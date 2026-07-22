@@ -14,10 +14,10 @@
 //! attributes, keeping fixture evaluation identical to the hot path.
 //!
 //! The defaults built by [`default_context`] mirror the Sidecar hot path
-//! (`ConstraintEnforcer::build_context`) exactly: all sixteen required
+//! (`ConstraintEnforcer::build_context`) exactly: all fifteen required
 //! `EnforcementContext` attributes are supplied, so a `firma policy test`
 //! verdict equals the enforcement verdict for the equivalent plain request.
-//! The six payment fields plus `raw_transport` default to the same fixed
+//! The five payment fields plus `raw_transport` default to the same fixed
 //! placeholders the hot path uses today and are overridable via
 //! `[fixture.context]`.
 
@@ -157,7 +157,7 @@ impl Fixture {
 
 /// Build the canonical default Cedar context object.
 ///
-/// The canonical Firma schema declares **sixteen required**
+/// The canonical Firma schema declares **fifteen required**
 /// `EnforcementContext` attributes. This default mirrors the Sidecar hot path
 /// (`ConstraintEnforcer::build_context` in
 /// `firma-sidecar/src/enforcement/constraint_enforcement.rs`, ~L375-389) so a
@@ -167,11 +167,10 @@ impl Fixture {
 ///
 /// Default origins:
 ///
-/// - `session_id`, `timestamp_ms`, `params`, `risk_score`, `budget_remaining`,
-///   `session_duration_s`, `action_count` — the seven user-facing defaults
+/// - `session_id`, `timestamp_ms`, `params`, `risk_score`,
+///   `session_duration_s`, `action_count` — the six user-facing defaults
 ///   defined by the `firma policy test` contract (`timestamp_ms` is current
-///   Unix time in ms so a fixture need not pin it; `budget_remaining` is
-///   `i64::MAX` for "unbounded", matching the sidecar's unbounded ceiling).
+///   Unix time in ms so a fixture need not pin it).
 /// - `raw_transport` — `"https"`, mirroring the sidecar value for an HTTPS
 ///   request (`normalizer.rs` sets `"https"`/`"http"` from `request.is_https`;
 ///   the canonical envelope baseline throughout `firma-core` is `"https"`).
@@ -186,12 +185,11 @@ pub fn default_context() -> serde_json::Map<String, serde_json::Value> {
         .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
 
     let mut ctx = serde_json::Map::new();
-    // Seven user-facing defaults from the `firma policy test` contract.
+    // Six user-facing defaults from the `firma policy test` contract.
     ctx.insert("session_id".into(), serde_json::Value::from("fixture"));
     ctx.insert("timestamp_ms".into(), serde_json::Value::from(now_ms));
     ctx.insert("params".into(), serde_json::Value::from("{}"));
     ctx.insert("risk_score".into(), serde_json::Value::from(0_i64));
-    ctx.insert("budget_remaining".into(), serde_json::Value::from(i64::MAX));
     ctx.insert("session_duration_s".into(), serde_json::Value::from(0_i64));
     ctx.insert("action_count".into(), serde_json::Value::from(1_i64));
     // Six fields mirrored from sidecar `build_context` so a fixture verdict
@@ -282,7 +280,7 @@ class = "model.inference.chat"
 host = "api.openai.com"
 
 [fixture.context]
-budget_remaining = 1000
+action_count = 1000
 
 [bundle]
 path = ".firma/policies/"
@@ -300,7 +298,7 @@ path = ".firma/policies/"
         assert_eq!(fx.fixture.resource.host, "api.openai.com");
         assert_eq!(fx.bundle.path, ".firma/policies/");
         assert_eq!(
-            fx.fixture.context.get("budget_remaining"),
+            fx.fixture.context.get("action_count"),
             Some(&toml::Value::Integer(1000))
         );
     }
@@ -386,7 +384,7 @@ path = "p/"
             obj.get("action_count"),
             Some(&serde_json::Value::from(1_i64))
         );
-        // All sixteen schema-required attributes present, mirroring the
+        // All fifteen schema-required attributes present, mirroring the
         // sidecar `build_context` defaults.
         assert_eq!(
             obj.get("raw_transport"),
@@ -412,18 +410,17 @@ path = "p/"
             obj.get("session_transfer_count"),
             Some(&serde_json::Value::from(0_i64))
         );
-        assert_eq!(obj.len(), 16);
+        assert_eq!(obj.len(), 15);
     }
 
     #[test]
-    fn default_context_has_sixteen_required_attributes() {
+    fn default_context_has_fifteen_required_attributes() {
         let ctx = default_context();
         for key in [
             "session_id",
             "timestamp_ms",
             "params",
             "risk_score",
-            "budget_remaining",
             "session_duration_s",
             "action_count",
             "raw_transport",
@@ -438,17 +435,17 @@ path = "p/"
         ] {
             assert!(ctx.contains_key(key), "missing required attribute {key}");
         }
-        assert_eq!(ctx.len(), 16);
+        assert_eq!(ctx.len(), 15);
     }
 
     #[test]
     fn merge_override_replaces_default() {
         let mut over = BTreeMap::new();
-        over.insert("budget_remaining".to_string(), toml::Value::Integer(1000));
+        over.insert("risk_score".to_string(), toml::Value::Integer(1000));
         let ctx = merged_context(&over);
         let obj = ctx.as_object().unwrap();
         assert_eq!(
-            obj.get("budget_remaining"),
+            obj.get("risk_score"),
             Some(&serde_json::Value::from(1000_i64))
         );
     }
@@ -459,12 +456,12 @@ path = "p/"
         over.insert("transfer_amount".to_string(), toml::Value::Integer(500));
         let ctx = merged_context(&over);
         let obj = ctx.as_object().unwrap();
-        // A mirrored payment default is overridable; count stays at 16.
+        // A mirrored payment default is overridable; count stays at 15.
         assert_eq!(
             obj.get("transfer_amount"),
             Some(&serde_json::Value::from(500_i64))
         );
-        assert_eq!(obj.len(), 16);
+        assert_eq!(obj.len(), 15);
     }
 
     #[test]
@@ -479,6 +476,6 @@ path = "p/"
             obj.get("not_in_schema"),
             Some(&serde_json::Value::from(7_i64))
         );
-        assert_eq!(obj.len(), 17);
+        assert_eq!(obj.len(), 16);
     }
 }

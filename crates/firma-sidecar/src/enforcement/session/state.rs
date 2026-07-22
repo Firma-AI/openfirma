@@ -1,9 +1,7 @@
 //! Per-session runtime state for Stage 2 quantitative constraint enforcement.
 //!
-//! V1 stores three signals per `SessionId`: action count (monotonic
-//! counter incremented on every admitted request), `budget_consumed`
-//! (cumulative, placeholder 0.0 in V1), `risk_score` (placeholder 0.0 in
-//! V1). Storage is in-memory with LRU eviction by default; a
+//! V1 stores action count and `risk_score` per `SessionId`. Storage is
+//! in-memory with LRU eviction by default; a
 //! file-backed persistent backend is available via
 //! [`crate::enforcement::session::PersistentSessionStateStore`]
 //! (selected by `constraint_enforcement.session_state_backend = "persistent"`).
@@ -38,7 +36,7 @@ pub enum Outcome {
     Deny,
     /// Request blocked pending human approval / stronger auth.
     StepUp,
-    /// Request deferred pending additional context or budget.
+    /// Request deferred pending additional context.
     Defer,
     /// Request was authorized then aborted (e.g. credential injection failed).
     Abort,
@@ -72,8 +70,6 @@ pub struct RuntimeSignals {
     /// Number of calls observed in the current session, including this
     /// one. First call in a session is 1.
     pub action_count: u64,
-    /// Cumulative budget used in this session. V1 placeholder = 0.0.
-    pub budget_consumed: f64,
     /// Static or pre-computed numeric risk attribute. V1 placeholder
     /// = 0.0.
     pub risk_score: f64,
@@ -91,34 +87,6 @@ pub struct RuntimeSignals {
 }
 
 impl RuntimeSignals {
-    /// Compute `budget_remaining` as a Cedar `Long` (i64). `None`
-    /// ceiling means unbounded → emit `i64::MAX`. Otherwise emit
-    /// `floor(ceiling - budget_consumed)` clamped to `i64`.
-    #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_precision_loss,
-        reason = "conversion intentionally floors and clamps budget values into Cedar Long semantics"
-    )]
-    pub fn budget_remaining_long(&self, ceiling: Option<f64>) -> i64 {
-        let Some(ceiling) = ceiling else {
-            return i64::MAX;
-        };
-        // Fail-closed: any NaN input collapses to the most-negative Long
-        // so `context.budget_remaining < N` policies always deny.
-        if ceiling.is_nan() || self.budget_consumed.is_nan() {
-            return i64::MIN;
-        }
-        let remaining = (ceiling - self.budget_consumed).floor();
-        if remaining >= i64::MAX as f64 {
-            i64::MAX
-        } else if remaining <= i64::MIN as f64 {
-            i64::MIN
-        } else {
-            remaining as i64
-        }
-    }
-
     /// `risk_score` as a Cedar `Long` — floor-rounded.
     #[must_use]
     #[expect(
@@ -214,7 +182,6 @@ pub struct LruSessionStateStore {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub(crate) struct SessionRecord {
     pub(crate) action_count: u64,
-    pub(crate) budget_consumed: f64,
     pub(crate) risk_score: f64,
     pub(crate) deny_count: u64,
     pub(crate) history: Vec<ActionOutcome>,
@@ -291,7 +258,6 @@ impl SessionStateStore for LruSessionStateStore {
             .peek(session_id)
             .map_or_else(RuntimeSignals::default, |r| RuntimeSignals {
                 action_count: r.action_count,
-                budget_consumed: r.budget_consumed,
                 risk_score: r.risk_score,
                 deny_count: r.deny_count,
                 history: r.history.clone(),
@@ -369,7 +335,6 @@ mod tests {
         let store = LruSessionStateStore::new(16);
         let signals = store.signals(&sid("never_seen"));
         assert_eq!(signals.action_count, 0);
-        assert_eq!(signals.budget_consumed, 0.0);
         assert_eq!(signals.risk_score, 0.0);
     }
 
@@ -393,65 +358,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_signals_remaining_unbounded_when_ceiling_none() {
-        let signals = RuntimeSignals {
-            action_count: 0,
-            budget_consumed: 0.0,
-            risk_score: 0.0,
-            ..RuntimeSignals::default()
-        };
-        assert_eq!(signals.budget_remaining_long(None), i64::MAX);
-    }
-
-    #[test]
-    fn runtime_signals_remaining_subtracts_consumed_and_floors() {
-        let signals = RuntimeSignals {
-            action_count: 0,
-            budget_consumed: 12.75,
-            risk_score: 0.0,
-            ..RuntimeSignals::default()
-        };
-        assert_eq!(signals.budget_remaining_long(Some(100.0)), 87);
-    }
-
-    #[test]
-    fn runtime_signals_remaining_goes_negative_when_overspent() {
-        let signals = RuntimeSignals {
-            action_count: 0,
-            budget_consumed: 150.0,
-            risk_score: 0.0,
-            ..RuntimeSignals::default()
-        };
-        assert_eq!(signals.budget_remaining_long(Some(100.0)), -50);
-    }
-
-    #[test]
-    fn budget_remaining_nan_ceiling_fails_closed() {
-        let signals = RuntimeSignals {
-            action_count: 0,
-            budget_consumed: 0.0,
-            risk_score: 0.0,
-            ..RuntimeSignals::default()
-        };
-        assert_eq!(signals.budget_remaining_long(Some(f64::NAN)), i64::MIN);
-    }
-
-    #[test]
-    fn budget_remaining_nan_consumed_fails_closed() {
-        let signals = RuntimeSignals {
-            action_count: 0,
-            budget_consumed: f64::NAN,
-            risk_score: 0.0,
-            ..RuntimeSignals::default()
-        };
-        assert_eq!(signals.budget_remaining_long(Some(100.0)), i64::MIN);
-    }
-
-    #[test]
     fn risk_score_nan_fails_closed() {
         let signals = RuntimeSignals {
             action_count: 0,
-            budget_consumed: 0.0,
             risk_score: f64::NAN,
             ..RuntimeSignals::default()
         };

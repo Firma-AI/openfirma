@@ -24,8 +24,6 @@ pub struct SeedFile {
     pub issued_at: String,
     pub expiry: String,
     pub context_hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub budget_ceiling: Option<f64>,
 }
 
 impl SeedFile {
@@ -44,7 +42,6 @@ impl SeedFile {
                     issued_at,
                     expiry,
                     context_hash,
-                    budget_ceiling,
                 },
         } = out;
 
@@ -58,7 +55,6 @@ impl SeedFile {
             issued_at: issued_at.to_rfc3339(),
             expiry: expiry.to_rfc3339(),
             context_hash: context_hash.clone(),
-            budget_ceiling: *budget_ceiling,
         }
     }
 

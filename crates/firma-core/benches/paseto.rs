@@ -23,7 +23,6 @@ fn sample_claims() -> CapabilityClaims {
         issued_at: now,
         expiry: now + chrono::Duration::seconds(600),
         context_hash: "abcdef1234567890".to_string(),
-        budget_ceiling: None,
     }
 }
 

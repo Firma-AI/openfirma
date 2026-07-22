@@ -8,7 +8,7 @@
 //! - `docs/architecture/linux-local-command-enforcement.md`
 //! - `docs/architecture/command-governance-local-exec-contract.md`
 //!
-//! Principle: **one control plane, one audit surface, one budget state**.
+//! Principle: **one control plane and one audit surface**.
 //! The mock Python scripts in `examples/` exercise the wire protocol but are
 //! not production components.
 //!

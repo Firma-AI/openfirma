@@ -81,7 +81,6 @@ context_hash = "deadbeef"
         let parsed: SeedFile = toml::from_str(body).unwrap();
         assert_eq!(parsed.agent_id, "agt_01j0000000e008000000000001");
         assert_eq!(parsed.action_set, vec!["communication.external.send"]);
-        assert!(parsed.budget_ceiling.is_none());
         assert_eq!(parsed.issued_at.to_rfc3339(), "2026-04-29T15:00:00+00:00");
     }
 
@@ -100,10 +99,8 @@ resource_scope = "*"
 issued_at = "2026-04-29T15:00:00+00:00"
 expiry = "2026-04-29T16:00:00+00:00"
 context_hash = "cafebabe"
-budget_ceiling = 1.5
 "#;
         let parsed: SeedFile = toml::from_str(body).unwrap();
-        assert_eq!(parsed.budget_ceiling, Some(1.5));
         assert_eq!(parsed.expiry.to_rfc3339(), "2026-04-29T16:00:00+00:00");
     }
 

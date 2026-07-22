@@ -55,7 +55,6 @@ When Stage 2 evaluates a runtime policy, it builds a Cedar context with these re
 | `timestamp_ms`         | Long        | Wall clock at evaluation, Unix epoch milliseconds                  |
 | `params`               | String      | JSON-serialized `intent.params` (the request body)                 |
 | `risk_score`           | Long        | Static or pre-computed; V1 always emits `0`                        |
-| `budget_remaining`     | Long        | Remaining budget from the capability ceiling                       |
 | `session_duration_s`   | Long        | Seconds since `claims.issued_at`                                   |
 | `action_count`         | Long        | Monotonic per-session counter, 1-based                             |
 | `raw_transport`        | String      | `"http"` or `"https"`                                              |

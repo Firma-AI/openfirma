@@ -445,7 +445,6 @@ mod tests {
             agent_id: Some("agent_1".to_string()),
             profile: "generic".to_string(),
             hitl_mode: "async_token".to_string(),
-            budget_state_ref: None,
             request_fingerprint: None,
             approval_token: None,
         }

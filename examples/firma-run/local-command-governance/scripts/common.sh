@@ -92,7 +92,6 @@ cleanup_mock_services() {
 run_firma() {
   local config_path="$1"
   shift
-  FIRMA_BUDGET_STATE_REF="budget:team-demo:2026-05" \
   "${FIRMA_BIN}" run \
     --profile generic \
     --config "${config_path}" \

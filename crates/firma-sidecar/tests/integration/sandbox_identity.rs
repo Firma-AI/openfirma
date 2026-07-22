@@ -25,7 +25,6 @@ fn request(sandbox_id: SandboxId) -> LocalExecRequest {
         agent_id: None,
         profile: "generic".to_string(),
         hitl_mode: "sync_wait".to_string(),
-        budget_state_ref: None,
         request_fingerprint: None,
         approval_token: None,
     }

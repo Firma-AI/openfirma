@@ -231,7 +231,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: "ctx_abc".to_string(),
-            budget_ceiling: None,
         }
     }
 
@@ -259,7 +258,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
                     .expect("literal agent id"),
                 timestamp: Utc::now(),
                 trace_id: None,
-                budget_consumed: 0.0,
                 risk_score: None,
                 thread_id: None,
                 parent_action_id: None,

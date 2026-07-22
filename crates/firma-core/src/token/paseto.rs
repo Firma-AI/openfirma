@@ -180,18 +180,6 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
             reason: format!("add action_set: {e:?}"),
         })?;
 
-    // Optional numeric claim: only written when present. Omitting the claim
-    // when `None` preserves wire compatibility with pre-010 tokens.
-    if let Some(ceiling) = claims.budget_ceiling {
-        let ceiling_val = serde_json::to_value(ceiling).map_err(|e| TokenError::Malformed {
-            reason: format!("serialize budget_ceiling: {e}"),
-        })?;
-        pc.add_additional("budget_ceiling", ceiling_val)
-            .map_err(|e| TokenError::Malformed {
-                reason: format!("add budget_ceiling: {e:?}"),
-            })?;
-    }
-
     Ok(pc)
 }
 
@@ -248,11 +236,6 @@ fn extract_datetime_claim(claims: &Claims, name: &str) -> Result<DateTime<Utc>, 
 
 /// Extract all fields from PASETO claims into `CapabilityClaims`.
 fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenError> {
-    // Optional numeric claim: absent → `None` (pre-010 wire compatibility).
-    let budget_ceiling = claims
-        .get_claim("budget_ceiling")
-        .and_then(serde_json::Value::as_f64);
-
     Ok(CapabilityClaims {
         token_id: extract_claim(claims, "token_id")?,
         agent_id: extract_claim(claims, "agent_id")?,
@@ -262,7 +245,6 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
         issued_at: extract_datetime_claim(claims, "iat")?,
         expiry: extract_datetime_claim(claims, "exp")?,
         context_hash: extract_claim(claims, "context_hash")?,
-        budget_ceiling,
     })
 }
 
@@ -289,7 +271,6 @@ mod tests {
             issued_at: now,
             expiry: now + chrono::Duration::seconds(expires_in_secs),
             context_hash: "abcdef1234567890".to_string(),
-            budget_ceiling: None,
         }
     }
 
@@ -504,37 +485,5 @@ mod tests {
         let token = signer.sign(&claims).unwrap();
         let recovered = verifier.verify(&token).unwrap();
         assert!(recovered.action_set.is_empty());
-    }
-
-    #[test]
-    fn paseto_roundtrip_preserves_budget_ceiling() {
-        let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
-
-        let mut claims = sample_claims(600);
-        claims.budget_ceiling = Some(250.50);
-
-        let token = signer.sign(&claims).unwrap();
-        let recovered = verifier.verify(&token).unwrap();
-
-        assert_eq!(recovered.budget_ceiling, Some(250.50));
-        assert_eq!(recovered, claims);
-    }
-
-    #[test]
-    fn paseto_roundtrip_preserves_none_budget_ceiling() {
-        let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
-
-        let mut claims = sample_claims(600);
-        claims.budget_ceiling = None;
-
-        let token = signer.sign(&claims).unwrap();
-        let recovered = verifier.verify(&token).unwrap();
-
-        assert_eq!(recovered.budget_ceiling, None);
-        assert_eq!(recovered, claims);
     }
 }

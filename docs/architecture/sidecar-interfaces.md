@@ -176,7 +176,6 @@ ExecutionEnvelope::new(
         agent_id: capability.claims.agent_id.clone(),
         timestamp: normalized.timestamp,
         trace_id: None,
-        budget_consumed: signals.budget_consumed,
         risk_score: if signals.risk_score == 0.0 {
             None
         } else {

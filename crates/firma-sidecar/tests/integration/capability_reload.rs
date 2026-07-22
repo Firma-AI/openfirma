@@ -59,7 +59,6 @@ fn claims(expiry: DateTime<Utc>) -> CapabilityClaims {
         issued_at: now,
         expiry,
         context_hash: "deadbeef".to_string(),
-        budget_ceiling: None,
     }
 }
 

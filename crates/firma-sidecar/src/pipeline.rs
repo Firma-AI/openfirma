@@ -62,8 +62,8 @@ pub struct PipelineArgs {
     pub constraint_enforcer: ConstraintEnforcer,
     /// Credential injector called after Stage 2 ALLOW.
     pub credential_injector: Box<dyn CredentialInjector>,
-    /// Per-session runtime state store — holds action count, budget
-    /// consumed, risk score keyed by `SessionId`.
+    /// Per-session runtime state store — holds action count and risk score
+    /// keyed by `SessionId`.
     pub session_state_store: Arc<dyn SessionStateStore>,
 }
 
@@ -370,7 +370,6 @@ impl EnforcementPipeline {
                 agent_id: capability.claims.agent_id,
                 timestamp: normalized.timestamp,
                 trace_id: None,
-                budget_consumed: signals.budget_consumed,
                 risk_score: if signals.risk_score == 0.0 {
                     None
                 } else {
@@ -956,7 +955,6 @@ mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
-            budget_ceiling: None,
         }
     }
 
@@ -1555,7 +1553,6 @@ mod tests {
                 "agt_01j0000000e008000000000001"
             );
             assert!(envelope.metadata().trace_id.is_none());
-            assert!((envelope.metadata().budget_consumed - 0.0).abs() < f64::EPSILON);
             assert!(envelope.metadata().risk_score.is_none());
 
             // AARM R2 G2: provenance is populated for admitted (Allow) calls as a
@@ -2367,7 +2364,6 @@ mod tests {
                 agent_id: claims.agent_id,
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
-                budget_consumed: 0.0,
                 risk_score: None,
                 thread_id: None,
                 parent_action_id: None,

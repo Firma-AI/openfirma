@@ -122,9 +122,8 @@ Quick fail-closed checks:
 
 1. The mock local-exec governance endpoint uses Unix socket at `${XDG_RUNTIME_DIR:-/tmp}/firma-showcase-sidecar-tools.sock` (override with `FIRMA_SHOWCASE_MEDIATOR_UNIX_PATH`).
 2. The mock sidecar liveness stub uses Unix socket at `${XDG_RUNTIME_DIR:-/tmp}/firma-showcase-sidecar.sock` (override with `FIRMA_SHOWCASE_SIDECAR_UNIX_PATH`).
-3. Scripts inject `FIRMA_BUDGET_STATE_REF` to demonstrate budget context propagation.
-4. Seccomp artifacts are generated under `.artifacts/firma-local-command-governance/` in repo root.
-5. For real rollout validation, also run:
+3. Seccomp artifacts are generated under `.artifacts/firma-local-command-governance/` in repo root.
+4. For real rollout validation, also run:
 
 ```bash
 just managed-seccomp-compat-check

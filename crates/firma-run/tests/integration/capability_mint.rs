@@ -29,8 +29,8 @@ use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
 use firma_core::{CapabilityClaims, CapabilitySeed, TokenId, TokenSigner, TokenVerifier};
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
-    CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
-    RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision,
+    PolicyBundleUpdate, RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 
 use firma_run::capability::issue::{IssueParams, mint_and_write};
@@ -51,6 +51,7 @@ enum MockTokenKind {
     Malformed,
     NonUtf8,
     Expired,
+    PendingApproval,
 }
 
 #[tonic::async_trait]
@@ -70,11 +71,30 @@ impl AuthorityService for MockAuthority {
                 token: None,
                 deny_reason: reason.to_string(),
                 deny_message: message.to_string(),
+                decision: IssueDecision::Deny.into(),
+                approval_id: None,
+                approval_url: None,
+                approval_expiry: None,
+            }));
+        }
+        if matches!(self.token_kind, MockTokenKind::PendingApproval) {
+            return Ok(Response::new(IssueCapabilityResponse {
+                granted: false,
+                token: None,
+                deny_reason: String::new(),
+                deny_message: String::new(),
+                decision: IssueDecision::PendingApproval.into(),
+                approval_id: Some("approval-123".to_string()),
+                approval_url: Some("https://authority.example/approvals/123".to_string()),
+                approval_expiry: Some(prost_types::Timestamp::default()),
             }));
         }
         let now = Utc::now();
         let expiry = match self.token_kind {
-            MockTokenKind::Valid | MockTokenKind::Malformed | MockTokenKind::NonUtf8 => {
+            MockTokenKind::Valid
+            | MockTokenKind::Malformed
+            | MockTokenKind::NonUtf8
+            | MockTokenKind::PendingApproval => {
                 now + chrono::Duration::seconds(i64::from(req.requested_ttl_seconds.max(1)))
             }
             MockTokenKind::Expired => now - chrono::Duration::seconds(60),
@@ -94,12 +114,11 @@ impl AuthorityService for MockAuthority {
             issued_at: now,
             expiry,
             context_hash: String::new(),
-            budget_ceiling: None,
         };
         let signature = match self.token_kind {
             MockTokenKind::Malformed => b"not-a-paseto-token".to_vec(),
             MockTokenKind::NonUtf8 => vec![0xff, 0xfe],
-            MockTokenKind::Valid | MockTokenKind::Expired => self
+            MockTokenKind::Valid | MockTokenKind::Expired | MockTokenKind::PendingApproval => self
                 .signer
                 .sign(&claims)
                 .map(String::into_bytes)
@@ -113,6 +132,10 @@ impl AuthorityService for MockAuthority {
             }),
             deny_reason: String::new(),
             deny_message: String::new(),
+            decision: IssueDecision::Allow.into(),
+            approval_id: None,
+            approval_url: None,
+            approval_expiry: None,
         }))
     }
 
@@ -314,6 +337,24 @@ fn mint_rejects_expired_token() {
     let err = mint_and_write(&params(&server), &seed_path).expect_err("expired token must fail");
 
     assert!(err.to_string().contains("token expired"), "got: {err}");
+    assert!(!seed_path.exists(), "no seed should be written on failure");
+}
+
+#[test]
+fn mint_reports_pending_approval() {
+    let server = start_mock_authority_with(MockTokenKind::PendingApproval);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+
+    let err = mint_and_write(&params(&server), &seed_path)
+        .expect_err("pending approval must stop capability issuance");
+    let message = err.to_string();
+
+    assert!(
+        message.contains("approval-123")
+            && message.contains("https://authority.example/approvals/123"),
+        "got: {err}"
+    );
     assert!(!seed_path.exists(), "no seed should be written on failure");
 }
 

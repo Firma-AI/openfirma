@@ -27,8 +27,6 @@ struct MediatorRequest<'a> {
     agent_id: Option<String>,
     profile: &'a str,
     hitl_mode: &'static str,
-    // Optional governance context pass-through. Runtime does not enforce budget semantics.
-    budget_state_ref: Option<String>,
     /// SHA-256 fingerprint of (`canonical_executable` ‖ argv ‖ `session_id` ‖ `sandbox_id` ‖ `agent_id`).
     /// The sidecar binds approval tokens to this fingerprint so a token issued for
     /// one command cannot authorize a different command in the same session.
@@ -77,9 +75,6 @@ pub fn enforce_local_command_governance(
         &identity.sandbox_id,
         agent_id.as_deref(),
     );
-    let budget_state_ref = std::env::var("FIRMA_BUDGET_STATE_REF")
-        .ok()
-        .filter(|v| !v.trim().is_empty());
     let deadline = std::time::Instant::now() + Duration::from_millis(mediator.hitl_max_wait_ms);
 
     let mut approval_token: Option<String> = None;
@@ -91,7 +86,6 @@ pub fn enforce_local_command_governance(
             args,
             agent_id.as_deref(),
             &fingerprint,
-            budget_state_ref.as_deref(),
             approval_token.as_deref(),
         )?;
 
@@ -133,10 +127,6 @@ pub fn enforce_local_command_governance(
 }
 
 /// Build and send one local-exec governance request; return the parsed response.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "governance request fields are passed through as separate inputs"
-)]
 fn call_mediator(
     mediator: &CommandMediatorConfig,
     identity: &RunIdentity,
@@ -144,7 +134,6 @@ fn call_mediator(
     args: &[String],
     agent_id: Option<&str>,
     fingerprint: &str,
-    budget_state_ref: Option<&str>,
     approval_token: Option<&str>,
 ) -> Result<MediatorResponse, RunError> {
     let hitl_mode_str = match mediator.hitl_mode {
@@ -160,7 +149,6 @@ fn call_mediator(
         agent_id: agent_id.map(ToOwned::to_owned),
         profile: &identity.execution_profile,
         hitl_mode: hitl_mode_str,
-        budget_state_ref: budget_state_ref.map(ToOwned::to_owned),
         request_fingerprint: fingerprint.to_string(),
         approval_token,
     };

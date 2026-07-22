@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::{AgentId, CapabilitySeed, TokenVerifier};
-use firma_protobuf::v1::IssueCapabilityRequest;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
+use firma_protobuf::v1::{IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision};
 use firma_sidecar::authority_client::channel::build_channel;
 use firma_sidecar::authority_credentials::ResolvedSidecarCredentials;
 
@@ -91,6 +91,7 @@ const ED25519_PUBLIC_KEY_LENGTH: usize = 32;
 /// - [`RunError::AgentNotRegistered`] when the Authority does not recognize the UUID.
 /// - [`RunError::AgentProfileMismatch`] when the registration rejects the local profile.
 /// - [`RunError::CapabilityDenied`] for other Authority denials.
+/// - [`RunError::CapabilityPendingApproval`] when issuance requires human approval.
 /// - [`RunError::Capability`] on verification, encoding, or file-write failure.
 pub fn mint_and_write(params: &IssueParams, out_path: &Path) -> Result<PathBuf, RunError> {
     let seed = mint(params)?;
@@ -193,27 +194,87 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
             })
     })?;
 
-    if !response.granted {
-        return Err(match response.deny_reason.as_str() {
-            "AGENT_NOT_REGISTERED" => RunError::AgentNotRegistered {
+    capability_seed_from_response(response, params, &verifier)
+}
+
+fn capability_seed_from_response(
+    response: IssueCapabilityResponse,
+    params: &IssueParams,
+    verifier: &PasetoV4Verifier,
+) -> Result<CapabilitySeed, RunError> {
+    let decision = IssueDecision::try_from(response.decision).map_err(|_| {
+        RunError::Capability(format!(
+            "authority returned unknown issuance decision {}",
+            response.decision
+        ))
+    })?;
+
+    match decision {
+        IssueDecision::Allow if !response.granted => {
+            return Err(RunError::Capability(
+                "authority returned ALLOW with granted=false".to_string(),
+            ));
+        }
+        IssueDecision::Allow => {}
+        IssueDecision::Deny if response.granted => {
+            return Err(RunError::Capability(
+                "authority returned DENY with granted=true".to_string(),
+            ));
+        }
+        IssueDecision::Deny => {
+            return Err(match response.deny_reason.as_str() {
+                "AGENT_NOT_REGISTERED" => RunError::AgentNotRegistered {
+                    agent_id: params.agent_id.to_string(),
+                    message: response.deny_message,
+                },
+                "AGENT_PROFILE_MISMATCH" => RunError::AgentProfileMismatch {
+                    agent_id: params.agent_id.to_string(),
+                    message: response.deny_message,
+                },
+                _ => RunError::CapabilityDenied {
+                    agent_id: params.agent_id.to_string(),
+                    reason: response.deny_reason,
+                    message: response.deny_message,
+                },
+            });
+        }
+        IssueDecision::PendingApproval => {
+            if response.granted {
+                return Err(RunError::Capability(
+                    "authority returned PENDING_APPROVAL with granted=true".to_string(),
+                ));
+            }
+            let approval_id = response.approval_id.ok_or_else(|| {
+                RunError::Capability(
+                    "authority returned PENDING_APPROVAL without approval_id".to_string(),
+                )
+            })?;
+            let approval_url = response.approval_url.ok_or_else(|| {
+                RunError::Capability(
+                    "authority returned PENDING_APPROVAL without approval_url".to_string(),
+                )
+            })?;
+            if response.approval_expiry.is_none() {
+                return Err(RunError::Capability(
+                    "authority returned PENDING_APPROVAL without approval_expiry".to_string(),
+                ));
+            }
+            return Err(RunError::CapabilityPendingApproval {
                 agent_id: params.agent_id.to_string(),
-                message: response.deny_message,
-            },
-            "AGENT_PROFILE_MISMATCH" => RunError::AgentProfileMismatch {
-                agent_id: params.agent_id.to_string(),
-                message: response.deny_message,
-            },
-            _ => RunError::CapabilityDenied {
-                agent_id: params.agent_id.to_string(),
-                reason: response.deny_reason,
-                message: response.deny_message,
-            },
-        });
+                approval_id,
+                approval_url,
+            });
+        }
+        IssueDecision::Unspecified => {
+            return Err(RunError::Capability(
+                "authority returned unspecified issuance decision".to_string(),
+            ));
+        }
     }
 
     let token = response
         .token
-        .ok_or_else(|| RunError::Capability("granted=true but no token returned".to_string()))?;
+        .ok_or_else(|| RunError::Capability("ALLOW response contained no token".to_string()))?;
 
     // `signature` carries the raw PASETO token string as UTF-8 bytes.
     let raw_token = String::from_utf8(token.signature)
@@ -257,7 +318,6 @@ mod tests {
             issued_at: now,
             expiry: now + chrono::Duration::minutes(15),
             context_hash: "deadbeef".to_string(),
-            budget_ceiling: None,
         };
         CapabilitySeed::from_claims(&claims, "v4.public.tok".to_string())
     }

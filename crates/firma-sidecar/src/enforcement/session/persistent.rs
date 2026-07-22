@@ -60,7 +60,6 @@ struct Inner {
 struct LogEntry {
     sid: String,
     action_count: u64,
-    budget_consumed: f64,
     risk_score: f64,
     #[serde(default)]
     deny_count: u64,
@@ -120,7 +119,6 @@ impl SessionStateStore for PersistentSessionStateStore {
         let entry = LogEntry {
             sid: session_id.to_string(),
             action_count: record.action_count,
-            budget_consumed: record.budget_consumed,
             risk_score: record.risk_score,
             deny_count: record.deny_count,
             history: record.history.clone(),
@@ -155,7 +153,6 @@ impl SessionStateStore for PersistentSessionStateStore {
             .peek(session_id)
             .map_or_else(RuntimeSignals::default, |r| RuntimeSignals {
                 action_count: r.action_count,
-                budget_consumed: r.budget_consumed,
                 risk_score: r.risk_score,
                 deny_count: r.deny_count,
                 history: r.history.clone(),
@@ -181,7 +178,6 @@ impl SessionStateStore for PersistentSessionStateStore {
         let entry = LogEntry {
             sid: session_id.to_string(),
             action_count: record.action_count,
-            budget_consumed: record.budget_consumed,
             risk_score: record.risk_score,
             deny_count: record.deny_count,
             history: record.history.clone(),
@@ -226,7 +222,6 @@ impl SessionStateStore for PersistentSessionStateStore {
         let entry = LogEntry {
             sid: session_id.to_string(),
             action_count: record.action_count,
-            budget_consumed: record.budget_consumed,
             risk_score: record.risk_score,
             deny_count: record.deny_count,
             history: record.history.clone(),
@@ -286,7 +281,6 @@ fn replay(path: &Path, cap: NonZeroUsize) -> std::io::Result<LruCache<SessionId,
             entry.sid,
             SessionRecord {
                 action_count: entry.action_count,
-                budget_consumed: entry.budget_consumed,
                 risk_score: entry.risk_score,
                 deny_count: entry.deny_count,
                 history: entry.history,
@@ -347,7 +341,6 @@ mod tests {
         let store = PersistentSessionStateStore::open(&path, 16).expect("open");
         let signals = store.signals(&sid("never_seen"));
         assert_eq!(signals.action_count, 0);
-        assert_eq!(signals.budget_consumed, 0.0);
         assert_eq!(signals.risk_score, 0.0);
         drop(store);
         let _ = std::fs::remove_file(&path);

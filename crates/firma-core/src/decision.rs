@@ -48,8 +48,7 @@ pub enum Decision {
 
 /// Typed reason code explaining why a request was denied.
 ///
-/// Backlog variants (add back when corresponding mechanisms exist):
-/// - `BudgetExceeded` — when budget tracking mechanism is designed
+/// Backlog variant (add back when the corresponding mechanism exists):
 /// - `RiskThreshold` — when anomaly detection is designed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[cfg_attr(test, derive(strum::EnumIter))]
@@ -135,7 +134,7 @@ pub enum DenyReason {
     #[error("step up required")]
     StepUpRequired,
     /// AARM R4 `DEFER`: the call is blocked and should be retried after the
-    /// supplied backoff window, pending additional context or rate budget.
+    /// supplied backoff window, pending additional context.
     #[error("deferred")]
     Deferred,
 }
@@ -582,7 +581,6 @@ mod tests {
                 agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
-                budget_consumed: 0.0,
                 risk_score: None,
                 thread_id: None,
                 parent_action_id: None,
@@ -634,7 +632,6 @@ mod tests {
                 agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
-                budget_consumed: 0.0,
                 risk_score: None,
                 thread_id: None,
                 parent_action_id: None,

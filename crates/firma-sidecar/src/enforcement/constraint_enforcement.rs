@@ -12,7 +12,7 @@
 //!    successful refresh, the Sidecar enters fail-closed mode and denies all
 //!    new requests.
 //! 3. **Context build** — assembles the Cedar request context from envelope
-//!    fields, claims, and runtime signals (budget consumed, risk score).
+//!    fields, claims, and runtime signals such as risk score.
 //! 4. **Cedar eval** — evaluates against the current policy bundle.
 //!    Deterministic: same context + same bundle = same decision. Fully local,
 //!    no external calls.
@@ -22,13 +22,11 @@
 //! # Security properties
 //!
 //! Stage 2 prevents valid capabilities from being misused for out-of-policy,
-//! over-budget, or contextually disallowed actions:
+//! contextually disallowed actions:
 //! - **Privilege escalation within token** — a valid token does not imply all
 //!   calls are allowed; Cedar eval checks the specific call against policy.
 //! - **Scope misuse at runtime** — a valid capability for action class X
 //!   cannot be used for action class Y.
-//! - **Budget overrun / quota abuse** — pre-computed `budget_remaining`
-//!   attribute checked against threshold.
 //! - **Non-deterministic authorization** — same context + same bundle always
 //!   produces the same decision.
 
@@ -72,7 +70,7 @@ pub enum PolicyVerdict {
         challenge: StepUpSpec,
     },
     /// AARM R4 `DEFER`: delay execution pending additional context or
-    /// rate budget. `backoff` is sourced from the `@defer("<ms>")` annotation.
+    /// rate-limit window. `backoff` is sourced from the `@defer("<ms>")` annotation.
     Defer {
         /// Backoff window before the agent should retry, validated > 0 at
         /// load time.
@@ -513,10 +511,6 @@ impl ConstraintEnforcer {
             serde_json::json!(signals.risk_score_long()),
         );
         context.insert(
-            "budget_remaining".to_string(),
-            serde_json::json!(signals.budget_remaining_long(claims.budget_ceiling)),
-        );
-        context.insert(
             "session_duration_s".to_string(),
             serde_json::json!(session_duration_s),
         );
@@ -736,14 +730,12 @@ mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
-            budget_ceiling: None,
         }
     }
 
     fn test_signals() -> RuntimeSignals {
         RuntimeSignals {
             action_count: 1,
-            budget_consumed: 0.0,
             risk_score: 0.0,
             ..RuntimeSignals::default()
         }
@@ -854,10 +846,8 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let mut claims = test_claims(vec!["communication.external.send"]);
         claims.issued_at = envelope.timestamp - chrono::Duration::seconds(42);
-        claims.budget_ceiling = Some(100.0);
         let signals = RuntimeSignals {
             action_count: 7,
-            budget_consumed: 12.75,
             risk_score: 3.0,
             ..RuntimeSignals::default()
         };
@@ -872,7 +862,6 @@ mod tests {
         assert!(context["timestamp_ms"].is_i64());
         assert!(context["params"].is_string());
         assert_eq!(context["risk_score"], 3);
-        assert_eq!(context["budget_remaining"], 87);
         assert_eq!(context["session_duration_s"], 42);
         assert_eq!(context["action_count"], 7);
         // Prior-action context (AARM R2 G3) — fresh session defaults.
@@ -933,23 +922,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_context_budget_remaining_unbounded_when_ceiling_none() {
-        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
-        let envelope = test_envelope("communication.external.send");
-        let claims = test_claims(vec!["communication.external.send"]);
-        let signals = RuntimeSignals {
-            action_count: 1,
-            budget_consumed: 0.0,
-            risk_score: 0.0,
-            ..RuntimeSignals::default()
-        };
-        let context = evaluator
-            .build_context(&envelope, &claims, &signals)
-            .expect("build_context must succeed for valid envelopes");
-        assert_eq!(context["budget_remaining"], serde_json::json!(i64::MAX));
-    }
-
-    #[test]
     fn test_build_context_surfaces_prior_action_history() {
         // AARM R2 G3: the Cedar context must surface prior action classes,
         // deny count, and the most recent resource so policies can reason
@@ -959,7 +931,6 @@ mod tests {
         let claims = test_claims(vec!["filesystem.delete"]);
         let signals = RuntimeSignals {
             action_count: 4,
-            budget_consumed: 0.0,
             risk_score: 0.0,
             deny_count: 2,
             history: vec![
@@ -998,7 +969,6 @@ mod tests {
         claims.issued_at = envelope.timestamp + chrono::Duration::seconds(10);
         let signals = RuntimeSignals {
             action_count: 1,
-            budget_consumed: 0.0,
             risk_score: 0.0,
             ..RuntimeSignals::default()
         };
