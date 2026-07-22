@@ -154,3 +154,57 @@ fn section_rejects_missing_required_field() {
         "error: {error}"
     );
 }
+
+#[test]
+fn optional_section_reads_a_present_typed_section() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &path,
+        r#"[authority]
+           listen_addr = "127.0.0.1:50051"
+        "#,
+    )
+    .expect("write config");
+    let config = FirmaConfig::load(&path).expect("load config");
+    let probe = config
+        .optional_section::<Probe>("authority")
+        .expect("deserialize section");
+    let probe = probe.expect("authority section exists");
+    assert_eq!(probe.listen_addr, "127.0.0.1:50051");
+}
+
+#[test]
+fn optional_section_returns_none_for_missing_section() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &path,
+        r#"[sidecar]
+           listen_addr = "127.0.0.1:50051"
+        "#,
+    )
+    .expect("write config");
+    let config = FirmaConfig::load(&path).expect("load config");
+    let probe = config
+        .optional_section::<Probe>("authority")
+        .expect("missing optional section is not an error");
+    assert_matches!(probe, None);
+}
+
+#[test]
+fn optional_section_rejects_present_non_table_section() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(&path, r#"authority = "not-a-table""#).expect("write config");
+    let config = FirmaConfig::load(&path).expect("load config");
+    let error = config
+        .optional_section::<Probe>("authority")
+        .expect_err("present non-table section must error");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid `[authority]` section: expected table"),
+        "error: {error}"
+    );
+}

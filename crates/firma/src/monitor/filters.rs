@@ -134,7 +134,8 @@ pub fn audit_passes(
 ///
 /// `Passthrough` in the audit log is encoded as `decision = ALLOW`
 /// AND `token_id` empty (see `firma_sidecar::audit::builder` tests).
-fn decision_matches(parsed: &AuditLite, want: DecisionFilter) -> bool {
+#[must_use]
+pub fn decision_matches(parsed: &AuditLite, want: DecisionFilter) -> bool {
     let Some(AuditLiteDecision::Known(decision)) = parsed.decision else {
         return false;
     };

@@ -8,11 +8,13 @@ use crate::control::{
     command::{ControlCommand, ControlEffect},
 };
 
+/// Returns the command for one pressed key, if the key is meaningful.
 #[must_use]
-pub fn command_for_key(app: &App, key: KeyCode) -> Option<ControlCommand> {
+pub fn command_for_key(app: &mut App, key: KeyCode) -> Option<ControlCommand> {
     bindings::command_for_key(app, key)
 }
 
+/// Applies the command represented by a key and returns runner side effects.
 #[must_use]
 pub fn handle_key(app: &mut App, key: KeyCode) -> Vec<ControlEffect> {
     command_for_key(app, key)
