@@ -55,7 +55,7 @@ These keys are the trust root for capabilities. If the private key leaks, an att
 
 ## Step 2: Write the issuance policy
 
-The Authority runs a separate Cedar bundle when deciding whether to mint a capability — the **issuance policy**. It answers "*should we ever mint this kind of capability for this agent?*", separate from the runtime policy that decides "*should we allow this specific call right now?*".
+The Authority runs a separate Cedar bundle when deciding whether to mint a capability — the **issuance policy**. It answers "_should we ever mint this kind of capability for this agent?_", separate from the runtime policy that decides "_should we allow this specific call right now?_".
 
 For development, a permissive issuance policy is fine:
 
@@ -98,14 +98,14 @@ Every subcommand reads one shared, sectioned `firma.toml`. Add an
 
 ```toml
 [authority]
-listen_addr         = "[::1]:50051"
-policy_dir          = "/tmp/firma-standalone/config/policies"
+listen_addr = "[::1]:50051"
+policy_dir = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/issuance"
-revocation_file     = "/tmp/firma-standalone/revocations.txt"
-key_file            = "/tmp/firma-standalone/firma-authority.key"
-max_ttl_seconds     = 3600
-bundle_ttl_seconds  = 30
-log_level           = "info"
+revocation_file = "/tmp/firma-standalone/revocations.txt"
+key_file = "/tmp/firma-standalone/firma-authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
 ```
 
 Notable fields:
@@ -181,6 +181,9 @@ cat /tmp/firma-standalone/capability-support.toml
 
 You'll see the structure described in [Capabilities](../../concepts/capabilities/): `raw_token`, `token_id`, `agent_id`, `session_id`, `action_set`, `resource_scope`, `issued_at`, `expiry`, `context_hash`. The `raw_token` is the wire-format PASETO; everything else is a parsed mirror for convenience.
 
+The `token_id` is a canonical `ctok` TypeID, for example
+`ctok_01j0000000e008000000000001`. Raw UUID capability IDs are not accepted.
+
 Note: `--action` can be repeated. `--resource-scope '*'` is the loosest scope — match anything. In production you would tighten this to e.g. `'api.openai.com*'`.
 
 Do not hand-edit the claim fields in this file. The Sidecar treats `raw_token` as authoritative and checks that the TOML mirror matches the signed claims at startup. If you need a different `action_set`, `resource_scope`, `session_id`, TTL, or agent id, issue a new capability with the Authority instead of editing the seed.
@@ -191,7 +194,7 @@ Edit the `[sidecar.*]` tables in `firma.toml` to add:
 
 ```toml
 [sidecar.authority]
-url             = "http://[::1]:50051"
+url = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/firma-authority.pub"
 
 [sidecar.capability_seed]
@@ -225,7 +228,7 @@ The audit event for this call will include the capability identity at the top le
 
 ```json
 {
-  "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
+  "token_id": "ctok_01j0000000e008000000000001",
   "agent_id": "agt_01j0000000e008000000000001",
   "session_id": "session-001",
   "action": "communication.external.send",
@@ -242,10 +245,15 @@ If you delete the capability seed file and restart, the same call returns a 403 
 To kill a specific capability immediately:
 
 ```bash
-firma authority -c /tmp/firma-standalone/config/firma.toml revocations add 79dd9ffb-ebc8-4883-8f1e-72eb74a26e33
+firma authority -c /tmp/firma-standalone/config/firma.toml revocations add ctok_01j0000000e008000000000001
 ```
 
 The Authority appends the `token_id` to `revocations.txt` and broadcasts it on its gRPC stream. Connected Sidecars update their bloom filter + LRU cache within seconds. The next attempt by that capability gets `TokenRevoked`.
+
+After upgrading from a release that issued raw UUID capability IDs, remove old
+capability seed files and raw UUID revocation records, then mint replacement
+capabilities. The cutover is strict: old capability tokens and state are not
+read as aliases.
 
 For housekeeping, clean expired entries periodically:
 

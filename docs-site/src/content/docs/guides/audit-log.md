@@ -30,7 +30,7 @@ A single line of the JSONL log decodes to something like:
 {
   "event_id": "018f5c6d-7a8b-7c9d-8e0f-123456789abc",
   "session_id": "session-001",
-  "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
+  "token_id": "ctok_01j0000000e008000000000001",
   "agent_id": "agt_01j0000000e008000000000001",
   "action": "communication.external.send",
   "resource": "paste.rs/",
@@ -184,7 +184,7 @@ The token is valid, but its action or resource scope does not cover this request
 
 Cedar evaluated and denied. Re-run the same case with `firma policy test` against the relevant bundle to see which rule shape is responsible.
 
-If you expected a *permit* to fire and a *forbid* fired instead, remember: `forbid` always wins. The fix is usually narrowing the forbid, not adding a permit.
+If you expected a _permit_ to fire and a _forbid_ fired instead, remember: `forbid` always wins. The fix is usually narrowing the forbid, not adding a permit.
 
 ### Stage 2: `PolicyBundleStale`
 
@@ -232,7 +232,7 @@ The audit log's value compounds with how easily you can search it. A grep-friend
 
 ## Common gotchas
 
-**`audit.jsonl` is empty after a request.** The audit worker writes asynchronously; events flush every few hundred milliseconds. If the file is *never* written, the Sidecar probably crashed at startup with a permissions error on `signing_key_path` — check stderr. Note that a per-run sidecar autostarted by `firma run` defaults its audit sink to a file at `<state_dir>/audit.jsonl` (the path `firma monitor` tails) even when the template configures no sink, so a `firma run` decision is monitorable out of the box; an explicit `[sidecar.audit]` sink in your template still wins.
+**`audit.jsonl` is empty after a request.** The audit worker writes asynchronously; events flush every few hundred milliseconds. If the file is _never_ written, the Sidecar probably crashed at startup with a permissions error on `signing_key_path` — check stderr. Note that a per-run sidecar autostarted by `firma run` defaults its audit sink to a file at `<state_dir>/audit.jsonl` (the path `firma monitor` tails) even when the template configures no sink, so a `firma run` decision is monitorable out of the box; an explicit `[sidecar.audit]` sink in your template still wins.
 
 **Signature verification fails for events you didn't tamper with.** Almost always a payload mismatch. The signed bytes are derived from newline-joined fields in declaration order, not from canonical JSON. Reformatting the JSONL does not matter, but changing any field value does.
 

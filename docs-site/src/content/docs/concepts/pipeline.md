@@ -116,9 +116,9 @@ For example, suppose your mapping rules contain only this GitHub route:
 
 ```toml
 [[rules]]
-method       = "GET"
-host         = "api.github.com"
-path         = "/repos/*"
+method = "GET"
+host = "api.github.com"
+path = "/repos/*"
 action_class = "code.read"
 ```
 
@@ -138,7 +138,7 @@ The proof is a capability token. A capability is a short-lived, signed PASETO to
 
 ```json
 {
-  "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
+  "token_id": "ctok_01j0000000e008000000000001",
   "agent_id": "agt_01j0000000e008000000000001",
   "session_id": "demo-session",
   "action_set": ["communication.external.send"],

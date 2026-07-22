@@ -108,7 +108,7 @@ pub fn enforce(
 - `CapabilityMap`, which selects a token by session, action class, and
   resource.
 - `TokenVerifier`, which verifies and extracts token claims.
-- `RevocationStore`, which checks whether a token ID has been revoked.
+- `RevocationStore`, which checks whether a validated `ctok` capability token ID has been revoked.
 
 **Failure:** Returns `EnforcementDecision::Deny` when token selection fails,
 token validation fails, the token is expired, or the token is revoked.
