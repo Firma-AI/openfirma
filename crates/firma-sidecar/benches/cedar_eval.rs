@@ -19,7 +19,7 @@ fn agent() -> AgentId {
 }
 
 fn ctx() -> serde_json::Value {
-    json!({ "budget_remaining": 100, "risk_score": 10 })
+    json!({ "risk_score": 10 })
 }
 
 fn bench_allow(c: &mut Criterion) {

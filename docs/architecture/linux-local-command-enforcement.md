@@ -90,7 +90,7 @@ custom policy via `FIRMA_MANAGED_POLICY`.
 2. No argument/path-level expression at kernel layer (`filesystem.delete` cannot encode path scopes like workspace-only).
 3. `rename*` blocking is intentionally conservative and may block benign atomic-update flows.
 4. Arch-specific syscall surfaces differ (`aarch64` behavior may map through `*at` variants where older syscall variants are absent).
-5. Dynamic context (HITL, budgets, tenant/session business logic) must stay in userspace governance.
+5. Dynamic context (HITL and tenant/session business logic) must stay in userspace governance.
 
 ## Artifact Contract
 
@@ -150,7 +150,7 @@ Optional governance controls:
 ### Request (JSON line)
 
 ```json
-{"action":"local.exec","executable":"...","args":[...],"sandbox_id":"...","session_id":"...","agent_id":"optional","profile":"...","hitl_mode":"sync_wait|async_token","budget_state_ref":"optional-ref","request_fingerprint":"optional-sha256hex","approval_token":"optional-token-id"}
+{"action":"local.exec","executable":"...","args":[...],"sandbox_id":"...","session_id":"...","agent_id":"optional","profile":"...","hitl_mode":"sync_wait|async_token","request_fingerprint":"optional-sha256hex","approval_token":"optional-token-id"}
 ```
 
 ### Response (JSON line)
@@ -174,22 +174,6 @@ Decision handling:
 1. `sync_wait`: governance endpoint must return final `allow|deny` in request timeout window.
 2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; runtime sleeps `retry_after_ms` and retries internally until `allow|deny` or `hitl_max_wait_ms` expires.
 3. No background in-place escalation of an already running sandbox process.
-
-### Budget Source of Truth (Cross-Platform Governance Layer)
-
-1. Runtime passes `budget_state_ref` from environment (`FIRMA_BUDGET_STATE_REF`) to governance endpoint for traceable decision context.
-2. Runtime does not own budget state consistency; Sidecar-governance system is source of truth.
-3. Missing `budget_state_ref` is allowed, but policy can deny when budget reference is mandatory.
-4. Full platform-neutral governance contract and ownership model: `docs/architecture/command-governance-local-exec-contract.md`.
-
-### `FIRMA_BUDGET_STATE_REF` Clarification (Platform-Neutral)
-
-1. `FIRMA_BUDGET_STATE_REF` is an optional runtime environment variable, not a seccomp option and not a profile policy switch.
-2. Current product behavior is pass-through only:
-3. `firma run` reads env var -> serializes `budget_state_ref` in governance request -> Sidecar governance decides how to use it.
-4. `firma run` does not parse, validate, persist, or enforce budget semantics from this field.
-5. Budget semantics (quota/spend/rate consistency and state lookup) belong to Sidecar-governance services.
-6. These semantics are platform-neutral; Linux/macOS/Windows runtime paths can all forward this field to the same governance contract.
 
 ### Non-Cooperative Anti-Bypass Guarantees
 

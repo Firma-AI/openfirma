@@ -14,7 +14,7 @@
 //! - [`capability_validation`] — Stage 1: capability token selection and
 //!   validation (parse, signature verify, expiry, revocation).
 //! - [`constraint_enforcement`] — Stage 2: Constraint Enforcement Engine
-//!   (CEE) — Cedar policy evaluation, scope/budget/threshold checks.
+//!   (CEE) — Cedar policy evaluation, scope and threshold checks.
 //! - [`capability_map`] — Pre-provisioned capability tokens indexed by
 //!   action class for fast selection.
 //! - [`decision`] — Unified ALLOW/DENY result type for every enforcement call.

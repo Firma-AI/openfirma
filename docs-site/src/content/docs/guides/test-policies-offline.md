@@ -144,17 +144,16 @@ all of them — `firma policy test` supplies every one by default, mirroring the
 Sidecar's `build_context` on the hot path, so a fixture verdict equals the
 enforcement verdict for an equivalent plain request.
 
-The 7 commonly-tuned keys and their defaults:
+The 6 commonly-tuned keys and their defaults:
 
-| Key                  | Default       | Notes                                      |
-| -------------------- | ------------- | ------------------------------------------ |
-| `session_id`         | `"fixture"`   | String session identifier.                 |
-| `timestamp_ms`       | now (Unix ms) | Current time so you need not pin it.       |
-| `params`             | `"{}"`        | Serialized request params.                 |
-| `risk_score`         | `0`           | Integer risk score.                        |
-| `budget_remaining`   | `i64::MAX`    | "Unbounded" ceiling, matching the sidecar. |
-| `session_duration_s` | `0`           | Seconds since session start.               |
-| `action_count`       | `1`           | Actions taken in the session so far.       |
+| Key                  | Default       | Notes                                |
+| -------------------- | ------------- | ------------------------------------ |
+| `session_id`         | `"fixture"`   | String session identifier.           |
+| `timestamp_ms`       | now (Unix ms) | Current time so you need not pin it. |
+| `params`             | `"{}"`        | Serialized request params.           |
+| `risk_score`         | `0`           | Integer risk score.                  |
+| `session_duration_s` | `0`           | Seconds since session start.         |
+| `action_count`       | `1`           | Actions taken in the session so far. |
 
 The other 6 default to the sidecar's plain-request placeholders and are
 overridable: `transfer_amount`, `daily_cumulative_amount`,

@@ -272,7 +272,6 @@ schema in `cedar_evaluator.rs` must match it exactly.
 | `timestamp_ms`       | `Long`     | `NormalizedEnvelope.timestamp` converted to epoch milliseconds          |
 | `params`             | `String`   | JSON-serialized `ActionParams` from the normalized request              |
 | `risk_score`         | `Long`     | `RuntimeSignals.risk_score_long()` from `SessionStateStore`             |
-| `budget_remaining`   | `Long`     | `RuntimeSignals.budget_remaining_long(claims.budget_ceiling)`           |
 | `session_duration_s` | `Long`     | `(envelope.timestamp - claims.issued_at).num_seconds()` clamped at zero |
 | `action_count`       | `Long`     | `RuntimeSignals.action_count`, including the current admitted call      |
 
@@ -292,9 +291,8 @@ The pipeline updates this state between Stage 1 and Stage 2:
 - The pipeline then reads `signals(session_id)` and reuses the same
   `RuntimeSignals` for both Cedar context construction and
   `ExecutionMetadata`, keeping policy inputs and audit metadata aligned.
-- In V1, `budget_consumed` and `risk_score` are placeholders sourced
-  from the same store but remain `0.0` unless a future task wires real
-  producers.
+- In V1, `risk_score` is a placeholder sourced from the store but remains
+  `0.0` unless a future task wires a real producer.
 
 #### 5.2.1 Revocation check flow
 

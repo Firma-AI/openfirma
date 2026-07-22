@@ -153,7 +153,7 @@ pub enum EnforcementDecision {
         identity: Option<DenyIdentity>,
     },
     /// AARM R4 `DEFER`: the request is blocked and should be retried after
-    /// `retry_after_ms`, pending additional context or rate budget. The call
+    /// `retry_after_ms`, pending additional context or a rate-limit window. The call
     /// does not proceed. Like [`Self::StepUp`], `claims`/`envelope` are
     /// `Option` for audit-only origination paths without a capability.
     Defer {
@@ -331,7 +331,6 @@ mod tests {
                 issued_at: chrono::Utc::now(),
                 expiry: chrono::Utc::now(),
                 context_hash: String::new(),
-                budget_ceiling: None,
             },
             envelope: Box::new(ExecutionEnvelope::new(
                 firma_core::ExecutionIntent {
@@ -354,7 +353,6 @@ mod tests {
                         .expect("literal agent id"),
                     timestamp: chrono::Utc::now(),
                     trace_id: None,
-                    budget_consumed: 0.0,
                     risk_score: None,
                     thread_id: None,
                     parent_action_id: None,

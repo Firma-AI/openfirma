@@ -12,8 +12,8 @@ use firma_core::token::paseto::PasetoV4Signer;
 use firma_protobuf::v1::RevocationEvent;
 use firma_protobuf::v1::authority_service_server::AuthorityService;
 use firma_protobuf::v1::{
-    CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
-    TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision,
+    PolicyBundleUpdate, TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -111,7 +111,11 @@ impl AuthorityService for AuthorityServiceImpl {
         .await
         {
             Ok(out) => {
-                let token = build_proto_token(&out.claims, out.raw_token.into_bytes());
+                let token = build_proto_token(
+                    &out.claims,
+                    out.raw_token.into_bytes(),
+                    &self.policy_watcher.bundle().version,
+                );
                 tracing::info!(
                     agent_id = %token.agent_id,
                     token_id = %token.token_id,
@@ -123,6 +127,10 @@ impl AuthorityService for AuthorityServiceImpl {
                     token: Some(token),
                     deny_reason: String::new(),
                     deny_message: String::new(),
+                    decision: IssueDecision::Allow.into(),
+                    approval_id: None,
+                    approval_url: None,
+                    approval_expiry: None,
                 }))
             }
             Err(crate::issuance::IssuanceError::Denied { reason, message }) => {
@@ -137,6 +145,10 @@ impl AuthorityService for AuthorityServiceImpl {
                     token: None,
                     deny_reason: reason,
                     deny_message: message,
+                    decision: IssueDecision::Deny.into(),
+                    approval_id: None,
+                    approval_url: None,
+                    approval_expiry: None,
                 }))
             }
             Err(crate::issuance::IssuanceError::Sign(e)) => {
@@ -404,7 +416,6 @@ pub(crate) fn evaluate_cedar_policy(
             "timestamp_ms": timestamp_ms,
             "params": "{}",
             "risk_score": 0i64,
-            "budget_remaining": i64::MAX,
             "session_duration_s": 0i64,
             "action_count": 0i64,
             "raw_transport": "https",
@@ -460,7 +471,11 @@ fn to_proto_timestamp(dt: chrono::DateTime<Utc>) -> prost_types::Timestamp {
 /// Build the proto `CapabilityToken` from the issuance result. Centralised so
 /// both the gRPC handler here and any future caller (e.g. an HTTP shim) share
 /// a single mapping from `CapabilityClaims` → wire format.
-fn build_proto_token(claims: &CapabilityClaims, signature: Vec<u8>) -> CapabilityToken {
+fn build_proto_token(
+    claims: &CapabilityClaims,
+    signature: Vec<u8>,
+    policy_bundle_version: &str,
+) -> CapabilityToken {
     CapabilityToken {
         token_id: claims.token_id.to_string(),
         agent_id: claims.agent_id.to_string(),
@@ -472,7 +487,9 @@ fn build_proto_token(claims: &CapabilityClaims, signature: Vec<u8>) -> Capabilit
         context_hash: claims.context_hash.clone(),
         signature,
         format: TokenFormat::PasetoV4.into(),
-        budget_ceiling: claims.budget_ceiling,
+        policy_bundle_version: Some(policy_bundle_version.to_string()),
+        approver_id: None,
+        approval_id: None,
     }
 }
 

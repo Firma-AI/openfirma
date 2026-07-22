@@ -115,6 +115,15 @@ pub enum RunError {
         message: String,
     },
 
+    #[error(
+        "authority requires approval for agent '{agent_id}' (approval '{approval_id}'); open {approval_url}"
+    )]
+    CapabilityPendingApproval {
+        agent_id: String,
+        approval_id: String,
+        approval_url: String,
+    },
+
     #[error("authority rejected unregistered agent '{agent_id}': {message}")]
     AgentNotRegistered { agent_id: String, message: String },
 

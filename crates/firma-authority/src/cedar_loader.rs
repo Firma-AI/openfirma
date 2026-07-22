@@ -325,7 +325,6 @@ mod tests {
     fn valid_context_json(
         session_id: &str,
         timestamp_ms: i64,
-        budget_remaining: i64,
         session_duration_s: i64,
         action_count: i64,
     ) -> serde_json::Value {
@@ -334,7 +333,6 @@ mod tests {
             "timestamp_ms": timestamp_ms,
             "params": "{}",
             "risk_score": 0i64,
-            "budget_remaining": budget_remaining,
             "session_duration_s": session_duration_s,
             "action_count": action_count,
             "raw_transport": "https",
@@ -581,7 +579,7 @@ mod tests {
         let action_uid: EntityUid = "Firma::Action::\"communication.external.send\""
             .parse()
             .unwrap_or_else(|e| panic!("action parse: {e}"));
-        let context_json = valid_context_json("sess_test", 0, 1000, 42, 3);
+        let context_json = valid_context_json("sess_test", 0, 42, 3);
         Context::from_json_value(context_json, Some((&schema, &action_uid)))
             .unwrap_or_else(|e| panic!("context validation failed: {e}"));
     }
@@ -616,7 +614,7 @@ mod tests {
         let policy_set = "permit(principal, action, resource);"
             .parse::<PolicySet>()
             .unwrap_or_else(|e| panic!("policy parse failed: {e}"));
-        let context_json = valid_context_json("sess_test", 0, i64::MAX, 0, 0);
+        let context_json = valid_context_json("sess_test", 0, 0, 0);
 
         for action in ACTIONS {
             let principal: EntityUid = "Firma::Agent::\"agent_test\""

@@ -106,7 +106,7 @@ Entity identifiers follow this shape:
 | Action    | `Firma::Action::"<action_class>"`   |
 | Resource  | `Firma::Resource::"<resource_uri>"` |
 
-The Sidecar supplies request context such as session ID, timestamp, serialized parameters, budget state, risk score, and action count when it evaluates policy.
+The Sidecar supplies request context such as session ID, timestamp, serialized parameters, risk score, and action count when it evaluates policy.
 
 ## Services
 

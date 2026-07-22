@@ -64,7 +64,6 @@ fn claims() -> CapabilityClaims {
         issued_at: Utc::now(),
         expiry: Utc::now() + chrono::Duration::hours(1),
         context_hash: String::new(),
-        budget_ceiling: None,
     }
 }
 

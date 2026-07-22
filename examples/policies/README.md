@@ -48,7 +48,6 @@ The Sidecar adds request context before policy evaluation. Policy conditions can
 | `timestamp_ms`            | The request time.                         |
 | `params`                  | Serialized action parameters.             |
 | `risk_score`              | A precomputed risk value.                 |
-| `budget_remaining`        | Remaining budget for bounded actions.     |
 | `action_count`            | The request count within the session.     |
 | `transfer_amount`         | Current transfer amount in cents.         |
 | `daily_cumulative_amount` | Rolling 24-hour transfer amount in cents. |
@@ -117,7 +116,6 @@ cedar authorize   --policies examples/policies/payment.cedar   --schema crates/f
     "timestamp_ms":0,
     "params":"{}",
     "risk_score":10,
-    "budget_remaining":5000000,
     "session_duration_s":0,
     "action_count":1,
     "raw_transport":"https",

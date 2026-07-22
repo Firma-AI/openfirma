@@ -203,7 +203,7 @@ The envelope is the canonical record of the action the Sidecar approved. It cont
 
 - `intent`: action class, resource, params, raw transport, and original action reference.
 - `capability`: the raw signed token that supported the request.
-- `metadata`: agent id, session id, timestamp, budget consumed, and risk score.
+- `metadata`: agent id, session id, timestamp, and risk score.
 - `provenance`: reserved for future causal-chain or attestation data.
 
 The envelope matters because it is shared by later steps and by audit. OpenFirma treats it as immutable once created. If a later step injects credentials or prepares a connector-specific request, it does so by creating derived data rather than rewriting what policy saw.

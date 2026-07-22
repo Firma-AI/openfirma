@@ -139,7 +139,7 @@ Even with policy + capability + sandbox, an agent with `communication.external.s
 
 **This is not a Sidecar bypass; it's a policy design problem.** OpenFirma can record what was sent (audit log) but cannot prevent abuse of an explicitly-permitted destination.
 
-**Mitigations:** scope capabilities and policies as narrowly as the workload tolerates. Use risk-score and budget context to constrain volume. Consider in-band content classification on the agent's side as a separate concern.
+**Mitigations:** scope capabilities and policies as narrowly as the workload tolerates. Use risk scores and action counters to constrain volume. Consider in-band content classification on the agent's side as a separate concern.
 
 ### MCP and other agent-to-tool transports over stdio
 

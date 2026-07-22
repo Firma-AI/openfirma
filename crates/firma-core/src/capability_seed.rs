@@ -11,7 +11,7 @@ use crate::CapabilityClaims;
 /// sidecar's `[capability_seed]` loader. Plain-string mirror of the signed
 /// [`CapabilityClaims`]; the `raw_token` is authoritative and re-verified at
 /// load time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilitySeed {
     /// Raw PASETO v4.public token string.
     pub raw_token: String,
@@ -31,9 +31,6 @@ pub struct CapabilitySeed {
     pub expiry: DateTime<Utc>,
     /// Hex-encoded context hash bound into the claims.
     pub context_hash: String,
-    /// Optional budget ceiling.
-    #[serde(default)]
-    pub budget_ceiling: Option<f64>,
 }
 
 impl CapabilitySeed {
@@ -50,7 +47,6 @@ impl CapabilitySeed {
             issued_at: claims.issued_at,
             expiry: claims.expiry,
             context_hash: claims.context_hash.clone(),
-            budget_ceiling: claims.budget_ceiling,
         }
     }
 }
@@ -71,7 +67,6 @@ mod tests {
             issued_at: now,
             expiry: now + chrono::Duration::minutes(15),
             context_hash: "deadbeef".to_string(),
-            budget_ceiling: None,
         }
     }
 
@@ -101,7 +96,6 @@ resource_scope = "*"
 issued_at = "2026-04-29T15:00:00+00:00"
 expiry = "2026-04-29T16:00:00Z"
 context_hash = "cafebabe"
-budget_ceiling = 1.5
 "#;
         let parsed: CapabilitySeed = toml::from_str(body).unwrap();
         // Both `+00:00` and `Z` offsets must parse to the same instant.
@@ -115,6 +109,5 @@ budget_ceiling = 1.5
                 .parse::<DateTime<Utc>>()
                 .unwrap()
         );
-        assert_eq!(parsed.budget_ceiling, Some(1.5));
     }
 }

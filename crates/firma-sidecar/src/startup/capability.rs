@@ -105,7 +105,6 @@ fn seed_claims(file: &SeedFile) -> anyhow::Result<CapabilityClaims> {
         issued_at: file.issued_at,
         expiry: file.expiry,
         context_hash: file.context_hash.clone(),
-        budget_ceiling: file.budget_ceiling,
     })
 }
 
@@ -408,7 +407,6 @@ mod tests {
             issued_at: now,
             expiry: now + chrono::Duration::minutes(10),
             context_hash: "abcdef1234567890".to_string(),
-            budget_ceiling: Some(10.0),
         }
     }
 
@@ -423,7 +421,6 @@ mod tests {
             issued_at: claims.issued_at,
             expiry: claims.expiry,
             context_hash: claims.context_hash.clone(),
-            budget_ceiling: claims.budget_ceiling,
         }
     }
 }

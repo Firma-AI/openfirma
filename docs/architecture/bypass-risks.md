@@ -58,7 +58,7 @@ claims could widen the action set or resource scope before policy evaluation.
 evaluating policy constraints.
 
 **Impact:** A valid token grants access within its token scope without bundle
-freshness checks, budget limits, time restrictions, or resource constraints.
+freshness checks, time restrictions, or resource constraints.
 
 **Mitigations:**
 

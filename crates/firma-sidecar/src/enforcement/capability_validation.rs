@@ -20,7 +20,7 @@
 //! entering the execution path:
 //! - **Token forgery** — cryptographic signature verification rejects tokens
 //!   not signed by a trusted Authority.
-//! - **Token tampering** — any modification to scope, budget, expiry, agent ID,
+//! - **Token tampering** — any modification to scope, expiry, agent ID,
 //!   or resource scope invalidates the signature.
 //! - **Expired credential reuse** — expiry check rejects tokens whose TTL has
 //!   elapsed.
@@ -325,7 +325,6 @@ mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
-            budget_ceiling: None,
         }
     }
 

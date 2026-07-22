@@ -18,9 +18,9 @@
 //!
 //! # Schema scope
 //!
-//! The canonical Firma schema declares sixteen *required* `EnforcementContext`
+//! The canonical Firma schema declares fifteen *required* `EnforcementContext`
 //! attributes. [`crate::policy::fixture::default_context`] supplies all
-//! sixteen, mirroring the Sidecar hot path's `build_context` so a fixture
+//! fifteen, mirroring the Sidecar hot path's `build_context` so a fixture
 //! verdict equals the enforcement verdict for the equivalent plain request; a
 //! fixture therefore needs no `[fixture.context]` block. Fixtures may still
 //! override any attribute (or add others) via `[fixture.context]`; an unknown
@@ -242,7 +242,7 @@ mod tests {
     fn allow_fixture_against_permit_all_exits_zero() {
         let tmp = tempfile::tempdir().unwrap();
         write_bundle(tmp.path(), "permit(principal, action, resource);");
-        // No `[fixture.context]`: the sixteen mirrored defaults satisfy the
+        // No `[fixture.context]`: the fifteen mirrored defaults satisfy the
         // schema-strict context build on their own.
         let body = r#"
 [fixture]

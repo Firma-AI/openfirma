@@ -98,7 +98,6 @@ pub async fn issue_capability(
         issued_at: now,
         expiry,
         context_hash,
-        budget_ceiling: None,
     };
 
     let raw_token = signer

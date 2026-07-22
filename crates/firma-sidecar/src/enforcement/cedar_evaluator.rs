@@ -450,7 +450,6 @@ namespace Firma {
         timestamp_ms: Long,
         params: String,
         risk_score: Long,
-        budget_remaining: Long,
         session_duration_s: Long,
         action_count: Long,
         git_provider?: String,
@@ -481,7 +480,6 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
-            "budget_remaining": i64::MAX,
             "session_duration_s": 0i64,
             "action_count": 1i64,
         })
@@ -515,7 +513,6 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
-            "budget_remaining": i64::MAX,
             "session_duration_s": 0i64,
             "action_count": 1i64,
         })
@@ -653,7 +650,6 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
-            "budget_remaining": i64::MAX,
             "session_duration_s": 0i64,
             "action_count": 1i64,
         });
@@ -794,37 +790,6 @@ namespace Firma {
     }
 
     #[test]
-    fn cedar_policy_denies_when_budget_remaining_negative() {
-        let policy_src = br"
-            forbid(principal, action, resource)
-            when { context.budget_remaining < 0 };
-            permit(principal, action, resource);
-        ";
-        let bundle = schema_bundle(policy_src);
-        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
-        let context = json!({
-            "session_id": "sess_001",
-            "timestamp_ms": 0i64,
-            "params": "{}",
-            "risk_score": 0i64,
-            "budget_remaining": -1i64,
-            "session_duration_s": 0i64,
-            "action_count": 1i64,
-        });
-
-        let allowed = evaluator
-            .evaluate(
-                &agent(),
-                "communication.external.send",
-                "api.openai.com/v1/chat/completions",
-                context,
-            )
-            .unwrap();
-
-        assert!(!allowed, "expected DENY when budget_remaining < 0");
-    }
-
-    #[test]
     fn cedar_policy_denies_when_risk_score_exceeds_threshold() {
         let policy_src = br"
             forbid(principal, action, resource)
@@ -838,7 +803,6 @@ namespace Firma {
             "timestamp_ms": 0i64,
             "params": "{}",
             "risk_score": 75i64,
-            "budget_remaining": 1000i64,
             "session_duration_s": 0i64,
             "action_count": 1i64,
         });
@@ -873,7 +837,6 @@ namespace Firma {
         timestamp_ms: Long,
         params: String,
         risk_score: Long,
-        budget_remaining: Long,
         session_duration_s: Long,
         action_count: Long,
         raw_transport: String,
@@ -895,7 +858,6 @@ principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"payment.transfer",
     resource
 ) when {
-    context.budget_remaining > 0 &&
     context.risk_score < 30 &&
     context.transfer_amount <= 500000 &&
     context.daily_cumulative_amount + context.transfer_amount <= 1000000 &&
@@ -917,7 +879,6 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
         timestamp_ms: i64,
         params: &'static str,
         risk_score: i64,
-        budget_remaining: i64,
         session_duration_s: i64,
         action_count: i64,
         raw_transport: &'static str,
@@ -935,7 +896,6 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
                 timestamp_ms: 1_700_000_000_000,
                 params: "{}",
                 risk_score: 10,
-                budget_remaining: 5_000_000,
                 session_duration_s: 0,
                 action_count: 1,
                 raw_transport: "https",

@@ -847,7 +847,6 @@ fn passthrough_envelope<'a>(
             agent_id: passthrough_agent_id(),
             timestamp: chrono::Utc::now(),
             trace_id: None,
-            budget_consumed: 0.0,
             risk_score: None,
             thread_id: None,
             parent_action_id: None,
@@ -997,7 +996,6 @@ pub(crate) mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
-            budget_ceiling: None,
         }
     }
 
@@ -1341,7 +1339,6 @@ pub(crate) mod tests {
                     .expect("literal agent id"),
                 timestamp: Utc::now(),
                 trace_id: None,
-                budget_consumed: 0.0,
                 risk_score: None,
                 thread_id: None,
                 parent_action_id: None,

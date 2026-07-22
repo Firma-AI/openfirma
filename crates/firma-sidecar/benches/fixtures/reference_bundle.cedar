@@ -8,7 +8,7 @@ permit(
   principal,
   action == Firma::Action::"bench.action.ctx",
   resource
-) when { context.budget_remaining >= 0 && context.risk_score < 100 };
+) when { context.risk_score < 100 };
 
 permit(principal == Firma::Agent::"agent-000", action == Firma::Action::"bench.action.allow", resource);
 permit(principal == Firma::Agent::"agent-001", action == Firma::Action::"bench.action.allow", resource);

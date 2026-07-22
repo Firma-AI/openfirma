@@ -35,7 +35,6 @@ fn view_for(resource: &str, query: HashMap<String, String>) -> anyhow::Result<Tr
             agent_id: "agt_01j0000000e008000000000001".parse()?,
             timestamp: chrono::Utc::now(),
             trace_id: None,
-            budget_consumed: 0.0,
             risk_score: None,
             thread_id: None,
             parent_action_id: None,

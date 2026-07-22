@@ -4,7 +4,6 @@
 // Actions:    payment.purchase | payment.transfer
 // Context (all monetary amounts in cents):
 //   risk_score              — pre-computed risk (0–100)
-//   budget_remaining        — remaining session budget; i64::MAX if unbounded
 //   transfer_amount         — amount of the current transfer
 //   daily_cumulative_amount — rolling 24-hour committed amount
 //   transfers_last_10m      — transfer count in the last 10-minute window
@@ -17,13 +16,12 @@
 //   Payee concentration:     < 3 transfers to same payee per 30-minute window
 //   Velocity cap:            < 10 transfers in any 10-minute window
 
-// Allow purchases when budget is available and risk is acceptable.
+// Allow purchases when risk is acceptable.
 permit (
     principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"payment.purchase",
     resource
 ) when {
-    context.budget_remaining > 0 &&
     context.risk_score < 50
 };
 
@@ -34,7 +32,6 @@ permit (
     action == Firma::Action::"payment.transfer",
     resource
 ) when {
-    context.budget_remaining > 0 &&
     context.risk_score < 30 &&
     context.transfer_amount <= 500000 &&
     context.daily_cumulative_amount + context.transfer_amount <= 1000000 &&

@@ -17,7 +17,6 @@ struct FuzzSeed {
     action_set: Vec<String>,
     resource_scope: String,
     context_hash: String,
-    budget_ceiling: Option<f64>,
 }
 
 fn static_verifier() -> &'static dyn TokenVerifier {
@@ -40,7 +39,6 @@ fuzz_target!(|input: FuzzSeed| {
         issued_at: Utc::now(),
         expiry: Utc::now(),
         context_hash: input.context_hash,
-        budget_ceiling: input.budget_ceiling,
     };
     let _ = firma_sidecar::startup::seed_into_entry(&file, static_verifier());
 });

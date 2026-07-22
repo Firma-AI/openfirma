@@ -185,7 +185,7 @@ A few patterns you'll write over and over:
 
 **Resource UIDs are exact strings.** `paste.rs/` and `paste.rs` are different UIDs. The normalizer always produces `host + path`, with `/` for empty paths. If you're not sure, log the resource from a denied call and copy it into your rule.
 
-**Use context for graduated controls.** `risk_score`, `budget_remaining`, `action_count`, `session_duration_s` are all in the runtime context. Gate permits with `when { context.field … }` for "permitted up to a point" rules.
+**Use context for graduated controls.** `risk_score`, `action_count`, and `session_duration_s` are all in the runtime context. Gate permits with `when { context.field … }` for "permitted up to a point" rules.
 
 **Use Git context for repo and branch scope.** GitHub HTTPS git traffic is classified by the smart-HTTP rules on `github.com`. A `git push` hits `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, which maps to `code.write`; a delete push is promoted to `code.destructive`. These rules require HTTPS MITM for `github.com` because CONNECT-only mode only sees the tunnel.
 

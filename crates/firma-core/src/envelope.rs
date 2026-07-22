@@ -270,9 +270,6 @@ pub struct ExecutionMetadata {
     pub timestamp: DateTime<Utc>,
     /// Optional distributed tracing correlation ID.
     pub trace_id: Option<String>,
-    /// Cumulative budget consumed in this session (e.g., API cost in USD).
-    /// Schema-reserved; populated when budget tracking is implemented.
-    pub budget_consumed: f64,
     /// Static or pre-computed risk attribute. Defaults to None.
     /// Schema-reserved; populated when risk scoring is implemented.
     pub risk_score: Option<f64>,
@@ -338,7 +335,6 @@ mod tests {
                 "agent_id": "agt_01j0000000e008000000000001",
                 "timestamp": "2024-01-01T00:00:00Z",
                 "trace_id": "golden-trace",
-                "budget_consumed": 0.0,
                 "risk_score": null
             },
             "provenance": null
@@ -372,7 +368,6 @@ mod tests {
                     .expect("fixed date")
                     .with_timezone(&Utc),
                 trace_id: Some("golden-trace".to_string()),
-                budget_consumed: 0.0,
                 risk_score: None,
                 thread_id: None,
                 parent_action_id: None,

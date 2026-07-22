@@ -50,8 +50,6 @@ pub struct LocalExecRequest {
     pub agent_id: Option<String>,
     pub profile: String,
     pub hitl_mode: String,
-    #[serde(default)]
-    pub budget_state_ref: Option<String>,
     /// SHA-256 fingerprint computed by `firma-run`. The sidecar recomputes
     /// independently and checks both match before issuing or consuming a token.
     #[serde(default)]
@@ -498,7 +496,6 @@ mod tests {
             agent_id: Some("agent_1".to_string()),
             profile: "generic".to_string(),
             hitl_mode: "async_token".to_string(),
-            budget_state_ref: None,
             request_fingerprint: None,
             approval_token: None,
         }

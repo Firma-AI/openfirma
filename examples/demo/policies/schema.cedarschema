@@ -20,7 +20,6 @@
 //   timestamp_ms       : Long    - Unix epoch milliseconds at evaluation time
 //   params             : String  - JSON-serialized intent.params (ActionParams)
 //   risk_score         : Long    - static or pre-computed risk attribute (V1 = 0)
-//   budget_remaining   : Long    - ceiling minus consumed, floored; i64::MAX when unbounded
 //   session_duration_s : Long    - seconds since claims.issued_at (non-negative)
 //   action_count       : Long    - monotonic per-session call counter, 1-based
 //   raw_transport      : String  - "http" or "https"; set by the normalizer
@@ -42,7 +41,6 @@ namespace Firma {
     //   timestamp_ms            : Long   — Unix epoch milliseconds at evaluation time
     //   params                  : String — JSON-serialized intent.params (ActionParams)
     //   risk_score              : Long   — static or pre-computed risk attribute (V1 = 0)
-    //   budget_remaining        : Long   — ceiling minus consumed, floored; i64::MAX when unbounded
     //   session_duration_s      : Long   — seconds since claims.issued_at (non-negative)
     //   action_count            : Long   — monotonic per-session call counter, 1-based
     //   raw_transport           : String — "http" or "https"; set by the normalizer
@@ -65,7 +63,6 @@ namespace Firma {
         timestamp_ms: Long,
         params: String,
         risk_score: Long,
-        budget_remaining: Long,
         session_duration_s: Long,
         action_count: Long,
         raw_transport: String,
