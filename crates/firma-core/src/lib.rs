@@ -31,6 +31,7 @@ pub use policy::{EvaluationError, PolicyBundle, PolicyBundleStore, PolicyEvaluat
 pub use run_audit::{RunAuditEvent, RunAuditMessage};
 pub use session::SessionId;
 pub use token::{
-    CapabilityClaims, RevocationStore, TokenError, TokenId, TokenSigner, TokenVerifier,
+    CapabilityClaims, RevocationStore, TokenError, TokenId, TokenIdParseError, TokenSigner,
+    TokenVerifier,
 };
 pub use transport::TransportView;

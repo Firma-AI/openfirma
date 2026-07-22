@@ -52,7 +52,7 @@ impl RevocationStore for NoRevocations {
 
 fn claims() -> CapabilityClaims {
     CapabilityClaims {
-        token_id: "3713c5fc-b569-650c-c780-c64051473370"
+        token_id: "ctok_01j0000000e008000000000001"
             .parse()
             .expect("literal token id"),
         agent_id: "agt_01j0000000e008000000000001"

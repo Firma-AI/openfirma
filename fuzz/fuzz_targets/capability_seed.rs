@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use arbitrary::Arbitrary;
 use chrono::Utc;
-use firma_core::TokenVerifier;
+use firma_core::{TokenId, TokenVerifier};
 use firma_sidecar::config::SeedFile;
 use libfuzzer_sys::fuzz_target;
 
@@ -29,9 +29,12 @@ fn static_verifier() -> &'static dyn TokenVerifier {
 }
 
 fuzz_target!(|input: FuzzSeed| {
+    let Ok(token_id) = input.token_id.parse::<TokenId>() else {
+        return;
+    };
     let file = SeedFile {
         raw_token: input.raw_token,
-        token_id: input.token_id,
+        token_id,
         agent_id: input.agent_id,
         session_id: input.session_id,
         action_set: input.action_set,

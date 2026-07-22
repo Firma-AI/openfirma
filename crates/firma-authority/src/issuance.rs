@@ -79,7 +79,7 @@ pub async fn issue_capability(
     let ttl = clamp_ttl(req.requested_ttl_seconds, max_ttl_seconds);
     let now: DateTime<Utc> = Utc::now();
     let expiry = now + Duration::seconds(i64::from(ttl));
-    let token_id = TokenId::new();
+    let token_id = TokenId::generate();
     let bundle_version = policy_store.bundle().version;
     let agent_id = req.agent_id.to_string();
     let context_hash = compute_context_hash(

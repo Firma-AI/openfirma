@@ -313,7 +313,7 @@ mod tests {
 
     fn valid_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+            token_id: "ctok_01j0000000e008000000000001"
                 .parse()
                 .expect("literal token id"),
             agent_id: "agt_01j0000000e008000000000001"
@@ -419,7 +419,7 @@ mod tests {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore {
-                revoked: vec!["3713c5fc-b569-650c-c780-c64051473370".to_string()],
+                revoked: vec!["ctok_01j0000000e008000000000001".to_string()],
             }),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -535,7 +535,7 @@ mod tests {
         let validated = result.unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(
             validated.claims.token_id.to_string(),
-            "3713c5fc-b569-650c-c780-c64051473370"
+            "ctok_01j0000000e008000000000001"
         );
         assert_eq!(validated.raw_token, "v4.public.test_token");
     }

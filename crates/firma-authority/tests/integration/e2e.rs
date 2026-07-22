@@ -208,7 +208,7 @@ async fn watch_revocations_streams_new_events() {
         .expect("RPC failed")
         .into_inner();
 
-    let token_id = firma_core::token::TokenId::new();
+    let token_id = firma_core::token::TokenId::generate();
     std::fs::write(&server.revocation_file, format!("{token_id}\n"))
         .expect("failed to write revocation");
 

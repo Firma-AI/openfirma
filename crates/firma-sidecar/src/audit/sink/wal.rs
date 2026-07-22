@@ -481,7 +481,7 @@ mod tests {
         ExecutionEvent {
             event_id: id.to_string(),
             session_id: "sess-1".parse().expect("literal session id"),
-            token_id: "2acea42e-bb57-44d6-3ad3-aad955ec50af"
+            token_id: "ctok_01j0000000e008000000000001"
                 .parse()
                 .expect("literal token id"),
             agent_id: "agt_01j0000000e008000000000001"

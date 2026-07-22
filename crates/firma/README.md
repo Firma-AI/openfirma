@@ -110,10 +110,10 @@ Subcommands:
 
 `revocations add` flags:
 
-| Arg / Flag     | Default            | Description                    |
-| -------------- | ------------------ | ------------------------------ |
-| `<token-id>`   | _required_         | Positional token ID to revoke. |
-| `-r, --reason` | `operator-revoked` | Human-readable reason.         |
+| Arg / Flag     | Default            | Description                                     |
+| -------------- | ------------------ | ----------------------------------------------- |
+| `<token-id>`   | _required_         | Canonical `ctok` capability token ID to revoke. |
+| `-r, --reason` | `operator-revoked` | Human-readable reason.                          |
 
 Config schema: see `crates/firma-authority/src/config.rs`.
 

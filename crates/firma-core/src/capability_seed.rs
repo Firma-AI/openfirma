@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::CapabilityClaims;
+use crate::{CapabilityClaims, TokenId};
 
 /// On-disk shape of a capability seed file.
 ///
@@ -15,8 +15,8 @@ use crate::CapabilityClaims;
 pub struct CapabilitySeed {
     /// Raw PASETO v4.public token string.
     pub raw_token: String,
-    /// Token id (ULID/UUID) as written by the authority.
-    pub token_id: String,
+    /// Capability token ID as written by the Authority.
+    pub token_id: TokenId,
     /// Agent identity bound into the token.
     pub agent_id: String,
     /// Session identity bound into the token.
@@ -39,7 +39,7 @@ impl CapabilitySeed {
     pub fn from_claims(claims: &CapabilityClaims, raw_token: String) -> Self {
         Self {
             raw_token,
-            token_id: claims.token_id.to_string(),
+            token_id: claims.token_id,
             agent_id: claims.agent_id.to_string(),
             session_id: claims.session_id.to_string(),
             action_set: claims.action_set.clone(),
@@ -54,12 +54,10 @@ impl CapabilitySeed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TokenId;
-
     fn sample_claims() -> CapabilityClaims {
         let now = chrono::Utc::now();
         CapabilityClaims {
-            token_id: TokenId::new(),
+            token_id: TokenId::generate(),
             agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "sess_xyz".parse().unwrap(),
             action_set: vec!["communication.external.send".to_string()],
@@ -71,11 +69,10 @@ mod tests {
     }
 
     #[test]
-    fn from_claims_stringifies_ids_then_toml_round_trip() {
+    fn from_claims_preserves_token_id_then_toml_round_trip() {
         let claims = sample_claims();
         let seed = CapabilitySeed::from_claims(&claims, "v4.public.tok".to_string());
-        // Verify the transformation: typed ids are stringified into the seed.
-        assert_eq!(seed.token_id, claims.token_id.to_string());
+        assert_eq!(seed.token_id, claims.token_id);
         assert_eq!(seed.agent_id, claims.agent_id.to_string());
         assert_eq!(seed.session_id, claims.session_id.to_string());
 
@@ -88,7 +85,7 @@ mod tests {
     fn parses_offset_and_z_timestamps() {
         let body = r#"
 raw_token = "v4.public.test"
-token_id = "01J0000000000000000000000Z"
+token_id = "ctok_01j0000000e008000000000001"
 agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo-session"
 action_set = ["communication.external.send"]

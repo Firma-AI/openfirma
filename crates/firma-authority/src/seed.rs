@@ -8,7 +8,7 @@
 //! when adding fields.
 
 use anyhow::{Context as _, Result};
-use firma_core::CapabilityClaims;
+use firma_core::{CapabilityClaims, TokenId};
 use serde::Serialize;
 
 use crate::IssuanceResult;
@@ -16,7 +16,7 @@ use crate::IssuanceResult;
 #[derive(Debug, Serialize)]
 pub struct SeedFile {
     pub raw_token: String,
-    pub token_id: String,
+    pub token_id: TokenId,
     pub agent_id: String,
     pub session_id: String,
     pub action_set: Vec<String>,
@@ -47,7 +47,7 @@ impl SeedFile {
 
         Self {
             raw_token: raw_token.clone(),
-            token_id: token_id.to_string(),
+            token_id: *token_id,
             agent_id: agent_id.to_string(),
             session_id: session_id.to_string(),
             action_set: action_set.clone(),

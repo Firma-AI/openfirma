@@ -26,10 +26,10 @@ pub struct RevocationEntry {
 /// broadcasting to live subscribers.
 ///
 /// File format: `token_id\trevoked_at_rfc3339\treason\n` (one entry per line).
-/// Legacy lines containing only a bare token ID are accepted for backward
-/// compatibility; they get `Utc::now()` as their revocation timestamp, which
-/// is conservative (treats them as freshly revoked rather than potentially
-/// expirable).
+/// Lines containing only a bare canonical `ctok` ID are accepted; they get
+/// `Utc::now()` as their revocation timestamp, which is conservative (treats
+/// them as freshly revoked rather than potentially expirable). Legacy raw UUID
+/// capability IDs are invalid and are not loaded.
 ///
 /// Entries whose `revoked_at + token_ttl < now` are considered expired: the
 /// token would fail the expiry check in Stage 1 regardless of revocation status,
@@ -88,8 +88,8 @@ impl RevocationStore {
     /// Parse a single line from the revocation file into a [`RevocationEntry`].
     ///
     /// Accepts both the current format (`token_id\trevoked_at_rfc3339\treason`)
-    /// and the legacy format (bare `token_id`). Returns `None` for blank or
-    /// unparseable lines.
+    /// and the bare canonical `token_id` format. Returns `None` for blank or
+    /// unparseable lines, including legacy raw UUID IDs.
     fn parse_line(line: &str, fallback_timestamp: DateTime<Utc>) -> Option<RevocationEntry> {
         let line = line.trim();
         if line.is_empty() {
@@ -454,8 +454,8 @@ mod tests {
     fn load_existing_revocations_legacy_format() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
-        let id1 = TokenId::new();
-        let id2 = TokenId::new();
+        let id1 = TokenId::generate();
+        let id2 = TokenId::generate();
         std::fs::write(&file, format!("{id1}\n{id2}\n")).unwrap();
 
         let s = store(&file);
@@ -468,7 +468,7 @@ mod tests {
     fn load_existing_revocations_new_format() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
-        let id = TokenId::new();
+        let id = TokenId::generate();
         let ts = Utc::now().to_rfc3339();
         std::fs::write(&file, format!("{id}\t{ts}\texplicit reason\n")).unwrap();
 
@@ -484,8 +484,8 @@ mod tests {
     fn load_ignores_empty_lines() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
-        let id1 = TokenId::new();
-        let id2 = TokenId::new();
+        let id1 = TokenId::generate();
+        let id2 = TokenId::generate();
         std::fs::write(&file, format!("{id1}\n\n  \n{id2}\n")).unwrap();
 
         let s = store(&file);
@@ -497,7 +497,7 @@ mod tests {
     fn expired_entries_skipped_on_load() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
-        let id = TokenId::new();
+        let id = TokenId::generate();
         // Revoked 2 hours ago, TTL is 1 hour → expired.
         let old_ts = (Utc::now() - Duration::hours(2)).to_rfc3339();
         std::fs::write(&file, format!("{id}\t{old_ts}\told revocation\n")).unwrap();
@@ -511,7 +511,7 @@ mod tests {
     fn non_expired_entries_loaded() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
-        let id = TokenId::new();
+        let id = TokenId::generate();
         // Revoked 30 minutes ago, TTL is 1 hour → still valid.
         let recent_ts = (Utc::now() - Duration::minutes(30)).to_rfc3339();
         std::fs::write(&file, format!("{id}\t{recent_ts}\trecent reason\n")).unwrap();
@@ -534,7 +534,7 @@ mod tests {
         let s = s.watch().unwrap();
         let mut rx = s.subscribe();
 
-        let id = TokenId::new();
+        let id = TokenId::generate();
         s.revoke(id, "test").await.unwrap();
 
         tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
@@ -557,7 +557,7 @@ mod tests {
         let s = s.watch().unwrap();
         let mut rx = s.subscribe();
 
-        let id = TokenId::new();
+        let id = TokenId::generate();
         s.revoke(id, "security breach").await.unwrap();
 
         tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
@@ -586,7 +586,7 @@ mod tests {
         let s = s.watch().unwrap();
         let mut rx = s.subscribe();
 
-        let id = TokenId::new();
+        let id = TokenId::generate();
         assert!(!s.is_revoked(id).await);
 
         s.revoke(id, "test").await.unwrap();
@@ -610,8 +610,8 @@ mod tests {
         let mut rx = s.subscribe();
 
         let before = Utc::now() - chrono::Duration::seconds(1);
-        let id1 = TokenId::new();
-        let id2 = TokenId::new();
+        let id1 = TokenId::generate();
+        let id2 = TokenId::generate();
 
         // Write both IDs at once so one file event triggers a single reload for both.
         tokio::fs::write(&file, format!("{id1}\n{id2}\n"))
@@ -637,8 +637,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
 
-        let id_old = TokenId::new();
-        let id_new = TokenId::new();
+        let id_old = TokenId::generate();
+        let id_new = TokenId::generate();
         let old_ts = (Utc::now() - Duration::hours(2)).to_rfc3339();
         let new_ts = (Utc::now() - Duration::minutes(30)).to_rfc3339();
         std::fs::write(
@@ -674,7 +674,7 @@ mod tests {
         let s = s.watch().unwrap();
         let mut rx = s.subscribe();
 
-        let id = TokenId::new();
+        let id = TokenId::generate();
         std::fs::write(&file, format!("{id}\n")).unwrap();
 
         tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
@@ -695,7 +695,7 @@ mod tests {
         let s = s.watch().unwrap();
         let mut rx = s.subscribe();
 
-        let id = TokenId::new();
+        let id = TokenId::generate();
         std::fs::write(&file, format!("{id}\n")).unwrap();
 
         let entry = tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())

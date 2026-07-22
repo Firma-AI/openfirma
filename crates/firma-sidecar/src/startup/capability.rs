@@ -13,7 +13,7 @@ use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use crate::enforcement::capability_validation::CapabilityMapHandle;
 use anyhow::Context;
 use firma_core::token::paseto::PasetoV4Verifier;
-use firma_core::{AgentId, CapabilityClaims, SessionId, TokenError, TokenId, TokenVerifier};
+use firma_core::{AgentId, CapabilityClaims, SessionId, TokenError, TokenVerifier};
 use notify::Watcher as _;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -92,12 +92,11 @@ pub fn seed_into_entry(
 }
 
 fn seed_claims(file: &SeedFile) -> anyhow::Result<CapabilityClaims> {
-    let token_id: TokenId = file.token_id.parse().context("invalid token_id")?;
     let agent_id: AgentId = file.agent_id.parse().context("invalid agent_id")?;
     let session_id: SessionId = file.session_id.parse().context("invalid session_id")?;
 
     Ok(CapabilityClaims {
-        token_id,
+        token_id: file.token_id,
         agent_id,
         session_id,
         action_set: file.action_set.clone(),
@@ -284,8 +283,8 @@ impl CapabilityReloader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_core::TokenSigner;
     use firma_core::token::paseto::PasetoV4Signer;
+    use firma_core::{TokenId, TokenSigner};
     use pasetors::keys::{AsymmetricKeyPair, Generate};
     use pasetors::version4::V4;
     use std::path::PathBuf;
@@ -399,7 +398,7 @@ mod tests {
     fn sample_claims() -> CapabilityClaims {
         let now = chrono::Utc::now();
         CapabilityClaims {
-            token_id: TokenId::new(),
+            token_id: TokenId::generate(),
             agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "sess_xyz".parse().unwrap(),
             action_set: vec!["communication.external.send".to_string()],
@@ -413,7 +412,7 @@ mod tests {
     fn seed_file_from_claims(claims: &CapabilityClaims) -> SeedFile {
         SeedFile {
             raw_token: String::new(),
-            token_id: claims.token_id.to_string(),
+            token_id: claims.token_id,
             agent_id: claims.agent_id.to_string(),
             session_id: claims.session_id.to_string(),
             action_set: claims.action_set.clone(),

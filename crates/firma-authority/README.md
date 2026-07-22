@@ -84,7 +84,7 @@ The output file contains the signed token and matching claims. Configure the Sid
 | `listen_addr`        | `[::1]:50051`         | gRPC address for the Authority service.      |
 | `policy_dir`         | `policies`            | Directory containing `.cedar` policy files.  |
 | `schema_path`        | unset                 | Optional schema override.                    |
-| `revocation_file`    | `revocations.txt`     | File containing revoked token IDs.           |
+| `revocation_file`    | `revocations.txt`     | File containing canonical `ctok` token IDs.  |
 | `key_file`           | `firma-authority.key` | Authority private signing key.               |
 | `max_ttl_seconds`    | `3600`                | Maximum token lifetime.                      |
 | `bundle_ttl_seconds` | `30`                  | TTL advertised with streamed policy bundles. |

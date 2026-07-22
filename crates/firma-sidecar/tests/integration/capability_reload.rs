@@ -51,7 +51,7 @@ fn verifier(public: &[u8]) -> Arc<dyn TokenVerifier + Send + Sync> {
 fn claims(expiry: DateTime<Utc>) -> CapabilityClaims {
     let now = Utc::now();
     CapabilityClaims {
-        token_id: TokenId::new(),
+        token_id: TokenId::generate(),
         agent_id: "agt_01j0000000e008000000000001".parse().expect("agent id"),
         session_id: SESSION.parse().expect("session id"),
         action_set: vec![ACTION.to_string()],

@@ -100,7 +100,7 @@ impl AuthorityService for MockAuthority {
             MockTokenKind::Expired => now - chrono::Duration::seconds(60),
         };
         let claims = CapabilityClaims {
-            token_id: TokenId::new(),
+            token_id: TokenId::generate(),
             agent_id: req
                 .agent_id
                 .parse()
@@ -390,7 +390,10 @@ fn refresher_rewrites_seed_before_expiry() {
             .expect("spawn refresher");
 
     let token_id = wait_for_reminted_token(&seed_path);
-    assert!(!token_id.is_empty(), "refresher wrote a verified seed");
+    assert!(
+        token_id.to_string().starts_with("ctok_"),
+        "refresher wrote a verified seed"
+    );
     assert!(
         server
             .seen_agent_ids
@@ -448,7 +451,7 @@ fn unknown_denial_reason_retains_generic_fallback() {
 
 /// Poll `seed_path` until it holds a parseable, re-minted seed; return its
 /// `token_id`.
-fn wait_for_reminted_token(seed_path: &Path) -> String {
+fn wait_for_reminted_token(seed_path: &Path) -> TokenId {
     let deadline = Instant::now() + Duration::from_secs(6);
     loop {
         if let Ok(body) = std::fs::read_to_string(seed_path)
