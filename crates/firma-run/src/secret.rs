@@ -166,12 +166,28 @@ impl fmt::Debug for SecretValue {
     }
 }
 
+/// A stored secret with its optional domain scope.
+#[derive(Debug, Clone)]
+struct SecretEntry {
+    value: SecretValue,
+    /// When `Some`, this secret is only returned for requests whose domain
+    /// matches exactly. `None` means the secret is domain-agnostic (wildcard).
+    domain: Option<String>,
+}
+
 /// In-memory placeholder ↔ secret dictionary.
+///
+/// Each placeholder holds exactly one entry. The entry's optional `domain`
+/// field scopes resolution: `None` resolves for any host; `Some(host)` resolves
+/// only for that exact host. Integrations that expose a URL/website field in
+/// their vault output (e.g. 1Password's `urls[0].href`) populate this field via
+/// the matcher's `domain_path` so the Sidecar cannot reuse a credential for a
+/// different service.
 ///
 /// The dictionary is run-scoped: values are zeroized when the store is dropped.
 #[derive(Debug, Clone, Default)]
 pub struct SecretStore {
-    by_placeholder: BTreeMap<Placeholder, SecretValue>,
+    by_placeholder: BTreeMap<Placeholder, SecretEntry>,
 }
 
 impl SecretStore {
@@ -182,24 +198,44 @@ impl SecretStore {
     }
 
     /// Insert or replace a placeholder → secret mapping.
-    pub fn insert(&mut self, placeholder: Placeholder, secret: SecretValue) {
-        self.by_placeholder.insert(placeholder, secret);
+    ///
+    /// `domain = None` makes the entry resolve for any request host (wildcard).
+    /// `domain = Some(host)` scopes it to that host only.
+    pub fn insert(
+        &mut self,
+        placeholder: Placeholder,
+        domain: Option<String>,
+        secret: SecretValue,
+    ) {
+        self.by_placeholder.insert(
+            placeholder,
+            SecretEntry {
+                value: secret,
+                domain,
+            },
+        );
     }
 
-    /// Resolve a placeholder token to its secret bytes, if known.
+    /// Resolve a placeholder token to its secret bytes for the given request domain.
+    ///
+    /// Returns `None` when the placeholder is unknown or its stored domain does
+    /// not match `domain`.
     #[must_use]
-    pub fn resolve(&self, placeholder: &str) -> Option<&[u8]> {
-        self.by_placeholder
-            .get(placeholder)
-            .map(SecretValue::expose)
+    pub fn resolve(&self, placeholder: &str, domain: &str) -> Option<&[u8]> {
+        self.by_placeholder.get(placeholder).and_then(|entry| {
+            entry
+                .domain
+                .as_deref()
+                .is_none_or(|d| d == domain)
+                .then_some(entry.value.expose())
+        })
     }
 
-    /// Iterate stored `(placeholder, secret bytes)` pairs, ordered by
-    /// placeholder.
+    /// Iterate stored `(placeholder, secret bytes)` pairs, ordered by placeholder.
     pub fn iter(&self) -> impl Iterator<Item = (&Placeholder, &[u8])> {
         self.by_placeholder
             .iter()
-            .map(|(placeholder, value)| (placeholder, value.expose()))
+            .map(|(placeholder, entry)| (placeholder, entry.value.expose()))
     }
 
     /// Number of stored secrets.
@@ -262,26 +298,56 @@ mod tests {
     }
 
     #[test]
-    fn resolve_returns_inserted_value_and_none_for_unknown() {
+    fn wildcard_entry_resolves_for_any_domain() {
         let mut store = SecretStore::new();
         let placeholder = Placeholder::mint("bitwarden", "token");
-        store.insert(placeholder.clone(), SecretValue::from("s3cr3t"));
+        store.insert(placeholder.clone(), None, SecretValue::from("s3cr3t"));
 
-        assert_eq!(store.resolve(placeholder.as_str()), Some(&b"s3cr3t"[..]));
-        assert_eq!(store.resolve("firma-secret://bitwarden/absent"), None);
+        assert_eq!(
+            store.resolve(placeholder.as_str(), "api.github.com"),
+            Some(&b"s3cr3t"[..])
+        );
+        assert_eq!(
+            store.resolve(placeholder.as_str(), "api.stripe.com"),
+            Some(&b"s3cr3t"[..])
+        );
+        assert_eq!(
+            store.resolve("firma-secret://bitwarden/absent", "api.github.com"),
+            None
+        );
         assert_eq!(store.len(), 1);
         assert!(!store.is_empty());
     }
 
     #[test]
-    fn insert_replaces_existing_placeholder() {
+    fn same_domain_insert_replaces_existing_entry() {
         let mut store = SecretStore::new();
         let placeholder = Placeholder::mint("bitwarden", "token");
-        store.insert(placeholder.clone(), SecretValue::from("old-value"));
-        store.insert(placeholder.clone(), SecretValue::from("new-value"));
+        store.insert(placeholder.clone(), None, SecretValue::from("old-value"));
+        store.insert(placeholder.clone(), None, SecretValue::from("new-value"));
 
         assert_eq!(store.len(), 1);
-        assert_eq!(store.resolve(placeholder.as_str()), Some(&b"new-value"[..]));
+        assert_eq!(
+            store.resolve(placeholder.as_str(), "any.domain"),
+            Some(&b"new-value"[..])
+        );
+    }
+
+    #[test]
+    fn domain_scoped_entry_does_not_match_wrong_domain() {
+        let mut store = SecretStore::new();
+        let placeholder = Placeholder::mint("bitwarden", "token");
+        store.insert(
+            placeholder.clone(),
+            Some("api.github.com".to_owned()),
+            SecretValue::from("ghp_xxx"),
+        );
+
+        assert_eq!(
+            store.resolve(placeholder.as_str(), "api.github.com"),
+            Some(&b"ghp_xxx"[..])
+        );
+        assert_eq!(store.resolve(placeholder.as_str(), "api.stripe.com"), None);
     }
 
     #[test]

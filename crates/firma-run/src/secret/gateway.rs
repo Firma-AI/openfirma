@@ -8,11 +8,17 @@
 //!
 //! # Protocol (newline-framed JSON)
 //!
+//! The request carries an array of placeholder tokens; the response is a
+//! positionally-aligned array of per-token results (one element per token):
+//!
 //! ```text
-//! → {"placeholder":"firma-secret://bw/token","domain":"api.github.com"}
-//! ← {"secret_b64":"...base64 bytes..."}   (success)
-//! ← {"error":"unknown placeholder: ..."}  (failure)
+//! → {"placeholders":["firma-secret://bw/token","firma-secret://bw/other"],"domain":"api.github.com"}
+//! ← [{"secret_b64":"...base64..."},{"error":"unknown placeholder: ..."}]
 //! ```
+//!
+//! Protocol-level errors (malformed request, oversized request) are returned as
+//! a single JSON object `{"error":"..."}` so they can be distinguished from an
+//! empty batch.
 //!
 //! The gateway transport is platform-dependent: a Unix domain socket on Unix
 //! targets and a TCP loopback socket on Windows. Consumers discover the bound
@@ -39,16 +45,16 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
 #[derive(Deserialize)]
 struct ResolveRequest {
-    placeholder: String,
-    /// Target host of the outbound request; forwarded for future domain-based
-    /// access control. Currently used only for debug logging.
-    #[serde(default)]
-    domain: Option<String>,
+    placeholders: Vec<String>,
+    /// Target host of the outbound request. Used to filter domain-scoped
+    /// secrets: a secret stored for `api.github.com` will not resolve for
+    /// requests to `api.stripe.com`.
+    domain: String,
 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum ResolveResponse {
+enum PlaceholderResult {
     Ok { secret_b64: String },
     Err { error: String },
 }
@@ -208,9 +214,9 @@ fn handle_protocol<R: io::Read, W: io::Write>(
     reader.read_line(&mut line)?;
 
     if line.len() > MAX_REQUEST_BYTES {
-        return write_response(
+        return write_json_line(
             &mut writer,
-            &ResolveResponse::Err {
+            &PlaceholderResult::Err {
                 error: "request too large".to_owned(),
             },
         );
@@ -227,41 +233,41 @@ fn handle_protocol<R: io::Read, W: io::Write>(
     let request = match serde_json::from_str::<ResolveRequest>(trimmed) {
         Ok(r) => r,
         Err(e) => {
-            return write_response(
+            return write_json_line(
                 &mut writer,
-                &ResolveResponse::Err {
+                &PlaceholderResult::Err {
                     error: format!("malformed request: {e}"),
                 },
             );
         }
     };
 
-    tracing::debug!(
-        placeholder = %request.placeholder,
-        domain = ?request.domain,
-        "secret gateway: resolving placeholder"
-    );
+    let snapshot = store.load();
+    let results: Vec<PlaceholderResult> = request
+        .placeholders
+        .iter()
+        .map(|placeholder| {
+            tracing::debug!(
+                %placeholder,
+                domain = %request.domain,
+                "secret gateway: resolving placeholder"
+            );
+            snapshot.resolve(placeholder, &request.domain).map_or_else(
+                || PlaceholderResult::Err {
+                    error: format!("unknown placeholder: {placeholder}"),
+                },
+                |bytes| PlaceholderResult::Ok {
+                    secret_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                },
+            )
+        })
+        .collect();
 
-    let secret_b64 = {
-        let snapshot = store.load();
-        snapshot
-            .resolve(&request.placeholder)
-            .map(|b| base64::engine::general_purpose::STANDARD.encode(b))
-    };
-
-    match secret_b64 {
-        Some(b64) => write_response(&mut writer, &ResolveResponse::Ok { secret_b64: b64 }),
-        None => write_response(
-            &mut writer,
-            &ResolveResponse::Err {
-                error: format!("unknown placeholder: {}", request.placeholder),
-            },
-        ),
-    }
+    write_json_line(&mut writer, &results)
 }
 
-fn write_response(writer: &mut impl io::Write, response: &ResolveResponse) -> io::Result<()> {
-    let mut payload = serde_json::to_vec(response)
+fn write_json_line<T: serde::Serialize>(writer: &mut impl io::Write, value: &T) -> io::Result<()> {
+    let mut payload = serde_json::to_vec(value)
         .map_err(|e| io::Error::other(format!("failed to serialize gateway response: {e}")))?;
     payload.push(b'\n');
     writer.write_all(&payload)?;
@@ -281,6 +287,7 @@ mod tests {
         let mut store = SecretStore::new();
         store.insert(
             Placeholder::parse(placeholder).expect("valid placeholder in test fixture"),
+            None,
             SecretValue::new(secret.to_vec()),
         );
         Arc::new(ArcSwap::from_pointee(store))
@@ -301,9 +308,9 @@ mod tests {
         (listener, addr)
     }
 
-    fn resolve(addr: SocketAddr, placeholder: &str) -> String {
+    fn resolve_batch(addr: SocketAddr, placeholders: &[&str], domain: &str) -> String {
         let mut stream = TcpStream::connect(addr).expect("connect");
-        let req = serde_json::json!({ "placeholder": placeholder });
+        let req = serde_json::json!({ "placeholders": placeholders, "domain": domain });
         stream
             .write_all(format!("{req}\n").as_bytes())
             .expect("write");
@@ -320,9 +327,9 @@ mod tests {
         let (listener, addr) = bind_tcp();
         thread::spawn(move || listener.serve_forever(&store));
 
-        let response = resolve(addr, "firma-secret://bw/token");
-        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
-        let b64 = val["secret_b64"].as_str().expect("secret_b64 field");
+        let response = resolve_batch(addr, &["firma-secret://bw/token"], "api.github.com");
+        let arr: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        let b64 = arr[0]["secret_b64"].as_str().expect("secret_b64 field");
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .expect("valid base64");
@@ -335,9 +342,52 @@ mod tests {
         let (listener, addr) = bind_tcp();
         thread::spawn(move || listener.serve_forever(&store));
 
-        let response = resolve(addr, "firma-secret://bw/absent");
-        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
-        assert!(val["error"].as_str().is_some(), "raw: {response}");
+        let response = resolve_batch(addr, &["firma-secret://bw/absent"], "api.github.com");
+        let arr: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert!(arr[0]["error"].as_str().is_some(), "raw: {response}");
+    }
+
+    #[test]
+    fn batch_resolves_mix_of_known_and_unknown() {
+        let store = store_with("firma-secret://bw/token", b"s3cr3t");
+        let (listener, addr) = bind_tcp();
+        thread::spawn(move || listener.serve_forever(&store));
+
+        let response = resolve_batch(
+            addr,
+            &["firma-secret://bw/token", "firma-secret://bw/absent"],
+            "api.github.com",
+        );
+        let arr: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert_eq!(arr.as_array().expect("array").len(), 2);
+        assert!(
+            arr[0]["secret_b64"].as_str().is_some(),
+            "first item should resolve"
+        );
+        assert!(
+            arr[1]["error"].as_str().is_some(),
+            "second item should error"
+        );
+    }
+
+    #[test]
+    fn domain_scoped_secret_rejected_for_wrong_domain() {
+        let mut store = SecretStore::new();
+        store.insert(
+            Placeholder::parse("firma-secret://bw/token").expect("valid"),
+            Some("api.github.com".to_owned()),
+            SecretValue::new(b"ghp_secret".to_vec()),
+        );
+        let store = Arc::new(ArcSwap::from_pointee(store));
+        let (listener, addr) = bind_tcp();
+        thread::spawn(move || listener.serve_forever(&store));
+
+        let response = resolve_batch(addr, &["firma-secret://bw/token"], "api.stripe.com");
+        let arr: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert!(
+            arr[0]["error"].as_str().is_some(),
+            "wrong-domain request must not resolve: {response}"
+        );
     }
 
     #[test]

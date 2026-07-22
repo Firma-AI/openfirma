@@ -418,26 +418,38 @@ impl RequestHandler {
         }
 
         let mut store = SidecarSecretStore::new();
-        for placeholder in &placeholders {
-            match secret_gateway_client::resolve(endpoint, placeholder, Some(&request.host)).await {
-                Ok(secret_bytes) => {
-                    if let Err(e) =
-                        store.insert(placeholder.clone(), SecretValue::new(secret_bytes))
-                    {
-                        tracing::warn!(
-                            placeholder = %placeholder,
-                            error = %e,
-                            "secret gateway: failed to build store entry"
-                        );
+        let placeholder_refs: Vec<&str> = placeholders.iter().map(String::as_str).collect();
+        match secret_gateway_client::resolve_batch(endpoint, &placeholder_refs, &request.host).await
+        {
+            Ok(results) => {
+                for (placeholder, result) in placeholders.iter().zip(results) {
+                    match result {
+                        Ok(secret_bytes) => {
+                            if let Err(e) =
+                                store.insert(placeholder.clone(), SecretValue::new(secret_bytes))
+                            {
+                                tracing::warn!(
+                                    placeholder = %placeholder,
+                                    error = %e,
+                                    "secret gateway: failed to build store entry"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                placeholder = %placeholder,
+                                error = %e,
+                                "secret gateway: placeholder resolution failed; forwarding literal"
+                            );
+                        }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        placeholder = %placeholder,
-                        error = %e,
-                        "secret gateway: placeholder resolution failed; forwarding literal"
-                    );
-                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "secret gateway: batch resolve failed; forwarding all literals"
+                );
             }
         }
 

@@ -391,6 +391,13 @@ pub enum SecretMatcher {
         /// `JSONPath` selecting the matching name (`@match_name`), aligned by
         /// document order with the value path.
         name_path: String,
+        /// Optional `JSONPath` selecting the domain (hostname) associated with
+        /// each secret, aligned with the value path. When a selected node is not
+        /// a string (e.g. `null`) the domain is treated as absent (wildcard).
+        /// Use this for integrations whose vault items carry a URL or hostname
+        /// field (e.g. 1Password `urls[0].href`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        domain_path: Option<String>,
     },
     /// `Regex` extraction over text output. The pattern carries a required
     /// `value` and optional `name` named capture group (`@match_pattern`).

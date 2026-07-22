@@ -1,9 +1,10 @@
 //! Client for the firma-run secret resolution gateway.
 //!
 //! When the Sidecar MITM pipeline processes an outbound request body containing
-//! placeholder tokens, it calls [`resolve`] for each token to obtain the raw
-//! secret bytes from firma-run. firma-run remains the single source of truth;
-//! the Sidecar never caches secrets across requests.
+//! placeholder tokens, it calls [`resolve_batch`] with all tokens at once to
+//! obtain the raw secret bytes from firma-run in a single round-trip. firma-run
+//! remains the single source of truth; the Sidecar never caches secrets across
+//! requests.
 //!
 //! The gateway address is advertised via the [`GATEWAY_ADDR_ENV`] environment
 //! variable, set by the orchestrator after firma-run binds the socket. The
@@ -14,7 +15,7 @@
 //! tcp:127.0.0.1:51234                          (Windows)
 //! ```
 //!
-//! Parse it with [`GatewayEndpoint::parse`] and pass it to [`resolve`].
+//! Parse it with [`GatewayEndpoint::parse`] and pass it to [`resolve_batch`].
 
 use std::net::SocketAddr;
 
@@ -68,38 +69,47 @@ impl GatewayEndpoint {
 
 #[derive(Serialize)]
 struct ResolveRequest<'a> {
-    placeholder: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    domain: Option<&'a str>,
+    placeholders: &'a [&'a str],
+    domain: &'a str,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum ResolveResponse {
+enum PlaceholderResult {
     Ok { secret_b64: String },
     Err { error: String },
 }
 
-/// Resolve one placeholder token to its raw secret bytes via the firma-run
-/// secret gateway.
+/// Resolve a batch of placeholder tokens to their raw secret bytes via the
+/// firma-run secret gateway.
 ///
-/// `domain` is the target host of the outbound request. It is forwarded to
-/// firma-run for future domain-based access control; pass `None` to omit.
+/// All tokens are sent in a single request; the response is a positionally-
+/// aligned array of per-token results. `domain` is the target host of the
+/// outbound request; secrets stored for a different domain will not resolve.
+///
+/// The outer `Result` represents a connection or protocol failure that affects
+/// the entire batch. The inner `Result` per position represents whether that
+/// specific placeholder was known to firma-run for this domain.
 ///
 /// # Errors
 ///
-/// Returns an error string when the gateway is unreachable, returns an error
-/// response, or the response cannot be decoded. Treat errors as fail-closed:
-/// do not forward the request with unresolved placeholders.
-pub async fn resolve(
+/// The outer error is returned when the gateway is unreachable or the response
+/// cannot be decoded. The inner per-token error is returned when a placeholder
+/// is unknown or scoped to a different domain. Treat both error variants as
+/// fail-open for that placeholder (leave the literal token in the request body).
+pub async fn resolve_batch(
     endpoint: &GatewayEndpoint,
-    placeholder: &str,
-    domain: Option<&str>,
-) -> Result<Vec<u8>, String> {
+    placeholders: &[&str],
+    domain: &str,
+) -> Result<Vec<Result<Vec<u8>, String>>, String> {
     use base64::Engine as _;
 
+    if placeholders.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let request = ResolveRequest {
-        placeholder,
+        placeholders,
         domain,
     };
     let payload = serde_json::to_string(&request)
@@ -121,14 +131,26 @@ pub async fn resolve(
         }
     };
 
-    match serde_json::from_str::<ResolveResponse>(&response_line)
-        .map_err(|e| format!("failed to decode gateway response: {e}"))?
-    {
-        ResolveResponse::Ok { secret_b64 } => base64::engine::general_purpose::STANDARD
-            .decode(&secret_b64)
-            .map_err(|e| format!("gateway returned invalid base64: {e}")),
-        ResolveResponse::Err { error } => Err(format!("gateway error: {error}")),
+    let results = serde_json::from_str::<Vec<PlaceholderResult>>(&response_line)
+        .map_err(|e| format!("failed to decode gateway response: {e}"))?;
+
+    if results.len() != placeholders.len() {
+        return Err(format!(
+            "gateway returned {} results for {} placeholders",
+            results.len(),
+            placeholders.len()
+        ));
     }
+
+    Ok(results
+        .into_iter()
+        .map(|r| match r {
+            PlaceholderResult::Ok { secret_b64 } => base64::engine::general_purpose::STANDARD
+                .decode(&secret_b64)
+                .map_err(|e| format!("gateway returned invalid base64: {e}")),
+            PlaceholderResult::Err { error } => Err(format!("gateway error: {error}")),
+        })
+        .collect())
 }
 
 async fn send_and_receive<S>(stream: S, payload: &str) -> Result<String, String>

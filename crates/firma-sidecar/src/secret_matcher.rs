@@ -47,6 +47,17 @@ pub enum MatcherError {
         /// Number of name nodes.
         names: usize,
     },
+    /// The domain path selected a different number of nodes than the value path.
+    #[error(
+        "json matcher domain_path selected {domains} node(s) but value_path selected {values}; \
+         paths must align"
+    )]
+    DomainMisaligned {
+        /// Number of value nodes.
+        values: usize,
+        /// Number of domain nodes selected.
+        domains: usize,
+    },
     /// A selected value or name node was not a JSON string.
     #[error("json matcher: a selected value/name node is not a string")]
     NonStringNode,
@@ -64,6 +75,8 @@ pub enum CompiledMatcher {
         value: JsonPath,
         /// Selects each matching name node.
         name: JsonPath,
+        /// Optional path selecting the domain/hostname per item.
+        domain: Option<JsonPath>,
     },
     /// Compiled regex with `value` and `name` named groups.
     Regex {
@@ -84,6 +97,7 @@ impl CompiledMatcher {
             SecretMatcher::Json {
                 value_path,
                 name_path,
+                domain_path,
             } => {
                 let value =
                     JsonPath::parse(value_path).map_err(|error| MatcherError::JsonPath {
@@ -94,7 +108,20 @@ impl CompiledMatcher {
                     path: name_path.clone(),
                     reason: error.to_string(),
                 })?;
-                Ok(Self::Json { value, name })
+                let domain = domain_path
+                    .as_deref()
+                    .map(|p| {
+                        JsonPath::parse(p).map_err(|error| MatcherError::JsonPath {
+                            path: p.to_owned(),
+                            reason: error.to_string(),
+                        })
+                    })
+                    .transpose()?;
+                Ok(Self::Json {
+                    value,
+                    name,
+                    domain,
+                })
             }
             SecretMatcher::Regex { pattern } => {
                 let pattern =
@@ -113,9 +140,11 @@ impl CompiledMatcher {
 
     /// Extract secrets from `output` and return it rewritten with placeholders.
     ///
-    /// `mint(name, value) -> placeholder` is invoked once per extracted secret;
-    /// the caller mints and stores the mapping and returns the placeholder to
-    /// substitute in place of the value.
+    /// `mint(name, value, domain) -> placeholder` is invoked once per extracted
+    /// secret. `domain` is the hostname associated with this item when the
+    /// matcher has a `domain_path` configured, `None` otherwise. The caller
+    /// mints and stores the mapping and returns the placeholder to substitute in
+    /// place of the value.
     ///
     /// # Errors
     ///
@@ -125,10 +154,14 @@ impl CompiledMatcher {
     pub fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(&str, &str) -> String,
+        mint: &mut impl FnMut(&str, &str, Option<&str>) -> String,
     ) -> Result<Vec<u8>, MatcherError> {
         match self {
-            Self::Json { value, name } => rewrite_json(output, value, name, mint),
+            Self::Json {
+                value,
+                name,
+                domain,
+            } => rewrite_json(output, value, name, domain.as_ref(), mint),
             Self::Regex { pattern } => rewrite_regex(output, pattern, mint),
         }
     }
@@ -138,13 +171,15 @@ fn rewrite_json(
     output: &[u8],
     value_path: &JsonPath,
     name_path: &JsonPath,
-    mint: &mut impl FnMut(&str, &str) -> String,
+    domain_path: Option<&JsonPath>,
+    mint: &mut impl FnMut(&str, &str, Option<&str>) -> String,
 ) -> Result<Vec<u8>, MatcherError> {
     let mut root: Value =
         serde_json::from_slice(output).map_err(|error| MatcherError::Json(error.to_string()))?;
 
-    // Collect value-node JSON pointers + their string values, and the aligned
-    // names, before mutating (the queries borrow `root` immutably).
+    // Collect value-node JSON pointers + their string values, aligned names,
+    // and optional domains — all before mutating (these queries borrow `root`
+    // immutably).
     let mut value_hits: Vec<(String, String)> = Vec::new();
     for node in value_path.query_located(&root).iter() {
         let value = node
@@ -158,7 +193,6 @@ fn rewrite_json(
     for node in name_path.query(&root).iter() {
         names.push(node.as_str().ok_or(MatcherError::NonStringNode)?.to_owned());
     }
-
     if value_hits.len() != names.len() {
         return Err(MatcherError::Misaligned {
             values: value_hits.len(),
@@ -166,8 +200,26 @@ fn rewrite_json(
         });
     }
 
-    for ((pointer, value), name) in value_hits.into_iter().zip(names) {
-        let placeholder = mint(&name, &value);
+    let domains: Vec<Option<String>> = match domain_path {
+        None => vec![None; value_hits.len()],
+        Some(dp) => {
+            let nodes: Vec<Option<String>> = dp
+                .query(&root)
+                .iter()
+                .map(|n| n.as_str().map(str::to_owned))
+                .collect();
+            if nodes.len() != value_hits.len() {
+                return Err(MatcherError::DomainMisaligned {
+                    values: value_hits.len(),
+                    domains: nodes.len(),
+                });
+            }
+            nodes
+        }
+    };
+
+    for (((pointer, value), name), domain) in value_hits.into_iter().zip(names).zip(domains) {
+        let placeholder = mint(&name, &value, domain.as_deref());
         if let Some(slot) = root.pointer_mut(&pointer) {
             *slot = Value::String(placeholder);
         }
@@ -179,7 +231,7 @@ fn rewrite_json(
 fn rewrite_regex(
     output: &[u8],
     pattern: &Regex,
-    mint: &mut impl FnMut(&str, &str) -> String,
+    mint: &mut impl FnMut(&str, &str, Option<&str>) -> String,
 ) -> Result<Vec<u8>, MatcherError> {
     let text = std::str::from_utf8(output).map_err(|_| MatcherError::NotUtf8)?;
     let mut result = String::with_capacity(text.len());
@@ -187,7 +239,8 @@ fn rewrite_regex(
     for caps in pattern.captures_iter(text) {
         let value = caps.name("value").ok_or(MatcherError::MissingValueGroup)?;
         let name = caps.name("name").ok_or(MatcherError::MissingNameGroup)?;
-        let placeholder = mint(name.as_str(), value.as_str());
+        let domain = caps.name("domain").map(|m| m.as_str());
+        let placeholder = mint(name.as_str(), value.as_str(), domain);
         result.push_str(&text[last..value.start()]);
         result.push_str(&placeholder);
         last = value.end();
@@ -204,6 +257,15 @@ mod tests {
         SecretMatcher::Json {
             value_path: value_path.to_string(),
             name_path: name_path.to_string(),
+            domain_path: None,
+        }
+    }
+
+    fn json_with_domain(value_path: &str, name_path: &str, domain_path: &str) -> SecretMatcher {
+        SecretMatcher::Json {
+            value_path: value_path.to_string(),
+            name_path: name_path.to_string(),
+            domain_path: Some(domain_path.to_string()),
         }
     }
 
@@ -245,7 +307,7 @@ mod tests {
         let out = compiled
             .rewrite(
                 br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB"}]"#,
-                &mut |name, value| {
+                &mut |name, value, _domain| {
                     pairs.push((name.to_string(), value.to_string()));
                     format!("P:{name}")
                 },
@@ -267,7 +329,9 @@ mod tests {
     fn json_matcher_rejects_misaligned_paths_and_bad_json() {
         let compiled = CompiledMatcher::compile(&json("$[*].value", "$[*].missing")).unwrap();
         assert!(matches!(
-            compiled.rewrite(br#"[{"key":"a","value":"AAA"}]"#, &mut |_, _| String::new()),
+            compiled.rewrite(br#"[{"key":"a","value":"AAA"}]"#, &mut |_, _, _| {
+                String::new()
+            }),
             Err(MatcherError::Misaligned {
                 values: 1,
                 names: 0
@@ -276,7 +340,7 @@ mod tests {
 
         let compiled = CompiledMatcher::compile(&json("$.value", "$.key")).unwrap();
         assert!(matches!(
-            compiled.rewrite(b"not json", &mut |_, _| String::new()),
+            compiled.rewrite(b"not json", &mut |_, _, _| String::new()),
             Err(MatcherError::Json(_))
         ));
     }
@@ -286,7 +350,7 @@ mod tests {
         let compiled =
             CompiledMatcher::compile(&regex(r"(?m)^(?P<name>[^=]+)=(?P<value>.+)$")).unwrap();
         let out = compiled
-            .rewrite(b"a=AAA\nb=BBB\n", &mut |name, _| format!("P:{name}"))
+            .rewrite(b"a=AAA\nb=BBB\n", &mut |name, _, _| format!("P:{name}"))
             .unwrap();
         assert_eq!(out, b"a=P:a\nb=P:b\n");
     }
@@ -295,8 +359,71 @@ mod tests {
     fn regex_matcher_rejects_non_utf8() {
         let compiled = CompiledMatcher::compile(&regex(r"(?P<name>.)=(?P<value>.)")).unwrap();
         assert!(matches!(
-            compiled.rewrite(&[0xff, 0xfe], &mut |_, _| String::new()),
+            compiled.rewrite(&[0xff, 0xfe], &mut |_, _, _| String::new()),
             Err(MatcherError::NotUtf8)
+        ));
+    }
+
+    #[test]
+    fn regex_domain_group_passes_domain_to_mint() {
+        let compiled = CompiledMatcher::compile(&regex(
+            r"(?m)^(?P<name>[^=]+)=(?P<value>[^@]+)@(?P<domain>.+)$",
+        ))
+        .unwrap();
+        let mut domains_seen: Vec<Option<String>> = Vec::new();
+        let out = compiled
+            .rewrite(b"token=ghp_abc@api.github.com\n", &mut |_, _, domain| {
+                domains_seen.push(domain.map(str::to_owned));
+                "PLACEHOLDER".to_string()
+            })
+            .unwrap();
+        assert_eq!(out, b"token=PLACEHOLDER@api.github.com\n");
+        assert_eq!(domains_seen, vec![Some("api.github.com".to_owned())]);
+    }
+
+    #[test]
+    fn regex_without_domain_group_passes_none() {
+        let compiled =
+            CompiledMatcher::compile(&regex(r"(?m)^(?P<name>[^=]+)=(?P<value>.+)$")).unwrap();
+        let mut domains_seen: Vec<Option<String>> = Vec::new();
+        compiled
+            .rewrite(b"token=ghp_abc\n", &mut |_, _, domain| {
+                domains_seen.push(domain.map(str::to_owned));
+                "PLACEHOLDER".to_string()
+            })
+            .unwrap();
+        assert_eq!(domains_seen, vec![None]);
+    }
+
+    #[test]
+    fn json_domain_path_passes_domain_to_mint() {
+        let spec = json_with_domain("$[*].value", "$[*].key", "$[*].domain");
+        let compiled = CompiledMatcher::compile(&spec).unwrap();
+        let mut domains_seen: Vec<Option<String>> = Vec::new();
+        compiled
+            .rewrite(
+                br#"[{"key":"a","value":"AAA","domain":"api.github.com"},{"key":"b","value":"BBB","domain":null}]"#,
+                &mut |_, _, domain| {
+                    domains_seen.push(domain.map(str::to_owned));
+                    String::new()
+                },
+            )
+            .unwrap();
+        assert_eq!(domains_seen, vec![Some("api.github.com".to_owned()), None]);
+    }
+
+    #[test]
+    fn json_domain_path_rejects_misaligned_count() {
+        let spec = json_with_domain("$[*].value", "$[*].key", "$[*].domain");
+        let compiled = CompiledMatcher::compile(&spec).unwrap();
+        assert!(matches!(
+            compiled.rewrite(br#"[{"key":"a","value":"AAA"}]"#, &mut |_, _, _| {
+                String::new()
+            }),
+            Err(MatcherError::DomainMisaligned {
+                values: 1,
+                domains: 0
+            })
         ));
     }
 }

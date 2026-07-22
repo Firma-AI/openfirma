@@ -45,6 +45,7 @@ impl IntegrationRegistry {
                     matcher: SecretMatcher::Json {
                         value_path: "$[*].value".to_string(),
                         name_path: "$[*].key".to_string(),
+                        domain_path: None,
                     },
                     placeholder_template: "firma-secret://bitwarden/{name}",
                 },
@@ -54,6 +55,7 @@ impl IntegrationRegistry {
                     matcher: SecretMatcher::Json {
                         value_path: "$[*].value".to_string(),
                         name_path: "$[*].label".to_string(),
+                        domain_path: Some("$[*].urls[0].href".to_string()),
                     },
                     placeholder_template: "firma-secret://1password/{name}",
                 },

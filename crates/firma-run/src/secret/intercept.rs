@@ -29,8 +29,9 @@ pub enum InterceptError {
 /// Extract secrets from a vault CLI's `output` and rewrite it with placeholders.
 ///
 /// Each secret found by `matcher` is stored in `store` under a placeholder
-/// minted from `placeholder_template`. Returns the rewritten bytes with every
-/// secret value replaced by its placeholder token.
+/// minted from `placeholder_template`. When the matcher's `domain_path` selects
+/// a hostname for the item, the secret is scoped to that host; otherwise it
+/// resolves for any host.
 ///
 /// # Errors
 ///
@@ -43,11 +44,16 @@ pub fn intercept(
 ) -> Result<Vec<u8>, InterceptError> {
     let compiled = CompiledMatcher::compile(matcher)?;
 
-    let rewritten = compiled.rewrite(output, &mut |name, value| {
+    let rewritten = compiled.rewrite(output, &mut |name, value, domain| {
         let placeholder = Placeholder::from_template(placeholder_template, name);
+        let domain = domain.map(str::to_owned);
         store.rcu(|store| {
             let mut store = SecretStore::clone(store);
-            store.insert(placeholder.clone(), SecretValue::from(value));
+            store.insert(
+                placeholder.clone(),
+                domain.clone(),
+                SecretValue::from(value),
+            );
             store
         });
         placeholder.as_str().to_owned()
@@ -68,6 +74,15 @@ mod tests {
         SecretMatcher::Json {
             value_path: "$[*].value".to_string(),
             name_path: "$[*].key".to_string(),
+            domain_path: None,
+        }
+    }
+
+    fn json_matcher_with_domain() -> SecretMatcher {
+        SecretMatcher::Json {
+            value_path: "$[*].value".to_string(),
+            name_path: "$[*].key".to_string(),
+            domain_path: Some("$[*].domain".to_string()),
         }
     }
 
@@ -92,7 +107,9 @@ mod tests {
             json!("firma-secret://bitwarden/api_key")
         );
         assert_eq!(
-            store.load().resolve("firma-secret://bitwarden/db_password"),
+            store
+                .load()
+                .resolve("firma-secret://bitwarden/db_password", "any.domain"),
             Some(&b"s3cr3t"[..])
         );
     }
@@ -117,8 +134,40 @@ mod tests {
             b"DB=firma-secret://env/DB\nAPI=firma-secret://env/API\n"
         );
         assert_eq!(
-            store.load().resolve("firma-secret://env/DB"),
+            store.load().resolve("firma-secret://env/DB", "any.domain"),
             Some(&b"s3cr3t"[..])
+        );
+    }
+
+    #[test]
+    fn domain_path_scopes_secret_to_extracted_host() {
+        let store = ArcSwap::from_pointee(SecretStore::new());
+        let output = json!([
+            { "key": "github-token", "value": "ghp_abc", "domain": "api.github.com" },
+        ])
+        .to_string();
+
+        intercept(
+            &json_matcher_with_domain(),
+            output.as_bytes(),
+            TEMPLATE,
+            &store,
+        )
+        .unwrap();
+
+        assert_eq!(
+            store
+                .load()
+                .resolve("firma-secret://bitwarden/github-token", "api.github.com"),
+            Some(&b"ghp_abc"[..]),
+            "should resolve for matching domain"
+        );
+        assert_eq!(
+            store
+                .load()
+                .resolve("firma-secret://bitwarden/github-token", "api.stripe.com"),
+            None,
+            "should not resolve for wrong domain"
         );
     }
 
