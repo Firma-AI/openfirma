@@ -14,15 +14,15 @@
 //! ```
 
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::net::TcpStream;
 
 use super::broker::{BrokerRequest, BrokerResponse};
 
 /// Env var carrying the broker's transport address into the sandbox.
 ///
 /// Supported schemes:
-/// - `unix:<path>` — Unix domain socket (Linux bwrap)
+/// - `tcp:<addr>` — TCP loopback socket (all platforms)
+/// - `unix:<path>` — Unix domain socket (Unix only)
 pub const FIRMA_BROKER_ADDR: &str = "FIRMA_BROKER_ADDR";
 
 /// Connect to `addr`, send `request`, and return the decoded response.
@@ -35,8 +35,13 @@ pub fn call_broker(addr: &str, request: &BrokerRequest) -> io::Result<BrokerResp
     let payload = serde_json::to_string(request)
         .map_err(|e| io::Error::other(format!("failed to serialize broker request: {e}")))?;
 
+    if let Some(rest) = addr.strip_prefix("tcp:") {
+        return call_tcp(rest, &payload);
+    }
+
+    #[cfg(unix)]
     if let Some(path) = addr.strip_prefix("unix:") {
-        return call_unix(Path::new(path), &payload);
+        return call_unix(std::path::Path::new(path), &payload);
     }
 
     Err(io::Error::other(format!(
@@ -44,15 +49,28 @@ pub fn call_broker(addr: &str, request: &BrokerRequest) -> io::Result<BrokerResp
     )))
 }
 
-fn call_unix(path: &Path, payload: &str) -> io::Result<BrokerResponse> {
+fn call_tcp(addr: &str, payload: &str) -> io::Result<BrokerResponse> {
+    let mut stream = TcpStream::connect(addr)
+        .map_err(|e| io::Error::other(format!("broker unavailable (tcp:{addr}): {e}")))?;
+    stream.write_all(payload.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    read_response(BufReader::new(stream))
+}
+
+#[cfg(unix)]
+fn call_unix(path: &std::path::Path, payload: &str) -> io::Result<BrokerResponse> {
+    use std::os::unix::net::UnixStream;
     let mut stream = UnixStream::connect(path).map_err(|e| {
         io::Error::other(format!("broker unavailable (unix:{}): {e}", path.display()))
     })?;
     stream.write_all(payload.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
+    read_response(BufReader::new(stream))
+}
 
-    let mut reader = BufReader::new(stream);
+fn read_response(mut reader: impl BufRead) -> io::Result<BrokerResponse> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let trimmed = line.trim();
@@ -66,14 +84,15 @@ fn call_unix(path: &Path, payload: &str) -> io::Result<BrokerResponse> {
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
+    use std::net::{SocketAddr, TcpListener};
     use std::thread;
 
     use super::*;
 
-    fn serve_once(path: &Path, response: BrokerResponse) -> thread::JoinHandle<()> {
-        let listener = UnixListener::bind(path).expect("bind");
-        thread::spawn(move || {
+    fn serve_once_tcp(response: BrokerResponse) -> (thread::JoinHandle<()>, SocketAddr) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        let handle = thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut reader = BufReader::new(stream.try_clone().expect("clone"));
                 let mut line = String::new();
@@ -82,21 +101,18 @@ mod tests {
                 let _ = stream.write_all(payload.as_bytes());
                 let _ = stream.write_all(b"\n");
             }
-        })
+        });
+        (handle, addr)
     }
 
     #[test]
-    fn call_broker_returns_decoded_stdout() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("broker.sock");
-        let server = serve_once(&path, BrokerResponse::ok(b"secret-value"));
-
-        let addr = format!("unix:{}", path.display());
+    fn call_broker_tcp_returns_decoded_stdout() {
+        let (server, addr) = serve_once_tcp(BrokerResponse::ok(b"secret-value"));
         let request = BrokerRequest {
             bin: "bws".to_string(),
             args: "secret get abc".to_string(),
         };
-        let response = call_broker(&addr, &request).expect("call_broker");
+        let response = call_broker(&format!("tcp:{addr}"), &request).expect("call_broker");
         server.join().expect("server thread");
         assert_eq!(response.into_stdout().expect("ok"), b"secret-value");
     }
@@ -115,12 +131,12 @@ mod tests {
     }
 
     #[test]
-    fn unreachable_socket_returns_error() {
+    fn unreachable_tcp_returns_error() {
         let request = BrokerRequest {
             bin: String::from("bws"),
             args: String::new(),
         };
-        let err = call_broker("unix:/nonexistent/broker.sock", &request).expect_err("unreachable");
+        let err = call_broker("tcp:127.0.0.1:1", &request).expect_err("unreachable");
         assert!(err.to_string().contains("broker unavailable"));
     }
 }

@@ -61,14 +61,28 @@ pub fn serve_forever<D, S>(
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
+    use std::net::{SocketAddr, TcpStream};
     use std::thread;
 
     use super::*;
+    use crate::config::CommandMediatorEndpoint;
     use crate::secret::broker::BrokerResponse;
 
-    fn call(path: &std::path::Path, bin: &str, args: &str) -> BrokerResponse {
-        let mut stream = UnixStream::connect(path).expect("connect");
+    fn bind_tcp() -> (BrokerListener, SocketAddr) {
+        let endpoint = CommandMediatorEndpoint::Tcp {
+            addr: "127.0.0.1:0".parse().expect("valid addr"),
+        };
+        let listener = BrokerListener::bind(&endpoint).expect("bind");
+        let CommandMediatorEndpoint::Tcp { addr } =
+            listener.bound_endpoint().expect("bound_endpoint")
+        else {
+            panic!("TCP listener must return TCP endpoint");
+        };
+        (listener, addr)
+    }
+
+    fn call(addr: SocketAddr, bin: &str, args: &str) -> BrokerResponse {
+        let mut stream = TcpStream::connect(addr).expect("connect");
         let payload = serde_json::to_string(&crate::secret::broker::BrokerRequest {
             bin: bin.to_string(),
             args: args.to_string(),
@@ -86,9 +100,7 @@ mod tests {
 
     #[test]
     fn passthrough_echo_end_to_end() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("broker.sock");
-        let listener = BrokerListener::bind(&path).expect("bind");
+        let (listener, addr) = bind_tcp();
         let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
 
         let server = thread::spawn(move || {
@@ -101,7 +113,7 @@ mod tests {
             );
         });
 
-        let response = call(&path, "echo", "hello from broker");
+        let response = call(addr, "echo", "hello from broker");
         let stdout = response.into_stdout().expect("ok response");
         assert_eq!(stdout.trim_ascii_end(), b"hello from broker");
 
@@ -110,9 +122,7 @@ mod tests {
 
     #[test]
     fn deny_outcome_returns_error_response() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("broker-deny.sock");
-        let listener = BrokerListener::bind(&path).expect("bind");
+        let (listener, addr) = bind_tcp();
         let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
 
         let server = thread::spawn(move || {
@@ -125,7 +135,7 @@ mod tests {
             );
         });
 
-        let response = call(&path, "echo", "hello");
+        let response = call(addr, "echo", "hello");
         assert!(response.into_stdout().is_err());
 
         drop(server);

@@ -40,34 +40,40 @@ struct ShimPlan {
     mounts: Vec<MountSpec>,
     /// Environment additions pointing the shim at the broker.
     env: Vec<(String, String)>,
-    /// Host path where the broker binds its Unix socket.
-    broker_sock: PathBuf,
 }
 
-/// Prepare secret-shim injection for a launch, mutating `handle` and `env`.
+/// Pre-bound gateway listener returned by [`pre_bind_gateway`].
 ///
-/// A no-op when the profile lists no shims. Otherwise it resolves each shimmed
-/// tool on the host `PATH`, starts the broker, and appends the shim's bind
-/// mounts and environment.
+/// Holds the socket open until [`prepare`] starts serving it. The address
+/// string is already formatted for `FIRMA_SECRET_GATEWAY_ADDR` and can be
+/// passed to the Sidecar before it starts.
+pub struct BoundGateway {
+    listener: SecretGatewayListener,
+    /// Formatted gateway address (`unix:<path>` or `tcp:<addr>`).
+    pub addr: String,
+}
+
+/// Bind the secret gateway socket before the Sidecar starts.
+///
+/// Returns `None` when the profile lists no shims (no gateway needed).
+/// Otherwise binds the gateway socket and returns a [`BoundGateway`] whose
+/// `addr` can be set as `FIRMA_SECRET_GATEWAY_ADDR` on the Sidecar process.
+/// The socket is held open until [`prepare`] starts serving it.
+///
+/// Call this before the Sidecar is spawned so the Sidecar can read the address
+/// at startup. Pass the returned [`BoundGateway`] to [`prepare`].
 ///
 /// # Errors
 ///
-/// Returns [`RunError`] if the shim binary or a shimmed tool cannot be located,
-/// the broker socket directory cannot be created, or the broker cannot bind.
-pub fn prepare(
-    handle: &mut SandboxHandle,
+/// Returns [`RunError`] if the shim directory cannot be created or the gateway
+/// socket cannot be bound.
+pub fn pre_bind_gateway(
+    handle: &SandboxHandle,
     profile: &ResolvedProfile,
-    identity: &RunIdentity,
-    env: &mut BTreeMap<String, String>,
-    firma_exe: &Path,
-    host_path: Option<&OsStr>,
-) -> Result<(), RunError> {
+) -> Result<Option<BoundGateway>, RunError> {
     if profile.shims.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-
-    let shim_bin = locate_shim_binary(firma_exe)?;
-    let reals = resolve_real_binaries(&profile.shims, host_path)?;
     let base = handle.runtime_dir.join("secret-shims");
     std::fs::create_dir_all(&base).map_err(|error| {
         RunError::Internal(format!(
@@ -75,17 +81,78 @@ pub fn prepare(
             base.display()
         ))
     })?;
+    let gateway_endpoint = gateway_endpoint(&base);
+    let listener = SecretGatewayListener::bind(&gateway_endpoint)
+        .map_err(|error| RunError::Internal(format!("bind secret gateway: {error}")))?;
+    let bound = listener.bound_endpoint().map_err(|error| {
+        RunError::Internal(format!("query secret gateway bound address: {error}"))
+    })?;
+    let addr = format_endpoint(&bound);
+    tracing::info!(
+        gateway = %addr,
+        "secret gateway bound; Sidecar will read FIRMA_SECRET_GATEWAY_ADDR"
+    );
+    Ok(Some(BoundGateway { listener, addr }))
+}
 
-    let plan = plan(&shim_bin, &reals, &base);
-    let gateway_endpoint = start_broker(
-        &plan.broker_sock,
+/// Prepare secret-shim injection for a launch, mutating `handle` and `env`.
+///
+/// A no-op when the profile lists no shims. Otherwise resolves each shimmed
+/// tool on the host `PATH`, starts the broker and the pre-bound gateway, and
+/// appends the shim's bind mounts and environment.
+///
+/// `gateway` must be the value returned by [`pre_bind_gateway`] for the same
+/// `profile`. If shims are configured but `gateway` is `None`, returns
+/// [`RunError::Internal`] — the caller skipped the pre-bind step.
+///
+/// # Errors
+///
+/// Returns [`RunError`] if the shim binary or a shimmed tool cannot be located
+/// or the broker socket cannot be bound.
+pub fn prepare(
+    handle: &mut Option<SandboxHandle>,
+    profile: &ResolvedProfile,
+    identity: &RunIdentity,
+    env: &mut BTreeMap<String, String>,
+    firma_exe: &Path,
+    host_path: Option<&OsStr>,
+    gateway: Option<BoundGateway>,
+) -> Result<(), RunError> {
+    if profile.shims.is_empty() {
+        return Ok(());
+    }
+    let handle = handle.as_mut().ok_or_else(|| {
+        RunError::Internal("sandbox handle missing for shim injection".to_string())
+    })?;
+    let gateway = gateway.ok_or_else(|| {
+        RunError::Internal(
+            "secret_shims::prepare called with shims but no pre-bound gateway".to_string(),
+        )
+    })?;
+
+    let shim_bin = locate_shim_binary(firma_exe)?;
+    let reals = resolve_real_binaries(&profile.shims, host_path)?;
+    let base = handle.runtime_dir.join("secret-shims");
+    // Directory was already created by pre_bind_gateway; this is idempotent.
+    std::fs::create_dir_all(&base).map_err(|error| {
+        RunError::Internal(format!(
+            "create secret-shim dir {}: {error}",
+            base.display()
+        ))
+    })?;
+
+    let broker_listener = bind_broker(&base)?;
+    let broker_bound = broker_listener
+        .bound_endpoint()
+        .map_err(|error| RunError::Internal(format!("query broker bound address: {error}")))?;
+    let broker_addr = format_endpoint(&broker_bound);
+
+    let plan = plan(&shim_bin, &reals, &broker_addr);
+    start_broker(
+        broker_listener,
+        gateway.listener,
         profile.sidecar_local_exec.clone(),
         identity,
-    )?;
-    let gateway_addr = format_endpoint(&gateway_endpoint);
-    tracing::info!(
-        gateway = %gateway_addr,
-        "secret gateway bound; configure Sidecar via FIRMA_SECRET_GATEWAY_ADDR"
     );
 
     handle.mounts.extend(plan.mounts);
@@ -111,10 +178,8 @@ pub fn prepare(
 /// Compute the bind mounts and env for the resolved `(name, real path)` tools.
 ///
 /// One mount per tool: the shim overlaid on the tool's own path. The env carries
-/// `FIRMA_BROKER_ADDR` so the shim can connect to the broker.
-fn plan(shim_bin: &Path, reals: &[(String, PathBuf)], base: &Path) -> ShimPlan {
-    let broker_sock = base.join("broker.sock");
-
+/// `FIRMA_BROKER_ADDR` pointing at the already-bound broker.
+fn plan(shim_bin: &Path, reals: &[(String, PathBuf)], broker_addr: &str) -> ShimPlan {
     let mounts = reals
         .iter()
         .map(|(_, real)| MountSpec {
@@ -124,16 +189,9 @@ fn plan(shim_bin: &Path, reals: &[(String, PathBuf)], base: &Path) -> ShimPlan {
         })
         .collect();
 
-    let env = vec![(
-        FIRMA_BROKER_ADDR.to_string(),
-        format!("unix:{}", broker_sock.display()),
-    )];
+    let env = vec![(FIRMA_BROKER_ADDR.to_string(), broker_addr.to_string())];
 
-    ShimPlan {
-        mounts,
-        env,
-        broker_sock,
-    }
+    ShimPlan { mounts, env }
 }
 
 /// Resolve each shimmed tool name to its real host path via `PATH`.
@@ -164,40 +222,70 @@ fn locate_shim_binary(firma_exe: &Path) -> Result<PathBuf, RunError> {
     }
 }
 
-/// Bind the broker socket and serve mediation on a detached thread.
+/// Choose the gateway endpoint for the current platform.
 ///
-/// Returns the actual gateway endpoint the Sidecar should connect to. For
-/// Unix sockets the path is deterministic; for TCP sockets the OS-assigned
-/// port is returned.
+/// On Unix a Unix domain socket in `base` is used (stays in the filesystem
+/// namespace, not the network namespace, which matters for bwrap sandboxes
+/// with `--unshare-net`). On other platforms TCP loopback with an
+/// OS-assigned port is used.
+fn gateway_endpoint(base: &Path) -> CommandMediatorEndpoint {
+    #[cfg(unix)]
+    {
+        CommandMediatorEndpoint::Unix {
+            path: base.join("gateway.sock"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = base;
+        CommandMediatorEndpoint::Tcp {
+            addr: std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                0,
+            )),
+        }
+    }
+}
+
+/// Bind the broker listener using the platform-appropriate transport.
 ///
-/// The threads run for the lifetime of the process; on a one-shot `firma run`
-/// they are torn down when the process exits after the agent finishes.
+/// On Unix: a Unix domain socket in `base`. On other platforms: TCP loopback
+/// with an OS-assigned port.
+fn bind_broker(base: &Path) -> Result<BrokerListener, RunError> {
+    #[cfg(unix)]
+    let endpoint = CommandMediatorEndpoint::Unix {
+        path: base.join("broker.sock"),
+    };
+    #[cfg(not(unix))]
+    let endpoint = {
+        let _ = base;
+        CommandMediatorEndpoint::Tcp {
+            addr: std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                0,
+            )),
+        }
+    };
+    BrokerListener::bind(&endpoint)
+        .map_err(|error| RunError::Internal(format!("bind secret broker: {error}")))
+}
+
+/// Bind the broker socket and start serving on detached threads.
+///
+/// Takes the `gateway_listener` pre-bound by [`pre_bind_gateway`] so the
+/// gateway address is already known to the Sidecar before this call.
+/// Threads run for the lifetime of the process.
 fn start_broker(
-    sock: &Path,
+    listener: BrokerListener,
+    gateway_listener: SecretGatewayListener,
     mediator: Option<CommandMediatorConfig>,
     identity: &RunIdentity,
-) -> Result<CommandMediatorEndpoint, RunError> {
-    let listener = BrokerListener::bind(sock).map_err(|error| {
-        RunError::Internal(format!(
-            "bind secret broker socket {}: {error}",
-            sock.display()
-        ))
-    })?;
+) {
     let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
 
-    // Start the secret gateway alongside the broker. The gateway serves
-    // `secret.resolve` requests from the Sidecar MITM pipeline.
-    let gateway_endpoint = CommandMediatorEndpoint::Unix {
-        path: sock.with_file_name("gateway.sock"),
-    };
-    let gateway = SecretGatewayListener::bind(&gateway_endpoint)
-        .map_err(|error| RunError::Internal(format!("bind secret gateway: {error}")))?;
-    let bound = gateway.bound_endpoint().map_err(|error| {
-        RunError::Internal(format!("query secret gateway bound address: {error}"))
-    })?;
     let gateway_store = Arc::clone(&store);
     std::thread::spawn(move || {
-        gateway.serve_forever(&gateway_store);
+        gateway_listener.serve_forever(&gateway_store);
     });
 
     let session_id = identity.session_id.clone();
@@ -210,7 +298,6 @@ fn start_broker(
     std::thread::spawn(move || {
         serve_forever(listener, store, decide, spec_for, None);
     });
-    Ok(bound)
 }
 
 /// Render a gateway endpoint as a `unix:<path>` or `tcp:<addr>` address string.
@@ -255,9 +342,9 @@ mod tests {
             ("bws".to_string(), PathBuf::from("/usr/bin/bws")),
             ("npx".to_string(), PathBuf::from("/usr/local/bin/npx")),
         ];
-        let base = PathBuf::from("/run/firma/secret-shims");
+        let broker_addr = "unix:/run/firma/secret-shims/broker.sock";
 
-        let plan = plan(&shim_bin, &reals, &base);
+        let plan = plan(&shim_bin, &reals, broker_addr);
 
         // One mount per tool: shim overlaid on the tool's own path.
         assert_eq!(plan.mounts.len(), 2);
@@ -272,13 +359,10 @@ mod tests {
             read_only: true,
         }));
 
-        // One env var: FIRMA_BROKER_ADDR.
+        // One env var: FIRMA_BROKER_ADDR set to the given broker address.
         assert_eq!(plan.env.len(), 1);
         assert_eq!(plan.env[0].0, FIRMA_BROKER_ADDR);
-        assert!(plan.env[0].1.starts_with("unix:"));
-        assert!(plan.env[0].1.contains("broker.sock"));
-
-        assert_eq!(plan.broker_sock, base.join("broker.sock"));
+        assert_eq!(plan.env[0].1, broker_addr);
     }
 
     #[test]

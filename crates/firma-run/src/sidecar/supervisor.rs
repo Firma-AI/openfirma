@@ -78,6 +78,9 @@ pub struct SpawnRequest<'a> {
     /// config regardless of the operator template value. Passed through from
     /// `--monitor` on the `firma run` CLI.
     pub monitor_mode: bool,
+    /// Secret gateway address set as `FIRMA_SECRET_GATEWAY_ADDR` on the
+    /// Sidecar process. `None` when no shims are configured.
+    pub secret_gateway_addr: Option<String>,
 }
 
 /// Captured values from the seven-line ready sequence.
@@ -205,6 +208,9 @@ impl SidecarSupervisor {
                 .env("FIRMA_RUN_AUDIT_SOCK", &audit_sock_path)
                 .env("NO_COLOR", "1")
                 .env("CLICOLOR", "0");
+            if let Some(ref addr) = req.secret_gateway_addr {
+                cmd.env("FIRMA_SECRET_GATEWAY_ADDR", addr);
+            }
             // The CLI `--monitor` flag is an explicit opt-in. Forward it to
             // the sidecar as the env-var opt-in that monitor mode now
             // requires, so `firma run --monitor` keeps honoring observe-only

@@ -1,9 +1,10 @@
 //! Out-of-sandbox broker transport for the secret shim.
 //!
-//! The shim binary connects to the broker over a Unix domain socket and sends a
-//! newline-terminated JSON request describing the tool launch. The broker runs
-//! the real CLI out of the sandbox, intercepts the output, and writes back a
-//! newline-terminated JSON response containing the base64-encoded stdout.
+//! The shim binary connects to the broker over a Unix domain socket (Unix) or
+//! TCP loopback (Windows) and sends a newline-terminated JSON request. The
+//! broker runs the real CLI out of the sandbox, intercepts the output, and
+//! writes back a newline-terminated JSON response containing the base64-encoded
+//! stdout.
 //!
 //! Protocol (one round-trip per connection):
 //!
@@ -14,11 +15,16 @@
 //! ```
 
 use std::io::{self, BufRead, BufReader, Write};
+use std::net::TcpListener;
+use std::path::PathBuf;
+
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+
+use crate::config::CommandMediatorEndpoint;
 
 /// Maximum request line length from the shim, in bytes.
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -78,35 +84,70 @@ impl BrokerResponse {
     }
 }
 
+enum BrokerListenerInner {
+    Tcp(TcpListener),
+    #[cfg(unix)]
+    Unix(UnixListener, PathBuf),
+}
+
 /// Broker-side listener: accepts shim connections and dispatches requests.
-#[derive(Debug)]
 pub struct BrokerListener {
-    listener: UnixListener,
-    path: PathBuf,
+    inner: BrokerListenerInner,
 }
 
 impl BrokerListener {
-    /// Bind a listener at `path`, removing any stale socket file first.
+    /// Bind a listener at `endpoint`.
+    ///
+    /// For Unix endpoints, any stale socket file is removed before binding.
+    /// For TCP endpoints with port `0`, the OS assigns a free port; retrieve
+    /// it with [`bound_endpoint`][Self::bound_endpoint].
     ///
     /// # Errors
     ///
-    /// Returns the underlying I/O error if removing a stale socket (other than
-    /// a missing one) or binding fails.
-    pub fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        if let Err(error) = std::fs::remove_file(&path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            return Err(error);
+    /// Returns the underlying I/O error if binding fails.
+    pub fn bind(endpoint: &CommandMediatorEndpoint) -> io::Result<Self> {
+        match endpoint {
+            CommandMediatorEndpoint::Tcp { addr } => {
+                let listener = TcpListener::bind(addr)?;
+                Ok(Self {
+                    inner: BrokerListenerInner::Tcp(listener),
+                })
+            }
+            #[cfg(unix)]
+            CommandMediatorEndpoint::Unix { path } => {
+                if let Err(e) = std::fs::remove_file(path)
+                    && e.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(e);
+                }
+                let listener = UnixListener::bind(path)?;
+                Ok(Self {
+                    inner: BrokerListenerInner::Unix(listener, path.clone()),
+                })
+            }
+            #[cfg(not(unix))]
+            CommandMediatorEndpoint::Unix { .. } => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Unix domain sockets are not supported on this platform",
+            )),
         }
-        let listener = UnixListener::bind(&path)?;
-        Ok(Self { listener, path })
     }
 
-    /// The bound socket path.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// Return the address this listener is actually bound to.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the OS cannot report the local address.
+    pub fn bound_endpoint(&self) -> io::Result<CommandMediatorEndpoint> {
+        match &self.inner {
+            BrokerListenerInner::Tcp(l) => Ok(CommandMediatorEndpoint::Tcp {
+                addr: l.local_addr()?,
+            }),
+            #[cfg(unix)]
+            BrokerListenerInner::Unix(_, path) => {
+                Ok(CommandMediatorEndpoint::Unix { path: path.clone() })
+            }
+        }
     }
 
     /// Accept one shim connection, invoke `handler(request)`, and write the
@@ -121,50 +162,82 @@ impl BrokerListener {
     where
         F: FnOnce(BrokerRequest) -> BrokerResponse,
     {
-        let (mut stream, _addr) = self.listener.accept()?;
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        if line.len() > MAX_REQUEST_BYTES {
-            let response = BrokerResponse::err("request too large");
-            return write_response(&mut stream, &response);
+        match &self.inner {
+            BrokerListenerInner::Tcp(listener) => {
+                let (stream, _) = listener.accept()?;
+                handle_connection(BufReader::new(stream.try_clone()?), stream, handler)
+            }
+            #[cfg(unix)]
+            BrokerListenerInner::Unix(listener, _) => {
+                let (stream, _) = listener.accept()?;
+                handle_connection(BufReader::new(stream.try_clone()?), stream, handler)
+            }
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Err(io::Error::other("empty broker request"));
-        }
-        let response = match serde_json::from_str::<BrokerRequest>(trimmed) {
-            Ok(request) => handler(request),
-            Err(e) => BrokerResponse::err(format!("malformed broker request: {e}")),
-        };
-        write_response(&mut stream, &response)
     }
 }
 
 impl Drop for BrokerListener {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        #[cfg(unix)]
+        if let BrokerListenerInner::Unix(_, path) = &self.inner {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
-fn write_response(stream: &mut impl Write, response: &BrokerResponse) -> io::Result<()> {
+fn handle_connection<R: BufRead, W: Write>(
+    mut reader: R,
+    mut writer: W,
+    handler: impl FnOnce(BrokerRequest) -> BrokerResponse,
+) -> io::Result<()> {
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    if line.len() > MAX_REQUEST_BYTES {
+        let response = BrokerResponse::err("request too large");
+        return write_response(&mut writer, &response);
+    }
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Err(io::Error::other("empty broker request"));
+    }
+    let response = match serde_json::from_str::<BrokerRequest>(trimmed) {
+        Ok(request) => handler(request),
+        Err(e) => BrokerResponse::err(format!("malformed broker request: {e}")),
+    };
+    write_response(&mut writer, &response)
+}
+
+fn write_response(writer: &mut impl Write, response: &BrokerResponse) -> io::Result<()> {
     let mut payload = serde_json::to_vec(response)
         .map_err(|e| io::Error::other(format!("failed to serialize broker response: {e}")))?;
     payload.push(b'\n');
-    stream.write_all(&payload)?;
-    stream.flush()
+    writer.write_all(&payload)?;
+    writer.flush()
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
+    use std::net::{SocketAddr, TcpStream};
     use std::thread;
 
     use super::*;
 
-    fn connect_and_send(path: &Path, request: &BrokerRequest) -> BrokerResponse {
-        let mut stream = UnixStream::connect(path).expect("connect");
+    fn bind_tcp() -> (BrokerListener, SocketAddr) {
+        let endpoint = CommandMediatorEndpoint::Tcp {
+            addr: "127.0.0.1:0".parse().expect("valid loopback addr"),
+        };
+        let listener = BrokerListener::bind(&endpoint).expect("bind");
+        let CommandMediatorEndpoint::Tcp { addr } =
+            listener.bound_endpoint().expect("bound_endpoint")
+        else {
+            panic!("TCP listener must return TCP endpoint");
+        };
+        (listener, addr)
+    }
+
+    fn connect_and_send(addr: SocketAddr, request: &BrokerRequest) -> BrokerResponse {
+        let mut stream = TcpStream::connect(addr).expect("connect");
         let payload = serde_json::to_string(request).expect("serialize");
         stream
             .write_all(format!("{payload}\n").as_bytes())
@@ -178,16 +251,12 @@ mod tests {
 
     #[test]
     fn roundtrip_ok_response() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("broker.sock");
-        let listener = BrokerListener::bind(&path).expect("bind");
-
+        let (listener, addr) = bind_tcp();
         let request = BrokerRequest {
             bin: "bws".to_string(),
             args: "secret get abc".to_string(),
         };
         let request_clone = request.clone();
-
         let server = thread::spawn(move || {
             listener
                 .accept_one(|req| {
@@ -196,44 +265,34 @@ mod tests {
                 })
                 .expect("accept_one");
         });
-
-        let response = connect_and_send(&path, &request);
+        let response = connect_and_send(addr, &request);
         server.join().expect("server thread");
-
-        let stdout = response.into_stdout().expect("ok response");
-        assert_eq!(stdout, b"secret-value");
+        assert_eq!(
+            response.into_stdout().expect("ok response"),
+            b"secret-value"
+        );
     }
 
     #[test]
     fn handler_error_written_as_error_response() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("broker-err.sock");
-        let listener = BrokerListener::bind(&path).expect("bind");
-
+        let (listener, addr) = bind_tcp();
         let request = BrokerRequest {
             bin: "bws".to_string(),
             args: "secret get x".to_string(),
         };
-
         let server = thread::spawn(move || {
             listener
                 .accept_one(|_req| BrokerResponse::err("tool not found"))
                 .expect("accept_one");
         });
-
-        let response = connect_and_send(&path, &request);
+        let response = connect_and_send(addr, &request);
         server.join().expect("server thread");
         assert!(response.into_stdout().is_err());
     }
 
     #[test]
-    fn listener_cleans_up_on_drop() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("cleanup.sock");
-        {
-            let _listener = BrokerListener::bind(&path).expect("bind");
-            assert!(path.exists());
-        }
-        assert!(!path.exists());
+    fn bound_endpoint_returns_assigned_tcp_port() {
+        let (_listener, addr) = bind_tcp();
+        assert_ne!(addr.port(), 0, "OS must assign a non-zero port");
     }
 }

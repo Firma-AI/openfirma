@@ -28,7 +28,6 @@ pub mod vscode;
 
 /// Secret-mediation shim injection (Unix/bwrap). Wires the broker + shim mounts
 /// into a launch when the profile lists `shims`.
-#[cfg(unix)]
 mod secret_shims;
 
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
@@ -226,6 +225,12 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         }
         let firma_exe = env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
+
+        // Pre-bind the secret gateway before the Sidecar starts so the Sidecar
+        // can read its address from FIRMA_SECRET_GATEWAY_ADDR at startup.
+        let gateway_binding = secret_shims::pre_bind_gateway(handle_ref, &profile)?;
+        flags.secret_gateway_addr = gateway_binding.as_ref().map(|b| b.addr.clone());
+
         let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
@@ -315,22 +320,17 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
             vscode::ensure_vscode_state_mount(handle_mut, &state_dir);
         }
-        // Inject secret-mediation shims (broker + bind-over-path) when the
-        // profile requests them. Unix/bwrap only; ignored on other platforms.
-        #[cfg(unix)]
-        {
-            let handle_mut = handle
-                .as_mut()
-                .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
-            secret_shims::prepare(
-                handle_mut,
-                &profile,
-                &identity,
-                &mut env,
-                &firma_exe,
-                env::var_os("PATH").as_deref(),
-            )?;
-        }
+        // Start the broker and serve the pre-bound gateway. Shim bind-mounts
+        // and env vars are applied to the sandbox handle when one is present.
+        secret_shims::prepare(
+            &mut handle,
+            &profile,
+            &identity,
+            &mut env,
+            &firma_exe,
+            env::var_os("PATH").as_deref(),
+            gateway_binding,
+        )?;
         let launch = LaunchSpec {
             executable,
             args: launch_args,

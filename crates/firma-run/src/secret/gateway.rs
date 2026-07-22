@@ -279,12 +279,10 @@ mod tests {
 
     fn store_with(placeholder: &str, secret: &[u8]) -> Arc<ArcSwap<SecretStore>> {
         let mut store = SecretStore::new();
-        store
-            .insert(
-                Placeholder::parse(placeholder).expect("valid placeholder in test fixture"),
-                SecretValue::new(secret.to_vec()),
-            )
-            .expect("insert");
+        store.insert(
+            Placeholder::parse(placeholder).expect("valid placeholder in test fixture"),
+            SecretValue::new(secret.to_vec()),
+        );
         Arc::new(ArcSwap::from_pointee(store))
     }
 

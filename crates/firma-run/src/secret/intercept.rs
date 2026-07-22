@@ -13,7 +13,7 @@ use arc_swap::ArcSwap;
 use firma_core::SecretMatcher;
 use firma_sidecar::secret_matcher::{CompiledMatcher, MatcherError};
 
-use super::{Placeholder, SecretStore, SecretStoreError, SecretValue};
+use super::{Placeholder, SecretStore, SecretValue};
 
 /// Errors from applying an intercept transform.
 ///
@@ -24,9 +24,6 @@ pub enum InterceptError {
     /// The matcher failed to compile or execute.
     #[error(transparent)]
     Matcher(#[from] MatcherError),
-    /// A minted secret could not be stored.
-    #[error(transparent)]
-    Store(#[from] SecretStoreError),
 }
 
 /// Extract secrets from a vault CLI's `output` and rewrite it with placeholders.
@@ -37,8 +34,7 @@ pub enum InterceptError {
 ///
 /// # Errors
 ///
-/// Returns [`InterceptError`] if the matcher fails to compile or execute, or a
-/// minted secret cannot be stored.
+/// Returns [`InterceptError`] if the matcher fails to compile or execute.
 pub fn intercept(
     matcher: &SecretMatcher,
     output: &[u8],
@@ -47,25 +43,16 @@ pub fn intercept(
 ) -> Result<Vec<u8>, InterceptError> {
     let compiled = CompiledMatcher::compile(matcher)?;
 
-    // The mint callback cannot return an error, so a store failure is stashed
-    // here and surfaced after the rewrite (fail-closed).
-    let mut store_error: Option<SecretStoreError> = None;
-
     let rewritten = compiled.rewrite(output, &mut |name, value| {
         let placeholder = Placeholder::from_template(placeholder_template, name);
         store.rcu(|store| {
             let mut store = SecretStore::clone(store);
-            if let Err(error) = store.insert(placeholder.clone(), SecretValue::from(value)) {
-                store_error = Some(error);
-            }
+            store.insert(placeholder.clone(), SecretValue::from(value));
             store
         });
         placeholder.as_str().to_owned()
     })?;
 
-    if let Some(error) = store_error {
-        return Err(InterceptError::Store(error));
-    }
     Ok(rewritten)
 }
 
@@ -108,7 +95,6 @@ mod tests {
             store.load().resolve("firma-secret://bitwarden/db_password"),
             Some(&b"s3cr3t"[..])
         );
-        assert_eq!(store.load().mask_matches(b"echo s3cr3t").count(), 1);
     }
 
     #[test]

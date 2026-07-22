@@ -8,19 +8,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[[bin]]
-name = "firma-secret-shim"
-path = "src/bin/firma-secret-shim.rs"
-
 [dependencies]
-aho-corasick.workspace = true
 anyhow.workspace = true
 arc-swap.workspace = true
 base64.workspace = true
 chrono.workspace = true
 ctrlc.workspace = true
 dialoguer.workspace = true
-either.workspace = true
 firma-authority.workspace = true
 firma-config-loader.workspace = true
 firma-core.workspace = true
@@ -60,7 +54,6 @@ fs-err.workspace = true
 pasetors = { workspace = true }
 pretty_assertions.workspace = true
 prost-types.workspace = true
-proptest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
 tokio-stream = { workspace = true }
