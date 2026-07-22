@@ -31,6 +31,7 @@ fn main() -> ExitCode {
         Command::EgressGuardedRun(a) => services::egress_guarded_run::run(a),
         Command::Doctor(a) => Ok(services::doctor::run(a)),
         Command::Config(a) => services::config::run(&a),
+        Command::Control(a) => services::control::run(&a),
         Command::Policy(a) => services::policy::run(a),
         Command::Monitor(a) => Ok(services::monitor::run(&a)),
         Command::ProxyBridge(a) => services::proxy_bridge::run(a),

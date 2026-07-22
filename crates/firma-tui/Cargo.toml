@@ -1,0 +1,16 @@
+[package]
+name = "firma-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Terminal UI components for OpenFirma"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+crossterm = "0.28"
+ratatui = "0.30"
+thiserror = { workspace = true }

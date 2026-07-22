@@ -2,6 +2,7 @@
 
 pub mod authority;
 pub mod config;
+pub mod control;
 pub mod doctor;
 pub mod monitor;
 pub mod policy;
@@ -88,6 +89,8 @@ pub enum Command {
     Authority(authority::Args),
     /// Scaffold a new agent config directory interactively.
     Config(config::InitArgs),
+    /// Open the interactive local control surface.
+    Control(control::Args),
     /// Browse the template catalogue and validate Cedar policy bundles.
     Policy(policy::PolicyArgs),
     /// Internal sandbox-local DNS stub.
