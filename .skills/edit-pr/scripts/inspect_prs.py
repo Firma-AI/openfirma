@@ -48,10 +48,10 @@ def active_refs() -> tuple[str, list[str]]:
                 "heads(bookmarks() & ::@)",
                 "--no-graph",
                 "-T",
-                'bookmarks ++ "\\n"',
+                'bookmarks.map(|bookmark| bookmark.name()).join("\\n") ++ "\\n"',
             ]
         )
-        refs = sorted({name for line in output.splitlines() for name in line.split()})
+        refs = sorted(set(output.splitlines()))
         return "jj", refs
 
     branch = run(["git", "branch", "--show-current"])

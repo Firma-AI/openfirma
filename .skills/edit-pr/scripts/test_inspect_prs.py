@@ -5,8 +5,27 @@
 # ///
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from inspect_prs import classify_interactions, matching_pulls, requires_manual
+from inspect_prs import active_refs, classify_interactions, matching_pulls, requires_manual
+
+
+class ActiveRefsTests(unittest.TestCase):
+    @patch("inspect_prs.run", return_value="topic\ntopic")
+    @patch(
+        "inspect_prs.subprocess.run",
+        return_value=SimpleNamespace(returncode=0),
+    )
+    def test_jj_uses_machine_readable_bookmark_names(
+        self, _probe: object, run_command: object
+    ) -> None:
+        vcs, refs = active_refs()
+        self.assertEqual((vcs, refs), ("jj", ["topic"]))
+        command = run_command.call_args.args[0]
+        self.assertIn(
+            'bookmarks.map(|bookmark| bookmark.name()).join("\\n")', command[-1]
+        )
 
 
 class ClassifyInteractionsTests(unittest.TestCase):
