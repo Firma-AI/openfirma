@@ -3,8 +3,8 @@
 //! Turns one shim request into a vault CLI execution and (for `Permit` outcomes)
 //! an intercept transform that extracts secrets and substitutes placeholders
 //! before the output reaches the agent. This module owns the **routing**: it maps
-//! a [`SecretPepOutcome`] to either a raw passthrough or an intercepted run and
-//! builds the [`BrokerResponse`].
+//! a [`pep::SecretPepOutcome`] to either a raw passthrough or an intercepted run and
+//! builds the [`broker::BrokerResponse`].
 //!
 //! A `Deny` returns without executing anything (fail closed). `Passthrough` runs
 //! the real binary unchanged. `Permit` runs the binary, applies the integration

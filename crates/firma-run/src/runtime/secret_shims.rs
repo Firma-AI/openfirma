@@ -86,6 +86,19 @@ pub fn prepare(
     for (key, value) in plan.env {
         env.insert(key, value);
     }
+
+    // Strip vault credential env vars for each shimmed integration so they
+    // can never enter the sandbox, even if an operator accidentally listed
+    // them in `env_inherit` or `env_set`.
+    let registry = IntegrationRegistry::with_builtins();
+    for name in &profile.shims {
+        if let Some(spec) = registry.get(name) {
+            for var in spec.credential_env_vars {
+                env.remove(*var);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -250,6 +263,32 @@ mod tests {
 
         let error = resolve_real_binaries(&shims, Some(dir.path().as_os_str())).unwrap_err();
         assert!(matches!(error, RunError::ConfigValidation(_)));
+    }
+
+    #[test]
+    fn credential_env_vars_are_stripped_for_shimmed_integrations() {
+        let registry = IntegrationRegistry::with_builtins();
+        let mut env = BTreeMap::from([
+            ("BWS_ACCESS_TOKEN".to_string(), "secret-token".to_string()),
+            ("VAULT_TOKEN".to_string(), "s.abc123".to_string()),
+            ("HOME".to_string(), "/home/agent".to_string()),
+        ]);
+
+        // Simulate stripping for "bws" only.
+        if let Some(spec) = registry.get("bws") {
+            for var in spec.credential_env_vars {
+                env.remove(*var);
+            }
+        }
+
+        assert!(
+            !env.contains_key("BWS_ACCESS_TOKEN"),
+            "bws token must be stripped"
+        );
+        // VAULT_TOKEN is not stripped since vault is not shimmed here.
+        assert!(env.contains_key("VAULT_TOKEN"), "vault token untouched");
+        // Non-credential vars pass through.
+        assert!(env.contains_key("HOME"));
     }
 
     #[test]

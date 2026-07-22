@@ -3,7 +3,7 @@
 //! At each shimmed-tool launch the broker asks the Sidecar (PDP) what to do and
 //! receives a [`firma_core::SecretDecision`]. This module owns that
 //! request/response over the governance socket and the **fail-closed** mapping
-//! to a [`SecretPepOutcome`]: any transport error, timeout, empty response,
+//! to a [`pep::SecretPepOutcome`]: any transport error, timeout, empty response,
 //! or undecodable payload denies the launch rather than running it unmediated.
 
 use std::io::{BufRead, BufReader, Read, Write};

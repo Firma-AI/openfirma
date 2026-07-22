@@ -1,8 +1,8 @@
 //! Broker accept loop.
 //!
-//! Accepts shim connections from [`BrokerListener`], asks the Sidecar for a
+//! Accepts shim connections from [`broker::BrokerListener`], asks the Sidecar for a
 //! decision via an injected `decide` closure, and serves the result via
-//! [`serve_request`]. Each connection is handled synchronously (one thread per
+//! [`serve::serve_request`]. Each connection is handled synchronously (one thread per
 //! connection is spawned by the caller if parallelism is needed). The decide
 //! closure is PDP-agnostic; the real caller passes one that calls
 //! [`pep::request_secret_decision`].

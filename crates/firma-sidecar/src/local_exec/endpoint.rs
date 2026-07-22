@@ -595,7 +595,7 @@ mod tests {
                 .parse()
                 .expect("valid sandbox ID fixture"),
             session_id: "sess_1".to_string(),
-            agent_id: Some("agent_1".to_string()),
+            agent_id: Some("agt_01j0000000e008000000000001".to_string()),
             profile: "generic".to_string(),
             hitl_mode: "async_token".to_string(),
             request_fingerprint: None,
@@ -662,7 +662,7 @@ mod tests {
                 "bin": "bws",
                 "args": "secret get x",
                 "session_id": "sess_1",
-                "agent_id": "agent_1",
+                "agent_id": "agt_01j0000000e008000000000001",
             }),
         )
         .await;

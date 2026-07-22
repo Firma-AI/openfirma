@@ -151,7 +151,7 @@ pub trait PolicyEvaluation: Send + Sync {
     ///
     /// The default returns [`SecretDecision::Passthrough`] — no governing
     /// policy, so the tool runs untouched. The Cedar evaluator overrides this
-    /// to evaluate `secret.mediate` and return a [`SecretDecision::Mediate`]
+    /// to evaluate `secret.mediate` and return a [`SecretDecision::Permit`]
     /// directive when a permit fires.
     ///
     /// # Errors
@@ -164,6 +164,27 @@ pub trait PolicyEvaluation: Send + Sync {
         _context: serde_json::Value,
     ) -> Result<SecretDecision, String> {
         Ok(SecretDecision::Passthrough)
+    }
+
+    /// Decide whether to apply secret rewriting for an outbound HTTP request
+    /// (`secret.redact`).
+    ///
+    /// Returns `true` when a `permit` policy fires — placeholder rehydration
+    /// and secret masking are active for this request. The default returns
+    /// `false` (passthrough). The Cedar evaluator overrides this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if policy evaluation fails.
+    fn evaluate_secret_redact(
+        &self,
+        _principal: &AgentId,
+        _host: &str,
+        _path: &str,
+        _method: &str,
+        _context: serde_json::Value,
+    ) -> Result<bool, String> {
+        Ok(false)
     }
 }
 
