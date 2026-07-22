@@ -1,15 +1,16 @@
-//! In-memory placeholder ↔ secret dictionary for the Sidecar redact path.
+//! In-memory placeholder ↔ secret dictionary for the Sidecar MITM pipeline.
 //!
-//! The broker (firma-run) populates this store by pushing entries over the
-//! local-exec channel whenever a vault CLI intercept succeeds. The Sidecar's
-//! MITM pipeline then reads the store on each outbound request (rehydrate) and
-//! each inbound response (mask).
+//! In the pull model the Sidecar queries the firma-run secret gateway
+//! ([`crate::secret_gateway_client`]) for each outbound request and builds a
+//! `SidecarSecretStore` from the returned `(placeholder, secret_bytes)` pairs.
+//! The store is scoped to one request-response cycle and discarded after
+//! forwarding. firma-run remains the single source of truth; the Sidecar never
+//! caches secrets persistently.
 //!
 //! The design mirrors `firma_run::secret::SecretStore` but lives in the Sidecar
-//! crate to avoid a circular dependency. The two stores share no code but are
-//! structurally identical: an Aho-Corasick scan over secret values (masking)
-//! and a parallel scan over placeholder tokens (rehydration), both rebuilt on
-//! each `insert`.
+//! crate to avoid a circular dependency. Both use Aho-Corasick for scanning:
+//! over secret values (masking inbound responses) and over placeholder tokens
+//! (rehydrating outbound requests).
 
 use std::borrow::Borrow;
 use std::collections::BTreeMap;

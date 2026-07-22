@@ -28,6 +28,12 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 pub mod broker;
 
+/// Secret resolution gateway for the Sidecar MITM pipeline.
+///
+/// Resolves placeholder tokens on demand so firma-run remains the single source
+/// of truth. Supports Unix domain sockets and TCP loopback (Windows).
+pub mod gateway;
+
 /// Broker → Sidecar policy-enforcement-point client for secret mediation
 /// decisions, with fail-closed semantics.
 #[cfg(unix)]

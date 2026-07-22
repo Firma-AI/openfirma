@@ -19,12 +19,13 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use crate::backend::SandboxHandle;
-use crate::config::{CommandMediatorConfig, MountSpec, ResolvedProfile};
+use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint, MountSpec, ResolvedProfile};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::secret::SecretStore;
 use crate::secret::accept::serve_forever;
 use crate::secret::broker::BrokerListener;
+use crate::secret::gateway::SecretGatewayListener;
 use crate::secret::integration::{IntegrationRegistry, IntegrationSpec};
 use crate::secret::pep::{SecretMediationRequest, SecretPepOutcome, request_secret_decision};
 use crate::secret::shim::FIRMA_BROKER_ADDR;
@@ -76,11 +77,16 @@ pub fn prepare(
     })?;
 
     let plan = plan(&shim_bin, &reals, &base);
-    start_broker(
+    let gateway_endpoint = start_broker(
         &plan.broker_sock,
         profile.sidecar_local_exec.clone(),
         identity,
     )?;
+    let gateway_addr = format_endpoint(&gateway_endpoint);
+    tracing::info!(
+        gateway = %gateway_addr,
+        "secret gateway bound; configure Sidecar via FIRMA_SECRET_GATEWAY_ADDR"
+    );
 
     handle.mounts.extend(plan.mounts);
     for (key, value) in plan.env {
@@ -160,13 +166,17 @@ fn locate_shim_binary(firma_exe: &Path) -> Result<PathBuf, RunError> {
 
 /// Bind the broker socket and serve mediation on a detached thread.
 ///
-/// The thread runs for the lifetime of the process; on a one-shot `firma run`
-/// it is torn down when the process exits after the agent finishes.
+/// Returns the actual gateway endpoint the Sidecar should connect to. For
+/// Unix sockets the path is deterministic; for TCP sockets the OS-assigned
+/// port is returned.
+///
+/// The threads run for the lifetime of the process; on a one-shot `firma run`
+/// they are torn down when the process exits after the agent finishes.
 fn start_broker(
     sock: &Path,
     mediator: Option<CommandMediatorConfig>,
     identity: &RunIdentity,
-) -> Result<(), RunError> {
+) -> Result<CommandMediatorEndpoint, RunError> {
     let listener = BrokerListener::bind(sock).map_err(|error| {
         RunError::Internal(format!(
             "bind secret broker socket {}: {error}",
@@ -174,6 +184,22 @@ fn start_broker(
         ))
     })?;
     let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
+
+    // Start the secret gateway alongside the broker. The gateway serves
+    // `secret.resolve` requests from the Sidecar MITM pipeline.
+    let gateway_endpoint = CommandMediatorEndpoint::Unix {
+        path: sock.with_file_name("gateway.sock"),
+    };
+    let gateway = SecretGatewayListener::bind(&gateway_endpoint)
+        .map_err(|error| RunError::Internal(format!("bind secret gateway: {error}")))?;
+    let bound = gateway.bound_endpoint().map_err(|error| {
+        RunError::Internal(format!("query secret gateway bound address: {error}"))
+    })?;
+    let gateway_store = Arc::clone(&store);
+    std::thread::spawn(move || {
+        gateway.serve_forever(&gateway_store);
+    });
+
     let session_id = identity.session_id.clone();
     let registry = Arc::new(IntegrationRegistry::with_builtins());
     let decide = Arc::new(move |bin: &str, args: &str| {
@@ -181,8 +207,18 @@ fn start_broker(
     });
     let spec_for =
         Arc::new(move |bin: &str| -> Option<IntegrationSpec> { registry.get(bin).cloned() });
-    std::thread::spawn(move || serve_forever(listener, store, decide, spec_for, None));
-    Ok(())
+    std::thread::spawn(move || {
+        serve_forever(listener, store, decide, spec_for, None);
+    });
+    Ok(bound)
+}
+
+/// Render a gateway endpoint as a `unix:<path>` or `tcp:<addr>` address string.
+fn format_endpoint(endpoint: &CommandMediatorEndpoint) -> String {
+    match endpoint {
+        CommandMediatorEndpoint::Unix { path } => format!("unix:{}", path.display()),
+        CommandMediatorEndpoint::Tcp { addr } => format!("tcp:{addr}"),
+    }
 }
 
 /// Ask the Sidecar (via the local-exec governance endpoint) for a decision,

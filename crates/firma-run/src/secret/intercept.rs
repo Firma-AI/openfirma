@@ -31,9 +31,9 @@ pub enum InterceptError {
 
 /// Extract secrets from a vault CLI's `output` and rewrite it with placeholders.
 ///
-/// Each secret found by `matcher` is stored under a placeholder minted from
-/// `placeholder_template`; the returned bytes have every secret value replaced
-/// by its placeholder.
+/// Each secret found by `matcher` is stored in `store` under a placeholder
+/// minted from `placeholder_template`. Returns the rewritten bytes with every
+/// secret value replaced by its placeholder token.
 ///
 /// # Errors
 ///
@@ -50,6 +50,7 @@ pub fn intercept(
     // The mint callback cannot return an error, so a store failure is stashed
     // here and surfaced after the rewrite (fail-closed).
     let mut store_error: Option<SecretStoreError> = None;
+
     let rewritten = compiled.rewrite(output, &mut |name, value| {
         let placeholder = Placeholder::from_template(placeholder_template, name);
         store.rcu(|store| {
