@@ -23,16 +23,21 @@ shim does. There are two behaviors:
 A runnable example lives in
 [`examples/firma-run/secret-redaction/`](https://github.com/openfirma/openfirma/tree/main/examples/firma-run/secret-redaction).
 
-## When to use this vs credential injection
+## When to use this vs other secret mechanisms
 
-- The secret is an **HTTP credential** for an upstream host → use
+- The secret is a **static HTTP header** for an upstream host → use
   [credential injection](../inject-credentials/). The Sidecar attaches it at L7
   and the agent never holds it.
+- The secret appears in an **HTTP request body** (JSON, form, raw) → use
+  [secret placeholders](../secret-placeholders/). The agent writes a
+  `firma-secret://` token; the Sidecar resolves it at dispatch time.
 - The secret is produced or consumed by a **local process over stdio** (a vault
   CLI's output, a value an MCP tool needs) → use shims, described here.
 
-They compose: injection guards the network boundary, shims guard the process I/O
-boundary.
+They compose: injection guards the header boundary, placeholders guard the body
+boundary, and shims guard the process I/O boundary. Secrets fetched via shims
+(this guide) become the source for placeholder rehydration; the two mechanisms
+are typically used together.
 
 ## Step 1: List the executables to shim
 
