@@ -27,7 +27,8 @@ and vault credentials never enter the sandbox.
 **Vault CLIs run out-of-sandbox, proxied through the firma-run broker.** A thin
 binary (`firma-secret-shim`) is injected into the sandbox in place of each
 configured vault CLI. When the agent spawns one, the shim forwards the request
-via HTTP to an embedded broker server in the firma-run host process. The broker
+over a newline-framed JSON socket to a broker server in the firma-run host
+process. The broker
 holds the vault credentials (read from the host environment at startup), executes
 the real CLI out-of-sandbox, extracts the secret(s), and returns placeholder
 tokens to the shim. The agent only ever sees placeholders.
@@ -61,7 +62,7 @@ declared in Cedar policy.
 ── intercept path ──────────────────────────────────────────────
                        sandbox boundary
 agent ── spawns ──▶  shim  (no secrets, no credentials)
-                       │  HTTP (loopback, out-of-sandbox)
+                       │  JSON-line over UDS/TCP (FIRMA_BROKER_ADDR)
                        ▼
               ┌─────────────────────────────────┐
               │  firma-run broker (out-of-sandbox)│
@@ -75,13 +76,14 @@ agent ── spawns ──▶  shim  (no secrets, no credentials)
   any sandbox process (agent, browser, …)
        │  outbound HTTPS (to external service)
        ▼
-  ┌─────────────────────────────────┐
-  │  Sidecar (Cedar PDP + MITM proxy) │
-  │  • secret.redact Cedar eval       │
-  │  • SecretStore (read)             │
-  │  • rehydrate placeholders in reqs │
-  │  • mask secrets in resps          │
-  └────────────────┬────────────────-┘
+  ┌─────────────────────────────────────────────────────────┐
+  │  Sidecar (Cedar PDP + MITM proxy)                         │
+  │  • secret.redact Cedar eval                               │
+  │  • resolves placeholders via JSON-line gateway RPC        │
+  │    (FIRMA_SECRET_GATEWAY_ADDR → firma-run)                │
+  │  • rehydrate placeholders in reqs                         │
+  │  • mask secrets in resps                                  │
+  └────────────────────────────────────────────────────────-┘
                    │
                    ▼  external service
 ```
@@ -97,9 +99,9 @@ Three components:
 
 2. **Shim** (`firma-secret-shim`) — a thin cross-platform binary injected into
    the sandbox in place of each configured vault CLI (intercept mode only).
-   Forwards the launch argv to the broker via HTTP and proxies back the
-   placeholder-substituted output. Holds no secrets and no vault credentials.
-   Not used for redact mode.
+   Forwards the launch request to the broker over a newline-framed JSON socket
+   and proxies back the placeholder-substituted output. Holds no secrets and no
+   vault credentials. Not used for redact mode.
 
 3. **Sidecar (Cedar PDP + MITM proxy)** — evaluates `secret.mediate` Cedar
    policies (for intercept) and `secret.redact` policies (for redact). On the
@@ -113,16 +115,27 @@ Three components:
 
 ### Shim-to-broker transport
 
-The broker's address is injected into the sandbox at startup via
-`FIRMA_BROKER_ADDR`. The shim parses the scheme and connects directly — no
-intermediate bridge process. The address scheme varies by backend:
+Two sockets are created per session, both in the sandbox's runtime directory
+(`<runtime_dir>/secret-shims/`):
 
-| Backend                        | `FIRMA_BROKER_ADDR`           | Transport                                |
-| ------------------------------ | ----------------------------- | ---------------------------------------- |
-| Linux bwrap                    | `unix:/run/firma/broker.sock` | UDS bind-mounted into the sandbox        |
-| macOS Virtualization.framework | `vsock://2:<port>`            | AF_VSOCK (guest↔host, no network config) |
-| WSL2                           | `tcp://<host-ip>:<port>`      | TCP to the WSL2 host-facing interface IP |
-| macOS / Windows native         | `tcp://127.0.0.1:<port>`      | TCP loopback                             |
+- **`broker.sock`** — shim → broker. Carries intercept requests (tool launch
+  argv) and returns placeholder-substituted stdout.
+- **`gateway.sock`** — Sidecar → broker. Carries batch placeholder-resolution
+  requests for the redact path.
+
+Their addresses are injected into the relevant processes as environment
+variables:
+
+| Env var                     | Consumer | Format        | Transport                             |
+| --------------------------- | -------- | ------------- | ------------------------------------- |
+| `FIRMA_BROKER_ADDR`         | shim     | `unix:<path>` | UDS bind-mounted into the sandbox     |
+| `FIRMA_BROKER_ADDR`         | shim     | `tcp:<addr>`  | TCP loopback (Windows / non-bwrap)    |
+| `FIRMA_SECRET_GATEWAY_ADDR` | Sidecar  | `unix:<path>` | UDS (out-of-sandbox, host filesystem) |
+| `FIRMA_SECRET_GATEWAY_ADDR` | Sidecar  | `tcp:<addr>`  | TCP loopback (Windows / non-bwrap)    |
+
+The broker and gateway socket paths are placed in the session runtime directory
+at startup (e.g. `<runtime_dir>/secret-shims/broker.sock`), not at a fixed
+system path.
 
 On Linux bwrap, the sandbox's network namespace (`--unshare-net`) isolates the
 host loopback, so TCP to the host is unreachable. A UDS path bind-mounted into
@@ -135,6 +148,34 @@ The shim is platform-aware by design — each backend already requires different
 sandbox machinery — so the per-scheme dispatch in the shim adds no hidden
 complexity. An intermediate TCP bridge process would add a failure mode and an
 extra egress-guard whitelist entry for no benefit.
+
+#### Shim ↔ broker wire protocol
+
+One newline-framed JSON round-trip per connection:
+
+```text
+shim  →  {"bin":"bws","args":"secret get <uuid>"}\n
+broker → {"stdout":"<base64-encoded stdout>"}\n   (success)
+broker → {"error":"<reason>"}\n                   (failure — shim exits non-zero)
+```
+
+`args` is the space-joined argument string (everything after the binary name).
+
+#### Sidecar ↔ broker gateway protocol
+
+One newline-framed JSON round-trip per connection. The request carries a batch
+of placeholder tokens and the request's target domain; the response is a
+positionally-aligned array — one element per placeholder:
+
+```text
+→ {"placeholders":["firma-secret://bw/token","firma-secret://bw/other"],"domain":"api.github.com"}\n
+← [{"secret_b64":"<base64>"},{"error":"unknown placeholder: ..."}]\n
+```
+
+Protocol-level errors (malformed request, oversized request) are returned as a
+single error object `{"error":"..."}` so they can be distinguished from an empty
+batch. Domain-scoped secrets that do not match `domain` are returned as errors
+(same as unknown placeholder — fail closed).
 
 ### Why vault CLI exec stays in the broker, not the Sidecar
 
@@ -149,8 +190,9 @@ and out-of-sandbox exec.
 
 The `SecretStore` lives in the broker. The broker writes `placeholder → value`
 entries after each successful vault CLI intercept. On the redact path the
-Sidecar issues a lookup RPC to the broker to resolve each placeholder; the
-broker never pushes entries to the Sidecar.
+Sidecar issues a batch lookup request to the broker's gateway socket
+(`FIRMA_SECRET_GATEWAY_ADDR`) to resolve each placeholder — see the gateway
+protocol above. The broker never pushes entries to the Sidecar.
 
 ### Why bind-over-path, not PATH shadowing
 
@@ -169,7 +211,8 @@ At sandbox startup, firma-run:
 3. **Strips them from the sandbox environment** before launching it.
 
 The agent cannot read or exfiltrate the credential because it is never present
-in the sandbox. The shim holds no credential — it only forwards the argv. The
+in the sandbox. The shim holds no credential — it only forwards the tool launch
+request (binary name + args) to the broker. The
 broker executes the real vault CLI out-of-sandbox with the credential, captures
 its stdout, and applies the integration's extractor.
 
@@ -183,10 +226,11 @@ strategy.
 Each CLI call returns one or more flat `(name, value)` pairs. Placeholder format:
 `firma-secret://<provider>/<name>`.
 
-| Integration | CLI       | Credential env vars | Output format                           |
-| ----------- | --------- | ------------------- | --------------------------------------- |
-| `bitwarden` | `bws`     | `BWS_ACCESS_TOKEN`  | JSON array of `{key, value}` objects    |
-| `doppler`   | `doppler` | `DOPPLER_TOKEN`     | JSON map of `{NAME: {computed: value}}` |
+| Integration       | CLI       | Credential env vars                            | Output format / extractor                           |
+| ----------------- | --------- | ---------------------------------------------- | --------------------------------------------------- |
+| `bitwarden`       | `bws`     | `BWS_ACCESS_TOKEN`                             | JSON array of `{key, value}` objects                |
+| `doppler`         | `doppler` | `DOPPLER_TOKEN`                                | `NAME=VALUE` env format (forced via `--format env`) |
+| `hashicorp-vault` | `vault`   | `VAULT_TOKEN`, `VAULT_ADDR`, `VAULT_NAMESPACE` | columnar table; regex extracts data rows            |
 
 ### Structured-item stores
 
@@ -195,10 +239,9 @@ password, TOTP code, card number, URL, and so on. Placeholder format:
 `firma-secret://<provider>/<item>/<field>`, where `<item>` is the item title and
 `<field>` is the field label, both percent-encoded.
 
-| Integration       | CLI     | Credential env vars                            | Sensitive field types extracted           |
-| ----------------- | ------- | ---------------------------------------------- | ----------------------------------------- |
-| `1password`       | `op`    | `OP_SERVICE_ACCOUNT_TOKEN`                     | `CONCEALED`, `TOTP`, `CREDIT_CARD_NUMBER` |
-| `hashicorp-vault` | `vault` | `VAULT_TOKEN`, `VAULT_ADDR`, `VAULT_NAMESPACE` | all string fields under `data`            |
+| Integration | CLI  | Credential env vars        | Sensitive field types extracted           |
+| ----------- | ---- | -------------------------- | ----------------------------------------- |
+| `1password` | `op` | `OP_SERVICE_ACCOUNT_TOKEN` | `CONCEALED`, `TOTP`, `CREDIT_CARD_NUMBER` |
 
 For structured-item integrations, field-type filtering is coded into the
 integration's built-in extractor, not expressed in Cedar annotations. When the
@@ -338,15 +381,15 @@ when { resource.host == "api.github.com" };
 ```
 agent: executes `bws secret get <uuid>`   (hits shim — real binary is out-of-sandbox)
   │
-  ▼  HTTP POST /broker/mediate  { argv: ["bws", "secret", "get", "<uuid>"] }
+  ▼  JSON-line to FIRMA_BROKER_ADDR:  {"bin":"bws","args":"secret get <uuid>"}\n
 broker:
-  1. asks Sidecar → SecretDecision { Intercept, integration: "bitwarden" }
+  1. asks Sidecar → SecretPepOutcome::Permit (via local-exec governance channel)
   2. looks up bitwarden spec: BWS_ACCESS_TOKEN (from host env), JSON extractor
   3. execs `bws secret get <uuid>` out-of-sandbox with BWS_ACCESS_TOKEN
   4. captures stdout; applies built-in extractor
   5. mints placeholder(s): firma-secret://bitwarden/<name>
   6. inserts placeholder → secret into SecretStore
-  7. returns placeholder-substituted stdout → shim → agent
+  7. returns {"stdout":"<base64-encoded rewritten output>"}\n → shim → agent
   │
 agent: receives `firma-secret://bitwarden/<name>` — never held the real value
 ```
@@ -589,8 +632,8 @@ when { resource.host == "api.github.com" };
 | 0     | This design doc                                                                                                                                                                                                                             | docs                                         | Reviewed                                            |
 | 1     | `SecretStore`, `Placeholder`, `SecretValue`, Aho-Corasick matcher                                                                                                                                                                           | `firma-run`                                  | Unit tests: dictionary, masking                     |
 | 2     | Cedar: `secret.mediate` / `secret.redact` action schemas; `SecretMediation` enum; load-time bundle validation (shim cross-check)                                                                                                            | `firma-core`, `firma-sidecar`                | Unit tests: bundle parse/validate, shim cross-check |
-| 3     | `IntegrationRegistry`: built-in specs for `bitwarden`, `1password`, `hashicorp-vault`, `doppler` (incl. structured-item extractors); credential env var stripping                                                                           | `firma-run`, `firma-config-loader`           | Integration tests with fake CLIs                    |
-| 4     | firma-run embedded HTTP server; shim binary as HTTP client; intercept mode end-to-end with out-of-sandbox vault CLI exec; bind-over-path shim injection                                                                                     | `firma-run`                                  | E2E on bwrap with mock vault CLIs                   |
+| 3     | `IntegrationRegistry`: built-in specs for `bitwarden`, `1password` (structured-item extractor), `hashicorp-vault`, `doppler`; credential env var stripping                                                                                  | `firma-run`, `firma-config-loader`           | Integration tests with fake CLIs                    |
+| 4     | firma-run JSON-line broker + gateway sockets; shim binary; intercept mode end-to-end with out-of-sandbox vault CLI exec; bind-over-path shim injection                                                                                      | `firma-run`                                  | E2E on bwrap with mock vault CLIs                   |
 | 5     | Content-Type–driven rewriter in Sidecar MITM path (`raw`, `json`, `form`, `xml`); multi-pattern Aho-Corasick masking; `secret.redact` Cedar eval; SecretStore read path in Sidecar; Host-header domain binding; docs (docs-site + llms.txt) | `firma-sidecar`, `firma-config-loader`, docs | `just check` green                                  |
 | 6     | Streaming rewrite with overlap buffers for chunked and HTTP/2 responses                                                                                                                                                                     | `firma-sidecar`                              | Property tests on chunk splits                      |
 | 7     | Plugin interface for custom integrations; additional backends (macOS vz, WSL2)                                                                                                                                                              | `firma-run`, backends                        | —                                                   |
@@ -619,11 +662,12 @@ Azure) that have no local CLI — see [Future Development](#future-development-n
 
 ### SecretStore location: broker (firma-run)
 
-The `SecretStore` lives in the broker. The Sidecar issues a lookup RPC to
-firma-run on each rehydration. This preserves the existing Sidecar security
-boundary — a Sidecar compromise does not yield the secret dictionary. The IPC
-round-trip on the redact hot path is acceptable; a short-lived local cache of
-recently resolved entries can be added if it becomes a measurable bottleneck.
+The `SecretStore` lives in the broker. The Sidecar resolves placeholders on
+demand by sending a batch request to the gateway socket (`FIRMA_SECRET_GATEWAY_ADDR`).
+This preserves the existing Sidecar security boundary — a Sidecar compromise
+does not yield the secret dictionary. The IPC round-trip on the redact hot path
+is acceptable; a short-lived local cache of recently resolved entries can be
+added if it becomes a measurable bottleneck.
 
 ## Future Development: Network-Only Secret Services
 

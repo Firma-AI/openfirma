@@ -53,6 +53,12 @@ pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
 /// key (percent-encoded).
 pub const PLACEHOLDER_NAME_MARKER: &str = "{name}";
 
+/// Optional marker substituted with the percent-encoded item title.
+///
+/// Used for structured-item stores (e.g. 1Password) where the placeholder
+/// format is `firma-secret://<provider>/{item}/{name}`.
+pub const PLACEHOLDER_ITEM_MARKER: &str = "{item}";
+
 /// A placeholder token of the form `firma-secret://<provider>/<name>`.
 ///
 /// The token is treated as an opaque dictionary key; callers never parse
@@ -76,17 +82,31 @@ impl Placeholder {
         Self(token)
     }
 
-    /// Mint a placeholder by substituting [`PLACEHOLDER_NAME_MARKER`] in a
-    /// `@placeholder` template with the percent-encoded secret key.
+    /// Mint a placeholder by substituting markers in a `@placeholder` template.
     ///
-    /// The template is expected to be pre-validated (scheme + `{name}` marker),
-    /// as enforced at Cedar bundle load. The key is percent-encoded to the token
-    /// charset so the result round-trips.
+    /// - [`PLACEHOLDER_NAME_MARKER`] (`{name}`) is always replaced with the
+    ///   percent-encoded `name`.
+    /// - [`PLACEHOLDER_ITEM_MARKER`] (`{item}`) is replaced with the
+    ///   percent-encoded `item` when `item` is `Some`; if the template contains
+    ///   `{item}` but `item` is `None` the marker is left unchanged (the caller
+    ///   should validate the template against the matcher config at load time).
+    ///
+    /// The template is expected to be pre-validated (scheme present, markers
+    /// present and consistent with the matcher), as enforced at Cedar bundle
+    /// load.
     #[must_use]
-    pub fn from_template(template: &str, name: &str) -> Self {
-        let mut encoded = String::new();
-        encode_segment(name, &mut encoded);
-        Self(template.replace(PLACEHOLDER_NAME_MARKER, &encoded))
+    pub fn from_template(template: &str, item: Option<&str>, name: &str) -> Self {
+        let mut encoded_name = String::new();
+        encode_segment(name, &mut encoded_name);
+        let after_name = template.replace(PLACEHOLDER_NAME_MARKER, &encoded_name);
+        let result = if let Some(item) = item {
+            let mut encoded_item = String::new();
+            encode_segment(item, &mut encoded_item);
+            after_name.replace(PLACEHOLDER_ITEM_MARKER, &encoded_item)
+        } else {
+            after_name
+        };
+        Self(result)
     }
 
     /// Wrap an existing token, validating the scheme and token charset.

@@ -391,19 +391,40 @@ pub enum SecretMatcher {
         /// `JSONPath` selecting the matching name (`@match_name`), aligned by
         /// document order with the value path.
         name_path: String,
+        /// Optional `JSONPath` selecting the item title for structured-item
+        /// stores. Substituted into the `{item}` marker of the placeholder
+        /// template. When the path selects a single node it is broadcast to all
+        /// extracted values; when it selects N nodes they are aligned
+        /// positionally. Use this for integrations that group multiple fields
+        /// under a named item (e.g. 1Password `$.title`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_path: Option<String>,
         /// Optional `JSONPath` selecting the domain (hostname) associated with
-        /// each secret, aligned with the value path. When a selected node is not
-        /// a string (e.g. `null`) the domain is treated as absent (wildcard).
-        /// Use this for integrations whose vault items carry a URL or hostname
-        /// field (e.g. 1Password `urls[0].href`).
+        /// each secret. When the path selects a single node it is broadcast to
+        /// all extracted values; when it selects N nodes they are aligned
+        /// positionally. A node that is not a string (e.g. `null`) is treated
+        /// as absent (wildcard). Use this for integrations whose vault items
+        /// carry a URL or hostname field (e.g. 1Password `urls[0].href`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         domain_path: Option<String>,
+        /// When `true` and `domain_path` is set, the selected value is parsed
+        /// as a URL and only the `host` portion is stored. Use this for
+        /// integrations that store full URLs rather than bare hostnames
+        /// (e.g. 1Password `urls[].href` stores `https://github.com`).
+        #[serde(default)]
+        domain_is_url: bool,
     },
     /// `Regex` extraction over text output. The pattern carries a required
-    /// `value` and optional `name` named capture group (`@match_pattern`).
+    /// `value` and `name` named capture group, and an optional `domain` group
+    /// (`@match_pattern`).
     Regex {
         /// The `Regex` source.
         pattern: String,
+        /// When `true` and the pattern has a `domain` capture group, the
+        /// captured value is parsed as a URL and only the `host` portion is
+        /// stored. Mirrors the same flag on the `Json` variant.
+        #[serde(default)]
+        domain_is_url: bool,
     },
 }
 

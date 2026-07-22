@@ -44,8 +44,8 @@ pub fn intercept(
 ) -> Result<Vec<u8>, InterceptError> {
     let compiled = CompiledMatcher::compile(matcher)?;
 
-    let rewritten = compiled.rewrite(output, &mut |name, value, domain| {
-        let placeholder = Placeholder::from_template(placeholder_template, name);
+    let rewritten = compiled.rewrite(output, &mut |name, value, domain, item| {
+        let placeholder = Placeholder::from_template(placeholder_template, item, name);
         let domain = domain.map(str::to_owned);
         store.rcu(|store| {
             let mut store = SecretStore::clone(store);
@@ -74,7 +74,9 @@ mod tests {
         SecretMatcher::Json {
             value_path: "$[*].value".to_string(),
             name_path: "$[*].key".to_string(),
+            item_path: None,
             domain_path: None,
+            domain_is_url: false,
         }
     }
 
@@ -82,7 +84,9 @@ mod tests {
         SecretMatcher::Json {
             value_path: "$[*].value".to_string(),
             name_path: "$[*].key".to_string(),
+            item_path: None,
             domain_path: Some("$[*].domain".to_string()),
+            domain_is_url: false,
         }
     }
 
@@ -119,6 +123,7 @@ mod tests {
         let store = ArcSwap::from_pointee(SecretStore::new());
         let matcher = SecretMatcher::Regex {
             pattern: r"(?m)^(?P<name>[^=]+)=(?P<value>.+)$".to_string(),
+            domain_is_url: false,
         };
 
         let rewritten = intercept(
