@@ -23,8 +23,8 @@ use aho_corasick::{AhoCorasick, MatchKind};
 use either::Either;
 use zeroize::Zeroizing;
 
-/// Out-of-sandbox broker transport (Unix-socket handshake + `SCM_RIGHTS` fd
-/// passing). Unix-only: the primitive is `sendmsg`/`recvmsg` ancillary data.
+/// Out-of-sandbox broker transport (Unix domain socket, JSON line protocol).
+/// Unix-only.
 #[cfg(unix)]
 pub mod broker;
 
@@ -37,26 +37,15 @@ pub mod pep;
 /// it so the agent sees placeholders.
 pub mod intercept;
 
-/// Streaming byte-level rewriters (the `raw` redact transform): rehydrate
-/// placeholders into secrets on stdin and mask secrets back on stdout.
-pub mod transform;
+/// Built-in integration specs for supported vault CLIs (bws, op, vault, doppler).
+pub mod integration;
 
-/// Broker-side application of a secret-mediation decision to a wrapped launch's
-/// captured output (fail-closed).
-#[cfg(unix)]
-pub mod session;
-
-/// Broker-side application of a redact decision to a wrapped tool's
-/// bidirectional streams (fail-closed).
-#[cfg(unix)]
-pub mod redact;
-
-/// Per-connection broker dispatch: route a shim handshake's descriptors to an
-/// intercept or redact session by decision (fail-closed).
+/// Per-request broker dispatch: run the real vault CLI and apply the intercept
+/// transform by decision (fail-closed).
 #[cfg(unix)]
 pub mod serve;
 
-/// In-sandbox shim: courier the wrapped tool's descriptors to the broker.
+/// In-sandbox shim: send a tool-launch request to the out-of-sandbox broker.
 #[cfg(unix)]
 pub mod shim;
 

@@ -1,91 +1,84 @@
 //! Out-of-sandbox broker transport for the secret shim.
 //!
-//! A sandbox shim connects to this broker over a Unix domain socket and hands
-//! over the file descriptors of the wrapped tool using `SCM_RIGHTS`, together
-//! with a small JSON handshake describing the launch.
+//! The shim binary connects to the broker over a Unix domain socket and sends a
+//! newline-terminated JSON request describing the tool launch. The broker runs
+//! the real CLI out of the sandbox, intercepts the output, and writes back a
+//! newline-terminated JSON response containing the base64-encoded stdout.
 //!
-//! See `docs/architecture/secrets-interception.md`.
+//! Protocol (one round-trip per connection):
+//!
+//! ```text
+//! shim  →  {"bin":"bws","args":"secret get abc"}\n
+//! broker → {"stdout":"<base64>"}\n        (on success)
+//! broker → {"error":"<reason>"}\n         (on failure — shim exits non-zero)
+//! ```
 
-#![expect(
-    unsafe_code,
-    reason = "descriptors received via SCM_RIGHTS have no safe nix wrapper into OwnedFd; each unsafe is a thin, checked shim taking sole ownership of a just-transferred fd"
-)]
-
-use std::collections::BTreeMap;
-use std::io::{self, IoSlice, IoSliceMut};
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::io::{self, BufRead, BufReader, Write};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
-use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-/// Maximum number of descriptors accepted in a single handshake.
-const MAX_FDS: usize = 8;
+/// Maximum request line length from the shim, in bytes.
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
-/// Maximum handshake payload size (length-prefixed JSON), in bytes.
-const MAX_HANDSHAKE_LEN: usize = 64 * 1024;
-
-/// Purpose of a single descriptor handed to the broker.
-///
-/// Each role names exactly one descriptor, in the same order the descriptors
-/// are passed via `SCM_RIGHTS` (strict 1 role : 1 fd). A redact launch couriers
-/// all four; an intercept launch couriers `[ToolStdoutSource, AgentStdoutSink]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FdRole {
-    /// Bytes from the agent toward the tool — rehydration **reads** here.
-    AgentStdinSource,
-    /// The tool's stdin — rehydration **writes** here (placeholder → secret).
-    ToolStdinSink,
-    /// The tool's stdout — masking/extraction **reads** here.
-    ToolStdoutSource,
-    /// Bytes toward the agent — masking/extraction **writes** here
-    /// (secret → placeholder).
-    AgentStdoutSink,
+/// Shim → broker request: describes one tool launch.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct BrokerRequest {
+    /// Executable basename of the wrapped tool (e.g. `"bws"`).
+    pub bin: String,
+    /// Space-joined arguments (everything after the binary name).
+    pub args: String,
 }
 
-/// Shim → broker handshake, sent once per wrapped-tool launch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Handshake {
-    /// Full launch argv of the wrapped tool; becomes the Cedar `resource.id`.
-    pub argv: Vec<String>,
-    /// Roles of the passed descriptors, aligned with the `SCM_RIGHTS` fd order.
-    pub fds: Vec<FdRole>,
+/// Broker → shim response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BrokerResponse {
+    Ok {
+        /// Base64-encoded stdout bytes from the real tool.
+        stdout: String,
+    },
+    Err {
+        error: String,
+    },
 }
 
-/// A decoded handshake together with the descriptors that accompanied it.
-#[derive(Debug)]
-pub struct AcceptedHandshake {
-    /// The decoded handshake.
-    pub handshake: Handshake,
-    /// Descriptors received via `SCM_RIGHTS`, in the order declared by
-    /// [`Handshake::fds`].
-    pub fds: Vec<OwnedFd>,
-}
+impl BrokerResponse {
+    /// Build a success response from raw stdout bytes.
+    #[must_use]
+    pub fn ok(stdout: &[u8]) -> Self {
+        Self::Ok {
+            stdout: base64::engine::general_purpose::STANDARD.encode(stdout),
+        }
+    }
 
-impl AcceptedHandshake {
-    /// Consume into a `role → descriptor` map.
-    ///
-    /// The handshake's declared roles are zipped with the received descriptors
-    /// in order (their counts were already checked equal by [`recv_handshake`]).
+    /// Build an error response.
+    #[must_use]
+    pub fn err(reason: impl Into<String>) -> Self {
+        Self::Err {
+            error: reason.into(),
+        }
+    }
+
+    /// Decode the stdout bytes from a success response.
     ///
     /// # Errors
     ///
-    /// Returns an error if a role is declared more than once, which would make
-    /// the descriptor for that role ambiguous (fail closed).
-    pub fn into_by_role(self) -> io::Result<BTreeMap<FdRole, OwnedFd>> {
-        let mut by_role = BTreeMap::new();
-        for (role, fd) in self.handshake.fds.into_iter().zip(self.fds) {
-            if by_role.insert(role, fd).is_some() {
-                return Err(io::Error::other(format!("duplicate fd role: {role:?}")));
-            }
+    /// Returns an error if the payload is an error response or the base64 is
+    /// malformed.
+    pub fn into_stdout(self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Ok { stdout } => base64::engine::general_purpose::STANDARD
+                .decode(stdout)
+                .map_err(|e| format!("broker response base64 decode failed: {e}")),
+            Self::Err { error } => Err(error),
         }
-        Ok(by_role)
     }
 }
 
-/// Broker-side listener for shim handshakes on a Unix domain socket.
+/// Broker-side listener: accepts shim connections and dispatches requests.
 #[derive(Debug)]
 pub struct BrokerListener {
     listener: UnixListener,
@@ -101,8 +94,6 @@ impl BrokerListener {
     /// a missing one) or binding fails.
     pub fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        // A leftover socket file from a previous run makes `bind` fail with
-        // EADDRINUSE; remove it best-effort, tolerating "not found".
         if let Err(error) = std::fs::remove_file(&path)
             && error.kind() != io::ErrorKind::NotFound
         {
@@ -112,222 +103,137 @@ impl BrokerListener {
         Ok(Self { listener, path })
     }
 
-    /// Accept one shim connection and read its handshake and descriptors.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if accepting, receiving, or decoding fails, including
-    /// when the received descriptor count does not match the declared roles
-    /// (fail closed).
-    pub fn accept(&self) -> io::Result<AcceptedHandshake> {
-        let (stream, _addr) = self.listener.accept()?;
-        recv_handshake(&stream)
-    }
-
     /// The bound socket path.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Accept one shim connection, invoke `handler(request)`, and write the
+    /// response back.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if accepting, reading, or writing fails. Handler
+    /// errors are serialized and written as `{"error":"..."}` responses rather
+    /// than returned here.
+    pub fn accept_one<F>(&self, handler: F) -> io::Result<()>
+    where
+        F: FnOnce(BrokerRequest) -> BrokerResponse,
+    {
+        let (mut stream, _addr) = self.listener.accept()?;
+        let mut reader = BufReader::new(stream.try_clone()?);
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        if line.len() > MAX_REQUEST_BYTES {
+            let response = BrokerResponse::err("request too large");
+            return write_response(&mut stream, &response);
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Err(io::Error::other("empty broker request"));
+        }
+        let response = match serde_json::from_str::<BrokerRequest>(trimmed) {
+            Ok(request) => handler(request),
+            Err(e) => BrokerResponse::err(format!("malformed broker request: {e}")),
+        };
+        write_response(&mut stream, &response)
+    }
 }
 
 impl Drop for BrokerListener {
     fn drop(&mut self) {
-        // Best-effort removal of the socket file on shutdown.
         let _ = std::fs::remove_file(&self.path);
     }
 }
 
-/// Send a handshake and its descriptors over a connected stream.
-///
-/// The payload is a little-endian `u32` length prefix followed by the JSON
-/// handshake; the descriptors ride along as `SCM_RIGHTS` ancillary data.
-///
-/// # Errors
-///
-/// Returns an error if the descriptor count disagrees with the declared roles,
-/// too many descriptors are passed, serialization fails, or the socket send
-/// fails.
-pub fn send_handshake(
-    stream: &UnixStream,
-    handshake: &Handshake,
-    fds: &[BorrowedFd<'_>],
-) -> io::Result<()> {
-    if fds.len() != handshake.fds.len() {
-        return Err(io::Error::other(
-            "descriptor count does not match declared roles",
-        ));
-    }
-    if fds.len() > MAX_FDS {
-        return Err(io::Error::other("too many descriptors in handshake"));
-    }
-
-    let json = serde_json::to_vec(handshake).map_err(io::Error::other)?;
-    let len =
-        u32::try_from(json.len()).map_err(|_| io::Error::other("handshake payload too large"))?;
-    let len_bytes = len.to_le_bytes();
-    let iov = [IoSlice::new(&len_bytes), IoSlice::new(&json)];
-
-    let raw_fds: Vec<RawFd> = fds.iter().map(AsRawFd::as_raw_fd).collect();
-    if raw_fds.is_empty() {
-        sendmsg::<()>(stream.as_raw_fd(), &iov, &[], MsgFlags::empty(), None)
-    } else {
-        let cmsg = [ControlMessage::ScmRights(raw_fds.as_slice())];
-        sendmsg::<()>(stream.as_raw_fd(), &iov, &cmsg, MsgFlags::empty(), None)
-    }
-    .map_err(|errno| io::Error::from_raw_os_error(errno as i32))?;
-    Ok(())
-}
-
-/// Receive a handshake and its descriptors from a connected stream.
-///
-/// # Errors
-///
-/// Returns an error if the socket receive fails, the payload is truncated or
-/// oversized, JSON decoding fails, or the received descriptor count does not
-/// match the declared roles (fail closed).
-pub fn recv_handshake(stream: &UnixStream) -> io::Result<AcceptedHandshake> {
-    let mut buf = vec![0_u8; MAX_HANDSHAKE_LEN];
-
-    let received;
-    let mut fds: Vec<OwnedFd> = Vec::new();
-    {
-        let mut iov = [IoSliceMut::new(&mut buf)];
-        let mut cmsg_space = nix::cmsg_space!([RawFd; MAX_FDS]);
-        let msg = recvmsg::<()>(
-            stream.as_raw_fd(),
-            &mut iov,
-            Some(&mut cmsg_space),
-            MsgFlags::empty(),
-        )
-        .map_err(|errno| io::Error::from_raw_os_error(errno as i32))?;
-
-        received = msg.bytes;
-        for cmsg in msg
-            .cmsgs()
-            .map_err(|errno| io::Error::from_raw_os_error(errno as i32))?
-        {
-            if let ControlMessageOwned::ScmRights(raw) = cmsg {
-                for fd in raw {
-                    // SAFETY: each fd was just transferred to us by the kernel
-                    // via SCM_RIGHTS; we take sole ownership of it here.
-                    fds.push(unsafe { OwnedFd::from_raw_fd(fd) });
-                }
-            }
-        }
-    }
-
-    let len_bytes: [u8; 4] = buf
-        .get(0..4)
-        .and_then(|slice| slice.try_into().ok())
-        .ok_or_else(|| io::Error::other("handshake shorter than length prefix"))?;
-    let len = usize::try_from(u32::from_le_bytes(len_bytes))
-        .map_err(|_| io::Error::other("invalid handshake length"))?;
-    let end = 4usize
-        .checked_add(len)
-        .ok_or_else(|| io::Error::other("handshake length overflow"))?;
-    if received != end {
-        return Err(io::Error::other("truncated or oversized handshake payload"));
-    }
-
-    let json = buf
-        .get(4..end)
-        .ok_or_else(|| io::Error::other("handshake payload out of range"))?;
-    let handshake: Handshake = serde_json::from_slice(json).map_err(io::Error::other)?;
-    if handshake.fds.len() != fds.len() {
-        return Err(io::Error::other(
-            "received descriptor count does not match handshake roles",
-        ));
-    }
-
-    Ok(AcceptedHandshake { handshake, fds })
+fn write_response(stream: &mut impl Write, response: &BrokerResponse) -> io::Result<()> {
+    let mut payload = serde_json::to_vec(response)
+        .map_err(|e| io::Error::other(format!("failed to serialize broker response: {e}")))?;
+    payload.push(b'\n');
+    stream.write_all(&payload)?;
+    stream.flush()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::os::fd::AsFd;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::thread;
 
     use super::*;
 
-    fn sample_handshake(fds: Vec<FdRole>) -> Handshake {
-        Handshake {
-            argv: vec!["bws".to_string(), "secret".to_string(), "get".to_string()],
-            fds,
-        }
+    fn connect_and_send(path: &Path, request: &BrokerRequest) -> BrokerResponse {
+        let mut stream = UnixStream::connect(path).expect("connect");
+        let payload = serde_json::to_string(request).expect("serialize");
+        stream
+            .write_all(format!("{payload}\n").as_bytes())
+            .expect("write");
+        stream.flush().expect("flush");
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read response");
+        serde_json::from_str(line.trim()).expect("deserialize response")
     }
 
     #[test]
-    fn handshake_and_descriptor_roundtrip() {
-        let (client, server) = UnixStream::pair().expect("socketpair");
-        let (mut reader, writer) = std::io::pipe().expect("pipe");
-        // A single write-sink descriptor exercises the transport roundtrip.
-        let handshake = sample_handshake(vec![FdRole::AgentStdoutSink]);
-
-        send_handshake(&client, &handshake, &[writer.as_fd()]).expect("send handshake");
-        let accepted = recv_handshake(&server).expect("recv handshake");
-
-        assert_eq!(accepted.handshake, handshake);
-        assert_eq!(accepted.fds.len(), 1);
-
-        // The received descriptor must be a working duplicate of our pipe write
-        // end: writing through it is readable from the retained read end.
-        drop(writer);
-        let received = accepted.fds.into_iter().next().expect("one descriptor");
-        let mut received_writer = std::fs::File::from(received);
-        received_writer
-            .write_all(b"ping")
-            .expect("write via received fd");
-        drop(received_writer);
-
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).expect("read pipe");
-        assert_eq!(buf, b"ping");
-    }
-
-    #[test]
-    fn listener_binds_accepts_and_cleans_up() {
+    fn roundtrip_ok_response() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let socket_path = dir.path().join("broker.sock");
+        let path = dir.path().join("broker.sock");
+        let listener = BrokerListener::bind(&path).expect("bind");
 
-        let accepted = {
-            let listener = BrokerListener::bind(&socket_path).expect("bind");
-            assert_eq!(listener.path(), socket_path);
-            assert!(socket_path.exists());
+        let request = BrokerRequest {
+            bin: "bws".to_string(),
+            args: "secret get abc".to_string(),
+        };
+        let request_clone = request.clone();
 
-            let client = UnixStream::connect(&socket_path).expect("connect");
-            let handshake = Handshake {
-                argv: vec!["npx".to_string(), "@playwright/mcp".to_string()],
-                fds: Vec::new(),
-            };
-            send_handshake(&client, &handshake, &[]).expect("send handshake");
-            listener.accept().expect("accept handshake")
+        let server = thread::spawn(move || {
+            listener
+                .accept_one(|req| {
+                    assert_eq!(req, request_clone);
+                    BrokerResponse::ok(b"secret-value")
+                })
+                .expect("accept_one");
+        });
+
+        let response = connect_and_send(&path, &request);
+        server.join().expect("server thread");
+
+        let stdout = response.into_stdout().expect("ok response");
+        assert_eq!(stdout, b"secret-value");
+    }
+
+    #[test]
+    fn handler_error_written_as_error_response() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("broker-err.sock");
+        let listener = BrokerListener::bind(&path).expect("bind");
+
+        let request = BrokerRequest {
+            bin: "bws".to_string(),
+            args: "secret get x".to_string(),
         };
 
-        assert_eq!(accepted.handshake.argv, ["npx", "@playwright/mcp"]);
-        assert!(accepted.fds.is_empty());
-        // The listener was dropped at the end of the block; the socket file is
-        // removed.
-        assert!(!socket_path.exists());
+        let server = thread::spawn(move || {
+            listener
+                .accept_one(|_req| BrokerResponse::err("tool not found"))
+                .expect("accept_one");
+        });
+
+        let response = connect_and_send(&path, &request);
+        server.join().expect("server thread");
+        assert!(response.into_stdout().is_err());
     }
 
     #[test]
-    fn send_rejects_declared_role_and_fd_count_mismatch() {
-        let (client, _server) = UnixStream::pair().expect("socketpair");
-        // Declares one role but passes zero descriptors.
-        let handshake = sample_handshake(vec![FdRole::ToolStdoutSource]);
-        let error = send_handshake(&client, &handshake, &[]).expect_err("count mismatch");
-        assert_eq!(error.kind(), io::ErrorKind::Other);
-    }
-
-    #[test]
-    fn recv_rejects_payload_without_valid_length_prefix() {
-        let (client, server) = UnixStream::pair().expect("socketpair");
-        // Two raw bytes: fewer than the four-byte length prefix declares.
-        (&client).write_all(b"xx").expect("write raw bytes");
-        drop(client);
-
-        let error = recv_handshake(&server).expect_err("truncated payload");
-        assert_eq!(error.kind(), io::ErrorKind::Other);
+    fn listener_cleans_up_on_drop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cleanup.sock");
+        {
+            let _listener = BrokerListener::bind(&path).expect("bind");
+            assert!(path.exists());
+        }
+        assert!(!path.exists());
     }
 }

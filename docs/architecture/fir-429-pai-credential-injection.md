@@ -117,12 +117,12 @@ The broker's address is injected into the sandbox at startup via
 `FIRMA_BROKER_ADDR`. The shim parses the scheme and connects directly — no
 intermediate bridge process. The address scheme varies by backend:
 
-| Backend | `FIRMA_BROKER_ADDR` | Transport |
-| ------- | ------------------- | --------- |
-| Linux bwrap | `unix:/run/firma/broker.sock` | UDS bind-mounted into the sandbox |
-| macOS Virtualization.framework | `vsock://2:<port>` | AF_VSOCK (guest↔host, no network config) |
-| WSL2 | `tcp://<host-ip>:<port>` | TCP to the WSL2 host-facing interface IP |
-| macOS / Windows native | `tcp://127.0.0.1:<port>` | TCP loopback |
+| Backend                        | `FIRMA_BROKER_ADDR`           | Transport                                |
+| ------------------------------ | ----------------------------- | ---------------------------------------- |
+| Linux bwrap                    | `unix:/run/firma/broker.sock` | UDS bind-mounted into the sandbox        |
+| macOS Virtualization.framework | `vsock://2:<port>`            | AF_VSOCK (guest↔host, no network config) |
+| WSL2                           | `tcp://<host-ip>:<port>`      | TCP to the WSL2 host-facing interface IP |
+| macOS / Windows native         | `tcp://127.0.0.1:<port>`      | TCP loopback                             |
 
 On Linux bwrap, the sandbox's network namespace (`--unshare-net`) isolates the
 host loopback, so TCP to the host is unreachable. A UDS path bind-mounted into
@@ -183,10 +183,10 @@ strategy.
 Each CLI call returns one or more flat `(name, value)` pairs. Placeholder format:
 `firma-secret://<provider>/<name>`.
 
-| Integration | CLI | Credential env vars | Output format |
-| ----------- | --- | ------------------- | ------------- |
-| `bitwarden` | `bws` | `BWS_ACCESS_TOKEN` | JSON array of `{key, value}` objects |
-| `doppler` | `doppler` | `DOPPLER_TOKEN` | JSON map of `{NAME: {computed: value}}` |
+| Integration | CLI       | Credential env vars | Output format                           |
+| ----------- | --------- | ------------------- | --------------------------------------- |
+| `bitwarden` | `bws`     | `BWS_ACCESS_TOKEN`  | JSON array of `{key, value}` objects    |
+| `doppler`   | `doppler` | `DOPPLER_TOKEN`     | JSON map of `{NAME: {computed: value}}` |
 
 ### Structured-item stores
 
@@ -195,10 +195,10 @@ password, TOTP code, card number, URL, and so on. Placeholder format:
 `firma-secret://<provider>/<item>/<field>`, where `<item>` is the item title and
 `<field>` is the field label, both percent-encoded.
 
-| Integration | CLI | Credential env vars | Sensitive field types extracted |
-| ----------- | --- | ------------------- | ------------------------------- |
-| `1password` | `op` | `OP_SERVICE_ACCOUNT_TOKEN` | `CONCEALED`, `TOTP`, `CREDIT_CARD_NUMBER` |
-| `hashicorp-vault` | `vault` | `VAULT_TOKEN`, `VAULT_ADDR`, `VAULT_NAMESPACE` | all string fields under `data` |
+| Integration       | CLI     | Credential env vars                            | Sensitive field types extracted           |
+| ----------------- | ------- | ---------------------------------------------- | ----------------------------------------- |
+| `1password`       | `op`    | `OP_SERVICE_ACCOUNT_TOKEN`                     | `CONCEALED`, `TOTP`, `CREDIT_CARD_NUMBER` |
+| `hashicorp-vault` | `vault` | `VAULT_TOKEN`, `VAULT_ADDR`, `VAULT_NAMESPACE` | all string fields under `data`            |
 
 For structured-item integrations, field-type filtering is coded into the
 integration's built-in extractor, not expressed in Cedar annotations. When the
@@ -290,7 +290,7 @@ invocation of that executable is intercepted:
 integration = "bitwarden"
 
 [run.shims.op]
-match = "item get *"   # only `op item get …`; other op subcommands pass through
+match = "item get *" # only `op item get …`; other op subcommands pass through
 integration = "1password"
 ```
 
@@ -444,13 +444,13 @@ surrounding syntax. The Sidecar uses the following detection order:
 
 **1. `Content-Type` request header** (primary — reliable for well-formed clients)
 
-| Content-Type | Encoding applied to secret value |
-| ------------ | -------------------------------- |
-| `application/json` | JSON string escaping: `"`, `\`, control characters |
-| `application/x-www-form-urlencoded` | percent-encoding (RFC 3986 unreserved chars left raw) |
-| `application/xml`, `text/xml`, `application/*+xml` | XML character escaping: `&`, `<`, `>`, `"` |
-| `text/plain` | raw bytes |
-| Headers (Authorization, Cookie, etc.) | raw bytes |
+| Content-Type                                       | Encoding applied to secret value                      |
+| -------------------------------------------------- | ----------------------------------------------------- |
+| `application/json`                                 | JSON string escaping: `"`, `\`, control characters    |
+| `application/x-www-form-urlencoded`                | percent-encoding (RFC 3986 unreserved chars left raw) |
+| `application/xml`, `text/xml`, `application/*+xml` | XML character escaping: `&`, `<`, `>`, `"`            |
+| `text/plain`                                       | raw bytes                                             |
+| Headers (Authorization, Cookie, etc.)              | raw bytes                                             |
 
 **2. Body sniffing** (fallback when `Content-Type` is absent or
 `application/octet-stream`)
@@ -584,16 +584,16 @@ when { resource.host == "api.github.com" };
 
 ## Phased Plan
 
-| Phase | Scope | Crates | Outcome |
-| ----- | ----- | ------ | ------- |
-| 0 | This design doc | docs | Reviewed |
-| 1 | `SecretStore`, `Placeholder`, `SecretValue`, Aho-Corasick matcher | `firma-run` | Unit tests: dictionary, masking |
-| 2 | Cedar: `secret.mediate` / `secret.redact` action schemas; `SecretMediation` enum; load-time bundle validation (shim cross-check) | `firma-core`, `firma-sidecar` | Unit tests: bundle parse/validate, shim cross-check |
-| 3 | `IntegrationRegistry`: built-in specs for `bitwarden`, `1password`, `hashicorp-vault`, `doppler` (incl. structured-item extractors); credential env var stripping | `firma-run`, `firma-config-loader` | Integration tests with fake CLIs |
-| 4 | firma-run embedded HTTP server; shim binary as HTTP client; intercept mode end-to-end with out-of-sandbox vault CLI exec; bind-over-path shim injection | `firma-run` | E2E on bwrap with mock vault CLIs |
-| 5 | Content-Type–driven rewriter in Sidecar MITM path (`raw`, `json`, `form`, `xml`); multi-pattern Aho-Corasick masking; `secret.redact` Cedar eval; SecretStore read path in Sidecar; Host-header domain binding; docs (docs-site + llms.txt) | `firma-sidecar`, `firma-config-loader`, docs | `just check` green |
-| 6 | Streaming rewrite with overlap buffers for chunked and HTTP/2 responses | `firma-sidecar` | Property tests on chunk splits |
-| 7 | Plugin interface for custom integrations; additional backends (macOS vz, WSL2) | `firma-run`, backends | — |
+| Phase | Scope                                                                                                                                                                                                                                       | Crates                                       | Outcome                                             |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------------- |
+| 0     | This design doc                                                                                                                                                                                                                             | docs                                         | Reviewed                                            |
+| 1     | `SecretStore`, `Placeholder`, `SecretValue`, Aho-Corasick matcher                                                                                                                                                                           | `firma-run`                                  | Unit tests: dictionary, masking                     |
+| 2     | Cedar: `secret.mediate` / `secret.redact` action schemas; `SecretMediation` enum; load-time bundle validation (shim cross-check)                                                                                                            | `firma-core`, `firma-sidecar`                | Unit tests: bundle parse/validate, shim cross-check |
+| 3     | `IntegrationRegistry`: built-in specs for `bitwarden`, `1password`, `hashicorp-vault`, `doppler` (incl. structured-item extractors); credential env var stripping                                                                           | `firma-run`, `firma-config-loader`           | Integration tests with fake CLIs                    |
+| 4     | firma-run embedded HTTP server; shim binary as HTTP client; intercept mode end-to-end with out-of-sandbox vault CLI exec; bind-over-path shim injection                                                                                     | `firma-run`                                  | E2E on bwrap with mock vault CLIs                   |
+| 5     | Content-Type–driven rewriter in Sidecar MITM path (`raw`, `json`, `form`, `xml`); multi-pattern Aho-Corasick masking; `secret.redact` Cedar eval; SecretStore read path in Sidecar; Host-header domain binding; docs (docs-site + llms.txt) | `firma-sidecar`, `firma-config-loader`, docs | `just check` green                                  |
+| 6     | Streaming rewrite with overlap buffers for chunked and HTTP/2 responses                                                                                                                                                                     | `firma-sidecar`                              | Property tests on chunk splits                      |
+| 7     | Plugin interface for custom integrations; additional backends (macOS vz, WSL2)                                                                                                                                                              | `firma-run`, backends                        | —                                                   |
 
 ## Resolved Design Decisions
 
@@ -640,9 +640,9 @@ contains a locally-decrypted secret. The natural interception point is the
 **HTTPS response body** — which the Sidecar already sits on.
 
 This is the same MITM infrastructure used for redact. The difference is
-directionality: redact rewrites *outbound* request bodies (agent → tool) and
-masks *inbound* response bodies (tool → agent); network intercept rewrites
-*inbound* response bodies (secret service → agent) and writes to the
+directionality: redact rewrites _outbound_ request bodies (agent → tool) and
+masks _inbound_ response bodies (tool → agent); network intercept rewrites
+_inbound_ response bodies (secret service → agent) and writes to the
 `SecretStore`. A Cedar `secret.capture` action would cover this.
 
 ```
@@ -664,12 +664,12 @@ agent: receives placeholder — never held the real value
 
 ### Differences from CLI intercept
 
-| Dimension | CLI intercept (this design) | Network intercept (future) |
-| --------- | -------------------------- | -------------------------- |
-| Interception point | Broker: vault CLI stdout | Sidecar: HTTPS response body |
-| Credential location | Stripped from sandbox; broker holds them | Cloud credentials remain in sandbox (agent authenticates itself) |
-| Who writes to SecretStore | Broker | Sidecar (via broker RPC or directly, depending on store location) |
-| Infrastructure required | Shim binary + broker HTTP server | HTTPS MITM (already exists) |
+| Dimension                 | CLI intercept (this design)              | Network intercept (future)                                        |
+| ------------------------- | ---------------------------------------- | ----------------------------------------------------------------- |
+| Interception point        | Broker: vault CLI stdout                 | Sidecar: HTTPS response body                                      |
+| Credential location       | Stripped from sandbox; broker holds them | Cloud credentials remain in sandbox (agent authenticates itself)  |
+| Who writes to SecretStore | Broker                                   | Sidecar (via broker RPC or directly, depending on store location) |
+| Infrastructure required   | Shim binary + broker HTTP server         | HTTPS MITM (already exists)                                       |
 
 The credential-stripping invariant is weaker for network intercept: the agent
 must hold cloud credentials to authenticate the API call, so those credentials

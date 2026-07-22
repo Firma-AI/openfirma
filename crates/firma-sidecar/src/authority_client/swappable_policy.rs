@@ -138,15 +138,11 @@ impl PolicyEvaluation for DenyAllPolicyEvaluation {
 
 #[cfg(test)]
 mod tests {
-    use firma_core::SecretMediation;
-
     use super::*;
 
-    /// Snapshot that returns a fixed [`SecretDecision::Mediate`], to prove the
-    /// swap boundary forwards secret-mediation decisions.
-    struct MediatePolicy(SecretMediation);
+    struct PermitPolicy;
 
-    impl PolicyEvaluation for MediatePolicy {
+    impl PolicyEvaluation for PermitPolicy {
         fn evaluate(
             &self,
             _principal: &AgentId,
@@ -171,7 +167,7 @@ mod tests {
             _argv: &str,
             _context: serde_json::Value,
         ) -> Result<SecretDecision, String> {
-            Ok(SecretDecision::Mediate(self.0.clone()))
+            Ok(SecretDecision::Permit)
         }
     }
 
@@ -190,21 +186,11 @@ mod tests {
 
     #[test]
     fn swapped_snapshot_secret_mediation_is_forwarded() {
-        let directive = SecretMediation::from_annotations(|key| match key {
-            "mode" => Some("redact"),
-            "transform" => Some("raw"),
-            _ => None,
-        })
-        .expect("valid directive");
         let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
-        swap.swap(
-            Box::new(MediatePolicy(directive.clone())),
-            30,
-            Some("v1".to_string()),
-        );
+        swap.swap(Box::new(PermitPolicy), 30, Some("v1".to_string()));
         let decision = swap
             .evaluate_secret_mediation(&agent(), "anything", serde_json::json!({}))
             .expect("decision");
-        assert_eq!(decision, SecretDecision::Mediate(directive));
+        assert_eq!(decision, SecretDecision::Permit);
     }
 }

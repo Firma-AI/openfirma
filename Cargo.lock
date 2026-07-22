@@ -1547,6 +1547,7 @@ dependencies = [
  "aho-corasick",
  "anyhow",
  "arc-swap",
+ "base64",
  "chrono",
  "ctrlc",
  "dialoguer",

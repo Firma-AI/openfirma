@@ -27,9 +27,7 @@ use cedar_policy::{
 };
 use firma_core::AgentId;
 use firma_core::policy::PolicyBundle;
-use firma_core::{
-    DeferDuration, FirmaEntityUid, ModificationSpec, SecretDecision, SecretMediation, StepUpSpec,
-};
+use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, SecretDecision, StepUpSpec};
 
 use super::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
@@ -102,24 +100,6 @@ pub enum CedarEvaluatorError {
         annotations: String,
     },
 
-    /// A `forbid` policy carried secret-mediation annotations (`@mode` /
-    /// `@transform` / `@adapter` / `@placeholder`). These grant behavior on a
-    /// `permit`; a `forbid` cannot mediate, so the bundle is rejected at load.
-    #[error(
-        "policy `{policy_id}` (forbid) carries secret-mediation annotations that only apply to permit policies"
-    )]
-    SecretAnnotationOnForbid { policy_id: String },
-
-    /// A `secret.mediate` policy's annotations could not be assembled into a
-    /// valid directive (e.g. `redact` without `@transform`). Rejected at load.
-    #[error("malformed secret-mediation annotations on policy `{policy_id}`: {reason}")]
-    MalformedSecretMediation { policy_id: String, reason: String },
-
-    /// A `secret.mediate` policy's matcher (`JSONPath` / `Regex`) failed to compile.
-    /// Rejected at load.
-    #[error("invalid secret-mediation matcher on policy `{policy_id}`: {reason}")]
-    MalformedSecretMatcher { policy_id: String, reason: String },
-
     /// The resource entity for a `secret.mediate` decision could not be built
     /// (attribute construction or schema conformance failed).
     #[error("failed to build secret-mediation resource entity: {0}")]
@@ -143,10 +123,6 @@ pub struct CedarPolicyEvaluator {
     /// load time so the hot path only reads `Response::diagnostics().reason()`
     /// and looks up the firing policy here.
     remediation: HashMap<PolicyId, Remediation>,
-    /// `permit` `secret.mediate` policies carrying secret-mediation annotations
-    /// (`@mode` / `@transform` / `@adapter` / `@placeholder`), keyed by
-    /// `PolicyId`. Built once at load; consulted per launch in a later phase.
-    secret: HashMap<PolicyId, SecretMediation>,
 }
 
 /// Remediation directive attached to a `forbid` policy via a Cedar
@@ -169,17 +145,6 @@ enum Remediation {
 const ANNOTATION_MODIFY: &str = "modify";
 const ANNOTATION_STEP_UP: &str = "step_up";
 const ANNOTATION_DEFER: &str = "defer";
-
-/// Annotation keys recognised on `permit` `secret.mediate` policies.
-const SECRET_ANNOTATION_KEYS: &[&str] = &[
-    "mode",
-    "transform",
-    "matcher",
-    "match_value",
-    "match_name",
-    "match_pattern",
-    "placeholder",
-];
 
 impl CedarPolicyEvaluator {
     /// Construct from a [`PolicyBundle`] received from the Authority.
@@ -213,7 +178,6 @@ impl CedarPolicyEvaluator {
             .map_err(|e| CedarEvaluatorError::SchemaParse(Box::new(e)))?;
 
         let remediation = build_remediation_map(&policy_set)?;
-        let secret = build_secret_map(&policy_set)?;
 
         Ok(Self {
             policy_set,
@@ -222,29 +186,20 @@ impl CedarPolicyEvaluator {
             received_at: Instant::now(),
             ttl_secs: bundle.ttl_seconds,
             remediation,
-            secret,
         })
-    }
-
-    /// The secret-mediation directive attached to a matched `secret.mediate`
-    /// permit policy, if any. Looked up from the evaluation response's firing
-    /// policy id (wired into the decision path in a later phase).
-    #[must_use]
-    pub fn secret_mediation(&self, policy_id: &PolicyId) -> Option<&SecretMediation> {
-        self.secret.get(policy_id)
     }
 
     /// Evaluate the `secret.mediate` action for a shimmed launch.
     ///
-    /// `argv` is the wrapped tool's launch command line; it is bound to the
-    /// resource UID and to the resource entity's `id` attribute so policies can
-    /// match with `resource.id like "…"`. On a Cedar `Allow`, the firing
-    /// permit's [`SecretMediation`] directive is returned as
-    /// [`SecretDecision::Mediate`]; any other outcome (an explicit forbid, or no
-    /// matching policy) is [`SecretDecision::Passthrough`].
+    /// `argv` is the wrapped tool's launch command line; it is bound to
+    /// `resource.id` (full argv), `resource.bin` (executable basename), and
+    /// `resource.args` (space-joined rest) so policies can match with either
+    /// `resource.bin == "bws"` or the legacy `resource.id like "bws *"`.
     ///
-    /// Unlike the HTTP enforcement path, this binds the resource entity's
-    /// attributes so `resource.id` resolves at evaluation time.
+    /// On a Cedar `Allow` from any `permit` policy, returns
+    /// [`SecretDecision::Permit`] — Cedar is pure auth; extraction behavior
+    /// comes from the `IntegrationRegistry` in firma-run, not from annotations.
+    /// Any non-`Allow` outcome is [`SecretDecision::Passthrough`].
     ///
     /// # Errors
     ///
@@ -257,7 +212,7 @@ impl CedarPolicyEvaluator {
         argv: &str,
         context: serde_json::Value,
     ) -> Result<SecretDecision, CedarEvaluatorError> {
-        let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
+        let principal_uid: EntityUid = FirmaEntityUid::Agent(*principal)
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
         let action_uid: EntityUid = FirmaEntityUid::Action("secret.mediate".to_string())
@@ -273,14 +228,11 @@ impl CedarPolicyEvaluator {
         // Bind resource.id (full joined argv), resource.bin (argv[0] basename),
         // and resource.args (space-joined argv[1..]) so policies can use either
         // `resource.id like "bws *"` (legacy) or `resource.bin == "bws"` (new).
-        let (bin, args) = argv
-            .split_once(' ')
-            .map(|(b, a)| (b, a))
-            .unwrap_or((argv, ""));
-        let bin = std::path::Path::new(bin)
+        let (raw_bin, raw_args) = argv.split_once(' ').unwrap_or((argv, ""));
+        let bin = std::path::Path::new(raw_bin)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(bin);
+            .unwrap_or(raw_bin);
         let mut attrs = HashMap::new();
         attrs.insert(
             "id".to_string(),
@@ -292,7 +244,7 @@ impl CedarPolicyEvaluator {
         );
         attrs.insert(
             "args".to_string(),
-            RestrictedExpression::new_string(args.to_string()),
+            RestrictedExpression::new_string(raw_args.to_string()),
         );
         let resource_entity = Entity::new(resource_uid.clone(), attrs, HashSet::new())
             .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
@@ -309,13 +261,8 @@ impl CedarPolicyEvaluator {
         .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
 
         let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
-        if matches!(response.decision(), Decision::Allow)
-            && let Some(mediation) = response
-                .diagnostics()
-                .reason()
-                .find_map(|id| self.secret.get(id))
-        {
-            return Ok(SecretDecision::Mediate(mediation.clone()));
+        if matches!(response.decision(), Decision::Allow) {
+            return Ok(SecretDecision::Permit);
         }
         Ok(SecretDecision::Passthrough)
     }
@@ -472,68 +419,6 @@ fn build_remediation_map(
                 }
             }
         }
-    }
-    Ok(map)
-}
-
-/// Scan the parsed `PolicySet` for secret-mediation annotations and build a
-/// `PolicyId -> SecretMediation` map for `permit` `secret.mediate` policies.
-///
-/// A policy carrying any [`SECRET_ANNOTATION_KEYS`] annotation is treated as a
-/// secret-mediation grant. Validation is fail-fast at load time so the caller
-/// keeps the previous good snapshot on any error:
-/// - annotations on a `forbid` policy are rejected (`SecretAnnotationOnForbid`);
-/// - annotation values that do not assemble into a valid [`SecretMediation`]
-///   are rejected (`MalformedSecretMediation`);
-/// - a matcher whose `JSONPath` or `Regex` does not compile is rejected
-///   (`MalformedSecretMatcher`).
-///
-/// Different `@placeholder` templates across policies are allowed: the
-/// dictionary is keyed by the full token, so tokens minted by different vault
-/// providers (e.g. `bitwarden` vs `1password`) coexist and redaction resolves
-/// any of them.
-fn build_secret_map(
-    policy_set: &PolicySet,
-) -> Result<HashMap<PolicyId, SecretMediation>, CedarEvaluatorError> {
-    let mut map = HashMap::new();
-    for policy in policy_set.policies() {
-        let has_secret_annotation = SECRET_ANNOTATION_KEYS
-            .iter()
-            .any(|key| policy.annotation(key).is_some());
-        if !has_secret_annotation {
-            continue;
-        }
-
-        let id = policy.id().clone();
-
-        // Secret-mediation directives grant behavior on a permit; a forbid
-        // carrying them is a misconfiguration (a deny cannot mediate).
-        if policy.effect() != Effect::Permit {
-            return Err(CedarEvaluatorError::SecretAnnotationOnForbid {
-                policy_id: id.to_string(),
-            });
-        }
-
-        let mediation =
-            SecretMediation::from_annotations(|key| policy.annotation(key)).map_err(|err| {
-                CedarEvaluatorError::MalformedSecretMediation {
-                    policy_id: id.to_string(),
-                    reason: err.to_string(),
-                }
-            })?;
-
-        // Compile the matcher now so a bad JSONPath / regex fails the bundle at
-        // load rather than at first launch.
-        if let SecretMediation::Intercept { matcher, .. } = &mediation {
-            crate::secret_matcher::CompiledMatcher::compile(matcher).map_err(|err| {
-                CedarEvaluatorError::MalformedSecretMatcher {
-                    policy_id: id.to_string(),
-                    reason: err.to_string(),
-                }
-            })?;
-        }
-
-        map.insert(id, mediation);
     }
     Ok(map)
 }
@@ -746,135 +631,16 @@ namespace Firma {
     }
 
     #[test]
-    fn build_secret_map_loads_valid_redact_directive() {
+    fn evaluate_secret_mediation_returns_permit_on_matching_policy() {
         let src = r#"
-            @mode("redact")
-            @transform("mcp-jsonrpc")
-            permit(principal, action == Firma::Action::"secret.mediate", resource);
-        "#;
-        let policy_set: PolicySet = src.parse().unwrap();
-        let map = build_secret_map(&policy_set).unwrap();
-        assert_eq!(map.len(), 1);
-        let directive = map.values().next().unwrap();
-        assert_eq!(
-            directive,
-            &firma_core::SecretMediation::Redact {
-                transform: firma_core::SecretTransform::McpJsonRpc
-            }
-        );
-    }
-
-    #[test]
-    fn build_secret_map_skips_policies_without_secret_annotations() {
-        let policy_set: PolicySet = "permit(principal, action, resource);".parse().unwrap();
-        assert!(build_secret_map(&policy_set).unwrap().is_empty());
-    }
-
-    #[test]
-    fn build_secret_map_rejects_annotations_on_forbid() {
-        let src = r#"
-            @mode("redact")
-            @transform("raw")
-            @placeholder("firma-secret://x/{name}")
-            forbid(principal, action == Firma::Action::"secret.mediate", resource);
-        "#;
-        let policy_set: PolicySet = src.parse().unwrap();
-        assert!(matches!(
-            build_secret_map(&policy_set),
-            Err(CedarEvaluatorError::SecretAnnotationOnForbid { .. })
-        ));
-    }
-
-    #[test]
-    fn build_secret_map_rejects_malformed_directive() {
-        // `redact` mode without the required @transform annotation.
-        let src = r#"
-            @mode("redact")
-            permit(principal, action == Firma::Action::"secret.mediate", resource);
-        "#;
-        let policy_set: PolicySet = src.parse().unwrap();
-        assert!(matches!(
-            build_secret_map(&policy_set),
-            Err(CedarEvaluatorError::MalformedSecretMediation { .. })
-        ));
-    }
-
-    #[test]
-    fn build_secret_map_allows_different_placeholder_per_policy() {
-        // Two vault providers → two placeholder templates. Both coexist; the
-        // dictionary is keyed by the full token, so redaction resolves either.
-        let src = r#"
-            @mode("intercept")
-            @matcher("json")
-            @match_value("$[*].value")
-            @match_name("$[*].key")
-            @placeholder("firma-secret://bitwarden/{name}")
-            permit(principal, action == Firma::Action::"secret.mediate", resource);
-
-            @mode("intercept")
-            @matcher("json")
-            @match_value("$[*].value")
-            @match_name("$[*].key")
-            @placeholder("firma-secret://1password/{name}")
-            permit(principal, action == Firma::Action::"secret.mediate", resource);
-        "#;
-        let policy_set: PolicySet = src.parse().unwrap();
-        let map = build_secret_map(&policy_set).unwrap();
-        assert_eq!(map.len(), 2);
-        let placeholders: std::collections::BTreeSet<&str> = map
-            .values()
-            .filter_map(|m| match m {
-                firma_core::SecretMediation::Intercept { placeholder, .. } => {
-                    Some(placeholder.as_str())
-                }
-                firma_core::SecretMediation::Redact { .. } => None,
-            })
-            .collect();
-        assert!(placeholders.contains("firma-secret://bitwarden/{name}"));
-        assert!(placeholders.contains("firma-secret://1password/{name}"));
-    }
-
-    #[test]
-    fn from_bundle_wires_secret_map_and_accessor() {
-        let src = r#"
-            @mode("intercept")
-            @matcher("json")
-            @match_value("$[*].value")
-            @match_name("$[*].key")
-            @placeholder("firma-secret://bitwarden/{name}")
-            permit(principal, action == Firma::Action::"secret.mediate", resource);
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-        assert_eq!(evaluator.secret.len(), 1);
-        let id = evaluator.secret.keys().next().unwrap().clone();
-        let directive = evaluator.secret_mediation(&id).unwrap();
-        assert!(matches!(
-            directive,
-            firma_core::SecretMediation::Intercept { .. }
-        ));
-    }
-
-    #[test]
-    fn evaluate_secret_mediation_returns_directive_on_matching_permit() {
-        let src = r#"
-            @mode("intercept")
-            @matcher("json")
-            @match_value("$[*].value")
-            @match_name("$[*].key")
-            @placeholder("firma-secret://bitwarden/{name}")
             permit(principal, action == Firma::Action::"secret.mediate", resource)
             when { resource.id like "bws *" };
         "#;
         let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
         let decision = evaluator
-            .evaluate_secret_mediation(&agent("agent_test"), "bws secret get abc", full_context())
+            .evaluate_secret_mediation(&agent(), "bws secret get abc", full_context())
             .unwrap();
-        match decision {
-            SecretDecision::Mediate(m) => {
-                assert!(matches!(m, firma_core::SecretMediation::Intercept { .. }));
-            }
-            SecretDecision::Passthrough => panic!("expected Mediate, got Passthrough"),
-        }
+        assert_eq!(decision, SecretDecision::Permit);
     }
 
     #[test]
@@ -890,11 +656,7 @@ namespace Firma {
         "#;
         let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
         let decision = evaluator
-            .evaluate_secret_mediation(
-                &agent("agent_test"),
-                "curl https://example.com",
-                full_context(),
-            )
+            .evaluate_secret_mediation(&agent(), "curl https://example.com", full_context())
             .unwrap();
         assert_eq!(decision, SecretDecision::Passthrough);
     }
@@ -902,26 +664,18 @@ namespace Firma {
     #[test]
     fn resource_bin_and_args_are_bound_for_secret_mediation() {
         let src = r#"
-            @mode("intercept")
-            @matcher("json")
-            @match_value("$[*].value")
-            @match_name("$[*].key")
-            @placeholder("firma-secret://bitwarden/{name}")
             permit(principal, action == Firma::Action::"secret.mediate", resource)
             when { resource.bin == "bws" && resource.args like "secret *" };
         "#;
         let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
 
         let permit = evaluator
-            .evaluate_secret_mediation(&agent("a"), "bws secret get abc", full_context())
+            .evaluate_secret_mediation(&agent(), "bws secret get abc", full_context())
             .unwrap();
-        assert!(
-            !matches!(permit, SecretDecision::Passthrough),
-            "expected a match on resource.bin/args"
-        );
+        assert_eq!(permit, SecretDecision::Permit);
 
         let no_match = evaluator
-            .evaluate_secret_mediation(&agent("a"), "bws list", full_context())
+            .evaluate_secret_mediation(&agent(), "bws list", full_context())
             .unwrap();
         assert_eq!(no_match, SecretDecision::Passthrough);
     }

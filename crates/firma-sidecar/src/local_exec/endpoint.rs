@@ -349,8 +349,8 @@ async fn handle_connection(
 #[cfg(target_family = "unix")]
 #[derive(Deserialize)]
 struct SecretMediateRequest {
-    #[serde(default)]
-    argv: Vec<String>,
+    bin: String,
+    args: String,
     session_id: String,
     #[serde(default)]
     agent_id: Option<String>,
@@ -379,7 +379,11 @@ async fn handle_secret_mediation(
         Ok(p) => p,
         Err(e) => return send_secret_error(stream, &format!("invalid agent id: {e}")).await,
     };
-    let argv = request.argv.join(" ");
+    let argv = if request.args.is_empty() {
+        request.bin.clone()
+    } else {
+        format!("{} {}", request.bin, request.args)
+    };
     let context = launch_context(&request.session_id);
 
     match evaluator.evaluate_secret_mediation(&principal, &argv, context) {
@@ -617,28 +621,22 @@ mod tests {
     fn deny_handler() -> LocalExecHandler {
         LocalExecHandler::new(LocalExecHandlerConfig {
             default_action: DefaultAction::Deny,
+            expected_sandbox_id: None,
             token_ttl: Duration::from_mins(1),
             retry_after_ms: 500,
         })
     }
 
     #[tokio::test]
-    async fn secret_mediation_returns_mediate_for_matching_launch() {
+    async fn secret_mediation_returns_permit_for_matching_launch() {
         use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
         use firma_core::policy::PolicyBundle;
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let socket_path = tmp.path().join("secret.sock");
 
-        let policy = br#"
-            @mode("intercept")
-            @matcher("json")
-            @match_value("$[*].value")
-            @match_name("$[*].key")
-            @placeholder("firma-secret://bitwarden/{name}")
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id like "bws*" };
-        "#;
+        let policy =
+            br#"permit(principal, action == Firma::Action::"secret.mediate", resource) when { resource.id like "bws*" };"#;
         let bundle = PolicyBundle::new(
             "v1".to_string(),
             policy.to_vec(),
@@ -661,19 +659,17 @@ mod tests {
             &socket_path,
             &serde_json::json!({
                 "action": "secret.mediate",
-                "argv": ["bws", "secret", "get", "x"],
+                "bin": "bws",
+                "args": "secret get x",
                 "session_id": "sess_1",
                 "agent_id": "agent_1",
             }),
         )
         .await;
 
-        match serde_json::from_str::<SecretDecision>(&response) {
-            Ok(SecretDecision::Mediate(m)) => {
-                assert!(matches!(m, firma_core::SecretMediation::Intercept { .. }));
-            }
-            other => panic!("expected Mediate; got {other:?} (raw: {response})"),
-        }
+        let decision: SecretDecision =
+            serde_json::from_str(&response).expect("expected valid SecretDecision");
+        assert_eq!(decision, SecretDecision::Permit, "raw: {response}");
         cancel.cancel();
     }
 
@@ -692,7 +688,7 @@ mod tests {
 
         let response = send_secret_mediate(
             &socket_path,
-            &serde_json::json!({"action": "secret.mediate", "argv": ["bws"], "session_id": "s"}),
+            &serde_json::json!({"action": "secret.mediate", "bin": "bws", "args": "", "session_id": "s"}),
         )
         .await;
 

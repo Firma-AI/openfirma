@@ -2,13 +2,14 @@
 //!
 //! When a profile lists `shims`, this wires the secret machinery into a launch:
 //! it starts the out-of-sandbox broker, bind-mounts the `firma-secret-shim`
-//! binary over each shimmed executable (so absolute-path or renamed invocations
-//! still hit it), preserves the real binaries under a lookup dir, and injects
-//! the env the shim needs to reach the broker.
+//! binary over each shimmed executable, and injects the `FIRMA_BROKER_ADDR`
+//! environment variable so the shim can reach the broker.
+//!
+//! The broker runs the real tool on the host (outside the sandbox) and returns
+//! its intercepted stdout to the shim. The sandbox never sees plaintext secrets.
 //!
 //! The mount/env computation ([`plan`]) is pure and unit-tested; the broker
 //! startup and mount application are thin glue validated end-to-end on bwrap.
-//! See `docs/architecture/secrets-interception.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -24,8 +25,9 @@ use crate::identity::RunIdentity;
 use crate::secret::SecretStore;
 use crate::secret::accept::serve_forever;
 use crate::secret::broker::BrokerListener;
+use crate::secret::integration::{IntegrationRegistry, IntegrationSpec};
 use crate::secret::pep::{SecretMediationRequest, SecretPepOutcome, request_secret_decision};
-use crate::secret::shim::{BROKER_SOCK_ENV, REAL_DIR_ENV};
+use crate::secret::shim::FIRMA_BROKER_ADDR;
 
 /// File name of the shim binary shipped alongside the `firma` executable.
 const SHIM_BIN_NAME: &str = "firma-secret-shim";
@@ -33,9 +35,9 @@ const SHIM_BIN_NAME: &str = "firma-secret-shim";
 /// The mounts and env a shimmed launch needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShimPlan {
-    /// Bind mounts: the shim over each tool, and each real tool preserved.
+    /// Bind mounts: one shim overlay per tool.
     mounts: Vec<MountSpec>,
-    /// Environment additions pointing the shim at the broker and real binaries.
+    /// Environment additions pointing the shim at the broker.
     env: Vec<(String, String)>,
     /// Host path where the broker binds its Unix socket.
     broker_sock: PathBuf,
@@ -66,7 +68,7 @@ pub fn prepare(
     let shim_bin = locate_shim_binary(firma_exe)?;
     let reals = resolve_real_binaries(&profile.shims, host_path)?;
     let base = handle.runtime_dir.join("secret-shims");
-    std::fs::create_dir_all(base.join("real")).map_err(|error| {
+    std::fs::create_dir_all(&base).map_err(|error| {
         RunError::Internal(format!(
             "create secret-shim dir {}: {error}",
             base.display()
@@ -88,34 +90,25 @@ pub fn prepare(
 }
 
 /// Compute the bind mounts and env for the resolved `(name, real path)` tools.
+///
+/// One mount per tool: the shim overlaid on the tool's own path. The env carries
+/// `FIRMA_BROKER_ADDR` so the shim can connect to the broker.
 fn plan(shim_bin: &Path, reals: &[(String, PathBuf)], base: &Path) -> ShimPlan {
-    let real_dir = base.join("real");
     let broker_sock = base.join("broker.sock");
 
-    let mut mounts = Vec::with_capacity(reals.len() * 2);
-    for (name, real) in reals {
-        // Overlay the shim onto the tool's own path so absolute-path, renamed,
-        // or copied invocations still hit it.
-        mounts.push(MountSpec {
+    let mounts = reals
+        .iter()
+        .map(|(_, real)| MountSpec {
             source: shim_bin.to_path_buf(),
             target: real.clone(),
             read_only: true,
-        });
-        // Preserve the real binary where the shim looks it up (by basename).
-        mounts.push(MountSpec {
-            source: real.clone(),
-            target: real_dir.join(name),
-            read_only: true,
-        });
-    }
+        })
+        .collect();
 
-    let env = vec![
-        (
-            BROKER_SOCK_ENV.to_string(),
-            broker_sock.display().to_string(),
-        ),
-        (REAL_DIR_ENV.to_string(), real_dir.display().to_string()),
-    ];
+    let env = vec![(
+        FIRMA_BROKER_ADDR.to_string(),
+        format!("unix:{}", broker_sock.display()),
+    )];
 
     ShimPlan {
         mounts,
@@ -169,9 +162,13 @@ fn start_broker(
     })?;
     let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
     let session_id = identity.session_id.clone();
-    let decide =
-        Arc::new(move |argv: &[String]| decide_secret(mediator.as_ref(), &session_id, argv));
-    std::thread::spawn(move || serve_forever(listener, store, decide));
+    let registry = Arc::new(IntegrationRegistry::with_builtins());
+    let decide = Arc::new(move |bin: &str, args: &str| {
+        decide_secret(mediator.as_ref(), &session_id, bin, args)
+    });
+    let spec_for =
+        Arc::new(move |bin: &str| -> Option<IntegrationSpec> { registry.get(bin).cloned() });
+    std::thread::spawn(move || serve_forever(listener, store, decide, spec_for, None));
     Ok(())
 }
 
@@ -180,7 +177,8 @@ fn start_broker(
 fn decide_secret(
     mediator: Option<&CommandMediatorConfig>,
     session_id: &str,
-    argv: &[String],
+    bin: &str,
+    args: &str,
 ) -> SecretPepOutcome {
     let Some(mediator) = mediator else {
         return SecretPepOutcome::Deny(
@@ -188,7 +186,12 @@ fn decide_secret(
                 .to_string(),
         );
     };
-    let request = SecretMediationRequest::new(argv.to_vec(), session_id.to_string(), None);
+    let request = SecretMediationRequest::new(
+        bin.to_string(),
+        args.to_string(),
+        session_id.to_string(),
+        None,
+    );
     request_secret_decision(&mediator.endpoint, mediator.timeout_ms, &request)
 }
 
@@ -197,7 +200,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_overlays_shim_and_preserves_real_with_env() {
+    fn plan_overlays_shim_with_broker_addr_env() {
         let shim_bin = PathBuf::from("/opt/firma/firma-secret-shim");
         let reals = vec![
             ("bws".to_string(), PathBuf::from("/usr/bin/bws")),
@@ -207,15 +210,11 @@ mod tests {
 
         let plan = plan(&shim_bin, &reals, &base);
 
-        // Two mounts per tool: shim-over-tool, and real preserved by basename.
+        // One mount per tool: shim overlaid on the tool's own path.
+        assert_eq!(plan.mounts.len(), 2);
         assert!(plan.mounts.contains(&MountSpec {
             source: shim_bin.clone(),
             target: PathBuf::from("/usr/bin/bws"),
-            read_only: true,
-        }));
-        assert!(plan.mounts.contains(&MountSpec {
-            source: PathBuf::from("/usr/bin/bws"),
-            target: PathBuf::from("/run/firma/secret-shims/real/bws"),
             read_only: true,
         }));
         assert!(plan.mounts.contains(&MountSpec {
@@ -223,16 +222,13 @@ mod tests {
             target: PathBuf::from("/usr/local/bin/npx"),
             read_only: true,
         }));
-        assert_eq!(plan.mounts.len(), 4);
 
-        assert!(plan.env.contains(&(
-            BROKER_SOCK_ENV.to_string(),
-            "/run/firma/secret-shims/broker.sock".to_string()
-        )));
-        assert!(plan.env.contains(&(
-            REAL_DIR_ENV.to_string(),
-            "/run/firma/secret-shims/real".to_string()
-        )));
+        // One env var: FIRMA_BROKER_ADDR.
+        assert_eq!(plan.env.len(), 1);
+        assert_eq!(plan.env[0].0, FIRMA_BROKER_ADDR);
+        assert!(plan.env[0].1.starts_with("unix:"));
+        assert!(plan.env[0].1.contains("broker.sock"));
+
         assert_eq!(plan.broker_sock, base.join("broker.sock"));
     }
 
@@ -261,7 +257,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let firma = dir.path().join("firma");
         std::fs::write(&firma, b"").expect("write firma");
-        // No sibling shim yet.
         assert!(locate_shim_binary(&firma).is_err());
 
         std::fs::write(dir.path().join(SHIM_BIN_NAME), b"").expect("write shim");

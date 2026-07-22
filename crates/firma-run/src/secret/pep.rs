@@ -3,10 +3,8 @@
 //! At each shimmed-tool launch the broker asks the Sidecar (PDP) what to do and
 //! receives a [`firma_core::SecretDecision`]. This module owns that
 //! request/response over the governance socket and the **fail-closed** mapping
-//! to a [`pep::SecretPepOutcome`]: any transport error, timeout, empty response,
+//! to a [`SecretPepOutcome`]: any transport error, timeout, empty response,
 //! or undecodable payload denies the launch rather than running it unmediated.
-//!
-//! See `docs/architecture/secrets-interception.md`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -14,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use firma_core::{SecretDecision, SecretMediation};
+use firma_core::SecretDecision;
 use serde::Serialize;
 
 use crate::config::CommandMediatorEndpoint;
@@ -23,15 +21,14 @@ use crate::config::CommandMediatorEndpoint;
 const SECRET_MEDIATE_ACTION: &str = "secret.mediate";
 
 /// Request the broker sends to the Sidecar for one shimmed-tool launch.
-///
-/// The Sidecar joins `argv` into the resource id it evaluates `secret.mediate`
-/// against, so policies can match with `resource.id like "…"`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SecretMediationRequest {
     /// Constant governance action discriminator (`secret.mediate`).
     pub action: &'static str,
-    /// Wrapped tool's launch argv.
-    pub argv: Vec<String>,
+    /// Wrapped tool's executable basename (e.g. `"bws"`).
+    pub bin: String,
+    /// Space-joined arguments (everything after the binary name).
+    pub args: String,
     /// Enclosing session identity.
     pub session_id: String,
     /// Agent identity, when known (from `FIRMA_AGENT_ID`).
@@ -42,10 +39,11 @@ pub struct SecretMediationRequest {
 impl SecretMediationRequest {
     /// Build a request for a launch.
     #[must_use]
-    pub fn new(argv: Vec<String>, session_id: String, agent_id: Option<String>) -> Self {
+    pub fn new(bin: String, args: String, session_id: String, agent_id: Option<String>) -> Self {
         Self {
             action: SECRET_MEDIATE_ACTION,
-            argv,
+            bin,
+            args,
             session_id,
             agent_id,
         }
@@ -55,8 +53,8 @@ impl SecretMediationRequest {
 /// The broker's enforcement outcome for a launch (PEP result).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretPepOutcome {
-    /// Apply this mediation directive to the launch.
-    Mediate(SecretMediation),
+    /// Cedar permit — mediate this launch using `IntegrationRegistry` behavior.
+    Permit,
     /// No governing policy — run the tool with stdio untouched.
     Passthrough,
     /// Fail closed: block the launch. Carries a human-readable reason.
@@ -67,7 +65,7 @@ pub enum SecretPepOutcome {
 ///
 /// Any transport error, timeout, empty response, or undecodable payload maps to
 /// [`SecretPepOutcome::Deny`] — the launch is blocked rather than run
-/// unmediated. A `Mediate` / `Passthrough` decision is returned verbatim.
+/// unmediated.
 #[must_use]
 pub fn request_secret_decision(
     endpoint: &CommandMediatorEndpoint,
@@ -75,7 +73,7 @@ pub fn request_secret_decision(
     request: &SecretMediationRequest,
 ) -> SecretPepOutcome {
     match query(endpoint, timeout_ms, request) {
-        Ok(SecretDecision::Mediate(mediation)) => SecretPepOutcome::Mediate(mediation),
+        Ok(SecretDecision::Permit) => SecretPepOutcome::Permit,
         Ok(SecretDecision::Passthrough) => SecretPepOutcome::Passthrough,
         Err(reason) => SecretPepOutcome::Deny(reason),
     }
@@ -154,9 +152,6 @@ mod tests {
 
     use super::*;
 
-    /// Spawn a one-shot Unix server that reads a request line and writes back
-    /// `response`. The socket is bound before the thread starts, so a subsequent
-    /// connect never races the bind.
     fn serve_once(path: &Path, response: String) -> thread::JoinHandle<()> {
         let listener = UnixListener::bind(path).expect("bind fake governance socket");
         thread::spawn(move || {
@@ -173,27 +168,18 @@ mod tests {
 
     fn sample_request() -> SecretMediationRequest {
         SecretMediationRequest::new(
-            vec!["bws".to_string(), "secret".to_string(), "get".to_string()],
+            "bws".to_string(),
+            "secret get x".to_string(),
             "sess-1".to_string(),
             None,
         )
     }
 
     #[test]
-    fn mediate_decision_maps_to_mediate() {
+    fn permit_decision_maps_to_permit() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gov.sock");
-        let directive = SecretMediation::from_annotations(|key| match key {
-            "mode" => Some("intercept"),
-            "matcher" => Some("json"),
-            "match_value" => Some("$[*].value"),
-            "match_name" => Some("$[*].key"),
-            "placeholder" => Some("firma-secret://bitwarden/{name}"),
-            _ => None,
-        })
-        .expect("valid directive");
-        let response = serde_json::to_string(&SecretDecision::Mediate(directive.clone()))
-            .expect("serialize decision");
+        let response = serde_json::to_string(&SecretDecision::Permit).expect("serialize decision");
         let server = serve_once(&path, response);
 
         let outcome = request_secret_decision(
@@ -202,7 +188,7 @@ mod tests {
             &sample_request(),
         );
         server.join().expect("server thread");
-        assert_eq!(outcome, SecretPepOutcome::Mediate(directive));
+        assert_eq!(outcome, SecretPepOutcome::Permit);
     }
 
     #[test]
