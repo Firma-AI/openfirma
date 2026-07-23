@@ -36,7 +36,16 @@
 namespace Firma {
     entity Agent;
     entity Resource {
-        id: String
+        id: String,
+        // secret.mediate: executable name ("bws", "op") and space-joined args.
+        // Populated alongside id for backward compat; new policies should prefer
+        // resource.bin and resource.args over resource.id like "bws *".
+        bin?: String,
+        args?: String,
+        // secret.redact: outbound HTTP request fields.
+        host?: String,
+        path?: String,
+        method?: String
     };
 
     // Shared context shape for all canonical enforcement actions.
@@ -350,6 +359,27 @@ namespace Firma {
     };
 
     action "communication.external.filter" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // OpenFirma secret-mediation grant (firma run broker PEP → Sidecar PDP).
+    // `resource.id` carries the wrapped tool's launch argv; behavior is driven
+    // by @mode/@transform/@adapter/@placeholder annotations.
+    action "secret.mediate" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // OpenFirma secret-redact grant (Sidecar MITM path).
+    // Authorises placeholder rehydration (outbound) and secret masking (inbound)
+    // for a specific outbound HTTP destination.
+    // resource.host — the outbound request Host header (e.g. "api.github.com").
+    // resource.path — the request path (e.g. "/user/repos").
+    // resource.method — the HTTP method (e.g. "GET", "POST").
+    action "secret.redact" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
