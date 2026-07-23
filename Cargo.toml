@@ -43,6 +43,7 @@ lto = "fat"
 codegen-units = 1
 
 [workspace.dependencies]
+aho-corasick = "1"
 anyhow = "1"
 arbitrary = "1"
 arc-swap = "1"
@@ -106,6 +107,7 @@ rustls-platform-verifier = "0.7"
 same-file = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_json_path = "0.7"
 serde_repr = "0.1"
 serde_yaml = "0.9"
 serial_test = "3"
@@ -136,3 +138,4 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 wiremock = "0.6"
 x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zeroize = "1"
