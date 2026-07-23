@@ -1,0 +1,99 @@
+# `firma run` profile for the secret interception & redaction demo.
+#
+# `shims` lists the executables to interpose on (route their stdio through the
+# firma-run broker). What each shim does — whether to intercept, which values
+# to extract, and which placeholder to mint — is decided by the Cedar policy
+# (secret.mediate, in policies/) and the integration spec below (shim_specs).
+
+[authority]
+listen_addr = "127.0.0.1:0"
+policy_dir = "policies"
+issuance_policy_dir = "issuance-policies"
+revocation_file = "examples/firma-run/secret-redaction/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+[run]
+profile = "generic"
+# Signals that `firma run` should auto-start a per-process Authority + Sidecar.
+# The authority loads Cedar policies from policies/ (the default policy_dir,
+# relative to this file) and streams them to the Sidecar for enforcement.
+# The signing key is generated on demand; override its location with:
+#   FIRMA_AUTHORITY_KEY_FILE=/path/to/authority.key
+
+[run.defaults]
+# mock-vault is the vault CLI stand-in. Keep this list tight: every launch of a
+# shimmed executable pays a broker round-trip even when the policy leaves it
+# untouched.
+shims = ["mock-vault"]
+
+# Custom integration spec for mock-vault: tells the broker how to extract
+# secrets from its JSON output and which placeholder template to mint.
+[[run.defaults.shim_specs]]
+name = "mock-vault"
+placeholder_template = "firma-secret://demo/{name}"
+matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" }
+
+[run.profiles.generic]
+backend = "bwrap"
+
+# secret.mediate decisions travel over the Sidecar's local-exec governance
+# socket. The endpoint must be set explicitly because automatic derivation
+# only works from unix:// sidecar_endpoint values; in autostart mode the
+# sidecar_endpoint falls back to a TCP placeholder.
+[run.profiles.generic.sidecar_local_exec]
+endpoint = "unix:///tmp/firma-secret-redaction-tools.sock"
+timeout_ms = 600
+
+[run.profiles.generic.env_set]
+FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"
+FIRMA_RUN_BWRAP_RUNTIME_HOME = "false"
+FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
+
+[sidecar]
+mode = "enforce"
+
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+
+[sidecar.interceptor.https_mitm]
+enabled = false
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.log]
+level = "info"
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[sidecar.constraint_enforcement]
+bundle_ttl_seconds = 3600
+enforcement_timeout_ms = 50
+
+[sidecar.connector]
+default_timeout_ms = 120000
+
+[sidecar.audit]
+sink = "file"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"
+
+# The local-exec governance endpoint: the Sidecar listens here for
+# secret.mediate requests from the firma-run broker. Must match
+# [run.profiles.generic.sidecar_local_exec].endpoint above.
+[sidecar.local_exec]
+socket_path = "/tmp/firma-secret-redaction-tools.sock"
+# Allow all local.exec launches by default; secret.mediate decisions are still
+# evaluated against Cedar policy (the permit in secret-mediation.cedar).
+default_action = "allow"

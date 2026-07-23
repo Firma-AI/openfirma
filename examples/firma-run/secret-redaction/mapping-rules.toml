@@ -1,0 +1,10 @@
+[[rules]]
+method = "CONNECT"
+host = "127.0.0.1:19876"
+action_class = "communication.internal.send"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19876"
+path = "/capture"
+action_class = "communication.internal.send"
