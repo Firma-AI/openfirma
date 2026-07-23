@@ -36,8 +36,15 @@ pub mod intercept;
 /// Built-in integration specs for supported vault CLIs (bws, op, vault, doppler).
 pub mod integration;
 
+/// Per-request broker dispatch: run the real vault CLI and apply the intercept
+/// transform by decision (fail-closed).
+pub mod serve;
+
 /// In-sandbox shim: send a tool-launch request to the out-of-sandbox broker.
 pub mod shim;
+
+/// Broker accept loop: accept shim connections, decide, and serve them.
+pub mod accept;
 
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
