@@ -88,7 +88,9 @@ mod tests {
     fn serialize_loopback_message_uses_stable_snake_case_tag() {
         let msg = RunAuditMessage {
             session_id: "sess".to_string(),
-            agent_id: "vscode".to_string(),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("valid agent ID"),
             event: RunAuditEvent::LoopbackBlocked {
                 dst_ip: "::1".to_string(),
                 dst_port: 9443,
@@ -98,7 +100,7 @@ mod tests {
         let value = serde_json::to_value(&msg).unwrap_or_else(|error| panic!("{error}"));
 
         assert_eq!(value["session_id"], "sess");
-        assert_eq!(value["agent_id"], "vscode");
+        assert_eq!(value["agent_id"], "agt_01j0000000e008000000000001");
         assert_eq!(value["event"]["kind"], "loopback_blocked");
         assert_eq!(value["event"]["dst_ip"], "::1");
         assert_eq!(value["event"]["dst_port"], 9443);
@@ -108,7 +110,7 @@ mod tests {
     fn unknown_event_kind_is_rejected() {
         let msg = r#"{
             "session_id": "sess",
-            "agent_id": "claude-code",
+            "agent_id": "agt_01j0000000e008000000000001",
             "event": {
                 "kind": "not_a_real_event"
             }
