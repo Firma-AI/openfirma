@@ -391,6 +391,10 @@ of config discovery. The `--config` flag on `sidecar stop`/`status`,
 `monitor`, and `doctor` is accepted for compatibility; only `doctor`
 actively consumes it to locate the unified file.
 
+## `firma control`
+
+`firma control` is experimental and under active development. Use `firma monitor` to watch live decisions.
+
 ## `firma authority`
 
 Reference Authority binary used for local development. Issues
