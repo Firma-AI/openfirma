@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use firma_core::token::paseto::PasetoV4Verifier;
-use firma_core::{AgentId, CapabilitySeed, TokenVerifier};
+use firma_core::{ActionClass, AgentId, CapabilitySeed, TokenVerifier};
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_protobuf::v1::{IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision};
 use firma_sidecar::authority_client::channel::build_channel;
@@ -44,24 +44,18 @@ pub struct IssueParams {
     pub ttl_seconds: i32,
 }
 
-/// Default action set requested when none is configured.
+/// Default action set requested when none is configured: every action class.
 ///
-/// Covers provider egress plus the GitHub action classes the dev posture
-/// grants. Codex expects the workspace to be a Git repository and probes Git
-/// and the GitHub API on startup, so the dev capability must cover those calls
-/// or they fail closed to DENY:
+/// A run requests all action classes by default and lets the Authority narrow
+/// the grant to whatever its issuance policy authorizes (`requested ∩
+/// Cedar-permitted`). This keeps the Authority the single source of truth for
+/// what a session may do, so a run never fails closed merely because its
+/// configured request omitted an action class the mapping rules later emit.
 ///
-/// - `code.review.read` classifies the `CONNECT api.github.com` tunnel in
-///   non-MITM proxy mode.
-/// - `code.read` classifies decrypted `GET /repos/...` reads under MITM.
-/// - `code.write` classifies the `CONNECT github.com` Git HTTPS transport
-///   (clone/fetch/push).
-pub const DEFAULT_REQUESTED_ACTIONS: &[&str] = &[
-    "communication.external.send",
-    "code.read",
-    "code.review.read",
-    "code.write",
-];
+/// Setting `[run.profiles.<name>.capability] requested_actions` in `firma.toml`
+/// narrows this request further — an opt-in extra-restriction knob for running
+/// with fewer permissions than the policy would otherwise allow.
+pub const DEFAULT_REQUESTED_ACTIONS: &[ActionClass] = ActionClass::ALL;
 
 /// Default resource scope.
 pub const DEFAULT_RESOURCE_SCOPE: &str = "*";

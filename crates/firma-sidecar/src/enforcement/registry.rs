@@ -392,6 +392,33 @@ mod tests {
         }
     }
 
+    /// The `firma_core::ActionClass` enum is the typed mirror of this registry.
+    /// Assert both directions so the two cannot drift: every enum variant is a
+    /// registry entry, and every registry entry parses back into a variant.
+    #[test]
+    fn action_class_enum_matches_registry() {
+        use firma_core::ActionClass;
+
+        let registry = ActionClassRegistry::v0_1();
+        for class in ActionClass::ALL {
+            assert!(
+                registry.contains(class.as_str()),
+                "ActionClass::{class:?} missing from registry"
+            );
+        }
+        assert_eq!(
+            ActionClass::ALL.len(),
+            registry.len(),
+            "ActionClass and registry differ in size"
+        );
+        for name in FEP_V0_1_CLASSES {
+            assert!(
+                name.parse::<ActionClass>().is_ok(),
+                "registry class not in ActionClass enum: {name}"
+            );
+        }
+    }
+
     #[test]
     fn test_payment_payout_is_critical() {
         let registry = ActionClassRegistry::v0_1();

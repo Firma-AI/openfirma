@@ -300,8 +300,15 @@ fn peer_identity_from_request<T>(request: &TonicRequest<T>) -> Option<String> {
 // --- Cedar evaluation helpers ---
 
 pub(crate) enum CedarDecision {
-    Allow,
-    Deny { reason: String, message: String },
+    /// At least one requested action is authorized. Carries the granted subset
+    /// (`requested ∩ Cedar-permitted`), which becomes the token `action_set`.
+    Allow {
+        granted: Vec<String>,
+    },
+    Deny {
+        reason: String,
+        message: String,
+    },
 }
 
 impl CedarDecision {
@@ -318,6 +325,15 @@ impl CedarDecision {
         }
     }
 
+    /// Every requested action was denied by policy; the intersection is empty
+    /// so there is nothing to grant. Fail closed rather than mint an empty token.
+    fn no_authorized_actions() -> Self {
+        Self::Deny {
+            reason: "NO_AUTHORIZED_ACTIONS".to_string(),
+            message: "no requested action classes are authorized by policy".to_string(),
+        }
+    }
+
     fn invalid_request(msg: impl Into<String>) -> Self {
         Self::Deny {
             reason: "INVALID_REQUEST".to_string(),
@@ -331,29 +347,26 @@ impl CedarDecision {
             message: format!("failed to build Cedar context for '{action}': {reason}"),
         }
     }
+}
 
-    fn policy_deny(action: &str, diagnostics: &cedar_policy::Diagnostics) -> Self {
-        let reasons: Vec<String> = diagnostics
-            .reason()
-            .map(std::string::ToString::to_string)
-            .collect();
-        let errors: Vec<String> = diagnostics
-            .errors()
-            .map(std::string::ToString::to_string)
-            .collect();
+/// Human-readable reason a single action was denied, used when logging the
+/// actions dropped while narrowing an issuance request to its authorized subset.
+fn policy_deny_message(action: &str, diagnostics: &cedar_policy::Diagnostics) -> String {
+    let reasons: Vec<String> = diagnostics
+        .reason()
+        .map(std::string::ToString::to_string)
+        .collect();
+    let errors: Vec<String> = diagnostics
+        .errors()
+        .map(std::string::ToString::to_string)
+        .collect();
 
-        let message = if !errors.is_empty() {
-            format!("policy errors for '{action}': {}", errors.join("; "))
-        } else if !reasons.is_empty() {
-            format!("denied '{action}' by policies: {}", reasons.join(", "))
-        } else {
-            format!("denied '{action}' by default (no matching permit policy)")
-        };
-
-        Self::Deny {
-            reason: "POLICY_DENIED".to_string(),
-            message,
-        }
+    if !errors.is_empty() {
+        format!("policy errors for '{action}': {}", errors.join("; "))
+    } else if !reasons.is_empty() {
+        format!("denied '{action}' by policies: {}", reasons.join(", "))
+    } else {
+        format!("denied '{action}' by default (no matching permit policy)")
     }
 }
 
@@ -363,8 +376,12 @@ impl CedarDecision {
 /// not loaded, falling back to a simple "any policy allows" evaluation.
 /// Evaluate Cedar policies for a capability issuance request.
 ///
-/// Evaluates every requested action independently — all must be allowed for
-/// the request to succeed (fail-closed across the full action set).
+/// Evaluates every requested action independently and grants the authorized
+/// subset (`requested ∩ Cedar-permitted`). Policy-denied actions are dropped,
+/// not fatal: this lets a run request the full action-class set and receive a
+/// token narrowed to whatever the policy authorizes. If the intersection is
+/// empty the whole issuance fails closed. Structural/malformed requests (invalid
+/// action UID, context-build failure) still hard-fail the entire request.
 ///
 /// Context at issuance time carries `session_id`, `timestamp_ms`, and
 /// `risk_score` (V1 placeholder = 0). `params` is empty (`"{}"`) because no
@@ -403,6 +420,7 @@ pub(crate) fn evaluate_cedar_policy(
     let authorizer = Authorizer::new();
     let timestamp_ms = Utc::now().timestamp_millis();
 
+    let mut granted: Vec<String> = Vec::with_capacity(actions.len());
     for action in actions {
         let action_entity: cedar_policy::EntityUid =
             match FirmaEntityUid::Action(action.clone()).try_into() {
@@ -452,11 +470,21 @@ pub(crate) fn evaluate_cedar_policy(
         let response = authorizer.is_authorized(&request, policy_set, &Entities::empty());
 
         if response.decision() == cedar_policy::Decision::Deny {
-            return CedarDecision::policy_deny(action, response.diagnostics());
+            tracing::debug!(
+                action = %action,
+                reason = %policy_deny_message(action, response.diagnostics()),
+                "dropping unauthorized action while narrowing issuance"
+            );
+            continue;
         }
+        granted.push(action.clone());
     }
 
-    CedarDecision::Allow
+    if granted.is_empty() {
+        return CedarDecision::no_authorized_actions();
+    }
+
+    CedarDecision::Allow { granted }
 }
 
 // --- Proto conversion helpers ---
@@ -594,6 +622,14 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"))
     }
 
+    /// Permits exactly one action class, so any other requested action
+    /// default-denies (no matching permit) and is dropped while narrowing.
+    fn permit_only(action: &str) -> PolicySet {
+        format!("permit(principal, action == Firma::Action::\"{action}\", resource);")
+            .parse()
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    }
+
     fn firma_schema() -> Schema {
         let (schema, _) = Schema::from_cedarschema_str(firma_core::cedar::FIRMA_SCHEMA)
             .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
@@ -636,11 +672,14 @@ mod tests {
             &["filesystem.read".to_string()],
             "api.example.com",
         );
-        assert!(matches!(result, CedarDecision::Allow));
+        assert!(
+            matches!(result, CedarDecision::Allow { granted } if granted == ["filesystem.read"])
+        );
     }
 
     #[test]
     fn evaluate_forbid_all_denies() {
+        // forbid-all → nothing authorized → empty intersection → fail closed.
         let result = evaluate_cedar_policy(
             &forbid_all(),
             &firma_schema(),
@@ -649,7 +688,9 @@ mod tests {
             &["filesystem.read".to_string()],
             "api.example.com",
         );
-        assert!(matches!(result, CedarDecision::Deny { .. }));
+        assert!(
+            matches!(result, CedarDecision::Deny { reason, .. } if reason == "NO_AUTHORIZED_ACTIONS")
+        );
     }
 
     #[test]
@@ -665,12 +706,36 @@ mod tests {
             ],
             "api.example.com",
         );
-        assert!(matches!(result, CedarDecision::Allow));
+        assert!(matches!(
+            result,
+            CedarDecision::Allow { granted }
+                if granted == ["communication.external.send", "filesystem.read"]
+        ));
     }
 
     #[test]
-    fn evaluate_multi_action_one_denied() {
-        // forbid-all → every action in the set is denied; first one short-circuits
+    fn evaluate_multi_action_narrows_to_authorized_subset() {
+        // Policy permits only filesystem.read; the unauthorized action is
+        // dropped and the grant is narrowed rather than the whole request denied.
+        let result = evaluate_cedar_policy(
+            &permit_only("filesystem.read"),
+            &firma_schema(),
+            &agent("agt_01j0000000e008000000000001"),
+            &session("sess_1"),
+            &[
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
+            "api.example.com",
+        );
+        assert!(
+            matches!(result, CedarDecision::Allow { granted } if granted == ["filesystem.read"])
+        );
+    }
+
+    #[test]
+    fn evaluate_multi_action_all_denied_fails_closed() {
+        // forbid-all → every action dropped → empty intersection → deny.
         let result = evaluate_cedar_policy(
             &forbid_all(),
             &firma_schema(),
@@ -682,7 +747,9 @@ mod tests {
             ],
             "api.example.com",
         );
-        assert!(matches!(result, CedarDecision::Deny { .. }));
+        assert!(
+            matches!(result, CedarDecision::Deny { reason, .. } if reason == "NO_AUTHORIZED_ACTIONS")
+        );
     }
 
     #[test]
@@ -696,7 +763,10 @@ mod tests {
             &["communication.external.send".to_string()],
             "api.example.com",
         );
-        assert!(matches!(result, CedarDecision::Allow));
+        assert!(matches!(
+            result,
+            CedarDecision::Allow { granted } if granted == ["communication.external.send"]
+        ));
     }
 
     #[test]
@@ -712,6 +782,26 @@ mod tests {
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn evaluate_structural_failure_aborts_partial_grant() {
+        // First action is authorized and would narrow into `granted`; the second
+        // is structurally invalid (not declared in schema). A structural failure
+        // must hard-fail the whole request rather than return the partial grant.
+        let schema = firma_schema();
+        let result = evaluate_cedar_policy(
+            &permit_all(),
+            &schema,
+            &agent("agt_01j0000000e008000000000001"),
+            &session("sess_1"),
+            &["filesystem.read".to_string(), "unknown.action".to_string()],
+            "api.example.com",
+        );
+        assert!(
+            matches!(result, CedarDecision::Deny { .. }),
+            "structural failure after an authorized action must abort, not grant the subset"
+        );
     }
 
     #[test]
@@ -746,7 +836,7 @@ mod tests {
             &actions,
             "api.example.com",
         );
-        assert!(matches!(result, CedarDecision::Allow));
+        assert!(matches!(result, CedarDecision::Allow { granted } if granted == actions));
     }
 
     #[test]

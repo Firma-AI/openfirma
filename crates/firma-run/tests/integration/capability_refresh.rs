@@ -29,6 +29,7 @@ fn lease() -> CapabilityLeaseConfig {
         public_key_path: None,
         refresh_ratio: 0.60,
         grace_seconds: 30,
+        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
 

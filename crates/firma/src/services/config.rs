@@ -1796,6 +1796,22 @@ mod tests {
     }
 
     #[test]
+    fn run_profile_does_not_scaffold_capability_requested_actions() {
+        // A run requests all action classes by default and the Authority narrows
+        // the grant, so `firma config` no longer writes a posture-derived
+        // `requested_actions` list into the profile regardless of posture.
+        for posture in Posture::iter() {
+            let files = make_files(&posture, &[], &[]);
+            let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
+            let profile = &t["run"]["profiles"]["generic"];
+            assert!(
+                profile.get("capability").is_none(),
+                "posture {posture:?} must not scaffold a [capability] table: {profile:?}"
+            );
+        }
+    }
+
+    #[test]
     fn implicit_scaffold_uses_workspace_not_config_dir_for_mount() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("project");

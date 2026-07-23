@@ -241,12 +241,28 @@ pub struct CapabilityLeaseConfig {
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: f64,
     pub grace_seconds: u64,
+    /// Action classes the auto-minted per-session token requests. Defaults to
+    /// every action class (`DEFAULT_REQUESTED_ACTIONS`); the Authority narrows
+    /// the grant to `requested ∩ Cedar-permitted`, so over-requesting is safe
+    /// and the issuance policy stays the source of truth for what is grantable.
+    /// Setting this narrows the request further — an opt-in extra-restriction
+    /// knob for running with fewer permissions than the policy would allow.
+    pub requested_actions: Vec<String>,
 }
 
 impl CapabilityLeaseConfig {
     #[must_use]
     pub fn grace(&self) -> Duration {
         Duration::from_secs(self.grace_seconds)
+    }
+
+    /// Fallback action set when a profile does not set `requested_actions`.
+    #[must_use]
+    pub fn default_requested_actions() -> Vec<String> {
+        crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
+            .iter()
+            .map(|class| class.as_str().to_string())
+            .collect()
     }
 }
 
@@ -424,6 +440,8 @@ pub(crate) struct CapabilityLeasePatch {
     pub(crate) public_key_path: Option<PathBuf>,
     pub(crate) refresh_ratio: Option<f64>,
     pub(crate) grace_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) requested_actions: Option<Vec<String>>,
 }
 
 impl CapabilityLeasePatch {
@@ -442,6 +460,7 @@ impl CapabilityLeasePatch {
             public_key_path: higher.public_key_path.or(self.public_key_path),
             refresh_ratio: higher.refresh_ratio.or(self.refresh_ratio),
             grace_seconds: higher.grace_seconds.or(self.grace_seconds),
+            requested_actions: higher.requested_actions.or(self.requested_actions),
         }
     }
 }
@@ -743,6 +762,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 public_key_path: None,
                 refresh_ratio: None,
                 grace_seconds: None,
+                requested_actions: None,
             }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
@@ -796,6 +816,10 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         public_key_path: patch.public_key_path,
         refresh_ratio: patch.refresh_ratio.unwrap_or(0.60),
         grace_seconds: patch.grace_seconds.unwrap_or(30),
+        requested_actions: patch
+            .requested_actions
+            .filter(|actions| !actions.is_empty())
+            .unwrap_or_else(CapabilityLeaseConfig::default_requested_actions),
     }
 }
 
@@ -814,6 +838,7 @@ fn default_capability_config() -> CapabilityLeaseConfig {
         public_key_path: None,
         refresh_ratio: 0.60,
         grace_seconds: 30,
+        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
 
@@ -1115,11 +1140,49 @@ mod tests {
     use crate::runtime::RunInput;
 
     use super::{
-        BackendKind, CapabilitySource, SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint,
+        BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
+        SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint, capability_from_patch,
         resolve_profile,
     };
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
+
+    fn lease_patch(requested_actions: Option<Vec<String>>) -> CapabilityLeasePatch {
+        CapabilityLeasePatch {
+            source: Some(super::CapabilitySourcePatch::Disabled),
+            kind: None,
+            path: None,
+            public_key_path: None,
+            refresh_ratio: None,
+            grace_seconds: None,
+            requested_actions,
+        }
+    }
+
+    #[test]
+    fn capability_patch_requested_actions_override_wins() {
+        let custom = vec!["communication.internal.send".to_string()];
+        let resolved = capability_from_patch(lease_patch(Some(custom.clone())));
+        assert_eq!(resolved.requested_actions, custom);
+    }
+
+    #[test]
+    fn capability_patch_absent_actions_fall_back_to_default() {
+        let resolved = capability_from_patch(lease_patch(None));
+        assert_eq!(
+            resolved.requested_actions,
+            CapabilityLeaseConfig::default_requested_actions()
+        );
+    }
+
+    #[test]
+    fn capability_patch_empty_actions_fall_back_to_default() {
+        let resolved = capability_from_patch(lease_patch(Some(Vec::new())));
+        assert_eq!(
+            resolved.requested_actions,
+            CapabilityLeaseConfig::default_requested_actions()
+        );
+    }
 
     fn args(profile: &str) -> RunInput {
         RunInput {

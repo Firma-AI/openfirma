@@ -605,10 +605,7 @@ fn mint_capability_seed(
         credentials: authority.credentials.clone(),
         agent_id: identity.agent_id,
         session_id: identity.session_id.clone(),
-        requested_actions: crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
+        requested_actions: capability_lease.requested_actions.clone(),
         resource_scope: crate::capability::issue::DEFAULT_RESOURCE_SCOPE.to_string(),
         ttl_seconds: crate::capability::issue::DEFAULT_TTL_SECONDS,
     };
@@ -1481,6 +1478,7 @@ mod non_structural_env_tests {
             public_key_path: None,
             refresh_ratio: 0.60,
             grace_seconds: 30,
+            requested_actions: CapabilityLeaseConfig::default_requested_actions(),
         }
     }
 

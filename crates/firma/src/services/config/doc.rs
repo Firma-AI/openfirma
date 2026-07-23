@@ -351,6 +351,11 @@ fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) ->
 
     let mounts = ensure_array_of_tables(profile_table, "mounts")?;
     replace_workspace_mount(mounts, inputs.workspace);
+
+    // No `[run.profiles.<name>.capability] requested_actions` is scaffolded: a
+    // run requests every action class by default and the Authority narrows the
+    // grant to what its issuance policy authorizes. Users can set
+    // `requested_actions` by hand as an opt-in extra-restriction knob.
     Ok(())
 }
 

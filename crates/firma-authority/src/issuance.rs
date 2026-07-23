@@ -69,12 +69,12 @@ pub async fn issue_capability(
         req.resource_scope,
     );
 
-    match decision {
-        CedarDecision::Allow => {}
+    let granted = match decision {
+        CedarDecision::Allow { granted } => granted,
         CedarDecision::Deny { reason, message } => {
             return Err(IssuanceError::Denied { reason, message });
         }
-    }
+    };
 
     let ttl = clamp_ttl(req.requested_ttl_seconds, max_ttl_seconds);
     let now: DateTime<Utc> = Utc::now();
@@ -82,18 +82,14 @@ pub async fn issue_capability(
     let token_id = TokenId::new();
     let bundle_version = policy_store.bundle().version;
     let agent_id = req.agent_id.to_string();
-    let context_hash = compute_context_hash(
-        &agent_id,
-        req.requested_actions,
-        req.resource_scope,
-        &bundle_version,
-    );
+    let context_hash =
+        compute_context_hash(&agent_id, &granted, req.resource_scope, &bundle_version);
 
     let claims = CapabilityClaims {
         token_id,
         agent_id: *req.agent_id,
         session_id: req.session_id.clone(),
-        action_set: req.requested_actions.to_vec(),
+        action_set: granted,
         resource_scope: req.resource_scope.to_string(),
         issued_at: now,
         expiry,
@@ -147,6 +143,72 @@ mod tests {
         assert!(!out.raw_token.is_empty());
         assert_eq!(out.claims.action_set, actions);
         assert_eq!(out.claims.resource_scope, "wttr.in*");
+    }
+
+    /// Policy store that permits exactly one action class; all others
+    /// default-deny so the grant narrows to the authorized subset.
+    fn store_permitting(action: &str) -> Arc<CedarPolicyStore> {
+        let dir = tempfile::tempdir().unwrap().keep();
+        std::fs::write(
+            dir.join("default.cedar"),
+            format!("permit(principal, action == Firma::Action::\"{action}\", resource);"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("schema.cedarschema"),
+            firma_core::cedar::FIRMA_SCHEMA,
+        )
+        .unwrap();
+        Arc::new(CedarPolicyStore::load(&dir, None, 30).unwrap())
+    }
+
+    #[tokio::test]
+    async fn narrows_action_set_to_authorized_subset() {
+        let store = store_permitting("code.read");
+        let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
+        let signer = Arc::new(PasetoV4Signer::try_new(kp.secret.as_bytes()).unwrap());
+        let agent: AgentId = "agt_01j0000000e008000000000001".parse().unwrap();
+        let session: SessionId = "sess_1".parse().unwrap();
+        // Request more than the policy permits; only code.read is authorized.
+        let actions = vec![
+            "code.read".to_string(),
+            "communication.external.send".to_string(),
+        ];
+        let req = IssuanceRequest {
+            agent_id: &agent,
+            session_id: &session,
+            requested_actions: &actions,
+            resource_scope: "*",
+            requested_ttl_seconds: 300,
+        };
+        let out = issue_capability(&store, &signer, 600, &req).await.unwrap();
+        assert_eq!(out.claims.action_set, vec!["code.read".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn denies_when_no_requested_action_is_authorized() {
+        let store = store_permitting("code.read");
+        let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
+        let signer = Arc::new(PasetoV4Signer::try_new(kp.secret.as_bytes()).unwrap());
+        let agent: AgentId = "agt_01j0000000e008000000000001".parse().unwrap();
+        let session: SessionId = "sess_1".parse().unwrap();
+        let actions = vec!["communication.external.send".to_string()];
+        let req = IssuanceRequest {
+            agent_id: &agent,
+            session_id: &session,
+            requested_actions: &actions,
+            resource_scope: "*",
+            requested_ttl_seconds: 300,
+        };
+        let err = issue_capability(&store, &signer, 600, &req)
+            .await
+            .unwrap_err();
+        match err {
+            IssuanceError::Denied { reason, .. } => {
+                assert_eq!(reason, "NO_AUTHORIZED_ACTIONS");
+            }
+            IssuanceError::Sign(e) => panic!("expected Denied, got Sign({e})"),
+        }
     }
 
     #[tokio::test]

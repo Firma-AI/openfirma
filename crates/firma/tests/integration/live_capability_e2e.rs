@@ -273,7 +273,7 @@ fn live_mint_writes_seed_and_admits_stage1() {
         session_id: "live-session".to_string(),
         requested_actions: firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS
             .iter()
-            .map(|s| (*s).to_string())
+            .map(|class| class.as_str().to_string())
             .collect(),
         resource_scope: firma_run::capability::issue::DEFAULT_RESOURCE_SCOPE.to_string(),
         ttl_seconds: firma_run::capability::issue::DEFAULT_TTL_SECONDS,
@@ -311,7 +311,7 @@ fn live_mint_writes_seed_and_admits_stage1() {
     let entry = map
         .select(
             "live-session",
-            firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS[0],
+            firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS[0].as_str(),
             "wttr.in/Berlin",
         )
         .expect("minted entry must select (ALLOW)");
@@ -327,7 +327,7 @@ fn live_mint_writes_seed_and_admits_stage1() {
         claims.action_set,
         firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS
             .iter()
-            .map(|s| (*s).to_string())
+            .map(|class| class.as_str().to_string())
             .collect::<Vec<_>>()
     );
 }

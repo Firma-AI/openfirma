@@ -77,6 +77,7 @@ fn generic_profile() -> ProfilePatch {
             public_key_path: None,
             refresh_ratio: Some(0.60),
             grace_seconds: Some(30),
+            requested_actions: None,
         }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
