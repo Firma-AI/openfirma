@@ -10,6 +10,7 @@ description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 loom-tests = []
 
 [dependencies]
+aho-corasick = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
@@ -38,11 +39,13 @@ p256 = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
 rcgen = { workspace = true }
+regex = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_json_path = { workspace = true }
 serde_repr = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
@@ -59,6 +62,7 @@ uuid = { workspace = true }
 webpki-roots = { workspace = true }
 x509-parser = { workspace = true }
 xxhash-rust = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
