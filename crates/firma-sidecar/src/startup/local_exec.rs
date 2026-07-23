@@ -4,12 +4,13 @@
 //! [`SidecarConfig`], builds the handler and endpoint, and spawns them as a
 //! background tokio task. Returns `None` when `local_exec` is not configured.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use firma_runtime_state::SandboxId;
 use tokio_util::sync::CancellationToken;
 
-use firma_runtime_state::SandboxId;
-
+use crate::authority_client::swappable_policy::SwappablePolicyEvaluation;
 use crate::config::{LocalExecConfig, SidecarConfig};
 use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerConfig};
 
@@ -24,6 +25,7 @@ use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerCon
 pub fn spawn_local_exec_endpoint(
     config: &SidecarConfig,
     sandbox_id: Option<SandboxId>,
+    evaluator: Arc<SwappablePolicyEvaluation>,
     cancel: CancellationToken,
 ) -> anyhow::Result<Option<tokio::task::JoinHandle<()>>> {
     let Some(le_config) = &config.local_exec else {
@@ -32,6 +34,11 @@ pub fn spawn_local_exec_endpoint(
 
     let handler = build_handler(le_config, sandbox_id);
     let endpoint = LocalExecEndpoint::new(le_config.socket_path.clone(), handler);
+    // Wire the live evaluator so the endpoint can decide `secret.mediate`.
+    #[cfg(target_family = "unix")]
+    let endpoint = endpoint.with_evaluator(evaluator);
+    #[cfg(not(target_family = "unix"))]
+    drop(evaluator);
     let socket_path = le_config.socket_path.display().to_string();
 
     tracing::info!(
