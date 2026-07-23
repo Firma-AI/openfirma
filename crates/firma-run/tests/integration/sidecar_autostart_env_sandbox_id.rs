@@ -68,6 +68,7 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
         monitor_mode: false,
+        secret_gateway_addr: None,
     })
     .expect("supervisor spawned");
 

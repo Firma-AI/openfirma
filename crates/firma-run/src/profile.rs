@@ -80,6 +80,8 @@ fn generic_profile() -> ProfilePatch {
         }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
+        shims: Vec::new(),
+        shim_specs: Vec::new(),
         codex_cli: None,
         use_http_proxy_sidecar: true,
         allow_non_structural: false,

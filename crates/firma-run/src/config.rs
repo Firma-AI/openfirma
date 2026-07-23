@@ -35,6 +35,15 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
+    /// Executables to interpose on with a secret-mediation shim (stdio routed
+    /// through the firma-run broker). This carries no behavior — Cedar policy
+    /// decides intercept vs redact and all directives; see the secrets design
+    /// doc. Merged across `[run.defaults]` and the active profile.
+    pub shims: BTreeSet<String>,
+    /// Custom integration specs from `[[run.defaults.shim_specs]]`. Merged
+    /// across `[run.defaults]` and the active profile; custom specs take
+    /// precedence over built-ins when names collide.
+    pub shim_specs: Vec<crate::secret::integration::IntegrationSpec>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
@@ -323,6 +332,9 @@ pub enum SeccompRuntimeMode {
 
 /// Fallback sidecar endpoint used only to keep `ResolvedProfile.sidecar_endpoint`
 /// populated on local autostart, where the supervisor substitutes its own UDS.
+#[cfg(target_family = "unix")]
+const DEFAULT_SIDECAR_ENDPOINT: &str = "unix:///tmp/sidecar.sock";
+#[cfg(not(target_family = "unix"))]
 const DEFAULT_SIDECAR_ENDPOINT: &str = "tcp://127.0.0.1:8080";
 const DEFAULT_MANAGED_POLICY_FILE: &str = "generic-local-command-v1.toml";
 const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
@@ -350,6 +362,88 @@ struct FileConfig {
     profiles: BTreeMap<String, ProfilePatch>,
 }
 
+/// Matcher configuration for a custom shim spec (`[[run.defaults.shim_specs]]`).
+///
+/// Mirrors [`firma_core::SecretMatcher`] with a `type` discriminator tag so
+/// TOML config reads naturally (e.g. `type = "json"`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum ShimMatcherConfig {
+    Json {
+        value_path: String,
+        name_path: String,
+        #[serde(default)]
+        item_path: Option<String>,
+        #[serde(default)]
+        domain_path: Option<String>,
+        #[serde(default)]
+        domain_is_url: bool,
+    },
+    Regex {
+        pattern: String,
+        #[serde(default)]
+        domain_is_url: bool,
+    },
+}
+
+impl From<ShimMatcherConfig> for firma_core::SecretMatcher {
+    fn from(c: ShimMatcherConfig) -> Self {
+        match c {
+            ShimMatcherConfig::Json {
+                value_path,
+                name_path,
+                item_path,
+                domain_path,
+                domain_is_url,
+            } => Self::Json {
+                value_path,
+                name_path,
+                item_path,
+                domain_path,
+                domain_is_url,
+            },
+            ShimMatcherConfig::Regex {
+                pattern,
+                domain_is_url,
+            } => Self::Regex {
+                pattern,
+                domain_is_url,
+            },
+        }
+    }
+}
+
+/// A custom shim integration spec defined in `[[run.defaults.shim_specs]]`.
+///
+/// Minimal example (JSON output with `{ key, value }` pairs):
+///
+/// ```toml
+/// [[run.defaults.shim_specs]]
+/// name = "mock-vault"
+/// placeholder_template = "firma-secret://demo/{name}"
+/// matcher = {type = "json", value_path = "$[*].value", name_path = "$[*].key"}
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ShimSpec {
+    /// Binary basename; must match an entry in `shims`.
+    pub(crate) name: String,
+    /// Placeholder token template; `{name}` is substituted with the
+    /// percent-encoded secret key (e.g. `"firma-secret://demo/{name}"`).
+    pub(crate) placeholder_template: String,
+    /// How to extract `(name, value)` pairs from the tool's stdout.
+    pub(crate) matcher: ShimMatcherConfig,
+    /// Credential env vars to forward from the broker's environment to the
+    /// subprocess. Defaults to none.
+    #[serde(default)]
+    pub(crate) credential_env_vars: Vec<String>,
+    /// Arg flags to strip before appending `forced_args`. Defaults to none.
+    #[serde(default)]
+    pub(crate) strip_arg_flags: Vec<String>,
+    /// Args appended after stripping. Defaults to none.
+    #[serde(default)]
+    pub(crate) forced_args: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub(crate) struct ProfilePatch {
     pub(crate) backend: Option<BackendKind>,
@@ -371,6 +465,14 @@ pub(crate) struct ProfilePatch {
     pub(crate) sidecar_local_exec: Option<CommandMediatorPatch>,
     #[serde(default)]
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    /// Executables to interpose on with a secret-mediation shim. Additive across
+    /// `[run.defaults]` and the active profile (like `env_passthrough`).
+    #[serde(default)]
+    pub(crate) shims: Vec<String>,
+    /// Custom integration specs for shimmed tools not covered by the built-ins.
+    /// Additive across `[run.defaults]` and the active profile.
+    #[serde(default)]
+    pub(crate) shim_specs: Vec<ShimSpec>,
     #[serde(default)]
     pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
@@ -482,6 +584,10 @@ impl ProfilePatch {
         env_passthrough.extend(higher.env_passthrough);
         let mut executable_policies = self.executable_policies;
         executable_policies.extend(higher.executable_policies);
+        let mut shims = self.shims;
+        shims.extend(higher.shims);
+        let mut shim_specs = self.shim_specs;
+        shim_specs.extend(higher.shim_specs);
 
         let mounts = if higher.mounts.is_empty() {
             self.mounts
@@ -511,6 +617,8 @@ impl ProfilePatch {
             },
             sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
+            shims,
+            shim_specs,
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
             allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
@@ -577,8 +685,28 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let env_passthrough = patch
         .env_passthrough
         .into_iter()
-        .filter(|item: &String| !item.trim().is_empty())
+        .filter(|item| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
+
+    let shims = patch
+        .shims
+        .into_iter()
+        .filter(|item| !item.trim().is_empty())
+        .map(|item| item.trim().to_string())
+        .collect::<BTreeSet<_>>();
+
+    let shim_specs = patch
+        .shim_specs
+        .into_iter()
+        .map(|s| crate::secret::integration::IntegrationSpec {
+            binary_name: s.name,
+            credential_env_vars: s.credential_env_vars,
+            matcher: s.matcher.into(),
+            placeholder_template: s.placeholder_template,
+            strip_arg_flags: s.strip_arg_flags,
+            forced_args: s.forced_args,
+        })
+        .collect::<Vec<_>>();
 
     let mut env_set = patch.env_set;
     if let Some(paths) = patch.mask_home_paths {
@@ -646,6 +774,8 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         capability,
         sidecar_local_exec,
         executable_policies,
+        shims,
+        shim_specs,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
         allow_non_structural: patch.allow_non_structural,
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
@@ -746,6 +876,8 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
+        shims: Vec::new(),
+        shim_specs: Vec::new(),
         codex_cli: None,
         use_http_proxy_sidecar: false,
         allow_non_structural: args.allow_non_structural,
@@ -1315,6 +1447,36 @@ path = "/tmp/capability.token"
                 path: PathBuf::from("/tmp/capability.token")
             }
         );
+    }
+
+    #[test]
+    fn shims_merge_across_defaults_and_profile() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+
+        let toml = r#"
+[run.defaults]
+shims = ["bws", "  "]
+
+[run.profiles.codex]
+shims = ["npx"]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        // Defaults and profile are additive; blank entries are dropped.
+        assert!(resolved.shims.contains("bws"));
+        assert!(resolved.shims.contains("npx"));
+        assert!(!resolved.shims.iter().any(|s| s.trim().is_empty()));
+    }
+
+    #[test]
+    fn shims_default_to_empty() {
+        let resolved = resolve_profile(&args("codex")).unwrap();
+        assert!(resolved.shims.is_empty());
     }
 
     #[test]

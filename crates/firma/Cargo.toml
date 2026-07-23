@@ -10,6 +10,10 @@ description = "Firma CLI for managing and running OpenFirma components"
 name = "firma"
 path = "src/main.rs"
 
+[[bin]]
+name = "firma-secret-shim"
+path = "src/bin/firma-secret-shim.rs"
+
 [lints]
 workspace = true
 

@@ -57,6 +57,7 @@ pub struct IssueParams {
 /// - `code.write` classifies the `CONNECT github.com` Git HTTPS transport
 ///   (clone/fetch/push).
 pub const DEFAULT_REQUESTED_ACTIONS: &[&str] = &[
+    "communication.internal.send",
     "communication.external.send",
     "code.read",
     "code.review.read",
