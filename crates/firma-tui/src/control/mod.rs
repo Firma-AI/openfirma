@@ -23,6 +23,7 @@ pub use command::{ControlCommand, ControlEffect, SelectionMovement};
 pub use error::{AuditSourceError, ControlError, ErrorMessage, RuntimeError};
 pub use event::{Event, Sources, TerminalEventSource, next_with_terminal};
 pub use input::{command_for_key, handle_key};
+pub use render::render;
 pub use runner::{ControlCrankOutcome, EventKind, HeadlessRunner};
 pub use state::{
     AuditDecision, AuditFilter, AuditRow, AuditViewportMode, ControlRuntimeState, ControlStatus,
