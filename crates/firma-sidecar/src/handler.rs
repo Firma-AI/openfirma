@@ -14,12 +14,16 @@ use firma_core::{
     ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
     InjectedCredentials, SessionId, TransportView,
 };
+use firma_http::HeaderName;
 use tokio::sync::mpsc;
 
 use crate::audit::{AuditPayload, Decision};
 use crate::connector::ConnectorRegistry;
 use crate::normalizer::NormalizedEnvelope;
 use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
+use crate::secret_gateway_client::{self, GatewayEndpoint};
+use crate::secret_rewrite::{ContentType, mask_body, rehydrate_body};
+use crate::secret_store::{SecretValue, SidecarSecretStore};
 
 /// Response produced by the transport-agnostic request handler.
 #[derive(Debug)]
@@ -293,11 +297,73 @@ pub struct DispatchedResponse {
     pub body: Vec<u8>,
 }
 
+const PLACEHOLDER_PREFIX: &[u8] = b"firma-secret://";
+
+fn is_placeholder_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'/')
+}
+
+/// Scan `body` for `firma-secret://` placeholder tokens and return a
+/// deduplicated list. Each token runs from the scheme prefix through
+/// consecutive path characters (`[A-Za-z0-9_\-/]`).
+fn collect_placeholders(body: &[u8]) -> Vec<String> {
+    let prefix_len = PLACEHOLDER_PREFIX.len();
+    let mut result: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i + prefix_len <= body.len() {
+        if body[i..].starts_with(PLACEHOLDER_PREFIX) {
+            let path_start = i + prefix_len;
+            let mut end = path_start;
+            while end < body.len() && is_placeholder_char(body[end]) {
+                end += 1;
+            }
+            if end > path_start
+                && let Ok(token) = std::str::from_utf8(&body[i..end])
+            {
+                let token = token.to_owned();
+                if !result.contains(&token) {
+                    result.push(token);
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    result
+}
+
+fn mask_dispatched(
+    mut dispatched: DispatchedResponse,
+    store: &SidecarSecretStore,
+) -> DispatchedResponse {
+    let ops = store.mask_ops(&dispatched.body);
+    if !ops.is_empty() {
+        let masked = mask_body(&dispatched.body, &ops);
+        if dispatched.headers.contains_key("content-length") {
+            dispatched
+                .headers
+                .insert("content-length".to_string(), masked.len().to_string());
+        }
+        dispatched.body = masked;
+    }
+    dispatched
+}
+
+fn mask_handled_response(response: HandledResponse, store: &SidecarSecretStore) -> HandledResponse {
+    match response {
+        HandledResponse::Ok(d) => HandledResponse::Ok(mask_dispatched(d, store)),
+        HandledResponse::Passthrough(d) => HandledResponse::Passthrough(mask_dispatched(d, store)),
+        other => other,
+    }
+}
+
 /// Shared handler used by every interceptor.
 pub struct RequestHandler {
     audit_sink_sender: mpsc::Sender<AuditPayload>,
     connector_registry: Arc<ConnectorRegistry>,
     pipeline: Arc<EnforcementPipeline>,
+    gateway_endpoint: Option<Arc<GatewayEndpoint>>,
 }
 
 impl RequestHandler {
@@ -313,7 +379,111 @@ impl RequestHandler {
             audit_sink_sender,
             connector_registry,
             pipeline,
+            gateway_endpoint: None,
         }
+    }
+
+    /// Enable secret placeholder rehydration via the firma-run secret gateway.
+    ///
+    /// When set, the handler resolves `firma-secret://` tokens in outbound
+    /// request bodies before dispatch and masks raw secret values in inbound
+    /// response bodies before returning them to the agent.
+    #[must_use]
+    pub fn with_gateway_endpoint(mut self, ep: GatewayEndpoint) -> Self {
+        self.gateway_endpoint = Some(Arc::new(ep));
+        self
+    }
+
+    /// Resolve `firma-secret://` placeholder tokens in the request body.
+    ///
+    /// Queries the secret gateway for each unique placeholder found, builds a
+    /// per-request [`SidecarSecretStore`], and rewrites the body with the real
+    /// secret bytes. The store is returned for use in response masking.
+    ///
+    /// Returns the (possibly modified) request and `None` when no gateway is
+    /// configured, when the body contains no placeholders, or when all
+    /// resolution attempts fail. Failures are logged as warnings; unresolved
+    /// placeholders remain in the body as-is so the upstream error reaches the
+    /// agent rather than a silent sidecar abort.
+    async fn rehydrate_request(
+        &self,
+        mut request: RawRequest,
+    ) -> (RawRequest, Option<SidecarSecretStore>) {
+        let Some(ref endpoint) = self.gateway_endpoint else {
+            return (request, None);
+        };
+
+        let body = match &request.body {
+            Some(b) if !b.is_empty() => b.clone(),
+            _ => return (request, None),
+        };
+
+        let placeholders = collect_placeholders(&body);
+        if placeholders.is_empty() {
+            return (request, None);
+        }
+
+        let mut store = SidecarSecretStore::new();
+        let placeholder_refs: Vec<&str> = placeholders.iter().map(String::as_str).collect();
+        match secret_gateway_client::resolve_batch(endpoint, &placeholder_refs, &request.host).await
+        {
+            Ok(results) => {
+                for (placeholder, result) in placeholders.iter().zip(results) {
+                    match result {
+                        Ok(secret_bytes) => {
+                            if let Err(e) =
+                                store.insert(placeholder.clone(), SecretValue::new(secret_bytes))
+                            {
+                                tracing::warn!(
+                                    placeholder = %placeholder,
+                                    error = %e,
+                                    "secret gateway: failed to build store entry"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                placeholder = %placeholder,
+                                error = %e,
+                                "secret gateway: placeholder resolution failed; forwarding literal"
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "secret gateway: batch resolve failed; forwarding all literals"
+                );
+            }
+        }
+
+        if store.is_empty() {
+            return (request, None);
+        }
+
+        let content_type_val = request
+            .headers
+            .get(&HeaderName::from_static("content-type"))
+            .map(String::as_str);
+        let ct = ContentType::resolve(content_type_val, &body);
+        let ops = store.rehydrate_ops(&body);
+        if !ops.is_empty() {
+            let rehydrated = rehydrate_body(&body, ct, &ops);
+            if request
+                .headers
+                .contains_key(&HeaderName::from_static("content-length"))
+            {
+                request.headers.insert(
+                    HeaderName::from_static("content-length"),
+                    rehydrated.len().to_string(),
+                );
+            }
+            request.body = Some(rehydrated);
+        }
+
+        (request, Some(store))
     }
 
     /// Handles one normalized transport request.
@@ -323,17 +493,16 @@ impl RequestHandler {
     pub async fn handle(&self, request: RawRequest, session_id: &str) -> HandledResponse {
         let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
+        let (request, secret_store) = self.rehydrate_request(request).await;
+
         let response = match decision {
             EnforcementDecision::Allow {
                 envelope,
                 credentials,
                 ..
             } => {
-                let mut dispatch_envelope = *envelope;
-                hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
-                let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
-                outcome.enrich(&mut audit_payload);
-                response
+                self.dispatch_allow(*envelope, &request, credentials, &mut audit_payload)
+                    .await
             }
             EnforcementDecision::Modify {
                 envelope,
@@ -351,22 +520,8 @@ impl RequestHandler {
                 .await
             }
             EnforcementDecision::Passthrough { .. } => {
-                match passthrough_envelope(&request, session_id) {
-                    Ok(envelope) => {
-                        let (response, outcome) =
-                            self.dispatch(envelope, InjectedCredentials::empty()).await;
-                        outcome.enrich(&mut audit_payload);
-                        // Re-wrap Ok as Passthrough so callers can distinguish
-                        // authorized traffic from forwarded non-protected
-                        // traffic. Deny / Aborted pass through unchanged.
-                        if let HandledResponse::Ok(dispatched) = response {
-                            HandledResponse::Passthrough(dispatched)
-                        } else {
-                            response
-                        }
-                    }
-                    Err(err) => handle_error(err),
-                }
+                self.dispatch_passthrough(&request, session_id, &mut audit_payload)
+                    .await
             }
             EnforcementDecision::Deny {
                 reason,
@@ -426,10 +581,54 @@ impl RequestHandler {
             }
         };
 
+        let response = match secret_store.as_ref() {
+            Some(store) => mask_handled_response(response, store),
+            None => response,
+        };
+
         if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
             tracing::error!("failed to send audit event: {err}");
         }
 
+        response
+    }
+
+    /// Dispatches a `PASSTHROUGH` decision: builds a minimal envelope and
+    /// forwards without enforcement credentials. Re-wraps `Ok` as `Passthrough`
+    /// so callers can distinguish authorized traffic from non-protected traffic.
+    async fn dispatch_passthrough(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+        audit_payload: &mut AuditPayload,
+    ) -> HandledResponse {
+        match passthrough_envelope(request, session_id) {
+            Ok(envelope) => {
+                let (response, outcome) =
+                    self.dispatch(envelope, InjectedCredentials::empty()).await;
+                outcome.enrich(audit_payload);
+                if let HandledResponse::Ok(dispatched) = response {
+                    HandledResponse::Passthrough(dispatched)
+                } else {
+                    response
+                }
+            }
+            Err(err) => handle_error(err),
+        }
+    }
+
+    /// Dispatches an `ALLOW` decision through the connector registry.
+    async fn dispatch_allow(
+        &self,
+        envelope: ExecutionEnvelope,
+        request: &RawRequest,
+        credentials: InjectedCredentials,
+        audit_payload: &mut AuditPayload,
+    ) -> HandledResponse {
+        let mut dispatch_envelope = envelope;
+        hydrate_dispatch_http_fields(&mut dispatch_envelope, request);
+        let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
+        outcome.enrich(audit_payload);
         response
     }
 
@@ -2007,5 +2206,45 @@ pub(crate) mod tests {
             payload.deny_reason
         );
         assert_eq!(payload.dispatch_status, 0);
+    }
+
+    // ── collect_placeholders ───────────────────────────────────────────────
+
+    #[test]
+    fn collect_placeholders_finds_single_token() {
+        let body = b"Authorization: Bearer firma-secret://bw/token\r\n";
+        let tokens = collect_placeholders(body);
+        assert_eq!(tokens, vec!["firma-secret://bw/token"]);
+    }
+
+    #[test]
+    fn collect_placeholders_deduplicates() {
+        let body = b"firma-secret://bw/x and again firma-secret://bw/x";
+        let tokens = collect_placeholders(body);
+        assert_eq!(tokens, vec!["firma-secret://bw/x"]);
+    }
+
+    #[test]
+    fn collect_placeholders_finds_multiple_distinct_tokens() {
+        let body = b"{\"a\":\"firma-secret://bw/alpha\",\"b\":\"firma-secret://bw/beta\"}";
+        let mut tokens = collect_placeholders(body);
+        tokens.sort();
+        assert_eq!(
+            tokens,
+            vec!["firma-secret://bw/alpha", "firma-secret://bw/beta"]
+        );
+    }
+
+    #[test]
+    fn collect_placeholders_returns_empty_when_none_present() {
+        let body = b"no placeholders here";
+        assert!(collect_placeholders(body).is_empty());
+    }
+
+    #[test]
+    fn collect_placeholders_stops_at_quote() {
+        let body = b"\"firma-secret://bw/tok\"";
+        let tokens = collect_placeholders(body);
+        assert_eq!(tokens, vec!["firma-secret://bw/tok"]);
     }
 }

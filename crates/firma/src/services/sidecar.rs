@@ -5,7 +5,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use firma_sidecar::audit::AuditPayload;
 use firma_sidecar::authority_client::readiness::ReadinessFlag;
+use firma_sidecar::connector::ConnectorRegistry;
+use firma_sidecar::pipeline::EnforcementPipeline;
+use firma_sidecar::secret_gateway_client::{GATEWAY_ADDR_ENV, GatewayEndpoint};
 use firma_sidecar::startup::CapabilityReloader;
 use firma_sidecar::{config, handler, health, startup};
 use tokio::task::JoinHandle;
@@ -104,6 +108,27 @@ fn spawn_capability_reload(
     )?))
 }
 
+fn build_request_handler(
+    pipeline: Arc<EnforcementPipeline>,
+    connector_registry: Arc<ConnectorRegistry>,
+    audit_sink_sender: tokio::sync::mpsc::Sender<AuditPayload>,
+) -> handler::RequestHandler {
+    let base = handler::RequestHandler::new(pipeline, connector_registry, audit_sink_sender);
+    match std::env::var(GATEWAY_ADDR_ENV) {
+        Ok(addr) => match GatewayEndpoint::parse(&addr) {
+            Ok(ep) => {
+                tracing::info!(%addr, "secret gateway configured; placeholder rehydration enabled");
+                base.with_gateway_endpoint(ep)
+            }
+            Err(e) => {
+                tracing::warn!(%addr, error = %e, "invalid secret gateway address; placeholder rehydration disabled");
+                base
+            }
+        },
+        Err(_) => base,
+    }
+}
+
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
     let sandbox_id = propagated_sandbox_id()?;
@@ -158,7 +183,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let _capability_reload = spawn_capability_reload(&config, &pipeline_runtime, &exit)?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
-    let handler = Arc::new(handler::RequestHandler::new(
+    let handler = Arc::new(build_request_handler(
         Arc::clone(&pipeline_runtime.pipeline),
         connector_registry,
         audit_payload_tx,
