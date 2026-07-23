@@ -198,6 +198,7 @@ interface PlanningState {
     | "failed";
   repositoryRevision?: string;
   currentCandidateVersion?: number;
+  activeMaterializationRunId?: string;
   completedReviewAttempts: number;
   updatedAt: string;
 }
@@ -510,17 +511,19 @@ the model instance.
 
 ## Decomposition Materialization Workflow
 
-The human reviews the decomposition attachment, then explicitly starts
-`openfirma-feature-materialization` with the planning model name, candidate
-version, and plan digest.
+The human reviews the decomposition attachment, generates a fresh UUID approval
+ID, then explicitly starts `@openfirma/feature-materialization` with the
+planning model name, candidate version, plan digest, and approval ID.
 
 The workflow performs:
 
-1. Call `prepareMaterialization` with the requested candidate version and digest.
+1. Call `prepareMaterialization` with the requested candidate version, digest,
+   and approval ID.
 2. The method loads the exact decomposition, verifies its digest, re-fetches the
    Linear issue, stores its current `updatedAt`, persists the immutable gate
    payload, and sets phase `awaiting_approval`.
-3. Suspend at a native `manual_approval` gate showing the issue, digest,
+3. Suspend at a native `manual_approval` gate. The operator inspects the
+   approval-specific materialization resource, which shows the issue, digest,
    attachment, child count, and whether the ticket changed since planning.
 4. After approval and explicit resume, pass the exact version and digest from
    the persisted pre-gate step output to `materialize`.
@@ -530,14 +533,17 @@ The workflow performs:
    relaunched with a fresh warning.
 6. Otherwise, set phase `materializing` and reconcile the children.
 
-Resume-time inputs cannot replace the pre-gate candidate version or digest.
+The model stores the active approval ID and rejects stale approval runs. The
+post-gate step loads the candidate version and digest from the preparation
+resource named by that approval ID rather than accepting them directly as
+resume inputs.
 
 Current Swamp model methods do not receive a cryptographic receipt proving that
 a workflow gate was approved. In v1, the native gate and workflow dependency are
 the enforcement boundary for the supported path, and deployment permissions
-must prevent untrusted callers from invoking `materialize` directly. A future
-Swamp approval-receipt capability would allow the model to enforce this
-independently.
+must prevent untrusted callers from invoking `materialize` directly or replacing
+the approval ID through malicious resume inputs. A future Swamp
+approval-receipt capability would allow the model to enforce this independently.
 
 If the human rejects or abandons the gate, no children are created. The caller
 invokes `cancelMaterialization` to return the model to `decomposition_ready` and
@@ -595,6 +601,8 @@ stored IDs and markers before creating anything.
 - Reviewer sessions receive no author transcript or hidden reasoning.
 - Linear and model-provider credentials come from Swamp vaults and never enter
   prompts or artifacts.
+- Every Linear ticket must belong to a vault-configured project UUID before any
+  mutation; unassigned and out-of-scope tickets fail closed.
 - Model responses validate against closed schemas.
 - Attachment URLs are not fetched into agent context automatically.
 - Private security intake produces only a private operator report and no public

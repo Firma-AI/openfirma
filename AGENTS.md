@@ -2,6 +2,11 @@
 
 Guidance for coding agents working in this repository.
 
+## Swamp Automation
+
+For Swamp models, workflows, data, vaults, extensions, or reports, load and
+follow [`swamp`](.skills/swamp/SKILL.md).
+
 ## Key Commands
 
 ```bash

@@ -1,0 +1,46 @@
+id: 4965ff69-a03f-4a73-9e22-b69c8e0d5f1f
+name: "@openfirma/feature-planning"
+description: Turn one Linear ticket into a reviewed OpenFirma implementation or decomposition plan
+version: 1
+inputs:
+  type: object
+  additionalProperties: false
+  properties:
+    ticket_id:
+      type: string
+      pattern: "^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$"
+    repository_revision:
+      type: string
+      default: ""
+    trigger_event_id:
+      type: string
+      default: ""
+  required:
+    - ticket_id
+jobs:
+  - name: planning
+    steps:
+      - name: plan-${{ self.ticket }}
+        forEach:
+          item: ticket
+          in: "${{ [inputs.ticket_id.lowerAscii()] }}"
+        task:
+          type: model_method
+          modelType: "@openfirma/feature-planning"
+          modelName: openfirma-plan-${{ self.ticket }}
+          methodName: plan
+          globalArgs:
+            linearApiKey: "${{ vault.get('openfirma-planning', 'linear-api-key') }}"
+            allowedProjectIdsCsv: "${{ vault.get('openfirma-planning', 'linear-allowed-project-ids') }}"
+            statusIds:
+              planning: "${{ vault.get('openfirma-planning', 'linear-status-planning') }}"
+              needsInput: "${{ vault.get('openfirma-planning', 'linear-status-needs-input') }}"
+              planningFailed: "${{ vault.get('openfirma-planning', 'linear-status-planning-failed') }}"
+              awaitingApproval: "${{ vault.get('openfirma-planning', 'linear-status-awaiting-approval') }}"
+              readyForImplementation: "${{ vault.get('openfirma-planning', 'linear-status-ready-for-implementation') }}"
+              planned: "${{ vault.get('openfirma-planning', 'linear-status-planned') }}"
+            allowedIntakeStatusIdsCsv: "${{ vault.get('openfirma-planning', 'linear-allowed-intake-status-ids') }}"
+          inputs:
+            ticketId: "${{ inputs.ticket_id }}"
+            repositoryRevision: "${{ inputs.repository_revision }}"
+            triggerEventId: "${{ inputs.trigger_event_id }}"

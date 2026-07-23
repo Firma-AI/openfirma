@@ -1,0 +1,7 @@
+id: b9a91866-c319-4af9-8e82-1292e6bde989
+name: openfirma-planning
+type: local_encryption
+config:
+  auto_generate: true
+  base_dir: /Users/luca/code/firma/openfirma2
+createdAt: '2026-07-23T18:05:46.865Z'
