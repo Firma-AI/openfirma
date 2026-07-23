@@ -175,6 +175,7 @@ For a production deployment:
 
 ## What's next
 
+- [Use secret placeholders in HTTP requests](../secret-placeholders/) — when the secret belongs in the request *body*, not a header.
 - [Read & verify the audit log](../audit-log/) — see injection records cleanly.
 - [Concepts: Connectors](../../concepts/connectors/) — the dispatch path and where injection fits.
 - [Concepts: Threat model](../../concepts/threat-model/) — the security rationale.
