@@ -1,5 +1,5 @@
 use std::{
-    borrow::{Borrow, Cow},
+    borrow::Borrow,
     hash::{Hash, Hasher},
     ops::Deref,
     str::FromStr,
@@ -72,10 +72,7 @@ impl<'de> Deserialize<'de> for HeaderName {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        struct Temp<'a>(#[serde(borrow)] Cow<'a, str>);
-
-        let temp = Temp::deserialize(deserializer)?;
+        let temp = crate::Str::deserialize(deserializer)?;
         http::HeaderName::from_str(temp.0.as_ref())
             .map(HeaderName)
             .map_err(serde::de::Error::custom)

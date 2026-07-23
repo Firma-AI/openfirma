@@ -281,6 +281,16 @@ impl ActionClassRegistry {
                 domain: "communication",
                 risk_level: Critical,
             },
+            ActionClassDefinition {
+                name: "secret.mediate",
+                domain: "secret",
+                risk_level: Critical,
+            },
+            ActionClassDefinition {
+                name: "secret.redact",
+                domain: "secret",
+                risk_level: Critical,
+            },
         ];
 
         let mut classes = HashMap::with_capacity(entries.len());
@@ -373,12 +383,15 @@ mod tests {
         "communication.external.manage",
         "communication.external.delete",
         "communication.external.filter",
+        // secret management
+        "secret.mediate",
+        "secret.redact",
     ];
 
     #[test]
-    fn test_v0_1_registry_has_44_classes() {
+    fn test_v0_1_registry_has_46_classes() {
         let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 44);
+        assert_eq!(registry.len(), 46);
     }
 
     #[test]
