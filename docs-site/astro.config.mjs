@@ -136,6 +136,7 @@ export default defineConfig({
             { label: 'Read & verify the audit log', slug: 'guides/audit-log' },
             { label: 'Secure a local coding agent', slug: 'guides/secure-a-coding-agent' },
             { label: 'Secure GitHub Copilot CLI', slug: 'guides/secure-github-copilot' },
+            { label: 'Secure Visual Studio Code', slug: 'guides/secure-vscode' },
             { label: 'Deploy a GenAI web app', slug: 'guides/deploy-a-genai-webapp' },
           ],
         },

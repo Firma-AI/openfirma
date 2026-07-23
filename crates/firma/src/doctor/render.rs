@@ -8,30 +8,40 @@ use crate::doctor::report::{Check, Report, Status};
 
 /// Render `report` in pretty form to `out`.
 pub fn pretty(report: &Report, out: &mut dyn Write) -> io::Result<()> {
+    pretty_with_color(report, out, false)
+}
+
+/// Render `report` in pretty form with terminal color enabled.
+pub fn pretty_for_stdout(report: &Report, out: &mut dyn Write) -> io::Result<()> {
+    pretty_with_color(report, out, true)
+}
+
+fn pretty_with_color(report: &Report, out: &mut dyn Write, color: bool) -> io::Result<()> {
     writeln!(out, "firma doctor")?;
     writeln!(out, "=============")?;
     for check in &report.checks {
-        writeln!(out, "{}", format_check(check))?;
+        writeln!(out, "{}", format_check(check, color))?;
     }
     Ok(())
 }
 
-fn format_check(check: &Check) -> String {
-    // Color is gated on stdout being a TTY via owo-colors' `if_supports_color`,
-    // so captured buffers (tests, `firma doctor | tee log`) stay plain ASCII.
+fn format_check(check: &Check, color: bool) -> String {
     let tag = match check.status {
-        Status::Ok => format!(
+        Status::Ok if color => format!(
             "{}",
             "[OK]  ".if_supports_color(Stream::Stdout, |t| t.green())
         ),
-        Status::Warn => format!(
+        Status::Warn if color => format!(
             "{}",
             "[WARN]".if_supports_color(Stream::Stdout, |t| t.yellow())
         ),
-        Status::Fail => format!(
+        Status::Fail if color => format!(
             "{}",
             "[FAIL]".if_supports_color(Stream::Stdout, |t| t.bright_red())
         ),
+        Status::Ok => "[OK]  ".to_string(),
+        Status::Warn => "[WARN]".to_string(),
+        Status::Fail => "[FAIL]".to_string(),
     };
     format!("{tag} {:<22} {}", check.category, check.reason)
 }
