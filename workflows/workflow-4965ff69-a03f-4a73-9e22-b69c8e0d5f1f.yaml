@@ -31,15 +31,11 @@ jobs:
           methodName: plan
           globalArgs:
             linearApiKey: "${{ vault.get('openfirma-planning', 'linear-api-key') }}"
-            allowedProjectIdsCsv: "${{ vault.get('openfirma-planning', 'linear-allowed-project-ids') }}"
+            allowedProjectIdsCsv: "8a68d77c-9ffb-4d1f-a580-13b3cc7896fa"
             statusIds:
-              planning: "${{ vault.get('openfirma-planning', 'linear-status-planning') }}"
-              needsInput: "${{ vault.get('openfirma-planning', 'linear-status-needs-input') }}"
-              planningFailed: "${{ vault.get('openfirma-planning', 'linear-status-planning-failed') }}"
-              awaitingApproval: "${{ vault.get('openfirma-planning', 'linear-status-awaiting-approval') }}"
-              readyForImplementation: "${{ vault.get('openfirma-planning', 'linear-status-ready-for-implementation') }}"
-              planned: "${{ vault.get('openfirma-planning', 'linear-status-planned') }}"
-            allowedIntakeStatusIdsCsv: "${{ vault.get('openfirma-planning', 'linear-allowed-intake-status-ids') }}"
+              triage: "ac9e1a23-f5c1-4582-bd08-937c889e0618"
+              inProgress: "d0f30049-a2e1-4ff6-aa4e-c5f5b4720a52"
+            allowedIntakeStatusIdsCsv: "70ea6101-6262-4371-acec-38ecfe4e5c2d,ac9e1a23-f5c1-4582-bd08-937c889e0618"
           inputs:
             ticketId: "${{ inputs.ticket_id }}"
             repositoryRevision: "${{ inputs.repository_revision }}"

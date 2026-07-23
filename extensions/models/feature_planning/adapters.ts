@@ -41,7 +41,7 @@ type LinearIssue = {
   url: string;
   updatedAt: string;
   team: { id: string };
-  project: { id: string } | null;
+  project: { id: string; name: string } | null;
   state: { id: string; name: string };
   comments: {
     nodes: Array<{
@@ -59,7 +59,7 @@ const ISSUE_QUERY = `
     issue(id: $id) {
       id identifier title description url updatedAt
       team { id }
-      project { id }
+      project { id name }
       state { id name }
       comments(first: 100) {
         nodes { id body createdAt updatedAt }
@@ -78,9 +78,11 @@ export class LinearClient {
   private async request<T>(
     query: string,
     variables: Record<string, unknown>,
+    options: { attempts?: number } = {},
   ): Promise<T> {
     let lastError: AdapterError | undefined;
-    for (let requestAttempt = 0; requestAttempt < 3; requestAttempt++) {
+    const attempts = options.attempts ?? 3;
+    for (let requestAttempt = 0; requestAttempt < attempts; requestAttempt++) {
       try {
         const response = await fetch(this.apiUrl, {
           method: "POST",
@@ -160,7 +162,9 @@ export class LinearClient {
           `Linear request failed: ${String(error)}`,
           true,
         );
-        if (!lastError.retryable || requestAttempt === 2) throw lastError;
+        if (!lastError.retryable || requestAttempt === attempts - 1) {
+          throw lastError;
+        }
         await new Promise((resolve) =>
           setTimeout(resolve, 250 * (2 ** requestAttempt))
         );
@@ -230,6 +234,7 @@ export class LinearClient {
       updatedAt: data.issue.updatedAt,
       teamId: data.issue.team.id,
       projectId: data.issue.project?.id ?? null,
+      projectName: data.issue.project?.name ?? null,
       stateId: data.issue.state.id,
       stateName: data.issue.state.name,
       comments,
@@ -260,8 +265,15 @@ export class LinearClient {
     marker: string,
     body: string,
   ): Promise<string> {
+    if (!body.includes(marker)) {
+      throw new AdapterError(
+        "conflict",
+        "Linear lifecycle comment body is missing its run marker",
+        false,
+      );
+    }
     const matches = baseline.comments.filter((comment) =>
-      comment.body.split("\n", 1)[0] === marker
+      comment.body.includes(marker)
     );
     if (matches.length > 1) {
       throw new AdapterError(
@@ -270,7 +282,7 @@ export class LinearClient {
         false,
       );
     }
-    const fullBody = `${marker}\n\n${body}`;
+    const fullBody = body;
     if (matches[0]) {
       const data = await this.request<{
         commentUpdate: { success: boolean; comment: { id: string } | null };
@@ -299,6 +311,9 @@ export class LinearClient {
         }
       }`,
       { issueId: baseline.id, body: fullBody },
+      // Reconcile an ambiguous create on the next projection instead of
+      // replaying a mutation that may already have committed.
+      { attempts: 1 },
     );
     if (!data.commentCreate.success || !data.commentCreate.comment) {
       throw new AdapterError(
@@ -310,11 +325,12 @@ export class LinearClient {
     return data.commentCreate.comment.id;
   }
 
-  async uploadMarkdownAsset(
+  async uploadAsset(
     filename: string,
-    markdown: string,
+    content: string,
+    contentType: "application/json" | "text/markdown",
   ): Promise<string> {
-    const bytes = new TextEncoder().encode(markdown);
+    const bytes = new TextEncoder().encode(content);
     const upload = await this.request<{
       fileUpload: {
         success: boolean;
@@ -330,7 +346,7 @@ export class LinearClient {
           success uploadFile { uploadUrl assetUrl headers { key value } }
         }
       }`,
-      { contentType: "text/markdown", filename, size: bytes.byteLength },
+      { contentType, filename, size: bytes.byteLength },
     );
     if (!upload.fileUpload.success || !upload.fileUpload.uploadFile) {
       throw new AdapterError(
@@ -340,7 +356,7 @@ export class LinearClient {
       );
     }
 
-    const headers = new Headers({ "Content-Type": "text/markdown" });
+    const headers = new Headers({ "Content-Type": contentType });
     for (const header of upload.fileUpload.uploadFile.headers) {
       headers.set(header.key, header.value);
     }
@@ -370,48 +386,6 @@ export class LinearClient {
     }
 
     return upload.fileUpload.uploadFile.assetUrl;
-  }
-
-  async createAttachment(
-    issueId: string,
-    filename: string,
-    assetUrl: string,
-    digest: string,
-    attempt: number,
-  ): Promise<string> {
-    const attachment = await this.request<{
-      attachmentCreate: {
-        success: boolean;
-        attachment: { id: string } | null;
-      };
-    }>(
-      `mutation CreatePlanningAttachment(
-        $issueId: String!, $title: String!, $url: String!, $subtitle: String!, $metadata: JSONObject!
-      ) {
-        attachmentCreate(input: {
-          issueId: $issueId, title: $title, url: $url,
-          subtitle: $subtitle, metadata: $metadata
-        }) { success attachment { id } }
-      }`,
-      {
-        issueId,
-        title: filename,
-        url: assetUrl,
-        subtitle: `SHA-256 ${digest}`,
-        metadata: { digest, attempt },
-      },
-    );
-    if (
-      !attachment.attachmentCreate.success ||
-      !attachment.attachmentCreate.attachment
-    ) {
-      throw new AdapterError(
-        "conflict",
-        "Linear attachment was not confirmed",
-        false,
-      );
-    }
-    return attachment.attachmentCreate.attachment.id;
   }
 
   async listChildren(parentId: string): Promise<
@@ -486,6 +460,8 @@ export class LinearClient {
         }) { success issue { id identifier } }
       }`,
       input,
+      // Reconcile an ambiguous create by child marker on the next invocation.
+      { attempts: 1 },
     );
     if (!data.issueCreate.success || !data.issueCreate.issue) {
       throw new AdapterError(
@@ -585,6 +561,8 @@ export class LinearClient {
         }) { success issueRelation { id } }
       }`,
       { issueId: blockerId, relatedIssueId: blockedId },
+      // Reconcile an ambiguous create from the relation list on the next invocation.
+      { attempts: 1 },
     );
     if (
       !data.issueRelationCreate.success ||

@@ -14,29 +14,32 @@ not forwarded to Codex.
 
 - `swamp` and `codex` installed locally.
 - `codex login status` reports an authenticated session.
-- A Linear API key with issue, comment, attachment, upload, state, child-issue,
+- A Linear API key with issue, comment, upload, state, child-issue,
   and relation access.
 - Team workflow-state UUIDs for every projected state.
 
-Create a local encrypted vault and store the credential and team configuration:
+Create a local encrypted vault and store the API credential:
 
 ```bash
 swamp vault create local_encryption openfirma-planning
 swamp vault put openfirma-planning linear-api-key '<key>'
-swamp vault put openfirma-planning linear-allowed-project-ids '<uuid>,<uuid>'
-swamp vault put openfirma-planning linear-status-planning '<uuid>'
-swamp vault put openfirma-planning linear-status-needs-input '<uuid>'
-swamp vault put openfirma-planning linear-status-planning-failed '<uuid>'
-swamp vault put openfirma-planning linear-status-awaiting-approval '<uuid>'
-swamp vault put openfirma-planning linear-status-ready-for-implementation '<uuid>'
-swamp vault put openfirma-planning linear-status-planned '<uuid>'
-swamp vault put openfirma-planning linear-allowed-intake-status-ids '<uuid>,<uuid>'
 ```
 
-The intake value is a comma-separated allowlist. The model only changes the
-initial status when its UUID appears there. Afterward it only changes a status
-that the same attempt previously confirmed as model-owned. Unexpected human
-status changes are preserved.
+Project and status UUIDs are non-secret deployment configuration in the planning
+workflow YAML. Keep them out of the vault: marking them sensitive causes Swamp to
+taint and redact persisted recovery data. The intake value is a comma-separated
+allowlist. The model only changes the initial status when its UUID appears there.
+Afterward it only changes a status that the same attempt previously confirmed as
+model-owned. Unexpected human status changes are preserved.
+The active projection then fails closed until Linear is returned to an allowed,
+model-owned status.
+
+The shipped workflow accepts `Prioritized` and `Triage`. A prioritized ticket
+moves to `Triage` when planning starts and remains there through missing input,
+review, failure, and decomposition approval. Starting the workflow again while
+the ticket is in `Triage` creates or resumes a planning attempt. Explicit human
+approval of an implementation plan, or successful creation of all decomposed
+child issues, moves the parent to `In Progress`.
 
 The project value is also a comma-separated UUID allowlist. Planning fails
 closed before any Linear mutation when a ticket is unassigned or belongs to a
@@ -54,12 +57,50 @@ revision expression. The model resolves it once to an immutable commit ID.
 Optional `trigger_event_id` deduplicates completed webhook-triggered attempts;
 the same event may still resume an interrupted `planning` attempt.
 
+Each new attempt gets a stable planning run UUID and one cumulative Linear
+comment. Resuming or retrying a method updates that comment in place. Starting a
+deliberate new attempt creates a new run UUID and comment. The comment shows
+one bold status field, an optional primary artifact, and exact next-step commands.
+This template is shared by every planning and materialization state. `Needs input`
+uploads the detailed blocker analysis and questions as a required-input Markdown
+artifact instead of expanding them in the comment. The collapsed `Planning
+history` contains links to every intermediate candidate and adversarial review,
+including the review findings. A collapsed `Run details` section contains the run
+marker, links the immutable revision to GitHub, and links the point-in-time input
+snapshot.
+
+Candidates are uploaded as versioned Markdown files immediately after their
+immutable Swamp candidate version is assigned. Reviews are uploaded immediately
+after persistence. A separate typed `artifact` resource records each filename,
+SHA-256 digest, upload URL, candidate version, and review attempt. Upload URLs do
+not mutate candidate resources, so reviews remain bound to exactly the content
+they assessed. Use `syncLinear` to retry missing uploads and reconstruct the
+entire comment from persisted resources:
+
+```bash
+swamp model method run openfirma-plan-fir-123 syncLinear
+```
+
 The model is named from the normalized ticket, such as
 `openfirma-plan-fir-123`. Inspect its state and outcome with:
 
 ```bash
 swamp data get openfirma-plan-fir-123 state-main
 swamp data get openfirma-plan-fir-123 outcome-main
+```
+
+Approve a reviewed implementation plan with the command shown in its comment:
+
+```bash
+swamp model method run openfirma-plan-fir-123 approvePlan
+```
+
+Approval records the explicit human transition, updates the cumulative comment,
+and projects the configured `In Progress` Linear status. Rejecting a plan means
+starting a deliberate new attempt:
+
+```bash
+swamp workflow run @openfirma/feature-planning --input ticket_id=FIR-123
 ```
 
 ## Materialize A Decomposition
@@ -76,13 +117,18 @@ swamp workflow run @openfirma/feature-materialization \
 ```
 
 The preparation resource is named `materialization-<approval-id>`. Inspect
-that resource before approving. It contains the issue, digest, attachment URL,
+that resource before approving. It contains the issue, digest, artifact URL,
 child count, and ticket-drift warning. The current Swamp manual-approval prompt
 cannot render deferred resource attributes, so the prompt itself is static.
 The downstream method reads the approval-specific resource and the model rejects
 an approval ID that is no longer active. Swamp does not yet provide a
 cryptographic approval receipt; deployment permissions must still prevent
 untrusted direct method calls or malicious resume-input replacement.
+
+The materialization workflow continues updating the original planning comment.
+It records the approval ID and digest, pre-gate ticket-drift warning, child identifiers,
+dependency relations, redacted failures, and completion. It does not create a
+separate materialization comment.
 
 Approve and resume using the commands printed by Swamp. Reject the gate when the
 decomposition is unsuitable. If a suspended run is abandoned rather than

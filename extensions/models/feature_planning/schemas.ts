@@ -4,6 +4,7 @@ export const PhaseSchema = z.enum([
   "planning",
   "needs_input",
   "implementation_ready",
+  "implementation_approved",
   "decomposition_ready",
   "awaiting_approval",
   "materializing",
@@ -14,21 +15,16 @@ export const PhaseSchema = z.enum([
 export type Phase = z.infer<typeof PhaseSchema>;
 
 export const StatusIdsSchema = z.strictObject({
-  planning: z.string().min(1).meta({ sensitive: true }),
-  needsInput: z.string().min(1).meta({ sensitive: true }),
-  planningFailed: z.string().min(1).meta({ sensitive: true }),
-  awaitingApproval: z.string().min(1).meta({ sensitive: true }),
-  readyForImplementation: z.string().min(1).meta({ sensitive: true }),
-  planned: z.string().min(1).meta({ sensitive: true }),
+  triage: z.string().min(1),
+  inProgress: z.string().min(1),
 });
 
 export const GlobalArgsSchema = z.strictObject({
   linearApiKey: z.string().min(1).meta({ sensitive: true }),
   linearApiUrl: z.string().url().default("https://api.linear.app/graphql"),
-  allowedProjectIdsCsv: z.string().min(1).meta({ sensitive: true }),
+  allowedProjectIdsCsv: z.string().min(1),
   statusIds: StatusIdsSchema,
-  allowedIntakeStatusIds: z.array(z.string().min(1)).default([]),
-  allowedIntakeStatusIdsCsv: z.string().default("").meta({ sensitive: true }),
+  allowedIntakeStatusIdsCsv: z.string().min(1),
   codexBinary: z.string().min(1).default("codex"),
   codexModel: z.string().min(1).optional(),
   codexTimeoutSeconds: z.number().int().min(60).max(7200).default(1800),
@@ -39,13 +35,15 @@ export type GlobalArgs = z.infer<typeof GlobalArgsSchema>;
 export const PlanningStateSchema = z.strictObject({
   issueIdentifier: z.string().min(1),
   attempt: z.number().int().positive(),
+  planningRunId: z.string().uuid(),
+  startedAt: z.string().datetime(),
   phase: PhaseSchema,
   repositoryRevision: z.string().min(1).optional(),
   currentCandidateVersion: z.number().int().positive().optional(),
   activeMaterializationRunId: z.string().uuid().optional(),
   completedReviewAttempts: z.number().int().min(0).max(3),
   triggerEventId: z.string().min(1).optional(),
-  initialStatusId: z.string().min(1).optional(),
+  initialStatusId: z.string().min(1),
   updatedAt: z.string().datetime(),
 });
 
@@ -68,6 +66,7 @@ export const TicketBaselineSchema = z.strictObject({
   updatedAt: z.string().datetime(),
   teamId: z.string().min(1),
   projectId: z.string().min(1).nullable(),
+  projectName: z.string().min(1).nullable(),
   stateId: z.string().min(1),
   stateName: z.string().min(1),
   comments: z.array(CommentSchema),
@@ -261,6 +260,56 @@ export const ReviewRecordSchema = z.strictObject({
 
 export type ReviewRecord = z.infer<typeof ReviewRecordSchema>;
 
+const ArtifactBaseSchema = z.strictObject({
+  attempt: z.number().int().positive(),
+  filename: z.string().min(1),
+  contentType: z.enum(["application/json", "text/markdown"]),
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+  status: z.enum(["pending", "confirmed"]),
+  url: z.string().url().optional(),
+  createdAt: z.string().datetime(),
+  uploadedAt: z.string().datetime().optional(),
+});
+
+export const ArtifactSchema = z.discriminatedUnion("kind", [
+  ArtifactBaseSchema.extend({ kind: z.literal("input_snapshot") }),
+  ArtifactBaseSchema.extend({ kind: z.literal("required_input") }),
+  ArtifactBaseSchema.extend({
+    kind: z.literal("candidate"),
+    candidateVersion: z.number().int().positive(),
+  }),
+  ArtifactBaseSchema.extend({
+    kind: z.literal("review"),
+    candidateVersion: z.number().int().positive(),
+    reviewAttempt: z.number().int().min(1).max(3),
+  }),
+]).superRefine((artifact, context) => {
+  if (artifact.status === "confirmed") {
+    if (!artifact.url) {
+      context.addIssue({
+        code: "custom",
+        message: "Confirmed artifacts require an upload URL",
+        path: ["url"],
+      });
+    }
+    if (!artifact.uploadedAt) {
+      context.addIssue({
+        code: "custom",
+        message: "Confirmed artifacts require an upload timestamp",
+        path: ["uploadedAt"],
+      });
+    }
+  } else if (artifact.url || artifact.uploadedAt) {
+    context.addIssue({
+      code: "custom",
+      message: "Pending artifacts cannot contain confirmed upload metadata",
+      path: artifact.url ? ["url"] : ["uploadedAt"],
+    });
+  }
+});
+
+export type Artifact = z.infer<typeof ArtifactSchema>;
+
 export const EffectSchema = z.strictObject({
   key: z.string().min(1),
   attempt: z.number().int().positive(),
@@ -286,13 +335,25 @@ export const MaterializationSchema = z.strictObject({
   planDigest: z.string().regex(/^[a-f0-9]{64}$/),
   workflowRunId: z.string().uuid(),
   issueIdentifier: z.string().min(1),
-  attachmentUrl: z.string().url(),
+  artifactUrl: z.string().url(),
   childCount: z.number().int().positive(),
   ticketUpdatedAt: z.string().datetime(),
   ticketChangedSincePlanning: z.boolean(),
   childIds: z.record(z.string(), z.string().min(1)),
+  childIdentifiers: z.record(z.string(), z.string().min(1)),
   relationKeys: z.array(z.string().min(1)),
   preparedAt: z.string().datetime(),
+  cancelledAt: z.string().datetime().optional(),
+}).superRefine((materialization, context) => {
+  const childKeys = Object.keys(materialization.childIds).sort();
+  const identifierKeys = Object.keys(materialization.childIdentifiers).sort();
+  if (childKeys.join("\0") !== identifierKeys.join("\0")) {
+    context.addIssue({
+      code: "custom",
+      message: "Child IDs and identifiers must contain the same keys",
+      path: ["childIdentifiers"],
+    });
+  }
 });
 
 export type Materialization = z.infer<typeof MaterializationSchema>;
@@ -303,6 +364,7 @@ export const OutcomeSchema = z.strictObject({
     "needs_input",
     "review_exhausted",
     "implementation_ready",
+    "implementation_approved",
     "decomposition_ready",
     "approval_stale",
     "children_created",
@@ -311,9 +373,10 @@ export const OutcomeSchema = z.strictObject({
   summary: z.string().min(1),
   candidateVersion: z.number().int().positive().optional(),
   planDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  attachmentUrl: z.string().url().optional(),
+  artifactUrl: z.string().url().optional(),
   blockingQuestions: NeedsInputSchema.shape.blockingQuestions.optional(),
   childIds: z.record(z.string(), z.string().min(1)).optional(),
+  materializationRunId: z.string().uuid().optional(),
   updatedAt: z.string().datetime(),
 });
 

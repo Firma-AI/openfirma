@@ -13,7 +13,8 @@
 This document specifies a state machine that turns one OpenFirma Linear ticket
 into one of three product outcomes:
 
-1. A reviewed implementation plan attached to the original ticket.
+1. A reviewed implementation plan linked from the original ticket's lifecycle
+   comment.
 2. A reviewed decomposition materialized as child Linear tickets after human
    approval.
 3. A terminal escalation asking a human to improve the ticket or resolve review
@@ -23,9 +24,6 @@ A repository-aware headless agent drafts and repairs plans. A fresh,
 repository-aware agent reviews every plan-based result without seeing the
 author's transcript, hidden reasoning, or repair rationale. Review and repair
 are bounded to three completed reviews.
-
-This is a design contract. It does not claim that the required Linear or
-headless-agent adapters already exist in this repository.
 
 ## Goals
 
@@ -86,7 +84,7 @@ flowchart LR
     PlanningModel --> Reviewer[Fresh reviewer agent]
     PlanningModel --> Data[(Versioned Swamp data)]
 
-    PlanningModel -->|implementation plan| Plan[Linear plan attachment]
+    PlanningModel -->|implementation plan| Plan[Linear plan artifact link]
     PlanningModel -->|decomposition ready| Human[Human]
     Human -->|explicitly launch| MaterializationWorkflow[Materialization workflow]
     MaterializationWorkflow --> Gate{Manual approval}
@@ -155,6 +153,8 @@ stateDiagram-v2
     NeedsInput --> Planning: new planning attempt
     Failed --> Planning: new planning attempt
     ImplementationReady --> Planning: explicit re-plan
+    ImplementationReady --> ImplementationApproved: human approves
+    ImplementationApproved --> Planning: explicit re-plan
     DecompositionReady --> Planning: explicit re-plan
     DecompositionReady --> AwaitingApproval: materialization workflow starts
     AwaitingApproval --> Materializing: human approves
@@ -164,16 +164,17 @@ stateDiagram-v2
     ChildrenCreated --> Planning: explicit re-plan
 ```
 
-| Phase                  | Meaning                                                         |
-| ---------------------- | --------------------------------------------------------------- |
-| `planning`             | Author/reviewer loop is active.                                 |
-| `needs_input`          | Ticket or review findings require human work.                   |
-| `implementation_ready` | Approved implementation plan has been persisted.                |
-| `decomposition_ready`  | Approved decomposition is waiting for explicit materialization. |
-| `awaiting_approval`    | Materialization workflow is suspended at its human gate.        |
-| `materializing`        | Approved child issues are being reconciled and created.         |
-| `children_created`     | All proposed children and relations are confirmed.              |
-| `failed`               | A non-retryable operational failure needs intervention.         |
+| Phase                     | Meaning                                                         |
+| ------------------------- | --------------------------------------------------------------- |
+| `planning`                | Author/reviewer loop is active.                                 |
+| `needs_input`             | Ticket or review findings require human work.                   |
+| `implementation_ready`    | Approved implementation plan has been persisted.                |
+| `implementation_approved` | Human explicitly approved the implementation plan.              |
+| `decomposition_ready`     | Approved decomposition is waiting for explicit materialization. |
+| `awaiting_approval`       | Materialization workflow is suspended at its human gate.        |
+| `materializing`           | Approved child issues are being reconciled and created.         |
+| `children_created`        | All proposed children and relations are confirmed.              |
+| `failed`                  | A non-retryable operational failure needs intervention.         |
 
 The model instance serializes method execution through Swamp's per-model lock.
 V1 does not add custom leases, fencing tokens, or compare-and-set state claims.
@@ -187,10 +188,13 @@ One model instance represents one Linear ticket, for example
 interface PlanningState {
   issueIdentifier: string;
   attempt: number;
+  planningRunId: string;
+  startedAt: string;
   phase:
     | "planning"
     | "needs_input"
     | "implementation_ready"
+    | "implementation_approved"
     | "decomposition_ready"
     | "awaiting_approval"
     | "materializing"
@@ -200,18 +204,24 @@ interface PlanningState {
   currentCandidateVersion?: number;
   activeMaterializationRunId?: string;
   completedReviewAttempts: number;
+  initialStatusId: string;
   updatedAt: string;
 }
 ```
 
-Calling `plan` from `needs_input`, `failed`, `implementation_ready`,
-`decomposition_ready`, or `children_created` starts a new attempt and captures
-fresh ticket context. Calling it in `planning` resumes the current attempt from
-the latest valid resource; it never resets the attempt. It cannot run in
-`awaiting_approval` or `materializing`.
+Calling `plan` from `needs_input`, `failed`, `implementation_ready`, or
+`decomposition_ready` starts a new attempt and captures fresh ticket context.
+After `implementation_approved` or `children_created`, a human must first return
+the ticket from `In Progress` to an allowed intake status. Calling `plan` in
+`planning` resumes the current attempt from the latest valid resource; it never
+resets the attempt. It cannot run in `awaiting_approval` or `materializing`.
 
 Repeated webhook delivery is deduplicated by an optional trigger event ID stored
 with the attempt.
+
+Every attempt records `planningRunId`, `startedAt`, and `initialStatusId` before
+planning begins. The run UUID is the stable machine identity used to recover the
+attempt's Linear comment.
 
 ## Planning Workflow
 
@@ -242,20 +252,26 @@ workflows are DAGs and cannot express a data-dependent sequential loop.
 reserve next attempt and set state = planning
 capture ticket baseline if absent for this attempt
 resolve immutable repository commit if absent for this attempt
-project Linear status = Planning
+project Linear status = Triage
+upload point-in-time input snapshot JSON
+render the cumulative Linear comment
 
 candidate = author(ticket, repository)
 
 if candidate is needs_input:
     persist outcome
-    project Needs input
+    keep Linear status = Triage
     stop
 
 persist candidate and use the returned native Swamp data version
+upload the rendered versioned candidate Markdown
+render the cumulative Linear comment
 
 for review_attempt in 1..3:
     report = fresh_reviewer(ticket, candidate, repository)
     persist report bound to candidate.version
+    upload the complete review Markdown
+    render the cumulative Linear comment
 
     if report is approved:
         publish implementation plan or decomposition
@@ -263,14 +279,14 @@ for review_attempt in 1..3:
 
     if review_attempt == 3:
         persist review-exhausted outcome
-        project Needs input
+        keep Linear status = Triage
         stop
 
     candidate = author_repair(ticket, candidate, report, repository)
 
     if candidate is needs_input:
         persist outcome
-        project Needs input
+        keep Linear status = Triage
         stop
 
     persist next candidate and use its returned native Swamp data version
@@ -281,7 +297,8 @@ consume a review attempt.
 
 The attempt reservation and `planning` phase are one first checkpoint, before
 ticket or repository capture. `plan` then checkpoints the baseline, resolved
-commit, every candidate, every review, and every Linear effect. If the process
+commit, every candidate, every review, artifact metadata, and every Linear
+effect. If the process
 exits while phase is `planning`, rerunning `plan` inspects those resources and
 resumes at the first incomplete step.
 Candidate and review data versions are monotonic across the model's lifetime;
@@ -399,6 +416,7 @@ The recommended model type is `@openfirma/feature-planning`.
 | Method                   | Purpose                                                                   |
 | ------------------------ | ------------------------------------------------------------------------- |
 | `plan`                   | Capture context and run the bounded author/reviewer loop.                 |
+| `approvePlan`            | Record explicit human approval of a reviewed implementation plan.         |
 | `prepareMaterialization` | Load and bind the exact decomposition used by the approval workflow.      |
 | `materialize`            | Reconcile and create children after the approval gate.                    |
 | `cancelMaterialization`  | Record a rejected/abandoned approval and return to `decomposition_ready`. |
@@ -416,6 +434,8 @@ gate-reconciliation workflow.
   `awaiting_approval` or `materializing`.
 - `prepareMaterialization` requires the current approved decomposition version
   and digest and stores the exact gate payload.
+- `approvePlan` requires the current digest-bound implementation artifact and a
+  freshly confirmed cumulative comment.
 - `materialize` requires the current approved decomposition version and digest.
 - `cancelMaterialization` requires `awaiting_approval`.
 - `syncLinear` may not modify semantic state.
@@ -424,15 +444,16 @@ gate-reconciliation workflow.
 
 ### Versioned resources
 
-| Resource          | Purpose                                                     |
-| ----------------- | ----------------------------------------------------------- |
-| `state`           | Coarse phase, attempt, candidate version, and review count. |
-| `ticketBaseline`  | Normalized Linear context captured per attempt.             |
-| `candidate`       | Versioned implementation or decomposition candidates.       |
-| `review`          | Versioned reports bound to candidate versions.              |
-| `effects`         | Linear effect keys, status, remote IDs, and last errors.    |
-| `materialization` | Gate payload, plan digest, and child-key-to-ID map.         |
-| `outcome`         | Latest typed planning or materialization result.            |
+| Resource          | Purpose                                                        |
+| ----------------- | -------------------------------------------------------------- |
+| `state`           | Coarse phase, attempt, candidate version, and review count.    |
+| `ticketBaseline`  | Normalized Linear context captured per attempt.                |
+| `candidate`       | Versioned implementation or decomposition candidates.          |
+| `review`          | Versioned reports bound to candidate versions.                 |
+| `artifact`        | Immutable upload metadata for inputs, candidates, and reviews. |
+| `effects`         | Linear effect keys, status, remote IDs, and last errors.       |
+| `materialization` | Gate payload, plan digest, and child-key-to-ID map.            |
+| `outcome`         | Latest typed planning or materialization result.               |
 
 Native Swamp data versions provide history. Retention and garbage-collection
 counts must be configured explicitly; the design does not claim indefinite
@@ -443,49 +464,77 @@ retention of every version.
 Swamp is authoritative for semantic state. Linear makes the lifecycle visible
 and holds human-facing artifacts.
 
-| Workflow outcome              | Linear status              | Additional signal                                               |
-| ----------------------------- | -------------------------- | --------------------------------------------------------------- |
-| Planning started              | `Planning`                 | Lifecycle comment with model and attempt ID                     |
-| Human information required    | `Needs input`              | Structured blocking questions                                   |
-| Review attempts exhausted     | `Needs input`              | Review report attachment                                        |
-| System failure                | `Planning failed`          | Redacted diagnostic summary                                     |
-| Decomposition ready           | `Awaiting approval`        | Hash-bound decomposition attachment                             |
-| Implementation plan published | `Ready for implementation` | Reviewed implementation-plan attachment                         |
-| Child tickets created         | `Planned`                  | Parent summary with ordered child links and dependency overview |
+| Workflow outcome              | Linear status | Additional signal                                               |
+| ----------------------------- | ------------- | --------------------------------------------------------------- |
+| Planning started              | `Triage`      | Lifecycle comment with model and attempt ID                     |
+| Human information required    | `Triage`      | Required-input artifact and retry command                       |
+| Review attempts exhausted     | `Triage`      | Review report artifact link                                     |
+| System failure                | `Triage`      | Redacted diagnostic summary                                     |
+| Decomposition ready           | `Triage`      | Hash-bound decomposition artifact link                          |
+| Implementation plan published | `Triage`      | Reviewed implementation-plan artifact link                      |
+| Implementation plan approved  | `In Progress` | Explicit approval in the cumulative comment                     |
+| Child tickets created         | `In Progress` | Parent summary with ordered child links and dependency overview |
 
 Status IDs are configured per Linear team. The model does not assume display
 names are valid API identifiers.
 
 ### Lifecycle comment
 
-Each attempt owns one marked Linear comment, for example:
+Each attempt owns one marked Linear comment. New attempts use a stable run marker:
 
 ```text
-openfirma-planning:model=openfirma-plan-fir-123;attempt=2
+openfirma-planning:run=6b5f6db8-2398-4e85-8aa8-e70cf13a1936
 ```
 
-The model updates that comment with current phase, latest artifact, review count,
-failure summary, and restart instructions. It does not append a new progress
-comment for every internal transition.
+The marker is rendered inside the collapsed `Run details` section. Reconciliation
+searches the complete comment body. Retried and resumed methods always target the
+same attempt comment; a new attempt receives a new UUID and comment.
+
+The model reconstructs the entire comment from typed Swamp resources on every
+projection instead of incrementally appending text. Every state uses one shared
+template: a bold status field, an optional primary artifact, optional next-step
+commands, and the same collapsed detail sections. `Needs input` stores the full
+blocker analysis and questions in a required-input Markdown artifact and keeps
+only its link and the retry command visible. A Linear `+++ Planning history`
+collapsible contains
+intermediate candidate links, all review links, and review findings. A collapsed
+`+++ Run details` section contains the input snapshot link and useful run-only
+metadata: the complete run marker, a GitHub link to the immutable repository
+revision, attempt, timestamps, and optional trigger event. Ticket title, original
+status, and project are not restated.
+
+The same comment remains active during the separately launched materialization
+workflow. It shows the approval ID and digest, ticket-drift warning, reconciled
+child identifiers and dependencies, redacted failure state, and completion.
 
 ### Status ownership
 
-The model records the issue's status at attempt start. It moves an allowed
-intake status to `Planning`, then performs convergent updates to statuses in the
-table. It does not overwrite an unexpected human-selected status.
+The model records the issue's status at attempt start. `Prioritized` and `Triage`
+are allowed intake statuses. It moves `Prioritized` to `Triage`, permits
+re-planning while the issue remains in `Triage`, and keeps every pre-approval
+phase in `Triage`. Human implementation-plan approval or completed child-issue
+materialization moves the parent to `In Progress`. It does not overwrite an
+unexpected human-selected status; the active projection fails closed instead.
 
-Workflow-authored status, comment, label, and attachment changes are not treated
+Workflow-authored status, comment, and artifact-link changes are not treated
 as ticket-content changes.
 
-### Attachments
+### Artifacts
 
-Approved plans are rendered to Markdown and uploaded through Linear's
-`fileUpload` flow. The model stores one SHA-256 digest of canonical structured
-plan JSON. The Markdown includes that digest and is associated with the issue as
-an attachment.
+The model uploads a point-in-time JSON input snapshot after baseline and revision
+capture. Its link appears only in collapsed run details. A `Needs input` outcome
+uploads its full explanation and questions as a Markdown artifact. Every candidate is
+rendered and uploaded as soon as its native Swamp version is assigned, using a
+stable filename such as `implementation-plan-v3.md`. Every review is
+rendered and uploaded after persistence with verdict, summary, all structured
+finding fields, and residual risks. SHA-256 digests bind candidate artifacts to
+canonical plan data and review artifacts to canonical report data.
 
-The implementation plan filename is `<IDENTIFIER>-implementation-plan.md`. The
-decomposition filename is `<IDENTIFIER>-decomposition-plan.md`.
+Upload metadata is persisted in a strict typed resource separate from candidates
+and reviews. Candidate resources are never versioned merely to add a URL, which
+preserves review-to-candidate bindings. `syncLinear` retries missing artifacts
+and deterministically rebuilds the comment from state, candidates, reviews,
+outcome, materialization, and artifact metadata.
 
 ### Effects and retries
 
@@ -511,7 +560,7 @@ the model instance.
 
 ## Decomposition Materialization Workflow
 
-The human reviews the decomposition attachment, generates a fresh UUID approval
+The human reviews the decomposition artifact, generates a fresh UUID approval
 ID, then explicitly starts `@openfirma/feature-materialization` with the
 planning model name, candidate version, plan digest, and approval ID.
 
@@ -524,7 +573,7 @@ The workflow performs:
    payload, and sets phase `awaiting_approval`.
 3. Suspend at a native `manual_approval` gate. The operator inspects the
    approval-specific materialization resource, which shows the issue, digest,
-   attachment, child count, and whether the ticket changed since planning.
+   artifact URL, child count, and whether the ticket changed since planning.
 4. After approval and explicit resume, pass the exact version and digest from
    the persisted pre-gate step output to `materialize`.
 5. `materialize` re-fetches Linear before creating anything. If `updatedAt`
@@ -546,8 +595,9 @@ the approval ID through malicious resume inputs. A future Swamp
 approval-receipt capability would allow the model to enforce this independently.
 
 If the human rejects or abandons the gate, no children are created. The caller
-invokes `cancelMaterialization` to return the model to `decomposition_ready` and
-project `Needs input`; they may then call `plan` for a corrected decomposition.
+invokes `cancelMaterialization` to return the model to `decomposition_ready`,
+render `Decomposition ready` in the lifecycle comment, and keep the ticket in
+`Triage`; they may then call `plan` for a corrected decomposition.
 Automatic rejection/timeout reconciliation is deferred from v1.
 
 ### Child creation
@@ -561,7 +611,7 @@ Automatic rejection/timeout reconciliation is deferred from v1.
 4. Persist the Linear ID immediately.
 5. Create dependency relations after all child IDs are known.
 6. Upsert the parent lifecycle comment with the child summary.
-7. Project parent status `Planned` and set phase `children_created`.
+7. Project parent status `In Progress` and set phase `children_created`.
 
 Ambiguous matches or a materially different existing child stop materialization
 as `failed`. The model never deletes already-created children as automatic
@@ -601,10 +651,10 @@ stored IDs and markers before creating anything.
 - Reviewer sessions receive no author transcript or hidden reasoning.
 - Linear and model-provider credentials come from Swamp vaults and never enter
   prompts or artifacts.
-- Every Linear ticket must belong to a vault-configured project UUID before any
+- Every Linear ticket must belong to a repository-configured project UUID before any
   mutation; unassigned and out-of-scope tickets fail closed.
 - Model responses validate against closed schemas.
-- Attachment URLs are not fetched into agent context automatically.
+- Artifact URLs are not fetched into agent context automatically.
 - Private security intake produces only a private operator report and no public
   Linear comment.
 - Materialization checks candidate version, digest, and approval before creating
@@ -627,10 +677,11 @@ stored IDs and markers before creating anything.
    fresh review.
 8. Review 3 with required changes projects `Needs input` and cannot publish the
    candidate as approved.
-9. Approved implementation plans are persisted, uploaded, attached, and
-   projected as `Ready for implementation`.
-10. Approved decompositions are persisted with one canonical digest and projected
-    as `Awaiting approval`.
+9. Reviewed implementation plans are persisted, uploaded, linked from the
+   lifecycle comment, and kept in `Triage`; `approvePlan` records explicit human
+   approval and projects `In Progress`.
+10. Approved decompositions are persisted with one canonical digest and remain in
+    `Triage` until child materialization completes.
 11. The supported materialization workflow cannot reach child creation before a
     native manual approval of the exact decomposition version and digest.
 12. Partial materialization resumes by stable child key without knowingly
@@ -643,6 +694,10 @@ stored IDs and markers before creating anything.
     approval run before child creation and requires a fresh gate.
 17. A crashed `planning` invocation resumes from persisted resources without
     resetting the attempt or duplicating completed reviews.
+18. One attempt has one cumulative comment containing every candidate and review
+    artifact reference, while keeping intermediate detail collapsed.
+19. Materialization updates the same comment through approval, drift detection,
+    child reconciliation, failure, and completion.
 
 ## Verification Strategy
 
@@ -653,7 +708,7 @@ stored IDs and markers before creating anything.
 - Snapshot reviewer prompts and assert author history is absent.
 - Verify reviewer repository access is read-only.
 - Test all three author result branches and reclassification during repair.
-- Retry status, comment, attachment, and file-upload effects after ambiguous
+- Retry status, comment, artifact-link, and file-upload effects after ambiguous
   failures.
 - Resume partial child creation before and after each Linear mutation.
 - Detect duplicate child markers and dependency cycles.
@@ -669,7 +724,8 @@ stored IDs and markers before creating anything.
 2. Implement typed Linear reads and the single lifecycle comment.
 3. Implement repository resolution and author/reviewer adapters.
 4. Implement the bounded planning method and version-bound reviews.
-5. Implement Markdown rendering, file upload, attachments, and status projection.
+5. Implement Markdown rendering, file upload, lifecycle links, and status
+   projection.
 6. Implement the explicit materialization workflow and native approval gate.
 7. Implement stable-key child reconciliation and relations.
 8. Add effect synchronization, failure injection, reports, and operator guidance.
@@ -698,6 +754,5 @@ Add these only after concrete operational need:
 - Swamp workflow reference: <https://swamp.club/manual/reference/workflows>
 - Swamp manual approval guide:
   <https://swamp.club/manual/how-to/gate-a-workflow-with-manual-approval>
-- Linear attachment API: <https://linear.app/developers/attachments>
 - Linear file upload guide:
   <https://linear.app/developers/how-to-upload-a-file-to-linear>

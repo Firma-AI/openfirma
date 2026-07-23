@@ -43,8 +43,8 @@ export function planningTicketContent(
   };
 }
 
-export function lifecycleMarker(modelName: string, attempt: number): string {
-  return `openfirma-planning:model=${modelName};attempt=${attempt}`;
+export function planningRunMarker(planningRunId: string): string {
+  return `openfirma-planning:run=${planningRunId}`;
 }
 
 export function childMarker(
@@ -170,6 +170,35 @@ export function renderDecomposition(
     "",
     "## Overall Acceptance Criteria",
     bullets(plan.overallAcceptanceCriteria),
+    "",
+  ].join("\n");
+}
+
+export function renderReview(review: ReviewReport): string {
+  const findings = review.findings.length === 0
+    ? "- None"
+    : review.findings.map((finding) =>
+      [
+        `### ${finding.id}: ${finding.severity}`,
+        `- Category: ${finding.category}`,
+        `- Location: ${finding.location}`,
+        `- Problem: ${finding.problem}`,
+        `- Required change: ${finding.requiredChange}`,
+      ].join("\n")
+    ).join("\n\n");
+  return [
+    `# Adversarial Review for Candidate v${review.candidateVersion}`,
+    "",
+    `Verdict: **${review.verdict}**`,
+    "",
+    "## Summary",
+    review.summary,
+    "",
+    "## Findings",
+    findings,
+    "",
+    "## Residual Risks",
+    bullets(review.residualRisks),
     "",
   ].join("\n");
 }
