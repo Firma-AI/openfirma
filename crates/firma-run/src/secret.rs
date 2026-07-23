@@ -19,9 +19,25 @@ use zeroize::Zeroizing;
 /// Supports Unix domain sockets and TCP loopback.
 pub mod broker;
 
+/// Secret resolution gateway for the Sidecar MITM pipeline.
+///
+/// Resolves placeholder tokens on demand so firma-run remains the single source
+/// of truth. Supports Unix domain sockets and TCP loopback.
+pub mod gateway;
+
 /// Broker → Sidecar policy-enforcement-point client for secret mediation
 /// decisions, with fail-closed semantics.
 pub mod pep;
+
+/// Intercept transform: extract secrets from a vault CLI's output and rewrite
+/// it so the agent sees placeholders.
+pub mod intercept;
+
+/// Built-in integration specs for supported vault CLIs (bws, op, vault, doppler).
+pub mod integration;
+
+/// In-sandbox shim: send a tool-launch request to the out-of-sandbox broker.
+pub mod shim;
 
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
