@@ -1,45 +1,29 @@
-// Secret interception & redaction — reference policy for the self-contained demo.
+// Secret interception & redaction — Cedar policies for the self-contained demo.
 //
-// Action:   secret.mediate (evaluated per shimmed-tool launch, off the hot path)
-// Resource: resource.id is the launch argv, so `like` matches the invocation.
+// secret.mediate (evaluated per shimmed-tool launch, via local-exec governance)
+// ─────────────────────────────────────────────────────────────────────────────
+// A permit here means the broker intercepts stdout, extracts secret values via
+// the mock-vault IntegrationSpec configured in firma.toml (shim_specs),
+// stores them in the out-of-sandbox secret store, and replaces them with
+// firma-secret://demo/<name> placeholders before the agent sees output.
 //
-// Two behaviors, both selected by Cedar annotations (no secret-specific config
-// lives in firma.toml — only the `shims` list of executables to interpose on):
-//
-//   intercept — catch a vault CLI's stdout, replace each secret with a
-//               placeholder, and keep the real value in the firma-run broker.
-//   redact    — for a sanctioned tool, rehydrate placeholders on its stdin and
-//               mask secrets back to placeholders on its stdout.
-//
-// Annotations are validated at bundle load: a bad JSONPath/regex or a missing
-// required directive fails the bundle closed. See
-// docs/architecture/secrets-interception.md.
+// communication.external.send (evaluated per outbound HTTP request)
+// ─────────────────────────────────────────────────────────────────
+// A permit here allows the Sidecar to forward the HTTP request. When the
+// request body contains firma-secret:// placeholders, the Sidecar resolves
+// them to real values before forwarding (rehydration). Any real secret values
+// in the response are masked back to placeholders before the agent reads them.
 
-// Intercept the mock vault CLI. Its output is a JSON array of { key, value }
-// objects; extract each value and mint firma-secret://demo/<key>.
-@mode("intercept")
-@matcher("json")
-@match_value("$[*].value")
-@match_name("$[*].key")
-@placeholder("firma-secret://demo/{name}")
-permit (
+permit(
     principal,
     action == Firma::Action::"secret.mediate",
     resource
 ) when {
-    resource.id like "mock-vault*"
+    resource has bin && resource.bin == "mock-vault"
 };
 
-// Redact the mock MCP server. It speaks newline-delimited JSON-RPC over stdio,
-// so use the JSON-aware codec: a placeholder the agent embeds in a tool-call
-// argument is rehydrated into the real secret on the server's stdin, and any
-// secret reflected on its stdout is masked back to the placeholder.
-@mode("redact")
-@transform("mcp-jsonrpc")
 permit (
     principal,
-    action == Firma::Action::"secret.mediate",
+    action == Firma::Action::"communication.internal.send",
     resource
-) when {
-    resource.id like "mock-mcp-server*"
-};
+);

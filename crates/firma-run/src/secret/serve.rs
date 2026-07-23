@@ -75,9 +75,11 @@ fn serve_inner(
         }
 
         SecretPepOutcome::Permit => {
-            let credential_env_vars = spec.map_or(&[][..], |s| s.credential_env_vars);
-            let (strip_flags, forced_args) =
-                spec.map_or((&[][..], &[][..]), |s| (s.strip_arg_flags, s.forced_args));
+            const EMPTY: &[String] = &[];
+            let credential_env_vars = spec.map_or(EMPTY, |s| s.credential_env_vars.as_slice());
+            let (strip_flags, forced_args) = spec.map_or((EMPTY, EMPTY), |s| {
+                (s.strip_arg_flags.as_slice(), s.forced_args.as_slice())
+            });
             let stdout = run_subprocess(
                 request,
                 credential_env_vars,
@@ -87,7 +89,7 @@ fn serve_inner(
             )?;
             if let Some(spec) = spec {
                 let rewritten =
-                    intercept(&spec.matcher, &stdout, spec.placeholder_template, store)?;
+                    intercept(&spec.matcher, &stdout, &spec.placeholder_template, store)?;
                 Ok(BrokerResponse::ok(&rewritten))
             } else {
                 Ok(BrokerResponse::ok(&stdout))
@@ -99,7 +101,7 @@ fn serve_inner(
 /// Strip `--flag value` / `--flag=value` pairs from `args_str`, then append
 /// `forced`. Used to ensure the subprocess always emits the format the matcher
 /// expects, regardless of what format flags the agent passed to the shim.
-fn normalize_args(args_str: &str, strip_flags: &[&str], forced: &[&str]) -> Vec<String> {
+fn normalize_args(args_str: &str, strip_flags: &[String], forced: &[String]) -> Vec<String> {
     let mut result: Vec<String> = Vec::new();
     let mut skip_next = false;
     for token in args_str.split_whitespace() {
@@ -109,7 +111,7 @@ fn normalize_args(args_str: &str, strip_flags: &[&str], forced: &[&str]) -> Vec<
         }
         if strip_flags
             .iter()
-            .any(|f| token == *f || token.starts_with(&format!("{f}=")))
+            .any(|f| token == f.as_str() || token.starts_with(&format!("{f}=")))
         {
             // Two-token form "--flag value": skip this token and the next.
             // One-token form "--flag=value": skip only this token.
@@ -120,16 +122,16 @@ fn normalize_args(args_str: &str, strip_flags: &[&str], forced: &[&str]) -> Vec<
         }
         result.push(token.to_owned());
     }
-    result.extend(forced.iter().map(|s| (*s).to_owned()));
+    result.extend(forced.iter().cloned());
     result
 }
 
 fn run_subprocess(
     request: &BrokerRequest,
-    credential_env_vars: &[&str],
+    credential_env_vars: &[String],
     real_bin_dir: Option<&Path>,
-    strip_flags: &[&str],
-    forced_args: &[&str],
+    strip_flags: &[String],
+    forced_args: &[String],
 ) -> Result<Vec<u8>, ServeError> {
     let bin_path = real_bin_dir.map_or_else(
         || Path::new(&request.bin).to_path_buf(),
@@ -165,12 +167,16 @@ mod tests {
         ArcSwap::from_pointee(SecretStore::new())
     }
 
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
     #[test]
     fn normalize_args_strips_two_token_flag_and_appends_forced() {
         let result = normalize_args(
             "item get MyItem --format yaml",
-            &["--format"],
-            &["--format", "json"],
+            &s(&["--format"]),
+            &s(&["--format", "json"]),
         );
         assert_eq!(result, ["item", "get", "MyItem", "--format", "json"]);
     }
@@ -179,8 +185,8 @@ mod tests {
     fn normalize_args_strips_equals_form_flag() {
         let result = normalize_args(
             "item get MyItem --format=yaml",
-            &["--format"],
-            &["--format", "json"],
+            &s(&["--format"]),
+            &s(&["--format", "json"]),
         );
         assert_eq!(result, ["item", "get", "MyItem", "--format", "json"]);
     }
@@ -195,7 +201,7 @@ mod tests {
     fn normalize_args_strips_vault_dash_format() {
         let result = normalize_args(
             "kv get -format=json secret/path",
-            &["-format", "--format"],
+            &s(&["-format", "--format"]),
             &[],
         );
         assert_eq!(result, ["kv", "get", "secret/path"]);

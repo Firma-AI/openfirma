@@ -1,87 +1,105 @@
 #!/usr/bin/env python3
-"""Simulated agent for the firma run secret-redaction demo.
+"""Demo agent for the firma run secret-redaction example.
 
-Runs inside the bwrap sandbox. Exercises both secret-mediation modes:
+Runs inside the bwrap sandbox. Exercises the two-phase secret-mediation flow:
 
-1. Intercept — calls mock-vault (shimmed); sees only firma-secret:// placeholder
-   tokens in the output. Real values stay in the out-of-sandbox broker.
+1. Intercept — calls mock-vault (shimmed); the firma run broker intercepts
+   stdout, extracts real values, and replaces them with firma-secret://demo/
+   placeholders. The agent only ever sees the placeholder tokens.
 
-2. Redact — embeds a placeholder in a tools/call to mock-mcp-server (shimmed);
-   the broker rehydrates it to the real secret on the server's stdin, then masks
-   any reflected secret back to the placeholder on stdout before the agent reads.
+2. Redact (HTTP) — embeds a placeholder in a JSON POST to the capture server
+   via the Sidecar HTTP proxy. The Sidecar resolves the placeholder to the real
+   secret before forwarding the request; the capture server receives (and logs)
+   the real value. The Sidecar then masks the real value back to the placeholder
+   in the response before the agent reads it.
+
+The two assertions at the end verify that both directions worked:
+  - the response body must contain the placeholder, not the real secret
+  - the capture server log (checked by run.sh) must contain the real secret
 """
+
 import json
+import os
 import subprocess
 import sys
+import urllib.request
+
+CAPTURE_URL = "http://127.0.0.1:19876/capture"
 
 
 def banner(label: str) -> None:
     print(f"\n--- {label} ---", flush=True)
 
 
-# --- Step 1: intercept ---
-banner("Fetching secrets via vault CLI (intercept mode)")
+# ── Step 1: intercept ─────────────────────────────────────────────────────────
+banner("Step 1: intercept — calling mock-vault (shimmed by firma run broker)")
 
-result = subprocess.run(
-    ["mock-vault"],
-    capture_output=True,
-    text=True,
-    check=True,
-)
+result = subprocess.run(["mock-vault"], capture_output=True, text=True)
+if result.returncode != 0:
+    print(
+        f"[fail] mock-vault exited {result.returncode}", file=sys.stderr
+    )
+    print(f"stdout: {result.stdout!r}", file=sys.stderr)
+    print(f"stderr: {result.stderr!r}", file=sys.stderr)
+    sys.exit(1)
 vault_output = json.loads(result.stdout)
 
-print("Agent sees (placeholders, not real values):")
+print("Agent sees (placeholders only, real values never left the broker):")
 print(json.dumps(vault_output, indent=2))
 
-password_token = next(
-    item["value"] for item in vault_output if item["key"] == "login-password"
+token = next(item["value"] for item in vault_output if item["key"] == "login-password")
+if not token.startswith("firma-secret://"):
+    print(f"[fail] expected a placeholder, got: {token!r}", file=sys.stderr)
+    sys.exit(1)
+print(f"\nPlaceholder for login-password: {token!r}")
+
+
+# ── Step 2: redact via HTTP proxy ─────────────────────────────────────────────
+banner("Step 2: redact — POST placeholder to capture server via Sidecar proxy")
+
+# firma run sets HTTP_PROXY to the host bridge; use it explicitly so that
+# urllib routes the loopback request through the proxy (bypassing no_proxy).
+proxy_url = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
+if not proxy_url:
+    print("[fail] HTTP_PROXY is not set — firma run should inject it", file=sys.stderr)
+    sys.exit(1)
+print(f"Using proxy: {proxy_url}")
+
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy_url}))
+
+body = json.dumps({"token": token}).encode()
+req = urllib.request.Request(
+    CAPTURE_URL,
+    data=body,
+    method="POST",
+    headers={"Content-Type": "application/json"},
 )
-if not password_token.startswith("firma-secret://"):
-    print(f"[fail] expected a placeholder, got: {password_token!r}", file=sys.stderr)
+try:
+    with opener.open(req, timeout=10) as resp:
+        response_json = json.loads(resp.read())
+except urllib.error.HTTPError as e:
+    body = e.read().decode(errors="replace")
+    print(f"[fail] HTTP {e.code} from proxy: {body!r}", file=sys.stderr)
+    sys.exit(1)
+except OSError as e:
+    print(f"[fail] connection error: {e}", file=sys.stderr)
     sys.exit(1)
 
-print(f"\nToken for login-password: {password_token!r}")
+print("Response from capture server (Sidecar masked real secret in response):")
+print(json.dumps(response_json, indent=2))
 
-
-# --- Step 2: redact ---
-banner("Calling MCP tool with placeholder (redact mode)")
-
-msgs = [
-    json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                           "clientInfo": {"name": "demo-agent"}}}),
-    json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized",
-                "params": {}}),
-    json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                "params": {"name": "type_password",
-                           "arguments": {"value": password_token}}}),
-]
-
-proc = subprocess.Popen(
-    ["mock-mcp-server"],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    text=True,
-)
-proc.stdin.write("\n".join(msgs) + "\n")
-proc.stdin.close()
-raw_output = proc.stdout.read()
-proc.wait()
-
-print("Messages sent (broker rehydrates placeholders on mock-mcp-server's stdin):")
-for msg in msgs:
-    print(f"  {msg}")
-
-print("\nResponses received (broker masks any real secret back to placeholder):")
-for line in raw_output.splitlines():
-    if not line.strip():
-        continue
-    print(f"  {line}")
-    parsed = json.loads(line)
-    for item in parsed.get("result", {}).get("content", []):
-        text = item.get("text", "")
-        if text and "firma-secret://" not in text:
-            print(f"\n[fail] response contains an unmasked value: {text!r}", file=sys.stderr)
-            sys.exit(1)
+captured = response_json.get("captured", "")
+if "firma-secret://" not in captured:
+    print(
+        f"[fail] response should contain the masked placeholder, got: {captured!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if "S3cr3tP" in captured:
+    print(
+        f"[fail] response must not contain the real secret value, got: {captured!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 print("\nDemo complete — agent handled only placeholders throughout.", flush=True)

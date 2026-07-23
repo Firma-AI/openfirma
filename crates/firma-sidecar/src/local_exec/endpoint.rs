@@ -422,7 +422,6 @@ fn launch_context(session_id: &str) -> serde_json::Value {
         "timestamp_ms": now_unix_ms(),
         "params": "{}",
         "risk_score": 0i64,
-        "budget_remaining": i64::MAX,
         "session_duration_s": 0i64,
         "action_count": 0i64,
         "raw_transport": "local",

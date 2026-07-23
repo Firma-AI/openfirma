@@ -339,7 +339,13 @@ fn mask_dispatched(
 ) -> DispatchedResponse {
     let ops = store.mask_ops(&dispatched.body);
     if !ops.is_empty() {
-        dispatched.body = mask_body(&dispatched.body, &ops);
+        let masked = mask_body(&dispatched.body, &ops);
+        if dispatched.headers.contains_key("content-length") {
+            dispatched
+                .headers
+                .insert("content-length".to_string(), masked.len().to_string());
+        }
+        dispatched.body = masked;
     }
     dispatched
 }
@@ -464,7 +470,17 @@ impl RequestHandler {
         let ct = ContentType::resolve(content_type_val, &body);
         let ops = store.rehydrate_ops(&body);
         if !ops.is_empty() {
-            request.body = Some(rehydrate_body(&body, ct, &ops));
+            let rehydrated = rehydrate_body(&body, ct, &ops);
+            if request
+                .headers
+                .contains_key(&HeaderName::from_static("content-length"))
+            {
+                request.headers.insert(
+                    HeaderName::from_static("content-length"),
+                    rehydrated.len().to_string(),
+                );
+            }
+            request.body = Some(rehydrated);
         }
 
         (request, Some(store))

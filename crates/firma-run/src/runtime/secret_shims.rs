@@ -153,6 +153,7 @@ pub fn prepare(
         gateway.listener,
         profile.sidecar_local_exec.clone(),
         identity,
+        profile.shim_specs.clone(),
     );
 
     handle.mounts.extend(plan.mounts);
@@ -166,8 +167,8 @@ pub fn prepare(
     let registry = IntegrationRegistry::with_builtins();
     for name in &profile.shims {
         if let Some(spec) = registry.get(name) {
-            for var in spec.credential_env_vars {
-                env.remove(*var);
+            for var in &spec.credential_env_vars {
+                env.remove(var.as_str());
             }
         }
     }
@@ -280,6 +281,7 @@ fn start_broker(
     gateway_listener: SecretGatewayListener,
     mediator: Option<CommandMediatorConfig>,
     identity: &RunIdentity,
+    custom_specs: Vec<IntegrationSpec>,
 ) {
     let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
 
@@ -289,9 +291,15 @@ fn start_broker(
     });
 
     let session_id = identity.session_id.clone();
-    let registry = Arc::new(IntegrationRegistry::with_builtins());
+    let agent_id = identity.agent_id.to_string();
+    let mut registry = IntegrationRegistry::with_builtins();
+    // Custom specs are pushed last so they shadow built-ins with the same name.
+    for spec in custom_specs {
+        registry.push(spec);
+    }
+    let registry = Arc::new(registry);
     let decide = Arc::new(move |bin: &str, args: &str| {
-        decide_secret(mediator.as_ref(), &session_id, bin, args)
+        decide_secret(mediator.as_ref(), &session_id, &agent_id, bin, args)
     });
     let spec_for =
         Arc::new(move |bin: &str| -> Option<IntegrationSpec> { registry.get(bin).cloned() });
@@ -313,6 +321,7 @@ fn format_endpoint(endpoint: &CommandMediatorEndpoint) -> String {
 fn decide_secret(
     mediator: Option<&CommandMediatorConfig>,
     session_id: &str,
+    agent_id: &str,
     bin: &str,
     args: &str,
 ) -> SecretPepOutcome {
@@ -326,7 +335,7 @@ fn decide_secret(
         bin.to_string(),
         args.to_string(),
         session_id.to_string(),
-        None,
+        Some(agent_id.to_string()),
     );
     request_secret_decision(&mediator.endpoint, mediator.timeout_ms, &request)
 }
@@ -396,8 +405,8 @@ mod tests {
 
         // Simulate stripping for "bws" only.
         if let Some(spec) = registry.get("bws") {
-            for var in spec.credential_env_vars {
-                env.remove(*var);
+            for var in &spec.credential_env_vars {
+                env.remove(var.as_str());
             }
         }
 
