@@ -136,11 +136,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(args.config.as_deref())?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `sidecar`"))?;
-    info!(
-        path = %resolved.config_file().display(),
-        source = ?resolved.source,
-        "config resolved"
-    );
+    info!(path = %resolved.config_file().display(), source = ?resolved.source, "config resolved");
     let config = read_config(&resolved)?;
     debug!("configuration loaded successfully");
 
