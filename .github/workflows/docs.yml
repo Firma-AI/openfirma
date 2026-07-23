@@ -16,6 +16,7 @@ on:
       - "crates/**"
       - "docs-site/**"
       - ".github/workflows/docs.yml"
+  merge_group:
   workflow_dispatch:
 
 permissions:
