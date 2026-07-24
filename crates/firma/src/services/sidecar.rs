@@ -5,7 +5,13 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use firma_core::AgentId;
+use firma_sidecar::audit::AuditPayload;
 use firma_sidecar::authority_client::readiness::ReadinessFlag;
+use firma_sidecar::authority_client::swappable_policy::SwappablePolicyEvaluation;
+use firma_sidecar::connector::ConnectorRegistry;
+use firma_sidecar::pipeline::EnforcementPipeline;
+use firma_sidecar::secret_gateway_client::{GATEWAY_ADDR_ENV, GatewayEndpoint};
 use firma_sidecar::startup::CapabilityReloader;
 use firma_sidecar::{config, handler, health, startup};
 use tokio::task::JoinHandle;
@@ -104,6 +110,63 @@ fn spawn_capability_reload(
     )?))
 }
 
+fn build_request_handler(
+    pipeline: Arc<EnforcementPipeline>,
+    connector_registry: Arc<ConnectorRegistry>,
+    audit_sink_sender: tokio::sync::mpsc::Sender<AuditPayload>,
+    config: &config::SidecarConfig,
+    swappable_policy: Arc<SwappablePolicyEvaluation>,
+) -> handler::RequestHandler {
+    let base = handler::RequestHandler::new(pipeline, connector_registry, audit_sink_sender);
+    let base = match std::env::var(GATEWAY_ADDR_ENV) {
+        Ok(addr) => match GatewayEndpoint::parse(&addr) {
+            Ok(ep) => {
+                tracing::info!(%addr, "secret gateway configured; placeholder rehydration enabled");
+                base.with_gateway_endpoint(ep)
+            }
+            Err(e) => {
+                tracing::warn!(%addr, error = %e, "invalid secret gateway address; placeholder rehydration disabled");
+                base
+            }
+        },
+        Err(_) => base,
+    };
+
+    if config.http_secret_providers.is_empty() {
+        return base;
+    }
+    match http_secret_mediate_principal(config) {
+        Ok(principal) => base.with_http_secret_providers(
+            swappable_policy,
+            config.http_secret_providers.clone(),
+            principal,
+        ),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "invalid agent id for HTTP secret.mediate principal; HTTP secret interception disabled"
+            );
+            base
+        }
+    }
+}
+
+/// Resolve the fixed principal used for HTTP-origin `secret.mediate`
+/// evaluation. No natural per-response agent identity exists for MITM'd HTTP
+/// traffic (unlike the capability-scoped principal used elsewhere), so this
+/// falls back to the same sentinel the local-exec endpoint uses for CLI
+/// `secret.mediate`.
+fn http_secret_mediate_principal(config: &config::SidecarConfig) -> Result<AgentId, String> {
+    config.authority.agent_id.map_or_else(
+        || {
+            "unknown-agent"
+                .parse::<AgentId>()
+                .map_err(|e| e.to_string())
+        },
+        Ok,
+    )
+}
+
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
     let sandbox_id = propagated_sandbox_id()?;
@@ -111,11 +174,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(args.config.as_deref())?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `sidecar`"))?;
-    info!(
-        path = %resolved.config_file().display(),
-        source = ?resolved.source,
-        "config resolved"
-    );
+    info!(path = %resolved.config_file().display(), source = ?resolved.source, "config resolved");
     let config = read_config(&resolved)?;
     debug!("configuration loaded successfully");
 
@@ -158,10 +217,12 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let _capability_reload = spawn_capability_reload(&config, &pipeline_runtime, &exit)?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
-    let handler = Arc::new(handler::RequestHandler::new(
+    let handler = Arc::new(build_request_handler(
         Arc::clone(&pipeline_runtime.pipeline),
         connector_registry,
         audit_payload_tx,
+        &config,
+        Arc::clone(&pipeline_runtime.swappable_policy),
     ));
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");

@@ -59,6 +59,7 @@ fn provider_for_host(host: &str) -> Option<&'static str> {
     }
 }
 
+pub(crate) use self::mapping::glob_match;
 pub use self::mapping::{MappingTable, MatchResult};
 pub use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
 use crate::enforcement::error::EnforcementError;
