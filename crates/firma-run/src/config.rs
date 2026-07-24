@@ -1273,8 +1273,7 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint, capability_from_patch,
-        resolve_profile,
+        SandboxIdentityMode, SeccompRuntimeMode, capability_from_patch, resolve_profile,
     };
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
@@ -1368,9 +1367,7 @@ mod tests {
         assert_eq!(resolved.backend, BackendKind::default_for_current_host());
         assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp {
-                addr: "127.0.0.1:8080".parse().unwrap()
-            }
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
         );
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::SandboxUser);
         if cfg!(target_os = "linux")
@@ -1579,10 +1576,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&args("claude-code")).unwrap();
         assert_eq!(resolved.id, "claude-code");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
         assert!(resolved.env_passthrough.contains("ANTHROPIC_API_KEY"));
     }
 
@@ -1623,10 +1620,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&args("codex")).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.id, "codex");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
     }
 
     #[test]
@@ -1636,10 +1633,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.id, "generic");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
     }
 
     #[test]
