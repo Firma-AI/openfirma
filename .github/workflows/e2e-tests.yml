@@ -1,24 +1,92 @@
 name: E2E Tests
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  pull_request:
+    types: [opened, reopened, synchronize]
+  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: e2e-tests-${{ github.ref }}
+  group: e2e-tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  detect:
+    name: Detect release candidate
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.candidate.outputs.run }}
+    steps:
+      - name: Resolve release candidate
+        id: candidate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          run=false
+          if [ "$EVENT_NAME" = 'workflow_dispatch' ]; then
+            run=true
+          elif [ "$EVENT_NAME" = 'pull_request' ]; then
+            if [[ "$HEAD_REF" == release/v* && "$HEAD_REPOSITORY" = "$REPOSITORY" ]]; then
+              run=true
+            fi
+          else
+            pull_requests="$(gh api "repos/${REPOSITORY}/commits/${HEAD_SHA}/pulls")"
+            if [ "$(jq 'length' <<< "$pull_requests")" -eq 0 ]; then
+              printf 'Could not resolve the pull requests in this merge group.\n' >&2
+              exit 1
+            fi
+            if jq -e --arg repository "$REPOSITORY" \
+              'any(.[]; (.head.ref | startswith("release/v")) and .head.repo.full_name == $repository)' \
+              <<< "$pull_requests" >/dev/null; then
+              run=true
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  candidate:
+    name: Validate release candidate
+    needs: detect
+    if: needs.detect.outputs.run == 'true' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: false
+          rustflags: ""
+      - name: Load tool versions
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Verify version and reviewed notes
+        run: |
+          version="$(uv run --script scripts/release/version.py current)"
+          uv run --script scripts/release/version.py verify "$version"
+          uv run --script scripts/release/release_notes.py validate-file \
+            --file "docs/release/v${version}.md" \
+            --version "$version"
+
   e2e:
     name: e2e (${{ matrix.os }}, ${{ matrix.agent.name }})
+    needs: [detect, candidate]
+    if: >-
+      needs.detect.outputs.run == 'true' &&
+      (needs.candidate.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -57,6 +125,7 @@ jobs:
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
+          version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install bubblewrap (Linux)
@@ -99,3 +168,24 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRMA_RUN_VZ_STRUCTURAL_NETWORK: '1'
         run: cargo nextest run -p firma --test e2e --run-ignored all -E 'test(/${{ matrix.agent.name }}::/)'
+
+  result:
+    name: Release E2E
+    if: always()
+    needs: [detect, candidate, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require candidate E2E success
+        env:
+          SHOULD_RUN: ${{ needs.detect.outputs.run }}
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          if [ "$SHOULD_RUN" = 'true' ] && [ "$CANDIDATE_RESULT" = 'failure' ]; then
+            printf 'Release candidate validation failed.\n' >&2
+            exit 1
+          fi
+          if [ "$SHOULD_RUN" = 'true' ] && [ "$E2E_RESULT" != 'success' ]; then
+            printf 'Release E2E matrix result: %s\n' "$E2E_RESULT" >&2
+            exit 1
+          fi

@@ -35,6 +35,16 @@ We actively welcome your Pull Requests! A couple of things to keep in mind befor
 - If you're new, we encourage you to take a look at issues tagged with [good first issue](https://github.com/firma-ai/openfirma/labels/good%20first%20issue).
 - If you're submitting a new feature, please open an [issue](https://github.com/firma-ai/openfirma/issues/new) first to discuss it before opening a PR.
 
+PR titles must use `type(scope)!: description`. The scope and breaking `!`
+marker are optional. Accepted types are `ai`, `build`, `chore`, `ci`, `docs`,
+`feat`, `fix`, `perf`, `refactor`, `revert`, `security`, and `test`.
+
+Complete the PR template's release metadata. User-facing PRs require one concise
+`Release note`; use `None` for `ai`, `build`, `chore`, `ci`, `refactor`, and
+`test` PRs because those types are excluded from release notes. A title with
+`!` also requires migration guidance in `Breaking change`. Excluded types
+cannot use `!` because a public breaking change must not be hidden.
+
 Before submitting your PR, please run these checks locally:
 
 ```bash

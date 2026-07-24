@@ -1,0 +1,6 @@
+allow-branch = ["*"]
+shared-version = true
+dependent-version = "upgrade"
+publish = false
+tag = false
+push = false

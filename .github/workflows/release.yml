@@ -1,24 +1,95 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
-  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [closed]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare:
+    name: Validate merged release PR
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+      tag_exists: ${{ steps.release.outputs.tag_exists }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: false
+          rustflags: ""
+
+      - name: Load tool versions
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Validate release
+        id: release
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          version="$(uv run --script scripts/release/version.py current)"
+          expected_ref="release/v${version}"
+          expected_title="chore(release): v${version}"
+          if [ "$HEAD_REF" != "$expected_ref" ]; then
+            printf 'Release branch is %s, expected %s.\n' "$HEAD_REF" "$expected_ref" >&2
+            exit 1
+          fi
+          if [ "$PR_TITLE" != "$expected_title" ]; then
+            printf 'Release PR title is %s, expected %s.\n' "$PR_TITLE" "$expected_title" >&2
+            exit 1
+          fi
+          uv run --script scripts/release/version.py verify "$version"
+          uv run --script scripts/release/release_notes.py validate-file \
+            --file "docs/release/v${version}.md" \
+            --version "$version"
+
+          tag_exists=false
+          if tag_sha="$(git rev-list -n 1 "v${version}" 2>/dev/null)"; then
+            if [ "$tag_sha" != "$MERGE_SHA" ]; then
+              printf 'Tag v%s points to %s instead of %s.\n' "$version" "$tag_sha" "$MERGE_SHA" >&2
+              exit 1
+            fi
+            tag_exists=true
+          fi
+          echo "sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-notes
+          path: docs/release/v${{ steps.release.outputs.version }}.md
+          if-no-files-found: error
+
   build:
     name: Build (${{ matrix.target }})
+    needs: prepare
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -45,18 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="dispatch-${GITHUB_RUN_ID}"
-          fi
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
@@ -72,34 +133,33 @@ jobs:
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install musl-tools (linux musl)
+      - name: Install musl-tools (Linux musl)
         if: endsWith(matrix.target, '-unknown-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Build with cargo
-        run: cargo build --release --target ${{ matrix.target }} --bin firma
+      - name: Build with Cargo
+        run: cargo build --locked --release --target ${{ matrix.target }} --bin firma
 
-      - name: Package (unix)
+      - name: Package (Unix)
         if: matrix.archive_ext == 'tar.gz'
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p dist
-          NAME="firma-${VERSION}-${{ matrix.target }}"
-          tar -czf "dist/${NAME}.tar.gz" -C "target/${{ matrix.target }}/release" firma
+          name="firma-${VERSION}-${{ matrix.target }}"
+          tar -czf "dist/${name}.tar.gz" -C "target/${{ matrix.target }}/release" firma
           if command -v sha256sum >/dev/null 2>&1; then
-            (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
+            (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
           else
-            (cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
+            (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
           fi
 
-      - name: Package (windows)
+      - name: Package (Windows)
         if: matrix.archive_ext == 'zip'
         shell: pwsh
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $name = "firma-$($env:VERSION)-${{ matrix.target }}"
@@ -114,35 +174,9 @@ jobs:
           path: dist/firma-*
           if-no-files-found: error
 
-  changelog:
-    name: Generate changelog
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          persist-credentials: false
-
-      - name: Run git-cliff
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
-        with:
-          config: cliff.toml
-          args: --latest --strip header
-        env:
-          OUTPUT: CHANGELOG.md
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: changelog
-          path: CHANGELOG.md
-          if-no-files-found: error
-
   release:
     name: Publish GitHub Release
-    if: github.event_name == 'push'
-    needs: [build, changelog]
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,19 +187,32 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: List artifacts
-        run: ls -la dist
+      - name: Create annotated tag
+        if: needs.prepare.outputs.tag_exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          tag_object="$(gh api --method POST "repos/${REPOSITORY}/git/tags" \
+            -f tag="v${VERSION}" \
+            -f message="v${VERSION}" \
+            -f object="$SHA" \
+            -f type='commit' \
+            --jq '.sha')"
+          gh api --method POST "repos/${REPOSITORY}/git/refs" \
+            -f ref="refs/tags/v${VERSION}" \
+            -f sha="$tag_object"
 
       - name: Create release
-        # Multi-file glob upload, checksums, and prerelease handling in one
-        # place; a hand-rolled `gh release` script would duplicate that.
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0 # zizmor: ignore[superfluous-actions]
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          body_path: dist/CHANGELOG.md
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: v${{ needs.prepare.outputs.version }}
+          body_path: dist/v${{ needs.prepare.outputs.version }}.md
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: false
           fail_on_unmatched_files: true
           files: |
             dist/firma-*.tar.gz
@@ -174,33 +221,31 @@ jobs:
 
   bump-tap:
     name: Bump Homebrew tap
-    if: github.event_name == 'push' && !contains(github.ref_name, '-')
-    needs: release
+    needs: [prepare, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
 
       - name: Bump tap formula
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          set -eu
-          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
-            echo "HOMEBREW_TAP_TOKEN not configured; skipping tap bump"
-            exit 0
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            printf 'HOMEBREW_TAP_TOKEN must be configured.\n' >&2
+            exit 1
           fi
-          VERSION="${GITHUB_REF_NAME#v}"
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Firma-AI/homebrew-openfirma.git" tap
-          chmod +x ./scripts/update-homebrew-tap.sh
           ./scripts/update-homebrew-tap.sh "$VERSION" tap
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/firma.rb
           if git diff --cached --quiet; then
-            echo "tap formula already up to date"
+            printf 'Tap formula is already up to date.\n'
             exit 0
           fi
           git commit -m "brew: bump firma to v${VERSION}"

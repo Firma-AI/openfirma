@@ -44,7 +44,7 @@ cat >"$FORMULA" <<EOF
 class Firma < Formula
   desc "Governed runtime for AI agents"
   homepage "https://github.com/${REPO}"
-  license "Apache-2.0"
+  license "GPL-3.0-only"
 
   on_macos do
     on_arm do

@@ -32,7 +32,9 @@ jobs:
           uvx ruff@$RUFF_VERSION format --check scripts/release
           uvx ruff@$RUFF_VERSION check scripts/release
       - name: Test release-note policy and rendering
-        run: uv run --script scripts/release/test_release_notes.py
+        run: |
+          uv run --script scripts/release/test_release_notes.py
+          uv run --script scripts/release/test_version.py
 
   audit:
     name: Security Audit

@@ -31,3 +31,7 @@ fi
 if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
   cargo binstall -y --locked cargo-llvm-cov@"$CARGO_LLVM_COV_VERSION"
 fi
+
+if ! command -v cargo-release >/dev/null 2>&1; then
+  cargo binstall -y --locked cargo-release@"$CARGO_RELEASE_VERSION"
+fi

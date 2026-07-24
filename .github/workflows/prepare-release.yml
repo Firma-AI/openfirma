@@ -1,0 +1,132 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: SemVer component to increment
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Open release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: main
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: false
+          rustflags: ""
+
+      - name: Load tool versions
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: cargo-bins/cargo-binstall@ead08b90bd7b2e6d81963fb9cf0b7239f66d5db4 # v1.21.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-release
+        run: cargo binstall -y --force --locked cargo-release@$CARGO_RELEASE_VERSION
+
+      - name: Bump workspace version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          version="$(uv run --script scripts/release/version.py bump "$BUMP")"
+          uv run --script scripts/release/version.py verify "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release identity
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git rev-parse --verify --quiet "refs/tags/v${VERSION}"; then
+            printf 'Tag v%s already exists.\n' "$VERSION" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "release/v${VERSION}" >/dev/null 2>&1; then
+            printf 'Branch release/v%s already exists.\n' "$VERSION" >&2
+            exit 1
+          fi
+
+      - name: Generate release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          previous_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*')"
+          uv run --script scripts/release/release_notes.py generate \
+            --from "$previous_tag" \
+            --to HEAD \
+            --version "$VERSION" \
+            --output "docs/release/v${VERSION}.md"
+
+      - name: Commit release candidate
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          branch="release/v${VERSION}"
+          git switch -c "$branch"
+          gh auth setup-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock fuzz/Cargo.lock crates/firma-config-loader/Cargo.toml \
+            "docs/release/v${VERSION}.md"
+          if [ -n "$(git status --porcelain | grep -v '^M  \|^A  ')" ]; then
+            printf 'Version preparation produced unexpected files:\n' >&2
+            git status --short >&2
+            exit 1
+          fi
+          git commit -m "chore(release): v${VERSION}"
+          git push origin "HEAD:refs/heads/${branch}"
+
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          body="$RUNNER_TEMP/release-pr.md"
+          printf '%s\n' \
+            '## Why' \
+            '' \
+            "Prepare OpenFirma v${VERSION} for publication." \
+            '' \
+            '## What Changed' \
+            '' \
+            '- Bump the workspace and internal dependency versions.' \
+            '- Refresh the root and fuzz lockfiles.' \
+            '- Generate the user-facing release notes for review.' \
+            '' \
+            '## Release note' \
+            '' \
+            'None' \
+            '' \
+            '## Breaking change' \
+            '' \
+            'None' > "$body"
+          gh pr create \
+            --base main \
+            --head "release/v${VERSION}" \
+            --title "chore(release): v${VERSION}" \
+            --body-file "$body"

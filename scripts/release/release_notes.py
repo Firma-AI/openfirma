@@ -232,6 +232,24 @@ def render_release_notes(version: str, date: str, entries: list[Entry]) -> str:
     return f"# OpenFirma v{version}\n\nReleased on {date}.\n\n{'\n\n'.join(sections)}\n"
 
 
+def validate_release_file(path: Path, version: str) -> None:
+    text = path.read_text()
+    if len(text) > 30_000:
+        raise ValueError(f"{path} exceeds the 30,000-character release-note limit")
+    if not text.startswith(f"# OpenFirma v{version}\n"):
+        raise ValueError(f"{path} does not start with the expected v{version} heading")
+
+    allowed_headings = {f"# OpenFirma v{version}"} | {
+        f"## {group}" for group in GROUP_ORDER
+    }
+    headings = {line for line in text.splitlines() if line.startswith("#")}
+    unexpected = sorted(headings - allowed_headings)
+    if unexpected:
+        raise ValueError(
+            f"{path} contains unexpected headings: {', '.join(unexpected)}"
+        )
+
+
 def validate_event(path: Path) -> None:
     event = json.loads(path.read_text())
     if pull_request := event.get("pull_request"):
@@ -266,6 +284,9 @@ def parser() -> argparse.ArgumentParser:
     generate_parser.add_argument("--version", required=True)
     generate_parser.add_argument("--date")
     generate_parser.add_argument("--output", type=Path, required=True)
+    validate_file = commands.add_parser("validate-file")
+    validate_file.add_argument("--file", type=Path, required=True)
+    validate_file.add_argument("--version", required=True)
     return root
 
 
@@ -273,8 +294,11 @@ def main() -> None:
     args = parser().parse_args()
     if args.command == "validate-event":
         validate_event(args.event)
-    else:
+    elif args.command == "generate":
         generate(args)
+    else:
+        validate_release_file(args.file, args.version)
+        print(f"{args.file} is valid for v{args.version}")
 
 
 if __name__ == "__main__":
