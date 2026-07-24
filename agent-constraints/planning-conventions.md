@@ -2,6 +2,7 @@
 
 Ground every proposed change in the repository at the supplied immutable
 revision. Inspect the implementation, tests, configuration, public contracts,
+and documentation before proposing work.
 
 Plans must:
 

@@ -7,6 +7,12 @@ Guidance for coding agents working in this repository.
 For Swamp models, workflows, data, vaults, extensions, or reports, load and
 follow [`swamp`](.skills/swamp/SKILL.md).
 
+Feature-planning execution is owned by the sibling `firma-automation`
+repository. Run `@firma/feature-planning` there with
+`--input repository=openfirma`; do not install or duplicate its model and
+workflows in this repository. OpenFirma owns only its committed planning and
+review policy under `agent-constraints/`.
+
 ## Key Commands
 
 ```bash
