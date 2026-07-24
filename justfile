@@ -97,5 +97,8 @@ demo-ci:
 git-demo-ci:
   ./examples/firma-git-demo/run.sh ci
 
+policy-control:
+  @just --justfile examples/policy-control/justfile policy-control
+
 managed-seccomp-compat-check:
   ./scripts/seccomp/check-managed-compatibility.sh

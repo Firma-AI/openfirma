@@ -1,0 +1,89 @@
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19090"
+path = "/healthz"
+action_class = "filesystem.read"
+
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19090"
+path = "/public/readme"
+action_class = "filesystem.read"
+
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19090"
+path = "/secrets"
+action_class = "credential.read"
+
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19090"
+path = "/secrets/*"
+action_class = "credential.read"
+
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19090"
+path = "/env/production"
+action_class = "credential.read"
+
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19090"
+path = "/credentials/*"
+action_class = "credential.read"
+
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19090"
+path = "*"
+action_class = "filesystem.read"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "/pull-request"
+action_class = "code.write"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "/payments/transfer"
+action_class = "payment.transfer"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "/payments/*"
+action_class = "payment.transfer"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "/vendors/payouts"
+action_class = "payment.transfer"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "/messages/external"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "/messages/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "/support/tickets/reply"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19090"
+path = "*"
+action_class = "code.write"
