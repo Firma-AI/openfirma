@@ -17,7 +17,8 @@ Configure these Actions secrets before preparing a release:
 Make `Validate PR metadata`, `Release tooling`, and `Release E2E` required
 checks. `Release E2E` is inexpensive on ordinary PRs and runs the full
 Claude/Codex matrix only for same-repository `release/v*` PRs. It also supports
-merge queue candidates.
+merge queue candidates. Require release PRs to be up to date with `main` before
+merging.
 
 ## Prepare a release
 
@@ -48,6 +49,11 @@ Review the version changes, both lockfiles, and the generated release notes.
 Edit the notes in the release PR when a clearer summary or ordering would help
 users. The release-note validator rejects unexpected headings, a mismatched
 version, and notes larger than 30,000 characters.
+
+The release PR records the exact `main` commit covered by its notes. If `main`
+advances while the PR is open, its required candidate check fails. Close that
+PR, delete its `release/vX.Y.Z` branch, and dispatch a new release so the version
+and notes are regenerated from the new release range.
 
 The release PR runs normal CI and the complete Linux/macOS by Claude/Codex E2E
 matrix. Do not merge until those checks pass.

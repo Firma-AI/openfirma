@@ -69,6 +69,14 @@ jobs:
             --file "docs/release/v${version}.md" \
             --version "$version"
 
+          expected_base="$(cat docs/release/.base-commit)"
+          release_parent="$(git rev-parse "${MERGE_SHA}^1")"
+          if [ "$expected_base" != "$release_parent" ]; then
+            printf 'Release was prepared from %s, but its merge parent is %s.\n' \
+              "$expected_base" "$release_parent" >&2
+            exit 1
+          fi
+
           tag_exists=false
           if tag_sha="$(git rev-list -n 1 "v${version}" 2>/dev/null)"; then
             if [ "$tag_sha" != "$MERGE_SHA" ]; then

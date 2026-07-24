@@ -75,6 +75,14 @@ jobs:
           version: ${{ env.UV_VERSION }}
       - name: Verify version and reviewed notes
         run: |
+          git fetch origin main
+          expected_base="$(cat docs/release/.base-commit)"
+          current_base="$(git rev-parse origin/main)"
+          if [ "$expected_base" != "$current_base" ]; then
+            printf 'Release notes cover main at %s, but main is now %s. Prepare a new release PR.\n' \
+              "$expected_base" "$current_base" >&2
+            exit 1
+          fi
           version="$(uv run --script scripts/release/version.py current)"
           uv run --script scripts/release/version.py verify "$version"
           uv run --script scripts/release/release_notes.py validate-file \
@@ -177,10 +185,15 @@ jobs:
     steps:
       - name: Require candidate E2E success
         env:
+          DETECT_RESULT: ${{ needs.detect.result }}
           SHOULD_RUN: ${{ needs.detect.outputs.run }}
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
         run: |
+          if [ "$DETECT_RESULT" != 'success' ]; then
+            printf 'Release candidate detection result: %s\n' "$DETECT_RESULT" >&2
+            exit 1
+          fi
           if [ "$SHOULD_RUN" = 'true' ] && [ "$CANDIDATE_RESULT" = 'failure' ]; then
             printf 'Release candidate validation failed.\n' >&2
             exit 1

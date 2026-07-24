@@ -55,6 +55,7 @@ TITLE_PATTERN = re.compile(
 EXCLUDED_LEGACY_PATTERN = re.compile(
     r"^(?:ai|build|chore|ci|refactor|test)(?:\([^)]*\))?!?:"
 )
+GIT_TRAILERS = re.compile(r"\n\n(?:[A-Za-z][A-Za-z0-9-]*: [^\n]+(?:\n|\Z))+\Z")
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,23 @@ class Entry:
     text: str
 
 
+LEGACY_OVERRIDES = {
+    "624d9433e4344cd79712debb76a75ad9b44b9924": Entry(
+        "Breaking changes",
+        "**protobuf:** Protobuf v0.2 removes quota and spending budget fields. "
+        "Existing capability seeds, policies, integrations, and local command "
+        "governance clients must stop sending or reading them. "
+        f"([#326]({REPOSITORY_URL}/pull/326))",
+    ),
+    "5312be8ebb238b21f5438d3470e48b2bc30ad6d2": Entry(
+        "Breaking changes",
+        "**identity:** Sandbox IDs now require the `sbx_...` TypeID format. "
+        "Update persisted runtime state, launch contracts, and integrations "
+        f"that use raw UUIDs. ([#316]({REPOSITORY_URL}/pull/316))",
+    ),
+}
+
+
 def parse_title(title: str) -> tuple[str, str, bool, str]:
     match = TITLE_PATTERN.fullmatch(title)
     if match is None:
@@ -98,10 +116,11 @@ def parse_title(title: str) -> tuple[str, str, bool, str]:
 
 
 def extract_section(body: str, heading: str) -> str:
+    body = GIT_TRAILERS.sub("", body.replace("\r\n", "\n"))
     pattern = re.compile(
         rf"^## {re.escape(heading)}\s*$\n(.*?)(?=^##\s+|\Z)", re.MULTILINE | re.DOTALL
     )
-    matches = pattern.findall(body.replace("\r\n", "\n"))
+    matches = pattern.findall(body)
     if len(matches) != 1:
         raise ValueError(f"PR body must contain exactly one '## {heading}' section")
     return re.sub(r"<!--.*?-->", "", matches[0], flags=re.DOTALL).strip()
@@ -161,6 +180,9 @@ def legacy_metadata(title: str) -> PullRequestMetadata | None:
 
 
 def entry_from_commit(commit: Commit, *, legacy: bool = False) -> Entry | None:
+    if legacy and commit.sha in LEGACY_OVERRIDES:
+        return LEGACY_OVERRIDES[commit.sha]
+
     try:
         metadata = validate_pull_request(commit.title, commit.body)
     except ValueError as error:

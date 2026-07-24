@@ -5,6 +5,8 @@
 # ///
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from release_notes import (
     Commit,
@@ -12,6 +14,7 @@ from release_notes import (
     parse_title,
     render_release_notes,
     validate_pull_request,
+    validate_release_file,
 )
 
 
@@ -72,6 +75,16 @@ class ReleaseNotesTests(unittest.TestCase):
             ),
         )
 
+    def test_ignores_git_trailers_after_final_metadata_section(self) -> None:
+        metadata = validate_pull_request(
+            "fix: reject invalid tokens",
+            "## Release note\n\nInvalid tokens are now rejected.\n\n"
+            "## Breaking change\n\nNone\n\n"
+            "Co-authored-by: Example User <example@example.com>\n"
+            "Signed-off-by: Example User <example@example.com>\n",
+        )
+        self.assertEqual(metadata.breaking_change, "None")
+
     def test_renders_only_dedicated_release_note(self) -> None:
         entry = entry_from_commit(
             Commit(
@@ -122,6 +135,40 @@ class ReleaseNotesTests(unittest.TestCase):
                 legacy=True,
             )
         )
+
+    def test_preserves_known_legacy_breaking_changes(self) -> None:
+        protobuf = entry_from_commit(
+            Commit(
+                "624d9433e4344cd79712debb76a75ad9b44b9924",
+                "refactor(protobuf)!: adopt v0.2 and remove budget fields (#326)",
+                "Legacy body.",
+            ),
+            legacy=True,
+        )
+        identity = entry_from_commit(
+            Commit(
+                "5312be8ebb238b21f5438d3470e48b2bc30ad6d2",
+                "breaking(identity): use prefixed sandbox TypeIDs (#316)",
+                "Legacy body.",
+            ),
+            legacy=True,
+        )
+        self.assertEqual(protobuf.group, "Breaking changes")
+        self.assertIn("budget fields", protobuf.text)
+        self.assertEqual(identity.group, "Breaking changes")
+        self.assertIn("sbx_", identity.text)
+
+    def test_validates_reviewed_release_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "v1.2.3.md"
+            path.write_text(
+                "# OpenFirma v1.2.3\n\nReleased on 2026-07-24.\n\n"
+                "## Fixed\n\n- Invalid tokens are rejected.\n"
+            )
+            validate_release_file(path, "1.2.3")
+            path.write_text("# OpenFirma v1.2.2\n\n## Internals\n")
+            with self.assertRaisesRegex(ValueError, "expected v1.2.3"):
+                validate_release_file(path, "1.2.3")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,7 @@ jobs:
         env:
           BUMP: ${{ inputs.bump }}
         run: |
+          git rev-parse HEAD > docs/release/.base-commit
           version="$(uv run --script scripts/release/version.py bump "$BUMP")"
           uv run --script scripts/release/version.py verify "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -92,7 +93,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock fuzz/Cargo.lock crates/firma-config-loader/Cargo.toml \
-            "docs/release/v${VERSION}.md"
+            docs/release/.base-commit "docs/release/v${VERSION}.md"
           if [ -n "$(git status --porcelain | grep -v '^M  \|^A  ')" ]; then
             printf 'Version preparation produced unexpected files:\n' >&2
             git status --short >&2
