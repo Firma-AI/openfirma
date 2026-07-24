@@ -10,6 +10,7 @@ use crate::control::{app::App, state::Pane};
 
 use super::theme::focused_panel;
 
+/// Renders the policies pane with the resolved policy directory context.
 pub fn render_policies(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let text = app.policy_dir().map_or_else(String::new, |path| {
         format!("policy dir: {}", path.display())

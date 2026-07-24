@@ -49,15 +49,11 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         source = ?resolved.source,
         "config resolved"
     );
-    let body = resolved
-        .config
-        .raw_section("authority")
-        .map_err(|e| anyhow::anyhow!("failed to load authority configuration: {e}"))?;
-    let tmp_dir = tempfile::tempdir().context("tempdir for authority config")?;
-    let tmp_cfg = tmp_dir.path().join("authority.toml");
-    std::fs::write(&tmp_cfg, body).context("stage authority config")?;
-    let config = AuthorityConfig::load_resolved(&tmp_cfg, &resolved.config_dir())
-        .context("failed to load authority configuration")?;
+    let config = AuthorityConfig::from_resolved_section(&resolved)
+        .context("failed to load authority configuration")?
+        .ok_or_else(|| {
+            anyhow::anyhow!("failed to load authority configuration: missing [authority] section")
+        })?;
 
     match args.command {
         None => run_server(config).await?,

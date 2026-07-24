@@ -1169,6 +1169,9 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
 ///
 /// Priority: explicit `--state-dir` → `sidecar.audit.file_path` from a
 /// discovered `firma.toml` → `<state_dir>/audit.jsonl`.
+///
+/// Relative config paths are resolved from the directory containing the
+/// selected `firma.toml`.
 pub fn resolve_audit_log_path(
     state_dir_flag: Option<&PathBuf>,
     config_override: Option<&Path>,
@@ -1194,11 +1197,20 @@ pub fn resolve_audit_log_path(
             .and_then(toml::Value::as_str)
             .filter(|path| !path.is_empty())
         {
-            return Ok(PathBuf::from(path));
+            return Ok(resolve_config_relative_path(&resolved.config_dir(), path));
         }
     }
 
     Ok(state_dir.join("audit.jsonl"))
+}
+
+fn resolve_config_relative_path(config_dir: &Path, path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        path
+    } else {
+        config_dir.join(path)
+    }
 }
 
 fn resolve_state_dir_with_default(

@@ -13,12 +13,21 @@ use crate::control::{app::App, render};
 
 type TerminalBackend = CrosstermBackend<io::Stdout>;
 
+/// Owns raw-mode and alternate-screen terminal state.
+///
+/// Dropping this value restores the terminal. Setup failures also attempt to
+/// restore whatever state was already changed before returning the error.
 pub struct Tui {
     terminal: Terminal<TerminalBackend>,
 }
 
 impl Tui {
     /// Enters raw mode and moves rendering into the alternate screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when raw mode, alternate screen setup, or terminal
+    /// backend initialization fails.
     pub fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -38,6 +47,10 @@ impl Tui {
     }
 
     /// Draws one frame of the current application state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the terminal backend cannot draw the frame.
     pub fn draw(&mut self, app: &App) -> anyhow::Result<()> {
         self.terminal.draw(|frame| render::render(frame, app))?;
         Ok(())

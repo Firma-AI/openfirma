@@ -1,6 +1,7 @@
 //! Rendering for the control surface.
 
 mod audit;
+mod help;
 mod policies;
 mod theme;
 
@@ -15,10 +16,12 @@ use crate::control::{app::App, state::ControlRuntimeState};
 
 use self::{
     audit::render_audit,
+    help::{key_hints, render_help},
     policies::render_policies,
     theme::{accent_style, dim_style, warning_style},
 };
 
+/// Renders the full Policy Control frame.
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     let outer = Block::default()
@@ -38,24 +41,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 
     render_policies(frame, panes[0], app);
     render_audit(frame, panes[1], app);
-}
 
-fn key_hints(app: &App) -> Line<'static> {
-    let entries = crate::control::bindings::footer_entries(app);
-    let mut spans = Vec::with_capacity(entries.len().saturating_mul(4).saturating_add(1));
-    spans.push(Span::styled(" ", dim_style()));
-
-    for entry in entries {
-        spans.push(Span::styled("[", dim_style()));
-        spans.push(Span::styled(entry.key, accent_style()));
-        spans.push(Span::styled("] ", dim_style()));
-        spans.push(Span::styled(
-            format!("{} ", entry.label.to_lowercase()),
-            dim_style(),
-        ));
+    if app.help_visible() {
+        render_help(frame, area, app);
     }
-
-    Line::from(spans)
 }
 
 fn title_spans(runtime_state: ControlRuntimeState) -> Vec<Span<'static>> {

@@ -184,6 +184,38 @@ impl AuthorityConfig {
         Ok(config)
     }
 
+    /// Load Authority configuration from the `[authority]` section of a
+    /// resolved unified `firma.toml`.
+    ///
+    /// Missing `[authority]` returns `Ok(None)`. A present section is parsed
+    /// directly, relative paths are re-based against the resolved config
+    /// directory, and environment overrides are applied last.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::ParseError`] if the section exists but cannot be
+    /// deserialized.
+    pub fn from_resolved_section(
+        resolved: &firma_config_loader::ResolvedConfig,
+    ) -> Result<Option<Self>, ConfigError> {
+        let config_path = resolved.config_file().to_path_buf();
+        let Some(mut config) = resolved
+            .config
+            .optional_section::<Self>("authority")
+            .map_err(|error| ConfigError::ParseError {
+                path: config_path,
+                reason: error.to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+
+        config.rebase_defaults(&resolved.config_dir());
+        config.apply_env_overrides();
+
+        Ok(Some(config))
+    }
+
     /// Returns TLS identity paths when both TLS fields are configured.
     ///
     /// # Errors

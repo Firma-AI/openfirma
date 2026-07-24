@@ -63,6 +63,33 @@ impl FirmaConfig {
         })
     }
 
+    /// Deserialize the named `[section]` directly into `T` when present.
+    ///
+    /// Missing sections return `Ok(None)`. Sections that exist but are not
+    /// TOML tables, or cannot deserialize into `T`, still fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-section or deserialization error.
+    pub fn optional_section<T: serde::de::DeserializeOwned>(
+        &self,
+        section_path: &str,
+    ) -> anyhow::Result<Option<T>> {
+        let Some(sub) = self.optional_section_table(section_path)? else {
+            return Ok(None);
+        };
+
+        sub.clone()
+            .try_into()
+            .map(Some)
+            .map_err(|e: toml::de::Error| {
+                anyhow!(
+                    "{}: invalid `[{section_path}]` section: {e}",
+                    self.origin.display()
+                )
+            })
+    }
+
     /// The named section body re-serialized as standalone TOML.
     ///
     /// Prefer [`section`](Self::section) for typed access; this exists for
@@ -87,26 +114,39 @@ impl FirmaConfig {
     /// Returns a "missing section" error when any path segment is absent or is
     /// not a table.
     fn section_table(&self, section_path: &str) -> anyhow::Result<&toml::Table> {
+        let Some(section) = self.optional_section_table(section_path)? else {
+            bail!(
+                "{}: missing required `[{section_path}]` section",
+                self.origin.display()
+            );
+        };
+
+        Ok(section)
+    }
+
+    fn optional_section_table(&self, section_path: &str) -> anyhow::Result<Option<&toml::Table>> {
         let parts: Vec<&str> = section_path.split('.').collect();
         let mut current = &self.table;
         for &part in &parts[..parts.len() - 1] {
             match current.get(part) {
                 Some(toml::Value::Table(t)) => current = t,
-                _ => {
+                Some(_) => {
                     bail!(
-                        "{}: missing required `[{section_path}]` section",
+                        "{}: invalid `[{section_path}]` section: expected table",
                         self.origin.display()
                     );
                 }
+                None => return Ok(None),
             }
         }
         let last = parts.last().copied().unwrap_or(section_path);
         match current.get(last) {
-            Some(toml::Value::Table(sub)) => Ok(sub),
-            _ => bail!(
-                "{}: missing required `[{section_path}]` section",
+            Some(toml::Value::Table(sub)) => Ok(Some(sub)),
+            Some(_) => bail!(
+                "{}: invalid `[{section_path}]` section: expected table",
                 self.origin.display()
             ),
+            None => Ok(None),
         }
     }
 }
