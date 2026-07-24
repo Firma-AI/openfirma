@@ -67,15 +67,17 @@ impl FromStr for TokenId {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let id = value.parse::<TypeSafeId<TokenIdType>>().map_err(|error| {
-            let kind = if matches!(&error, type_safe_id::Error::IncorrectType { .. }) {
-                TokenIdParseErrorKind::IncorrectPrefix(value.to_string())
-            } else if matches!(&error, type_safe_id::Error::InvalidData) {
-                TokenIdParseErrorKind::InvalidSuffix(value.to_string())
-            } else {
-                TokenIdParseErrorKind::Malformed {
-                    value: value.to_string(),
-                    source: error,
+            let kind = match error {
+                type_safe_id::Error::IncorrectType { .. } => {
+                    TokenIdParseErrorKind::IncorrectPrefix(value.to_string())
                 }
+                type_safe_id::Error::InvalidData => {
+                    TokenIdParseErrorKind::InvalidSuffix(value.to_string())
+                }
+                source => TokenIdParseErrorKind::Malformed {
+                    value: value.to_string(),
+                    source,
+                },
             };
             TokenIdParseError(kind)
         })?;
