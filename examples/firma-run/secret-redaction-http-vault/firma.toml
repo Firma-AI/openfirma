@@ -1,0 +1,82 @@
+# `firma run` profile for the HTTP-vault secret interception demo — the HTTP
+# counterpart of ../secret-redaction/ (which shims a vault CLI over stdio).
+#
+# `secret_providers` has one `type = "http"` entry instead of a CLI one: the
+# Sidecar's own HTTP path (not the firma-run broker) matches the vault's
+# response, evaluates secret.mediate, extracts the secret, and mints a
+# placeholder. No shim, no local-exec governance socket needed for the fetch
+# itself — see policies/secret-mediation.cedar.
+
+[authority]
+listen_addr = "127.0.0.1:0"
+policy_dir = "policies"
+issuance_policy_dir = "issuance-policies"
+revocation_file = "examples/firma-run/secret-redaction-http-vault/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+[run]
+profile = "generic"
+# Signals that `firma run` should auto-start a per-process Authority + Sidecar.
+# The authority loads Cedar policies from policies/ (the default policy_dir,
+# relative to this file) and streams them to the Sidecar for enforcement.
+# The signing key is generated on demand; override its location with:
+#   FIRMA_AUTHORITY_KEY_FILE=/path/to/authority.key
+
+[run.defaults]
+# demo-http-vault stands in for a cloud secrets manager the agent calls
+# directly over HTTP. There is no built-in HTTP integration — every HTTP
+# provider is fully user-defined, the same posture as a custom CLI entry.
+# `host` and `path` are glob patterns matched against the Sidecar's view of
+# the outbound request; `matcher`/`placeholder_template` work exactly like
+# the CLI form.
+secret_providers = [
+  { type = "http", provider_id = "demo-http-vault", host = "127.0.0.1:19877", path = "/secret/*", placeholder_template = "firma-secret://demo-http-vault/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+]
+
+[run.profiles.generic]
+backend = "bwrap"
+
+[run.profiles.generic.env_set]
+FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"
+FIRMA_RUN_BWRAP_RUNTIME_HOME = "false"
+FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000002"
+
+[sidecar]
+mode = "enforce"
+
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+
+[sidecar.interceptor.https_mitm]
+enabled = false
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.log]
+level = "info"
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[sidecar.constraint_enforcement]
+bundle_ttl_seconds = 3600
+enforcement_timeout_ms = 50
+
+[sidecar.connector]
+default_timeout_ms = 120000
+
+[sidecar.audit]
+sink = "file"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"

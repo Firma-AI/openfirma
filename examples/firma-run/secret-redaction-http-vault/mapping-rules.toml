@@ -1,0 +1,21 @@
+[[rules]]
+method = "CONNECT"
+host = "127.0.0.1:19877"
+action_class = "communication.internal.send"
+
+[[rules]]
+method = "GET"
+host = "127.0.0.1:19877"
+path = "/secret/*"
+action_class = "communication.internal.send"
+
+[[rules]]
+method = "CONNECT"
+host = "127.0.0.1:19876"
+action_class = "communication.internal.send"
+
+[[rules]]
+method = "POST"
+host = "127.0.0.1:19876"
+path = "/capture"
+action_class = "communication.internal.send"
