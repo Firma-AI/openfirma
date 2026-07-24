@@ -77,3 +77,4 @@ codecov.json
 !.skills/build
 .claude/*.lock
 .claude/specs/
+graphify-out/
