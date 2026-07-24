@@ -1,0 +1,1 @@
+^examples/firma-run/secret-redaction/scripts/mock-vault$

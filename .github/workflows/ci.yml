@@ -68,7 +68,7 @@ jobs:
         with:
           base: ${{ github.event.merge_group.base_sha }}
           head: ${{ github.event.merge_group.head_sha }}
-          extra_args: --results=verified,unverified,unknown
+          extra_args: --results=verified,unverified,unknown --exclude-paths=.github/trufflehog-exclude.txt
 
   fmt:
     name: Format
