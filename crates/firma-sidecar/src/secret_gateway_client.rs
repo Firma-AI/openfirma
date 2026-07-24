@@ -19,7 +19,10 @@
 
 use std::net::SocketAddr;
 
-use serde::{Deserialize, Serialize};
+use firma_http::Str;
+use firma_secret_provider::{
+    GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
+};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 /// Environment variable the Sidecar reads to locate the firma-run secret
@@ -56,28 +59,18 @@ impl GatewayEndpoint {
             return Ok(Self::Unix(std::path::PathBuf::from(path_str)));
 
             #[cfg(not(unix))]
-            return Err(format!(
-                "unix gateway address '{s}' is not supported on this platform"
-            ));
+            {
+                let _ = path_str;
+                return Err(format!(
+                    "unix gateway address '{s}' is not supported on this platform"
+                ));
+            }
         }
 
         Err(format!(
             "unrecognized gateway address '{s}'; expected 'tcp:<host>:<port>' or 'unix:<path>'"
         ))
     }
-}
-
-#[derive(Serialize)]
-struct ResolveRequest<'a> {
-    placeholders: &'a [&'a str],
-    domain: &'a str,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum PlaceholderResult {
-    Ok { secret_b64: String },
-    Err { error: String },
 }
 
 /// Resolve a batch of placeholder tokens to their raw secret bytes via the
@@ -97,21 +90,27 @@ enum PlaceholderResult {
 /// cannot be decoded. The inner per-token error is returned when a placeholder
 /// is unknown or scoped to a different domain. Treat both error variants as
 /// fail-open for that placeholder (leave the literal token in the request body).
-pub async fn resolve_batch(
+pub async fn resolve_batch<'a, I, S>(
     endpoint: &GatewayEndpoint,
-    placeholders: &[&str],
+    placeholders: I,
     domain: &str,
-) -> Result<Vec<Result<Vec<u8>, String>>, String> {
+) -> Result<Vec<Result<Vec<u8>, String>>, String>
+where
+    I: IntoIterator<Item = S> + 'a,
+    Str<'a>: From<S>,
+{
     use base64::Engine as _;
 
+    let placeholders = placeholders.into_iter().map(Str::from).collect::<Vec<_>>();
     if placeholders.is_empty() {
         return Ok(Vec::new());
     }
+    let placeholders_len = placeholders.len();
 
-    let request = ResolveRequest {
+    let request = GatewayRequest::Resolve(ResolveRequest {
         placeholders,
-        domain,
-    };
+        domain: domain.into(),
+    });
     let payload = serde_json::to_string(&request)
         .map_err(|e| format!("failed to serialize gateway request: {e}"))?;
 
@@ -134,11 +133,10 @@ pub async fn resolve_batch(
     let results = serde_json::from_str::<Vec<PlaceholderResult>>(&response_line)
         .map_err(|e| format!("failed to decode gateway response: {e}"))?;
 
-    if results.len() != placeholders.len() {
+    if results.len() != placeholders_len {
         return Err(format!(
-            "gateway returned {} results for {} placeholders",
-            results.len(),
-            placeholders.len()
+            "gateway returned {} results for {placeholders_len} placeholders",
+            results.len()
         ));
     }
 
@@ -146,11 +144,70 @@ pub async fn resolve_batch(
         .into_iter()
         .map(|r| match r {
             PlaceholderResult::Ok { secret_b64 } => base64::engine::general_purpose::STANDARD
-                .decode(&secret_b64)
+                .decode(&*secret_b64)
                 .map_err(|e| format!("gateway returned invalid base64: {e}")),
             PlaceholderResult::Err { error } => Err(format!("gateway error: {error}")),
         })
         .collect())
+}
+
+/// Push a secret newly extracted from an intercepted HTTP vault response.
+///
+/// `placeholder` must already be minted by the caller (via
+/// `firma_secret_provider::mint_placeholder`, from the same
+/// `placeholder_template` firma-run resolved and mirrored into the Sidecar's
+/// config) — the Sidecar mints locally so it can substitute the placeholder
+/// synchronously into the response body during extraction, and the gateway
+/// stores it as-is rather than re-deriving it, so the stored key can never
+/// diverge from what the agent actually sees. The counterpart of
+/// [`resolve_batch`] for the write direction: extraction happens in the
+/// Sidecar (via `firma_secret_provider::CompiledMatcher`), but firma-run's
+/// broker remains the single owner of the secret dictionary, so the
+/// extracted value is pushed there rather than cached locally.
+///
+/// # Errors
+///
+/// Returns an error string if the gateway is unreachable, the response
+/// cannot be decoded, or the gateway rejects the push (e.g. malformed
+/// placeholder). Callers should treat any error as fail-closed: do not
+/// substitute the placeholder into the response the agent sees.
+pub async fn push_secret(
+    endpoint: &GatewayEndpoint,
+    placeholder: &str,
+    value: &[u8],
+    domain: &str,
+) -> Result<String, String> {
+    use base64::Engine as _;
+
+    let request = GatewayRequest::Push(PushRequest {
+        placeholder: Str::from(placeholder),
+        value_b64: Str::from(base64::engine::general_purpose::STANDARD.encode(value)),
+        domain: Str::from(domain),
+    });
+    let payload = serde_json::to_string(&request)
+        .map_err(|e| format!("failed to serialize gateway push request: {e}"))?;
+
+    let response_line = match endpoint {
+        GatewayEndpoint::Tcp(addr) => {
+            let stream = tokio::net::TcpStream::connect(addr)
+                .await
+                .map_err(|e| format!("secret gateway unreachable (tcp:{addr}): {e}"))?;
+            send_and_receive(stream, &payload).await?
+        }
+        #[cfg(unix)]
+        GatewayEndpoint::Unix(path) => {
+            let stream = tokio::net::UnixStream::connect(path).await.map_err(|e| {
+                format!("secret gateway unreachable (unix:{}): {e}", path.display())
+            })?;
+            send_and_receive(stream, &payload).await?
+        }
+    };
+
+    match serde_json::from_str::<PushResponse>(&response_line) {
+        Ok(PushResponse::Ok { placeholder }) => Ok(placeholder.to_string()),
+        Ok(PushResponse::Err { error }) => Err(format!("gateway error: {error}")),
+        Err(e) => Err(format!("failed to decode gateway push response: {e}")),
+    }
 }
 
 async fn send_and_receive<S>(stream: S, payload: &str) -> Result<String, String>

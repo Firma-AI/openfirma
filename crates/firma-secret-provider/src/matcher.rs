@@ -1,12 +1,13 @@
 //! Compiled secret matchers.
 //!
-//! A [`SecretMatcher`] spec (from a `secret.mediate` policy's annotations) is
-//! compiled once at bundle-load to **validate** it — a bad `JSONPath` or `Regex`
-//! fails the bundle closed — and again in the broker to **execute** it.
-//! Execution extracts `(name, value)` pairs from a vault CLI's stdout and
-//! rewrites the output with placeholders supplied by a mint callback, so the
-//! agent only ever sees placeholders. See
-//! `docs/architecture/secrets-interception.md`.
+//! A [`SecretMatcher`] spec (from a `secret_providers` config entry) is
+//! compiled once to **validate** it — a bad `JSONPath` or `Regex` is rejected
+//! at config-resolution time — and again to **execute** it. Execution is
+//! transport-agnostic: it extracts `(name, value)` pairs from a raw byte
+//! buffer and rewrites it with placeholders supplied by a mint callback, so
+//! the agent only ever sees placeholders. Used by `firma-run`'s broker for
+//! CLI vault stdout and by `firma-sidecar`'s HTTPS MITM path for HTTP vault
+//! response bodies. See `docs/architecture/secrets-interception.md`.
 
 use firma_core::SecretMatcher;
 use regex::Regex;

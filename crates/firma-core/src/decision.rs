@@ -377,12 +377,17 @@ impl From<DeferDuration> for Duration {
     }
 }
 
-/// How to extract `(name, value)` pairs from a vault CLI's stdout.
+/// How to extract `(name, value)` pairs from a vault CLI's stdout or an
+/// HTTP vault's response body.
 ///
 /// Defined in `IntegrationRegistry` built-in specs and optional explicit
 /// extractor config; the execution (`JSONPath` / `Regex` compilation and
-/// rewrite) lives in the firma-run broker.
+/// rewrite) lives in `firma-secret-provider`. Internally tagged
+/// (`{"type": "json", ...}` rather than the default `{"Json": {...}}`) so it
+/// nests as a flat table when embedded in TOML (e.g. the Sidecar's
+/// `http_secret_providers` config) as well as JSON.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SecretMatcher {
     /// `JSONPath` extraction over structured output.
     Json {

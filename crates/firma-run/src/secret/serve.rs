@@ -19,7 +19,8 @@ use arc_swap::ArcSwap;
 
 use super::SecretStore;
 use super::broker::{BrokerRequest, BrokerResponse};
-use super::integration::IntegrationSpec;
+use firma_secret_provider::CliIntegrationSpec;
+
 use super::intercept::intercept;
 use super::pep::SecretPepOutcome;
 
@@ -49,7 +50,7 @@ pub enum ServeError {
 pub fn serve_request(
     request: &BrokerRequest,
     outcome: &SecretPepOutcome,
-    spec: Option<&IntegrationSpec>,
+    spec: Option<&CliIntegrationSpec>,
     store: &ArcSwap<SecretStore>,
     real_bin_dir: Option<&Path>,
 ) -> BrokerResponse {
@@ -62,7 +63,7 @@ pub fn serve_request(
 fn serve_inner(
     request: &BrokerRequest,
     outcome: &SecretPepOutcome,
-    spec: Option<&IntegrationSpec>,
+    spec: Option<&CliIntegrationSpec>,
     store: &ArcSwap<SecretStore>,
     real_bin_dir: Option<&Path>,
 ) -> Result<BrokerResponse, ServeError> {

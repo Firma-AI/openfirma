@@ -1,8 +1,12 @@
-//! Built-in integration specs for supported secret managers.
+//! Built-in integration specs for supported CLI secret managers.
 //!
 //! Each spec names the vault CLI binary, lists the credential env vars the
 //! broker must forward to the subprocess, specifies how to extract secrets from
 //! the tool's stdout, and provides the placeholder template used to mint tokens.
+//!
+//! CLI-only: every built-in is a vault CLI tool. There are no built-in HTTP
+//! vaults — every HTTP provider must be fully user-defined (matching how
+//! custom CLI integrations already work).
 //!
 //! The registry is keyed by binary basename; a launcher whose basename is not in
 //! the registry can still be permitted or passed through by Cedar, but no
@@ -10,43 +14,16 @@
 
 use firma_core::SecretMatcher;
 
-/// Per-tool behavior spec: credentials to forward, how to extract secrets, and
-/// how to mint placeholder tokens for the extracted values.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct IntegrationSpec {
-    /// Binary basename (e.g. `"bws"`).
-    pub binary_name: String,
-    /// Stable integration identity (e.g. `"bitwarden"` for the `bws` binary).
-    /// Used as the Cedar `Firma::SecretProvider` entity's id — distinct from
-    /// `binary_name`, which is the per-invocation executable and belongs on
-    /// `resource.bin` instead.
-    pub provider_id: String,
-    /// Names of env vars that carry vault credentials. The broker forwards any
-    /// that are present in its own environment to the subprocess.
-    pub credential_env_vars: Vec<String>,
-    /// How to extract `(name, value)` pairs from the tool's stdout.
-    pub matcher: SecretMatcher,
-    /// Template for minting placeholder tokens; `{name}` is substituted with the
-    /// percent-encoded secret key.
-    pub placeholder_template: String,
-    /// Arg flags to strip from the shim's requested args before appending
-    /// `forced_args`. Both `--flag value` (two-token) and `--flag=value`
-    /// (single-token) forms are matched. Example: `vec!["--format"]`.
-    pub strip_arg_flags: Vec<String>,
-    /// Args appended to the subprocess command after stripping. Used to force a
-    /// specific output format that the matcher expects.
-    /// Example: `vec!["--format", "json"]`.
-    pub forced_args: Vec<String>,
-}
+use crate::spec::CliIntegrationSpec;
 
-/// Registry of integration specs, keyed by binary basename.
+/// Registry of CLI integration specs, keyed by binary basename.
 ///
 /// Starts with the four built-in specs and can be extended with custom specs
 /// loaded from `firma.toml` (`secret_providers` table entries). Custom specs
 /// take precedence over built-ins when names collide.
 #[derive(Debug, Default)]
 pub struct IntegrationRegistry {
-    specs: Vec<IntegrationSpec>,
+    specs: Vec<CliIntegrationSpec>,
 }
 
 impl IntegrationRegistry {
@@ -56,7 +33,7 @@ impl IntegrationRegistry {
     pub fn with_builtins() -> Self {
         Self {
             specs: vec![
-                IntegrationSpec {
+                CliIntegrationSpec {
                     binary_name: String::from("bws"),
                     provider_id: String::from("bitwarden"),
                     credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
@@ -76,7 +53,7 @@ impl IntegrationRegistry {
                 // TOTP, CREDIT_CARD_NUMBER) using a JSONPath filter expression.
                 // The item's primary URL is broadcast as the domain scope for
                 // all extracted fields.
-                IntegrationSpec {
+                CliIntegrationSpec {
                     binary_name: String::from("op"),
                     provider_id: String::from("1password"),
                     credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
@@ -110,7 +87,7 @@ impl IntegrationRegistry {
                     strip_arg_flags: vec![String::from("--format")],
                     forced_args: vec![String::from("--format"), String::from("json")],
                 },
-                IntegrationSpec {
+                CliIntegrationSpec {
                     binary_name: String::from("vault"),
                     provider_id: String::from("hashicorp-vault"),
                     credential_env_vars: vec![
@@ -136,7 +113,7 @@ impl IntegrationRegistry {
                 // `doppler secrets download --format env` outputs NAME=VALUE
                 // pairs, one per line. We force this format so the regex always
                 // has a well-defined input shape.
-                IntegrationSpec {
+                CliIntegrationSpec {
                     binary_name: String::from("doppler"),
                     provider_id: String::from("doppler"),
                     credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
@@ -156,7 +133,7 @@ impl IntegrationRegistry {
 
     /// Look up a spec by binary basename. Returns `None` for unknown tools.
     #[must_use]
-    pub fn get(&self, binary_name: &str) -> Option<&IntegrationSpec> {
+    pub fn get(&self, binary_name: &str) -> Option<&CliIntegrationSpec> {
         self.specs
             .iter()
             .rev()
@@ -165,7 +142,7 @@ impl IntegrationRegistry {
 
     /// Add a custom spec. If a spec with the same binary name already exists
     /// (e.g. a built-in), the custom one takes precedence (is found first).
-    pub fn push(&mut self, spec: IntegrationSpec) {
+    pub fn push(&mut self, spec: CliIntegrationSpec) {
         self.specs.push(spec);
     }
 }
@@ -206,7 +183,7 @@ mod tests {
     #[test]
     fn push_custom_spec_takes_precedence_over_builtin() {
         let mut registry = IntegrationRegistry::with_builtins();
-        registry.push(IntegrationSpec {
+        registry.push(CliIntegrationSpec {
             binary_name: String::from("bws"),
             provider_id: String::from("custom"),
             credential_env_vars: vec![],

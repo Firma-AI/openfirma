@@ -12,14 +12,16 @@ use firma_core::envelope::InvalidMethod;
 use firma_core::{
     AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
     ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
-    InjectedCredentials, SessionId, TransportView,
+    InjectedCredentials, SecretDecision, SessionId, TransportView,
 };
 use firma_http::HeaderName;
+use firma_secret_provider::{CompiledMatcher, HttpIntegrationSpec};
 use tokio::sync::mpsc;
 
 use crate::audit::{AuditPayload, Decision};
 use crate::connector::ConnectorRegistry;
-use crate::normalizer::NormalizedEnvelope;
+use crate::enforcement::constraint_enforcement::PolicyEvaluation;
+use crate::normalizer::{NormalizedEnvelope, glob_match};
 use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
 use crate::secret_gateway_client::{self, GatewayEndpoint};
 use crate::secret_rewrite::{ContentType, mask_body, rehydrate_body};
@@ -358,12 +360,59 @@ fn mask_handled_response(response: HandledResponse, store: &SidecarSecretStore) 
     }
 }
 
+/// Build the minimal `EnforcementContext` for an HTTP-origin `secret.mediate`
+/// decision. Mirrors the required fields produced by
+/// `ConstraintEnforcer::build_context`; counters that only matter for the
+/// main per-session enforcement path default to zero, matching the CLI
+/// origin's `local_exec::endpoint::launch_context`.
+fn http_secret_mediate_context(session_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session_id,
+        "timestamp_ms": now_unix_ms(),
+        "params": "{}",
+        "risk_score": 0i64,
+        "session_duration_s": 0i64,
+        "action_count": 0i64,
+        "raw_transport": "https",
+        "deny_count": 0i64,
+        "prior_action_classes": Vec::<String>::new(),
+        "last_resource": "",
+        "transfer_amount": 0i64,
+        "daily_cumulative_amount": 0i64,
+        "transfers_last_10m": 0i64,
+        "same_payee_count_30m": 0i64,
+        "session_transfer_count": 0i64,
+    })
+}
+
+fn now_unix_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// HTTP-origin `secret.mediate` interception: the Sidecar-local mirror of an
+/// HTTP vault registry entry, plus what's needed to ask Cedar and mint a
+/// placeholder locally (see [`RequestHandler::intercept_http_secrets`]).
+struct HttpSecretMediation {
+    evaluator: Arc<dyn PolicyEvaluation + Send + Sync>,
+    providers: Vec<HttpIntegrationSpec>,
+    /// Fixed principal used for HTTP-origin `secret.mediate` evaluation.
+    /// Unlike the per-request capability-scoped principal used elsewhere,
+    /// there is no natural per-response agent identity for MITM'd traffic —
+    /// mirrors the same fallback pattern as the local-exec endpoint's CLI
+    /// `secret.mediate` evaluation.
+    principal: AgentId,
+}
+
 /// Shared handler used by every interceptor.
 pub struct RequestHandler {
     audit_sink_sender: mpsc::Sender<AuditPayload>,
     connector_registry: Arc<ConnectorRegistry>,
     pipeline: Arc<EnforcementPipeline>,
     gateway_endpoint: Option<Arc<GatewayEndpoint>>,
+    http_secret_mediation: Option<HttpSecretMediation>,
 }
 
 impl RequestHandler {
@@ -380,6 +429,7 @@ impl RequestHandler {
             connector_registry,
             pipeline,
             gateway_endpoint: None,
+            http_secret_mediation: None,
         }
     }
 
@@ -391,6 +441,30 @@ impl RequestHandler {
     #[must_use]
     pub fn with_gateway_endpoint(mut self, ep: GatewayEndpoint) -> Self {
         self.gateway_endpoint = Some(Arc::new(ep));
+        self
+    }
+
+    /// Enable HTTP-origin `secret.mediate` interception for the given
+    /// `providers` (the Sidecar's mirror of firma-run's HTTP-shaped
+    /// `secret_providers` config, synthesized in at startup). A no-op when
+    /// `providers` is empty. Requires [`Self::with_gateway_endpoint`] to
+    /// have been called too — extracted secrets are pushed there; without a
+    /// gateway endpoint, matched responses are evaluated but never
+    /// intercepted (logged as a misconfiguration).
+    #[must_use]
+    pub fn with_http_secret_providers(
+        mut self,
+        evaluator: Arc<dyn PolicyEvaluation + Send + Sync>,
+        providers: Vec<HttpIntegrationSpec>,
+        principal: AgentId,
+    ) -> Self {
+        if !providers.is_empty() {
+            self.http_secret_mediation = Some(HttpSecretMediation {
+                evaluator,
+                providers,
+                principal,
+            });
+        }
         self
     }
 
@@ -424,8 +498,8 @@ impl RequestHandler {
         }
 
         let mut store = SidecarSecretStore::new();
-        let placeholder_refs: Vec<&str> = placeholders.iter().map(String::as_str).collect();
-        match secret_gateway_client::resolve_batch(endpoint, &placeholder_refs, &request.host).await
+        match secret_gateway_client::resolve_batch(endpoint, placeholders.iter(), &request.host)
+            .await
         {
             Ok(results) => {
                 for (placeholder, result) in placeholders.iter().zip(results) {
@@ -586,11 +660,166 @@ impl RequestHandler {
             None => response,
         };
 
+        let response = self
+            .intercept_http_secrets(&request, session_id, response)
+            .await;
+
         if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
             tracing::error!("failed to send audit event: {err}");
         }
 
         response
+    }
+
+    /// HTTP-origin `secret.mediate` interception: if `request` matches a
+    /// configured HTTP secret provider and Cedar permits `secret.mediate`
+    /// for it, run the provider's matcher over the response body, mint
+    /// placeholders locally, push each extracted secret to firma-run's
+    /// broker, and substitute the placeholders into the body before it
+    /// reaches the agent.
+    ///
+    /// A no-op — `response` passes through unchanged — when no HTTP secret
+    /// providers are configured, no entry matches `request`, Cedar does not
+    /// permit, or extraction/push fails. This is an additive interception
+    /// layer on top of already-allowed traffic, not a new blocking gate: any
+    /// failure here falls back to the pre-existing behavior of forwarding
+    /// the response as dispatched.
+    async fn intercept_http_secrets(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+        response: HandledResponse,
+    ) -> HandledResponse {
+        let Some(mediation) = &self.http_secret_mediation else {
+            return response;
+        };
+        let Some(provider) = mediation.providers.iter().find(|p| {
+            glob_match(&p.host, &request.host)
+                && p.path
+                    .as_deref()
+                    .is_none_or(|pattern| glob_match(pattern, &request.path))
+        }) else {
+            return response;
+        };
+
+        let context = http_secret_mediate_context(session_id);
+        let decision = mediation.evaluator.evaluate_secret_mediate_http(
+            &mediation.principal,
+            &provider.provider_id,
+            &request.host,
+            &request.path,
+            request.method.as_str(),
+            context,
+        );
+        match decision {
+            Ok(SecretDecision::Permit) => {}
+            Ok(SecretDecision::Passthrough) => return response,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = %provider.provider_id,
+                    host = %request.host,
+                    %error,
+                    "secret.mediate (HTTP) evaluation failed; not intercepting"
+                );
+                return response;
+            }
+        }
+
+        let Some(gateway) = self.gateway_endpoint.as_ref() else {
+            tracing::warn!(
+                provider_id = %provider.provider_id,
+                "secret.mediate (HTTP) permitted interception but no secret gateway is \
+                 configured; not intercepting"
+            );
+            return response;
+        };
+
+        match response {
+            HandledResponse::Ok(dispatched) => HandledResponse::Ok(
+                self.rewrite_with_http_intercept(dispatched, provider, gateway, &request.host)
+                    .await,
+            ),
+            HandledResponse::Passthrough(dispatched) => HandledResponse::Passthrough(
+                self.rewrite_with_http_intercept(dispatched, provider, gateway, &request.host)
+                    .await,
+            ),
+            other => other,
+        }
+    }
+
+    /// Runs `provider`'s matcher over `dispatched.body`, minting a
+    /// placeholder for each extracted secret and pushing it to firma-run's
+    /// broker via `gateway`. Returns `dispatched` with the body rewritten to
+    /// placeholders; on any compile/extraction failure, returns `dispatched`
+    /// unmodified (fail-open on the interception layer — the underlying
+    /// request was already permitted by the main enforcement pipeline).
+    async fn rewrite_with_http_intercept(
+        &self,
+        mut dispatched: DispatchedResponse,
+        provider: &HttpIntegrationSpec,
+        gateway: &GatewayEndpoint,
+        domain: &str,
+    ) -> DispatchedResponse {
+        let matcher = match CompiledMatcher::compile(&provider.matcher) {
+            Ok(m) => m,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = %provider.provider_id,
+                    %error,
+                    "secret.mediate (HTTP): matcher compile failed; forwarding unmodified"
+                );
+                return dispatched;
+            }
+        };
+
+        // Minting must happen synchronously — the single-pass rewrite
+        // substitutes the placeholder in place of the plaintext value as it
+        // scans — so pushes to the broker are collected here and sent after.
+        let mut pushes: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
+        let rewritten = matcher.rewrite(&dispatched.body, &mut |name, value, item_domain, item| {
+            let placeholder =
+                firma_secret_provider::mint_placeholder(&provider.placeholder_template, item, name);
+            pushes.push((
+                placeholder.clone(),
+                value.as_bytes().to_vec(),
+                item_domain.map(str::to_owned),
+            ));
+            placeholder
+        });
+
+        let rewritten = match rewritten {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = %provider.provider_id,
+                    %error,
+                    "secret.mediate (HTTP): extraction failed; forwarding unmodified"
+                );
+                return dispatched;
+            }
+        };
+
+        for (placeholder, value, item_domain) in &pushes {
+            let push_domain = item_domain.as_deref().unwrap_or(domain);
+            if let Err(error) =
+                secret_gateway_client::push_secret(gateway, placeholder, value, push_domain).await
+            {
+                tracing::warn!(
+                    provider_id = %provider.provider_id,
+                    %placeholder,
+                    %error,
+                    "secret.mediate (HTTP): failed to push extracted secret to broker"
+                );
+            }
+        }
+
+        if dispatched.headers.contains_key("content-length") {
+            dispatched
+                .headers
+                .insert("content-length".to_string(), rewritten.len().to_string());
+        }
+        dispatched.body = rewritten;
+        dispatched
     }
 
     /// Dispatches a `PASSTHROUGH` decision: builds a minimal envelope and
@@ -1082,6 +1311,7 @@ pub(crate) mod tests {
 
     use crate::config::TenancyMode;
     use async_trait::async_trait;
+    use base64::Engine as _;
     use chrono::Utc;
     use firma_core::{
         CapabilityClaims, Connector, RevocationStore, TokenError, TokenId, TokenVerifier,
@@ -1720,6 +1950,183 @@ pub(crate) mod tests {
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.decision, Decision::Allow);
         assert_eq!(payload.dispatch_status, 503);
+    }
+
+    /// Permits `secret.mediate` (HTTP origin) unconditionally; used to test
+    /// the interception hook without a full Cedar bundle.
+    struct PermitSecretMediateHttp;
+    impl PolicyEvaluation for PermitSecretMediateHttp {
+        fn evaluate(
+            &self,
+            _: &AgentId,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn is_fresh(&self) -> bool {
+            true
+        }
+        fn version(&self) -> Option<String> {
+            Some("test-v1".to_string())
+        }
+        fn evaluate_secret_mediate_http(
+            &self,
+            _principal: &AgentId,
+            _provider_id: &str,
+            _host: &str,
+            _path: &str,
+            _method: &str,
+            _context: serde_json::Value,
+        ) -> Result<SecretDecision, String> {
+            Ok(SecretDecision::Permit)
+        }
+    }
+
+    /// Minimal fake gateway: accepts one connection, reads one
+    /// `secret.push` line, captures it, and echoes back the given
+    /// `placeholder` as the confirmation response — enough to exercise
+    /// [`RequestHandler::rewrite_with_http_intercept`] without depending on
+    /// firma-run (which firma-sidecar does not, and must not, depend on).
+    async fn fake_push_gateway() -> (
+        SocketAddr,
+        tokio::sync::oneshot::Receiver<serde_json::Value>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake gateway");
+        let addr = listener.local_addr().expect("local_addr");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                if let Ok(n) = stream.read(&mut buf).await {
+                    let line = String::from_utf8_lossy(&buf[..n]);
+                    let request: serde_json::Value =
+                        serde_json::from_str(line.trim()).expect("valid push request JSON");
+                    let placeholder = request["placeholder"].clone();
+                    let _ = tx.send(request);
+                    let response =
+                        serde_json::json!({ "placeholder": placeholder }).to_string() + "\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            }
+        });
+        (addr, rx)
+    }
+
+    fn aws_secrets_manager_provider(host: &str) -> HttpIntegrationSpec {
+        HttpIntegrationSpec {
+            provider_id: "aws-secrets-manager".to_string(),
+            host: host.to_string(),
+            path: None,
+            matcher: firma_core::SecretMatcher::Json {
+                value_path: "$.SecretString".to_string(),
+                name_path: "$.Name".to_string(),
+                item_path: None,
+                domain_path: None,
+                domain_is_url: false,
+            },
+            placeholder_template: "firma-secret://aws/{name}".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_intercepts_http_vault_response_and_pushes_secret() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": "s3cr3t-db-pass",
+                    "Name": "dbpass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let (gateway_addr, push_rx) = fake_push_gateway().await;
+        let host = format!("127.0.0.1:{}", server.address().port());
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_secret"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_endpoint(GatewayEndpoint::Tcp(gateway_addr))
+        .with_http_secret_providers(
+            Arc::new(PermitSecretMediateHttp),
+            vec![aws_secrets_manager_provider(&host)],
+            "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
+        );
+
+        let response = handler
+            .handle(raw_request(host, Method::POST), "sess_http_secret")
+            .await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&dispatched.body).expect("json body");
+                assert_eq!(body["SecretString"], "firma-secret://aws/dbpass");
+                assert_eq!(body["Name"], "dbpass");
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+
+        let pushed = push_rx.await.expect("gateway received a push");
+        assert_eq!(pushed["placeholder"], "firma-secret://aws/dbpass");
+        let value_b64 = pushed["value_b64"].as_str().expect("value_b64 field");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(value_b64)
+            .expect("valid base64");
+        assert_eq!(decoded, b"s3cr3t-db-pass");
+    }
+
+    #[tokio::test]
+    async fn test_handle_no_http_secret_provider_configured_forwards_body_unmodified() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": "s3cr3t-db-pass",
+                    "Name": "dbpass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        // No `with_http_secret_providers` call: interception must be a no-op.
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_secret_none"),
+            test_connector_registry(),
+            tx,
+        );
+
+        let response = handler
+            .handle(
+                raw_request(
+                    format!("127.0.0.1:{}", server.address().port()),
+                    Method::POST,
+                ),
+                "sess_http_secret_none",
+            )
+            .await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&dispatched.body).expect("json body");
+                assert_eq!(body["SecretString"], "s3cr3t-db-pass");
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
     }
 
     #[test]

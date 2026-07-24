@@ -1,0 +1,19 @@
+[package]
+name = "firma-secret-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Secret-provider spec types and extraction engine shared by firma-run and firma-sidecar"
+
+[dependencies]
+firma-core = { workspace = true }
+firma-http = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_json_path = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

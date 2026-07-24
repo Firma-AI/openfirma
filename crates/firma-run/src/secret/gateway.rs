@@ -1,24 +1,43 @@
 //! Sidecar → firma-run secret resolution gateway.
 //!
 //! Serves a TCP loopback or Unix domain socket where the Sidecar sends
-//! `secret.resolve` requests to look up placeholder tokens by name.
-//! firma-run is the single source of truth for secrets; the Sidecar fetches on
-//! demand, building per-request rehydration/masking state rather than caching
-//! secrets persistently.
+//! `secret.resolve` requests to look up placeholder tokens by name, and
+//! `secret.push` requests to store a secret newly extracted from an
+//! intercepted HTTP vault response (the HTTP-origin counterpart of the CLI
+//! shim's [`intercept::intercept`]). firma-run is the single source of
+//! truth for secrets; the Sidecar fetches/pushes on demand rather than
+//! caching secrets persistently.
 //!
 //! # Protocol (newline-framed JSON)
 //!
-//! The request carries an array of placeholder tokens; the response is a
-//! positionally-aligned array of per-token results (one element per token):
+//! Each request carries an `action` discriminator (mirrors the local-exec
+//! governance protocol's `ActionPeek` pattern).
+//!
+//! `secret.resolve` — the request carries an array of placeholder tokens; the
+//! response is a positionally-aligned array of per-token results:
 //!
 //! ```text
-//! → {"placeholders":["firma-secret://bw/token","firma-secret://bw/other"],"domain":"api.github.com"}
+//! → {"action":"secret.resolve","placeholders":["firma-secret://bw/token","firma-secret://bw/other"],"domain":"api.github.com"}
 //! ← [{"secret_b64":"...base64..."},{"error":"unknown placeholder: ..."}]
 //! ```
 //!
-//! Protocol-level errors (malformed request, oversized request) are returned as
-//! a single JSON object `{"error":"..."}` so they can be distinguished from an
-//! empty batch.
+//! `secret.push` — the Sidecar has already run its own copy of the matcher
+//! against an HTTP vault response, extracted one `(name, value)` pair, and
+//! minted the placeholder locally (`firma_secret_provider::mint_placeholder`,
+//! from the same `placeholder_template` firma-run resolved and mirrored into
+//! the Sidecar's config) so it can substitute the placeholder synchronously
+//! into the response body. The gateway stores the already-minted placeholder
+//! as-is — it does not re-derive it — so the stored key can never diverge
+//! from what the agent actually sees:
+//!
+//! ```text
+//! → {"action":"secret.push","placeholder":"firma-secret://aws/dbpass","value_b64":"...","domain":"secretsmanager.us-east-1.amazonaws.com"}
+//! ← {"placeholder":"firma-secret://aws/dbpass"}
+//! ```
+//!
+//! Protocol-level errors (malformed request, oversized request, unknown
+//! action) are returned as a single JSON object `{"error":"..."}` so they can
+//! be distinguished from a well-formed batch/push response.
 //!
 //! The gateway transport is platform-dependent: a Unix domain socket on Unix
 //! targets and a TCP loopback socket on Windows. Consumers discover the bound
@@ -35,29 +54,16 @@ use std::os::unix::net::UnixListener;
 
 use arc_swap::ArcSwap;
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
+use firma_http::Str;
+use firma_secret_provider::{
+    GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
+};
 
 use crate::config::CommandMediatorEndpoint;
 
-use super::SecretStore;
+use super::{Placeholder, SecretStore, SecretValue};
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
-
-#[derive(Deserialize)]
-struct ResolveRequest {
-    placeholders: Vec<String>,
-    /// Target host of the outbound request. Used to filter domain-scoped
-    /// secrets: a secret stored for `api.github.com` will not resolve for
-    /// requests to `api.stripe.com`.
-    domain: String,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum PlaceholderResult {
-    Ok { secret_b64: String },
-    Err { error: String },
-}
 
 enum GatewayInner {
     Tcp(TcpListener),
@@ -129,7 +135,8 @@ impl SecretGatewayListener {
         }
     }
 
-    /// Accept and serve `secret.resolve` connections indefinitely.
+    /// Accept and serve `secret.resolve` / `secret.push` connections
+    /// indefinitely.
     ///
     /// Each connection is dispatched on a dedicated thread. The loop exits when
     /// the listener socket is closed or a fatal accept error occurs. The caller
@@ -214,12 +221,7 @@ fn handle_protocol<R: io::Read, W: io::Write>(
     reader.read_line(&mut line)?;
 
     if line.len() > MAX_REQUEST_BYTES {
-        return write_json_line(
-            &mut writer,
-            &PlaceholderResult::Err {
-                error: "request too large".to_owned(),
-            },
-        );
+        return write_error_line(&mut writer, "request too large");
     }
 
     let trimmed = line.trim();
@@ -230,18 +232,33 @@ fn handle_protocol<R: io::Read, W: io::Write>(
         ));
     }
 
-    let request = match serde_json::from_str::<ResolveRequest>(trimmed) {
-        Ok(r) => r,
+    let req = match serde_json::from_str::<GatewayRequest>(trimmed) {
+        Ok(req) => req,
         Err(e) => {
-            return write_json_line(
-                &mut writer,
-                &PlaceholderResult::Err {
-                    error: format!("malformed request: {e}"),
-                },
-            );
+            return write_error_line(&mut writer, &format!("malformed request: {e}"));
         }
     };
 
+    match req {
+        GatewayRequest::Resolve(resolve) => handle_resolve(&resolve, &mut writer, store),
+        GatewayRequest::Push(push) => handle_push(&push, &mut writer, store),
+    }
+}
+
+fn write_error_line<W: io::Write>(writer: &mut W, message: &str) -> io::Result<()> {
+    write_json_line(
+        writer,
+        &PlaceholderResult::Err {
+            error: Str::from(message),
+        },
+    )
+}
+
+fn handle_resolve<W: io::Write>(
+    request: &ResolveRequest,
+    writer: &mut W,
+    store: &ArcSwap<SecretStore>,
+) -> io::Result<()> {
     let snapshot = store.load();
     let results: Vec<PlaceholderResult> = request
         .placeholders
@@ -254,16 +271,72 @@ fn handle_protocol<R: io::Read, W: io::Write>(
             );
             snapshot.resolve(placeholder, &request.domain).map_or_else(
                 || PlaceholderResult::Err {
-                    error: format!("unknown placeholder: {placeholder}"),
+                    error: Str::from(format!("unknown placeholder: {placeholder}")),
                 },
                 |bytes| PlaceholderResult::Ok {
-                    secret_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                    secret_b64: Str::from(base64::engine::general_purpose::STANDARD.encode(bytes)),
                 },
             )
         })
         .collect();
 
-    write_json_line(&mut writer, &results)
+    write_json_line(writer, &results)
+}
+
+/// Handle a `secret.push` request: mint the placeholder from the named HTTP
+/// provider's `placeholder_template`, insert the value into `store` scoped to
+/// `domain`, and return the minted placeholder so the Sidecar can substitute
+/// it into the response body it forwards to the agent.
+fn handle_push<W: io::Write>(
+    request: &PushRequest,
+    writer: &mut W,
+    store: &ArcSwap<SecretStore>,
+) -> io::Result<()> {
+    let Some(placeholder) = Placeholder::parse(&request.placeholder) else {
+        return write_json_line(
+            writer,
+            &PushResponse::Err {
+                error: Str::from(format!(
+                    "invalid placeholder token '{}'",
+                    request.placeholder
+                )),
+            },
+        );
+    };
+
+    let value = match base64::engine::general_purpose::STANDARD.decode(&*request.value_b64) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return write_json_line(
+                writer,
+                &PushResponse::Err {
+                    error: Str::from(format!("invalid base64 value: {e}")),
+                },
+            );
+        }
+    };
+
+    tracing::debug!(
+        placeholder = %placeholder,
+        domain = %request.domain,
+        "secret gateway: pushing HTTP-intercepted secret"
+    );
+    store.rcu(|current| {
+        let mut updated = SecretStore::clone(current);
+        updated.insert(
+            placeholder.clone(),
+            Some(request.domain.to_string()),
+            SecretValue::new(value.clone()),
+        );
+        updated
+    });
+
+    write_json_line(
+        writer,
+        &PushResponse::Ok {
+            placeholder: Str::from(placeholder.as_str()),
+        },
+    )
 }
 
 fn write_json_line<T: serde::Serialize>(writer: &mut impl io::Write, value: &T) -> io::Result<()> {
@@ -279,6 +352,8 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::{SocketAddr, TcpStream};
     use std::thread;
+
+    use firma_http::Str;
 
     use super::*;
     use crate::secret::{Placeholder, SecretValue};
@@ -308,17 +383,27 @@ mod tests {
         (listener, addr)
     }
 
-    fn resolve_batch(addr: SocketAddr, placeholders: &[&str], domain: &str) -> String {
+    fn send_request<S: serde::Serialize>(addr: SocketAddr, req: &S) -> String {
         let mut stream = TcpStream::connect(addr).expect("connect");
-        let req = serde_json::json!({ "placeholders": placeholders, "domain": domain });
         stream
-            .write_all(format!("{req}\n").as_bytes())
+            .write_all(serde_json::to_vec(req).expect("serialize").as_slice())
             .expect("write");
+        stream.write_all(b"\n").expect("write");
         stream.flush().expect("flush");
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).expect("read");
         line.trim().to_owned()
+    }
+
+    fn resolve_batch(addr: SocketAddr, placeholders: &[&str], domain: &str) -> String {
+        send_request(
+            addr,
+            &GatewayRequest::Resolve(ResolveRequest {
+                placeholders: placeholders.iter().map(Str::from).collect(),
+                domain: Str::from(domain),
+            }),
+        )
     }
 
     #[test]
@@ -406,6 +491,67 @@ mod tests {
         let val: serde_json::Value =
             serde_json::from_str(line.trim()).expect("valid JSON error response");
         assert!(val["error"].as_str().is_some(), "raw: {line}");
+    }
+
+    #[test]
+    fn unknown_action_returns_error() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
+        let (listener, addr) = bind_tcp();
+        thread::spawn(move || listener.serve_forever(&store));
+
+        let response = send_request(addr, &serde_json::json!({"action": "secret.frobnicate"}));
+        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert!(val["error"].as_str().is_some(), "raw: {response}");
+    }
+
+    #[test]
+    fn push_stores_the_given_placeholder_and_makes_it_resolvable() {
+        let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
+        let (listener, addr) = bind_tcp();
+        thread::spawn(move || listener.serve_forever(&store));
+
+        let value_b64 = base64::engine::general_purpose::STANDARD.encode(b"s3cr3t-db-pass");
+        let response = send_request(
+            addr,
+            &GatewayRequest::Push(PushRequest {
+                placeholder: Str::from("firma-secret://aws/dbpass"),
+                value_b64: Str::from(value_b64),
+                domain: Str::from("secretsmanager.us-east-1.amazonaws.com"),
+            }),
+        );
+        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert_eq!(val["placeholder"], "firma-secret://aws/dbpass");
+
+        let resolved = resolve_batch(
+            addr,
+            &["firma-secret://aws/dbpass"],
+            "secretsmanager.us-east-1.amazonaws.com",
+        );
+        let arr: serde_json::Value = serde_json::from_str(&resolved).expect("valid JSON");
+        let b64 = arr[0]["secret_b64"].as_str().expect("secret_b64 field");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("valid base64");
+        assert_eq!(decoded, b"s3cr3t-db-pass");
+    }
+
+    #[test]
+    fn push_invalid_placeholder_token_returns_error() {
+        let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
+        let (listener, addr) = bind_tcp();
+        thread::spawn(move || listener.serve_forever(&store));
+
+        let response = send_request(
+            addr,
+            &GatewayRequest::Push(PushRequest {
+                placeholder: Str::from("not-a-placeholder-token"),
+                value_b64: Str::from(base64::engine::general_purpose::STANDARD.encode(b"x")),
+                domain: Str::from("example.com"),
+            }),
+        );
+        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert!(val["error"].as_str().is_some(), "raw: {response}");
     }
 
     #[test]

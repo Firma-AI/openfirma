@@ -69,6 +69,7 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
         audit_fallback_path: None,
         monitor_mode: false,
         secret_gateway_addr: None,
+        http_secret_providers: Vec::new(),
     })
     .expect("supervisor spawned");
 

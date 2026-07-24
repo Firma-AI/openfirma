@@ -5,13 +5,13 @@
 //! the agent only ever sees placeholders.
 //!
 //! The matcher itself (JSONPath / regex) is compiled and executed by
-//! [`firma_sidecar::secret_matcher`]; this module owns the mint + store
+//! [`firma_secret_provider`]; this module owns the mint + store
 //! orchestration. It is the producer half of the secret machinery (the consumer
 //! is redaction rehydration). See `docs/architecture/secrets-interception.md`.
 
 use arc_swap::ArcSwap;
 use firma_core::SecretMatcher;
-use firma_sidecar::secret_matcher::{CompiledMatcher, MatcherError};
+use firma_secret_provider::{CompiledMatcher, MatcherError};
 
 use super::{Placeholder, SecretStore, SecretValue};
 

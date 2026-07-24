@@ -12,9 +12,10 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
+use firma_secret_provider::CliIntegrationSpec;
+
 use super::SecretStore;
 use super::broker::{BrokerListener, BrokerRequest};
-use super::integration::IntegrationSpec;
 use super::pep::SecretPepOutcome;
 use super::serve::serve_request;
 
@@ -32,7 +33,7 @@ pub fn serve_forever<D, S>(
     real_bin_dir: Option<Arc<Path>>,
 ) where
     D: Fn(&str, &str) -> SecretPepOutcome + Send + Sync + 'static,
-    S: Fn(&str) -> Option<IntegrationSpec> + Send + Sync + 'static,
+    S: Fn(&str) -> Option<CliIntegrationSpec> + Send + Sync + 'static,
 {
     loop {
         let store = Arc::clone(&store);

@@ -11,6 +11,7 @@ members = [
   "crates/firma-http",
   "crates/firma-run",
   "crates/firma-runtime-state",
+  "crates/firma-secret-provider",
   "crates/firma-sidecar",
   "crates/firma-stack",
   "crates/firma-tui",
@@ -71,6 +72,7 @@ firma-http = { path = "crates/firma-http", version = "0.1.4" }
 firma-protobuf = "0.2"
 firma-run = { path = "crates/firma-run", version = "0.1.4" }
 firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.4" }
+firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.1.4" }
 firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.4" }
 firma-stack = { path = "crates/firma-stack", version = "0.1.4" }
 firma-tui = { path = "crates/firma-tui", version = "0.1.4" }

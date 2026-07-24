@@ -1523,6 +1523,7 @@ dependencies = [
  "arbitrary",
  "http",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1557,6 +1558,7 @@ dependencies = [
  "firma-http",
  "firma-protobuf",
  "firma-runtime-state",
+ "firma-secret-provider",
  "firma-sidecar",
  "fs-err",
  "hex",
@@ -1602,6 +1604,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "firma-secret-provider"
+version = "0.1.4"
+dependencies = [
+ "firma-core",
+ "firma-http",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_json_path",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "firma-sidecar"
 version = "0.1.4"
 dependencies = [
@@ -1621,6 +1636,7 @@ dependencies = [
  "firma-http",
  "firma-protobuf",
  "firma-runtime-state",
+ "firma-secret-provider",
  "governor",
  "hex",
  "http",

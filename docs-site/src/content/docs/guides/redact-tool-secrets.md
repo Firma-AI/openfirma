@@ -5,22 +5,30 @@ description: Keep real secrets out of the agent while local tools still use them
 
 [Inject credentials](../inject-credentials/) attaches a secret at the Sidecar for
 **outbound HTTP** calls. This guide covers the other half: keeping secrets out of
-the agent when it talks to **local tools** over stdio — a vault CLI it runs, or an
-MCP server it drives. The agent only ever sees placeholders
+the agent when it fetches them itself — from a **local tool** over stdio (a vault
+CLI it runs, or an MCP server it drives), or from an **HTTP vault** it calls
+directly (a cloud secrets manager). The agent only ever sees placeholders
 (`firma-secret://<provider>/<name>`); the real values live in the `firma run`
 broker, outside the sandbox.
 
-The mechanism is a generic stdio **shim**. You list which executables to
-interpose on in `firma.toml`; a Cedar `secret.mediate` policy decides what each
-shim does. There are two behaviors:
+Both are the same underlying mechanism — a Cedar `secret.mediate` policy
+authorizing a `Firma::SecretProvider` resource, plus a `secret_providers`
+config entry describing how to extract secrets — just triggered from two
+different transports:
 
-- **intercept** — catch a vault CLI's stdout, replace each secret with a
-  placeholder, and keep the real value in the broker. The agent's fetch returns
-  placeholders.
-- **redact** — for a sanctioned tool, rehydrate placeholders into real secrets on
-  its **stdin**, and mask real secrets back into placeholders on its **stdout**.
+- **CLI (stdio)**: you list which executables to interpose on with a generic
+  stdio **shim**. There are two behaviors:
+  - **intercept** — catch a vault CLI's stdout, replace each secret with a
+    placeholder, and keep the real value in the broker. The agent's fetch
+    returns placeholders.
+  - **redact** — for a sanctioned tool, rehydrate placeholders into real
+    secrets on its **stdin**, and mask real secrets back into placeholders on
+    its **stdout**.
+- **HTTP vault**: the Sidecar's HTTPS MITM path intercepts the vault's
+  response the same way the CLI shim intercepts stdout — see
+  [HTTP vaults](#http-vaults) below.
 
-A runnable example lives in
+A runnable CLI-shim example lives in
 [`examples/firma-run/secret-redaction/`](https://github.com/openfirma/openfirma/tree/main/examples/firma-run/secret-redaction).
 
 ## When to use this vs other secret mechanisms
@@ -32,7 +40,10 @@ A runnable example lives in
   [secret placeholders](../secret-placeholders/). The agent writes a
   `firma-secret://` token; the Sidecar resolves it at dispatch time.
 - The secret is produced or consumed by a **local process over stdio** (a vault
-  CLI's output, a value an MCP tool needs) → use shims, described here.
+  CLI's output, a value an MCP tool needs) → use a CLI shim, described here.
+- The secret comes from an **HTTP vault the agent calls directly** (a cloud
+  secrets manager) → use an HTTP-shaped `secret_providers` entry, described in
+  [HTTP vaults](#http-vaults) below.
 
 They compose: injection guards the header boundary, placeholders guard the body
 boundary, and shims guard the process I/O boundary. Secrets fetched via shims
@@ -59,13 +70,16 @@ copied invocations still hit it — not just `PATH` lookups.
 
 A tool with no built-in integration needs a full table entry instead of a bare
 name — it tells the broker how to extract secrets from the tool's output and
-which placeholder template to mint. Entries can be mixed in the same list:
+which placeholder template to mint. Full-table entries are tagged with
+`type = "cli"` or `type = "http"` (see below) so a CLI-only field and an
+HTTP-only field can never be mixed on the same entry. Entries of any shape can
+be mixed in the same list:
 
 ```toml
 [run.defaults]
 secret_providers = [
     "bws",
-    { name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+    { type = "cli", name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
 ]
 ```
 
@@ -129,6 +143,53 @@ timeout_ms = 600
 ```
 
 Without this endpoint, shimmed launches **fail closed** (the tool is not run).
+
+## HTTP vaults
+
+For a vault the agent calls directly over HTTPS (instead of via a CLI you
+shim), use an HTTP-shaped `secret_providers` entry — `type = "http"` instead
+of `type = "cli"`:
+
+```toml
+[run.defaults]
+secret_providers = [
+    {
+        type = "http",
+        provider_id = "aws-secrets-manager",
+        host = "secretsmanager.*.amazonaws.com",
+        placeholder_template = "firma-secret://aws/{name}",
+        matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" },
+    },
+]
+```
+
+`host` is a glob pattern (`*` matches one segment, same syntax as
+[mapping rules](../../concepts/action-classes/)); `path` is an optional glob
+pattern that defaults to matching any path on `host`. `matcher` and
+`placeholder_template` work exactly like the CLI form.
+
+There is no built-in HTTP vault — every HTTP provider is fully user-defined,
+the same posture as a custom CLI integration like the `mock-vault` example
+above.
+
+The Cedar policy uses the same `Firma::SecretProvider` resource and the same
+`secret.mediate` action as the CLI form — only the populated attributes
+differ: `resource.host`/`resource.path`/`resource.method` (the MITM'd
+request) instead of `resource.bin`/`resource.args` (the CLI invocation).
+`resource.id` is still the provider identity:
+
+```cedar
+permit (principal, action == Firma::Action::"secret.mediate", resource)
+when { resource.id == "aws-secrets-manager" };
+```
+
+No governance endpoint is needed for the HTTP form (unlike the CLI form's
+`sidecar_local_exec` requirement in Step 3) — the Sidecar evaluates the
+policy itself, since it is already on the MITM path for the response. On a
+Cedar permit, the Sidecar runs the provider's matcher over the response body,
+mints a placeholder for each extracted secret, and pushes it to the `firma
+run` broker (the same out-of-sandbox dictionary the CLI form populates) —
+the agent only ever sees the placeholder.
 
 ## The flow
 

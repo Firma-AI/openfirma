@@ -230,6 +230,12 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         // can read its address from FIRMA_SECRET_GATEWAY_ADDR at startup.
         let gateway_binding = secret_shims::pre_bind_gateway(handle_ref, &profile)?;
         flags.secret_gateway_addr = gateway_binding.as_ref().map(|b| b.addr.clone());
+        flags.http_secret_providers = profile
+            .secret_providers
+            .values()
+            .filter_map(firma_secret_provider::IntegrationSpec::as_http)
+            .cloned()
+            .collect();
 
         let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
         let mut prompt = crate::authority::StdAuthorityPrompt;

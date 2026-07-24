@@ -32,7 +32,7 @@ profile = "generic"
 # every launch of a shimmed executable pays a broker round-trip even when the
 # policy leaves it untouched.
 secret_providers = [
-  { name = "mock-vault", provider_id = "demo", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+  { type = "cli", name = "mock-vault", provider_id = "demo", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
 ]
 
 [run.profiles.generic]

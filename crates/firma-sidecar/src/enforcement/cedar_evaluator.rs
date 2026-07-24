@@ -271,6 +271,80 @@ impl CedarPolicyEvaluator {
         Ok(SecretDecision::Passthrough)
     }
 
+    /// Evaluate the `secret.mediate` action for an intercepted HTTP vault
+    /// response (the MITM counterpart of [`Self::secret_decision`]'s CLI
+    /// shim origin — same action, same `SecretProvider` entity type).
+    ///
+    /// `provider_id` becomes the entity's id (mirrors the entity UID, as in
+    /// the CLI origin); `host`/`path`/`method` are bound to
+    /// `resource.host`/`resource.path`/`resource.method` in place of the CLI
+    /// origin's `resource.bin`/`resource.args`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CedarEvaluatorError`] if the entity UIDs, context, resource
+    /// entity, or Cedar request cannot be built. The Sidecar treats an error
+    /// as fail-closed (no interception).
+    fn secret_mediate_http_decision(
+        &self,
+        principal: &AgentId,
+        provider_id: &str,
+        host: &str,
+        path: &str,
+        method: &str,
+        context: serde_json::Value,
+    ) -> Result<SecretDecision, CedarEvaluatorError> {
+        let principal_uid: EntityUid = FirmaEntityUid::Agent(*principal)
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+        let action_uid: EntityUid = FirmaEntityUid::Action("secret.mediate".to_string())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+        let resource_uid: EntityUid = FirmaEntityUid::SecretProvider(provider_id.to_string())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+
+        let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
+            .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
+
+        let mut attrs = HashMap::new();
+        attrs.insert(
+            "id".to_string(),
+            RestrictedExpression::new_string(provider_id.to_string()),
+        );
+        attrs.insert(
+            "host".to_string(),
+            RestrictedExpression::new_string(host.to_string()),
+        );
+        attrs.insert(
+            "path".to_string(),
+            RestrictedExpression::new_string(path.to_string()),
+        );
+        attrs.insert(
+            "method".to_string(),
+            RestrictedExpression::new_string(method.to_string()),
+        );
+        let resource_entity = Entity::new(resource_uid.clone(), attrs, HashSet::new())
+            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
+        let entities = Entities::from_entities([resource_entity], Some(&self.schema))
+            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
+
+        let request = Request::new(
+            Some(principal_uid),
+            Some(action_uid),
+            Some(resource_uid),
+            cedar_context,
+            Some(&self.schema),
+        )
+        .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
+
+        let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
+        if matches!(response.decision(), Decision::Allow) {
+            return Ok(SecretDecision::Permit);
+        }
+        Ok(SecretDecision::Passthrough)
+    }
+
     /// Evaluate the `secret.redact` action for an outbound HTTP request.
     ///
     /// Binds `resource.id` (host), `resource.host`, `resource.path`, and
@@ -520,6 +594,22 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
             .map_err(|error| error.to_string())
     }
 
+    /// Evaluate the `secret.mediate` action for an intercepted HTTP vault
+    /// response, exposing the internal logic through the trait with a
+    /// stringified error for the swap-boundary surface.
+    fn evaluate_secret_mediate_http(
+        &self,
+        principal: &AgentId,
+        provider_id: &str,
+        host: &str,
+        path: &str,
+        method: &str,
+        context: serde_json::Value,
+    ) -> Result<SecretDecision, String> {
+        self.secret_mediate_http_decision(principal, provider_id, host, path, method, context)
+            .map_err(|error| error.to_string())
+    }
+
     /// Evaluate whether to apply secret rewriting for an outbound HTTP request
     /// (`secret.redact`). Returns `true` when a Cedar `permit` fires.
     fn evaluate_secret_redact(
@@ -639,7 +729,7 @@ namespace Firma {
     };
     entity Agent;
     entity Resource { id: String, host?: String, path?: String, method?: String };
-    entity SecretProvider { id: String, bin: String, args: String };
+    entity SecretProvider { id: String, bin?: String, args?: String, host?: String, path?: String, method?: String };
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"secret.mediate\" appliesTo { principal: [Agent], resource: [SecretProvider], context: EnforcementContext };
@@ -793,6 +883,85 @@ namespace Firma {
 
         let no_match = evaluator
             .evaluate_secret_mediation(&agent(), "bitwarden", "bws list", full_context())
+            .unwrap();
+        assert_eq!(no_match, SecretDecision::Passthrough);
+    }
+
+    #[test]
+    fn evaluate_secret_mediate_http_returns_permit_on_matching_provider_id() {
+        // Same action, same SecretProvider entity type as the CLI origin —
+        // only the populated attributes differ (host/path/method vs bin/args).
+        let src = r#"
+            permit(principal, action == Firma::Action::"secret.mediate", resource)
+            when { resource.id == "aws-secrets-manager" };
+        "#;
+        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
+        let decision = evaluator
+            .evaluate_secret_mediate_http(
+                &agent(),
+                "aws-secrets-manager",
+                "secretsmanager.us-east-1.amazonaws.com",
+                "/",
+                "POST",
+                full_context(),
+            )
+            .unwrap();
+        assert_eq!(decision, SecretDecision::Permit);
+    }
+
+    #[test]
+    fn evaluate_secret_mediate_http_passthrough_when_no_policy_matches() {
+        let src = r#"
+            permit(principal, action == Firma::Action::"secret.mediate", resource)
+            when { resource.id == "aws-secrets-manager" };
+        "#;
+        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
+        let decision = evaluator
+            .evaluate_secret_mediate_http(
+                &agent(),
+                "some-other-vault",
+                "vault.example.com",
+                "/",
+                "GET",
+                full_context(),
+            )
+            .unwrap();
+        assert_eq!(decision, SecretDecision::Passthrough);
+    }
+
+    #[test]
+    fn resource_host_path_method_are_bound_for_http_secret_mediation() {
+        let src = r#"
+            permit(principal, action == Firma::Action::"secret.mediate", resource)
+            when {
+                resource.host == "secretsmanager.us-east-1.amazonaws.com" &&
+                resource.path == "/" &&
+                resource.method == "POST"
+            };
+        "#;
+        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
+
+        let permit = evaluator
+            .evaluate_secret_mediate_http(
+                &agent(),
+                "aws-secrets-manager",
+                "secretsmanager.us-east-1.amazonaws.com",
+                "/",
+                "POST",
+                full_context(),
+            )
+            .unwrap();
+        assert_eq!(permit, SecretDecision::Permit);
+
+        let no_match = evaluator
+            .evaluate_secret_mediate_http(
+                &agent(),
+                "aws-secrets-manager",
+                "secretsmanager.us-east-1.amazonaws.com",
+                "/",
+                "GET",
+                full_context(),
+            )
             .unwrap();
         assert_eq!(no_match, SecretDecision::Passthrough);
     }

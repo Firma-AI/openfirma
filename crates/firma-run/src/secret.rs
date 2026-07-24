@@ -33,9 +33,6 @@ pub mod pep;
 /// it so the agent sees placeholders.
 pub mod intercept;
 
-/// Built-in integration specs for supported vault CLIs (bws, op, vault, doppler).
-pub mod integration;
-
 /// Per-request broker dispatch: run the real vault CLI and apply the intercept
 /// transform by decision (fail-closed).
 pub mod serve;
@@ -96,17 +93,9 @@ impl Placeholder {
     /// load.
     #[must_use]
     pub fn from_template(template: &str, item: Option<&str>, name: &str) -> Self {
-        let mut encoded_name = String::new();
-        encode_segment(name, &mut encoded_name);
-        let after_name = template.replace(PLACEHOLDER_NAME_MARKER, &encoded_name);
-        let result = if let Some(item) = item {
-            let mut encoded_item = String::new();
-            encode_segment(item, &mut encoded_item);
-            after_name.replace(PLACEHOLDER_ITEM_MARKER, &encoded_item)
-        } else {
-            after_name
-        };
-        Self(result)
+        Self(firma_secret_provider::mint_placeholder(
+            template, item, name,
+        ))
     }
 
     /// Wrap an existing token, validating the scheme and token charset.

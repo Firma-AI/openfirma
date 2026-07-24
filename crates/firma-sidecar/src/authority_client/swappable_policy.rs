@@ -90,6 +90,27 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
             .evaluate_secret_mediation(principal, provider_id, argv, context)
     }
 
+    /// Delegate HTTP-origin secret-mediation decisions to the inner snapshot,
+    /// mirroring [`Self::evaluate_secret_mediation`]'s CLI-origin delegation.
+    fn evaluate_secret_mediate_http(
+        &self,
+        principal: &AgentId,
+        provider_id: &str,
+        host: &str,
+        path: &str,
+        method: &str,
+        context: serde_json::Value,
+    ) -> Result<SecretDecision, String> {
+        self.inner.load().evaluate_secret_mediate_http(
+            principal,
+            provider_id,
+            host,
+            path,
+            method,
+            context,
+        )
+    }
+
     fn evaluate_secret_redact(
         &self,
         principal: &AgentId,

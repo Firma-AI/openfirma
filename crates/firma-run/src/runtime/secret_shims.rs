@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use firma_secret_provider::{CliIntegrationSpec, IntegrationSpec};
 
 use crate::backend::SandboxHandle;
 use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint, MountSpec, ResolvedProfile};
@@ -26,7 +27,6 @@ use crate::secret::SecretStore;
 use crate::secret::accept::serve_forever;
 use crate::secret::broker::BrokerListener;
 use crate::secret::gateway::SecretGatewayListener;
-use crate::secret::integration::IntegrationSpec;
 use crate::secret::pep::{SecretMediationRequest, SecretPepOutcome, request_secret_decision};
 use crate::secret::shim::FIRMA_BROKER_ADDR;
 
@@ -131,8 +131,6 @@ pub fn prepare(
         )
     })?;
 
-    let shim_bin = locate_shim_binary(firma_exe)?;
-    let reals = resolve_real_binaries(&profile.secret_providers, host_path)?;
     let base = handle.runtime_dir.join("secret-shims");
     // Directory was already created by pre_bind_gateway; this is idempotent.
     std::fs::create_dir_all(&base).map_err(|error| {
@@ -148,7 +146,28 @@ pub fn prepare(
         .map_err(|error| RunError::Internal(format!("query broker bound address: {error}")))?;
     let broker_addr = format_endpoint(&broker_bound);
 
-    let plan = plan(&shim_bin, &reals, &broker_addr);
+    // Only CLI entries need stdio shim injection (bind mounts over a real
+    // executable on PATH); HTTP entries are irrelevant here — they're mirrored
+    // into the Sidecar's own config instead (see sidecar::config::synthesize)
+    // and intercepted on its MITM path, not via a shim.
+    let cli_providers: BTreeMap<String, CliIntegrationSpec> = profile
+        .secret_providers
+        .iter()
+        .filter_map(|(name, spec)| spec.as_cli().map(|cli| (name.clone(), cli.clone())))
+        .collect();
+
+    if !cli_providers.is_empty() {
+        let shim_bin = locate_shim_binary(firma_exe)?;
+        let reals = resolve_real_binaries(&cli_providers, host_path)?;
+        let plan = plan(&shim_bin, &reals, &broker_addr);
+        handle.mounts.extend(plan.mounts);
+        for (key, value) in plan.env {
+            env.insert(key, value);
+        }
+    }
+
+    // The broker still needs to serve the gateway (secret push/resolve for
+    // HTTP-sourced secrets) even when there are no CLI shims to mount.
     start_broker(
         broker_listener,
         gateway.listener,
@@ -157,15 +176,10 @@ pub fn prepare(
         profile.secret_providers.clone(),
     );
 
-    handle.mounts.extend(plan.mounts);
-    for (key, value) in plan.env {
-        env.insert(key, value);
-    }
-
-    // Strip vault credential env vars for each shimmed integration so they
+    // Strip vault credential env vars for each shimmed CLI integration so they
     // can never enter the sandbox, even if an operator accidentally listed
     // them in `env_inherit` or `env_set`.
-    for spec in profile.secret_providers.values() {
+    for spec in cli_providers.values() {
         for var in &spec.credential_env_vars {
             env.remove(var.as_str());
         }
@@ -195,7 +209,7 @@ fn plan(shim_bin: &Path, reals: &[(String, PathBuf)], broker_addr: &str) -> Shim
 
 /// Resolve each shimmed tool name to its real host path via `PATH`.
 fn resolve_real_binaries(
-    providers: &BTreeMap<String, IntegrationSpec>,
+    providers: &BTreeMap<String, CliIntegrationSpec>,
     host_path: Option<&OsStr>,
 ) -> Result<Vec<(String, PathBuf)>, RunError> {
     providers
@@ -273,11 +287,13 @@ fn bind_broker(base: &Path) -> Result<BrokerListener, RunError> {
 ///
 /// Takes the `gateway_listener` pre-bound by [`pre_bind_gateway`] so the
 /// gateway address is already known to the Sidecar before this call.
-/// Threads run for the lifetime of the process. `providers` is the fully
-/// resolved `binary_name -> IntegrationSpec` map from
-/// [`ResolvedProfile::secret_providers`] — built-in lookups and custom specs
-/// are already merged by config resolution, so no registry rebuilding is
-/// needed here.
+/// Threads run for the lifetime of the process. `providers` is
+/// [`ResolvedProfile::secret_providers`] as-is (CLI entries keyed by binary
+/// name, HTTP entries keyed by `provider_id`) — built-in lookups and custom
+/// specs are already merged by config resolution, so no registry rebuilding
+/// is needed here. Only CLI entries participate in shim decisions
+/// (`decide`/`spec_for` are looked up by `bin`); the gateway thread serves
+/// both origins since it's the store HTTP-sourced secrets get pushed into.
 fn start_broker(
     listener: BrokerListener,
     gateway_listener: SecretGatewayListener,
@@ -286,6 +302,7 @@ fn start_broker(
     providers: BTreeMap<String, IntegrationSpec>,
 ) {
     let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
+    let providers = Arc::new(providers);
 
     let gateway_store = Arc::clone(&store);
     std::thread::spawn(move || {
@@ -294,12 +311,11 @@ fn start_broker(
 
     let session_id = identity.session_id.clone();
     let agent_id = identity.agent_id.to_string();
-    let providers = Arc::new(providers);
     let decide_providers = Arc::clone(&providers);
     let decide = Arc::new(move |bin: &str, args: &str| {
         let provider_id = decide_providers
             .get(bin)
-            .map_or_else(|| bin.to_string(), |spec| spec.provider_id.clone());
+            .map_or_else(|| bin.to_string(), |spec| spec.provider_id().to_string());
         decide_secret(
             mediator.as_ref(),
             &session_id,
@@ -309,8 +325,12 @@ fn start_broker(
             args,
         )
     });
-    let spec_for =
-        Arc::new(move |bin: &str| -> Option<IntegrationSpec> { providers.get(bin).cloned() });
+    let spec_for = Arc::new(move |bin: &str| -> Option<CliIntegrationSpec> {
+        providers
+            .get(bin)
+            .and_then(IntegrationSpec::as_cli)
+            .cloned()
+    });
     std::thread::spawn(move || {
         serve_forever(listener, store, decide, spec_for, None);
     });
@@ -353,12 +373,12 @@ fn decide_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secret::integration::IntegrationRegistry;
+    use firma_secret_provider::IntegrationRegistry;
 
-    /// Minimal `IntegrationSpec` for tests that only care about the binary
+    /// Minimal `CliIntegrationSpec` for tests that only care about the binary
     /// name (e.g. resolving it on `PATH`), not its extraction behavior.
-    fn dummy_spec(name: &str) -> IntegrationSpec {
-        IntegrationSpec {
+    fn dummy_spec(name: &str) -> CliIntegrationSpec {
+        CliIntegrationSpec {
             binary_name: name.to_string(),
             provider_id: name.to_string(),
             credential_env_vars: vec![],

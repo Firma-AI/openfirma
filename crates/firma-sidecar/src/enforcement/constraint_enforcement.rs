@@ -172,6 +172,36 @@ pub trait PolicyEvaluation: Send + Sync {
         Ok(SecretDecision::Passthrough)
     }
 
+    /// Decide secret mediation for an intercepted HTTP vault response
+    /// (`secret.mediate`, HTTP origin — the Sidecar MITM counterpart of
+    /// [`Self::evaluate_secret_mediation`]'s CLI shim origin).
+    ///
+    /// `provider_id` is the stable secret-provider integration identity
+    /// (e.g. `"aws-secrets-manager"`) — it becomes the Cedar
+    /// `Firma::SecretProvider` entity's id, the same entity type and action
+    /// as the CLI origin. `host`/`path`/`method` are the MITM'd request's
+    /// fields, bound to `resource.host`/`resource.path`/`resource.method`
+    /// for per-invocation matching (in place of the CLI origin's
+    /// `resource.bin`/`resource.args`).
+    ///
+    /// The default returns [`SecretDecision::Passthrough`]. The Cedar
+    /// evaluator overrides this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if policy evaluation fails.
+    fn evaluate_secret_mediate_http(
+        &self,
+        _principal: &AgentId,
+        _provider_id: &str,
+        _host: &str,
+        _path: &str,
+        _method: &str,
+        _context: serde_json::Value,
+    ) -> Result<SecretDecision, String> {
+        Ok(SecretDecision::Passthrough)
+    }
+
     /// Decide whether to apply secret rewriting for an outbound HTTP request
     /// (`secret.redact`).
     ///

@@ -35,16 +35,19 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
-    /// Resolved secret-provider integrations, keyed by binary basename. Each
-    /// entry activates a secret-mediation shim for that binary (stdio routed
-    /// through the firma-run broker); the map value is the fully resolved
-    /// [`IntegrationSpec`](crate::secret::integration::IntegrationSpec) — a
-    /// built-in looked up by name, or a custom spec defined inline. This
-    /// carries no policy behavior — Cedar decides intercept vs redact and all
-    /// directives; see the secrets design doc. Merged across `[run.defaults]`
-    /// and the active profile; entries defined later win on name collision
-    /// (profile overrides defaults, custom overrides built-in).
-    pub secret_providers: BTreeMap<String, crate::secret::integration::IntegrationSpec>,
+    /// Resolved secret-provider integrations: CLI vault tools keyed by binary
+    /// basename, HTTP vaults keyed by `provider_id`. A CLI entry activates a
+    /// secret-mediation shim for that binary (stdio routed through the
+    /// firma-run broker); an HTTP entry is mirrored into the autostarted
+    /// Sidecar's own config so it can intercept MITM'd responses from that
+    /// vault. The map value is the fully resolved
+    /// [`IntegrationSpec`](firma_secret_provider::IntegrationSpec) — a
+    /// built-in looked up by name (CLI only), or a custom spec defined
+    /// inline. This carries no policy behavior — Cedar decides intercept vs
+    /// redact and all directives; see the secrets design doc. Merged across
+    /// `[run.defaults]` and the active profile; entries defined later win on
+    /// name collision (profile overrides defaults, custom overrides built-in).
+    pub secret_providers: BTreeMap<String, firma_secret_provider::IntegrationSpec>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
@@ -432,18 +435,38 @@ impl From<SecretMatcherConfig> for firma_core::SecretMatcher {
 }
 
 /// A custom secret-provider integration spec: one full-table entry in
-/// `secret_providers`.
+/// `secret_providers`, explicitly tagged by `type` so a CLI-only field (e.g.
+/// `name`) and an HTTP-only field (e.g. `host`) can never be mixed on the
+/// same entry — an untagged CLI-vs-HTTP guess would also give worse parse
+/// errors for a malformed table than an explicit tag does.
 ///
-/// Minimal example (JSON output with `{ key, value }` pairs):
+/// Minimal CLI example (JSON output with `{ key, value }` pairs):
 ///
 /// ```toml
 /// [run.defaults]
 /// secret_providers = [
-///     { name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+///     { type = "cli", name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+/// ]
+/// ```
+///
+/// Minimal HTTP example:
+///
+/// ```toml
+/// [run.defaults]
+/// secret_providers = [
+///     { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
 /// ]
 /// ```
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct SecretProviderSpec {
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum SecretProviderSpec {
+    Cli(CliProviderSpec),
+    Http(HttpProviderSpec),
+}
+
+/// CLI vault-tool spec: a `type = "cli"` entry in `secret_providers`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CliProviderSpec {
     /// Binary basename to shim.
     pub(crate) name: String,
     /// Stable integration identity, used as the Cedar `Firma::SecretProvider`
@@ -468,10 +491,34 @@ pub(crate) struct SecretProviderSpec {
     pub(crate) forced_args: Vec<String>,
 }
 
+/// HTTP vault spec: a `type = "http"` entry in `secret_providers`. Mirrored
+/// into the autostarted Sidecar's own config so its MITM path can intercept
+/// matching responses — see [`crate::sidecar::config::synthesize`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct HttpProviderSpec {
+    /// Stable integration identity, used as the Cedar `Firma::SecretProvider`
+    /// entity id (no default — HTTP providers have no binary name to fall
+    /// back to).
+    pub(crate) provider_id: String,
+    /// Host glob pattern to match against MITM'd responses (e.g.
+    /// `"secretsmanager.*.amazonaws.com"`).
+    pub(crate) host: String,
+    /// Optional path glob pattern. When absent, matches any path on `host`.
+    #[serde(default)]
+    pub(crate) path: Option<String>,
+    /// Placeholder token template; `{name}` is substituted with the
+    /// percent-encoded secret key.
+    pub(crate) placeholder_template: String,
+    /// How to extract `(name, value)` pairs from the response body.
+    pub(crate) matcher: SecretMatcherConfig,
+}
+
 /// One entry in `secret_providers`: either a bare string naming an existing
-/// built-in integration (`"bws"`), or a full table defining a new custom
-/// integration. TOML is self-describing, so this deserializes untagged based
-/// on whether the entry is a string or a table.
+/// built-in CLI integration (`"bws"`), or a full table defining a new custom
+/// integration (CLI or HTTP). TOML is self-describing, so this deserializes
+/// untagged based on whether the entry is a string or a table; the CLI-vs-HTTP
+/// distinction *within* the table form is resolved by [`SecretProviderSpec`]'s
+/// own `type` tag, not by this outer untagged split.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum SecretProviderPatch {
@@ -901,9 +948,10 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
 }
 
 /// Resolve the merged `secret_providers` patch entries into the final
-/// `binary_name -> IntegrationSpec` map. Entries are processed in order, so a
-/// later entry (a higher-priority profile, or a custom spec appearing after a
-/// bare-name reference) wins on name collision.
+/// map (CLI entries keyed by binary basename, HTTP entries keyed by
+/// `provider_id`). Entries are processed in order, so a later entry (a
+/// higher-priority profile, or a custom spec appearing after a bare-name
+/// reference) wins on name collision.
 ///
 /// # Errors
 ///
@@ -911,8 +959,8 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
 /// a known built-in integration.
 fn resolve_secret_providers(
     patch: Vec<SecretProviderPatch>,
-) -> Result<BTreeMap<String, crate::secret::integration::IntegrationSpec>, RunError> {
-    let builtins = crate::secret::integration::IntegrationRegistry::with_builtins();
+) -> Result<BTreeMap<String, firma_secret_provider::IntegrationSpec>, RunError> {
+    let builtins = firma_secret_provider::IntegrationRegistry::with_builtins();
     let mut resolved = BTreeMap::new();
     for entry in patch {
         match entry {
@@ -927,26 +975,44 @@ fn resolve_secret_providers(
                          — provide a full spec to define a custom one"
                     ))
                 })?;
-                resolved.insert(name, spec);
+                resolved.insert(name, firma_secret_provider::IntegrationSpec::Cli(spec));
             }
-            SecretProviderPatch::Custom(spec) => {
-                let provider_id = spec
-                    .provider_id
-                    .filter(|id| !id.trim().is_empty())
-                    .unwrap_or_else(|| spec.name.clone());
-                resolved.insert(
-                    spec.name.clone(),
-                    crate::secret::integration::IntegrationSpec {
-                        binary_name: spec.name,
-                        provider_id,
-                        credential_env_vars: spec.credential_env_vars,
-                        matcher: spec.matcher.into(),
-                        placeholder_template: spec.placeholder_template,
-                        strip_arg_flags: spec.strip_arg_flags,
-                        forced_args: spec.forced_args,
-                    },
-                );
-            }
+            SecretProviderPatch::Custom(spec) => match *spec {
+                SecretProviderSpec::Cli(cli) => {
+                    let provider_id = cli
+                        .provider_id
+                        .filter(|id| !id.trim().is_empty())
+                        .unwrap_or_else(|| cli.name.clone());
+                    resolved.insert(
+                        cli.name.clone(),
+                        firma_secret_provider::IntegrationSpec::Cli(
+                            firma_secret_provider::CliIntegrationSpec {
+                                binary_name: cli.name,
+                                provider_id,
+                                credential_env_vars: cli.credential_env_vars,
+                                matcher: cli.matcher.into(),
+                                placeholder_template: cli.placeholder_template,
+                                strip_arg_flags: cli.strip_arg_flags,
+                                forced_args: cli.forced_args,
+                            },
+                        ),
+                    );
+                }
+                SecretProviderSpec::Http(http) => {
+                    resolved.insert(
+                        http.provider_id.clone(),
+                        firma_secret_provider::IntegrationSpec::Http(
+                            firma_secret_provider::HttpIntegrationSpec {
+                                provider_id: http.provider_id,
+                                host: http.host,
+                                path: http.path,
+                                matcher: http.matcher.into(),
+                                placeholder_template: http.placeholder_template,
+                            },
+                        ),
+                    );
+                }
+            },
         }
     }
     Ok(resolved)
@@ -1611,7 +1677,7 @@ secret_providers = ["not-a-real-integration"]
 [run.defaults]
 secret_providers = [
     "bws",
-    { name = "bws", placeholder_template = "firma-secret://custom/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+    { type = "cli", name = "bws", placeholder_template = "firma-secret://custom/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
 ]
 "#;
         fs::write(&config_path, toml).unwrap();
@@ -1621,7 +1687,57 @@ secret_providers = [
 
         let resolved = resolve_profile(&run_args).unwrap();
         let spec = resolved.secret_providers.get("bws").unwrap();
-        assert!(spec.placeholder_template.contains("custom"));
+        assert!(
+            spec.as_cli()
+                .expect("bws entry must resolve to a CLI spec")
+                .placeholder_template
+                .contains("custom")
+        );
+    }
+
+    #[test]
+    fn secret_providers_http_entry_resolves_by_provider_id() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        let spec = resolved
+            .secret_providers
+            .get("aws-secrets-manager")
+            .expect("http provider keyed by provider_id")
+            .as_http()
+            .expect("must resolve to an HTTP spec");
+        assert_eq!(spec.host, "secretsmanager.*.amazonaws.com");
+        assert_eq!(spec.provider_id, "aws-secrets-manager");
+    }
+
+    #[test]
+    fn secret_providers_http_entry_missing_type_tag_fails_closed() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    { provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let err = resolve_profile(&run_args).unwrap_err();
+        assert!(matches!(err, RunError::ConfigParse { .. }));
     }
 
     #[test]

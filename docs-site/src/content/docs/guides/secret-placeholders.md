@@ -31,8 +31,13 @@ This keeps the real secret out of the agent process, out of audit logs, and invi
 | Upstream expects a Bearer token in `Authorization` header | [Credential injection](../inject-credentials/) |
 | Secret appears in the HTTP **request body** (JSON, form, raw) | Secret placeholders (this guide) |
 | Local tool over stdio needs to produce or consume a secret | [Redact tool secrets](../redact-tool-secrets/) |
+| Agent calls an **HTTP vault** directly (a cloud secrets manager) | [Redact tool secrets → HTTP vaults](../redact-tool-secrets/#http-vaults) |
 
-The three mechanisms compose. Injection guards the header boundary; placeholders guard the body boundary; shims guard the stdio boundary.
+These compose. Injection guards the header boundary; placeholders guard the
+body boundary; stdio shims and HTTP vault interception both guard the
+secret-fetch boundary — one over a local process's stdio, the other over the
+Sidecar's own HTTPS MITM path — and both populate the same broker dictionary
+that placeholder resolution reads from here.
 
 ## Step 1: Load secrets into the broker
 

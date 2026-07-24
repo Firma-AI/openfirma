@@ -81,6 +81,10 @@ pub struct SpawnRequest<'a> {
     /// Secret gateway address set as `FIRMA_SECRET_GATEWAY_ADDR` on the
     /// Sidecar process. `None` when no secret providers are configured.
     pub secret_gateway_addr: Option<String>,
+    /// HTTP-shaped secret providers mirrored into the synthesized sidecar
+    /// config's `http_secret_providers` (see
+    /// [`crate::sidecar::config::SynthesizeRequest::http_secret_providers`]).
+    pub http_secret_providers: Vec<firma_secret_provider::HttpIntegrationSpec>,
 }
 
 /// Captured values from the seven-line ready sequence.
@@ -189,6 +193,7 @@ impl SidecarSupervisor {
                 capability_seed_path: req.capability_seed_path.as_deref(),
                 audit_fallback_path: req.audit_fallback_path.as_deref(),
                 monitor_mode: req.monitor_mode,
+                http_secret_providers: &req.http_secret_providers,
             })?;
 
             let mut cmd = std::process::Command::new(&req.firma_exe);
