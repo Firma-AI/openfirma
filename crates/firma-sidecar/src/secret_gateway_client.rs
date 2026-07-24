@@ -165,6 +165,12 @@ where
 /// broker remains the single owner of the secret dictionary, so the
 /// extracted value is pushed there rather than cached locally.
 ///
+/// `domain` scopes the pushed secret to that request host, mirroring a CLI
+/// intercept's `domain_path`-derived scope; pass `None` to store it unscoped
+/// (resolves for any request host) — the common case for HTTP vaults, whose
+/// response carries a credential meant for later use against some other
+/// downstream host, not the vault itself.
+///
 /// # Errors
 ///
 /// Returns an error string if the gateway is unreachable, the response
@@ -175,14 +181,14 @@ pub async fn push_secret(
     endpoint: &GatewayEndpoint,
     placeholder: &str,
     value: &[u8],
-    domain: &str,
+    domain: Option<&str>,
 ) -> Result<String, String> {
     use base64::Engine as _;
 
     let request = GatewayRequest::Push(PushRequest {
         placeholder: Str::from(placeholder),
         value_b64: Str::from(base64::engine::general_purpose::STANDARD.encode(value)),
-        domain: Str::from(domain),
+        domain: domain.map(Str::from),
     });
     let payload = serde_json::to_string(&request)
         .map_err(|e| format!("failed to serialize gateway push request: {e}"))?;

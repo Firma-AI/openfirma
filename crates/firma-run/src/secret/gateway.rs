@@ -28,10 +28,15 @@
 //! the Sidecar's config) so it can substitute the placeholder synchronously
 //! into the response body. The gateway stores the already-minted placeholder
 //! as-is — it does not re-derive it — so the stored key can never diverge
-//! from what the agent actually sees:
+//! from what the agent actually sees. `domain` is `null`/absent unless the
+//! matcher's `domain_path`/`domain_is_url` extracted one from the item, in
+//! which case the pushed secret is scoped to it (like a CLI intercept's
+//! `domain_path`-derived scope); otherwise the secret resolves for any
+//! request host — most HTTP vaults return a credential meant for later use
+//! against an unrelated downstream host, not the vault itself:
 //!
 //! ```text
-//! → {"action":"secret.push","placeholder":"firma-secret://aws/dbpass","value_b64":"...","domain":"secretsmanager.us-east-1.amazonaws.com"}
+//! → {"action":"secret.push","placeholder":"firma-secret://aws/dbpass","value_b64":"...","domain":null}
 //! ← {"placeholder":"firma-secret://aws/dbpass"}
 //! ```
 //!
@@ -283,10 +288,11 @@ fn handle_resolve<W: io::Write>(
     write_json_line(writer, &results)
 }
 
-/// Handle a `secret.push` request: mint the placeholder from the named HTTP
-/// provider's `placeholder_template`, insert the value into `store` scoped to
-/// `domain`, and return the minted placeholder so the Sidecar can substitute
-/// it into the response body it forwards to the agent.
+/// Handle a `secret.push` request: insert the already-minted placeholder into
+/// `store`, scoped to `domain` when present (unscoped/wildcard otherwise,
+/// mirroring a CLI intercept whose matcher has no `domain_path`), and return
+/// the placeholder so the Sidecar can substitute it into the response body it
+/// forwards to the agent.
 fn handle_push<W: io::Write>(
     request: &PushRequest,
     writer: &mut W,
@@ -318,14 +324,14 @@ fn handle_push<W: io::Write>(
 
     tracing::debug!(
         placeholder = %placeholder,
-        domain = %request.domain,
+        domain = ?request.domain.as_deref(),
         "secret gateway: pushing HTTP-intercepted secret"
     );
     store.rcu(|current| {
         let mut updated = SecretStore::clone(current);
         updated.insert(
             placeholder.clone(),
-            Some(request.domain.to_string()),
+            request.domain.as_deref().map(str::to_owned),
             SecretValue::new(value.clone()),
         );
         updated
@@ -517,7 +523,7 @@ mod tests {
             &GatewayRequest::Push(PushRequest {
                 placeholder: Str::from("firma-secret://aws/dbpass"),
                 value_b64: Str::from(value_b64),
-                domain: Str::from("secretsmanager.us-east-1.amazonaws.com"),
+                domain: Some(Str::from("secretsmanager.us-east-1.amazonaws.com")),
             }),
         );
         let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
@@ -536,6 +542,43 @@ mod tests {
         assert_eq!(decoded, b"s3cr3t-db-pass");
     }
 
+    /// A pushed secret with no `domain` (the matcher had no `domain_path`) is
+    /// unscoped: it must resolve for a request to a host unrelated to where
+    /// it was extracted from, mirroring a CLI intercept with no `domain_path`.
+    /// This is the common case for HTTP vaults — the fetched credential is
+    /// meant for later use against some other downstream host, not the vault
+    /// itself.
+    #[test]
+    fn push_with_no_domain_resolves_for_any_host() {
+        let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
+        let (listener, addr) = bind_tcp();
+        thread::spawn(move || listener.serve_forever(&store));
+
+        let value_b64 = base64::engine::general_purpose::STANDARD.encode(b"s3cr3t-api-key");
+        let response = send_request(
+            addr,
+            &GatewayRequest::Push(PushRequest {
+                placeholder: Str::from("firma-secret://demo-http-vault/api-key"),
+                value_b64: Str::from(value_b64),
+                domain: None,
+            }),
+        );
+        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert_eq!(val["placeholder"], "firma-secret://demo-http-vault/api-key");
+
+        let resolved = resolve_batch(
+            addr,
+            &["firma-secret://demo-http-vault/api-key"],
+            "some-unrelated-downstream-api.example.com",
+        );
+        let arr: serde_json::Value = serde_json::from_str(&resolved).expect("valid JSON");
+        let b64 = arr[0]["secret_b64"].as_str().expect("secret_b64 field");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("valid base64");
+        assert_eq!(decoded, b"s3cr3t-api-key");
+    }
+
     #[test]
     fn push_invalid_placeholder_token_returns_error() {
         let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
@@ -547,7 +590,7 @@ mod tests {
             &GatewayRequest::Push(PushRequest {
                 placeholder: Str::from("not-a-placeholder-token"),
                 value_b64: Str::from(base64::engine::general_purpose::STANDARD.encode(b"x")),
-                domain: Str::from("example.com"),
+                domain: Some(Str::from("example.com")),
             }),
         );
         let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");

@@ -19,7 +19,7 @@ permit(
     action == Firma::Action::"secret.mediate",
     resource
 ) when {
-    resource.bin == "mock-vault"
+    resource has "bin" && resource.bin == "mock-vault"
 };
 
 permit (

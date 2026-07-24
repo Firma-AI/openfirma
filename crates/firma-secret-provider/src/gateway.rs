@@ -28,9 +28,12 @@ pub struct PushRequest<'a> {
     pub placeholder: Str<'a>,
     /// Base64-encoded plaintext secret value.
     pub value_b64: Str<'a>,
-    /// Host the secret was extracted from; the pushed secret is scoped to
-    /// this domain, like a CLI intercept's `domain_path`-derived scope.
-    pub domain: Str<'a>,
+    /// Host the secret is scoped to, mirroring a CLI intercept's
+    /// `domain_path`-derived scope: `Some(host)` when the matcher's
+    /// `domain_path`/`domain_is_url` extracted a host from the item, `None`
+    /// when it did not (the secret then resolves for any request host).
+    #[serde(borrow, default)]
+    pub domain: Option<Str<'a>>,
 }
 
 #[derive(Deserialize, Serialize)]

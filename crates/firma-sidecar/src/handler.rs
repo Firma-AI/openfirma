@@ -736,11 +736,11 @@ impl RequestHandler {
 
         match response {
             HandledResponse::Ok(dispatched) => HandledResponse::Ok(
-                self.rewrite_with_http_intercept(dispatched, provider, gateway, &request.host)
+                self.rewrite_with_http_intercept(dispatched, provider, gateway)
                     .await,
             ),
             HandledResponse::Passthrough(dispatched) => HandledResponse::Passthrough(
-                self.rewrite_with_http_intercept(dispatched, provider, gateway, &request.host)
+                self.rewrite_with_http_intercept(dispatched, provider, gateway)
                     .await,
             ),
             other => other,
@@ -758,7 +758,6 @@ impl RequestHandler {
         mut dispatched: DispatchedResponse,
         provider: &HttpIntegrationSpec,
         gateway: &GatewayEndpoint,
-        domain: &str,
     ) -> DispatchedResponse {
         let matcher = match CompiledMatcher::compile(&provider.matcher) {
             Ok(m) => m,
@@ -775,6 +774,13 @@ impl RequestHandler {
         // Minting must happen synchronously — the single-pass rewrite
         // substitutes the placeholder in place of the plaintext value as it
         // scans — so pushes to the broker are collected here and sent after.
+        // `item_domain` is `None` unless the matcher's `domain_path`/
+        // `domain_is_url` extracted one from the item; it is deliberately
+        // *not* defaulted to the vault's own request host — an HTTP vault's
+        // response is a credential meant for later use against some other
+        // downstream host, not the vault itself, so an unscoped (wildcard)
+        // push is the useful default here, mirroring a CLI intercept whose
+        // matcher has no `domain_path`.
         let mut pushes: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
         let rewritten = matcher.rewrite(&dispatched.body, &mut |name, value, item_domain, item| {
             let placeholder =
@@ -800,9 +806,13 @@ impl RequestHandler {
         };
 
         for (placeholder, value, item_domain) in &pushes {
-            let push_domain = item_domain.as_deref().unwrap_or(domain);
-            if let Err(error) =
-                secret_gateway_client::push_secret(gateway, placeholder, value, push_domain).await
+            if let Err(error) = secret_gateway_client::push_secret(
+                gateway,
+                placeholder,
+                value,
+                item_domain.as_deref(),
+            )
+            .await
             {
                 tracing::warn!(
                     provider_id = %provider.provider_id,
@@ -2085,6 +2095,15 @@ pub(crate) mod tests {
             .decode(value_b64)
             .expect("valid base64");
         assert_eq!(decoded, b"s3cr3t-db-pass");
+        // The matcher has no domain_path, so the push must be unscoped
+        // (resolves for any request host) rather than defaulted to the
+        // vault's own host — an HTTP vault's response is a credential meant
+        // for later use against some other downstream host.
+        assert!(
+            pushed["domain"].is_null(),
+            "expected unscoped push, got domain: {:?}",
+            pushed["domain"]
+        );
     }
 
     #[tokio::test]
