@@ -133,6 +133,13 @@ pub struct SidecarConfig {
     /// Tenancy settings (agent isolation mode).
     #[serde(default)]
     pub tenancy: TenancyConfig,
+    /// HTTP secret-provider registry for MITM interception, mirrored from
+    /// firma-run's resolved `secret_providers` config (the HTTP-shaped subset
+    /// only) by `firma-run`'s `sidecar::config::synthesize` at autostart —
+    /// a distinct field name from firma-run's own `secret_providers` so the
+    /// two are never confused. Loaded once at startup; not hot-reloaded.
+    #[serde(default)]
+    pub http_secret_providers: Vec<firma_secret_provider::HttpIntegrationSpec>,
 }
 
 impl SidecarConfig {

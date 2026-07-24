@@ -1617,6 +1617,7 @@ dependencies = [
 name = "firma-sidecar"
 version = "0.1.2"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "arc-swap",
  "async-trait",
@@ -1676,6 +1677,7 @@ dependencies = [
  "wiremock",
  "x509-parser",
  "xxhash-rust",
+ "zeroize",
 ]
 
 [[package]]
