@@ -219,7 +219,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+            token_id: "ctok_01j0000000e008000000000001"
                 .parse()
                 .expect("literal token id"),
             agent_id: "agt_01j0000000e008000000000001"
@@ -318,7 +318,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let event = builder.build(payload);
 
         assert_eq!(event.session_id, "sess_001");
-        assert_eq!(event.token_id, "3713c5fc-b569-650c-c780-c64051473370");
+        assert_eq!(event.token_id, "ctok_01j0000000e008000000000001");
         assert_eq!(event.agent_id, "agt_01j0000000e008000000000001");
         assert_eq!(event.action, "communication.external.send");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");

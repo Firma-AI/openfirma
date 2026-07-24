@@ -69,7 +69,7 @@ mod tests {
     fn parses_full_seed_file() {
         let body = r#"
 raw_token = "v4.public.eyJhbGciOiJFZERTQSJ9.test-payload.test-sig"
-token_id = "01J0000000000000000000000Z"
+token_id = "ctok_01j0000000e008000000000001"
 agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo-session"
 action_set = ["communication.external.send"]
@@ -91,7 +91,7 @@ context_hash = "deadbeef"
         // `+00:00` rather than `Z`. Make sure both spellings parse.
         let body = r#"
 raw_token = "v4.public.test"
-token_id = "01J0000000000000000000000Z"
+token_id = "ctok_01j0000000e008000000000001"
 agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo-session"
 action_set = ["communication.external.send"]

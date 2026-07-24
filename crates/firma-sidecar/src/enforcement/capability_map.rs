@@ -235,7 +235,7 @@ mod tests {
 
     fn test_claims(actions: Vec<&str>, resource_scope: &str) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+            token_id: "ctok_01j0000000e008000000000001"
                 .parse()
                 .expect("literal token id"),
             agent_id: "agt_01j0000000e008000000000001"
@@ -324,7 +324,7 @@ mod tests {
         CapabilityEntry {
             raw_token: format!("v4.public.{token_id}"),
             claims: CapabilityClaims {
-                token_id: TokenId::new(),
+                token_id: TokenId::generate(),
                 agent_id: "agt_01j0000000e008000000000001"
                     .parse()
                     .expect("literal agent id"),

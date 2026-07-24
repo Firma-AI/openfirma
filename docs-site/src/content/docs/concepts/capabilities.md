@@ -13,7 +13,7 @@ The token's payload is a `CapabilityClaims` struct, defined in `firma-core`:
 
 ```json
 {
-  "token_id":     "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
+  "token_id":     "ctok_01j0000000e008000000000001",
   "agent_id":     "agt_01j0000000e008000000000001",
   "session_id":   "demo-session",
   "action_set":   ["communication.external.send"],
@@ -28,7 +28,7 @@ Every field has a job:
 
 | Field            | Purpose                                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------------------------------- |
-| `token_id`       | UUID v4 used as the revocation key. Lets you kill a single token without re-issuing every other one.    |
+| `token_id`       | `ctok` TypeID backed by an RFC UUID v7. Used as the revocation key for one capability token.            |
 | `agent_id`       | The principal in Cedar policies (`Firma::Agent::"<agent_id>"`).                                         |
 | `session_id`     | A logical session within an agent's lifetime. Lets the same agent run multiple isolated sessions.       |
 | `action_set`     | The action classes this token authorizes. The Sidecar denies any class outside the set.                 |
@@ -187,6 +187,10 @@ tamper detection to boot time instead of waiting for the first matching request.
 
 A capability lives until its `expiry`. If you need to kill one earlier — say, an agent was compromised and you want to cut it off immediately — you publish a **revocation** for its `token_id`.
 
+Capability token IDs use the canonical form `ctok_<26-character TypeID suffix>`.
+Raw UUIDs and TypeIDs with another prefix or UUID version are rejected by token,
+seed, and revocation ingestion.
+
 In the reference Authority, this is:
 
 ```bash
@@ -198,7 +202,7 @@ The Authority appends `token_id` to its revocation file and broadcasts a `Revoca
 The local store has two layers:
 
 - A **bloom filter** sized for the expected number of active revocations (configurable via `[revocation].capacity` and `.fpr`). Lookups are constant-time and lock-free.
-- An **LRU cache** that absorbs false-positive hits from the bloom and confirms whether a `token_id` is *actually* revoked (configurable via `[revocation].lru_capacity`).
+- An **LRU cache** that absorbs false-positive hits from the bloom and confirms whether a `token_id` is _actually_ revoked (configurable via `[revocation].lru_capacity`).
 
 This split is why revocation lookups stay under microseconds and why memory cost is bounded even with millions of historical revocations.
 
@@ -209,7 +213,7 @@ You might ask: if Stage 2 has the full power of Cedar, why bother with capabilit
 In principle, yes. In practice, the two-layer design buys three things:
 
 1. **Low latency.** Issuance is the right place for expensive checks: provenance, agent identity, multi-factor approval, human-in-the-loop. The Sidecar's hot path stays cheap because that work is already done by the time a token exists. A revoked capability turns into a fast bloom-filter miss.
-2. **Auditability.** A signed token is non-repudiable evidence that *this Authority decided this agent was OK*. You can replay an audit log months later and verify, from cold, that the chain of authorizations actually existed.
+2. **Auditability.** A signed token is non-repudiable evidence that _this Authority decided this agent was OK_. You can replay an audit log months later and verify, from cold, that the chain of authorizations actually existed.
 3. **Operational safety.** Policy bundles get edited often (you tighten a rule, you push). Capabilities get issued at session start and stay stable. If the policy bundle is briefly missing or stale, capability validation continues working — and Stage 2 fails closed on stale bundles, so an old capability cannot bypass a tightening.
 
 The two together form a textbook capability-based security model: the capability says "you have permission to attempt this", the policy says "given current conditions, this attempt is OK". Either alone is weaker.

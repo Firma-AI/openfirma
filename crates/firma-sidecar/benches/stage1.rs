@@ -29,13 +29,13 @@ impl TokenVerifier for MockVerifier {
 
 fn seed_revocations(store: &BloomLruRevocationStore, n: usize) {
     for _ in 0..n {
-        let _ = store.add_revocation(&TokenId::new());
+        let _ = store.add_revocation(&TokenId::generate());
     }
 }
 
 fn test_claims() -> CapabilityClaims {
     CapabilityClaims {
-        token_id: "3713c5fc-b569-650c-c780-c64051473370"
+        token_id: "ctok_01j0000000e008000000000001"
             .parse()
             .expect("literal token id"),
         agent_id: "agt_01j0000000e008000000000001"

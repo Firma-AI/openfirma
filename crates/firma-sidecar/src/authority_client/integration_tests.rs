@@ -614,7 +614,7 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
     );
 
     let pushed_at = Instant::now();
-    let propagate_id: TokenId = "11111111-1111-1111-1111-111111111111"
+    let propagate_id: TokenId = "ctok_01j0000000e008000000000001"
         .parse()
         .expect("literal uuid");
     server

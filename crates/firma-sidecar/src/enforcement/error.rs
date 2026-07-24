@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn test_token_expired_maps_correctly() {
         let err = EnforcementError::TokenValidation(TokenError::Expired {
-            token_id: TokenId::new(),
+            token_id: TokenId::generate(),
         });
         let decision = err.into_deny(EnforcementStage::CapabilityValidation(
             CapabilityValidationStage::TokenValidation,
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn test_token_revoked_maps_correctly() {
         let err = EnforcementError::TokenValidation(TokenError::Revoked {
-            token_id: "14f89c0d-b675-c46e-ba6e-0f9d47ef316f"
+            token_id: "ctok_01j0000000e008000000000001"
                 .parse()
                 .expect("literal token id"),
         });
@@ -206,7 +206,7 @@ mod tests {
                 detail: "test".to_string(),
             },
             EnforcementError::TokenValidation(TokenError::Expired {
-                token_id: "60ae136e-5d49-fbdf-037f-ab5f1d805634"
+                token_id: "ctok_01j0000000e008000000000001"
                     .parse()
                     .expect("literal token id"),
             }),

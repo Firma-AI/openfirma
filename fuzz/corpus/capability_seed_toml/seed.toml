@@ -1,5 +1,5 @@
 raw_token = "v4.public.eyJhbGciOiJFZERTQSJ9.test-payload.test-sig"
-token_id = "01J0000000000000000000000Z"
+token_id = "ctok_01j0000000e008000000000001"
 agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo-session"
 action_set = ["communication.external.send"]

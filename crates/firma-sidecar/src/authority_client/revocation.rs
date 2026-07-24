@@ -115,10 +115,7 @@ impl RevocationTask {
     }
 
     fn apply_event(&mut self, event: &RevocationEvent) -> Result<(), String> {
-        let token_id = event
-            .token_id
-            .parse::<TokenId>()
-            .map_err(|e| format!("invalid token id in revocation event: {e}"))?;
+        let token_id = token_id_from_event(event)?;
         self.store
             .add_revocation(&token_id)
             .map_err(|err| err.to_string())?;
@@ -130,6 +127,18 @@ impl RevocationTask {
         );
         Ok(())
     }
+}
+
+/// Parse and validate the capability token ID carried by a revocation event.
+///
+/// # Errors
+///
+/// Returns an error when the protobuf string is not a canonical `ctok` ID.
+pub fn token_id_from_event(event: &RevocationEvent) -> Result<TokenId, String> {
+    event
+        .token_id
+        .parse::<TokenId>()
+        .map_err(|e| format!("invalid token id in revocation event: {e}"))
 }
 
 async fn wait_or_cancel(delay: Duration, cancel: &CancellationToken) -> bool {

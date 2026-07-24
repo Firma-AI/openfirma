@@ -13,14 +13,14 @@ fn bench_is_revoked_miss(c: &mut Criterion) {
     let store = BloomLruRevocationStore::new(RevocationConfig::default());
     let mut populated = Vec::with_capacity(100_000);
     for _ in 0..100_000_u64 {
-        let id = TokenId::new();
+        let id = TokenId::generate();
         let _ = store.add_revocation(&id);
         populated.push(id);
     }
     let _ = populated;
     c.bench_function("is_revoked_miss", |b| {
         b.iter(|| {
-            let id = TokenId::new();
+            let id = TokenId::generate();
             let _ = black_box(store.is_revoked(&id));
         });
     });
@@ -30,7 +30,7 @@ fn bench_is_revoked_hit(c: &mut Criterion) {
     let store = BloomLruRevocationStore::new(RevocationConfig::default());
     let mut ids = Vec::with_capacity(10_000);
     for _ in 0..10_000_u64 {
-        let id = TokenId::new();
+        let id = TokenId::generate();
         let _ = store.add_revocation(&id);
         ids.push(id);
     }
@@ -47,7 +47,7 @@ fn bench_add_revocation(c: &mut Criterion) {
     let store = BloomLruRevocationStore::new(RevocationConfig::default());
     c.bench_function("add_revocation", |b| {
         b.iter(|| {
-            let id = TokenId::new();
+            let id = TokenId::generate();
             let _ = black_box(store.add_revocation(&id));
         });
     });

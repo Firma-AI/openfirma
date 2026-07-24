@@ -125,14 +125,14 @@ mod tests {
     #[test]
     fn unknown_token_not_revoked() {
         let store = small_store();
-        let result = store.is_revoked(&TokenId::new());
+        let result = store.is_revoked(&TokenId::generate());
         assert_eq!(result.ok(), Some(false));
     }
 
     #[test]
     fn added_token_is_revoked() -> Result<(), TokenError> {
         let store = small_store();
-        let id = TokenId::new();
+        let id = TokenId::generate();
         store.add_revocation(&id)?;
         assert_eq!(store.is_revoked(&id).ok(), Some(true));
         Ok(())
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn bloom_hit_lru_miss_returns_revoked() -> Result<(), TokenError> {
         let store = small_store();
-        let ids: Vec<TokenId> = (0..5).map(|_| TokenId::new()).collect();
+        let ids: Vec<TokenId> = (0..5).map(|_| TokenId::generate()).collect();
         for id in &ids {
             store.add_revocation(id)?;
         }
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn idempotent_add_revocation() -> Result<(), TokenError> {
         let store = small_store();
-        let id = TokenId::new();
+        let id = TokenId::generate();
         store.add_revocation(&id)?;
         store.add_revocation(&id)?;
         assert_eq!(store.is_revoked(&id).ok(), Some(true));
@@ -177,7 +177,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 let mut i = 0_u64;
                 while Instant::now() < deadline {
-                    let id = TokenId::new();
+                    let id = TokenId::generate();
                     let _ = store.is_revoked(&id);
                     if i.is_multiple_of(8) {
                         let _ = store.add_revocation(&id);
@@ -205,7 +205,7 @@ mod proptests {
     proptest! {
         #[test]
         fn members_always_revoked(count in 1usize..200) {
-            let members: Vec<TokenId> = (0..count).map(|_| TokenId::new()).collect();
+            let members: Vec<TokenId> = (0..count).map(|_| TokenId::generate()).collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
                 capacity: 10_000,
                 fpr: 0.001,
@@ -225,7 +225,7 @@ mod proptests {
             reason = "Empirical false-positive rate calculation is test-only."
         )]
         fn non_members_mostly_not_revoked(count in 100usize..500) {
-            let members: Vec<TokenId> = (0..count).map(|_| TokenId::new()).collect();
+            let members: Vec<TokenId> = (0..count).map(|_| TokenId::generate()).collect();
             let member_set: HashSet<TokenId> = members.iter().copied().collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
                 capacity: 10_000,
@@ -238,7 +238,7 @@ mod proptests {
             let mut false_positives = 0_usize;
             let samples = 2_000_usize;
             for _ in 0..samples {
-                let candidate = TokenId::new();
+                let candidate = TokenId::generate();
                 if member_set.contains(&candidate) {
                     continue;
                 }

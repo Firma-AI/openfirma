@@ -263,7 +263,7 @@ mod tests {
     fn sample_claims(expires_in_secs: i64) -> CapabilityClaims {
         let now = Utc::now();
         CapabilityClaims {
-            token_id: TokenId::new(),
+            token_id: TokenId::generate(),
             agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "sess_xyz".parse().unwrap(),
             action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],

@@ -940,7 +940,7 @@ mod tests {
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+            token_id: "ctok_01j0000000e008000000000001"
                 .parse()
                 .expect("literal token id"),
             agent_id: "agt_01j0000000e008000000000001"
@@ -1572,7 +1572,7 @@ mod tests {
             // Verify claims match
             assert_eq!(
                 claims.token_id.to_string(),
-                "3713c5fc-b569-650c-c780-c64051473370"
+                "ctok_01j0000000e008000000000001"
             );
             assert_eq!(
                 claims.agent_id.to_string(),
@@ -1887,7 +1887,7 @@ mod tests {
 
         assert_eq!(payload.session_id, "sess_audit");
         assert_eq!(payload.decision, Decision::Allow);
-        assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
+        assert_eq!(payload.token_id, "ctok_01j0000000e008000000000001");
         assert_eq!(payload.agent_id, "agt_01j0000000e008000000000001");
         assert_eq!(payload.action, "communication.external.send");
         assert!(payload.enforcement_latency_us >= 0);
@@ -2388,7 +2388,7 @@ mod tests {
             audit_payload_from_decision(&modify, &request, "sess_001", Duration::ZERO, None);
         assert_eq!(payload.decision, Decision::Modify);
         assert_eq!(payload.deny_reason, "redacted_header:authorization");
-        assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
+        assert_eq!(payload.token_id, "ctok_01j0000000e008000000000001");
         assert_eq!(payload.action, "communication.external.send");
     }
 
