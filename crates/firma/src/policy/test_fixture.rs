@@ -194,9 +194,12 @@ fn evaluate_to_outcome(path: &Path) -> Outcome {
 ///
 /// Mirrors the Sidecar hot path: the agent id is parsed into an
 /// [`AgentId`] (enforcing the `[a-zA-Z0-9_-]{1,128}` shape) before becoming
-/// a `Firma::Agent` UID; action class and resource host become
-/// `Firma::Action` / `Firma::Resource` UIDs verbatim. Any parse failure is
-/// returned as a ready-to-print fail-closed diagnostic.
+/// a `Firma::Agent` UID; action class becomes a `Firma::Action` UID verbatim.
+/// The resource host becomes a `Firma::Resource` UID for every action except
+/// `secret.mediate`, which is schema-typed to a dedicated
+/// `Firma::SecretProvider` resource — mirrored here so a fixture targeting
+/// `secret.mediate` builds a request the schema actually accepts. Any parse
+/// failure is returned as a ready-to-print fail-closed diagnostic.
 fn build_uids(fixture: &Fixture) -> Result<(EntityUid, EntityUid, EntityUid), String> {
     let agent_id = fixture
         .fixture
@@ -216,7 +219,13 @@ fn build_uids(fixture: &Fixture) -> Result<(EntityUid, EntityUid, EntityUid), St
     let action_uid: EntityUid = FirmaEntityUid::Action(fixture.fixture.action.class.clone())
         .try_into()
         .map_err(|error| format!("error: invalid action UID: {error}\n"))?;
-    let resource_uid: EntityUid = FirmaEntityUid::Resource(fixture.fixture.resource.host.clone())
+    let resource_entity_uid =
+        if fixture.fixture.action.class == firma_core::ActionClass::SecretMediate.as_str() {
+            FirmaEntityUid::SecretProvider(fixture.fixture.resource.host.clone())
+        } else {
+            FirmaEntityUid::Resource(fixture.fixture.resource.host.clone())
+        };
+    let resource_uid: EntityUid = resource_entity_uid
         .try_into()
         .map_err(|error| format!("error: invalid resource UID: {error}\n"))?;
 

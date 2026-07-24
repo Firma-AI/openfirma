@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
-use firma_core::AgentId;
+use firma_core::{AgentId, SecretDecision};
 
 use crate::enforcement::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
@@ -75,6 +75,55 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
             .evaluate_verdict(principal, action, resource, context)
     }
 
+    /// Delegate secret-mediation decisions to the inner snapshot so the live
+    /// Cedar evaluator's `secret.mediate` policies apply through the swap
+    /// boundary.
+    fn evaluate_secret_mediation(
+        &self,
+        principal: &AgentId,
+        provider_id: &str,
+        argv: &str,
+        context: serde_json::Value,
+    ) -> Result<SecretDecision, String> {
+        self.inner
+            .load()
+            .evaluate_secret_mediation(principal, provider_id, argv, context)
+    }
+
+    /// Delegate HTTP-origin secret-mediation decisions to the inner snapshot,
+    /// mirroring [`Self::evaluate_secret_mediation`]'s CLI-origin delegation.
+    fn evaluate_secret_mediate_http(
+        &self,
+        principal: &AgentId,
+        provider_id: &str,
+        host: &str,
+        path: &str,
+        method: &str,
+        context: serde_json::Value,
+    ) -> Result<SecretDecision, String> {
+        self.inner.load().evaluate_secret_mediate_http(
+            principal,
+            provider_id,
+            host,
+            path,
+            method,
+            context,
+        )
+    }
+
+    fn evaluate_secret_redact(
+        &self,
+        principal: &AgentId,
+        host: &str,
+        path: &str,
+        method: &str,
+        context: serde_json::Value,
+    ) -> Result<bool, String> {
+        self.inner
+            .load()
+            .evaluate_secret_redact(principal, host, path, method, context)
+    }
+
     fn is_fresh(&self) -> bool {
         now_ms() < self.deadline_unix_ms.load(Ordering::Relaxed)
     }
@@ -119,5 +168,72 @@ impl PolicyEvaluation for DenyAllPolicyEvaluation {
 
     fn version(&self) -> Option<String> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct PermitPolicy;
+
+    impl PolicyEvaluation for PermitPolicy {
+        fn evaluate(
+            &self,
+            _principal: &AgentId,
+            _action: &str,
+            _resource: &str,
+            _context: serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn is_fresh(&self) -> bool {
+            true
+        }
+
+        fn version(&self) -> Option<String> {
+            None
+        }
+
+        fn evaluate_secret_mediation(
+            &self,
+            _principal: &AgentId,
+            _provider_id: &str,
+            _argv: &str,
+            _context: serde_json::Value,
+        ) -> Result<SecretDecision, String> {
+            Ok(SecretDecision::Permit)
+        }
+    }
+
+    fn agent() -> AgentId {
+        "agt_01j0000000e008000000000001"
+            .parse()
+            .expect("valid agent id")
+    }
+
+    #[test]
+    fn initial_deny_all_snapshot_passes_secret_mediation_through() {
+        let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
+        let decision = swap
+            .evaluate_secret_mediation(
+                &agent(),
+                "bitwarden",
+                "bws secret get x",
+                serde_json::json!({}),
+            )
+            .expect("decision");
+        assert_eq!(decision, SecretDecision::Passthrough);
+    }
+
+    #[test]
+    fn swapped_snapshot_secret_mediation_is_forwarded() {
+        let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
+        swap.swap(Box::new(PermitPolicy), 30, Some("v1".to_string()));
+        let decision = swap
+            .evaluate_secret_mediation(&agent(), "anything", "anything", serde_json::json!({}))
+            .expect("decision");
+        assert_eq!(decision, SecretDecision::Permit);
     }
 }
