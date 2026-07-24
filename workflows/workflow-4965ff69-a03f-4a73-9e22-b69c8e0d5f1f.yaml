@@ -1,6 +1,6 @@
 id: 4965ff69-a03f-4a73-9e22-b69c8e0d5f1f
-name: "@openfirma/feature-planning"
-description: Turn one Linear ticket into a reviewed OpenFirma implementation or decomposition plan
+name: "@firma/feature-planning"
+description: Turn one Linear ticket into a repository-grounded reviewed implementation or decomposition plan
 version: 1
 inputs:
   type: object
@@ -26,16 +26,20 @@ jobs:
           in: "${{ [inputs.ticket_id.lowerAscii()] }}"
         task:
           type: model_method
-          modelType: "@openfirma/feature-planning"
-          modelName: openfirma-plan-${{ self.ticket }}
+          modelType: "@firma/feature-planning"
+          modelName: feature-plan-${{ self.ticket }}
           methodName: plan
           globalArgs:
-            linearApiKey: "${{ vault.get('openfirma-planning', 'linear-api-key') }}"
+            linearApiKey: "${{ vault.get('firma-feature-planning', 'linear-api-key') }}"
             allowedProjectIdsCsv: "8a68d77c-9ffb-4d1f-a580-13b3cc7896fa"
             statusIds:
               triage: "ac9e1a23-f5c1-4582-bd08-937c889e0618"
               inProgress: "d0f30049-a2e1-4ff6-aa4e-c5f5b4720a52"
             allowedIntakeStatusIdsCsv: "70ea6101-6262-4371-acec-38ecfe4e5c2d,ac9e1a23-f5c1-4582-bd08-937c889e0618"
+            repositoryDisplayName: OpenFirma
+            repositoryCommitUrlPrefix: "https://github.com/Firma-AI/openfirma/commit/"
+            planningWorkflowName: "@firma/feature-planning"
+            materializationWorkflowName: "@firma/feature-materialization"
           inputs:
             ticketId: "${{ inputs.ticket_id }}"
             repositoryRevision: "${{ inputs.repository_revision }}"

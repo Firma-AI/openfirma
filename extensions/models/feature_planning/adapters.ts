@@ -6,6 +6,12 @@ import {
   type TicketBaseline,
 } from "./schemas.ts";
 
+export const PLANNING_CONVENTIONS_PATH =
+  "agent-constraints/planning-conventions.md";
+export const ADVERSARIAL_DIMENSIONS_PATH =
+  "agent-constraints/adversarial-dimensions.md";
+const MAX_PROMPT_POLICY_FILE_BYTES = 32_768;
+
 export class AdapterError extends Error {
   constructor(
     readonly kind:
@@ -686,7 +692,7 @@ export async function archiveRepository(
   revision: string,
   vcs: "jj" | "git",
 ): Promise<{ root: string; checkout: string }> {
-  const root = await Deno.makeTempDir({ prefix: "openfirma-planning-" });
+  const root = await Deno.makeTempDir({ prefix: "firma-feature-planning-" });
   const checkout = `${root}/repository`;
   await Deno.mkdir(checkout);
   const archive = `${root}/repository.tar`;
@@ -732,6 +738,98 @@ export async function archiveRepository(
   return { root, checkout };
 }
 
+async function readPromptPolicyFile(
+  checkout: string,
+  relativePath: string,
+): Promise<string> {
+  const path = `${checkout}/${relativePath}`;
+  let metadata: Deno.FileInfo;
+  try {
+    metadata = await Deno.lstat(path);
+  } catch (error) {
+    throw new AdapterError(
+      "conflict",
+      `Required repository prompt policy file ${relativePath} could not be inspected: ${
+        String(error)
+      }`,
+      false,
+    );
+  }
+  if (!metadata.isFile || metadata.isSymlink) {
+    throw new AdapterError(
+      "conflict",
+      `Repository prompt policy file ${relativePath} must be a regular file`,
+      false,
+    );
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await Deno.readFile(path);
+  } catch (error) {
+    throw new AdapterError(
+      "conflict",
+      `Required repository prompt policy file ${relativePath} could not be read: ${
+        String(error)
+      }`,
+      false,
+    );
+  }
+  if (bytes.byteLength > MAX_PROMPT_POLICY_FILE_BYTES) {
+    throw new AdapterError(
+      "conflict",
+      `Repository prompt policy file ${relativePath} exceeds ${MAX_PROMPT_POLICY_FILE_BYTES} bytes`,
+      false,
+    );
+  }
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new AdapterError(
+      "conflict",
+      `Repository prompt policy file ${relativePath} is not valid UTF-8: ${
+        String(error)
+      }`,
+      false,
+    );
+  }
+  if (!content.trim()) {
+    throw new AdapterError(
+      "conflict",
+      `Repository prompt policy file ${relativePath} is empty`,
+      false,
+    );
+  }
+  return content;
+}
+
+export async function readRepositoryPromptPolicy(checkout: string): Promise<{
+  planningConventions: string;
+  adversarialDimensions: string;
+}> {
+  const [planningConventions, adversarialDimensions] = await Promise.all([
+    readPromptPolicyFile(checkout, PLANNING_CONVENTIONS_PATH),
+    readPromptPolicyFile(checkout, ADVERSARIAL_DIMENSIONS_PATH),
+  ]);
+  return { planningConventions, adversarialDimensions };
+}
+
+export async function loadRepositoryPromptPolicy(
+  repoDir: string,
+  revision: string,
+  vcs: "jj" | "git",
+): Promise<{
+  planningConventions: string;
+  adversarialDimensions: string;
+}> {
+  const archived = await archiveRepository(repoDir, revision, vcs);
+  try {
+    return await readRepositoryPromptPolicy(archived.checkout);
+  } finally {
+    await Deno.remove(archived.root, { recursive: true });
+  }
+}
+
 export function codexEnvironment(): Record<string, string> {
   const names = [
     "HOME",
@@ -761,9 +859,9 @@ export function codexPermissionArguments(): string[] {
     "--disable",
     "multi_agent",
     "-c",
-    'default_permissions="openfirma-planning"',
+    'default_permissions="firma-feature-planning"',
     "-c",
-    'permissions.openfirma-planning.filesystem={":minimal"="read",":workspace_roots"={"."="read"}}',
+    'permissions.firma-feature-planning.filesystem={":minimal"="read",":workspace_roots"={"."="read"}}',
     "-c",
     'approval_policy="never"',
     "-c",

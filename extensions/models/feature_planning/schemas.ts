@@ -19,12 +19,24 @@ export const StatusIdsSchema = z.strictObject({
   inProgress: z.string().min(1),
 });
 
+const RepositoryCommitUrlPrefixSchema = z.string().url().refine(
+  (value) => value.endsWith("/"),
+  "Repository commit URL prefix must end with a slash",
+);
+const WorkflowNameSchema = z.string().regex(
+  /^@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/,
+);
+
 export const GlobalArgsSchema = z.strictObject({
   linearApiKey: z.string().min(1).meta({ sensitive: true }),
   linearApiUrl: z.string().url().default("https://api.linear.app/graphql"),
   allowedProjectIdsCsv: z.string().min(1),
   statusIds: StatusIdsSchema,
   allowedIntakeStatusIdsCsv: z.string().min(1),
+  repositoryDisplayName: z.string().min(1),
+  repositoryCommitUrlPrefix: RepositoryCommitUrlPrefixSchema,
+  planningWorkflowName: WorkflowNameSchema,
+  materializationWorkflowName: WorkflowNameSchema,
   codexBinary: z.string().min(1).default("codex"),
   codexModel: z.string().min(1).optional(),
   codexTimeoutSeconds: z.number().int().min(60).max(7200).default(1800),
@@ -39,6 +51,7 @@ export const PlanningStateSchema = z.strictObject({
   startedAt: z.string().datetime(),
   phase: PhaseSchema,
   repositoryRevision: z.string().min(1).optional(),
+  promptPolicyDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   currentCandidateVersion: z.number().int().positive().optional(),
   activeMaterializationRunId: z.string().uuid().optional(),
   completedReviewAttempts: z.number().int().min(0).max(3),
@@ -48,6 +61,28 @@ export const PlanningStateSchema = z.strictObject({
 });
 
 export type PlanningState = z.infer<typeof PlanningStateSchema>;
+
+export const PromptPolicySchema = z.strictObject({
+  attempt: z.number().int().positive(),
+  repositoryRevision: z.string().min(1),
+  contractVersion: z.literal("1"),
+  repositoryDisplayName: z.string().min(1),
+  repositoryCommitUrlPrefix: RepositoryCommitUrlPrefixSchema,
+  planningWorkflowName: WorkflowNameSchema,
+  materializationWorkflowName: WorkflowNameSchema,
+  planningConventionsPath: z.literal(
+    "agent-constraints/planning-conventions.md",
+  ),
+  planningConventions: z.string().min(1).max(32_768),
+  adversarialDimensionsPath: z.literal(
+    "agent-constraints/adversarial-dimensions.md",
+  ),
+  adversarialDimensions: z.string().min(1).max(32_768),
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+  capturedAt: z.string().datetime(),
+});
+
+export type PromptPolicy = z.infer<typeof PromptPolicySchema>;
 
 const CommentSchema = z.strictObject({
   id: z.string().min(1),

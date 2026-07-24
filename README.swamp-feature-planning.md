@@ -1,8 +1,9 @@
-# OpenFirma Feature Planning
+# Repository-Aware Feature Planning
 
-This Swamp extension turns one Linear issue into a reviewed implementation plan
-or an approval-gated child-issue decomposition. Swamp owns lifecycle state and
-versioned artifacts. Linear is the collaborative projection.
+This Swamp extension turns one trusted, developer-authored Linear issue into a
+reviewed implementation plan or an approval-gated child-issue decomposition.
+Swamp owns lifecycle state and versioned artifacts. Linear is the collaborative
+projection.
 
 The author and every reviewer run as separate ephemeral Codex processes against
 independent read-only snapshots of the same immutable Git or Jujutsu commit.
@@ -21,8 +22,8 @@ not forwarded to Codex.
 Create a local encrypted vault and store the API credential:
 
 ```bash
-swamp vault create local_encryption openfirma-planning
-swamp vault put openfirma-planning linear-api-key '<key>'
+swamp vault create local_encryption firma-feature-planning
+swamp vault put firma-feature-planning linear-api-key '<key>'
 ```
 
 Project and status UUIDs are non-secret deployment configuration in the planning
@@ -46,10 +47,48 @@ closed before any Linear mutation when a ticket is unassigned or belongs to a
 different project. Materialized child issues are explicitly assigned to the
 parent ticket's allowed project.
 
+## Configure A Repository
+
+Every repository using the extension must commit both prompt-policy files:
+
+```text
+agent-constraints/planning-conventions.md
+agent-constraints/adversarial-dimensions.md
+```
+
+The planning file defines repository architecture, implementation, testing, and
+documentation conventions. The adversarial file defines repository-specific
+review dimensions. Each file must be a regular, non-empty UTF-8 file no larger
+than 32 KiB; symlinks are rejected. Missing or invalid files fail the attempt
+before Codex runs.
+
+The model reads both files from the same immutable revision used by the agents.
+It persists their contents, paths, repository presentation settings, contract
+version, and canonical digest in `prompt-policy-<attempt>`. Repairs, reviews, and
+recovery use that frozen resource even if a later commit changes the files.
+
+Configure these non-secret global arguments in the repository's planning
+workflow:
+
+- `repositoryDisplayName`
+- `repositoryCommitUrlPrefix`, including the trailing slash
+- `planningWorkflowName`
+- `materializationWorkflowName`
+
+The shipped workflow contains OpenFirma's values. Another repository can reuse
+the same model with its own convention files, Linear UUIDs, repository URL, and
+workflow presentation settings.
+
+The workflow is manually started by a developer with board access, so the ticket
+and human comments are trusted task instructions. Fixed controller requirements
+still own read-only access, revision and identity binding, reviewer isolation,
+and output schemas. Generated lifecycle comments are excluded from agent ticket
+context; generated candidates and reviews remain untrusted data.
+
 ## Plan A Ticket
 
 ```bash
-swamp workflow run @openfirma/feature-planning --input ticket_id=FIR-123
+swamp workflow run @firma/feature-planning --input ticket_id=FIR-123
 ```
 
 Optional `repository_revision` accepts a Git commit, Jujutsu commit ID, or
@@ -78,21 +117,21 @@ they assessed. Use `syncLinear` to retry missing uploads and reconstruct the
 entire comment from persisted resources:
 
 ```bash
-swamp model method run openfirma-plan-fir-123 syncLinear
+swamp model method run feature-plan-fir-123 syncLinear
 ```
 
 The model is named from the normalized ticket, such as
-`openfirma-plan-fir-123`. Inspect its state and outcome with:
+`feature-plan-fir-123`. Inspect its state and outcome with:
 
 ```bash
-swamp data get openfirma-plan-fir-123 state-main
-swamp data get openfirma-plan-fir-123 outcome-main
+swamp data get feature-plan-fir-123 state-main
+swamp data get feature-plan-fir-123 outcome-main
 ```
 
 Approve a reviewed implementation plan with the command shown in its comment:
 
 ```bash
-swamp model method run openfirma-plan-fir-123 approvePlan
+swamp model method run feature-plan-fir-123 approvePlan
 ```
 
 Approval records the explicit human transition, updates the cumulative comment,
@@ -100,7 +139,7 @@ and projects the configured `In Progress` Linear status. Rejecting a plan means
 starting a deliberate new attempt:
 
 ```bash
-swamp workflow run @openfirma/feature-planning --input ticket_id=FIR-123
+swamp workflow run @firma/feature-planning --input ticket_id=FIR-123
 ```
 
 ## Materialize A Decomposition
@@ -109,8 +148,8 @@ Launch materialization with the candidate version and digest from the reviewed
 outcome:
 
 ```bash
-swamp workflow run @openfirma/feature-materialization \
-  --input model_name=openfirma-plan-fir-123 \
+swamp workflow run @firma/feature-materialization \
+  --input model_name=feature-plan-fir-123 \
   --input '{"candidate_version":3}' \
   --input plan_digest=<64-character-sha256> \
   --input approval_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
@@ -135,7 +174,7 @@ decomposition is unsuitable. If a suspended run is abandoned rather than
 rejected, return the model to `decomposition_ready` explicitly:
 
 ```bash
-swamp model method run openfirma-plan-fir-123 cancelMaterialization
+swamp model method run feature-plan-fir-123 cancelMaterialization
 ```
 
 Partial child creation is reconciled by stable markers. Existing children are

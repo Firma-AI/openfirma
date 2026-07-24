@@ -1,4 +1,4 @@
-# OpenFirma Feature Planning Workflow
+# Repository-Aware Feature Planning Workflow
 
 | Field           | Value                                                         |
 | --------------- | ------------------------------------------------------------- |
@@ -10,7 +10,7 @@
 
 ## Purpose
 
-This document specifies a state machine that turns one OpenFirma Linear ticket
+This document specifies a state machine that turns one developer-authored Linear ticket
 into one of three product outcomes:
 
 1. A reviewed implementation plan linked from the original ticket's lifecycle
@@ -28,7 +28,7 @@ are bounded to three completed reviews.
 ## Goals
 
 - Accept one Linear issue identifier.
-- Produce plans grounded in the current OpenFirma repository.
+- Produce plans grounded in an immutable revision of the configured repository.
 - Distinguish cohesive implementation work from work that needs decomposition.
 - Escalate when missing product or architecture decisions prevent a tight plan.
 - Run every review in a fresh context with independent repository access.
@@ -41,7 +41,7 @@ are bounded to three completed reviews.
 
 ## Non-goals
 
-- Implement the feature, open a pull request, or modify the OpenFirma working
+- Implement the feature, open a pull request, or modify the repository working
   copy.
 - Build a general distributed workflow engine inside the planning model.
 - Guarantee transactional consistency between Swamp and Linear.
@@ -62,7 +62,7 @@ The design follows the useful boundary demonstrated by Swamp's
 - Linear is a collaborative projection, while Swamp is authoritative for run
   state and history.
 
-OpenFirma deliberately strengthens two areas compared with that extension:
+This model deliberately strengthens two areas compared with that extension:
 
 - Adversarial review uses a fresh agent rather than the authoring session.
 - Decomposition uses a native, digest-bound manual approval gate before any
@@ -79,7 +79,7 @@ flowchart LR
     Caller[Caller] -->|Linear ticket ID| PlanningWorkflow[Planning workflow]
     PlanningWorkflow --> PlanningModel[Feature planning model]
     PlanningModel --> Linear[Linear]
-    PlanningModel --> Repo[Read-only OpenFirma checkout]
+    PlanningModel --> Repo[Read-only repository checkout]
     PlanningModel --> Author[Author agent]
     PlanningModel --> Reviewer[Fresh reviewer agent]
     PlanningModel --> Data[(Versioned Swamp data)]
@@ -135,6 +135,25 @@ The reviewer does not receive earlier review reports, repair notes, author
 transcripts, drafting rationale, or hidden reasoning. Every review attempt uses
 a new agent session.
 
+The ticket and human comments are trusted task instructions because a developer
+with board access manually starts the workflow. They cannot override the fixed
+controller's read-only access, immutable identity bindings, isolation, or output
+schema. Generated lifecycle comments are removed from prompt context. Candidates
+and reviews are model-generated and remain untrusted data.
+
+### Repository prompt policy
+
+Each repository commits `agent-constraints/planning-conventions.md` and
+`agent-constraints/adversarial-dimensions.md`. The model loads both from the
+resolved immutable revision before the first agent call. It stores their content,
+paths, repository presentation configuration, prompt-contract version, and
+canonical digest in `prompt-policy-<attempt>`.
+
+The files are required regular files; symlinks are rejected. They must be
+non-empty UTF-8 and are limited to 32 KiB each. Recovery uses the persisted
+policy rather than reading the current working copy, so every author, repair, and
+reviewer in one attempt observes exactly the same policy.
+
 ## Lifecycle State
 
 The model stores only phases meaningful to operators. Drafting, reviewing,
@@ -182,7 +201,7 @@ V1 does not add custom leases, fencing tokens, or compare-and-set state claims.
 ## Model Identity and Attempts
 
 One model instance represents one Linear ticket, for example
-`openfirma-plan-fir-123`. Its state includes:
+`feature-plan-fir-123`. Its state includes:
 
 ```typescript
 interface PlanningState {
@@ -201,6 +220,7 @@ interface PlanningState {
     | "children_created"
     | "failed";
   repositoryRevision?: string;
+  promptPolicyDigest?: string;
   currentCandidateVersion?: number;
   activeMaterializationRunId?: string;
   completedReviewAttempts: number;
@@ -225,7 +245,7 @@ attempt's Linear comment.
 
 ## Planning Workflow
 
-`openfirma-feature-planning` accepts:
+`@firma/feature-planning` accepts:
 
 ```yaml
 type: object
@@ -252,6 +272,7 @@ workflows are DAGs and cannot express a data-dependent sequential loop.
 reserve next attempt and set state = planning
 capture ticket baseline if absent for this attempt
 resolve immutable repository commit if absent for this attempt
+load and persist the digest-bound repository prompt policy if absent
 project Linear status = Triage
 upload point-in-time input snapshot JSON
 render the cumulative Linear comment
@@ -351,10 +372,11 @@ interface Plan {
 }
 ```
 
-Plans must cite concrete repository paths and consider OpenFirma's fail-closed
-behavior, local hot path, deterministic enforcement, immutable execution
-envelopes, supported Unix/Windows targets, strict Rust lint policy, tests, and
-documentation impact when relevant.
+Plans must cite concrete repository paths and follow the frozen repository
+planning conventions. OpenFirma's committed convention file currently requires
+fail-closed behavior, a local deterministic hot path, immutable execution
+envelopes, Unix and Windows support, strict Rust linting, tests, and relevant
+documentation updates.
 
 ### Decomposition content
 
@@ -409,7 +431,7 @@ finding.
 
 ## Swamp Model
 
-The recommended model type is `@openfirma/feature-planning`.
+The model type is `@firma/feature-planning`.
 
 ### Methods
 
@@ -448,6 +470,7 @@ gate-reconciliation workflow.
 | ----------------- | -------------------------------------------------------------- |
 | `state`           | Coarse phase, attempt, candidate version, and review count.    |
 | `ticketBaseline`  | Normalized Linear context captured per attempt.                |
+| `promptPolicy`    | Attempt-frozen repository prompt policy and digest.            |
 | `candidate`       | Versioned implementation or decomposition candidates.          |
 | `review`          | Versioned reports bound to candidate versions.                 |
 | `artifact`        | Immutable upload metadata for inputs, candidates, and reviews. |
@@ -483,7 +506,7 @@ names are valid API identifiers.
 Each attempt owns one marked Linear comment. New attempts use a stable run marker:
 
 ```text
-openfirma-planning:run=6b5f6db8-2398-4e85-8aa8-e70cf13a1936
+firma-feature-planning:run=6b5f6db8-2398-4e85-8aa8-e70cf13a1936
 ```
 
 The marker is rendered inside the collapsed `Run details` section. Reconciliation
@@ -561,7 +584,7 @@ the model instance.
 ## Decomposition Materialization Workflow
 
 The human reviews the decomposition artifact, generates a fresh UUID approval
-ID, then explicitly starts `@openfirma/feature-materialization` with the
+ID, then explicitly starts `@firma/feature-materialization` with the
 planning model name, candidate version, plan digest, and approval ID.
 
 The workflow performs:
@@ -643,9 +666,9 @@ stored IDs and markers before creating anything.
 
 ## Security
 
-- Ticket, plan, review, and comment text are untrusted prompt data.
-- Instructions inside untrusted data cannot override agent or repository
-  instructions.
+- Developer-authored ticket text and human comments are trusted task context.
+- Generated lifecycle comments are excluded from prompts, and generated plan and
+  review data cannot override controller or repository instructions.
 - Author and reviewer receive read-only repository access and no Linear mutation
   credentials.
 - Reviewer sessions receive no author transcript or hidden reasoning.

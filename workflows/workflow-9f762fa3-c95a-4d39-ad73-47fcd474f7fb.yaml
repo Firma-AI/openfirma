@@ -1,6 +1,6 @@
 id: 9f762fa3-c95a-4d39-ad73-47fcd474f7fb
-name: "@openfirma/feature-materialization"
-description: Approve and materialize an exact reviewed OpenFirma decomposition
+name: "@firma/feature-materialization"
+description: Approve and materialize an exact reviewed repository decomposition
 version: 1
 inputs:
   type: object
@@ -8,7 +8,7 @@ inputs:
   properties:
     model_name:
       type: string
-      pattern: "^openfirma-plan-[a-z][a-z0-9_]*-[1-9][0-9]*$"
+      pattern: "^feature-plan-[a-z][a-z0-9_]*-[1-9][0-9]*$"
     candidate_version:
       type: integer
     plan_digest:
@@ -31,7 +31,7 @@ jobs:
           in: "${{ [inputs.model_name] }}"
         task:
           type: model_method
-          modelType: "@openfirma/feature-planning"
+          modelType: "@firma/feature-planning"
           modelName: "${{ self.planning_model }}"
           methodName: prepareMaterialization
           inputs:
@@ -56,7 +56,7 @@ jobs:
               type: succeeded
         task:
           type: model_method
-          modelType: "@openfirma/feature-planning"
+          modelType: "@firma/feature-planning"
           modelName: "${{ self.planning_model }}"
           methodName: materialize
           inputs:

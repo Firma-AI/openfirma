@@ -1,7 +1,10 @@
 import { z } from "npm:zod@4.3.6";
 import {
   AdapterError,
+  ADVERSARIAL_DIMENSIONS_PATH,
   LinearClient,
+  loadRepositoryPromptPolicy,
+  PLANNING_CONVENTIONS_PATH,
   resolveRepositoryRevision,
   runAuthor,
   runReviewer,
@@ -32,6 +35,8 @@ import {
   OutcomeSchema,
   type PlanningState,
   PlanningStateSchema,
+  type PromptPolicy,
+  PromptPolicySchema,
   type ReviewRecord,
   ReviewRecordSchema,
   StatusOwnershipSchema,
@@ -105,6 +110,107 @@ async function readBaseline(context: Context): Promise<TicketBaseline | null> {
 async function readOutcome(context: Context): Promise<Outcome | null> {
   const value = await context.readResource("outcome-main");
   return value ? OutcomeSchema.parse(value) : null;
+}
+
+async function readPromptPolicy(
+  context: Context,
+  attempt: number,
+): Promise<PromptPolicy | null> {
+  const value = await context.readResource(`prompt-policy-${attempt}`);
+  if (!value) return null;
+  const policy = PromptPolicySchema.parse(value);
+  if (await sha256(promptPolicyBinding(policy)) !== policy.digest) {
+    throw new AdapterError(
+      "conflict",
+      "Persisted prompt policy digest does not match its content",
+      false,
+    );
+  }
+  return policy;
+}
+
+function promptPolicyBinding(
+  policy: Omit<PromptPolicy, "digest" | "capturedAt">,
+) {
+  return {
+    attempt: policy.attempt,
+    repositoryRevision: policy.repositoryRevision,
+    contractVersion: policy.contractVersion,
+    repositoryDisplayName: policy.repositoryDisplayName,
+    repositoryCommitUrlPrefix: policy.repositoryCommitUrlPrefix,
+    planningWorkflowName: policy.planningWorkflowName,
+    materializationWorkflowName: policy.materializationWorkflowName,
+    planningConventionsPath: policy.planningConventionsPath,
+    planningConventions: policy.planningConventions,
+    adversarialDimensionsPath: policy.adversarialDimensionsPath,
+    adversarialDimensions: policy.adversarialDimensions,
+  };
+}
+
+export async function ensurePromptPolicy(
+  context: Context,
+  state: PlanningState,
+  revision: string,
+  vcs: "jj" | "git",
+): Promise<{ state: PlanningState; policy: PromptPolicy }> {
+  const existing = await readPromptPolicy(context, state.attempt);
+  if (existing?.attempt === state.attempt) {
+    if (
+      existing.repositoryRevision !== revision ||
+      (state.promptPolicyDigest && state.promptPolicyDigest !== existing.digest)
+    ) {
+      throw new AdapterError(
+        "conflict",
+        "Persisted prompt policy does not match the active planning attempt",
+        false,
+      );
+    }
+    if (state.promptPolicyDigest === existing.digest) {
+      return { state, policy: existing };
+    }
+    const next = {
+      ...state,
+      promptPolicyDigest: existing.digest,
+      updatedAt: now(),
+    };
+    await writeState(context, next);
+    return { state: next, policy: existing };
+  }
+  const files = await loadRepositoryPromptPolicy(
+    context.repoDir,
+    revision,
+    vcs,
+  );
+  const binding: Omit<PromptPolicy, "digest" | "capturedAt"> = {
+    attempt: state.attempt,
+    repositoryRevision: revision,
+    contractVersion: "1" as const,
+    repositoryDisplayName: context.globalArgs.repositoryDisplayName,
+    repositoryCommitUrlPrefix: context.globalArgs.repositoryCommitUrlPrefix,
+    planningWorkflowName: context.globalArgs.planningWorkflowName,
+    materializationWorkflowName: context.globalArgs.materializationWorkflowName,
+    planningConventionsPath: PLANNING_CONVENTIONS_PATH,
+    planningConventions: files.planningConventions,
+    adversarialDimensionsPath: ADVERSARIAL_DIMENSIONS_PATH,
+    adversarialDimensions: files.adversarialDimensions,
+  };
+  const policy = PromptPolicySchema.parse({
+    ...binding,
+    digest: await sha256(promptPolicyBinding(binding)),
+    capturedAt: now(),
+  });
+  await context.writeResource(
+    "promptPolicy",
+    `prompt-policy-${state.attempt}`,
+    policy,
+  );
+  const next = {
+    ...state,
+    promptPolicyDigest: policy.digest,
+    updatedAt: now(),
+  };
+  await writeState(context, next);
+  return { state: next, policy };
 }
 
 export async function records<T>(
@@ -560,8 +666,36 @@ type CommentProjection = {
   artifacts: Artifact[];
   outcome: Outcome | null;
   materialization: Materialization | null;
+  repositoryCommitUrlPrefix: string;
+  planningWorkflowName: string;
+  materializationWorkflowName: string;
   ticketVisibleValues?: string[];
 };
+
+type ProjectionConfiguration = Pick<
+  PromptPolicy,
+  | "repositoryCommitUrlPrefix"
+  | "planningWorkflowName"
+  | "materializationWorkflowName"
+>;
+
+export function resolveProjectionConfiguration(
+  state: PlanningState,
+  policy: PromptPolicy | null,
+  globalArgs: GlobalArgs,
+): ProjectionConfiguration {
+  if (
+    state.promptPolicyDigest &&
+    (!policy || policy.digest !== state.promptPolicyDigest)
+  ) {
+    throw new AdapterError(
+      "conflict",
+      "Current planning attempt has no matching frozen prompt policy",
+      false,
+    );
+  }
+  return policy ?? globalArgs;
+}
 
 function scrubTicketVisibleText(text: string, values: string[]): string {
   return [...new Set(values.filter((value) => value.length > 0))]
@@ -661,7 +795,7 @@ export function renderPlanningComment(input: CommentProjection): string {
     "+++ Run details",
     `- Planning run: \`${marker}\``,
     revision
-      ? `- Repository revision: [\`${revision}\`](https://github.com/openfirma/openfirma/commit/${revision})`
+      ? `- Repository revision: [\`${revision}\`](${input.repositoryCommitUrlPrefix}${revision})`
       : "- Repository revision: pending",
     `- Attempt: ${state.attempt}`,
     `- Started: ${state.startedAt}`,
@@ -753,7 +887,7 @@ export function renderPlanningComment(input: CommentProjection): string {
         "",
         "**Suggested next steps:**",
         `- Approve: \`swamp model method run ${input.modelName} approvePlan\``,
-        `- Reject and replan: \`swamp workflow run @openfirma/feature-planning --input ticket_id=${state.issueIdentifier}\``,
+        `- Reject and replan: \`swamp workflow run ${input.planningWorkflowName} --input ticket_id=${state.issueIdentifier}\``,
       );
     } else if (
       state.phase === "decomposition_ready" && outcome?.candidateVersion &&
@@ -762,8 +896,8 @@ export function renderPlanningComment(input: CommentProjection): string {
       body.push(
         "",
         "**Suggested next steps:**",
-        `- Approve: \`swamp workflow run @openfirma/feature-materialization --input model_name=${input.modelName} --input '{"candidate_version":${outcome.candidateVersion}}' --input plan_digest=${outcome.planDigest} --input approval_id=$(uuidgen | tr '[:upper:]' '[:lower:]')\``,
-        `- Reject and replan: \`swamp workflow run @openfirma/feature-planning --input ticket_id=${state.issueIdentifier}\``,
+        `- Approve: \`swamp workflow run ${input.materializationWorkflowName} --input model_name=${input.modelName} --input '{"candidate_version":${outcome.candidateVersion}}' --input plan_digest=${outcome.planDigest} --input approval_id=$(uuidgen | tr '[:upper:]' '[:lower:]')\``,
+        `- Reject and replan: \`swamp workflow run ${input.planningWorkflowName} --input ticket_id=${state.issueIdentifier}\``,
       );
     }
   }
@@ -776,7 +910,7 @@ export function renderPlanningComment(input: CommentProjection): string {
       "",
       "**Suggested next steps:**",
       "- Update the ticket with the requested information.",
-      `- Retry planning: \`swamp workflow run @openfirma/feature-planning --input ticket_id=${state.issueIdentifier}\``,
+      `- Retry planning: \`swamp workflow run ${input.planningWorkflowName} --input ticket_id=${state.issueIdentifier}\``,
     );
   } else if (outcome?.kind === "review_exhausted") {
     body.push("", "Human action is required after three adversarial reviews.");
@@ -815,7 +949,7 @@ export function renderPlanningComment(input: CommentProjection): string {
     `- Reviews completed: ${state.completedReviewAttempts}/3`,
     `- Artifacts uploaded: ${artifacts.length}`,
     `- Next action: ${recoveryAction(state, outcome)}`,
-    "- Recovery: run `@openfirma/feature-planning` again for this ticket.",
+    `- Recovery: run \`${input.planningWorkflowName}\` again for this ticket.`,
     "+++",
   ];
   return [
@@ -865,6 +999,12 @@ async function projectLifecycleComment(
   reviews.sort((left, right) => left.reviewAttempt - right.reviewAttempt);
   const outcome = await readOutcome(context);
   const baseline = await readBaseline(context);
+  const policy = await readPromptPolicy(context, state.attempt);
+  const projection = resolveProjectionConfiguration(
+    state,
+    policy,
+    context.globalArgs,
+  );
   const body = renderPlanningComment({
     state,
     modelName: context.definition.name,
@@ -873,6 +1013,9 @@ async function projectLifecycleComment(
     artifacts,
     outcome: outcome?.attempt === state.attempt ? outcome : null,
     materialization: await latestMaterialization(context, state.attempt),
+    repositoryCommitUrlPrefix: projection.repositoryCommitUrlPrefix,
+    planningWorkflowName: projection.planningWorkflowName,
+    materializationWorkflowName: projection.materializationWorkflowName,
     ticketVisibleValues: baseline
       ? [
         baseline.identifier,
@@ -984,6 +1127,7 @@ async function persistAuthorResult(
   baseline: TicketBaseline,
   revision: string,
   vcs: "jj" | "git",
+  policy: PromptPolicy,
   previous?: { candidate: Candidate; review: ReviewRecord },
 ): Promise<{ state: PlanningState; candidate?: Candidate; stop: boolean }> {
   const authorRound = previous ? previous.candidate.authorRound + 1 : 1;
@@ -996,6 +1140,7 @@ async function persistAuthorResult(
       baseline,
       revision,
       state.attempt,
+      policy,
       previous
         ? { candidate: previous.candidate, review: previous.review.report }
         : undefined,
@@ -1155,11 +1300,19 @@ async function persistInputSnapshot(
   context: Context,
   state: PlanningState,
   baseline: TicketBaseline,
+  policy: PromptPolicy,
 ): Promise<Artifact | null> {
   const snapshot = {
     planningRunId: state.planningRunId,
     attempt: state.attempt,
     repositoryRevision: state.repositoryRevision,
+    promptPolicy: {
+      digest: policy.digest,
+      contractVersion: policy.contractVersion,
+      repositoryDisplayName: policy.repositoryDisplayName,
+      planningConventionsPath: policy.planningConventionsPath,
+      adversarialDimensionsPath: policy.adversarialDimensionsPath,
+    },
     capturedAt: baseline.capturedAt,
     ticketUpdatedAt: baseline.updatedAt,
     ticket: planningTicketContent(baseline),
@@ -1346,7 +1499,15 @@ async function executePlan(
       };
       await writeState(context, state);
     }
-    await persistInputSnapshot(context, state, baseline);
+    const ensuredPolicy = await ensurePromptPolicy(
+      context,
+      state,
+      resolved.revision,
+      resolved.vcs,
+    );
+    state = ensuredPolicy.state;
+    const policy = ensuredPolicy.policy;
+    await persistInputSnapshot(context, state, baseline, policy);
     await projectPhase(
       context,
       state,
@@ -1376,6 +1537,7 @@ async function executePlan(
         baseline,
         resolved.revision,
         resolved.vcs,
+        policy,
       );
       state = authored.state;
       if (authored.stop) return { dataHandles: [] };
@@ -1417,6 +1579,7 @@ async function executePlan(
             baseline,
             currentCandidate.value,
             currentCandidate.version,
+            policy,
           ),
         });
         if (
@@ -1481,6 +1644,7 @@ async function executePlan(
         baseline,
         resolved.revision,
         resolved.vcs,
+        policy,
         { candidate: currentCandidate.value, review: reviewRecord },
       );
       state = repaired.state;
@@ -2090,7 +2254,23 @@ async function syncLinear(
   );
   assertAllowedProject(context.globalArgs, current);
   if (state.repositoryRevision) {
-    const snapshot = await persistInputSnapshot(context, state, baseline);
+    const policy = await readPromptPolicy(context, state.attempt);
+    if (
+      !policy || policy.attempt !== state.attempt ||
+      policy.digest !== state.promptPolicyDigest
+    ) {
+      throw new AdapterError(
+        "conflict",
+        "Current planning attempt has no matching frozen prompt policy",
+        false,
+      );
+    }
+    const snapshot = await persistInputSnapshot(
+      context,
+      state,
+      baseline,
+      policy,
+    );
     if (!snapshot?.url) {
       throw new AdapterError(
         "temporary",
@@ -2207,8 +2387,8 @@ async function getOutcome(
 }
 
 export const model = {
-  type: "@openfirma/feature-planning",
-  version: "2026.07.24.7",
+  type: "@firma/feature-planning",
+  version: "2026.07.24.8",
   globalArguments: GlobalArgsSchema,
   resources: {
     state: {
@@ -2220,6 +2400,13 @@ export const model = {
     ticketBaseline: {
       description: "Normalized Linear ticket baseline",
       schema: TicketBaselineSchema,
+      lifetime: "infinite" as const,
+      garbageCollection: 20,
+    },
+    promptPolicy: {
+      description:
+        "Attempt-frozen repository planning and adversarial review policy",
+      schema: PromptPolicySchema,
       lifetime: "infinite" as const,
       garbageCollection: 20,
     },

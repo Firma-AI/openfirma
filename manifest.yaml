@@ -1,8 +1,8 @@
 manifestVersion: 1
-name: "@openfirma/feature-planning"
-version: "2026.07.24.7"
+name: "@firma/feature-planning"
+version: "2026.07.24.8"
 description: "Repository-aware planning and reviewed Linear issue decomposition"
-repository: "https://github.com/openfirma/openfirma"
+repository: "https://github.com/Firma-AI/openfirma"
 models:
   - feature_planning/model.ts
 workflows:
