@@ -149,6 +149,11 @@ pub trait PolicyEvaluation: Send + Sync {
 
     /// Decide secret mediation for a shimmed launch (`secret.mediate`).
     ///
+    /// `provider_id` is the stable secret-provider integration identity (e.g.
+    /// `"bitwarden"` for the `bws` binary) — it becomes the Cedar
+    /// `Firma::SecretProvider` entity's id. `argv` is the launch command line,
+    /// bound to `resource.bin`/`resource.args` for per-invocation matching.
+    ///
     /// The default returns [`SecretDecision::Passthrough`] — no governing
     /// policy, so the tool runs untouched. The Cedar evaluator overrides this
     /// to evaluate `secret.mediate` and return a [`SecretDecision::Permit`]
@@ -160,6 +165,7 @@ pub trait PolicyEvaluation: Send + Sync {
     fn evaluate_secret_mediation(
         &self,
         _principal: &AgentId,
+        _provider_id: &str,
         _argv: &str,
         _context: serde_json::Value,
     ) -> Result<SecretDecision, String> {

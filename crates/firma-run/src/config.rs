@@ -35,15 +35,16 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
-    /// Executables to interpose on with a secret-mediation shim (stdio routed
-    /// through the firma-run broker). This carries no behavior — Cedar policy
-    /// decides intercept vs redact and all directives; see the secrets design
-    /// doc. Merged across `[run.defaults]` and the active profile.
-    pub shims: BTreeSet<String>,
-    /// Custom integration specs from `[[run.defaults.shim_specs]]`. Merged
-    /// across `[run.defaults]` and the active profile; custom specs take
-    /// precedence over built-ins when names collide.
-    pub shim_specs: Vec<crate::secret::integration::IntegrationSpec>,
+    /// Resolved secret-provider integrations, keyed by binary basename. Each
+    /// entry activates a secret-mediation shim for that binary (stdio routed
+    /// through the firma-run broker); the map value is the fully resolved
+    /// [`IntegrationSpec`](crate::secret::integration::IntegrationSpec) — a
+    /// built-in looked up by name, or a custom spec defined inline. This
+    /// carries no policy behavior — Cedar decides intercept vs redact and all
+    /// directives; see the secrets design doc. Merged across `[run.defaults]`
+    /// and the active profile; entries defined later win on name collision
+    /// (profile overrides defaults, custom overrides built-in).
+    pub secret_providers: BTreeMap<String, crate::secret::integration::IntegrationSpec>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
@@ -378,13 +379,14 @@ struct FileConfig {
     profiles: BTreeMap<String, ProfilePatch>,
 }
 
-/// Matcher configuration for a custom shim spec (`[[run.defaults.shim_specs]]`).
+/// Matcher configuration for a custom secret-provider spec (an inline table
+/// entry in `secret_providers`).
 ///
 /// Mirrors [`firma_core::SecretMatcher`] with a `type` discriminator tag so
 /// TOML config reads naturally (e.g. `type = "json"`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum ShimMatcherConfig {
+pub(crate) enum SecretMatcherConfig {
     Json {
         value_path: String,
         name_path: String,
@@ -402,10 +404,10 @@ pub(crate) enum ShimMatcherConfig {
     },
 }
 
-impl From<ShimMatcherConfig> for firma_core::SecretMatcher {
-    fn from(c: ShimMatcherConfig) -> Self {
+impl From<SecretMatcherConfig> for firma_core::SecretMatcher {
+    fn from(c: SecretMatcherConfig) -> Self {
         match c {
-            ShimMatcherConfig::Json {
+            SecretMatcherConfig::Json {
                 value_path,
                 name_path,
                 item_path,
@@ -418,7 +420,7 @@ impl From<ShimMatcherConfig> for firma_core::SecretMatcher {
                 domain_path,
                 domain_is_url,
             },
-            ShimMatcherConfig::Regex {
+            SecretMatcherConfig::Regex {
                 pattern,
                 domain_is_url,
             } => Self::Regex {
@@ -429,25 +431,31 @@ impl From<ShimMatcherConfig> for firma_core::SecretMatcher {
     }
 }
 
-/// A custom shim integration spec defined in `[[run.defaults.shim_specs]]`.
+/// A custom secret-provider integration spec: one full-table entry in
+/// `secret_providers`.
 ///
 /// Minimal example (JSON output with `{ key, value }` pairs):
 ///
 /// ```toml
-/// [[run.defaults.shim_specs]]
-/// name = "mock-vault"
-/// placeholder_template = "firma-secret://demo/{name}"
-/// matcher = {type = "json", value_path = "$[*].value", name_path = "$[*].key"}
+/// [run.defaults]
+/// secret_providers = [
+///     { name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+/// ]
 /// ```
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ShimSpec {
-    /// Binary basename; must match an entry in `shims`.
+pub(crate) struct SecretProviderSpec {
+    /// Binary basename to shim.
     pub(crate) name: String,
+    /// Stable integration identity, used as the Cedar `Firma::SecretProvider`
+    /// entity id. Defaults to `name` when omitted — most custom integrations
+    /// have no separate display identity from their binary name.
+    #[serde(default)]
+    pub(crate) provider_id: Option<String>,
     /// Placeholder token template; `{name}` is substituted with the
     /// percent-encoded secret key (e.g. `"firma-secret://demo/{name}"`).
     pub(crate) placeholder_template: String,
     /// How to extract `(name, value)` pairs from the tool's stdout.
-    pub(crate) matcher: ShimMatcherConfig,
+    pub(crate) matcher: SecretMatcherConfig,
     /// Credential env vars to forward from the broker's environment to the
     /// subprocess. Defaults to none.
     #[serde(default)]
@@ -458,6 +466,17 @@ pub(crate) struct ShimSpec {
     /// Args appended after stripping. Defaults to none.
     #[serde(default)]
     pub(crate) forced_args: Vec<String>,
+}
+
+/// One entry in `secret_providers`: either a bare string naming an existing
+/// built-in integration (`"bws"`), or a full table defining a new custom
+/// integration. TOML is self-describing, so this deserializes untagged based
+/// on whether the entry is a string or a table.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum SecretProviderPatch {
+    Named(String),
+    Custom(Box<SecretProviderSpec>),
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -481,14 +500,12 @@ pub(crate) struct ProfilePatch {
     pub(crate) sidecar_local_exec: Option<CommandMediatorPatch>,
     #[serde(default)]
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
-    /// Executables to interpose on with a secret-mediation shim. Additive across
-    /// `[run.defaults]` and the active profile (like `env_passthrough`).
+    /// Secret providers to activate: bare strings reference a built-in
+    /// integration, tables define a custom one. Additive across
+    /// `[run.defaults]` and the active profile (like `env_passthrough`);
+    /// entries appearing later win on name collision.
     #[serde(default)]
-    pub(crate) shims: Vec<String>,
-    /// Custom integration specs for shimmed tools not covered by the built-ins.
-    /// Additive across `[run.defaults]` and the active profile.
-    #[serde(default)]
-    pub(crate) shim_specs: Vec<ShimSpec>,
+    pub(crate) secret_providers: Vec<SecretProviderPatch>,
     #[serde(default)]
     pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
@@ -603,10 +620,8 @@ impl ProfilePatch {
         env_passthrough.extend(higher.env_passthrough);
         let mut executable_policies = self.executable_policies;
         executable_policies.extend(higher.executable_policies);
-        let mut shims = self.shims;
-        shims.extend(higher.shims);
-        let mut shim_specs = self.shim_specs;
-        shim_specs.extend(higher.shim_specs);
+        let mut secret_providers = self.secret_providers;
+        secret_providers.extend(higher.secret_providers);
 
         let mounts = if higher.mounts.is_empty() {
             self.mounts
@@ -636,8 +651,7 @@ impl ProfilePatch {
             },
             sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
-            shims,
-            shim_specs,
+            secret_providers,
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
             allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
@@ -707,25 +721,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         .filter(|item| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
 
-    let shims = patch
-        .shims
-        .into_iter()
-        .filter(|item| !item.trim().is_empty())
-        .map(|item| item.trim().to_string())
-        .collect::<BTreeSet<_>>();
-
-    let shim_specs = patch
-        .shim_specs
-        .into_iter()
-        .map(|s| crate::secret::integration::IntegrationSpec {
-            binary_name: s.name,
-            credential_env_vars: s.credential_env_vars,
-            matcher: s.matcher.into(),
-            placeholder_template: s.placeholder_template,
-            strip_arg_flags: s.strip_arg_flags,
-            forced_args: s.forced_args,
-        })
-        .collect::<Vec<_>>();
+    let secret_providers = resolve_secret_providers(patch.secret_providers)?;
 
     let mut env_set = patch.env_set;
     if let Some(paths) = patch.mask_home_paths {
@@ -793,8 +789,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         capability,
         sidecar_local_exec,
         executable_policies,
-        shims,
-        shim_specs,
+        secret_providers,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
         allow_non_structural: patch.allow_non_structural,
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
@@ -896,14 +891,65 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
-        shims: Vec::new(),
-        shim_specs: Vec::new(),
+        secret_providers: Vec::new(),
         codex_cli: None,
         use_http_proxy_sidecar: false,
         allow_non_structural: args.allow_non_structural,
         mask_home_paths: None,
         ca_trust_mode: None,
     }
+}
+
+/// Resolve the merged `secret_providers` patch entries into the final
+/// `binary_name -> IntegrationSpec` map. Entries are processed in order, so a
+/// later entry (a higher-priority profile, or a custom spec appearing after a
+/// bare-name reference) wins on name collision.
+///
+/// # Errors
+///
+/// Returns [`RunError::ConfigValidation`] if a bare-string entry does not name
+/// a known built-in integration.
+fn resolve_secret_providers(
+    patch: Vec<SecretProviderPatch>,
+) -> Result<BTreeMap<String, crate::secret::integration::IntegrationSpec>, RunError> {
+    let builtins = crate::secret::integration::IntegrationRegistry::with_builtins();
+    let mut resolved = BTreeMap::new();
+    for entry in patch {
+        match entry {
+            SecretProviderPatch::Named(name) => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let spec = builtins.get(&name).cloned().ok_or_else(|| {
+                    RunError::ConfigValidation(format!(
+                        "unknown secret provider '{name}'; no built-in integration by that name \
+                         — provide a full spec to define a custom one"
+                    ))
+                })?;
+                resolved.insert(name, spec);
+            }
+            SecretProviderPatch::Custom(spec) => {
+                let provider_id = spec
+                    .provider_id
+                    .filter(|id| !id.trim().is_empty())
+                    .unwrap_or_else(|| spec.name.clone());
+                resolved.insert(
+                    spec.name.clone(),
+                    crate::secret::integration::IntegrationSpec {
+                        binary_name: spec.name,
+                        provider_id,
+                        credential_env_vars: spec.credential_env_vars,
+                        matcher: spec.matcher.into(),
+                        placeholder_template: spec.placeholder_template,
+                        strip_arg_flags: spec.strip_arg_flags,
+                        forced_args: spec.forced_args,
+                    },
+                );
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 fn resolve_executable_policies(
@@ -1277,6 +1323,7 @@ mod tests {
     };
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
+    use crate::error::RunError;
 
     fn lease_patch(requested_actions: Option<Vec<String>>) -> CapabilityLeasePatch {
         CapabilityLeasePatch {
@@ -1510,16 +1557,16 @@ path = "/tmp/capability.token"
     }
 
     #[test]
-    fn shims_merge_across_defaults_and_profile() {
+    fn secret_providers_merge_across_defaults_and_profile() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
 
         let toml = r#"
 [run.defaults]
-shims = ["bws", "  "]
+secret_providers = ["bws", "  "]
 
 [run.profiles.codex]
-shims = ["npx"]
+secret_providers = ["op"]
 "#;
         fs::write(&config_path, toml).unwrap();
 
@@ -1528,15 +1575,53 @@ shims = ["npx"]
 
         let resolved = resolve_profile(&run_args).unwrap();
         // Defaults and profile are additive; blank entries are dropped.
-        assert!(resolved.shims.contains("bws"));
-        assert!(resolved.shims.contains("npx"));
-        assert!(!resolved.shims.iter().any(|s| s.trim().is_empty()));
+        assert!(resolved.secret_providers.contains_key("bws"));
+        assert!(resolved.secret_providers.contains_key("op"));
+        assert!(!resolved.secret_providers.contains_key(""));
     }
 
     #[test]
-    fn shims_default_to_empty() {
+    fn secret_providers_default_to_empty() {
         let resolved = resolve_profile(&args("codex")).unwrap();
-        assert!(resolved.shims.is_empty());
+        assert!(resolved.secret_providers.is_empty());
+    }
+
+    #[test]
+    fn secret_providers_named_entry_unknown_builtin_errors() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = ["not-a-real-integration"]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let err = resolve_profile(&run_args).unwrap_err();
+        assert!(matches!(err, RunError::ConfigValidation(_)));
+    }
+
+    #[test]
+    fn secret_providers_custom_spec_overrides_builtin_of_same_name() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    "bws",
+    { name = "bws", placeholder_template = "firma-secret://custom/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        let spec = resolved.secret_providers.get("bws").unwrap();
+        assert!(spec.placeholder_template.contains("custom"));
     }
 
     #[test]

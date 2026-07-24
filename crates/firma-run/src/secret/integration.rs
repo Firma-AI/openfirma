@@ -16,6 +16,11 @@ use firma_core::SecretMatcher;
 pub struct IntegrationSpec {
     /// Binary basename (e.g. `"bws"`).
     pub binary_name: String,
+    /// Stable integration identity (e.g. `"bitwarden"` for the `bws` binary).
+    /// Used as the Cedar `Firma::SecretProvider` entity's id — distinct from
+    /// `binary_name`, which is the per-invocation executable and belongs on
+    /// `resource.bin` instead.
+    pub provider_id: String,
     /// Names of env vars that carry vault credentials. The broker forwards any
     /// that are present in its own environment to the subprocess.
     pub credential_env_vars: Vec<String>,
@@ -37,7 +42,7 @@ pub struct IntegrationSpec {
 /// Registry of integration specs, keyed by binary basename.
 ///
 /// Starts with the four built-in specs and can be extended with custom specs
-/// loaded from `firma.toml` (`[[run.defaults.shim_specs]]`). Custom specs
+/// loaded from `firma.toml` (`secret_providers` table entries). Custom specs
 /// take precedence over built-ins when names collide.
 #[derive(Debug, Default)]
 pub struct IntegrationRegistry {
@@ -53,6 +58,7 @@ impl IntegrationRegistry {
             specs: vec![
                 IntegrationSpec {
                     binary_name: String::from("bws"),
+                    provider_id: String::from("bitwarden"),
                     credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
                     matcher: SecretMatcher::Json {
                         value_path: String::from("$[*].value"),
@@ -72,6 +78,7 @@ impl IntegrationRegistry {
                 // all extracted fields.
                 IntegrationSpec {
                     binary_name: String::from("op"),
+                    provider_id: String::from("1password"),
                     credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
                     matcher: SecretMatcher::Json {
                         value_path: String::from(concat!(
@@ -105,6 +112,7 @@ impl IntegrationRegistry {
                 },
                 IntegrationSpec {
                     binary_name: String::from("vault"),
+                    provider_id: String::from("hashicorp-vault"),
                     credential_env_vars: vec![
                         String::from("VAULT_TOKEN"),
                         String::from("VAULT_ADDR"),
@@ -130,6 +138,7 @@ impl IntegrationRegistry {
                 // has a well-defined input shape.
                 IntegrationSpec {
                     binary_name: String::from("doppler"),
+                    provider_id: String::from("doppler"),
                     credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
                     matcher: SecretMatcher::Regex {
                         domain_is_url: false,
@@ -199,6 +208,7 @@ mod tests {
         let mut registry = IntegrationRegistry::with_builtins();
         registry.push(IntegrationSpec {
             binary_name: String::from("bws"),
+            provider_id: String::from("custom"),
             credential_env_vars: vec![],
             matcher: SecretMatcher::Json {
                 value_path: String::from("$[*].value"),

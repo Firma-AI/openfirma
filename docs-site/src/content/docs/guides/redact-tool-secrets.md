@@ -41,12 +41,13 @@ are typically used together.
 
 ## Step 1: List the executables to shim
 
-`shims` is the only secret-specific setting in `firma.toml`. It carries no
-behavior — just which commands to route through the broker:
+`secret_providers` is the only secret-specific setting in `firma.toml`. It
+carries no behavior — just which commands to route through the broker. A bare
+string names a built-in integration (`bws`, `op`, `vault`, `doppler`):
 
 ```toml
 [run.defaults]
-shims = ["bws", "npx"]
+secret_providers = ["bws", "npx"]
 ```
 
 Keep the list tight: every launch of a shimmed executable pays a broker
@@ -56,10 +57,30 @@ round-trip, even when the policy leaves it untouched. Shimming a launcher like
 The shim is bound over the real binary's path, so absolute-path, renamed, or
 copied invocations still hit it — not just `PATH` lookups.
 
+A tool with no built-in integration needs a full table entry instead of a bare
+name — it tells the broker how to extract secrets from the tool's output and
+which placeholder template to mint. Entries can be mixed in the same list:
+
+```toml
+[run.defaults]
+secret_providers = [
+    "bws",
+    { name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+]
+```
+
+See
+[`examples/firma-run/secret-redaction/firma.toml`](https://github.com/openfirma/openfirma/tree/main/examples/firma-run/secret-redaction/firma.toml)
+for a complete custom-integration example.
+
 ## Step 2: Write the `secret.mediate` policy
 
-Behavior lives entirely in Cedar annotations, evaluated per launch. `resource.id`
-is the launch argv, so `like` matches the invocation.
+Behavior lives entirely in Cedar annotations, evaluated per launch. The
+resource is a `Firma::SecretProvider` entity: `resource.id` is the resolved
+provider identity (e.g. `"bitwarden"` for `bws` — the same string used in the
+placeholder template), while `resource.bin`/`resource.args` carry the
+invocation itself, so `like` matches against the arguments of a specific
+launch.
 
 ```cedar
 // Intercept the Bitwarden Secrets Manager CLI. Its `secret list` output is a
@@ -70,13 +91,13 @@ is the launch argv, so `like` matches the invocation.
 @match_name("$[*].key")
 @placeholder("firma-secret://bitwarden/{name}")
 permit (principal, action == Firma::Action::"secret.mediate", resource)
-when { resource.id like "bws *" };
+when { resource.bin == "bws" };
 
 // Redact the Playwright MCP server (newline-delimited JSON-RPC over stdio).
 @mode("redact")
 @transform("mcp-jsonrpc")
 permit (principal, action == Firma::Action::"secret.mediate", resource)
-when { resource.id like "npx @playwright/mcp*" };
+when { resource.bin == "npx" && resource.args like "@playwright/mcp*" };
 ```
 
 Annotation reference:

@@ -25,6 +25,10 @@ const SECRET_MEDIATE_ACTION: &str = "secret.mediate";
 pub struct SecretMediationRequest {
     /// Constant governance action discriminator (`secret.mediate`).
     pub action: &'static str,
+    /// Stable integration identity (e.g. `"bitwarden"` for the `bws` binary),
+    /// resolved from the profile's `secret_providers` config. Becomes the
+    /// Cedar `Firma::SecretProvider` entity's id on the Sidecar side.
+    pub provider_id: String,
     /// Wrapped tool's executable basename (e.g. `"bws"`).
     pub bin: String,
     /// Space-joined arguments (everything after the binary name).
@@ -39,9 +43,16 @@ pub struct SecretMediationRequest {
 impl SecretMediationRequest {
     /// Build a request for a launch.
     #[must_use]
-    pub fn new(bin: String, args: String, session_id: String, agent_id: Option<String>) -> Self {
+    pub fn new(
+        provider_id: String,
+        bin: String,
+        args: String,
+        session_id: String,
+        agent_id: Option<String>,
+    ) -> Self {
         Self {
             action: SECRET_MEDIATE_ACTION,
+            provider_id,
             bin,
             args,
             session_id,
@@ -168,6 +179,7 @@ mod tests {
 
     fn sample_request() -> SecretMediationRequest {
         SecretMediationRequest::new(
+            "bitwarden".to_string(),
             "bws".to_string(),
             "secret get x".to_string(),
             "sess-1".to_string(),

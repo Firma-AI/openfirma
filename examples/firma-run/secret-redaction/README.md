@@ -8,7 +8,7 @@ Full design: [`docs/architecture/fir-429-pai-credential-injection.md`](../../../
 
 ## Files
 
-- `firma.toml` — run profile. `shims` lists the executables to interpose on;
+- `firma.toml` — run profile. `secret_providers` lists the executables to interpose on;
   `[authority]` tells `firma run` to auto-start a per-process Authority +
   Sidecar that loads the Cedar policies below.
 - `mapping-rules.toml` — Sidecar mapping rules. Maps the capture server

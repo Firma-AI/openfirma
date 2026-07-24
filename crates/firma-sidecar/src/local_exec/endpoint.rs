@@ -355,6 +355,7 @@ async fn handle_connection(
 #[cfg(target_family = "unix")]
 #[derive(Deserialize)]
 struct SecretMediateRequest {
+    provider_id: String,
     bin: String,
     args: String,
     session_id: String,
@@ -392,7 +393,7 @@ async fn handle_secret_mediation(
     };
     let context = launch_context(&request.session_id);
 
-    match evaluator.evaluate_secret_mediation(&principal, &argv, context) {
+    match evaluator.evaluate_secret_mediation(&principal, &request.provider_id, &argv, context) {
         Ok(decision) => send_secret_decision(stream, &decision).await,
         Err(reason) => {
             tracing::warn!(error = %reason, "secret.mediate: evaluation failed; failing closed");
@@ -641,7 +642,7 @@ mod tests {
         let socket_path = tmp.path().join("secret.sock");
 
         let policy =
-            br#"permit(principal, action == Firma::Action::"secret.mediate", resource) when { resource.id like "bws*" };"#;
+            br#"permit(principal, action == Firma::Action::"secret.mediate", resource) when { resource.id == "bitwarden" };"#;
         let bundle = PolicyBundle::new(
             "v1".to_string(),
             policy.to_vec(),
@@ -664,6 +665,7 @@ mod tests {
             &socket_path,
             &serde_json::json!({
                 "action": "secret.mediate",
+                "provider_id": "bitwarden",
                 "bin": "bws",
                 "args": "secret get x",
                 "session_id": "sess_1",

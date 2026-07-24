@@ -191,10 +191,13 @@ impl CedarPolicyEvaluator {
 
     /// Evaluate the `secret.mediate` action for a shimmed launch.
     ///
-    /// `argv` is the wrapped tool's launch command line; it is bound to
-    /// `resource.id` (full argv), `resource.bin` (executable basename), and
-    /// `resource.args` (space-joined rest) so policies can match with either
-    /// `resource.bin == "bws"` or the legacy `resource.id like "bws *"`.
+    /// `provider_id` is the stable secret-provider integration identity (e.g.
+    /// `"bitwarden"` for the `bws` binary), resolved by firma-run from its
+    /// `secret_providers` config; it becomes both the `Firma::SecretProvider`
+    /// entity's UID and its `resource.id` attribute. `argv` is the wrapped
+    /// tool's launch command line; it is split into `resource.bin` (executable
+    /// basename) and `resource.args` (space-joined rest) so policies can match
+    /// a specific invocation, e.g. `resource.bin == "bws"`.
     ///
     /// On a Cedar `Allow` from any `permit` policy, returns
     /// [`SecretDecision::Permit`] — Cedar is pure auth; extraction behavior
@@ -209,6 +212,7 @@ impl CedarPolicyEvaluator {
     fn secret_decision(
         &self,
         principal: &AgentId,
+        provider_id: &str,
         argv: &str,
         context: serde_json::Value,
     ) -> Result<SecretDecision, CedarEvaluatorError> {
@@ -218,16 +222,16 @@ impl CedarPolicyEvaluator {
         let action_uid: EntityUid = FirmaEntityUid::Action("secret.mediate".to_string())
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let resource_uid: EntityUid = FirmaEntityUid::Resource(argv.to_string())
+        let resource_uid: EntityUid = FirmaEntityUid::SecretProvider(provider_id.to_string())
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
 
         let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
             .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
 
-        // Bind resource.id (full joined argv), resource.bin (argv[0] basename),
-        // and resource.args (space-joined argv[1..]) so policies can use either
-        // `resource.id like "bws *"` (legacy) or `resource.bin == "bws"` (new).
+        // resource.id is the stable provider identity (mirrors the entity
+        // UID); resource.bin (argv[0] basename) and resource.args
+        // (space-joined argv[1..]) carry the per-invocation detail.
         let (raw_bin, raw_args) = argv.split_once(' ').unwrap_or((argv, ""));
         let bin = std::path::Path::new(raw_bin)
             .file_name()
@@ -236,7 +240,7 @@ impl CedarPolicyEvaluator {
         let mut attrs = HashMap::new();
         attrs.insert(
             "id".to_string(),
-            RestrictedExpression::new_string(argv.to_string()),
+            RestrictedExpression::new_string(provider_id.to_string()),
         );
         attrs.insert(
             "bin".to_string(),
@@ -508,10 +512,11 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
     fn evaluate_secret_mediation(
         &self,
         principal: &AgentId,
+        provider_id: &str,
         argv: &str,
         context: serde_json::Value,
     ) -> Result<SecretDecision, String> {
-        self.secret_decision(principal, argv, context)
+        self.secret_decision(principal, provider_id, argv, context)
             .map_err(|error| error.to_string())
     }
 
@@ -633,10 +638,11 @@ namespace Firma {
         git_operation?: String
     };
     entity Agent;
-    entity Resource { id: String, bin?: String, args?: String, host?: String, path?: String, method?: String };
+    entity Resource { id: String, host?: String, path?: String, method?: String };
+    entity SecretProvider { id: String, bin: String, args: String };
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
-    action \"secret.mediate\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
+    action \"secret.mediate\" appliesTo { principal: [Agent], resource: [SecretProvider], context: EnforcementContext };
     action \"secret.redact\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
 
@@ -712,11 +718,11 @@ namespace Firma {
     fn evaluate_secret_mediation_returns_permit_on_matching_policy() {
         let src = r#"
             permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id like "bws *" };
+            when { resource.id == "bitwarden" };
         "#;
         let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
         let decision = evaluator
-            .evaluate_secret_mediation(&agent(), "bws secret get abc", full_context())
+            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
             .unwrap();
         assert_eq!(decision, SecretDecision::Permit);
     }
@@ -730,13 +736,46 @@ namespace Firma {
             @match_name("$[*].key")
             @placeholder("firma-secret://bitwarden/{name}")
             permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id like "bws *" };
+            when { resource.id == "bitwarden" };
         "#;
         let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
         let decision = evaluator
-            .evaluate_secret_mediation(&agent(), "curl https://example.com", full_context())
+            .evaluate_secret_mediation(
+                &agent(),
+                "unmanaged",
+                "curl https://example.com",
+                full_context(),
+            )
             .unwrap();
         assert_eq!(decision, SecretDecision::Passthrough);
+    }
+
+    #[test]
+    fn secret_provider_id_reports_integration_name_not_argv() {
+        // The entity id (and resource.id attribute) must be the resolved
+        // provider identity, not the launch argv — even though the argv
+        // contains a completely different string.
+        let src = r#"
+            permit(principal, action == Firma::Action::"secret.mediate", resource)
+            when { resource.id == "bitwarden" };
+        "#;
+        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
+        let decision = evaluator
+            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
+            .unwrap();
+        assert_eq!(decision, SecretDecision::Permit);
+
+        // A policy matching on the argv-shaped legacy id no longer fires.
+        let legacy_src = r#"
+            permit(principal, action == Firma::Action::"secret.mediate", resource)
+            when { resource.id like "bws *" };
+        "#;
+        let legacy_evaluator =
+            CedarPolicyEvaluator::from_bundle(&secret_bundle(legacy_src)).unwrap();
+        let legacy_decision = legacy_evaluator
+            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
+            .unwrap();
+        assert_eq!(legacy_decision, SecretDecision::Passthrough);
     }
 
     #[test]
@@ -748,12 +787,12 @@ namespace Firma {
         let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
 
         let permit = evaluator
-            .evaluate_secret_mediation(&agent(), "bws secret get abc", full_context())
+            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
             .unwrap();
         assert_eq!(permit, SecretDecision::Permit);
 
         let no_match = evaluator
-            .evaluate_secret_mediation(&agent(), "bws list", full_context())
+            .evaluate_secret_mediation(&agent(), "bitwarden", "bws list", full_context())
             .unwrap();
         assert_eq!(no_match, SecretDecision::Passthrough);
     }

@@ -209,7 +209,7 @@ pub struct AutostartFlags {
     /// config. Passed through from `RunInput.monitor_mode`.
     pub monitor_mode: bool,
     /// Secret gateway address advertised to the autostarted Sidecar via
-    /// `FIRMA_SECRET_GATEWAY_ADDR`. `None` when no shims are configured.
+    /// `FIRMA_SECRET_GATEWAY_ADDR`. `None` when no secret providers are configured.
     pub secret_gateway_addr: Option<String>,
 }
 

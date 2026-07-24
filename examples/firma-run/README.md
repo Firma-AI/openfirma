@@ -41,7 +41,7 @@ examples/firma-run/local-command-governance/scripts/run-allow.sh
 - `local/` contains setup scripts, config templates, capability renewal helpers, and local runbook docs.
 - `e2e/` contains the Linux end-to-end harness for sandbox routing, audit output, and fail-closed behavior.
 - `local-command-governance/` contains focused Linux demos for managed static seccomp + mediator governance behavior.
-- `secret-redaction/` shows secret interception & redaction: a `shims` profile plus the `secret.mediate` Cedar policy that keeps real secrets out of the agent (vault-CLI intercept + Playwright MCP redact).
+- `secret-redaction/` shows secret interception & redaction: a `secret_providers` profile plus the `secret.mediate` Cedar policy that keeps real secrets out of the agent (vault-CLI intercept + Playwright MCP redact).
 - `spikes/` contains focused research harnesses for architecture decisions.
 
 Each folder keeps its scripts, documentation, and supporting assets together so example-specific material does not live in the main `docs/` tree.

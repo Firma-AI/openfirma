@@ -1,9 +1,9 @@
 //! Secret-mediation shim injection into the sandbox.
 //!
-//! When a profile lists `shims`, this wires the secret machinery into a launch:
-//! it starts the out-of-sandbox broker, bind-mounts the `firma-secret-shim`
-//! binary over each shimmed executable, and injects the `FIRMA_BROKER_ADDR`
-//! environment variable so the shim can reach the broker.
+//! When a profile lists `secret_providers`, this wires the secret machinery
+//! into a launch: it starts the out-of-sandbox broker, bind-mounts the
+//! `firma-secret-shim` binary over each shimmed executable, and injects the
+//! `FIRMA_BROKER_ADDR` environment variable so the shim can reach the broker.
 //!
 //! The broker runs the real tool on the host (outside the sandbox) and returns
 //! its intercepted stdout to the shim. The sandbox never sees plaintext secrets.
@@ -11,7 +11,7 @@
 //! The mount/env computation ([`plan`]) is pure and unit-tested; the broker
 //! startup and mount application are thin glue validated end-to-end on bwrap.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,7 +26,7 @@ use crate::secret::SecretStore;
 use crate::secret::accept::serve_forever;
 use crate::secret::broker::BrokerListener;
 use crate::secret::gateway::SecretGatewayListener;
-use crate::secret::integration::{IntegrationRegistry, IntegrationSpec};
+use crate::secret::integration::IntegrationSpec;
 use crate::secret::pep::{SecretMediationRequest, SecretPepOutcome, request_secret_decision};
 use crate::secret::shim::FIRMA_BROKER_ADDR;
 
@@ -55,7 +55,7 @@ pub struct BoundGateway {
 
 /// Bind the secret gateway socket before the Sidecar starts.
 ///
-/// Returns `None` when the profile lists no shims (no gateway needed).
+/// Returns `None` when the profile lists no secret providers (no gateway needed).
 /// Otherwise binds the gateway socket and returns a [`BoundGateway`] whose
 /// `addr` can be set as `FIRMA_SECRET_GATEWAY_ADDR` on the Sidecar process.
 /// The socket is held open until [`prepare`] starts serving it.
@@ -71,7 +71,7 @@ pub fn pre_bind_gateway(
     handle: &SandboxHandle,
     profile: &ResolvedProfile,
 ) -> Result<Option<BoundGateway>, RunError> {
-    if profile.shims.is_empty() {
+    if profile.secret_providers.is_empty() {
         return Ok(None);
     }
     let base = handle.runtime_dir.join("secret-shims");
@@ -97,13 +97,13 @@ pub fn pre_bind_gateway(
 
 /// Prepare secret-shim injection for a launch, mutating `handle` and `env`.
 ///
-/// A no-op when the profile lists no shims. Otherwise resolves each shimmed
-/// tool on the host `PATH`, starts the broker and the pre-bound gateway, and
-/// appends the shim's bind mounts and environment.
+/// A no-op when the profile lists no secret providers. Otherwise resolves
+/// each shimmed tool on the host `PATH`, starts the broker and the pre-bound
+/// gateway, and appends the shim's bind mounts and environment.
 ///
 /// `gateway` must be the value returned by [`pre_bind_gateway`] for the same
-/// `profile`. If shims are configured but `gateway` is `None`, returns
-/// [`RunError::Internal`] — the caller skipped the pre-bind step.
+/// `profile`. If secret providers are configured but `gateway` is `None`,
+/// returns [`RunError::Internal`] — the caller skipped the pre-bind step.
 ///
 /// # Errors
 ///
@@ -118,7 +118,7 @@ pub fn prepare(
     host_path: Option<&OsStr>,
     gateway: Option<BoundGateway>,
 ) -> Result<(), RunError> {
-    if profile.shims.is_empty() {
+    if profile.secret_providers.is_empty() {
         return Ok(());
     }
     let handle = handle.as_mut().ok_or_else(|| {
@@ -126,12 +126,13 @@ pub fn prepare(
     })?;
     let gateway = gateway.ok_or_else(|| {
         RunError::Internal(
-            "secret_shims::prepare called with shims but no pre-bound gateway".to_string(),
+            "secret_shims::prepare called with secret providers but no pre-bound gateway"
+                .to_string(),
         )
     })?;
 
     let shim_bin = locate_shim_binary(firma_exe)?;
-    let reals = resolve_real_binaries(&profile.shims, host_path)?;
+    let reals = resolve_real_binaries(&profile.secret_providers, host_path)?;
     let base = handle.runtime_dir.join("secret-shims");
     // Directory was already created by pre_bind_gateway; this is idempotent.
     std::fs::create_dir_all(&base).map_err(|error| {
@@ -153,7 +154,7 @@ pub fn prepare(
         gateway.listener,
         profile.sidecar_local_exec.clone(),
         identity,
-        profile.shim_specs.clone(),
+        profile.secret_providers.clone(),
     );
 
     handle.mounts.extend(plan.mounts);
@@ -164,12 +165,9 @@ pub fn prepare(
     // Strip vault credential env vars for each shimmed integration so they
     // can never enter the sandbox, even if an operator accidentally listed
     // them in `env_inherit` or `env_set`.
-    let registry = IntegrationRegistry::with_builtins();
-    for name in &profile.shims {
-        if let Some(spec) = registry.get(name) {
-            for var in &spec.credential_env_vars {
-                env.remove(var.as_str());
-            }
+    for spec in profile.secret_providers.values() {
+        for var in &spec.credential_env_vars {
+            env.remove(var.as_str());
         }
     }
 
@@ -197,11 +195,11 @@ fn plan(shim_bin: &Path, reals: &[(String, PathBuf)], broker_addr: &str) -> Shim
 
 /// Resolve each shimmed tool name to its real host path via `PATH`.
 fn resolve_real_binaries(
-    shims: &BTreeSet<String>,
+    providers: &BTreeMap<String, IntegrationSpec>,
     host_path: Option<&OsStr>,
 ) -> Result<Vec<(String, PathBuf)>, RunError> {
-    shims
-        .iter()
+    providers
+        .keys()
         .map(|name| {
             let real = super::resolve_host_executable(name, host_path)?;
             Ok((name.clone(), real))
@@ -275,13 +273,17 @@ fn bind_broker(base: &Path) -> Result<BrokerListener, RunError> {
 ///
 /// Takes the `gateway_listener` pre-bound by [`pre_bind_gateway`] so the
 /// gateway address is already known to the Sidecar before this call.
-/// Threads run for the lifetime of the process.
+/// Threads run for the lifetime of the process. `providers` is the fully
+/// resolved `binary_name -> IntegrationSpec` map from
+/// [`ResolvedProfile::secret_providers`] — built-in lookups and custom specs
+/// are already merged by config resolution, so no registry rebuilding is
+/// needed here.
 fn start_broker(
     listener: BrokerListener,
     gateway_listener: SecretGatewayListener,
     mediator: Option<CommandMediatorConfig>,
     identity: &RunIdentity,
-    custom_specs: Vec<IntegrationSpec>,
+    providers: BTreeMap<String, IntegrationSpec>,
 ) {
     let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
 
@@ -292,17 +294,23 @@ fn start_broker(
 
     let session_id = identity.session_id.clone();
     let agent_id = identity.agent_id.to_string();
-    let mut registry = IntegrationRegistry::with_builtins();
-    // Custom specs are pushed last so they shadow built-ins with the same name.
-    for spec in custom_specs {
-        registry.push(spec);
-    }
-    let registry = Arc::new(registry);
+    let providers = Arc::new(providers);
+    let decide_providers = Arc::clone(&providers);
     let decide = Arc::new(move |bin: &str, args: &str| {
-        decide_secret(mediator.as_ref(), &session_id, &agent_id, bin, args)
+        let provider_id = decide_providers
+            .get(bin)
+            .map_or_else(|| bin.to_string(), |spec| spec.provider_id.clone());
+        decide_secret(
+            mediator.as_ref(),
+            &session_id,
+            &agent_id,
+            &provider_id,
+            bin,
+            args,
+        )
     });
     let spec_for =
-        Arc::new(move |bin: &str| -> Option<IntegrationSpec> { registry.get(bin).cloned() });
+        Arc::new(move |bin: &str| -> Option<IntegrationSpec> { providers.get(bin).cloned() });
     std::thread::spawn(move || {
         serve_forever(listener, store, decide, spec_for, None);
     });
@@ -322,6 +330,7 @@ fn decide_secret(
     mediator: Option<&CommandMediatorConfig>,
     session_id: &str,
     agent_id: &str,
+    provider_id: &str,
     bin: &str,
     args: &str,
 ) -> SecretPepOutcome {
@@ -332,6 +341,7 @@ fn decide_secret(
         );
     };
     let request = SecretMediationRequest::new(
+        provider_id.to_string(),
         bin.to_string(),
         args.to_string(),
         session_id.to_string(),
@@ -343,6 +353,24 @@ fn decide_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secret::integration::IntegrationRegistry;
+
+    /// Minimal `IntegrationSpec` for tests that only care about the binary
+    /// name (e.g. resolving it on `PATH`), not its extraction behavior.
+    fn dummy_spec(name: &str) -> IntegrationSpec {
+        IntegrationSpec {
+            binary_name: name.to_string(),
+            provider_id: name.to_string(),
+            credential_env_vars: vec![],
+            matcher: firma_core::SecretMatcher::Regex {
+                pattern: String::new(),
+                domain_is_url: false,
+            },
+            placeholder_template: String::new(),
+            strip_arg_flags: vec![],
+            forced_args: vec![],
+        }
+    }
 
     #[test]
     fn plan_overlays_shim_with_broker_addr_env() {
@@ -380,17 +408,19 @@ mod tests {
         let tool = dir.path().join("bws");
         std::fs::write(&tool, b"#!/bin/sh\n").expect("write fake tool");
 
-        let shims = BTreeSet::from(["bws".to_string()]);
-        let reals = resolve_real_binaries(&shims, Some(dir.path().as_os_str())).expect("resolve");
+        let providers = BTreeMap::from([("bws".to_string(), dummy_spec("bws"))]);
+        let reals =
+            resolve_real_binaries(&providers, Some(dir.path().as_os_str())).expect("resolve");
         assert_eq!(reals, vec![("bws".to_string(), tool)]);
     }
 
     #[test]
     fn resolve_real_binaries_errors_on_missing_tool() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let shims = BTreeSet::from(["does-not-exist".to_string()]);
+        let providers =
+            BTreeMap::from([("does-not-exist".to_string(), dummy_spec("does-not-exist"))]);
 
-        let error = resolve_real_binaries(&shims, Some(dir.path().as_os_str())).unwrap_err();
+        let error = resolve_real_binaries(&providers, Some(dir.path().as_os_str())).unwrap_err();
         assert!(matches!(error, RunError::ConfigValidation(_)));
     }
 

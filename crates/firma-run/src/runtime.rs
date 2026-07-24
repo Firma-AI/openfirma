@@ -27,7 +27,7 @@ use crate::supervisor::wait_with_signal_forwarding;
 pub mod vscode;
 
 /// Secret-mediation shim injection (Unix/bwrap). Wires the broker + shim mounts
-/// into a launch when the profile lists `shims`.
+/// into a launch when the profile lists `secret_providers`.
 mod secret_shims;
 
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
@@ -964,8 +964,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1035,8 +1034,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1091,8 +1089,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1162,8 +1159,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
             ca_trust_mode: mode,
@@ -1263,8 +1259,7 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1336,8 +1331,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1383,8 +1377,7 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1458,8 +1451,7 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
-            shims: BTreeSet::new(),
-            shim_specs: Vec::new(),
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,

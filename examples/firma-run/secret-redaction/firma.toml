@@ -1,9 +1,11 @@
 # `firma run` profile for the secret interception & redaction demo.
 #
-# `shims` lists the executables to interpose on (route their stdio through the
-# firma-run broker). What each shim does — whether to intercept, which values
-# to extract, and which placeholder to mint — is decided by the Cedar policy
-# (secret.mediate, in policies/) and the integration spec below (shim_specs).
+# `secret_providers` lists the executables to interpose on (route their stdio
+# through the firma-run broker) — a bare string references a built-in
+# integration, a table defines a custom one. What each shim does — whether to
+# intercept, which values to extract, and which placeholder to mint — is
+# decided by the Cedar policy (secret.mediate, in policies/) plus the
+# integration spec below.
 
 [authority]
 listen_addr = "127.0.0.1:0"
@@ -24,17 +26,14 @@ profile = "generic"
 #   FIRMA_AUTHORITY_KEY_FILE=/path/to/authority.key
 
 [run.defaults]
-# mock-vault is the vault CLI stand-in. Keep this list tight: every launch of a
-# shimmed executable pays a broker round-trip even when the policy leaves it
-# untouched.
-shims = ["mock-vault"]
-
-# Custom integration spec for mock-vault: tells the broker how to extract
-# secrets from its JSON output and which placeholder template to mint.
-[[run.defaults.shim_specs]]
-name = "mock-vault"
-placeholder_template = "firma-secret://demo/{name}"
-matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" }
+# mock-vault is the vault CLI stand-in; it has no built-in integration, so it
+# needs a full table entry telling the broker how to extract secrets from its
+# JSON output and which placeholder template to mint. Keep this list tight:
+# every launch of a shimmed executable pays a broker round-trip even when the
+# policy leaves it untouched.
+secret_providers = [
+  { name = "mock-vault", provider_id = "demo", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+]
 
 [run.profiles.generic]
 backend = "bwrap"

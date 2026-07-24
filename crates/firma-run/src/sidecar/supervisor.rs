@@ -79,7 +79,7 @@ pub struct SpawnRequest<'a> {
     /// `--monitor` on the `firma run` CLI.
     pub monitor_mode: bool,
     /// Secret gateway address set as `FIRMA_SECRET_GATEWAY_ADDR` on the
-    /// Sidecar process. `None` when no shims are configured.
+    /// Sidecar process. `None` when no secret providers are configured.
     pub secret_gateway_addr: Option<String>,
 }
 

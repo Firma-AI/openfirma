@@ -3,7 +3,7 @@
 // secret.mediate (evaluated per shimmed-tool launch, via local-exec governance)
 // ─────────────────────────────────────────────────────────────────────────────
 // A permit here means the broker intercepts stdout, extracts secret values via
-// the mock-vault IntegrationSpec configured in firma.toml (shim_specs),
+// the mock-vault IntegrationSpec configured in firma.toml (secret_providers),
 // stores them in the out-of-sandbox secret store, and replaces them with
 // firma-secret://demo/<name> placeholders before the agent sees output.
 //
@@ -19,7 +19,7 @@ permit(
     action == Firma::Action::"secret.mediate",
     resource
 ) when {
-    resource has bin && resource.bin == "mock-vault"
+    resource.bin == "mock-vault"
 };
 
 permit (
