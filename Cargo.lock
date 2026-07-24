@@ -1632,6 +1632,7 @@ dependencies = [
  "firma-http",
  "firma-protobuf",
  "firma-runtime-state",
+ "firma-secret-provider",
  "governor",
  "hex",
  "http",
