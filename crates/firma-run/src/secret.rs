@@ -33,8 +33,15 @@ pub mod pep;
 /// it so the agent sees placeholders.
 pub mod intercept;
 
+/// Per-request broker dispatch: run the real vault CLI and apply the intercept
+/// transform by decision (fail-closed).
+pub mod serve;
+
 /// In-sandbox shim: send a tool-launch request to the out-of-sandbox broker.
 pub mod shim;
+
+/// Broker accept loop: accept shim connections, decide, and serve them.
+pub mod accept;
 
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
