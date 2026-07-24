@@ -8,6 +8,14 @@
 //! back out of its own synthesized startup config and runs extraction
 //! itself against MITM'd response bodies.
 
+mod gateway;
 mod matcher;
+mod placeholder;
+mod registry;
+mod spec;
 
+pub use gateway::{GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest};
 pub use matcher::{CompiledMatcher, MatcherError};
+pub use placeholder::mint_placeholder;
+pub use registry::IntegrationRegistry;
+pub use spec::{CliIntegrationSpec, HttpIntegrationSpec, IntegrationSpec};
