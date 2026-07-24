@@ -1,6 +1,6 @@
 //! Cedar entity UID types and shared schema for Firma policy evaluation.
 //!
-//! Encodes the three roles used in Firma policy evaluation and produces the
+//! Encodes the entity roles used in Firma policy evaluation and produces the
 //! Cedar entity UID via [`TryFrom`] using Cedar's typed builder API.  Both
 //! the Authority (issuance) and the Sidecar (enforcement) must use identical
 //! UID formats — keeping this type in `firma-core` makes that contract
@@ -8,11 +8,12 @@
 //!
 //! # Entity UID conventions
 //!
-//! | Variant    | Cedar type name    | ID source        |
-//! |------------|--------------------|------------------|
-//! | `Agent`    | `Firma::Agent`     | [`AgentId`]      |
-//! | `Action`   | `Firma::Action`    | normalizer string |
-//! | `Resource` | `Firma::Resource`  | normalizer string |
+//! | Variant          | Cedar type name        | ID source          |
+//! |------------------|------------------------|---------------------|
+//! | `Agent`          | `Firma::Agent`         | [`AgentId`]         |
+//! | `Action`         | `Firma::Action`        | normalizer string   |
+//! | `Resource`       | `Firma::Resource`      | normalizer string   |
+//! | `SecretProvider` | `Firma::SecretProvider`| resolved provider name |
 //!
 //! # Injection safety
 //!
@@ -186,6 +187,7 @@ pub enum FirmaEntityUid {
     Agent(AgentId),
     Action(String),
     Resource(String),
+    SecretProvider(String),
 }
 
 impl TryFrom<FirmaEntityUid> for EntityUid {
@@ -201,6 +203,7 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
             FirmaEntityUid::Agent(id) => ("Firma::Agent", id.to_string()),
             FirmaEntityUid::Action(id) => ("Firma::Action", id),
             FirmaEntityUid::Resource(id) => ("Firma::Resource", id),
+            FirmaEntityUid::SecretProvider(id) => ("Firma::SecretProvider", id),
         };
         let entity_type = type_name_str.parse::<EntityTypeName>()?;
         let entity_id = EntityId::new(id_string);
@@ -233,6 +236,14 @@ mod tests {
         let uid = EntityUid::try_from(FirmaEntityUid::Resource("2001:db8::1".to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Resource");
         assert_eq!(uid.id().as_ref(), "2001:db8::1");
+    }
+
+    #[test]
+    fn secret_provider_uid_roundtrip() {
+        let uid =
+            EntityUid::try_from(FirmaEntityUid::SecretProvider("bitwarden".to_string())).unwrap();
+        assert_eq!(uid.type_name().to_string(), "Firma::SecretProvider");
+        assert_eq!(uid.id().as_ref(), "bitwarden");
     }
 
     // Action and Resource take raw strings (normalizer-controlled). The typed
@@ -313,11 +324,17 @@ forbid (
         let policies = files.concat().parse::<PolicySet>().unwrap();
 
         let errors = validate_policies(&policies, &schema, Some(&files)).unwrap_err();
-        assert_eq!(
-            &errors.0.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            &[
-                "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found"
-            ]
-        );
+        // `resource` is unconstrained, so the validator reports this error
+        // against every entity type that can be a resource for some action
+        // (Resource, SecretProvider) — in hashmap-iteration order, which is
+        // not stable across runs, so sort before comparing.
+        let mut actual = errors.0.iter().map(ToString::to_string).collect::<Vec<_>>();
+        actual.sort();
+        let mut expected = vec![
+            "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::SecretProvider not found".to_string(),
+            "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 }
