@@ -1547,6 +1547,7 @@ name = "firma-run"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "ctrlc",
  "dialoguer",
@@ -1557,6 +1558,7 @@ dependencies = [
  "firma-http",
  "firma-protobuf",
  "firma-runtime-state",
+ "firma-secret-provider",
  "firma-sidecar",
  "fs-err",
  "hex",
@@ -1581,6 +1583,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wait-timeout",
+ "zeroize",
 ]
 
 [[package]]
