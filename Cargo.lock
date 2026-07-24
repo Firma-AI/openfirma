@@ -1547,6 +1547,7 @@ name = "firma-run"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "base64",
  "chrono",
  "ctrlc",
