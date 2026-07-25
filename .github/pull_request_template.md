@@ -22,23 +22,6 @@ Link the issue, decision doc, or discussion instead of repeating background.
 
 -
 
-## Release note
-
-<!--
-One concise, user-facing paragraph (300 characters maximum), or exactly `None`.
-Use `None` for ai, build, chore, ci, refactor, and test PRs. Those types are
-excluded from release notes.
--->
-
-## Breaking change
-
-<!--
-For a title containing `!`, explain the migration or compatibility impact in
-one concise paragraph. Otherwise write exactly `None`.
--->
-
-None
-
 ## Manual / Extra Verification
 
 <!--

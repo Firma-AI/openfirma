@@ -64,8 +64,7 @@ deny:
 release-tools-test:
   . ./tool-versions.env; uvx ruff@$RUFF_VERSION format --check scripts/release
   . ./tool-versions.env; uvx ruff@$RUFF_VERSION check scripts/release
-  uv run --script scripts/release/test_release_notes.py
-  uv run --script scripts/release/test_version.py
+  uv run --script scripts/release/test_validate_pr.py
 
 check: fmt lint test build audit deny release-tools-test
 

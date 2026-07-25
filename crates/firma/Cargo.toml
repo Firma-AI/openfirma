@@ -2,9 +2,14 @@
 name = "firma"
 version.workspace = true
 edition.workspace = true
+homepage = "https://openfirma.ai"
 license.workspace = true
 repository.workspace = true
 description = "Firma CLI for managing and running OpenFirma components"
+
+[package.metadata.dist]
+changelog = "../../CHANGELOG.md"
+dist = true
 
 [[bin]]
 name = "firma"

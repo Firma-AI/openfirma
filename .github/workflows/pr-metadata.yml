@@ -23,5 +23,5 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
-      - name: Validate title and release metadata
-        run: uv run --script scripts/release/release_notes.py validate-event --event "$GITHUB_EVENT_PATH"
+      - name: Validate PR title
+        run: uv run --script scripts/release/validate_pr.py --event "$GITHUB_EVENT_PATH"

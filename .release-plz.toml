@@ -1,0 +1,83 @@
+[workspace]
+git_only = true
+publish = false
+release_always = false
+release = false
+semver_check = false
+dependencies_update = false
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+git_tag_name = "v{{ version }}"
+pr_branch_prefix = "release-plz-"
+pr_labels = ["release"]
+pr_name = "chore(release): prepare release"
+
+[changelog]
+header = """# Changelog
+
+All notable user-facing changes to OpenFirma are documented in this file.
+"""
+body = """
+
+## [{{ version | trim_start_matches(pat="v") }}]{% if release_link %}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% set breaking = commits | filter(attribute="breaking", value=true) %}
+{% if breaking | length > 0 %}
+### Breaking changes
+{% for commit in breaking %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message }}{{ self::pr(commit=commit) }}
+{% endfor %}
+{% endif %}
+{% for group, grouped_commits in commits | group_by(attribute="group") %}
+{% if group != "other" %}
+{% set visible = grouped_commits | filter(attribute="breaking", value=false) %}
+{% if visible | length > 0 %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in visible %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message }}{{ self::pr(commit=commit) }}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if remote.contributors %}
+### Contributors
+{% for contributor in remote.contributors %}
+- @{{ contributor.username }}
+{% endfor %}
+{% endif %}
+{% macro pr(commit) %}{% if commit.remote.pr_number %} ([#{{ commit.remote.pr_number }}](https://github.com/Firma-AI/openfirma/pull/{{ commit.remote.pr_number }})){% endif %}{% endmacro %}
+"""
+commit_parsers = [
+  { message = "^security", group = "<!-- 0 -->Security" },
+  { message = "^feat", group = "<!-- 1 -->Added" },
+  { message = "^fix", group = "<!-- 2 -->Fixed" },
+  { message = "^perf", group = "<!-- 3 -->Performance" },
+  { message = "^revert", group = "<!-- 4 -->Changed" },
+  { message = "^docs?", group = "<!-- 5 -->Documentation" },
+  { message = "^(ai|build|chore|ci|refactor|test)", skip = true },
+  { message = "^.*", skip = true },
+]
+
+[[package]]
+name = "firma"
+release = true
+changelog_update = true
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+  "firma-authority",
+  "firma-config-loader",
+  "firma-core",
+  "firma-demo-fixture",
+  "firma-demo-tui",
+  "firma-fs",
+  "firma-grpc-interceptor-proto",
+  "firma-http",
+  "firma-run",
+  "firma-runtime-state",
+  "firma-sidecar",
+  "firma-stack",
+  "firma-tui",
+  "firma-vz-guest-init",
+  "firma-vz-runner",
+]
+git_tag_enable = true

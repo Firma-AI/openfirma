@@ -100,7 +100,7 @@ function Get-Target {
     $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
     switch ($arch) {
         'X64'   { return 'x86_64-pc-windows-msvc' }
-        'Arm64' { return 'aarch64-pc-windows-msvc' }
+        'Arm64' { Stop-Install 'Windows ARM64 is not currently supported' }
         default { Stop-Install "unsupported windows arch: $arch" }
     }
 }
@@ -171,9 +171,7 @@ function New-TempDir {
 }
 
 function Get-FirmaArchive ($TmpDir) {
-    # Release tag carries the v prefix (v0.7.0); asset filenames do not.
-    $versionBare = $script:Version.TrimStart('v')
-    $script:ArchiveName  = "firma-$versionBare-$script:Target.zip"
+    $script:ArchiveName  = "firma-$script:Target.zip"
     $script:ArchivePath  = Join-Path $TmpDir $script:ArchiveName
     $script:ChecksumPath = "$script:ArchivePath.sha256"
     $base = "https://github.com/$GitHubRepo/releases/download/$script:Version"
