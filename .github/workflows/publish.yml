@@ -7,10 +7,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: publish-release-tag
-  cancel-in-progress: false
-
 jobs:
   release-plz:
     name: Tag merged release PR
