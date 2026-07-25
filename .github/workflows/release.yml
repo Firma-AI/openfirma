@@ -159,7 +159,7 @@ jobs:
       - name: Create release
         # Multi-file glob upload, checksums, and prerelease handling in one
         # place; a hand-rolled `gh release` script would duplicate that.
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.0 # zizmor: ignore[superfluous-actions]
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
