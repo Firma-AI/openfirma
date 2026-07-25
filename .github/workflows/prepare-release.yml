@@ -62,14 +62,11 @@ jobs:
           gh pr checkout "$pr_number"
 
           cargo update --manifest-path fuzz/Cargo.toml -p firma-core
-
-          "$HOME/.dprint/bin/dprint" fmt CHANGELOG.md Cargo.toml \
-            crates/firma-config-loader/Cargo.toml
+          dprint fmt
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md Cargo.toml Cargo.lock fuzz/Cargo.lock \
-            crates/firma-config-loader/Cargo.toml
+          git add --all
           if git diff --cached --quiet; then
             exit 0
           fi

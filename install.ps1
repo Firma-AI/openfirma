@@ -100,7 +100,7 @@ function Get-Target {
     $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
     switch ($arch) {
         'X64'   { return 'x86_64-pc-windows-msvc' }
-        'Arm64' { Stop-Install 'Windows ARM64 is not currently supported' }
+        'Arm64' { return 'aarch64-pc-windows-msvc' }
         default { Stop-Install "unsupported windows arch: $arch" }
     }
 }

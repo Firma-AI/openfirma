@@ -11,7 +11,13 @@ git_tag_enable = false
 git_tag_name = "v{{ version }}"
 pr_branch_prefix = "release-plz-"
 pr_labels = ["release"]
-pr_name = "chore(release): prepare release"
+pr_name = "chore(release): Prepare release"
+pr_body = """## Release
+{% for release in releases %}
+- `{{ release.package }}`: {% if release.previous_version %}`{{ release.previous_version }}` -> {% endif %}`{{ release.next_version }}`
+{% endfor %}
+Review and edit the release notes in `CHANGELOG.md`.
+"""
 
 [changelog]
 header = """# Changelog

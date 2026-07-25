@@ -18,7 +18,12 @@ env:
 jobs:
   e2e:
     name: e2e (${{ matrix.os }}, ${{ matrix.agent.name }})
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.head.ref, 'release-plz-')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type == 'Bot' &&
+      contains(github.event.pull_request.labels.*.name, 'release') &&
+      startsWith(github.event.pull_request.head.ref, 'release-plz-'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -64,9 +69,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y bubblewrap
 
-      # Ubuntu 24.04 restricts unprivileged user namespaces with AppArmor. This
-      # profile lets bubblewrap retain the capabilities needed to configure
-      # loopback inside its user namespace.
+      # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1, which
+      # transitions bwrap to a profile that strips CAP_NET_ADMIN inside its user
+      # namespace, so it cannot bring up loopback (RTM_NEWADDR). Install the
+      # targeted AppArmor profile that lets bwrap keep its caps in the userns.
       - name: Allow bwrap user namespaces via AppArmor profile (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -92,6 +98,8 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
+      # nextest builds the firma binary as part of the e2e test; firma_bin()
+      # reads its path from CARGO_BIN_EXE_firma.
       - name: Run e2e tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

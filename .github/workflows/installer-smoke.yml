@@ -49,8 +49,12 @@ jobs:
           grep -F 'already installed' out.log
 
   windows:
-    name: install.ps1 (windows-latest)
-    runs-on: windows-latest
+    name: install.ps1 (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
