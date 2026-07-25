@@ -173,13 +173,25 @@ function New-TempDir {
 function Get-FirmaArchive ($TmpDir) {
     $script:ArchiveName  = "firma-$script:Target.zip"
     $script:ArchivePath  = Join-Path $TmpDir $script:ArchiveName
-    $script:ChecksumPath = "$script:ArchivePath.sha256"
     $base = "https://github.com/$GitHubRepo/releases/download/$script:Version"
     $script:Headers = Get-AuthHeader
     Write-Info "downloading $script:ArchiveName ..."
-    Invoke-Step "Invoke-WebRequest $base/$script:ArchiveName" {
-        Invoke-WebRequest -UseBasicParsing -Headers $script:Headers -Uri "$base/$script:ArchiveName"        -OutFile $script:ArchivePath
+    try {
+        Invoke-Step "Invoke-WebRequest $base/$script:ArchiveName" {
+            Invoke-WebRequest -UseBasicParsing -Headers $script:Headers -Uri "$base/$script:ArchiveName" -OutFile $script:ArchivePath
+        }
+    } catch {
+        Remove-Item -Force -ErrorAction SilentlyContinue $script:ArchivePath
+        $versionBare = $script:Version.TrimStart('v')
+        $script:ArchiveName = "firma-$versionBare-$script:Target.zip"
+        $script:ArchivePath = Join-Path $TmpDir $script:ArchiveName
+        Write-Info "cargo-dist archive unavailable; trying legacy archive $script:ArchiveName ..."
+        Invoke-Step "Invoke-WebRequest $base/$script:ArchiveName" {
+            Invoke-WebRequest -UseBasicParsing -Headers $script:Headers -Uri "$base/$script:ArchiveName" -OutFile $script:ArchivePath
+        }
     }
+
+    $script:ChecksumPath = "$script:ArchivePath.sha256"
     Invoke-Step "Invoke-WebRequest $base/$script:ArchiveName.sha256" {
         Invoke-WebRequest -UseBasicParsing -Headers $script:Headers -Uri "$base/$script:ArchiveName.sha256" -OutFile $script:ChecksumPath
     }

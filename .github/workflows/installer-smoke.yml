@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, macos-13, macos-14]
+        runner: [ubuntu-latest, macos-15-intel, macos-14]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,8 +45,19 @@ jobs:
         run: |
           set -eu
           INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
-          ./install.sh --install-dir "${INSTALL_DIR}" | tee out.log
+          PATH="${INSTALL_DIR}:${PATH}" ./install.sh --install-dir "${INSTALL_DIR}" | tee out.log
           grep -F 'already installed' out.log
+      - name: Install legacy release
+        env:
+          FIRMA_NO_BREW: '1'
+          FIRMA_NO_INIT: '1'
+          FIRMA_NO_MODIFY_PATH: '1'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          INSTALL_DIR="${RUNNER_TEMP}/firma-legacy-bin"
+          ./install.sh --version v0.1.2 --install-dir "${INSTALL_DIR}"
+          "${INSTALL_DIR}/firma" --version | grep -F '0.1.2'
 
   windows:
     name: install.ps1 (${{ matrix.runner }})
@@ -78,6 +89,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
+          $env:PATH = "$dir;$env:PATH"
           $out = .\install.ps1 -InstallDir $dir | Out-String
           $out | Write-Host
           if ($out -notmatch 'already installed') { exit 1 }
+      - name: Install legacy release
+        shell: pwsh
+        env:
+          FIRMA_NO_INIT: '1'
+          FIRMA_NO_MODIFY_PATH: '1'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'firma-legacy-bin'
+          .\install.ps1 -Version v0.1.2 -InstallDir $dir
+          $version = & (Join-Path $dir 'firma.exe') --version
+          if ($version -notmatch '0\.1\.2') { exit 1 }
