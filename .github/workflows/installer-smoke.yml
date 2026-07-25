@@ -90,7 +90,8 @@ jobs:
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
           $env:PATH = "$dir;$env:PATH"
-          $out = .\install.ps1 -InstallDir $dir | Out-String
+          $out = & pwsh -NoProfile -File .\install.ps1 -InstallDir $dir | Out-String
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $out | Write-Host
           if ($out -notmatch 'already installed') { exit 1 }
       - name: Install legacy release
