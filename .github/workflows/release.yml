@@ -138,10 +138,6 @@ jobs:
         with:
           "repo-token": "${{ secrets.GITHUB_TOKEN }}"
           "version": "35.1"
-      - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          key: ${{ join(matrix.targets, '-') }}
-          cache-provider: ${{ matrix.cache_provider }}
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

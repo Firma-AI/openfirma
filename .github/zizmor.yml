@@ -5,12 +5,6 @@
 # reviewed code. Each `uses:` carries a `# vX.Y.Z` comment so Renovate/Dependabot
 # can still track upstream releases.
 rules:
-  cache-poisoning:
-    ignore:
-      - release.yml
-  excessive-permissions:
-    ignore:
-      - release.yml
   template-injection:
     ignore:
       - release.yml
