@@ -1,0 +1,64 @@
+# Policy Control real-stack example.
+
+[authority]
+listen_addr = "127.0.0.1:50151"
+policy_dir = "policies/"
+issuance_policy_dir = "issuance-policies/"
+revocation_file = ".firma/state/revocations.txt"
+key_file = "state/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 5
+log_level = "info"
+
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:18180"
+drain_timeout_secs = 5
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.ca]
+dir = ".firma/state/generated-firma-ca"
+
+[sidecar.log]
+level = "info"
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+default_protected = true
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[sidecar.constraint_enforcement]
+bundle_ttl_seconds = 30
+enforcement_timeout_ms = 50
+
+[sidecar.connector]
+default_timeout_ms = 5000
+
+[sidecar.audit]
+sink = "file"
+file_path = "state/audit.jsonl"
+signing_key_path = "state/audit.key"
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
+url = "http://127.0.0.1:50151"
+public_key_path = "state/authority.pub"
+connect_timeout_secs = 5
+reconnect_min_backoff_ms = 250
+reconnect_max_backoff_secs = 5
+revocation_readiness_grace_ms = 500
+revocation_fail_closed_on_disconnect = false
+
+[sidecar.capability_seed]
+paths = [
+  "state/capability-filesystem-read.toml",
+  "state/capability-credential-read.toml",
+  "state/capability-code-write.toml",
+  "state/capability-payment-transfer.toml",
+  "state/capability-communication-external-send.toml",
+]
+hot_reload = true

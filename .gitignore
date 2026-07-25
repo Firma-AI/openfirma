@@ -58,6 +58,9 @@ audit.jsonl
 *.crt
 *.log
 .firma/
+!examples/policy-control/.firma/
+!examples/policy-control/.firma/**
+examples/policy-control/.firma/state/
 
 # Examples runtime artifacts
 /examples/**/.runtime/
