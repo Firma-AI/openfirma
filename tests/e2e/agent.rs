@@ -6,17 +6,17 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
-    /// Domains the agent contacts to reach its own model provider.
+    /// Domains the agent contacts as incidental startup traffic.
     ///
     /// This traffic is incidental to enforcement scenarios and varies by
     /// platform and agent version (e.g. codex dials `files.openai.com` on
     /// macOS but not Linux), so tests filter it out of the audit trail to keep
     /// snapshots deterministic across operating systems.
     #[must_use]
-    pub fn provider_domains(self) -> &'static [&'static str] {
+    pub fn incidental_allow_domains(self) -> &'static [&'static str] {
         match self {
             Self::Claude => &["anthropic.com"],
-            Self::Codex => &["openai.com", "chatgpt.com"],
+            Self::Codex => &["openai.com", "chatgpt.com", "github.com"],
         }
     }
 }

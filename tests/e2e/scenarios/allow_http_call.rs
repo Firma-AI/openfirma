@@ -29,9 +29,7 @@ impl EnforcementScenario for AllowHttpCall {
             .named("allow-repo-lifecycle")
             .permit("repo.lifecycle")
             .add()?;
-        let agent_id = ctx.agent.profile();
         ctx.issue_capability(
-            agent_id,
             SESSION_ID,
             &["communication.external.send", "repo.lifecycle"],
             "*",

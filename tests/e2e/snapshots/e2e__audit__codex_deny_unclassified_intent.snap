@@ -5,27 +5,6 @@ expression: self
 FirmaAuditTrail(
     {
         AuditEvent {
-            action: "code.read",
-            resource: "api.github.com/repos/openai/plugins",
-            decision: Allow,
-            deny_reason: "",
-            dispatch_status: 200,
-        },
-        AuditEvent {
-            action: "code.read",
-            resource: "api.github.com/repos/openai/plugins/git/ref/heads/main",
-            decision: Allow,
-            deny_reason: "",
-            dispatch_status: 200,
-        },
-        AuditEvent {
-            action: "code.write",
-            resource: "github.com/",
-            decision: Allow,
-            deny_reason: "",
-            dispatch_status: 200,
-        },
-        AuditEvent {
             action: "raw.http.GET",
             resource: "unmapped.test:<mock-port>/unlisted",
             decision: Deny,
