@@ -1425,7 +1425,6 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
- "firma-config-loader",
  "fs-err",
  "pretty_assertions",
  "serde",
