@@ -5,10 +5,10 @@ expression: self
 FirmaAuditTrail(
     {
         AuditEvent {
-            action: "raw.http.POST",
+            action: "communication.internal.send",
             resource: "127.0.0.1:<mock-port>/deny",
             decision: Deny,
-            deny_reason: "token invalid: no capability token covers action 'communication.internal.send' on resource '127.0.0.1:<mock-port>/deny'",
+            deny_reason: "policy denied: policy denied action 'communication.internal.send' on resource '127.0.0.1:<mock-port>/deny'",
             dispatch_status: 0,
         },
     },

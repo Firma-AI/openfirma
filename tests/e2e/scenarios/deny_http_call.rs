@@ -16,6 +16,10 @@ impl EnforcementScenario for DenyHttpCall {
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
+        ctx.policy()
+            .named("deny-internal-send")
+            .forbid("communication.internal.send")
+            .add()?;
         ctx.add_mapping_rule(
             &ctx.mock_server.address().to_string(),
             Method::POST,
