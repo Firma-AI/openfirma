@@ -75,12 +75,17 @@ impl ScenarioSetup {
 
     pub fn issue_capability(
         &mut self,
-        agent_id: &str,
         session_id: &str,
         actions: &[&str],
         scope: &str,
         ttl_secs: u64,
     ) -> Result<(), anyhow::Error> {
+        let config_path = self.config_dir.join("firma.toml");
+        let config: toml::Value = toml::from_str(&fs_err::read_to_string(&config_path)?)
+            .with_context(|| format!("parse {}", config_path.display()))?;
+        let agent_id = config["sidecar"]["authority"]["agent_id"]
+            .as_str()
+            .context("generated config is missing sidecar.authority.agent_id")?;
         let seed_path = config::issue_capability(
             &self.config_dir,
             agent_id,
