@@ -267,7 +267,7 @@ impl Mapping {
             Self::Gmail => include_str!("../../templates/mappings/gmail.toml"),
             Self::Npm => include_str!("../../templates/mappings/npm.toml"),
             Self::Pypi => include_str!("../../templates/mappings/pypi.toml"),
-            Self::Cargo => include_str!("../../templates/mappings/cargo.toml"),
+            Self::Cargo => include_str!("../../templates/mappings/cargo-registry.toml"),
             Self::Stripe => include_str!("../../templates/mappings/stripe.toml"),
             Self::Copilot => include_str!("../../templates/mappings/copilot.toml"),
             Self::Vscode => include_str!("../../templates/mappings/vscode.toml"),
