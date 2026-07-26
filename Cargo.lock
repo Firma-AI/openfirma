@@ -1327,7 +1327,7 @@ checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
 name = "firma"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "cedar-policy",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "firma-authority"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "firma-config-loader"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "firma-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "arbitrary",
  "async-trait",
@@ -1459,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "firma-demo-fixture"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -1478,7 +1478,7 @@ dependencies = [
 
 [[package]]
 name = "firma-demo-tui"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
@@ -1499,7 +1499,7 @@ dependencies = [
 
 [[package]]
 name = "firma-fs"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "insta",
  "tempfile",
@@ -1508,7 +1508,7 @@ dependencies = [
 
 [[package]]
 name = "firma-grpc-interceptor-proto"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "prost",
  "tonic",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "firma-http"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "arbitrary",
  "http",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "firma-run"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1583,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "firma-runtime-state"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "insta",
  "nix 0.31.3",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "firma-sidecar"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1664,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "firma-stack"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ctrlc",
  "firma-authority",
@@ -1684,7 +1684,7 @@ dependencies = [
 
 [[package]]
 name = "firma-tui"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "crossterm 0.28.1",
@@ -1694,7 +1694,7 @@ dependencies = [
 
 [[package]]
 name = "firma-vz-guest-init"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "firma-runtime-state",
  "insta",
@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "firma-vz-runner"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "block2",
