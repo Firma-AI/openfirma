@@ -397,25 +397,25 @@ const IOC_WRITE: u64 = 1;
 const IOC_READ: u64 = 2;
 const SECCOMP_IOC_MAGIC: u64 = b'!' as u64;
 
-const fn ioc(dir: u64, nr: u64, size: usize) -> libc::c_ulong {
-    ((dir << 30) | (SECCOMP_IOC_MAGIC << 8) | nr | ((size as u64) << 16)) as libc::c_ulong
+const fn ioc(dir: u64, nr: u64, size: usize) -> libc::Ioctl {
+    ((dir << 30) | (SECCOMP_IOC_MAGIC << 8) | nr | ((size as u64) << 16)) as libc::Ioctl
 }
 
-fn notif_recv_req() -> libc::c_ulong {
+fn notif_recv_req() -> libc::Ioctl {
     ioc(
         IOC_READ | IOC_WRITE,
         0,
         std::mem::size_of::<libc::seccomp_notif>(),
     )
 }
-fn notif_send_req() -> libc::c_ulong {
+fn notif_send_req() -> libc::Ioctl {
     ioc(
         IOC_READ | IOC_WRITE,
         1,
         std::mem::size_of::<libc::seccomp_notif_resp>(),
     )
 }
-fn notif_id_valid_req() -> libc::c_ulong {
+fn notif_id_valid_req() -> libc::Ioctl {
     ioc(IOC_WRITE, 2, std::mem::size_of::<u64>())
 }
 
