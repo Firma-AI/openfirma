@@ -20,7 +20,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/Firma-AI/openfirma"
@@ -60,18 +60,18 @@ dirs = "6"
 dispatch2 = "0.3"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
-firma-authority = { path = "crates/firma-authority", version = "0.1.2" }
-firma-config-loader = { path = "crates/firma-config-loader", version = "0.1.2" }
-firma-core = { path = "crates/firma-core", version = "0.1.2" }
-firma-fs = { path = "crates/firma-fs", version = "0.1.2" }
-firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.1.2" }
-firma-http = { path = "crates/firma-http", version = "0.1.2" }
+firma-authority = { path = "crates/firma-authority", version = "0.1.3" }
+firma-config-loader = { path = "crates/firma-config-loader", version = "0.1.3" }
+firma-core = { path = "crates/firma-core", version = "0.1.3" }
+firma-fs = { path = "crates/firma-fs", version = "0.1.3" }
+firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.1.3" }
+firma-http = { path = "crates/firma-http", version = "0.1.3" }
 firma-protobuf = "0.2"
-firma-run = { path = "crates/firma-run", version = "0.1.2" }
-firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.2" }
-firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.2" }
-firma-stack = { path = "crates/firma-stack", version = "0.1.2" }
-firma-tui = { path = "crates/firma-tui", version = "0.1.2" }
+firma-run = { path = "crates/firma-run", version = "0.1.3" }
+firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.3" }
+firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.3" }
+firma-stack = { path = "crates/firma-stack", version = "0.1.3" }
+firma-tui = { path = "crates/firma-tui", version = "0.1.3" }
 fs-err = "3.3"
 governor = "0.10"
 hex = "0.4"

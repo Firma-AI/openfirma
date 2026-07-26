@@ -20,10 +20,7 @@ Released on {{ timestamp | date(format="%Y-%m-%d") }}
 
 {% for commit in commits -%}
 - {% if commit.breaking %}💥 {% endif %}{% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | trim }}
-  {%- if commit.body %}
-  > {{ commit.body | split(pat="\n") | join(sep="\n  > ") }}
-  {%- endif %}
-{%- endfor %}
+{% endfor -%}
 {%- endfor %}
 """
 trim = false
