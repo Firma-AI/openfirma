@@ -35,16 +35,14 @@ impl FirmaAuditTrail {
         Ok(Self(events))
     }
 
-    /// Drops allowed requests to the agent's own provider; denials are kept.
+    /// Drops allowed requests caused by agent startup; denials are kept.
     ///
-    /// An agent must reach its provider to function, so allowed provider
-    /// traffic is already implied by a successful run and only adds
-    /// platform-dependent noise to snapshots (e.g. codex dials
-    /// `files.openai.com` on macOS but not Linux). Denials to those same hosts
-    /// still signal enforcement behavior, so they are preserved.
+    /// Startup traffic is incidental to the scenario and varies by platform
+    /// and agent version. Denials to those same hosts still signal enforcement
+    /// behavior, so they are preserved.
     #[must_use]
-    pub fn exclude_provider_allow_events(mut self, agent: AgentKind) -> Self {
-        let domains = agent.provider_domains();
+    pub fn exclude_incidental_allow_events(mut self, agent: AgentKind) -> Self {
+        let domains = agent.incidental_allow_domains();
         self.0.retain(|event| {
             // Resources are `host/path`; match the host segment.
             let host = event
