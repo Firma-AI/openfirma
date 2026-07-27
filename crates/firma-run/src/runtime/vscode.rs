@@ -9,6 +9,7 @@ use crate::backend::{SandboxHandle, SandboxMount};
 use crate::config::MountSpec;
 use crate::config::ResolvedProfile;
 use crate::error::RunError;
+use crate::runtime::resolve_host_executable;
 
 pub(super) fn should_apply_vscode_shim(profile: &ResolvedProfile, executable: &str) -> bool {
     profile.id == "vscode"
@@ -380,75 +381,6 @@ fn replace_symlink(source: &Path, target: &Path) -> Result<(), RunError> {
             source.display()
         ))
     })
-}
-
-pub(super) fn resolve_host_executable(
-    executable: &str,
-    host_path: Option<&OsStr>,
-) -> Result<PathBuf, RunError> {
-    let candidate = PathBuf::from(executable);
-    if candidate
-        .parent()
-        .is_some_and(|parent| !parent.as_os_str().is_empty())
-    {
-        return require_file(candidate, executable);
-    }
-
-    let path_value = host_path
-        .map(std::ffi::OsString::from)
-        .or_else(|| std::env::var_os("PATH"))
-        .ok_or_else(|| {
-            RunError::ConfigValidation(format!(
-                "cannot resolve executable '{executable}' because host PATH is not set"
-            ))
-        })?;
-    for dir in std::env::split_paths(&path_value) {
-        for candidate in executable_search_candidates(&dir, executable) {
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-    Err(RunError::ConfigValidation(format!(
-        "cannot resolve executable '{executable}' on host PATH"
-    )))
-}
-
-#[cfg(windows)]
-fn executable_search_candidates(dir: &Path, executable: &str) -> Vec<PathBuf> {
-    let direct = dir.join(executable);
-    if Path::new(executable).extension().is_some() {
-        return vec![direct];
-    }
-
-    let mut candidates = vec![direct];
-    let path_ext = std::env::var_os("PATHEXT").map_or_else(
-        || ".COM;.EXE;.BAT;.CMD".to_string(),
-        |value| value.to_string_lossy().into_owned(),
-    );
-    candidates.extend(
-        path_ext
-            .split(';')
-            .filter(|extension| !extension.is_empty())
-            .map(|extension| dir.join(format!("{executable}{extension}"))),
-    );
-    candidates
-}
-
-#[cfg(not(windows))]
-fn executable_search_candidates(dir: &Path, executable: &str) -> Vec<PathBuf> {
-    vec![dir.join(executable)]
-}
-
-fn require_file(candidate: PathBuf, executable: &str) -> Result<PathBuf, RunError> {
-    if candidate.is_file() {
-        Ok(candidate)
-    } else {
-        Err(RunError::ConfigValidation(format!(
-            "cannot resolve executable '{executable}' at {}",
-            candidate.display()
-        )))
-    }
 }
 
 #[cfg(windows)]
