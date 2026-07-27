@@ -201,7 +201,7 @@ fn encode_secret(secret: &SecretString, content_type: ContentType) -> String {
 /// Delegates the actual decoding to the same crates [`encode_secret`] uses
 /// for encoding (`serde_json`, `form_urlencoded`, `quick_xml`), so this only
 /// has to locate the candidate span, not reimplement any escaping rules.
-fn find_decoded_secret_spans(
+pub(crate) fn find_decoded_secret_spans(
     body: &[u8],
     content_type: ContentType,
     secret: &SecretString,

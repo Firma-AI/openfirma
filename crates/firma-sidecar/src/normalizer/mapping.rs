@@ -324,50 +324,10 @@ fn split_ipv6_authority(host: &str) -> (String, Option<String>) {
 
 /// Simple glob matching where `*` matches any sequence of characters.
 ///
-/// The wildcard crosses separators: `*.example.com` matches both
-/// `api.example.com` and `deep.api.example.com`, and a bare `*` matches
-/// everything.
-///
-/// - `/v1/*/completions` matches `/v1/chat/completions`
-pub fn glob_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-
-    // Split into segments by the `*` wildcard
-    let parts: Vec<&str> = pattern.split('*').collect();
-
-    if parts.len() == 1 {
-        // No wildcard — exact match
-        return pattern == value;
-    }
-
-    let mut pos = 0usize;
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        match value[pos..].find(part) {
-            Some(found) => {
-                // First part must match at the start
-                if i == 0 && found != 0 {
-                    return false;
-                }
-                pos += found + part.len();
-            }
-            None => return false,
-        }
-    }
-
-    // Last part must match at the end
-    if let Some(last) = parts.last()
-        && !last.is_empty()
-    {
-        return value.ends_with(last);
-    }
-
-    true
-}
+/// Shared with `firma-secret-provider`'s `HttpIntegrationSpec` host/path
+/// matching (a distinct crate this one already depends on) rather than
+/// reimplemented here, so the two never silently diverge.
+pub use firma_secret_provider::glob_match;
 
 #[cfg(test)]
 mod tests {

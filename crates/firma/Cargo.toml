@@ -36,6 +36,7 @@ firma-http = { workspace = true }
 firma-identifiers = { workspace = true }
 firma-run = { workspace = true }
 firma-runtime-state = { workspace = true }
+firma-secret-provider = { workspace = true }
 firma-sidecar = { workspace = true }
 firma-stack = { workspace = true }
 firma-tui = { workspace = true }
