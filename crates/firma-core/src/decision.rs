@@ -396,28 +396,53 @@ pub enum SecretMatcher {
         /// `JSONPath` selecting the matching name (`@match_name`), aligned by
         /// document order with the value path.
         name_path: String,
-        /// Optional `JSONPath` selecting the item title for structured-item
-        /// stores. Substituted into the `{item}` marker of the placeholder
-        /// template. When the path selects a single node it is broadcast to all
-        /// extracted values; when it selects N nodes they are aligned
-        /// positionally. Use this for integrations that group multiple fields
-        /// under a named item (e.g. 1Password `$.title`).
+        /// Optional `JSONPath` selecting the item title for structured-item stores.
+        ///
+        /// A syntactically singular `JSONPath`, as defined by RFC 9535, is treated as
+        /// shared metadata. If it selects one node, that value is broadcast to every
+        /// extracted secret. Examples include `$.title` and `$.items[0].title`.
+        /// Use this for integrations that group multiple fields under a named item
+        /// (e.g. 1Password `$.title`).
+        ///
+        /// A non-singular `JSONPath` is treated as positional. It must select exactly
+        /// as many nodes as `value_path`, and results are aligned in document order.
+        /// Examples include `$[*].title` and `$.items[*].title`.
+        ///
+        /// A non-singular path is not broadcast merely because it happens to select
+        /// one node for a particular response. This avoids treating a missing
+        /// positional value as shared metadata.
+        ///
+        /// Selecting zero nodes or a positional count that differs from `value_path`
+        /// is an error.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item_path: Option<String>,
-        /// Optional `JSONPath` selecting the domain (hostname) associated with
-        /// each secret. When the path selects a single node it is broadcast to
-        /// all extracted values; when it selects N nodes they are aligned
-        /// positionally. A node that is not a string (e.g. `null`) is treated
-        /// as absent (wildcard). Use this for integrations whose vault items
-        /// carry a URL or hostname field (e.g. 1Password `urls[0].href`).
+        /// Optional `JSONPath` selecting the domain authority associated with each
+        /// secret.
+        ///
+        /// A syntactically singular `JSONPath`, as defined by RFC 9535, is treated as a
+        /// shared domain. If it selects one node, that domain is broadcast to every
+        /// extracted secret. Examples include `$.url` and `$.urls[0].href`.
+        /// Use this for integrations whose vault items carry a URL or hostname field
+        /// (e.g. 1Password `urls[0].href`).
+        ///
+        /// A non-singular `JSONPath` is treated as positional. It must select exactly
+        /// as many nodes as `value_path`, and results are aligned in document order.
+        /// Examples include `$[*].domain` and `$.items[*].url`.
+        ///
+        /// A non-singular path is not broadcast merely because it happens to select
+        /// one node for a particular response. This ensures that a missing domain on
+        /// one secret fails closed rather than causing another secret's domain to be
+        /// broadcast.
+        ///
+        /// String values are parsed as HTTP authorities or URLs and normalized to an
+        /// authority suitable for matching outbound request destinations. A selected
+        /// `null` or other non-string node is treated as an absent domain for that
+        /// position.
+        ///
+        /// Selecting zero nodes or a positional count that differs from `value_path`
+        /// is an error.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         domain_path: Option<String>,
-        /// When `true` and `domain_path` is set, the selected value is parsed
-        /// as a URL and only the `host` portion is stored. Use this for
-        /// integrations that store full URLs rather than bare hostnames
-        /// (e.g. 1Password `urls[].href` stores `https://github.com`).
-        #[serde(default)]
-        domain_is_url: bool,
     },
     /// `Regex` extraction over text output. The pattern carries a required
     /// `value` and `name` named capture group, and an optional `domain` group
@@ -425,11 +450,6 @@ pub enum SecretMatcher {
     Regex {
         /// The `Regex` source.
         pattern: String,
-        /// When `true` and the pattern has a `domain` capture group, the
-        /// captured value is parsed as a URL and only the `host` portion is
-        /// stored. Mirrors the same flag on the `Json` variant.
-        #[serde(default)]
-        domain_is_url: bool,
     },
 }
 
