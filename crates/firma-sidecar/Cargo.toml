@@ -24,6 +24,7 @@ firma-grpc-interceptor-proto = { workspace = true }
 firma-http = { workspace = true }
 firma-protobuf = { workspace = true }
 firma-runtime-state = { workspace = true }
+firma-secret-provider = { workspace = true }
 governor = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
