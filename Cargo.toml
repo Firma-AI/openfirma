@@ -49,6 +49,7 @@ inherits = "release"
 lto = "thin"
 
 [workspace.dependencies]
+aho-corasick = "1"
 anyhow = "1"
 arbitrary = "1"
 arc-swap = "1"
@@ -146,3 +147,4 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 wiremock = "0.6"
 x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zeroize = "1"
