@@ -1604,7 +1604,9 @@ name = "firma-secret-provider"
 version = "0.1.4"
 dependencies = [
  "firma-core",
+ "firma-http",
  "regex",
+ "serde",
  "serde_json",
  "serde_json_path",
  "thiserror 2.0.18",
