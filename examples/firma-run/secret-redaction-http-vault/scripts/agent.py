@@ -5,11 +5,11 @@ Runs inside the bwrap sandbox. Exercises the two-phase secret-mediation flow,
 with the fetch phase going through an HTTP vault instead of a CLI shim:
 
 1. Fetch (HTTP-vault intercept) — GETs a secret from the mock HTTP vault via
-   the Sidecar HTTP proxy. The Sidecar's own HTTP path evaluates
-   secret.mediate, extracts the real value from the JSON response, and
-   replaces it with a firma-secret://demo-http-vault/ placeholder before the
-   agent's HTTP client sees the response body. No shim, no firma-run broker
-   round-trip for the fetch itself.
+   the Sidecar HTTP proxy. The Sidecar's own HTTP path matches the response
+   against the configured provider, extracts the real value from the JSON
+   response, and replaces it with a firma-secret://demo-http-vault/
+   placeholder before the agent's HTTP client sees the response body. No
+   shim, no firma-run broker round-trip for the fetch itself.
 
 2. Use (HTTP redact) — embeds the placeholder in a JSON POST to the capture
    server via the same Sidecar proxy. The Sidecar resolves the placeholder to

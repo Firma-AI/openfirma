@@ -1,15 +1,14 @@
 //! Per-request broker dispatch.
 //!
-//! Turns one shim request into a vault CLI execution and (for `Permit` outcomes)
-//! an intercept transform that extracts secrets and substitutes placeholders
-//! before the output reaches the agent. This module owns the **routing**: it maps
-//! a [`pep::SecretPepOutcome`] to either a raw passthrough or an intercepted run and
-//! builds the [`broker::BrokerResponse`].
+//! Turns one shim request into a vault CLI execution plus an intercept
+//! transform that extracts secrets and substitutes placeholders before the
+//! output reaches the agent. This module owns the **routing**: it builds the
+//! [`broker::BrokerResponse`] for a launch.
 //!
-//! A `Deny` returns without executing anything (fail closed). `Passthrough` runs
-//! the real binary unchanged. `Permit` runs the binary, applies the integration
-//! spec's extractor, and forwards only the rewritten (placeholder-substituted)
-//! output.
+//! A binary only ever reaches the broker because it matched a configured
+//! secret-provider entry (that's why the shim was installed over it), so
+//! being asked to serve a request is itself the authorization — every launch
+//! runs with the integration spec's credential envs and extractor applied.
 
 use std::io;
 use std::path::Path;
@@ -22,13 +21,10 @@ use super::broker::{BrokerRequest, BrokerResponse};
 use firma_secret_provider::CliIntegrationSpec;
 
 use super::intercept::intercept;
-use super::pep::SecretPepOutcome;
 
 /// Errors from executing a vault CLI subprocess.
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
-    #[error("launch denied by policy: {0}")]
-    Denied(String),
     #[error("failed to spawn subprocess: {0}")]
     Spawn(io::Error),
     #[error("subprocess wait failed: {0}")]
@@ -39,22 +35,21 @@ pub enum ServeError {
 
 /// Execute a broker request and return the appropriate [`BrokerResponse`].
 ///
-/// - `Deny` → error response without spawning anything.
-/// - `Passthrough` → run `bin` (from `real_bin_dir` or PATH) unchanged.
-/// - `Permit` → run with `spec` credential envs, apply intercept, mint
-///   placeholders into `store`, return rewritten stdout.
+/// Runs `spec`'s credential envs, applies its extractor, mints placeholders
+/// into `store`, and returns the rewritten stdout. When `spec` is `None` (no
+/// integration spec resolved for the binary), runs with no credential envs
+/// and forwards stdout unmodified.
 ///
 /// `real_bin_dir`: if `Some`, the real binary is resolved as
 /// `real_bin_dir/<bin>` rather than searched on PATH. This supports the Linux
 /// bwrap layout where un-shimmed binaries live under a separate directory.
 pub fn serve_request(
     request: &BrokerRequest,
-    outcome: &SecretPepOutcome,
     spec: Option<&CliIntegrationSpec>,
     store: &ArcSwap<SecretStore>,
     real_bin_dir: Option<&Path>,
 ) -> BrokerResponse {
-    match serve_inner(request, outcome, spec, store, real_bin_dir) {
+    match serve_inner(request, spec, store, real_bin_dir) {
         Ok(response) => response,
         Err(err) => BrokerResponse::err(err.to_string()),
     }
@@ -62,40 +57,27 @@ pub fn serve_request(
 
 fn serve_inner(
     request: &BrokerRequest,
-    outcome: &SecretPepOutcome,
     spec: Option<&CliIntegrationSpec>,
     store: &ArcSwap<SecretStore>,
     real_bin_dir: Option<&Path>,
 ) -> Result<BrokerResponse, ServeError> {
-    match outcome {
-        SecretPepOutcome::Deny(reason) => Err(ServeError::Denied(reason.clone())),
-
-        SecretPepOutcome::Passthrough => {
-            let stdout = run_subprocess(request, &[], real_bin_dir, &[], &[])?;
-            Ok(BrokerResponse::ok(&stdout))
-        }
-
-        SecretPepOutcome::Permit => {
-            const EMPTY: &[String] = &[];
-            let credential_env_vars = spec.map_or(EMPTY, |s| s.credential_env_vars.as_slice());
-            let (strip_flags, forced_args) = spec.map_or((EMPTY, EMPTY), |s| {
-                (s.strip_arg_flags.as_slice(), s.forced_args.as_slice())
-            });
-            let stdout = run_subprocess(
-                request,
-                credential_env_vars,
-                real_bin_dir,
-                strip_flags,
-                forced_args,
-            )?;
-            if let Some(spec) = spec {
-                let rewritten =
-                    intercept(&spec.matcher, &stdout, &spec.placeholder_template, store)?;
-                Ok(BrokerResponse::ok(&rewritten))
-            } else {
-                Ok(BrokerResponse::ok(&stdout))
-            }
-        }
+    const EMPTY: &[String] = &[];
+    let credential_env_vars = spec.map_or(EMPTY, |s| s.credential_env_vars.as_slice());
+    let (strip_flags, forced_args) = spec.map_or((EMPTY, EMPTY), |s| {
+        (s.strip_arg_flags.as_slice(), s.forced_args.as_slice())
+    });
+    let stdout = run_subprocess(
+        request,
+        credential_env_vars,
+        real_bin_dir,
+        strip_flags,
+        forced_args,
+    )?;
+    if let Some(spec) = spec {
+        let rewritten = intercept(&spec.matcher, &stdout, &spec.placeholder_template, store)?;
+        Ok(BrokerResponse::ok(&rewritten))
+    } else {
+        Ok(BrokerResponse::ok(&stdout))
     }
 }
 
@@ -209,46 +191,14 @@ mod tests {
     }
 
     #[test]
-    fn deny_returns_error_response_without_spawning() {
-        let request = BrokerRequest {
-            bin: "bws".to_string(),
-            args: "secret get x".to_string(),
-        };
-        let store = empty_store();
-        let response = serve_request(
-            &request,
-            &SecretPepOutcome::Deny("blocked by policy".to_string()),
-            None,
-            &store,
-            None,
-        );
-        assert!(
-            response.into_stdout().is_err(),
-            "deny must return an error response"
-        );
-    }
-
-    #[test]
-    fn passthrough_runs_real_binary_and_returns_stdout() {
-        let request = BrokerRequest {
-            bin: "echo".to_string(),
-            args: "hello".to_string(),
-        };
-        let store = empty_store();
-        let response = serve_request(&request, &SecretPepOutcome::Passthrough, None, &store, None);
-        let stdout = response.into_stdout().expect("passthrough ok");
-        assert_eq!(stdout.trim_ascii_end(), b"hello");
-    }
-
-    #[test]
-    fn permit_without_spec_returns_raw_stdout() {
+    fn runs_real_binary_and_returns_raw_stdout_without_spec() {
         let request = BrokerRequest {
             bin: "echo".to_string(),
             args: "raw".to_string(),
         };
         let store = empty_store();
-        let response = serve_request(&request, &SecretPepOutcome::Permit, None, &store, None);
-        let stdout = response.into_stdout().expect("permit ok");
+        let response = serve_request(&request, None, &store, None);
+        let stdout = response.into_stdout().expect("ok");
         assert_eq!(stdout.trim_ascii_end(), b"raw");
     }
 }

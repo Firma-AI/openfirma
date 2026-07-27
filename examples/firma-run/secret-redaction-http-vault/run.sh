@@ -13,10 +13,10 @@
 #   3. Runs scripts/agent.py inside the bwrap sandbox:
 #        a. Agent GETs a secret from the vault. Once the request itself is
 #           allowed, the Sidecar matches the response against the
-#           demo-http-vault provider, evaluates secret.mediate, extracts the
-#           real value from the JSON response, and replaces it with a
-#           firma-secret://demo-http-vault/ placeholder before the agent's
-#           HTTP client sees it.
+#           demo-http-vault provider — the match is itself the authorization
+#           — extracts the real value from the JSON response, and replaces
+#           it with a firma-secret://demo-http-vault/ placeholder before the
+#           agent's HTTP client sees it.
 #        b. Agent POSTs {"token": "<placeholder>"} to 127.0.0.1:19876/capture
 #           via the Sidecar HTTP proxy. The Sidecar resolves the placeholder
 #           to the real secret before forwarding; the capture server receives

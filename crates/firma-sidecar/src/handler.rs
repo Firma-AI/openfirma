@@ -12,7 +12,7 @@ use firma_core::envelope::InvalidMethod;
 use firma_core::{
     AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
     ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
-    InjectedCredentials, SecretDecision, SessionId, TransportView,
+    InjectedCredentials, SessionId, TransportView,
 };
 use firma_http::HeaderName;
 use firma_secret_provider::{CompiledMatcher, HttpIntegrationSpec};
@@ -20,7 +20,6 @@ use tokio::sync::mpsc;
 
 use crate::audit::{AuditPayload, Decision};
 use crate::connector::ConnectorRegistry;
-use crate::enforcement::constraint_enforcement::PolicyEvaluation;
 use crate::normalizer::{NormalizedEnvelope, glob_match};
 use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
 use crate::secret_gateway_client::{self, GatewayEndpoint};
@@ -360,50 +359,13 @@ fn mask_handled_response(response: HandledResponse, store: &SidecarSecretStore) 
     }
 }
 
-/// Build the minimal `EnforcementContext` for an HTTP-origin `secret.mediate`
-/// decision. Mirrors the required fields produced by
-/// `ConstraintEnforcer::build_context`; counters that only matter for the
-/// main per-session enforcement path default to zero, matching the CLI
-/// origin's `local_exec::endpoint::launch_context`.
-fn http_secret_mediate_context(session_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": session_id,
-        "timestamp_ms": now_unix_ms(),
-        "params": "{}",
-        "risk_score": 0i64,
-        "session_duration_s": 0i64,
-        "action_count": 0i64,
-        "raw_transport": "https",
-        "deny_count": 0i64,
-        "prior_action_classes": Vec::<String>::new(),
-        "last_resource": "",
-        "transfer_amount": 0i64,
-        "daily_cumulative_amount": 0i64,
-        "transfers_last_10m": 0i64,
-        "same_payee_count_30m": 0i64,
-        "session_transfer_count": 0i64,
-    })
-}
-
-fn now_unix_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
-
-/// HTTP-origin `secret.mediate` interception: the Sidecar-local mirror of an
-/// HTTP vault registry entry, plus what's needed to ask Cedar and mint a
-/// placeholder locally (see [`RequestHandler::intercept_http_secrets`]).
+/// HTTP-origin secret interception: the Sidecar-local mirror of an HTTP
+/// vault registry entry, used to mint placeholders locally (see
+/// [`RequestHandler::intercept_http_secrets`]). A provider being listed here
+/// (mirroring firma-run's `http_secret_providers` config) is itself the
+/// authorization — no separate policy check gates it.
 struct HttpSecretMediation {
-    evaluator: Arc<dyn PolicyEvaluation + Send + Sync>,
     providers: Vec<HttpIntegrationSpec>,
-    /// Fixed principal used for HTTP-origin `secret.mediate` evaluation.
-    /// Unlike the per-request capability-scoped principal used elsewhere,
-    /// there is no natural per-response agent identity for MITM'd traffic —
-    /// mirrors the same fallback pattern as the local-exec endpoint's CLI
-    /// `secret.mediate` evaluation.
-    principal: AgentId,
 }
 
 /// Shared handler used by every interceptor.
@@ -444,26 +406,17 @@ impl RequestHandler {
         self
     }
 
-    /// Enable HTTP-origin `secret.mediate` interception for the given
-    /// `providers` (the Sidecar's mirror of firma-run's HTTP-shaped
-    /// `secret_providers` config, synthesized in at startup). A no-op when
-    /// `providers` is empty. Requires [`Self::with_gateway_endpoint`] to
-    /// have been called too — extracted secrets are pushed there; without a
-    /// gateway endpoint, matched responses are evaluated but never
-    /// intercepted (logged as a misconfiguration).
+    /// Enable HTTP-origin secret interception for the given `providers` (the
+    /// Sidecar's mirror of firma-run's HTTP-shaped `secret_providers`
+    /// config, synthesized in at startup). A no-op when `providers` is
+    /// empty. Requires [`Self::with_gateway_endpoint`] to have been called
+    /// too — extracted secrets are pushed there; without a gateway
+    /// endpoint, matched responses are never intercepted (logged as a
+    /// misconfiguration).
     #[must_use]
-    pub fn with_http_secret_providers(
-        mut self,
-        evaluator: Arc<dyn PolicyEvaluation + Send + Sync>,
-        providers: Vec<HttpIntegrationSpec>,
-        principal: AgentId,
-    ) -> Self {
+    pub fn with_http_secret_providers(mut self, providers: Vec<HttpIntegrationSpec>) -> Self {
         if !providers.is_empty() {
-            self.http_secret_mediation = Some(HttpSecretMediation {
-                evaluator,
-                providers,
-                principal,
-            });
+            self.http_secret_mediation = Some(HttpSecretMediation { providers });
         }
         self
     }
@@ -660,9 +613,7 @@ impl RequestHandler {
             None => response,
         };
 
-        let response = self
-            .intercept_http_secrets(&request, session_id, response)
-            .await;
+        let response = self.intercept_http_secrets(&request, response).await;
 
         if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
             tracing::error!("failed to send audit event: {err}");
@@ -671,23 +622,22 @@ impl RequestHandler {
         response
     }
 
-    /// HTTP-origin `secret.mediate` interception: if `request` matches a
-    /// configured HTTP secret provider and Cedar permits `secret.mediate`
-    /// for it, run the provider's matcher over the response body, mint
-    /// placeholders locally, push each extracted secret to firma-run's
-    /// broker, and substitute the placeholders into the body before it
-    /// reaches the agent.
+    /// HTTP-origin secret interception: if `request` matches a configured
+    /// HTTP secret provider, run the provider's matcher over the response
+    /// body, mint placeholders locally, push each extracted secret to
+    /// firma-run's broker, and substitute the placeholders into the body
+    /// before it reaches the agent. A matching provider entry is itself the
+    /// authorization — no separate policy check gates it.
     ///
     /// A no-op — `response` passes through unchanged — when no HTTP secret
-    /// providers are configured, no entry matches `request`, Cedar does not
-    /// permit, or extraction/push fails. This is an additive interception
-    /// layer on top of already-allowed traffic, not a new blocking gate: any
-    /// failure here falls back to the pre-existing behavior of forwarding
-    /// the response as dispatched.
+    /// providers are configured, no entry matches `request`, or
+    /// extraction/push fails. This is an additive interception layer on top
+    /// of already-allowed traffic, not a new blocking gate: any failure here
+    /// falls back to the pre-existing behavior of forwarding the response as
+    /// dispatched.
     async fn intercept_http_secrets(
         &self,
         request: &RawRequest,
-        session_id: &str,
         response: HandledResponse,
     ) -> HandledResponse {
         let Some(mediation) = &self.http_secret_mediation else {
@@ -702,34 +652,11 @@ impl RequestHandler {
             return response;
         };
 
-        let context = http_secret_mediate_context(session_id);
-        let decision = mediation.evaluator.evaluate_secret_mediate_http(
-            &mediation.principal,
-            &provider.provider_id,
-            &request.host,
-            &request.path,
-            request.method.as_str(),
-            context,
-        );
-        match decision {
-            Ok(SecretDecision::Permit) => {}
-            Ok(SecretDecision::Passthrough) => return response,
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = %provider.provider_id,
-                    host = %request.host,
-                    %error,
-                    "secret.mediate (HTTP) evaluation failed; not intercepting"
-                );
-                return response;
-            }
-        }
-
         let Some(gateway) = self.gateway_endpoint.as_ref() else {
             tracing::warn!(
                 provider_id = %provider.provider_id,
-                "secret.mediate (HTTP) permitted interception but no secret gateway is \
-                 configured; not intercepting"
+                "HTTP secret provider matched but no secret gateway is configured; not \
+                 intercepting"
             );
             return response;
         };
@@ -765,7 +692,7 @@ impl RequestHandler {
                 tracing::warn!(
                     provider_id = %provider.provider_id,
                     %error,
-                    "secret.mediate (HTTP): matcher compile failed; forwarding unmodified"
+                    "HTTP secret intercept: matcher compile failed; forwarding unmodified"
                 );
                 return dispatched;
             }
@@ -799,7 +726,7 @@ impl RequestHandler {
                 tracing::warn!(
                     provider_id = %provider.provider_id,
                     %error,
-                    "secret.mediate (HTTP): extraction failed; forwarding unmodified"
+                    "HTTP secret intercept: extraction failed; forwarding unmodified"
                 );
                 return dispatched;
             }
@@ -818,7 +745,7 @@ impl RequestHandler {
                     provider_id = %provider.provider_id,
                     %placeholder,
                     %error,
-                    "secret.mediate (HTTP): failed to push extracted secret to broker"
+                    "HTTP secret intercept: failed to push extracted secret to broker"
                 );
             }
         }
@@ -1962,38 +1889,6 @@ pub(crate) mod tests {
         assert_eq!(payload.dispatch_status, 503);
     }
 
-    /// Permits `secret.mediate` (HTTP origin) unconditionally; used to test
-    /// the interception hook without a full Cedar bundle.
-    struct PermitSecretMediateHttp;
-    impl PolicyEvaluation for PermitSecretMediateHttp {
-        fn evaluate(
-            &self,
-            _: &AgentId,
-            _: &str,
-            _: &str,
-            _: serde_json::Value,
-        ) -> Result<bool, String> {
-            Ok(true)
-        }
-        fn is_fresh(&self) -> bool {
-            true
-        }
-        fn version(&self) -> Option<String> {
-            Some("test-v1".to_string())
-        }
-        fn evaluate_secret_mediate_http(
-            &self,
-            _principal: &AgentId,
-            _provider_id: &str,
-            _host: &str,
-            _path: &str,
-            _method: &str,
-            _context: serde_json::Value,
-        ) -> Result<SecretDecision, String> {
-            Ok(SecretDecision::Permit)
-        }
-    }
-
     /// Minimal fake gateway: accepts one connection, reads one
     /// `secret.push` line, captures it, and echoes back the given
     /// `placeholder` as the confirmation response — enough to exercise
@@ -2066,13 +1961,7 @@ pub(crate) mod tests {
             tx,
         )
         .with_gateway_endpoint(GatewayEndpoint::Tcp(gateway_addr))
-        .with_http_secret_providers(
-            Arc::new(PermitSecretMediateHttp),
-            vec![aws_secrets_manager_provider(&host)],
-            "agt_01j0000000e008000000000001"
-                .parse()
-                .expect("literal agent id"),
-        );
+        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
 
         let response = handler
             .handle(raw_request(host, Method::POST), "sess_http_secret")

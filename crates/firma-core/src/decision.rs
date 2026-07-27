@@ -433,33 +433,10 @@ pub enum SecretMatcher {
     },
 }
 
-/// Outcome of evaluating a `secret.mediate` request for a shimmed launch.
-///
-/// Returned by the Sidecar (PDP) to the broker (PEP). Cedar is pure auth:
-/// behavior (extraction mode, placeholder template) comes from the
-/// `IntegrationRegistry` in firma-run, not from Cedar annotations.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SecretDecision {
-    /// A governing `secret.mediate` permit matched: run the integration.
-    Permit,
-    /// No governing policy matched: run the tool with stdio untouched.
-    Passthrough,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fmt::Display;
-
-    #[test]
-    fn secret_decision_serde_round_trip() {
-        for decision in [SecretDecision::Permit, SecretDecision::Passthrough] {
-            let json = serde_json::to_string(&decision).unwrap_or_else(|e| panic!("{e}"));
-            let parsed: SecretDecision =
-                serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
-            assert_eq!(decision, parsed);
-        }
-    }
 
     #[test]
     fn test_decision_allow() {

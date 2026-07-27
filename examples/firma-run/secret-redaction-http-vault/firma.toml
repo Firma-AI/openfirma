@@ -3,9 +3,9 @@
 #
 # `secret_providers` has one `type = "http"` entry instead of a CLI one: the
 # Sidecar's own HTTP path (not the firma-run broker) matches the vault's
-# response, evaluates secret.mediate, extracts the secret, and mints a
-# placeholder. No shim, no local-exec governance socket needed for the fetch
-# itself — see policies/secret-mediation.cedar.
+# response, extracts the secret, and mints a placeholder. Listing the entry
+# here is itself the authorization to intercept — no Cedar policy required.
+# No shim, no local-exec governance socket needed for the fetch itself.
 
 [authority]
 listen_addr = "127.0.0.1:0"

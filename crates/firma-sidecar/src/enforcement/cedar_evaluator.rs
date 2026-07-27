@@ -27,7 +27,7 @@ use cedar_policy::{
 };
 use firma_core::AgentId;
 use firma_core::policy::PolicyBundle;
-use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, SecretDecision, StepUpSpec};
+use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, StepUpSpec};
 
 use super::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
@@ -100,9 +100,10 @@ pub enum CedarEvaluatorError {
         annotations: String,
     },
 
-    /// The resource entity for a `secret.mediate` decision could not be built
-    /// (attribute construction or schema conformance failed).
-    #[error("failed to build secret-mediation resource entity: {0}")]
+    /// A resource entity for an action requiring one (e.g. `secret.redact`)
+    /// could not be built (attribute construction or schema conformance
+    /// failed).
+    #[error("failed to build resource entity: {0}")]
     EntityBuild(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -187,162 +188,6 @@ impl CedarPolicyEvaluator {
             ttl_secs: bundle.ttl_seconds,
             remediation,
         })
-    }
-
-    /// Evaluate the `secret.mediate` action for a shimmed launch.
-    ///
-    /// `provider_id` is the stable secret-provider integration identity (e.g.
-    /// `"bitwarden"` for the `bws` binary), resolved by firma-run from its
-    /// `secret_providers` config; it becomes both the `Firma::SecretProvider`
-    /// entity's UID and its `resource.id` attribute. `argv` is the wrapped
-    /// tool's launch command line; it is split into `resource.bin` (executable
-    /// basename) and `resource.args` (space-joined rest) so policies can match
-    /// a specific invocation, e.g. `resource.bin == "bws"`.
-    ///
-    /// On a Cedar `Allow` from any `permit` policy, returns
-    /// [`SecretDecision::Permit`] — Cedar is pure auth; extraction behavior
-    /// comes from the `IntegrationRegistry` in firma-run, not from annotations.
-    /// Any non-`Allow` outcome is [`SecretDecision::Passthrough`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`CedarEvaluatorError`] if the entity UIDs, context, resource
-    /// entity, or Cedar request cannot be built. The broker treats an error as
-    /// fail-closed (deny the launch).
-    fn secret_decision(
-        &self,
-        principal: &AgentId,
-        provider_id: &str,
-        argv: &str,
-        context: serde_json::Value,
-    ) -> Result<SecretDecision, CedarEvaluatorError> {
-        let principal_uid: EntityUid = FirmaEntityUid::Agent(*principal)
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let action_uid: EntityUid = FirmaEntityUid::Action("secret.mediate".to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let resource_uid: EntityUid = FirmaEntityUid::SecretProvider(provider_id.to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-
-        let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
-            .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
-
-        // resource.id is the stable provider identity (mirrors the entity
-        // UID); resource.bin (argv[0] basename) and resource.args
-        // (space-joined argv[1..]) carry the per-invocation detail.
-        let (raw_bin, raw_args) = argv.split_once(' ').unwrap_or((argv, ""));
-        let bin = std::path::Path::new(raw_bin)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(raw_bin);
-        let mut attrs = HashMap::new();
-        attrs.insert(
-            "id".to_string(),
-            RestrictedExpression::new_string(provider_id.to_string()),
-        );
-        attrs.insert(
-            "bin".to_string(),
-            RestrictedExpression::new_string(bin.to_string()),
-        );
-        attrs.insert(
-            "args".to_string(),
-            RestrictedExpression::new_string(raw_args.to_string()),
-        );
-        let resource_entity = Entity::new(resource_uid.clone(), attrs, HashSet::new())
-            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
-        let entities = Entities::from_entities([resource_entity], Some(&self.schema))
-            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
-
-        let request = Request::new(
-            Some(principal_uid),
-            Some(action_uid),
-            Some(resource_uid),
-            cedar_context,
-            Some(&self.schema),
-        )
-        .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
-
-        let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
-        if matches!(response.decision(), Decision::Allow) {
-            return Ok(SecretDecision::Permit);
-        }
-        Ok(SecretDecision::Passthrough)
-    }
-
-    /// Evaluate the `secret.mediate` action for an intercepted HTTP vault
-    /// response (the MITM counterpart of [`Self::secret_decision`]'s CLI
-    /// shim origin — same action, same `SecretProvider` entity type).
-    ///
-    /// `provider_id` becomes the entity's id (mirrors the entity UID, as in
-    /// the CLI origin); `host`/`path`/`method` are bound to
-    /// `resource.host`/`resource.path`/`resource.method` in place of the CLI
-    /// origin's `resource.bin`/`resource.args`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`CedarEvaluatorError`] if the entity UIDs, context, resource
-    /// entity, or Cedar request cannot be built. The Sidecar treats an error
-    /// as fail-closed (no interception).
-    fn secret_mediate_http_decision(
-        &self,
-        principal: &AgentId,
-        provider_id: &str,
-        host: &str,
-        path: &str,
-        method: &str,
-        context: serde_json::Value,
-    ) -> Result<SecretDecision, CedarEvaluatorError> {
-        let principal_uid: EntityUid = FirmaEntityUid::Agent(*principal)
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let action_uid: EntityUid = FirmaEntityUid::Action("secret.mediate".to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let resource_uid: EntityUid = FirmaEntityUid::SecretProvider(provider_id.to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-
-        let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
-            .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
-
-        let mut attrs = HashMap::new();
-        attrs.insert(
-            "id".to_string(),
-            RestrictedExpression::new_string(provider_id.to_string()),
-        );
-        attrs.insert(
-            "host".to_string(),
-            RestrictedExpression::new_string(host.to_string()),
-        );
-        attrs.insert(
-            "path".to_string(),
-            RestrictedExpression::new_string(path.to_string()),
-        );
-        attrs.insert(
-            "method".to_string(),
-            RestrictedExpression::new_string(method.to_string()),
-        );
-        let resource_entity = Entity::new(resource_uid.clone(), attrs, HashSet::new())
-            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
-        let entities = Entities::from_entities([resource_entity], Some(&self.schema))
-            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
-
-        let request = Request::new(
-            Some(principal_uid),
-            Some(action_uid),
-            Some(resource_uid),
-            cedar_context,
-            Some(&self.schema),
-        )
-        .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
-
-        let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
-        if matches!(response.decision(), Decision::Allow) {
-            return Ok(SecretDecision::Permit);
-        }
-        Ok(SecretDecision::Passthrough)
     }
 
     /// Evaluate the `secret.redact` action for an outbound HTTP request.
@@ -580,36 +425,6 @@ fn pick_remediation(candidates: &[&Remediation]) -> Option<Remediation> {
 }
 
 impl PolicyEvaluation for CedarPolicyEvaluator {
-    /// Evaluate the `secret.mediate` action for a shimmed launch, exposing the
-    /// internal logic through the trait with a stringified error for the
-    /// swap-boundary surface.
-    fn evaluate_secret_mediation(
-        &self,
-        principal: &AgentId,
-        provider_id: &str,
-        argv: &str,
-        context: serde_json::Value,
-    ) -> Result<SecretDecision, String> {
-        self.secret_decision(principal, provider_id, argv, context)
-            .map_err(|error| error.to_string())
-    }
-
-    /// Evaluate the `secret.mediate` action for an intercepted HTTP vault
-    /// response, exposing the internal logic through the trait with a
-    /// stringified error for the swap-boundary surface.
-    fn evaluate_secret_mediate_http(
-        &self,
-        principal: &AgentId,
-        provider_id: &str,
-        host: &str,
-        path: &str,
-        method: &str,
-        context: serde_json::Value,
-    ) -> Result<SecretDecision, String> {
-        self.secret_mediate_http_decision(principal, provider_id, host, path, method, context)
-            .map_err(|error| error.to_string())
-    }
-
     /// Evaluate whether to apply secret rewriting for an outbound HTTP request
     /// (`secret.redact`). Returns `true` when a Cedar `permit` fires.
     fn evaluate_secret_redact(
@@ -729,10 +544,8 @@ namespace Firma {
     };
     entity Agent;
     entity Resource { id: String, host?: String, path?: String, method?: String };
-    entity SecretProvider { id: String, bin?: String, args?: String, host?: String, path?: String, method?: String };
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
-    action \"secret.mediate\" appliesTo { principal: [Agent], resource: [SecretProvider], context: EnforcementContext };
     action \"secret.redact\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
 
@@ -805,168 +618,6 @@ namespace Firma {
     }
 
     #[test]
-    fn evaluate_secret_mediation_returns_permit_on_matching_policy() {
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id == "bitwarden" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-        let decision = evaluator
-            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
-            .unwrap();
-        assert_eq!(decision, SecretDecision::Permit);
-    }
-
-    #[test]
-    fn evaluate_secret_mediation_passthrough_when_no_policy_matches() {
-        let src = r#"
-            @mode("intercept")
-            @matcher("json")
-            @match_value("$[*].value")
-            @match_name("$[*].key")
-            @placeholder("firma-secret://bitwarden/{name}")
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id == "bitwarden" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-        let decision = evaluator
-            .evaluate_secret_mediation(
-                &agent(),
-                "unmanaged",
-                "curl https://example.com",
-                full_context(),
-            )
-            .unwrap();
-        assert_eq!(decision, SecretDecision::Passthrough);
-    }
-
-    #[test]
-    fn secret_provider_id_reports_integration_name_not_argv() {
-        // The entity id (and resource.id attribute) must be the resolved
-        // provider identity, not the launch argv — even though the argv
-        // contains a completely different string.
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id == "bitwarden" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-        let decision = evaluator
-            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
-            .unwrap();
-        assert_eq!(decision, SecretDecision::Permit);
-
-        // A policy matching on the argv-shaped legacy id no longer fires.
-        let legacy_src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id like "bws *" };
-        "#;
-        let legacy_evaluator =
-            CedarPolicyEvaluator::from_bundle(&secret_bundle(legacy_src)).unwrap();
-        let legacy_decision = legacy_evaluator
-            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
-            .unwrap();
-        assert_eq!(legacy_decision, SecretDecision::Passthrough);
-    }
-
-    #[test]
-    fn resource_bin_and_args_are_bound_for_secret_mediation() {
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.bin == "bws" && resource.args like "secret *" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-
-        let permit = evaluator
-            .evaluate_secret_mediation(&agent(), "bitwarden", "bws secret get abc", full_context())
-            .unwrap();
-        assert_eq!(permit, SecretDecision::Permit);
-
-        let no_match = evaluator
-            .evaluate_secret_mediation(&agent(), "bitwarden", "bws list", full_context())
-            .unwrap();
-        assert_eq!(no_match, SecretDecision::Passthrough);
-    }
-
-    #[test]
-    fn evaluate_secret_mediate_http_returns_permit_on_matching_provider_id() {
-        // Same action, same SecretProvider entity type as the CLI origin —
-        // only the populated attributes differ (host/path/method vs bin/args).
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id == "aws-secrets-manager" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-        let decision = evaluator
-            .evaluate_secret_mediate_http(
-                &agent(),
-                "aws-secrets-manager",
-                "secretsmanager.us-east-1.amazonaws.com",
-                "/",
-                "POST",
-                full_context(),
-            )
-            .unwrap();
-        assert_eq!(decision, SecretDecision::Permit);
-    }
-
-    #[test]
-    fn evaluate_secret_mediate_http_passthrough_when_no_policy_matches() {
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.id == "aws-secrets-manager" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-        let decision = evaluator
-            .evaluate_secret_mediate_http(
-                &agent(),
-                "some-other-vault",
-                "vault.example.com",
-                "/",
-                "GET",
-                full_context(),
-            )
-            .unwrap();
-        assert_eq!(decision, SecretDecision::Passthrough);
-    }
-
-    #[test]
-    fn resource_host_path_method_are_bound_for_http_secret_mediation() {
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when {
-                resource.host == "secretsmanager.us-east-1.amazonaws.com" &&
-                resource.path == "/" &&
-                resource.method == "POST"
-            };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
-
-        let permit = evaluator
-            .evaluate_secret_mediate_http(
-                &agent(),
-                "aws-secrets-manager",
-                "secretsmanager.us-east-1.amazonaws.com",
-                "/",
-                "POST",
-                full_context(),
-            )
-            .unwrap();
-        assert_eq!(permit, SecretDecision::Permit);
-
-        let no_match = evaluator
-            .evaluate_secret_mediate_http(
-                &agent(),
-                "aws-secrets-manager",
-                "secretsmanager.us-east-1.amazonaws.com",
-                "/",
-                "GET",
-                full_context(),
-            )
-            .unwrap();
-        assert_eq!(no_match, SecretDecision::Passthrough);
-    }
-
-    #[test]
     fn evaluate_secret_redact_returns_true_on_matching_host_policy() {
         let src = r#"
             permit(principal, action == Firma::Action::"secret.redact", resource)
@@ -1007,8 +658,8 @@ namespace Firma {
     #[test]
     fn evaluate_secret_redact_defaults_to_false_with_no_policy() {
         let src = r#"
-            permit(principal, action == Firma::Action::"secret.mediate", resource)
-            when { resource.bin == "bws" };
+            permit(principal, action == Firma::Action::"code.write", resource)
+            when { resource.id == "bws" };
         "#;
         let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).expect("bundle");
         let result = evaluator

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
-use firma_core::{AgentId, SecretDecision};
+use firma_core::AgentId;
 
 use crate::enforcement::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
@@ -73,42 +73,6 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
         self.inner
             .load()
             .evaluate_verdict(principal, action, resource, context)
-    }
-
-    /// Delegate secret-mediation decisions to the inner snapshot so the live
-    /// Cedar evaluator's `secret.mediate` policies apply through the swap
-    /// boundary.
-    fn evaluate_secret_mediation(
-        &self,
-        principal: &AgentId,
-        provider_id: &str,
-        argv: &str,
-        context: serde_json::Value,
-    ) -> Result<SecretDecision, String> {
-        self.inner
-            .load()
-            .evaluate_secret_mediation(principal, provider_id, argv, context)
-    }
-
-    /// Delegate HTTP-origin secret-mediation decisions to the inner snapshot,
-    /// mirroring [`Self::evaluate_secret_mediation`]'s CLI-origin delegation.
-    fn evaluate_secret_mediate_http(
-        &self,
-        principal: &AgentId,
-        provider_id: &str,
-        host: &str,
-        path: &str,
-        method: &str,
-        context: serde_json::Value,
-    ) -> Result<SecretDecision, String> {
-        self.inner.load().evaluate_secret_mediate_http(
-            principal,
-            provider_id,
-            host,
-            path,
-            method,
-            context,
-        )
     }
 
     fn evaluate_secret_redact(
@@ -195,16 +159,6 @@ mod tests {
         fn version(&self) -> Option<String> {
             None
         }
-
-        fn evaluate_secret_mediation(
-            &self,
-            _principal: &AgentId,
-            _provider_id: &str,
-            _argv: &str,
-            _context: serde_json::Value,
-        ) -> Result<SecretDecision, String> {
-            Ok(SecretDecision::Permit)
-        }
     }
 
     fn agent() -> AgentId {
@@ -214,26 +168,34 @@ mod tests {
     }
 
     #[test]
-    fn initial_deny_all_snapshot_passes_secret_mediation_through() {
+    fn initial_deny_all_snapshot_denies_and_reports_stale() {
         let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
         let decision = swap
-            .evaluate_secret_mediation(
+            .evaluate(
                 &agent(),
-                "bitwarden",
-                "bws secret get x",
+                "communication.external.send",
+                "res",
                 serde_json::json!({}),
             )
             .expect("decision");
-        assert_eq!(decision, SecretDecision::Passthrough);
+        assert!(!decision);
+        assert!(!swap.is_fresh());
     }
 
     #[test]
-    fn swapped_snapshot_secret_mediation_is_forwarded() {
+    fn swapped_snapshot_is_forwarded() {
         let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
         swap.swap(Box::new(PermitPolicy), 30, Some("v1".to_string()));
         let decision = swap
-            .evaluate_secret_mediation(&agent(), "anything", "anything", serde_json::json!({}))
+            .evaluate(
+                &agent(),
+                "communication.external.send",
+                "res",
+                serde_json::json!({}),
+            )
             .expect("decision");
-        assert_eq!(decision, SecretDecision::Permit);
+        assert!(decision);
+        assert!(swap.is_fresh());
+        assert_eq!(swap.version(), Some("v1".to_string()));
     }
 }

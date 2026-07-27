@@ -414,18 +414,9 @@ pub(crate) fn evaluate_cedar_policy(
         match FirmaEntityUid::Resource(resource.to_string()).try_into() {
             Ok(uid) => uid,
             Err(e) => {
-                return CedarDecision::invalid_request(format!("invalid resource: {e}"));
-            }
-        };
-    // `secret.mediate` is schema-typed to a dedicated `Firma::SecretProvider`
-    // resource, not the generic `Firma::Resource` every other action class
-    // uses; build its request-time entity UID with the matching type so
-    // `Request::new`'s schema validation doesn't reject it below.
-    let secret_provider_entity: cedar_policy::EntityUid =
-        match FirmaEntityUid::SecretProvider(resource.to_string()).try_into() {
-            Ok(uid) => uid,
-            Err(e) => {
-                return CedarDecision::invalid_request(format!("invalid resource: {e}"));
+                return CedarDecision::invalid_request(format!(
+                    "invalid secret provider resource: {e}"
+                ));
             }
         };
     let authorizer = Authorizer::new();
@@ -440,11 +431,6 @@ pub(crate) fn evaluate_cedar_policy(
                     return CedarDecision::invalid_request(format!("invalid action: {e}"));
                 }
             };
-        let resource_uid = if action.as_str() == firma_core::ActionClass::SecretMediate.as_str() {
-            secret_provider_entity.clone()
-        } else {
-            resource_entity.clone()
-        };
         let context_json = json!({
             "session_id": session_id,
             "timestamp_ms": timestamp_ms,
@@ -473,7 +459,7 @@ pub(crate) fn evaluate_cedar_policy(
         let request = match Request::new(
             Some(principal.clone()),
             Some(action_entity),
-            Some(resource_uid),
+            Some(resource_entity.clone()),
             cedar_context,
             Some(schema),
         ) {

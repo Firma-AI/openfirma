@@ -4,7 +4,7 @@
 Runs outside the sandbox on localhost:19876. Receives POST /capture requests
 that the Sidecar has already rehydrated (placeholder → real secret value,
 sourced from the mock HTTP vault in scripts/vault-server via the Sidecar's
-secret.mediate interception). Logs what it received so run.sh can verify the
+HTTP secret interception). Logs what it received so run.sh can verify the
 real secret arrived at the server.
 
 The response echoes the received token back so the Sidecar can demonstrate

@@ -20,14 +20,12 @@ use arc_swap::ArcSwap;
 use firma_secret_provider::{CliIntegrationSpec, IntegrationSpec};
 
 use crate::backend::SandboxHandle;
-use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint, MountSpec, ResolvedProfile};
+use crate::config::{CommandMediatorEndpoint, MountSpec, ResolvedProfile};
 use crate::error::RunError;
-use crate::identity::RunIdentity;
 use crate::secret::SecretStore;
 use crate::secret::accept::serve_forever;
 use crate::secret::broker::BrokerListener;
 use crate::secret::gateway::SecretGatewayListener;
-use crate::secret::pep::{SecretMediationRequest, SecretPepOutcome, request_secret_decision};
 use crate::secret::shim::FIRMA_BROKER_ADDR;
 
 /// File name of the shim binary shipped alongside the `firma` executable.
@@ -112,7 +110,6 @@ pub fn pre_bind_gateway(
 pub fn prepare(
     handle: &mut Option<SandboxHandle>,
     profile: &ResolvedProfile,
-    identity: &RunIdentity,
     env: &mut BTreeMap<String, String>,
     firma_exe: &Path,
     host_path: Option<&OsStr>,
@@ -171,8 +168,6 @@ pub fn prepare(
     start_broker(
         broker_listener,
         gateway.listener,
-        profile.sidecar_local_exec.clone(),
-        identity,
         profile.secret_providers.clone(),
     );
 
@@ -292,13 +287,11 @@ fn bind_broker(base: &Path) -> Result<BrokerListener, RunError> {
 /// name, HTTP entries keyed by `provider_id`) — built-in lookups and custom
 /// specs are already merged by config resolution, so no registry rebuilding
 /// is needed here. Only CLI entries participate in shim decisions
-/// (`decide`/`spec_for` are looked up by `bin`); the gateway thread serves
-/// both origins since it's the store HTTP-sourced secrets get pushed into.
+/// (`spec_for` is looked up by `bin`); the gateway thread serves both origins
+/// since it's the store HTTP-sourced secrets get pushed into.
 fn start_broker(
     listener: BrokerListener,
     gateway_listener: SecretGatewayListener,
-    mediator: Option<CommandMediatorConfig>,
-    identity: &RunIdentity,
     providers: BTreeMap<String, IntegrationSpec>,
 ) {
     let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
@@ -309,22 +302,6 @@ fn start_broker(
         gateway_listener.serve_forever(&gateway_store);
     });
 
-    let session_id = identity.session_id.clone();
-    let agent_id = identity.agent_id.to_string();
-    let decide_providers = Arc::clone(&providers);
-    let decide = Arc::new(move |bin: &str, args: &str| {
-        let provider_id = decide_providers
-            .get(bin)
-            .map_or_else(|| bin.to_string(), |spec| spec.provider_id().to_string());
-        decide_secret(
-            mediator.as_ref(),
-            &session_id,
-            &agent_id,
-            &provider_id,
-            bin,
-            args,
-        )
-    });
     let spec_for = Arc::new(move |bin: &str| -> Option<CliIntegrationSpec> {
         providers
             .get(bin)
@@ -332,7 +309,7 @@ fn start_broker(
             .cloned()
     });
     std::thread::spawn(move || {
-        serve_forever(listener, store, decide, spec_for, None);
+        serve_forever(listener, store, spec_for, None);
     });
 }
 
@@ -342,32 +319,6 @@ fn format_endpoint(endpoint: &CommandMediatorEndpoint) -> String {
         CommandMediatorEndpoint::Unix { path } => format!("unix:{}", path.display()),
         CommandMediatorEndpoint::Tcp { addr } => format!("tcp:{addr}"),
     }
-}
-
-/// Ask the Sidecar (via the local-exec governance endpoint) for a decision,
-/// failing closed when no endpoint is configured.
-fn decide_secret(
-    mediator: Option<&CommandMediatorConfig>,
-    session_id: &str,
-    agent_id: &str,
-    provider_id: &str,
-    bin: &str,
-    args: &str,
-) -> SecretPepOutcome {
-    let Some(mediator) = mediator else {
-        return SecretPepOutcome::Deny(
-            "secret mediation requires a sidecar local-exec endpoint, but none is configured"
-                .to_string(),
-        );
-    };
-    let request = SecretMediationRequest::new(
-        provider_id.to_string(),
-        bin.to_string(),
-        args.to_string(),
-        session_id.to_string(),
-        Some(agent_id.to_string()),
-    );
-    request_secret_decision(&mediator.endpoint, mediator.timeout_ms, &request)
 }
 
 #[cfg(test)]

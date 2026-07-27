@@ -8,15 +8,15 @@ Full design: [`docs/architecture/fir-429-pai-credential-injection.md`](../../../
 
 ## Files
 
-- `firma.toml` — run profile. `secret_providers` lists the executables to interpose on;
-  `[authority]` tells `firma run` to auto-start a per-process Authority +
-  Sidecar that loads the Cedar policies below.
+- `firma.toml` — run profile. `secret_providers` lists the executables to interpose on
+  — listing one there is itself the authorization to intercept it, no Cedar
+  policy required; `[authority]` tells `firma run` to auto-start a per-process
+  Authority + Sidecar that loads the Cedar policy below.
 - `mapping-rules.toml` — Sidecar mapping rules. Maps the capture server
-  endpoint to the `communication.external.send` action class so the Sidecar
+  endpoint to the `communication.internal.send` action class so the Sidecar
   knows which Cedar policy to apply.
-- `policies/secret-mediation.cedar` — Cedar policy with two permits:
-  `secret.mediate` for the broker intercept path (bws), and
-  `communication.external.send` for the Sidecar HTTP redact path.
+- `policies/communication.cedar` — Cedar policy permitting
+  `communication.internal.send`, the Sidecar HTTP redact path.
 - `scripts/mock-vault` — stand-in for the Bitwarden Secrets Manager CLI.
   Outputs a JSON array of `{ key, value }` objects; the broker intercepts its
   stdout, extracts each value via the built-in bitwarden JSONPath matcher, and

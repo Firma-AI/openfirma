@@ -25,10 +25,6 @@ pub mod broker;
 /// of truth. Supports Unix domain sockets and TCP loopback.
 pub mod gateway;
 
-/// Broker → Sidecar policy-enforcement-point client for secret mediation
-/// decisions, with fail-closed semantics.
-pub mod pep;
-
 /// Intercept transform: extract secrets from a vault CLI's output and rewrite
 /// it so the agent sees placeholders.
 pub mod intercept;

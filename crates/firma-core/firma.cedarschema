@@ -43,28 +43,6 @@ namespace Firma {
         method?: String
     };
 
-    // secret.mediate resource: either a shimmed CLI tool launch or an
-    // HTTP vault fetch intercepted by the Sidecar's MITM path. `id` is the
-    // stable secret-provider integration identity (e.g. "bitwarden" for the
-    // `bws` binary, "aws-secrets-manager" for an HTTP vault), resolved from
-    // firma-run's `secret_providers` config — matches the entity's own UID,
-    // for both origins.
-    //
-    // CLI origin: `bin` is the executable basename and `args` the
-    // space-joined rest, so policies can match a specific invocation with
-    // `resource.bin == "bws"`. HTTP origin: `host`/`path`/`method` are the
-    // MITM'd request's fields. Only one origin's fields are ever populated
-    // on a given evaluation, hence all optional — use `resource has bin` or
-    // `resource has host` to branch on origin if a policy needs to.
-    entity SecretProvider {
-        id: String,
-        bin?: String,
-        args?: String,
-        host?: String,
-        path?: String,
-        method?: String
-    };
-
     // Shared context shape for all canonical enforcement actions.
     // Must match the JSON object produced by ConstraintEnforcer::build_context().
     //
@@ -378,15 +356,6 @@ namespace Firma {
     action "communication.external.filter" appliesTo {
         principal: [Agent],
         resource: [Resource],
-        context: EnforcementContext
-    };
-
-    // OpenFirma secret-mediation grant (firma run broker PEP → Sidecar PDP).
-    // `resource.id` carries the wrapped tool's launch argv; behavior is driven
-    // by @mode/@transform/@adapter/@placeholder annotations.
-    action "secret.mediate" appliesTo {
-        principal: [Agent],
-        resource: [SecretProvider],
         context: EnforcementContext
     };
 

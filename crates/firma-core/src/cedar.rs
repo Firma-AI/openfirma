@@ -13,7 +13,6 @@
 //! | `Agent`          | `Firma::Agent`         | [`AgentId`]         |
 //! | `Action`         | `Firma::Action`        | normalizer string   |
 //! | `Resource`       | `Firma::Resource`      | normalizer string   |
-//! | `SecretProvider` | `Firma::SecretProvider`| resolved provider name |
 //!
 //! # Injection safety
 //!
@@ -187,7 +186,6 @@ pub enum FirmaEntityUid {
     Agent(AgentId),
     Action(String),
     Resource(String),
-    SecretProvider(String),
 }
 
 impl TryFrom<FirmaEntityUid> for EntityUid {
@@ -203,7 +201,6 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
             FirmaEntityUid::Agent(id) => ("Firma::Agent", id.to_string()),
             FirmaEntityUid::Action(id) => ("Firma::Action", id),
             FirmaEntityUid::Resource(id) => ("Firma::Resource", id),
-            FirmaEntityUid::SecretProvider(id) => ("Firma::SecretProvider", id),
         };
         let entity_type = type_name_str.parse::<EntityTypeName>()?;
         let entity_id = EntityId::new(id_string);
@@ -236,14 +233,6 @@ mod tests {
         let uid = EntityUid::try_from(FirmaEntityUid::Resource("2001:db8::1".to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Resource");
         assert_eq!(uid.id().as_ref(), "2001:db8::1");
-    }
-
-    #[test]
-    fn secret_provider_uid_roundtrip() {
-        let uid =
-            EntityUid::try_from(FirmaEntityUid::SecretProvider("bitwarden".to_string())).unwrap();
-        assert_eq!(uid.type_name().to_string(), "Firma::SecretProvider");
-        assert_eq!(uid.id().as_ref(), "bitwarden");
     }
 
     // Action and Resource take raw strings (normalizer-controlled). The typed
@@ -324,17 +313,10 @@ forbid (
         let policies = files.concat().parse::<PolicySet>().unwrap();
 
         let errors = validate_policies(&policies, &schema, Some(&files)).unwrap_err();
-        // `resource` is unconstrained, so the validator reports this error
-        // against every entity type that can be a resource for some action
-        // (Resource, SecretProvider) — in hashmap-iteration order, which is
-        // not stable across runs, so sort before comparing.
-        let mut actual = errors.0.iter().map(ToString::to_string).collect::<Vec<_>>();
-        actual.sort();
-        let mut expected = vec![
-            "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::SecretProvider not found".to_string(),
+        let actual = errors.0.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let expected = vec![
             "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found".to_string(),
         ];
-        expected.sort();
         assert_eq!(actual, expected);
     }
 }

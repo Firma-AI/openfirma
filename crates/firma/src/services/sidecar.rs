@@ -5,10 +5,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use firma_core::AgentId;
 use firma_sidecar::audit::AuditPayload;
 use firma_sidecar::authority_client::readiness::ReadinessFlag;
-use firma_sidecar::authority_client::swappable_policy::SwappablePolicyEvaluation;
 use firma_sidecar::connector::ConnectorRegistry;
 use firma_sidecar::pipeline::EnforcementPipeline;
 use firma_sidecar::secret_gateway_client::{GATEWAY_ADDR_ENV, GatewayEndpoint};
@@ -115,7 +113,6 @@ fn build_request_handler(
     connector_registry: Arc<ConnectorRegistry>,
     audit_sink_sender: tokio::sync::mpsc::Sender<AuditPayload>,
     config: &config::SidecarConfig,
-    swappable_policy: Arc<SwappablePolicyEvaluation>,
 ) -> handler::RequestHandler {
     let base = handler::RequestHandler::new(pipeline, connector_registry, audit_sink_sender);
     let base = match std::env::var(GATEWAY_ADDR_ENV) {
@@ -135,36 +132,7 @@ fn build_request_handler(
     if config.http_secret_providers.is_empty() {
         return base;
     }
-    match http_secret_mediate_principal(config) {
-        Ok(principal) => base.with_http_secret_providers(
-            swappable_policy,
-            config.http_secret_providers.clone(),
-            principal,
-        ),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "invalid agent id for HTTP secret.mediate principal; HTTP secret interception disabled"
-            );
-            base
-        }
-    }
-}
-
-/// Resolve the fixed principal used for HTTP-origin `secret.mediate`
-/// evaluation. No natural per-response agent identity exists for MITM'd HTTP
-/// traffic (unlike the capability-scoped principal used elsewhere), so this
-/// falls back to the same sentinel the local-exec endpoint uses for CLI
-/// `secret.mediate`.
-fn http_secret_mediate_principal(config: &config::SidecarConfig) -> Result<AgentId, String> {
-    config.authority.agent_id.map_or_else(
-        || {
-            "unknown-agent"
-                .parse::<AgentId>()
-                .map_err(|e| e.to_string())
-        },
-        Ok,
-    )
+    base.with_http_secret_providers(config.http_secret_providers.clone())
 }
 
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
@@ -222,18 +190,12 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         connector_registry,
         audit_payload_tx,
         &config,
-        Arc::clone(&pipeline_runtime.swappable_policy),
     ));
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
-    let local_exec_handle = startup::spawn_local_exec_endpoint(
-        &config,
-        sandbox_id,
-        Arc::clone(&pipeline_runtime.swappable_policy),
-        exit.clone(),
-    )?;
+    let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
 
     let report = build_startup_report(
         resolved.config_file(),

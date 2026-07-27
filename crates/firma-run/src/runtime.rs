@@ -331,7 +331,6 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         secret_shims::prepare(
             &mut handle,
             &profile,
-            &identity,
             &mut env,
             &firma_exe,
             env::var_os("PATH").as_deref(),

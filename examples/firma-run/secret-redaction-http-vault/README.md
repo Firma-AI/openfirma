@@ -14,16 +14,16 @@ section of the secret-redaction guide.
 
 - `firma.toml` — run profile. `secret_providers` has one `type = "http"`
   entry (`demo-http-vault`) instead of a CLI one — no shim, no
-  `sidecar_local_exec` governance socket needed for the fetch itself.
-  `[authority]` tells `firma run` to auto-start a per-process Authority +
-  Sidecar that loads the Cedar policies below.
+  `sidecar_local_exec` governance socket needed for the fetch itself. Listing
+  the entry here is itself the authorization to intercept it, no Cedar policy
+  required. `[authority]` tells `firma run` to auto-start a per-process
+  Authority + Sidecar that loads the Cedar policy below.
 - `mapping-rules.toml` — Sidecar mapping rules. Maps both the vault and the
   capture-server endpoints to the `communication.internal.send` action class
   so the Sidecar knows which Cedar policy to apply to each request.
-- `policies/secret-mediation.cedar` — Cedar policy with two permits:
-  `secret.mediate` for the Sidecar's own HTTP interception path
-  (`demo-http-vault`), and `communication.internal.send` for both outbound
-  calls (vault fetch, capture-server redact).
+- `policies/communication.cedar` — Cedar policy permitting
+  `communication.internal.send` for both outbound calls (vault fetch,
+  capture-server redact).
 - `scripts/vault-server` — stand-in for a cloud secrets manager's HTTP API.
   Serves `GET /secret/<name>` with a JSON body shaped like a typical
   "get secret value" response (`{"Name": ..., "SecretString": ...}`). Has no
@@ -43,12 +43,13 @@ section of the secret-redaction guide.
 1. **Fetch (Sidecar HTTP-vault intercept).** The agent GETs
    `http://127.0.0.1:19877/secret/login-password` via the Sidecar HTTP proxy.
    Once the request itself is allowed (`communication.internal.send`), the
-   Sidecar matches the response against the `demo-http-vault` provider,
-   evaluates `secret.mediate`, extracts `SecretString` via the configured
-   JSONPath matcher, stores it in the broker under a
-   `firma-secret://demo-http-vault/login-password` placeholder, and rewrites
-   the response body before the agent's HTTP client reads it. No shim, no
-   firma-run broker round-trip for the fetch itself.
+   Sidecar matches the response against the `demo-http-vault` provider —
+   the match is itself the authorization, no separate policy check — extracts
+   `SecretString` via the configured JSONPath matcher, stores it in the
+   broker under a `firma-secret://demo-http-vault/login-password`
+   placeholder, and rewrites the response body before the agent's HTTP
+   client reads it. No shim, no firma-run broker round-trip for the fetch
+   itself.
 
 2. **Use (Sidecar HTTP redact).** The agent POSTs `{"token": "<placeholder>"}`
    to `http://127.0.0.1:19876/capture` via the same Sidecar proxy. The
@@ -78,16 +79,15 @@ resolved it correctly during rehydration.
 ## Invariants
 
 - **Fail closed on the enforcement gate.** The vault and capture-server calls
-  still go through the normal Stage 1 + Stage 2 pipeline; `secret.mediate` is
-  an additive interception layer on top of already-allowed traffic, not a
+  still go through the normal Stage 1 + Stage 2 pipeline; HTTP secret
+  interception is an additive layer on top of already-allowed traffic, not a
   second gate that can itself deny a request.
-- **Fail open on the interception layer.** A matcher failure, a Cedar
-  evaluation error, or a missing gateway leaves the vault's response
-  unmodified — an availability/redaction miss, not an authorization bypass,
-  since the underlying request was already permitted by the normal
-  enforcement pipeline. Placeholder rehydration for the capture-server call
-  is separately fail-open the same way as `../secret-redaction/`: an
-  unresolvable placeholder is forwarded as-is.
+- **Fail open on the interception layer.** A matcher failure or a missing
+  gateway leaves the vault's response unmodified — an availability/redaction
+  miss, not an authorization bypass, since the underlying request was already
+  permitted by the normal enforcement pipeline. Placeholder rehydration for
+  the capture-server call is separately fail-open the same way as
+  `../secret-redaction/`: an unresolvable placeholder is forwarded as-is.
 - **Dictionary out-of-sandbox.** The placeholder ↔ secret map lives in the
   `firma run` broker process; the in-sandbox agent holds no real values.
 - **Masking is best-effort.** A secret transformed before output (base64,

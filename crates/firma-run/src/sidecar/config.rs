@@ -346,8 +346,9 @@ pub struct SynthesizeRequest<'a> {
     pub monitor_mode: bool,
     /// HTTP-shaped entries from `ResolvedProfile::secret_providers`, written
     /// into `[sidecar].http_secret_providers` so the Sidecar's MITM path can
-    /// intercept matching vault responses (`secret.mediate`, HTTP origin).
-    /// Deliberately a distinct field name from firma-run's own
+    /// intercept matching vault responses. A provider entry being present
+    /// here is itself the authorization to intercept — no separate policy
+    /// check gates it. Deliberately a distinct field name from firma-run's own
     /// `secret_providers` config so the two are never confused — this is a
     /// read-only mirror the Sidecar consumes, not a config surface an
     /// operator edits directly. Empty when no HTTP providers are configured.

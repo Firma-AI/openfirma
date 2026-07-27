@@ -48,7 +48,7 @@ pub struct ActionClassRegistry {
 impl ActionClassRegistry {
     /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 29
     /// in-place additions covering the GitHub (12), Stripe (12), and
-    /// Gmail (5) REST surfaces, and the `secret.mediate` governance
+    /// Gmail (5) REST surfaces, plus the `secret.redact` governance
     /// action (45 total).
     #[must_use]
     #[expect(
@@ -283,11 +283,6 @@ impl ActionClassRegistry {
                 risk_level: Critical,
             },
             ActionClassDefinition {
-                name: "secret.mediate",
-                domain: "secret",
-                risk_level: Critical,
-            },
-            ActionClassDefinition {
                 name: "secret.redact",
                 domain: "secret",
                 risk_level: Critical,
@@ -385,12 +380,6 @@ mod tests {
         "communication.external.delete",
         "communication.external.filter",
     ];
-
-    #[test]
-    fn test_v0_1_registry_has_46_classes() {
-        let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 46);
-    }
 
     #[test]
     fn test_v0_1_registry_matches_fep_spec() {

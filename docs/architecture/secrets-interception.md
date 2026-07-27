@@ -1,40 +1,58 @@
 # Secret Interception and Redaction
 
-Status: draft (design)\
-Date: 2026-07-15\
-Scope: `firma run` (broker + sandbox shims) and the Sidecar Cedar policy model;
-no changes to the Sidecar network hot path
+Status: draft (design), updated to match shipped behavior\
+Date: 2026-07-15 (original), updated 2026-07-27\
+Scope: `firma run` (broker + sandbox shims) and the Sidecar's HTTP redact
+path; no changes to the Sidecar network hot path
+
+> This document originally proposed a Cedar-annotation-driven authorization
+> model for intercept (a `secret.mediate` action with `@mode`/`@matcher`/
+> `@placeholder`/`@transform` annotations) and a stdio-based redact mode for
+> locally spawned tools such as an MCP server. Neither shipped in that form.
+> The content below has been updated to describe what was actually built —
+> see [`fir-429-pai-credential-injection.md`](fir-429-pai-credential-injection.md)
+> for the fuller, actively-maintained design (including HTTP vaults).
+> Stdio-based redact (rehydrating/masking on a locally spawned tool's stdin/
+> stdout, e.g. an MCP server) was never implemented; intra-sandbox traffic
+> does not traverse the Sidecar and remains a known gap tracked in
+> `docs/security/bypass-analysis.md`.
 
 ## Overview
 
 This document specifies a `firma run` capability that keeps real secret values
-out of the agent while still letting sanctioned tools use them. It has two
-Cedar-driven behaviors:
+out of the agent while still letting sanctioned tools use them. It covers two
+behaviors:
 
 - **intercept** — catch the agent's calls to a **vault CLI** (for example
-  `bws`, the Bitwarden Secrets Manager CLI), replace each returned secret with a
-  placeholder, and keep the real value in a firma-run-owned dictionary. The
-  agent only ever sees placeholders.
-- **redact** — for tools Cedar authorizes, rehydrate placeholders into real
-  secrets on the tool's **stdin**, and mask real secrets back into placeholders
-  on the tool's **stdout**. First target: a Playwright MCP server over stdio.
+  `bws`, the Bitwarden Secrets Manager CLI) over stdio, or a vault's response
+  over HTTP, replace each returned secret with a placeholder, and keep the
+  real value in a firma-run-owned dictionary. The agent only ever sees
+  placeholders.
+- **redact** — for outbound HTTP calls Cedar authorizes, rehydrate
+  placeholders into real secrets in the request, and mask real secrets back
+  into placeholders in the response. This is the Sidecar's existing MITM
+  path; see `fir-429-pai-credential-injection.md` for the full design.
 
-The two are one mechanism with different transforms: intercept _produces_
-dictionary entries, redact _consumes_ them.
+Intercept and redact are one mechanism with different transforms: intercept
+_produces_ dictionary entries, redact _consumes_ them.
 
-The mechanism is a **generic stdio interposition** ("shim"). Which executables
-are shimmed is per-profile `firma.toml` config; **what a shim does** (intercept
-vs redact, transform, placeholder, permit/deny) is decided by Cedar policy. The
-config is therefore not secret-specific.
+Intercept is a **generic interposition** mechanism: stdio (a shim) for CLI
+vaults, HTTPS MITM for HTTP vaults. Which executables are shimmed, and which
+HTTP hosts/paths are treated as vaults, is per-profile `firma.toml`
+config — listing an entry in `secret_providers` is itself the authorization
+to intercept it. **No Cedar policy gates intercept.** Cedar continues to
+gate redact only (`secret.redact`, per outbound HTTP destination).
 
-### Why stdio, not HTTP
+### Why stdio, not HTTP, for CLI vaults
 
 The plaintext secret is materialized by the vault CLI **on its stdout**,
 regardless of how the tool obtained it. A tool may fetch end-to-end-encrypted
 ciphertext and decrypt locally (so an HTTPS MITM sees only ciphertext), or read a
 local store or OS keychain (no network at all). Intercepting the tool's stdout is
 therefore the one transport-agnostic point where the plaintext reliably appears —
-so interception happens at the process I/O boundary, not the network boundary.
+so interception happens at the process I/O boundary for CLI vaults, not the
+network boundary. (A vault reached directly over HTTP is intercepted on the
+Sidecar's own MITM path instead — see `fir-429-pai-credential-injection.md`.)
 
 For example, `bws` performs client-side decryption: the Bitwarden API returns
 ciphertext that `bws` decrypts locally, so the cleartext secret exists only on the
@@ -42,18 +60,18 @@ ciphertext that `bws` decrypts locally, so the cleartext secret exists only on t
 
 ## Key Invariants
 
-- **Fail closed.** A broker error, unreachable broker, or transform failure
-  blocks the stream (non-zero exit); it never forwards plaintext or an
-  unrehydrated placeholder by default.
+- **Fail closed.** A broker error or extraction failure blocks the stream
+  (non-zero exit or unmodified passthrough); it never forwards plaintext by
+  mistake.
 - **Dictionary out-of-sandbox.** The placeholder ↔ secret dictionary and all
   substitution logic live in the firma-run broker, outside the sandbox. Shims
   hold no secrets.
-- **Least exposure.** Real plaintext appears in the sandbox only transiently, on
-  one specific tool's stdio fd (unavoidable: the vault CLI writes it, or a
-  sanctioned tool reads it). It is never materialized in the agent process or a
-  shim.
-- **Deterministic policy.** Behavior is a pure function of the Cedar bundle plus
-  the launch context, consistent with the rest of OpenFirma enforcement.
+- **Least exposure.** Real plaintext appears in the sandbox only transiently,
+  on the vault CLI's stdout. It is never materialized in the agent process or
+  the shim.
+- **Deterministic.** Behavior is a pure function of the `secret_providers`
+  config (intercept) or the Cedar bundle (redact) plus the launch/request
+  context, consistent with the rest of OpenFirma enforcement.
 
 ## Architecture
 
@@ -65,31 +83,32 @@ agent ── spawns ──▶ shim (fd-courier, no secrets)
                    ┌───────────────────────────────────┐
                    │  firma-run broker (out-of-sandbox) │
                    │   • secrets dictionary             │
-                   │   • pluggable transform            │
+                   │   • per-provider matcher           │
                    │   • fd multiplexing / rewrite      │
-                   └───────────────┬───────────────────┘
-                                   │ governance request (per launch)
-                                   ▼
-                           Sidecar (Cedar PDP)
+                   └─────────────────────────────────---┘
 ```
 
-Three pieces:
+A binary reaching the broker at all is proof it matched a configured
+`secret_providers` entry — that's why the shim was installed over it — so
+there is no separate per-launch decision to make.
+
+Two pieces:
 
 1. **Broker** — a component in the firma-run host process. Owns the in-memory
    dictionary (placeholder → value, plus an Aho-Corasick matcher over values for
-   masking) and performs every rewrite. It is the policy _enforcement_ point
-   (PEP): at each shimmed-tool launch it asks the Sidecar for a decision, then
-   applies it.
+   masking) and performs every rewrite for the CLI-shim origin. Runs the real
+   vault CLI out-of-sandbox and applies the configured matcher — there is no
+   separate policy decision to consult.
 2. **Shims** — thin executables injected into the sandbox that shadow the
    configured commands. Reuse the existing PATH-shim pattern
    (`runtime/vscode.rs` `prepend_path`). A shim connects to the broker over the
    UDS bridge, makes a `socketpair` for the wrapped tool, passes the fds to the
    broker via `SCM_RIGHTS`, execs the real tool, then waits and propagates
-   exit/signals. It is **role-agnostic** — the broker learns the behavior from
-   the Cedar decision — and holds no plaintext.
-3. **UDS bridge + fd passing** — shims reach the broker over a Unix socket
-   bind-mounted into the sandbox (the existing `FIRMA_RUN_PROXY_BRIDGE_*`
-   plumbing). Passing fds via `SCM_RIGHTS` has precedent in the egress guard.
+   exit/signals. It holds no plaintext.
+
+Shims reach the broker over a Unix socket bind-mounted into the sandbox (the
+existing `FIRMA_RUN_PROXY_BRIDGE_*` plumbing). Passing fds via `SCM_RIGHTS`
+has precedent in the egress guard.
 
 ### Why shim + bind-over-path, not pure syscall interception
 
@@ -112,70 +131,43 @@ binary. Per-path exec gating is only possible via seccomp **user-notify +
 `process_vm_readv`** (egress-guard style) and is optional defense-in-depth, not
 required for correctness.
 
-## Policy Model: PDP / PEP
+## Configuration Model
 
-Cedar decisions are evaluated **only in the Sidecar** (`CedarPolicyEvaluator`),
-fed by signed bundles from the Authority. firma-run has no Cedar evaluator, so
-the broker (PEP) consults the Sidecar (PDP) over the existing local-exec
-governance channel (`command-governance-local-exec-contract.md`), which already
-carries an allow/deny/pending_hitl decision request per launch. This is a
-per-launch call over a local socket — off the network hot path — not per-byte.
+All behavior lives in `firma.toml`'s `secret_providers` list — there is no
+Cedar policy for intercept. Each entry is either a bare string (a built-in
+integration, keyed by binary name) or a full table tagged `type = "cli"` or
+`type = "http"`:
 
-### Action and annotations
-
-A single action expresses "may this shimmed launch be mediated, and how":
-
-```cedar
-@mode("intercept")
-@matcher("json")
-@match_value("$[*].value")
-@match_name("$[*].key")
-@placeholder("firma-secret://bitwarden/{name}")
-permit(principal, action == Firma::Action::"secret.mediate", resource)
-when { resource.id like "bws *" };
-
-@mode("redact")
-@transform("mcp-jsonrpc")
-permit(principal, action == Firma::Action::"secret.mediate", resource)
-when { resource.id like "npx @playwright/mcp*" };
+```toml
+[run.defaults]
+secret_providers = [
+  "bws", # built-in integration, matched by binary name
+  { type = "cli", name = "my-vault", provider_id = "my-vault", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" }, placeholder_template = "firma-secret://my-vault/{name}" },
+  { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" }, placeholder_template = "firma-secret://aws/{name}" },
+]
 ```
 
-- `resource.id` is the launch argv (the broker sends it in the governance
-  request), enabling `like` prefix/glob matching. The secret-mediation eval
-  path **binds the resource entity's `id` attribute** so this resolves at
-  runtime.
-- Annotations carry the behavior, parsed and validated at bundle-load (a bad
-  JSONPath/regex fails the bundle closed), alongside the AARM R4
-  `@modify`/`@step_up`/`@defer` annotations:
-  - `@mode("intercept"|"redact")` — selects the broker topology.
-  - `@transform("raw"|"mcp-jsonrpc")` — stream codec (redact-only).
-  - `@matcher("json"|"regex")` — how to extract secrets from the tool's output
-    (intercept-only):
-    - `json`: `@match_value("<jsonpath>")` and `@match_name("<jsonpath>")`
-      (both required), aligned by document order;
-    - `regex`: `@match_pattern("<regex>")` with required `value` and `name`
-      named capture groups.
-  - `@placeholder("…")` — placeholder mint template (intercept-only).
+A `type = "cli"` entry's key is the binary name shimmed in the sandbox
+(bind-mounted over the real executable). A `type = "http"` entry's `host`
+(and optional `path`) are glob patterns matched against the Sidecar's view
+of the outbound request. Both shapes carry the same `matcher` /
+`placeholder_template` fields — how to extract `(name, value)` pairs from the
+tool's output or the HTTP response body, and how to mint the placeholder
+token. A CLI entry may also carry `credential_env_vars`, `strip_arg_flags`,
+and `forced_args`.
 
-  Each mode takes exactly its own directives: `intercept` requires a `@matcher`
-  (plus its paths/pattern) and `@placeholder` and rejects `@transform`; `redact`
-  requires `@transform` and rejects the matcher and `@placeholder` annotations
-  (redaction mints nothing — it resolves tokens from the shared dictionary). This
-  maps to the `SecretMediation` enum (`Intercept { matcher, placeholder }` /
-  `Redact { transform }`) — no illegal combinations are representable.
+Listing an entry is itself the authorization: the broker (CLI origin) or the
+Sidecar (HTTP origin) mediates every matching launch/response
+unconditionally. There is no permit/forbid decision to author.
 
 ### Decision semantics (fail-closed)
 
-- **Broker cannot reach the Sidecar** → **deny** (block the launch).
-- **Sidecar returns forbid / no matching policy** → transparent **passthrough**:
-  the binary is a shim candidate but is not governed, so it runs untouched.
-- **Malformed or incomplete annotations** (e.g. `@mode("redact")` without
-  `@transform`, `@mode("intercept")` without a `@matcher`, or a matcher whose
-  JSONPath/regex does not compile) → **reject the bundle at load**.
-- **Different `@placeholder` templates are allowed** across policies: the
-  dictionary is keyed by the full token, so tokens minted by different vault
-  providers (e.g. `bitwarden` vs `1password`) coexist and redaction resolves any
-  of them.
+- A shim/HTTP-provider entry being configured is itself the authorization to
+  intercept — every matching launch/response is mediated unconditionally.
+- Sidecar: no matching `secret.redact` policy → passthrough (forward
+  outbound HTTP unchanged).
+- Sidecar: `forbid` on `secret.redact` → deny.
+- Unknown `integration` name in `firma.toml` → startup error.
 
 ## Placeholder Format
 
@@ -183,8 +175,8 @@ when { resource.id like "npx @playwright/mcp*" };
 firma-secret://<provider>/<name>
 ```
 
-- `<provider>` is the vault namespace (for example `bitwarden`), chosen by the
-  policy's `@placeholder` template; `<name>` is the secret's key.
+- `<provider>` is the vault namespace (for example `bitwarden`), chosen by
+  the entry's `placeholder_template`; `<name>` is the secret's key.
 - Prefix-anchored: match the fixed `firma-secret://`, then consume the maximal
   run of `[A-Za-z0-9._/-]` (any other byte is percent-encoded at mint time). The
   boundary is defined by the charset — no end sentinel needed.
@@ -192,44 +184,37 @@ firma-secret://<provider>/<name>
 - Legible: the agent and operators can see which secret a reference points to.
 - Fail-closed: a mangled token yields no dictionary hit, so the literal passes
   through and the tool receives no secret — never a leak.
-- `<name>` is the secret's **key**, produced by the intercept `@matcher` — a
-  JSONPath `@match_name` node or a regex `name` capture group. Cross-key
+- `<name>` is the secret's **key**, produced by the intercept matcher — a
+  JSONPath name node or a regex `name` capture group. Cross-key
   collisions are disambiguated only if they actually occur.
 
 The full token (including prefix) is the dictionary key; the rewriter never has
 to parse `<name>` semantically.
 
-## Matcher (intercept) and Transform (redact)
+## Matcher (intercept)
 
-**Intercept extraction** is driven by the `@matcher`, compiled and executed by
-`firma-sidecar`'s `secret_matcher` module (shared with the broker) and validated
-at bundle-load:
+Intercept extraction is driven by the entry's `matcher` config, compiled and
+executed by the shared `firma-secret-provider` matcher type (used by both the
+firma-run broker for the CLI origin and `firma-sidecar` for the HTTP origin):
 
-- **`json`** — JSONPath (`serde_json_path`). `@match_value` / `@match_name`
+- **`json`** — JSONPath (`serde_json_path`). `value_path` / `name_path`
   select aligned value/name nodes; the value nodes are replaced **structurally**
   (via JSON pointer), so escaping is never an issue. Handles single objects,
   arrays, and nested shapes.
-- **`regex`** — the `@match_pattern`'s `value` / `name` named groups extract each
-  secret from text output; the `value` spans are replaced in place.
+- **`regex`** — a pattern with required `value` and `name` named capture
+  groups extracts each secret from text output; the `value` spans are
+  replaced in place.
 
-Each extracted `(name, value)` is minted into a placeholder (from the
-`@placeholder` template) and stored; the value is replaced by the placeholder in
-the returned output. A tool is never special-cased in code — a new vault CLI is
-just a new `@matcher` policy.
+Each extracted `(name, value)` is minted into a placeholder (from the entry's
+`placeholder_template`) and stored; the value is replaced by the placeholder
+in the returned output. A tool is never special-cased in code — a new vault
+CLI or HTTP vault is just a new `secret_providers` entry.
 
-**Redact rewriting** is driven by the `@transform` codec:
-
-- **`raw`** — streaming byte matcher. Carries an overlap buffer of
-  `maxTokenLen - 1` (rehydration) or `maxSecretLen - 1` (masking) across reads so
-  a token/secret split across chunk boundaries still matches.
-- **`mcp-jsonrpc`** — newline-delimited JSON-RPC codec for MCP stdio servers.
-  Parses each message and substitutes in JSON context:
-  - rehydration **JSON-escapes** the secret so quotes/backslashes/newlines cannot
-    corrupt the message;
-  - masking matches secrets in their **JSON-escaped** on-wire form.
-
-  Raw byte substitution is unsafe for MCP: unescaped secrets produce invalid
-  JSON, and escaped secrets on stdout would be missed by a literal search.
+Redact (outbound HTTP only) uses a separate Content-Type–driven rewriter
+(`raw`/`json`/`form`/`xml`) in the Sidecar's MITM path; see
+`fir-429-pai-credential-injection.md` for that mechanism. Stdio-based redact
+for a locally spawned tool (rehydrating on stdin / masking on stdout) is not
+implemented.
 
 ## Mode: intercept
 
@@ -241,89 +226,45 @@ agent: `<vault-cli> get <ref>`          # e.g. `bws secret get <uuid>`
   └─ shim: execs the real vault CLI in-sandbox,
        wires its stdout → socketpair → SCM_RIGHTS → broker
   └─ broker: reads the plaintext stdout,
-       extracts value(s) via the @matcher (JSONPath / regex),
+       extracts value(s) via the configured matcher (JSONPath / regex),
        stores value ↔ firma-secret://<provider>/<name>,
        forwards placeholder-substituted output → agent
 ```
 
-The matcher is policy-defined (`@matcher` + `@match_*`); no tool is special-cased
-in code. Only **stdout** is transformed.
+The matcher is config-defined (`secret_providers` entry); no tool is
+special-cased in code. Only **stdout** is transformed.
 
-## Mode: redact
-
-```
-agent ──▶ shim ──SCM_RIGHTS──▶ broker ──▶ T.stdin   [rehydrate: placeholder→secret]
-agent ◀── shim ◀──SCM_RIGHTS── broker ◀── T.stdout  [mask: secret→placeholder]
-```
-
-### First target: Playwright MCP server
-
-The agent (MCP client) spawns the Playwright MCP server as a stdio subprocess and
-embeds `firma-secret://<provider>/<name>` in a tool-call argument (for example, a
-login value). On the server's stdin the broker rehydrates the placeholder inside
-the JSON-RPC message, so Playwright drives the browser with the real value; the
-agent never held it. On stdout, any secret reflected in page content or DOM is
-masked back to its placeholder.
-
-MCP servers typically launch via `npx` / `node` / `docker`, so the shim shadows
-the launcher (coarse), and Cedar's `resource.id like` selects the exact
-invocation to govern (fine).
+An HTTP vault follows the same shape but on the Sidecar's own MITM path
+instead of a shim — see `fir-429-pai-credential-injection.md`.
 
 ## Secret Lifecycle
 
-The dictionary is populated **only by intercept** — that is, only when the agent
-calls a vault CLI. redact rehydrates a placeholder only if it is already in the
-dictionary; an unknown placeholder on stdin **fails closed** (the literal is not
-substituted, so the tool receives no secret). The broker never contacts the vault
-itself, so the vault CLI stays in-sandbox and no vault credentials live in the
-broker. Consequence: the agent must fetch a secret via the vault CLI before it can
-use the corresponding placeholder in a redact target.
+The dictionary is populated only by intercept (CLI or HTTP origin) — that is,
+only when the agent calls a vault CLI or a vault HTTP endpoint it's
+configured to intercept. Redact rehydrates a placeholder in an outbound HTTP
+request only if it is already in the dictionary; an unknown placeholder
+**fails closed** (the literal is not substituted, so the upstream receives no
+secret). The broker never contacts the vault on its own initiative, so the
+vault CLI stays in-sandbox and no vault credentials live in the broker.
+Consequence: the agent must fetch a secret via the vault CLI/HTTP vault
+before it can use the corresponding placeholder elsewhere.
 
 The dictionary is run-scoped and zeroized on teardown.
-
-## Configuration
-
-`firma.toml` holds only the mechanism residue: which executables to interpose on,
-per profile. Everything else is Cedar. Profiles live under `[run.profiles.<name>]`
-and merge over `[run.defaults]`.
-
-```toml
-[run.defaults]
-shims = ["bws"] # baseline for every profile
-
-[run.profiles.playwright-agent]
-shims = ["bws", "npx"] # this profile also shadows npx
-```
-
-`shims` is a `Vec<String>` on the profile patch (like `env_passthrough` /
-`allowed_executables`). It is **distinct** from two existing mechanisms:
-
-- `executable_policies.<name>` rewrites _argv_ (e.g. injecting flags for codex);
-- the built-in `vscode` shim shadows `code`.
-
-`shims` here is **stdio interposition routed to the broker**. It carries no
-behavior — Cedar decides intercept vs redact and all directives — so the config
-is not secret-specific and could drive other shim behaviors in future.
 
 ## Threat Model and Caveats
 
 - **Broker is the trust anchor.** All plaintext and the dictionary live there,
   out-of-sandbox. Secrets are zeroized on drop; the dictionary is run-scoped.
-- **Residual redact exposure.** A sanctioned tool `T` receives real plaintext on
-  its stdin (it must, to function). A hostile agent could `ptrace` that specific
-  `T` to observe a secret — but only secrets it itself chose to route into `T`,
-  and it cannot enumerate the dictionary or read other secrets.
 - **Vault credential in-sandbox.** Accepted: the vault CLI runs in-sandbox by
   design, so any credential it needs (e.g. `bws`'s `BWS_ACCESS_TOKEN`) is present
   there. This is independent of the dictionary, which stays in firma-run.
 - **Masking is best-effort (by design).** Secrets transformed before output
   (base64, hex, chunked, re-encoded) will not match. This is accepted: the
   primary control is that the agent never sees the secret (placeholders only);
-  stdout masking is defense-in-depth against a tool echoing a rehydrated value
-  back, not a guarantee.
-- **Coarse shadowing cost.** Shadowing `npx` means every `npx` launch pays a
-  shim + governance round-trip, even ungoverned ones (which then pass through).
-  Keep `shims` lists tight.
+  stdout masking on the redact path is defense-in-depth against a tool echoing
+  a rehydrated value back, not a guarantee.
+- **Coarse shadowing cost.** Shadowing a launcher like `npx` means every
+  launch is mediated unconditionally. Keep `secret_providers` lists tight.
 - **Vault-CLI egress.** If the vault CLI reaches a network backend, that traffic
   (with the CLI in-sandbox) traverses the Sidecar, so the egress policy must
   permit the vault's API host (e.g. Bitwarden's). The Sidecar sees only
@@ -331,54 +272,40 @@ is not secret-specific and could drive other shim behaviors in future.
 
 ## Sharp Edges
 
-- **Interactive / PTY tools.** Pipe interposition breaks TTY detection. v1
-  targets non-interactive tools (the vault CLI and the MCP server both qualify);
-  PTY allocation is deferred to hardening.
-- **Large payloads.** MCP responses (base64 screenshots, full DOM) can be large;
-  per-line JSON parse cost is acceptable but noted.
-- **Chunk boundaries.** The `raw` transform must not miss a token/secret split
-  across reads (overlap buffer); covered by property tests.
+- **Interactive / PTY tools.** Pipe interposition breaks TTY detection; the
+  current target is non-interactive tools. PTY allocation is deferred to
+  hardening.
 - **Exit and signal fidelity.** The shim must propagate the wrapped tool's exit
   code and forward signals (reuse `supervisor.rs`).
+- **Stdio-based redact is unimplemented.** Intra-sandbox traffic (e.g. agent
+  ↔ a locally spawned MCP server) does not traverse the Sidecar; redact is
+  only available on the outbound-HTTP path. This is a known gap tracked in
+  `docs/security/bypass-analysis.md`.
 
 ## Resolved Decisions
 
-- **Resolution model: intercept-only.** The dictionary is populated only via a
-  vault CLI; redact fails closed on unknown placeholders; no broker-side vault
-  access (see Secret Lifecycle).
+- **Resolution model: intercept-only for the dictionary.** The dictionary is
+  populated only via a vault CLI or HTTP vault; redact fails closed on
+  unknown placeholders; no broker-side vault access (see Secret Lifecycle).
 - **Masking: best-effort** defense-in-depth (see Threat Model).
-- **Placeholder `<name>`: the secret key** read from the vault CLI's output, via
-  an id→key mapping (see Placeholder Format).
-
-## Phased Plan
-
-Each phase is an atomic revision that stands on its own, with tests per
-`rust-tests-guidelines`.
-
-| Phase | Scope                                                                                                                                                                             | Crates                             | Outcome                                 |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------- |
-| 0     | This design doc; governance-contract extension; placeholder format                                                                                                                | docs                               | Reviewed                                |
-| 1     | Broker skeleton: dictionary, Aho-Corasick matcher, UDS listener, `SCM_RIGHTS` fd-passing (no rewrite)                                                                             | firma-run (+core types)            | Unit tests: dictionary, matcher         |
-| 2     | Cedar: `secret.mediate` action class + `@mode`/`@transform`/`@matcher`/`@match_*`/`@placeholder` annotations (`SecretMediation` enum), load-time validation incl. matcher compile | firma-core (schema), firma-sidecar | Unit tests on annotation parse/validate |
-| 3     | Governance-contract extension: broker → Sidecar decision returning mode + directives; PEP wiring; fail-closed rules                                                               | firma-run, firma-sidecar           | E2E decision round-trip                 |
-| 4     | intercept: matcher execution (`json`/`regex` via `secret_matcher`) + minting; vault-CLI shim + broker                                                                             | firma-run, firma-sidecar           | E2E on bwrap with a fake vault CLI      |
-| 5     | Transform layer: `raw` streaming rewriter (rehydrate + mask) with overlap buffers; fd-courier shim                                                                                | firma-run                          | Property tests on chunk splits          |
-| 6     | `mcp-jsonrpc` transform: line framing, JSON-aware rehydrate/mask/escape                                                                                                           | firma-run                          | Unit tests on escaped/split cases       |
-| 7     | redact + `shims` config + PATH-shim/bind-over-path injection; Playwright MCP integration; docs (docs-site + llms.txt)                                                             | firma-run, config-loader, docs     | `just check` green                      |
-| 8     | Hardening: PTY/interactive, perf, zeroization; later — other backends (macOS vz-guest / WSL) and more vault CLIs                                                                  | firma-run, backends                | —                                       |
+- **Placeholder `<name>`: the secret key** read from the vault's output, via
+  the configured matcher (see Placeholder Format).
+- **Authorization: config presence, not Cedar.** A `secret_providers` entry
+  existing is itself the authorization to intercept — no permit/forbid
+  decision, no per-launch round-trip to the Sidecar.
 
 ## Cross-Platform Notes
 
 The shim + UDS + `SCM_RIGHTS` model targets the Linux `bwrap` backend first. VM
 backends (macOS `vz` guest, future Firecracker) already funnel stdio through a
 narrow vsock channel; the broker connection would ride that channel, with the
-rewrite still host-side. WSL2-from-Windows can pipe `wsl.exe` stdio. Post-v1.
+rewrite still host-side. WSL2-from-Windows can pipe `wsl.exe` stdio.
 
 ## Open Follow-ups
 
-- Additional vault CLIs (`bw`, `op`, `vault`) are just new `@matcher` policies —
-  no code changes.
-- HTTP-transport MCP (SSE) would instead traverse the Sidecar and hit the
-  response-path-enforcement gap tracked in `docs/security/bypass-risks.md`.
-- Whether `secret.mediate` should split into `secret.resolve` / `secret.inject`
-  verbs (resolved Sidecar-side) instead of a single action + `@mode`.
+- Additional vault CLIs (`bw`, `op`, `vault`) or HTTP vaults are just new
+  `secret_providers` entries — no code changes.
+- HTTP-transport MCP (SSE) would traverse the Sidecar and hit the
+  response-path-enforcement gap tracked in `docs/security/bypass-analysis.md`.
+- Stdio-based redact for locally spawned tools (e.g. an MCP server) remains
+  unimplemented; see Sharp Edges.

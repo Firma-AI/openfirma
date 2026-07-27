@@ -104,7 +104,6 @@ action_classes! {
     PaymentTransfer => "payment.transfer",
     RepoAdmin => "repo.admin",
     RepoLifecycle => "repo.lifecycle",
-    SecretMediate => "secret.mediate",
     SecretRedact => "secret.redact",
     SecurityAlertRead => "security.alert.read",
     SystemExecute => "system.execute",

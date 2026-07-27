@@ -43,10 +43,11 @@ pub struct ResolvedProfile {
     /// vault. The map value is the fully resolved
     /// [`IntegrationSpec`](firma_secret_provider::IntegrationSpec) — a
     /// built-in looked up by name (CLI only), or a custom spec defined
-    /// inline. This carries no policy behavior — Cedar decides intercept vs
-    /// redact and all directives; see the secrets design doc. Merged across
-    /// `[run.defaults]` and the active profile; entries defined later win on
-    /// name collision (profile overrides defaults, custom overrides built-in).
+    /// inline. An entry being present here is itself the authorization to
+    /// intercept — no separate policy check gates it; see the secrets design
+    /// doc. Merged across `[run.defaults]` and the active profile; entries
+    /// defined later win on name collision (profile overrides defaults,
+    /// custom overrides built-in).
     pub secret_providers: BTreeMap<String, firma_secret_provider::IntegrationSpec>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
@@ -469,9 +470,10 @@ pub(crate) enum SecretProviderSpec {
 pub(crate) struct CliProviderSpec {
     /// Binary basename to shim.
     pub(crate) name: String,
-    /// Stable integration identity, used as the Cedar `Firma::SecretProvider`
-    /// entity id. Defaults to `name` when omitted — most custom integrations
-    /// have no separate display identity from their binary name.
+    /// Stable integration identity, used for placeholder minting and to
+    /// scope pushes to the broker's secret store. Defaults to `name` when
+    /// omitted — most custom integrations have no separate display identity
+    /// from their binary name.
     #[serde(default)]
     pub(crate) provider_id: Option<String>,
     /// Placeholder token template; `{name}` is substituted with the
@@ -496,9 +498,9 @@ pub(crate) struct CliProviderSpec {
 /// matching responses — see [`crate::sidecar::config::synthesize`].
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct HttpProviderSpec {
-    /// Stable integration identity, used as the Cedar `Firma::SecretProvider`
-    /// entity id (no default — HTTP providers have no binary name to fall
-    /// back to).
+    /// Stable integration identity, used for placeholder minting and to
+    /// scope pushes to the broker's secret store (no default — HTTP
+    /// providers have no binary name to fall back to).
     pub(crate) provider_id: String,
     /// Host glob pattern to match against MITM'd responses (e.g.
     /// `"secretsmanager.*.amazonaws.com"`).

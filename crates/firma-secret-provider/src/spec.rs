@@ -19,8 +19,9 @@ pub enum IntegrationSpec {
 }
 
 impl IntegrationSpec {
-    /// Stable integration identity (e.g. `"bitwarden"`, `"aws-secrets-manager"`).
-    /// Used as the Cedar `Firma::SecretProvider` entity's id, for both origins.
+    /// Stable integration identity (e.g. `"bitwarden"`, `"aws-secrets-manager"`),
+    /// for both origins. Used to key placeholder minting and to scope pushes
+    /// to the broker's secret store.
     #[must_use]
     pub fn provider_id(&self) -> &str {
         match self {
@@ -55,10 +56,8 @@ impl IntegrationSpec {
 pub struct CliIntegrationSpec {
     /// Binary basename (e.g. `"bws"`).
     pub binary_name: String,
-    /// Stable integration identity (e.g. `"bitwarden"` for the `bws` binary).
-    /// Used as the Cedar `Firma::SecretProvider` entity's id — distinct from
-    /// `binary_name`, which is the per-invocation executable and belongs on
-    /// `resource.bin` instead.
+    /// Stable integration identity (e.g. `"bitwarden"` for the `bws` binary) —
+    /// distinct from `binary_name`, which is the per-invocation executable.
     pub provider_id: String,
     /// Names of env vars that carry vault credentials. The broker forwards any
     /// that are present in its own environment to the subprocess.
@@ -83,8 +82,7 @@ pub struct CliIntegrationSpec {
 /// the extracted values.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HttpIntegrationSpec {
-    /// Stable integration identity (e.g. `"aws-secrets-manager"`). Used as
-    /// the Cedar `Firma::SecretProvider` entity's id.
+    /// Stable integration identity (e.g. `"aws-secrets-manager"`).
     pub provider_id: String,
     /// Host glob pattern to match against MITM'd responses (e.g.
     /// `"secretsmanager.*.amazonaws.com"`).
