@@ -17,7 +17,7 @@ mod regex;
 use std::collections::HashSet;
 
 use firma_core::SecretMatcher;
-use http::uri::Authority;
+use firma_http::Authority;
 
 use crate::{SecretPlaceholder, SecretString};
 

@@ -38,6 +38,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use firma_http::HeaderName;
+use firma_secret_provider::{
+    gateway::client::config::GatewayClientConfig, spec::http::HttpIntegrationSpec,
+};
 use serde::Deserialize;
 
 pub(crate) enum AuthorityTarget {
@@ -137,6 +140,29 @@ pub struct SidecarConfig {
     /// Tenancy settings (agent isolation mode).
     #[serde(default)]
     pub(crate) tenancy: TenancyConfig,
+    /// HTTP secret-provider registry for MITM interception — a distinct
+    /// field name from firma-run's own `secret_providers` so the two are
+    /// never confused. Loaded once at startup; not hot-reloaded.
+    ///
+    /// As of this writing, `firma-run`'s `sidecar::config::synthesize` does
+    /// **not** yet populate this field from its own resolved
+    /// `secret_providers` config at autostart; an operator (or an
+    /// integration ahead of that work landing) must hand-write it directly
+    /// into the sidecar's `firma.toml`. Treat that as the currently
+    /// supported path until the autostart mirroring lands.
+    #[serde(default)]
+    pub http_secret_providers: Vec<HttpIntegrationSpec>,
+    /// Tunable timeouts and limits for the secret-gateway client used to
+    /// resolve and push placeholders against firma-run's broker. The
+    /// gateway's address itself is not configured here: it comes from the
+    /// `FIRMA_SECRET_GATEWAY_ADDR` environment variable, and
+    /// rehydration/interception stay disabled when that variable is unset.
+    ///
+    /// As of this writing, `firma-run` does not yet set this variable at
+    /// autostart; an operator must set it in the sidecar's process
+    /// environment directly until that wiring lands.
+    #[serde(default)]
+    pub secret_gateway: GatewayClientConfig,
 }
 
 impl SidecarConfig {
