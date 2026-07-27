@@ -36,11 +36,7 @@
 namespace Firma {
     entity Agent;
     entity Resource {
-        id: String,
-        // secret.redact: outbound HTTP request fields.
-        host?: String,
-        path?: String,
-        method?: String
+        id: String
     };
 
     // Shared context shape for all canonical enforcement actions.
@@ -354,18 +350,6 @@ namespace Firma {
     };
 
     action "communication.external.filter" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-        context: EnforcementContext
-    };
-
-    // OpenFirma secret-redact grant (Sidecar MITM path).
-    // Authorises placeholder rehydration (outbound) and secret masking (inbound)
-    // for a specific outbound HTTP destination.
-    // resource.host — the outbound request Host header (e.g. "api.github.com").
-    // resource.path — the request path (e.g. "/user/repos").
-    // resource.method — the HTTP method (e.g. "GET", "POST").
-    action "secret.redact" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext

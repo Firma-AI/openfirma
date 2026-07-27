@@ -17,13 +17,13 @@
 //! | `resource`  | `Firma::Resource::"<resource_uri>"`  |
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     time::{Duration, Instant},
 };
 
 use cedar_policy::{
-    Authorizer, Context, Decision, Effect, Entities, Entity, EntityUid, PolicyId, PolicySet,
-    Request, Response, RestrictedExpression, Schema,
+    Authorizer, Context, Decision, Effect, Entities, EntityUid, PolicyId, PolicySet, Request,
+    Response, Schema,
 };
 use firma_core::AgentId;
 use firma_core::policy::PolicyBundle;
@@ -99,12 +99,6 @@ pub enum CedarEvaluatorError {
         policy_id: String,
         annotations: String,
     },
-
-    /// A resource entity for an action requiring one (e.g. `secret.redact`)
-    /// could not be built (attribute construction or schema conformance
-    /// failed).
-    #[error("failed to build resource entity: {0}")]
-    EntityBuild(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
@@ -188,67 +182,6 @@ impl CedarPolicyEvaluator {
             ttl_secs: bundle.ttl_seconds,
             remediation,
         })
-    }
-
-    /// Evaluate the `secret.redact` action for an outbound HTTP request.
-    ///
-    /// Binds `resource.id` (host), `resource.host`, `resource.path`, and
-    /// `resource.method` so policies can match with `resource.host == "api.github.com"`.
-    /// Returns `true` on Cedar `Allow`, `false` otherwise (passthrough).
-    fn secret_redact_decision(
-        &self,
-        principal: &AgentId,
-        host: &str,
-        path: &str,
-        method: &str,
-        context: serde_json::Value,
-    ) -> Result<bool, CedarEvaluatorError> {
-        let principal_uid: EntityUid = FirmaEntityUid::Agent(*principal)
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let action_uid: EntityUid = FirmaEntityUid::Action("secret.redact".to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let resource_uid: EntityUid = FirmaEntityUid::Resource(host.to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-
-        let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
-            .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
-
-        let mut attrs = HashMap::new();
-        attrs.insert(
-            "id".to_string(),
-            RestrictedExpression::new_string(host.to_string()),
-        );
-        attrs.insert(
-            "host".to_string(),
-            RestrictedExpression::new_string(host.to_string()),
-        );
-        attrs.insert(
-            "path".to_string(),
-            RestrictedExpression::new_string(path.to_string()),
-        );
-        attrs.insert(
-            "method".to_string(),
-            RestrictedExpression::new_string(method.to_string()),
-        );
-        let resource_entity = Entity::new(resource_uid.clone(), attrs, HashSet::new())
-            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
-        let entities = Entities::from_entities([resource_entity], Some(&self.schema))
-            .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
-
-        let request = Request::new(
-            Some(principal_uid),
-            Some(action_uid),
-            Some(resource_uid),
-            cedar_context,
-            Some(&self.schema),
-        )
-        .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
-
-        let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
-        Ok(matches!(response.decision(), Decision::Allow))
     }
 
     fn evaluate_response(
@@ -425,20 +358,6 @@ fn pick_remediation(candidates: &[&Remediation]) -> Option<Remediation> {
 }
 
 impl PolicyEvaluation for CedarPolicyEvaluator {
-    /// Evaluate whether to apply secret rewriting for an outbound HTTP request
-    /// (`secret.redact`). Returns `true` when a Cedar `permit` fires.
-    fn evaluate_secret_redact(
-        &self,
-        principal: &AgentId,
-        host: &str,
-        path: &str,
-        method: &str,
-        context: serde_json::Value,
-    ) -> Result<bool, String> {
-        self.secret_redact_decision(principal, host, path, method, context)
-            .map_err(|error| error.to_string())
-    }
-
     /// Evaluate Cedar policies for the given principal, action, and resource.
     ///
     /// Context attributes — the fields declared by `EnforcementContext` in
@@ -543,10 +462,9 @@ namespace Firma {
         git_operation?: String
     };
     entity Agent;
-    entity Resource { id: String, host?: String, path?: String, method?: String };
+    entity Resource { id: String };
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
-    action \"secret.redact\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
 
     fn schema_bundle(policy_src: &[u8]) -> PolicyBundle {
@@ -606,66 +524,6 @@ namespace Firma {
         "agt_01j0000000e008000000000001"
             .parse()
             .expect("valid agent id")
-    }
-
-    fn secret_bundle(policy_src: &str) -> PolicyBundle {
-        PolicyBundle::new(
-            "secret-v1".to_string(),
-            policy_src.as_bytes().to_vec(),
-            TEST_SCHEMA.as_bytes().to_vec(),
-            30,
-        )
-    }
-
-    #[test]
-    fn evaluate_secret_redact_returns_true_on_matching_host_policy() {
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.redact", resource)
-            when { resource.host == "api.github.com" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).expect("bundle");
-        let result = evaluator
-            .evaluate_secret_redact(
-                &agent(),
-                "api.github.com",
-                "/user/repos",
-                "GET",
-                full_context(),
-            )
-            .expect("decision");
-        assert!(result, "permit policy on host must return true");
-    }
-
-    #[test]
-    fn evaluate_secret_redact_returns_false_when_host_does_not_match() {
-        let src = r#"
-            permit(principal, action == Firma::Action::"secret.redact", resource)
-            when { resource.host == "api.github.com" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).expect("bundle");
-        let result = evaluator
-            .evaluate_secret_redact(
-                &agent(),
-                "attacker.example.com",
-                "/steal",
-                "POST",
-                full_context(),
-            )
-            .expect("decision");
-        assert!(!result, "no permit for non-matching host must return false");
-    }
-
-    #[test]
-    fn evaluate_secret_redact_defaults_to_false_with_no_policy() {
-        let src = r#"
-            permit(principal, action == Firma::Action::"code.write", resource)
-            when { resource.id == "bws" };
-        "#;
-        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).expect("bundle");
-        let result = evaluator
-            .evaluate_secret_redact(&agent(), "api.github.com", "/", "GET", full_context())
-            .expect("decision");
-        assert!(!result, "no secret.redact policy must default to false");
     }
 
     #[test]

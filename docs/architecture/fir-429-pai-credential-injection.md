@@ -2,8 +2,8 @@
 
 Status: draft (design)\
 Date: 2026-07-20\
-Scope: `firma run` (broker + sandbox shims), `firma-sidecar` (Cedar evaluation +
-secret matcher + HTTP redact path), `firma-core` (decision types)
+Scope: `firma run` (broker + sandbox shims), `firma-sidecar` (secret matcher +
+HTTP redact path), `firma-core` (decision types)
 
 ## Problem
 
@@ -40,7 +40,7 @@ HTTP call from the sandbox that contains a `firma-secret://` placeholder has it
 rehydrated before forwarding; any inbound response that reflects a known secret
 value has it masked back to a placeholder. No shim is needed for this mode.
 
-Two modes, two mechanisms:
+Two modes, two mechanisms, neither gated by Cedar:
 
 - **intercept** — a shim catches the agent's vault CLI invocation, forwards it
   to the broker out-of-sandbox, which runs the real CLI with host-held
@@ -48,13 +48,13 @@ Two modes, two mechanisms:
   placeholder-substituted output to the agent.
 - **redact** — the Sidecar scans every outbound HTTP request from the sandbox
   for `firma-secret://` placeholders, rehydrates them from the `SecretStore`,
-  and masks known secret values in the corresponding responses. Any outbound call
-  is eligible; Cedar policy selects which hosts and paths receive rewrite
-  treatment.
+  and masks known secret values in the corresponding responses. Every outbound
+  call is scanned unconditionally — there is no policy that selects which
+  hosts or paths receive rewrite treatment.
 
 Which executables are shimmed (intercept) is per-profile `firma.toml`
-configuration. Which outbound HTTP destinations receive redact treatment is
-declared in Cedar policy.
+configuration. Redact applies to every outbound HTTP destination
+unconditionally — being on the Sidecar's MITM path is the only gate.
 
 ## Architecture
 
@@ -77,8 +77,8 @@ agent ── spawns ──▶  shim  (no secrets, no credentials)
        │  outbound HTTPS (to external service)
        ▼
   ┌─────────────────────────────────────────────────────────┐
-  │  Sidecar (Cedar PDP + MITM proxy)                         │
-  │  • secret.redact Cedar eval                               │
+  │  Sidecar (MITM proxy)                                     │
+  │  • unconditional scan for firma-secret:// placeholders    │
   │  • resolves placeholders via JSON-line gateway RPC        │
   │    (FIRMA_SECRET_GATEWAY_ADDR → firma-run)                │
   │  • rehydrate placeholders in reqs                         │
@@ -105,16 +105,17 @@ Three components:
    and proxies back the placeholder-substituted output. Holds no secrets and no
    vault credentials. Not used for redact mode.
 
-3. **Sidecar (Cedar PDP + MITM proxy)** — evaluates `secret.redact` policies
-   (for redact); intercept is authorized purely by `secret_providers`
-   config, no Cedar policy involved. On the redact path the Sidecar adds two
-   rewrite passes to its existing MITM pipeline: it
-   replaces `firma-secret://` placeholders in outbound request bodies/headers
-   with real values from the `SecretStore`, and masks known secret values in
-   inbound response bodies back to their placeholders. "Outbound" means any HTTP
-   call from any sandbox process to an external host — agent calls, browser form
-   submissions, SDK calls, etc. Intra-sandbox traffic (e.g. agent ↔ locally
-   spawned MCP server) is invisible to the Sidecar and is not rewritten.
+3. **Sidecar (MITM proxy)** — scans every outbound HTTP call unconditionally;
+   being on the MITM path is the only gate, no policy decision is involved for
+   either intercept (config-only, see the broker above) or redact. On the
+   redact path the Sidecar adds two rewrite passes to its existing MITM
+   pipeline: it replaces `firma-secret://` placeholders in outbound request
+   bodies/headers with real values from the `SecretStore`, and masks known
+   secret values in inbound response bodies back to their placeholders.
+   "Outbound" means any HTTP call from any sandbox process to an external
+   host — agent calls, browser form submissions, SDK calls, etc. Intra-sandbox
+   traffic (e.g. agent ↔ locally spawned MCP server) is invisible to the
+   Sidecar and is not rewritten.
 
 ### Shim-to-broker transport
 
@@ -298,16 +299,14 @@ Properties:
 - Fail-closed: an unknown or mangled token yields no dictionary hit, so the
   literal passes through and the tool receives no secret — never a leak.
 
-## Policy and Configuration Model
+## Configuration Model
 
-All behavioral configuration lives in `firma.toml`. Intercept (per shim
-launch) is authorized purely by `firma.toml` configuration — a shim being
-configured is itself the authorization, no Cedar policy is involved. Redact
-is the one mode still gated by Cedar:
-
-- `Firma::Action::"secret.redact"` — per outbound HTTP connection (redact);
-  evaluated by the Sidecar inline on its MITM path. `resource` is the outbound
-  HTTP request (host, port, path).
+All behavioral configuration lives in `firma.toml`. Neither mode is gated by
+Cedar: intercept (per shim launch) is authorized purely by `firma.toml`
+configuration — a shim being configured is itself the authorization; redact
+applies unconditionally to every outbound HTTP call the Sidecar's MITM path
+already sees — no policy selects which hosts or paths receive rewrite
+treatment.
 
 ### `firma.toml` configuration
 
@@ -355,22 +354,16 @@ secret_providers = [
 view of the outbound request; there is no built-in HTTP vault — every HTTP
 provider is fully user-defined.
 
-### Cedar policies
-
-Cedar only governs redact; intercept has no Cedar policy to author.
-
-```cedar
-permit(principal, action == Firma::Action::"secret.redact", resource)
-when { resource.host == "api.github.com" };
-```
-
 ### Decision semantics (fail-closed)
 
 - A shim being configured in `firma.toml` is itself the authorization to
   intercept — every launch of a shimmed executable is mediated
   unconditionally.
-- Sidecar: no matching `secret.redact` policy → **passthrough** (forward HTTP unchanged).
-- Sidecar: `forbid` → **deny**.
+- Every outbound HTTP call on the Sidecar's MITM path is scanned for
+  `firma-secret://` placeholders (rehydration) and known secret values
+  (masking) unconditionally — there is no permit/forbid decision for redact.
+- An unresolvable placeholder fails closed: the literal is left unrewritten
+  rather than forwarded as a guess.
 - A bare-string `secret_providers` entry naming no built-in integration →
   **startup error** (config validation, before the sandbox launches).
 
@@ -425,7 +418,7 @@ agent: GET https://api.github.com/user/repos
          │  outbound HTTPS via Sidecar
          ▼
 Sidecar:
-  • secret.redact policy matches api.github.com
+  • scans the request body/headers unconditionally
   • looks up firma-secret://bitwarden/github-token in SecretStore
   • rewrites Authorization header: Bearer ghp_<real_token>
   • forwards request to GitHub
@@ -464,10 +457,10 @@ and the site receives the literal token — fail closed.
 
 ## Transforms
 
-The Sidecar selects the substitution codec per-request, never per-policy. A
-single `secret.redact` rule can match JSON API calls, HTML form submissions, and
-XML payloads to the same host — the codec must be chosen at request time, not
-at policy authoring time.
+The Sidecar selects the substitution codec per-request. The same host can
+receive JSON API calls, HTML form submissions, and XML payloads across
+different requests — the codec must be chosen at request time, not fixed
+per destination.
 
 ### Finding placeholders
 
@@ -598,15 +591,10 @@ secret_providers = ["bws", "op"]
 secret_providers = ["bws", "op", "vault"]
 ```
 
-Redact behavior (which HTTP endpoints the Sidecar rewrites) is declared in
-Cedar policy rather than `firma.toml`, because it operates on outbound HTTP
-connections that the Sidecar already governs — no startup-time credential
-stripping or shim injection is required.
-
-```cedar
-permit(principal, action == Firma::Action::"secret.redact", resource)
-when { resource.host == "api.github.com" };
-```
+Redact needs no configuration at all: it applies unconditionally to every
+outbound HTTP connection the Sidecar already governs — no startup-time
+credential stripping or shim injection is required, and no policy selects
+which hosts or paths receive rewrite treatment.
 
 ## Threat Model
 
@@ -626,27 +614,27 @@ when { resource.host == "api.github.com" };
 
 ## Phased Plan
 
-| Phase | Scope                                                                                                                                                                                                                                       | Crates                                       | Outcome                           |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------- |
-| 0     | This design doc                                                                                                                                                                                                                             | docs                                         | Reviewed                          |
-| 1     | `SecretStore`, `Placeholder`, `SecretValue`, Aho-Corasick matcher                                                                                                                                                                           | `firma-run`                                  | Unit tests: dictionary, masking   |
-| 2     | Cedar: `secret.redact` action schema; load-time bundle validation                                                                                                                                                                           | `firma-core`, `firma-sidecar`                | Unit tests: bundle parse/validate |
-| 3     | `IntegrationRegistry`: built-in specs for `bitwarden`, `1password` (structured-item extractor), `hashicorp-vault`, `doppler`; credential env var stripping                                                                                  | `firma-run`, `firma-config-loader`           | Integration tests with fake CLIs  |
-| 4     | firma-run JSON-line broker + gateway sockets; shim binary; intercept mode end-to-end with out-of-sandbox vault CLI exec; bind-over-path shim injection                                                                                      | `firma-run`                                  | E2E on bwrap with mock vault CLIs |
-| 5     | Content-Type–driven rewriter in Sidecar MITM path (`raw`, `json`, `form`, `xml`); multi-pattern Aho-Corasick masking; `secret.redact` Cedar eval; SecretStore read path in Sidecar; Host-header domain binding; docs (docs-site + llms.txt) | `firma-sidecar`, `firma-config-loader`, docs | `just check` green                |
-| 6     | Streaming rewrite with overlap buffers for chunked and HTTP/2 responses                                                                                                                                                                     | `firma-sidecar`                              | Property tests on chunk splits    |
-| 7     | Plugin interface for custom integrations; additional backends (macOS vz, WSL2)                                                                                                                                                              | `firma-run`, backends                        | —                                 |
+| Phase | Scope                                                                                                                                                                                                                                      | Crates                                       | Outcome                           |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- | --------------------------------- |
+| 0     | This design doc                                                                                                                                                                                                                            | docs                                         | Reviewed                          |
+| 1     | `SecretStore`, `Placeholder`, `SecretValue`, Aho-Corasick matcher                                                                                                                                                                          | `firma-run`                                  | Unit tests: dictionary, masking   |
+| 2     | ~~Cedar: dedicated secret-redact action schema~~ — since removed; redact is unconditional, no Cedar policy involved                                                                                                                        | `firma-core`, `firma-sidecar`                | Superseded                        |
+| 3     | `IntegrationRegistry`: built-in specs for `bitwarden`, `1password` (structured-item extractor), `hashicorp-vault`, `doppler`; credential env var stripping                                                                                 | `firma-run`, `firma-config-loader`           | Integration tests with fake CLIs  |
+| 4     | firma-run JSON-line broker + gateway sockets; shim binary; intercept mode end-to-end with out-of-sandbox vault CLI exec; bind-over-path shim injection                                                                                     | `firma-run`                                  | E2E on bwrap with mock vault CLIs |
+| 5     | Content-Type–driven rewriter in Sidecar MITM path (`raw`, `json`, `form`, `xml`); multi-pattern Aho-Corasick masking; unconditional redact scan; SecretStore read path in Sidecar; Host-header domain binding; docs (docs-site + llms.txt) | `firma-sidecar`, `firma-config-loader`, docs | `just check` green                |
+| 6     | Streaming rewrite with overlap buffers for chunked and HTTP/2 responses                                                                                                                                                                    | `firma-sidecar`                              | Property tests on chunk splits    |
+| 7     | Plugin interface for custom integrations; additional backends (macOS vz, WSL2)                                                                                                                                                             | `firma-run`, backends                        | —                                 |
 
 ## Resolved Design Decisions
 
 ### Behavior configuration: `firma.toml`
 
 All shim behavioral config (which integrations are active, which executables are
-shimmed, explicit extractor specs) lives in `firma.toml`. Cedar is
-authorization-only — no behavioral annotations. This keeps `firma.toml` the
-single operational config file, avoids a timing dependency between Cedar bundle
-fetch and sandbox startup, and keeps Cedar readable by operators without knowing
-extractor internals.
+shimmed, explicit extractor specs) lives in `firma.toml`. Neither mode
+involves Cedar at all: this keeps `firma.toml` the single operational config
+file, avoids a timing dependency between Cedar bundle fetch and sandbox
+startup, and keeps the mechanism's behavior fully visible without needing to
+also read a policy bundle.
 
 ### Integration implementation: CLI wrappers
 
@@ -743,7 +731,5 @@ A runnable example lives in
   `docs/security/bypass-analysis.md`. The Playwright browser form-submission path
   is covered because the browser's outbound HTTP exits the sandbox through the
   Sidecar.
-- Whether `secret.redact` should further split into `secret.resolve` /
-  `secret.inject` verbs — deferred.
 - Plugin interface mechanism (config-file schema, WASM, native library) —
   deferred to phase 7.

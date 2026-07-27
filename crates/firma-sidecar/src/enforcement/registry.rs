@@ -48,8 +48,7 @@ pub struct ActionClassRegistry {
 impl ActionClassRegistry {
     /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 29
     /// in-place additions covering the GitHub (12), Stripe (12), and
-    /// Gmail (5) REST surfaces, plus the `secret.redact` governance
-    /// action (45 total).
+    /// Gmail (5) REST surfaces (44 total).
     #[must_use]
     #[expect(
         clippy::too_many_lines,
@@ -280,11 +279,6 @@ impl ActionClassRegistry {
             ActionClassDefinition {
                 name: "communication.external.filter",
                 domain: "communication",
-                risk_level: Critical,
-            },
-            ActionClassDefinition {
-                name: "secret.redact",
-                domain: "secret",
                 risk_level: Critical,
             },
         ];

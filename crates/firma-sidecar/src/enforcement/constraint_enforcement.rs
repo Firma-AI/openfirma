@@ -144,27 +144,6 @@ pub trait PolicyEvaluation: Send + Sync {
 
     /// Get the current policy bundle version.
     fn version(&self) -> Option<String>;
-
-    /// Decide whether to apply secret rewriting for an outbound HTTP request
-    /// (`secret.redact`).
-    ///
-    /// Returns `true` when a `permit` policy fires — placeholder rehydration
-    /// and secret masking are active for this request. The default returns
-    /// `false` (passthrough). The Cedar evaluator overrides this.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error string if policy evaluation fails.
-    fn evaluate_secret_redact(
-        &self,
-        _principal: &AgentId,
-        _host: &str,
-        _path: &str,
-        _method: &str,
-        _context: serde_json::Value,
-    ) -> Result<bool, String> {
-        Ok(false)
-    }
 }
 
 /// Stage 2: Constraint Enforcement Engine (CEE).

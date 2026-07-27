@@ -51,11 +51,10 @@
 
 use std::io::{self, BufRead, BufReader};
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(unix)]
-use std::os::unix::net::UnixListener;
+use std::{os::unix::net::UnixListener, path::PathBuf};
 
 use arc_swap::ArcSwap;
 use base64::Engine as _;

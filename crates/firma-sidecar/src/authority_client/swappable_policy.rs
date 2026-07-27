@@ -75,19 +75,6 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
             .evaluate_verdict(principal, action, resource, context)
     }
 
-    fn evaluate_secret_redact(
-        &self,
-        principal: &AgentId,
-        host: &str,
-        path: &str,
-        method: &str,
-        context: serde_json::Value,
-    ) -> Result<bool, String> {
-        self.inner
-            .load()
-            .evaluate_secret_redact(principal, host, path, method, context)
-    }
-
     fn is_fresh(&self) -> bool {
         now_ms() < self.deadline_unix_ms.load(Ordering::Relaxed)
     }

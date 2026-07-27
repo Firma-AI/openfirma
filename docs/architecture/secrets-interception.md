@@ -28,10 +28,10 @@ behaviors:
   over HTTP, replace each returned secret with a placeholder, and keep the
   real value in a firma-run-owned dictionary. The agent only ever sees
   placeholders.
-- **redact** — for outbound HTTP calls Cedar authorizes, rehydrate
-  placeholders into real secrets in the request, and mask real secrets back
-  into placeholders in the response. This is the Sidecar's existing MITM
-  path; see `fir-429-pai-credential-injection.md` for the full design.
+- **redact** — for every outbound HTTP call, rehydrate placeholders into real
+  secrets in the request, and mask real secrets back into placeholders in the
+  response. This is the Sidecar's existing MITM path; see
+  `fir-429-pai-credential-injection.md` for the full design.
 
 Intercept and redact are one mechanism with different transforms: intercept
 _produces_ dictionary entries, redact _consumes_ them.
@@ -40,8 +40,9 @@ Intercept is a **generic interposition** mechanism: stdio (a shim) for CLI
 vaults, HTTPS MITM for HTTP vaults. Which executables are shimmed, and which
 HTTP hosts/paths are treated as vaults, is per-profile `firma.toml`
 config — listing an entry in `secret_providers` is itself the authorization
-to intercept it. **No Cedar policy gates intercept.** Cedar continues to
-gate redact only (`secret.redact`, per outbound HTTP destination).
+to intercept it. **Neither mode is gated by Cedar.** Redact scans every
+outbound HTTP call unconditionally — there is no policy that selects which
+hosts or paths receive rewrite treatment.
 
 ### Why stdio, not HTTP, for CLI vaults
 
@@ -70,8 +71,8 @@ ciphertext that `bws` decrypts locally, so the cleartext secret exists only on t
   on the vault CLI's stdout. It is never materialized in the agent process or
   the shim.
 - **Deterministic.** Behavior is a pure function of the `secret_providers`
-  config (intercept) or the Cedar bundle (redact) plus the launch/request
-  context, consistent with the rest of OpenFirma enforcement.
+  config (intercept) or the request/response content itself (redact) plus the
+  launch/request context, consistent with the rest of OpenFirma enforcement.
 
 ## Architecture
 
@@ -164,9 +165,11 @@ unconditionally. There is no permit/forbid decision to author.
 
 - A shim/HTTP-provider entry being configured is itself the authorization to
   intercept — every matching launch/response is mediated unconditionally.
-- Sidecar: no matching `secret.redact` policy → passthrough (forward
-  outbound HTTP unchanged).
-- Sidecar: `forbid` on `secret.redact` → deny.
+- Every outbound HTTP call on the Sidecar's MITM path is scanned for
+  `firma-secret://` placeholders (rehydration) and known secret values
+  (masking) unconditionally — there is no permit/forbid decision for redact.
+- An unresolvable placeholder fails closed: the literal is left unrewritten
+  rather than forwarded as a guess.
 - Unknown `integration` name in `firma.toml` → startup error.
 
 ## Placeholder Format
@@ -290,9 +293,11 @@ The dictionary is run-scoped and zeroized on teardown.
 - **Masking: best-effort** defense-in-depth (see Threat Model).
 - **Placeholder `<name>`: the secret key** read from the vault's output, via
   the configured matcher (see Placeholder Format).
-- **Authorization: config presence, not Cedar.** A `secret_providers` entry
-  existing is itself the authorization to intercept — no permit/forbid
-  decision, no per-launch round-trip to the Sidecar.
+- **Authorization: config presence or unconditional, never Cedar.** A
+  `secret_providers` entry existing is itself the authorization to
+  intercept — no permit/forbid decision, no per-launch round-trip to the
+  Sidecar. Redact has no authorization step at all: every outbound HTTP call
+  is scanned.
 
 ## Cross-Platform Notes
 

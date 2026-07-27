@@ -16,10 +16,9 @@
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
 
 #[cfg(unix)]
-use std::os::unix::net::UnixListener;
+use std::{os::unix::net::UnixListener, path::PathBuf};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};

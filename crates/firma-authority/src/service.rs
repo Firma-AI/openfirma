@@ -414,9 +414,7 @@ pub(crate) fn evaluate_cedar_policy(
         match FirmaEntityUid::Resource(resource.to_string()).try_into() {
             Ok(uid) => uid,
             Err(e) => {
-                return CedarDecision::invalid_request(format!(
-                    "invalid secret provider resource: {e}"
-                ));
+                return CedarDecision::invalid_request(format!("invalid resource: {e}"));
             }
         };
     let authorizer = Authorizer::new();
