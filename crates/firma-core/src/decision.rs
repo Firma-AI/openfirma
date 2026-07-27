@@ -391,33 +391,25 @@ impl From<DeferDuration> for Duration {
 pub enum SecretMatcher {
     /// `JSONPath` extraction over structured output.
     Json {
-        /// `JSONPath` selecting each secret value (`@match_value`).
+        /// `JSONPath` evaluated once against the document root to select each
+        /// logical secret record.
+        record_path: String,
+        /// Record-relative `JSONPath` selecting the matching name
+        /// (`@match_name`). It must select exactly one string from each record.
         value_path: String,
         /// `JSONPath` selecting the matching name (`@match_name`), aligned by
         /// document order with the value path.
         name_path: String,
-        /// Optional `JSONPath` selecting the item title for structured-item
-        /// stores. Substituted into the `{item}` marker of the placeholder
-        /// template. When the path selects a single node it is broadcast to all
-        /// extracted values; when it selects N nodes they are aligned
-        /// positionally. Use this for integrations that group multiple fields
-        /// under a named item (e.g. 1Password `$.title`).
+        /// Optional scoped selector for the structured-item title. Record-scoped
+        /// selectors run once per record; document-scoped selectors run once at
+        /// the document root and are broadcast to every record.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        item_path: Option<String>,
-        /// Optional `JSONPath` selecting the domain (hostname) associated with
-        /// each secret. When the path selects a single node it is broadcast to
-        /// all extracted values; when it selects N nodes they are aligned
-        /// positionally. A node that is not a string (e.g. `null`) is treated
-        /// as absent (wildcard). Use this for integrations whose vault items
-        /// carry a URL or hostname field (e.g. 1Password `urls[0].href`).
+        item_selector: Option<SecretJsonSelector>,
+        /// Optional scoped selector for the domain associated with each secret.
+        /// String nodes are validated and normalized as HTTP authorities or URLs;
+        /// `null` and other non-string nodes represent an absent domain.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        domain_path: Option<String>,
-        /// When `true` and `domain_path` is set, the selected value is parsed
-        /// as a URL and only the `host` portion is stored. Use this for
-        /// integrations that store full URLs rather than bare hostnames
-        /// (e.g. 1Password `urls[].href` stores `https://github.com`).
-        #[serde(default)]
-        domain_is_url: bool,
+        domain_selector: Option<SecretJsonSelector>,
     },
     /// `Regex` extraction over text output. The pattern carries a required
     /// `value` and `name` named capture group, and an optional `domain` group
@@ -425,12 +417,31 @@ pub enum SecretMatcher {
     Regex {
         /// The `Regex` source.
         pattern: String,
-        /// When `true` and the pattern has a `domain` capture group, the
-        /// captured value is parsed as a URL and only the `host` portion is
-        /// stored. Mirrors the same flag on the `Json` variant.
-        #[serde(default)]
-        domain_is_url: bool,
     },
+}
+
+/// A `JSONPath` selector whose evaluation root is explicit.
+///
+/// The scope is part of the serialized shape, for example
+/// `{"path":"$.title","scope":"document"}`. Selector cardinality is always
+/// exactly one at each applicable root; scope is never inferred from `JSONPath`
+/// syntax.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SecretJsonSelector {
+    /// `JSONPath` evaluated at the root selected by [`Self::scope`].
+    pub path: String,
+    /// Whether the path is relative to each record or to the whole document.
+    pub scope: SecretJsonSelectorScope,
+}
+
+/// Evaluation root for a [`SecretJsonSelector`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretJsonSelectorScope {
+    /// Evaluate independently against every node selected by `record_path`.
+    Record,
+    /// Evaluate once against the document root and broadcast the selected node.
+    Document,
 }
 
 #[cfg(test)]
