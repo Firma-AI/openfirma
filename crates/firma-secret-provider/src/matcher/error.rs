@@ -72,6 +72,13 @@ pub enum MatcherError {
         /// Zero-based index of the record selected by `record_path`.
         record_index: usize,
     },
+    /// A `RecordKey`-sourced name had no parent key to derive from (the
+    /// record's own location is the document root).
+    #[error("json matcher name (record_key) has no parent key in record {record_index}")]
+    RecordKeyUnavailable {
+        /// Zero-based index of the record selected by `record_path`.
+        record_index: usize,
+    },
     /// Re-serializing the rewritten JSON failed defensively; ordinary
     /// [`serde_json::Value`] serialization is expected to be infallible.
     #[error("failed to serialize rewritten output: {0}")]

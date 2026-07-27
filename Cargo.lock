@@ -1604,13 +1604,17 @@ version = "0.1.6"
 dependencies = [
  "either",
  "firma-core",
+ "firma-http",
  "http",
  "insta",
  "regex",
+ "serde",
  "serde_json",
  "serde_json_path",
  "thiserror 2.0.18",
+ "tracing",
  "type-safe-id",
+ "zeroize",
 ]
 
 [[package]]

@@ -150,3 +150,4 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 wiremock = "0.6"
 x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zeroize = "1.9"

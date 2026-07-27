@@ -22,8 +22,8 @@ pub use cedar::{FIRMA_SCHEMA, FirmaEntityUid, validate_policies};
 pub use connector::{Connector, ConnectorError, ConnectorResponse};
 pub use credential::InjectedCredentials;
 pub use decision::{
-    AbortReason, DeferDuration, DenyReason, ModificationError, ModificationSpec,
-    SecretJsonSelector, SecretJsonSelectorScope, SecretMatcher, StepUpSpec,
+    AbortReason, Decision, DeferDuration, DenyReason, ModificationError, ModificationSpec,
+    SecretJsonSelector, SecretJsonSelectorScope, SecretMatcher, SecretNameSource, StepUpSpec,
 };
 pub use envelope::{
     ActionParams, DbQueryParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
