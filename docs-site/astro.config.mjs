@@ -134,6 +134,7 @@ export default defineConfig({
             { label: 'Govern Composio tool execution', slug: 'guides/composio' },
             { label: 'Extend the action-class mapping', slug: 'guides/extend-mapping' },
             { label: 'Inject credentials', slug: 'guides/inject-credentials' },
+            { label: 'Rehydrate & mask secrets (secret gateway)', slug: 'guides/secret-gateway' },
             { label: 'Read & verify the audit log', slug: 'guides/audit-log' },
             { label: 'Secure a local coding agent', slug: 'guides/secure-a-coding-agent' },
             { label: 'Secure GitHub Copilot CLI', slug: 'guides/secure-github-copilot' },

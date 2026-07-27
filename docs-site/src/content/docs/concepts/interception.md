@@ -162,3 +162,4 @@ Start in CONNECT-only mode. Add MITM hosts as you decide which ones you want L7 
 - [Connectors](../connectors/) — what happens to a request *after* the Sidecar allows it.
 - [The sandbox boundary](../sandbox/) — how `firma run` forces traffic through the Sidecar even for agents that ignore env vars.
 - [Enable HTTPS MITM](../../guides/https-mitm/) — operator-side walkthrough.
+- [Rehydrate & mask secrets (secret gateway)](../../guides/secret-gateway/) — MITM'd HTTP vault responses feed this path once you need placeholder-based secret handling.

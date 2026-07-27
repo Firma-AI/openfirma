@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use firma_http::Authority;
 use firma_secret_provider::{
     SecretPlaceholder,
@@ -281,7 +283,7 @@ async fn push_secret_returns_placeholder_on_success() {
     );
 
     let returned = client
-        .push_secret(&placeholder, &secret, vec![])
+        .push_secret(placeholder.clone(), secret, HashSet::new())
         .await
         .expect("push succeeds");
     assert_eq!(returned, placeholder);
@@ -300,7 +302,7 @@ async fn push_secret_rejects_mismatched_placeholder() {
     );
 
     let error = client
-        .push_secret(&requested, &secret, vec![])
+        .push_secret(requested.clone(), secret, HashSet::new())
         .await
         .expect_err("mismatched placeholder must fail closed");
 
@@ -333,7 +335,7 @@ async fn push_secret_reports_gateway_rejection() {
     );
 
     let err = client
-        .push_secret(&placeholder, &secret, vec![])
+        .push_secret(placeholder, secret, HashSet::new())
         .await
         .expect_err("rejected");
     std::assert_matches!(err, GatewayClientError::Rejected(err) if err == "malformed placeholder");
@@ -349,7 +351,7 @@ async fn push_secret_rejects_malformed_response() {
     );
 
     let err = client
-        .push_secret(&placeholder, &secret, vec![])
+        .push_secret(placeholder, secret, HashSet::new())
         .await
         .expect_err("malformed response");
     std::assert_matches!(
@@ -371,7 +373,7 @@ async fn push_secret_reports_unreachable_gateway() {
     );
 
     let err = client
-        .push_secret(&placeholder, &secret, vec![])
+        .push_secret(placeholder, secret, HashSet::new())
         .await
         .expect_err("unreachable");
     std::assert_matches!(

@@ -1382,6 +1382,7 @@ dependencies = [
  "firma-http",
  "firma-run",
  "firma-runtime-state",
+ "firma-secret-provider",
  "firma-sidecar",
  "firma-stack",
  "firma-tui",

@@ -2,28 +2,39 @@
 //!
 //! Owns the post-enforcement call path shared by all interceptors:
 //! enforcement, dispatch for allowed traffic, denial translation, and audit
-//! payload emission.
+//! payload emission. When a secret gateway is configured (see
+//! [`RequestHandler::with_gateway_client`]), the same path also rehydrates
+//! outbound secret placeholders and masks inbound secret values; when HTTP
+//! secret providers are configured (see
+//! [`RequestHandler::with_http_secret_providers`]), it additionally
+//! intercepts and mints placeholders for matching HTTP-vault responses.
 
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::sync::Arc;
+use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 
-use firma_core::envelope::InvalidMethod;
 use firma_core::{
     AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
     ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
-    InjectedCredentials, SessionId, TransportView,
+    InjectedCredentials, SecretMatcher, SessionId, TransportView, envelope::InvalidMethod,
 };
 use firma_http::HeaderMap;
+use firma_secret_provider::{
+    CompiledMatcher, MatchingResolution, PLACEHOLDER_PREFIX, SecretPlaceholder,
+    gateway::client::GatewayClient, spec::http::HttpIntegrationSpec,
+};
+use headers::HeaderMapExt;
 use tokio::sync::mpsc;
 
-use crate::audit::{AuditPayload, Decision};
-use crate::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode, is_protected_host};
-use crate::connector::ConnectorRegistry;
-use crate::normalizer::NormalizedEnvelope;
-use crate::pipeline::{
-    CompositeActionResult, CompositeDisposition, EnforcementDecision, EnforcementPipeline,
-    RawRequest, audit_payload_from_decision, monitor_override,
+use crate::{
+    audit::{AuditPayload, Decision},
+    composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode, is_protected_host},
+    connector::ConnectorRegistry,
+    normalizer::{NormalizedEnvelope, mapping::glob_match},
+    pipeline::{
+        CompositeActionResult, CompositeDisposition, EnforcementDecision, EnforcementPipeline,
+        RawRequest, audit_payload_from_decision, monitor_override,
+    },
+    secret_rewrite::{ContentType, mask_body, rehydrate_body},
+    secret_store::SidecarSecretStore,
 };
 
 /// Response produced by the transport-agnostic request handler.
@@ -156,6 +167,145 @@ fn denial_context_of(envelope: Option<&NormalizedEnvelope>) -> DenialContext {
     envelope.map_or(DenialContext::Api, |e| {
         denial_context_from_params(&e.intent.params)
     })
+}
+
+/// Builds the fail-closed denial for a request whose secret placeholders
+/// could not be fully resolved before dispatch.
+///
+/// Overrides `audit_payload` to record a `FailClosed` denial in place of the
+/// pre-dispatch decision it was built from, mirroring the dispatch-level
+/// override used when a `MODIFY` cannot be applied — dispatch never runs, so
+/// nothing is forwarded with unresolved placeholder tokens in its body.
+#[must_use]
+fn rehydrate_fail_closed_response(
+    audit_payload: &mut AuditPayload,
+    context: DenialContext,
+    error: &str,
+) -> HandledResponse {
+    let detail = format!("secret placeholders could not be resolved; failing closed: {error}");
+    audit_payload.decision = Decision::Deny;
+    audit_payload.deny_reason = format!("{}: {detail}", DenyReason::FailClosed);
+    HandledResponse::Deny {
+        reason: DenyReason::FailClosed,
+        detail,
+        context,
+    }
+}
+
+/// Builds the abort for a request whose target matches a `Blocked` HTTP
+/// secret provider path.
+///
+/// Overrides `audit_payload` to record the abort in place of the
+/// pre-dispatch decision it was built from — dispatch never runs, so the
+/// blocked command never reaches the upstream vault.
+#[must_use]
+fn http_secret_blocked_response(
+    audit_payload: &mut AuditPayload,
+    provider_id: &str,
+) -> HandledResponse {
+    let detail = format!("HTTP secret provider \"{provider_id}\" blocks this command");
+    audit_payload.decision = Decision::Abort;
+    audit_payload.deny_reason = format!(
+        "{}: {detail}",
+        AbortReason::CredentialInjectionBlocked.code()
+    );
+    HandledResponse::Aborted {
+        reason: AbortReason::CredentialInjectionBlocked,
+        detail,
+    }
+}
+
+/// Builds the abort for a response whose HTTP secret provider extracted a
+/// secret and substituted its placeholder into the body, but then failed to
+/// push that secret to the broker — overrides `audit_payload` in place of the
+/// dispatched-response outcome, since the response as substituted can no
+/// longer be forwarded (see [`RequestHandler::rewrite_with_http_intercept`]).
+#[must_use]
+fn http_secret_push_failed_response(
+    audit_payload: &mut AuditPayload,
+    reason: AbortReason,
+    detail: String,
+) -> HandledResponse {
+    audit_payload.decision = Decision::Abort;
+    audit_payload.deny_reason = format!("{}: {detail}", reason.code());
+    HandledResponse::Aborted { reason, detail }
+}
+
+/// Builds the structured denial for [`EnforcementDecision::Deny`], logging a
+/// renewal hint when the capability token has expired.
+#[must_use]
+fn deny_response(
+    reason: DenyReason,
+    detail: String,
+    envelope: Option<&NormalizedEnvelope>,
+    request: &RawRequest,
+    session_id: &str,
+) -> HandledResponse {
+    if reason == DenyReason::TokenExpired {
+        tracing::warn!(
+            method = %request.method,
+            host = %request.host,
+            path = %request.path,
+            session_id = %session_id,
+            detail = %detail,
+            "request denied because capability token expired; renew token (same session_id) and reload sidecar capability source"
+        );
+    }
+    let context = denial_context_of(envelope);
+    HandledResponse::Deny {
+        reason,
+        detail,
+        context,
+    }
+}
+
+/// Builds the structured denial for AARM R4 `STEP_UP`: the call is blocked
+/// pending human approval or stronger authentication.
+#[must_use]
+fn step_up_response(challenge: String, envelope: Option<&NormalizedEnvelope>) -> HandledResponse {
+    let context = denial_context_of(envelope);
+    HandledResponse::Deny {
+        reason: DenyReason::StepUpRequired,
+        detail: challenge,
+        context,
+    }
+}
+
+/// Builds the structured denial for AARM R4 `DEFER`: the call is blocked and
+/// should be retried after `retry_after_ms`.
+#[must_use]
+fn defer_response(retry_after_ms: u64, envelope: Option<&NormalizedEnvelope>) -> HandledResponse {
+    let context = denial_context_of(envelope);
+    HandledResponse::Deny {
+        reason: DenyReason::Deferred,
+        detail: format!("retry_after_ms: {retry_after_ms}"),
+        context,
+    }
+}
+
+/// Checks the two conditions that must block dispatch even though
+/// enforcement itself allowed the request: unresolved secret placeholders
+/// ([`rehydrate_fail_closed_response`]) and a `Blocked` HTTP secret provider
+/// path ([`http_secret_blocked_response`]). Returns `None` when neither
+/// applies and the caller may proceed to dispatch.
+#[must_use]
+fn pre_dispatch_gate(
+    rehydrate_result: &Result<Option<SidecarSecretStore>, String>,
+    blocked_provider: Option<&str>,
+    context: DenialContext,
+    audit_payload: &mut AuditPayload,
+) -> Option<HandledResponse> {
+    if let Err(detail) = rehydrate_result {
+        return Some(rehydrate_fail_closed_response(
+            audit_payload,
+            context,
+            detail,
+        ));
+    }
+    if let Some(provider_id) = blocked_provider {
+        return Some(http_secret_blocked_response(audit_payload, provider_id));
+    }
+    None
 }
 
 /// Serialize a denial into the canonical JSON body used by HTTP-facing
@@ -304,12 +454,98 @@ pub struct DispatchedResponse {
     pub(crate) body: Vec<u8>,
 }
 
+/// Scan `body` for [`PLACEHOLDER_PREFIX`]-prefixed placeholder tokens and
+/// return a deduplicated list. Each token runs from the prefix through
+/// consecutive alphanumeric characters, matching [`SecretPlaceholder`]'s
+/// Crockford-base32 encoding (never `_`, `-`, or other separators).
+///
+/// Dedup is `Vec::contains`, an O(n²) scan over the *distinct* tokens found
+/// so far — deliberately, not a `HashSet`: callers zip this list
+/// positionally against `resolve_batch`'s results, so insertion order must
+/// be preserved, and `n` is bounded by how many distinct placeholders one
+/// request body plausibly carries (single digits), where the constant
+/// factor of a `Vec` scan beats hashing.
+fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
+    let prefix_len = PLACEHOLDER_PREFIX.len();
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i + prefix_len <= body.len() {
+        if body[i..].starts_with(PLACEHOLDER_PREFIX.as_bytes()) {
+            let path_start = i + prefix_len;
+            let mut end = path_start;
+            while end < body.len() && body[end].is_ascii_alphanumeric() {
+                end += 1;
+            }
+            if end > path_start
+                && let Ok(token) = std::str::from_utf8(&body[i..end])
+                && let Ok(placeholder) = SecretPlaceholder::from_str(token)
+                && !result.contains(&placeholder)
+            {
+                result.push(placeholder);
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Masks `dispatched.body` against `store`'s known secrets.
+///
+/// Resolves the response's content type from its `Content-Type` header,
+/// falling back to sniffing the body and then to [`ContentType::Raw`] when
+/// neither is conclusive — masking still runs on unrecognized content as a
+/// raw byte scan rather than skipping it outright, since declining to mask
+/// would risk forwarding a secret re-echo unredacted.
+fn mask_dispatched(
+    mut dispatched: DispatchedResponse,
+    store: &SidecarSecretStore,
+) -> DispatchedResponse {
+    if dispatched.body.is_empty() {
+        return dispatched;
+    }
+    let content_type_val = dispatched.headers.typed_get::<headers::ContentType>();
+    let content_type =
+        ContentType::resolve(content_type_val, &dispatched.body).unwrap_or(ContentType::Raw);
+    let ops = store.mask_ops(&dispatched.body, content_type);
+    if !ops.is_empty() {
+        let masked = mask_body(&dispatched.body, &ops);
+        if dispatched.headers.contains_key("content-length") {
+            dispatched
+                .headers
+                .insert("content-length", http::HeaderValue::from(masked.len()));
+        }
+        dispatched.body = masked;
+    }
+    dispatched
+}
+
+fn mask_handled_response(response: HandledResponse, store: &SidecarSecretStore) -> HandledResponse {
+    match response {
+        HandledResponse::Ok(d) => HandledResponse::Ok(mask_dispatched(d, store)),
+        HandledResponse::Passthrough(d) => HandledResponse::Passthrough(mask_dispatched(d, store)),
+        other => other,
+    }
+}
+
+/// HTTP-origin secret interception: the Sidecar-local mirror of an HTTP
+/// vault registry entry, used to mint placeholders locally (see
+/// [`RequestHandler::intercept_http_secrets`]). A provider being listed here
+/// (mirroring firma-run's `http_secret_providers` config) is itself the
+/// authorization — no separate policy check gates it.
+struct HttpSecretMediation {
+    providers: Vec<HttpIntegrationSpec>,
+}
+
 /// Shared handler used by every interceptor.
 pub struct RequestHandler {
     audit_sink_sender: mpsc::Sender<AuditPayload>,
     composio_catalogs: Option<Arc<ComposioCatalogs>>,
     connector_registry: Arc<ConnectorRegistry>,
     pipeline: Arc<EnforcementPipeline>,
+    gateway_client: Option<Arc<GatewayClient>>,
+    http_secret_mediation: Option<HttpSecretMediation>,
 }
 
 impl RequestHandler {
@@ -326,7 +562,122 @@ impl RequestHandler {
             composio_catalogs: None,
             connector_registry,
             pipeline,
+            gateway_client: None,
+            http_secret_mediation: None,
         }
+    }
+
+    /// Enable secret placeholder rehydration via the firma-run secret gateway.
+    ///
+    /// When set, the handler resolves [`PLACEHOLDER_PREFIX`]-prefixed tokens
+    /// in outbound request bodies before dispatch and masks raw secret
+    /// values in inbound response bodies before returning them to the agent.
+    #[must_use]
+    pub fn with_gateway_client(mut self, gc: GatewayClient) -> Self {
+        self.gateway_client = Some(Arc::new(gc));
+        self
+    }
+
+    /// Enable HTTP-origin secret interception for the given `providers` (the
+    /// Sidecar's mirror of firma-run's HTTP-shaped `secret_providers`
+    /// config, synthesized in at startup). A no-op when `providers` is
+    /// empty. Requires [`Self::with_gateway_client`] to have been called
+    /// too — extracted secrets are pushed there; without a gateway
+    /// client, matched responses are never intercepted (logged as a
+    /// misconfiguration).
+    #[must_use]
+    pub fn with_http_secret_providers(mut self, providers: Vec<HttpIntegrationSpec>) -> Self {
+        if !providers.is_empty() {
+            self.http_secret_mediation = Some(HttpSecretMediation { providers });
+        }
+        self
+    }
+
+    /// Resolve [`PLACEHOLDER_PREFIX`]-prefixed placeholder tokens in the request body.
+    ///
+    /// Queries the secret gateway for each unique placeholder found, builds a
+    /// per-request [`SidecarSecretStore`], and rewrites the body with the real
+    /// secret bytes. The store is returned for use in response masking.
+    ///
+    /// Returns `Ok(None)` when no gateway is configured or the body contains
+    /// no placeholders. Returns `Err` when the body contains placeholders
+    /// that cannot be fully resolved and substituted. The caller must fail
+    /// closed on `Err` and never dispatch the request: forwarding a body
+    /// with some placeholders rehydrated and others left literal (or all
+    /// left literal) can trigger partial side effects upstream — e.g.
+    /// writing, overwriting, or deleting the wrong secret — so evaluation of
+    /// every placeholder must succeed before anything is sent out.
+    async fn rehydrate_request(
+        &self,
+        mut request: RawRequest,
+    ) -> (RawRequest, Result<Option<SidecarSecretStore>, String>) {
+        let Some(ref gateway_client) = self.gateway_client else {
+            return (request, Ok(None));
+        };
+
+        let body = match &request.body {
+            Some(b) if !b.is_empty() => b.clone(),
+            _ => return (request, Ok(None)),
+        };
+
+        let placeholders = collect_placeholders(&body);
+        if placeholders.is_empty() {
+            return (request, Ok(None));
+        }
+
+        let host = request.host.clone();
+
+        let mut store = SidecarSecretStore::new();
+        match gateway_client.resolve_batch(&placeholders, host).await {
+            Ok(Ok(results)) => {
+                for (placeholder, secret) in placeholders.iter().zip(results) {
+                    if let Err(e) = store.insert(placeholder.clone(), secret) {
+                        let detail = format!(
+                            "secret gateway: failed to build store entry for {placeholder}: {e}"
+                        );
+                        tracing::warn!("{detail}");
+                        return (request, Err(detail));
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                let detail = format!("secret gateway: placeholder resolution failed: {e}");
+                tracing::warn!("{detail}");
+                return (request, Err(detail));
+            }
+            Err(e) => {
+                let detail = format!("secret gateway: batch resolve failed: {e}");
+                tracing::warn!("{detail}");
+                return (request, Err(detail));
+            }
+        }
+
+        if store.len() != placeholders.len() {
+            let detail = format!(
+                "secret gateway: resolved {} of {} placeholders",
+                store.len(),
+                placeholders.len()
+            );
+            tracing::warn!("{detail}");
+            return (request, Err(detail));
+        }
+
+        let content_type_val = request.headers.typed_get::<headers::ContentType>();
+        let Ok(ct) = ContentType::resolve(content_type_val, &body) else {
+            let detail = "secret gateway: unrecognized content type".to_string();
+            tracing::warn!("{detail}");
+            return (request, Err(detail));
+        };
+        let ops = store.rehydrate_ops(&body);
+        let rehydrated = rehydrate_body(&body, ct, &ops);
+        if request.headers.contains_key("content-length") {
+            request
+                .headers
+                .insert("content-length", http::HeaderValue::from(rehydrated.len()));
+        }
+        request.body = Some(rehydrated);
+
+        (request, Ok(Some(store)))
     }
 
     /// Install validated pinned Composio catalogs.
@@ -340,10 +691,6 @@ impl RequestHandler {
     ///
     /// The handler emits exactly one audit payload per call after dispatch
     /// work has completed for allow and passthrough outcomes.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the exhaustive decision match owns dispatch and audit finalization"
-    )]
     pub async fn handle(&self, request: RawRequest, session_id: &str) -> HandledResponse {
         if let Some(response) = self.handle_composio(&request, session_id).await {
             return response;
@@ -351,107 +698,60 @@ impl RequestHandler {
 
         let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
-        let response = match decision {
-            EnforcementDecision::Allow {
-                envelope,
-                credentials,
-                ..
-            } => {
-                let mut dispatch_envelope = *envelope;
-                hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
-                let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
-                outcome.enrich(&mut audit_payload);
-                response
-            }
-            EnforcementDecision::Modify {
-                envelope,
-                credentials,
-                modifications,
-                ..
-            } => {
-                self.dispatch_modify(
-                    *envelope,
-                    &request,
-                    credentials,
-                    modifications,
-                    &mut audit_payload,
-                )
-                .await
-            }
-            EnforcementDecision::Passthrough { .. } => {
-                match passthrough_envelope(&request, session_id) {
-                    Ok(envelope) => {
-                        let (response, outcome) =
-                            self.dispatch(envelope, InjectedCredentials::empty()).await;
-                        outcome.enrich(&mut audit_payload);
-                        // Re-wrap Ok as Passthrough so callers can distinguish
-                        // authorized traffic from forwarded non-protected
-                        // traffic. Deny / Aborted pass through unchanged.
-                        if let HandledResponse::Ok(dispatched) = response {
-                            HandledResponse::Passthrough(dispatched)
-                        } else {
-                            response
-                        }
-                    }
-                    Err(err) => handle_error(err),
-                }
-            }
-            EnforcementDecision::Deny {
-                reason,
-                detail,
-                envelope,
-                ..
-            } => {
-                if reason == firma_core::DenyReason::TokenExpired {
-                    tracing::warn!(
-                        method = %request.method,
-                        host = %request.host,
-                        path = %request.path,
-                        session_id = %session_id,
-                        detail = %detail,
-                        "request denied because capability token expired; renew token (same session_id) and reload sidecar capability source"
-                    );
-                }
-                let context = denial_context_of(envelope.as_ref());
-                HandledResponse::Deny {
-                    reason,
-                    detail,
-                    context,
-                }
-            }
-            EnforcementDecision::Abort { reason, detail, .. } => {
-                HandledResponse::Aborted { reason, detail }
-            }
-            EnforcementDecision::StepUp {
-                challenge,
-                envelope,
-                ..
-            } => {
-                // AARM R4 `STEP_UP` blocks the call. The agent receives a
-                // structured denial whose reason tells it to request human
-                // approval and retry.
-                let context = denial_context_of(envelope.as_ref());
-                HandledResponse::Deny {
-                    reason: firma_core::DenyReason::StepUpRequired,
-                    detail: challenge,
-                    context,
-                }
-            }
-            EnforcementDecision::Defer {
-                retry_after_ms,
-                envelope,
-                ..
-            } => {
-                // AARM R4 `DEFER` blocks the call. The agent receives a
-                // structured denial whose reason tells it to retry after
-                // the backoff window.
-                let context = denial_context_of(envelope.as_ref());
-                HandledResponse::Deny {
-                    reason: firma_core::DenyReason::Deferred,
-                    detail: format!("retry_after_ms: {retry_after_ms}"),
-                    context,
-                }
-            }
+        // Only decisions that go on to dispatch need their body rehydrated;
+        // skip the gateway round-trip entirely for a decision that's already
+        // going to deny/abort/block the call — it wastes a connection and
+        // needlessly reveals the request's placeholder tokens to the broker.
+        let dispatches = matches!(
+            decision,
+            EnforcementDecision::Allow { .. }
+                | EnforcementDecision::Modify { .. }
+                | EnforcementDecision::Passthrough { .. }
+        );
+        let (request, rehydrate_result) = if dispatches {
+            self.rehydrate_request(request).await
+        } else {
+            (request, Ok(None))
+        };
+
+        // Resolved before dispatch, not just for post-dispatch rewrite: a
+        // `Blocked` HTTP secret provider path must never reach the
+        // connector. Resolving it only after dispatch (as the response
+        // rewrite in `intercept_http_secrets` does for `Matcher`) would let
+        // the destructive command already execute upstream before the
+        // sidecar aborted the response.
+        let blocked_provider =
+            self.http_secret_provider_decision(&request)
+                .and_then(|(provider_id, resolution)| {
+                    matches!(resolution, MatchingResolution::Blocked).then_some(provider_id)
+                });
+
+        let response = self
+            .dispatch_decision(
+                decision,
+                &rehydrate_result,
+                blocked_provider,
+                &request,
+                session_id,
+                &mut audit_payload,
+            )
+            .await;
+
+        // Interception (extracting genuine HTTP-vault secrets) runs before
+        // masking (redacting rehydration echoes): if a rehydrated request's
+        // secret gets echoed back by an HTTP-vault response, masking-first
+        // would turn that echo into a placeholder *before* interception's
+        // matcher ever saw it, so interception would extract and push the
+        // literal placeholder string as if it were a fresh secret — losing
+        // the real value and corrupting the broker's mapping. Running
+        // interception first means it always sees the true response bytes.
+        let response = self
+            .intercept_http_secrets(&request, response, &mut audit_payload)
+            .await;
+
+        let response = match rehydrate_result.ok().flatten() {
+            Some(store) => mask_handled_response(response, &store),
+            None => response,
         };
 
         if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
@@ -461,6 +761,322 @@ impl RequestHandler {
         response
     }
 
+    /// Routes an [`EnforcementDecision`] to its dispatch path, or to a
+    /// pre-dispatch denial/abort when `rehydrate_result` is `Err` or
+    /// `blocked_provider` is set and the decision would otherwise have
+    /// dispatched the request.
+    async fn dispatch_decision(
+        &self,
+        decision: EnforcementDecision,
+        rehydrate_result: &Result<Option<SidecarSecretStore>, String>,
+        blocked_provider: Option<&str>,
+        request: &RawRequest,
+        session_id: &str,
+        audit_payload: &mut AuditPayload,
+    ) -> HandledResponse {
+        match decision {
+            EnforcementDecision::Allow {
+                envelope,
+                credentials,
+                ..
+            } => match pre_dispatch_gate(
+                rehydrate_result,
+                blocked_provider,
+                denial_context_from_params(&envelope.intent.params),
+                audit_payload,
+            ) {
+                Some(response) => response,
+                None => {
+                    self.dispatch_allow(*envelope, request, credentials, audit_payload)
+                        .await
+                }
+            },
+            EnforcementDecision::Modify {
+                envelope,
+                credentials,
+                modifications,
+                ..
+            } => match pre_dispatch_gate(
+                rehydrate_result,
+                blocked_provider,
+                denial_context_from_params(&envelope.intent.params),
+                audit_payload,
+            ) {
+                Some(response) => response,
+                None => {
+                    self.dispatch_modify(
+                        *envelope,
+                        request,
+                        credentials,
+                        modifications,
+                        audit_payload,
+                    )
+                    .await
+                }
+            },
+            EnforcementDecision::Passthrough { .. } => match pre_dispatch_gate(
+                rehydrate_result,
+                blocked_provider,
+                DenialContext::Api,
+                audit_payload,
+            ) {
+                Some(response) => response,
+                None => {
+                    self.dispatch_passthrough(request, session_id, audit_payload)
+                        .await
+                }
+            },
+            EnforcementDecision::Deny {
+                reason,
+                detail,
+                envelope,
+                ..
+            } => deny_response(reason, detail, envelope.as_ref(), request, session_id),
+            EnforcementDecision::Abort { reason, detail, .. } => {
+                HandledResponse::Aborted { reason, detail }
+            }
+            EnforcementDecision::StepUp {
+                challenge,
+                envelope,
+                ..
+            } => step_up_response(challenge, envelope.as_ref()),
+            EnforcementDecision::Defer {
+                retry_after_ms,
+                envelope,
+                ..
+            } => defer_response(retry_after_ms, envelope.as_ref()),
+        }
+    }
+
+    /// Resolves the HTTP secret provider entry (if any) whose host/path glob
+    /// matches `request`, and how its response should be handled.
+    ///
+    /// Synchronous — pure matcher lookup, no I/O — so it is safe to call
+    /// before dispatch to gate on [`MatchingResolution::Blocked`], as well as
+    /// after dispatch (in [`Self::intercept_http_secrets`]) to select the
+    /// response-rewrite matcher.
+    fn http_secret_provider_decision<'a>(
+        &'a self,
+        request: &RawRequest,
+    ) -> Option<(&'a str, MatchingResolution<'a>)> {
+        let mediation = self.http_secret_mediation.as_ref()?;
+        mediation.providers.iter().find_map(|p| {
+            glob_match(&p.host, request.host.as_str())
+                .then(|| (p.provider_id.as_str(), p.matcher_for(&request.path)))
+        })
+    }
+
+    /// HTTP-origin secret interception: if `request` matches a configured
+    /// HTTP secret provider whose matcher applies to this path, run the
+    /// provider's matcher over the response body, mint placeholders locally,
+    /// push each extracted secret to firma-run's broker, and substitute the
+    /// placeholders into the body before it reaches the agent. A matching
+    /// provider entry is itself the authorization — no separate policy check
+    /// gates it.
+    ///
+    /// `MatchingResolution::Blocked` paths are gated before dispatch (see the
+    /// `blocked_provider` check in `handle`), not here — by the time a
+    /// response reaches this function the request has already gone out, so
+    /// this layer only ever rewrites, never blocks.
+    ///
+    /// A no-op — `response` passes through unchanged — when no HTTP secret
+    /// providers are configured, no entry matches `request`, the entry
+    /// resolves to `PassThrough`/`Blocked`, or the matcher fails to compile
+    /// or extract. Those failures fall back to forwarding the response as
+    /// dispatched (fail-open on the interception layer itself — the
+    /// underlying request was already permitted by the main enforcement
+    /// pipeline). A failure to *push* an already-extracted secret to the
+    /// broker is different: see [`Self::rewrite_with_http_intercept`].
+    async fn intercept_http_secrets(
+        &self,
+        request: &RawRequest,
+        response: HandledResponse,
+        audit_payload: &mut AuditPayload,
+    ) -> HandledResponse {
+        let Some((provider_id, decision)) = self.http_secret_provider_decision(request) else {
+            return response;
+        };
+
+        let matcher = match decision {
+            MatchingResolution::Matcher(matcher) => matcher,
+            MatchingResolution::PassThrough | MatchingResolution::Blocked => return response,
+        };
+
+        let Some(gateway_client) = self.gateway_client.as_ref() else {
+            tracing::warn!(
+                provider_id = %provider_id,
+                "HTTP secret provider matched but no secret gateway is configured; not \
+                 intercepting"
+            );
+            return response;
+        };
+
+        let rewrite = async |dispatched: DispatchedResponse| {
+            self.rewrite_with_http_intercept(dispatched, provider_id, matcher, gateway_client)
+                .await
+        };
+
+        match response {
+            HandledResponse::Ok(dispatched) => match rewrite(dispatched).await {
+                Ok(dispatched) => HandledResponse::Ok(dispatched),
+                Err((reason, detail)) => {
+                    http_secret_push_failed_response(audit_payload, reason, detail)
+                }
+            },
+            HandledResponse::Passthrough(dispatched) => match rewrite(dispatched).await {
+                Ok(dispatched) => HandledResponse::Passthrough(dispatched),
+                Err((reason, detail)) => {
+                    http_secret_push_failed_response(audit_payload, reason, detail)
+                }
+            },
+            other => other,
+        }
+    }
+
+    /// Runs `provider`'s matcher over `dispatched.body`, minting a
+    /// placeholder for each extracted secret and pushing it to firma-run's
+    /// broker via `gateway`. Returns `dispatched` with the body rewritten to
+    /// placeholders.
+    ///
+    /// Returns `Ok(dispatched)` unmodified when the matcher fails to compile
+    /// or the extraction pass itself fails — fail-open, since no secret has
+    /// been extracted or promised to the agent yet.
+    ///
+    /// Returns `Err` when the matcher successfully extracted a secret and
+    /// substituted its placeholder into the body, but the push to the broker
+    /// that would make the placeholder resolvable failed: the substitution
+    /// already happened in-place as the single-pass rewrite scanned, so at
+    /// that point the only way to avoid handing the agent a placeholder the
+    /// broker never learned (an unresolvable token, indistinguishable from a
+    /// silently lost credential) is to abort the whole response rather than
+    /// forward it.
+    async fn rewrite_with_http_intercept(
+        &self,
+        mut dispatched: DispatchedResponse,
+        provider_id: &str,
+        matcher: &SecretMatcher,
+        gateway: &GatewayClient,
+    ) -> Result<DispatchedResponse, (AbortReason, String)> {
+        let matcher = match CompiledMatcher::compile(matcher) {
+            Ok(m) => m,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = %provider_id,
+                    %error,
+                    "HTTP secret intercept: matcher compile failed; forwarding unmodified"
+                );
+                return Ok(dispatched);
+            }
+        };
+
+        // Minting must happen synchronously — the single-pass rewrite
+        // substitutes the placeholder in place of the plaintext value as it
+        // scans — so pushes to the broker are collected here and sent after.
+        // `item_domain` is empty unless the matcher's `domain_selector`
+        // extracted one from the item; it is deliberately *not* defaulted to
+        // the vault's own request host — an HTTP vault's response is a
+        // credential meant for later use against some other downstream
+        // host, not the vault itself, so an unscoped (wildcard) push is the
+        // useful default here, mirroring a CLI intercept whose matcher has
+        // no `domain_selector`.
+        let mut pushes = Vec::new();
+        let rewritten =
+            matcher.rewrite(&dispatched.body, &mut |_name, value, item_domain, _item| {
+                let placeholder = SecretPlaceholder::new();
+                pushes.push((placeholder.clone(), value, item_domain));
+                placeholder
+            });
+
+        let rewritten = match rewritten {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = %provider_id,
+                    %error,
+                    "HTTP secret intercept: extraction failed; forwarding unmodified"
+                );
+                return Ok(dispatched);
+            }
+        };
+
+        for (placeholder, value, item_domain) in pushes {
+            if let Err(error) = gateway
+                .push_secret(placeholder.clone(), value, item_domain)
+                .await
+            {
+                tracing::error!(
+                    provider_id = %provider_id,
+                    %placeholder,
+                    %error,
+                    "HTTP secret intercept: failed to push extracted secret to broker; \
+                     aborting rather than hand the agent an unresolvable placeholder"
+                );
+                let detail = format!(
+                    "HTTP secret provider \"{provider_id}\" extracted a secret but failed to \
+                     push it to the broker: {error}"
+                );
+                return Err((AbortReason::CredentialInjectionFailed, detail));
+            }
+        }
+
+        if dispatched.headers.contains_key("content-length") {
+            dispatched
+                .headers
+                .insert("content-length", http::HeaderValue::from(rewritten.len()));
+        }
+        dispatched.body = rewritten;
+        Ok(dispatched)
+    }
+
+    /// Dispatches a `PASSTHROUGH` decision: builds a minimal envelope and
+    /// forwards without enforcement credentials. Re-wraps `Ok` as `Passthrough`
+    /// so callers can distinguish authorized traffic from non-protected traffic.
+    async fn dispatch_passthrough(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+        audit_payload: &mut AuditPayload,
+    ) -> HandledResponse {
+        match passthrough_envelope(request, session_id) {
+            Ok(envelope) => {
+                let (response, outcome) =
+                    self.dispatch(envelope, InjectedCredentials::empty()).await;
+                outcome.enrich(audit_payload);
+                if let HandledResponse::Ok(dispatched) = response {
+                    HandledResponse::Passthrough(dispatched)
+                } else {
+                    response
+                }
+            }
+            Err(err) => handle_error(err),
+        }
+    }
+
+    /// Dispatches an `ALLOW` decision through the connector registry.
+    async fn dispatch_allow(
+        &self,
+        envelope: ExecutionEnvelope,
+        request: &RawRequest,
+        credentials: InjectedCredentials,
+        audit_payload: &mut AuditPayload,
+    ) -> HandledResponse {
+        let mut dispatch_envelope = envelope;
+        hydrate_dispatch_http_fields(&mut dispatch_envelope, request);
+        let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
+        outcome.enrich(audit_payload);
+        response
+    }
+
+    /// Returns `Some` when `request` targets a configured Composio catalog
+    /// host, handling it entirely through the Composio-specific decision
+    /// path below instead of the main `handle` flow.
+    ///
+    /// This bypasses secret rehydration, response masking, and HTTP secret
+    /// provider interception entirely: a Composio-protected request body
+    /// carrying a gateway placeholder is forwarded upstream as a literal
+    /// token, and any secret the response echoes back is never masked. This
+    /// is a pre-existing asymmetry with the main path, not something this
+    /// function newly introduces — flagged here since it is easy to miss.
     async fn handle_composio(
         &self,
         request: &RawRequest,
@@ -1171,28 +1787,33 @@ fn passthrough_session_id() -> SessionId {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::collections::HashMap;
-    use std::net::SocketAddr;
-    use std::str::FromStr;
-    use std::time::Duration;
+    use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-    use crate::config::TenancyMode;
     use async_trait::async_trait;
+    use base64::Engine as _;
     use chrono::Utc;
     use firma_core::{
-        CapabilityClaims, Connector, RevocationStore, TokenError, TokenId, TokenVerifier,
-        TransportView,
+        CapabilityClaims, Connector, RevocationStore, StepUpSpec, TokenError, TokenId,
+        TokenVerifier, TransportView,
     };
     use firma_http::{Authority, Method};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use firma_secret_provider::{
+        gateway::{client::config::GatewayClientConfig, endpoint::GatewayEndpoint},
+        non_empty::NonEmptyString,
+        spec::http::{HttpMatcherRule, PathAndMatcher, PathOnly},
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::config::TenancyMode;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
-    use crate::enforcement::constraint_enforcement::PolicyEvaluation;
+    use crate::enforcement::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
     use crate::pipeline::{
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
         MappingTable, PipelineArgs,
@@ -1247,6 +1868,78 @@ pub(crate) mod tests {
 
         fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
+        }
+    }
+
+    /// Policy stub whose `evaluate_verdict` always returns `STEP_UP`, to
+    /// exercise `handle()`'s `EnforcementDecision::StepUp` arm — no policy
+    /// engine wiring in the other test helpers ever produces this outcome.
+    struct StepUpPolicy;
+    impl PolicyEvaluation for StepUpPolicy {
+        fn evaluate(
+            &self,
+            _: &AgentId,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn evaluate_verdict(
+            &self,
+            _: &AgentId,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<PolicyVerdict, String> {
+            Ok(PolicyVerdict::StepUp {
+                challenge: StepUpSpec::new("manager approval required")
+                    .expect("non-empty challenge literal"),
+            })
+        }
+
+        fn is_fresh(&self) -> bool {
+            true
+        }
+
+        fn version(&self) -> Option<String> {
+            Some("test-v1".to_string())
+        }
+    }
+
+    /// Policy stub whose `evaluate_verdict` always returns `DEFER`, to
+    /// exercise `handle()`'s `EnforcementDecision::Defer` arm.
+    struct DeferPolicy;
+    impl PolicyEvaluation for DeferPolicy {
+        fn evaluate(
+            &self,
+            _: &AgentId,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn evaluate_verdict(
+            &self,
+            _: &AgentId,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<PolicyVerdict, String> {
+            Ok(PolicyVerdict::Defer {
+                backoff: Duration::from_millis(250),
+            })
+        }
+
+        fn is_fresh(&self) -> bool {
+            true
+        }
+
+        fn version(&self) -> Option<String> {
+            Some("test-v1".to_string())
         }
     }
 
@@ -1367,6 +2060,40 @@ pub(crate) mod tests {
             ),
             constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(FailingCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
+    /// Like [`test_pipeline_for_session`], but with a caller-supplied
+    /// policy so tests can drive remediation verdicts (`STEP_UP`/`DEFER`)
+    /// that `AllowAllPolicy` can never produce.
+    fn test_pipeline_with_policy(
+        rules: Vec<MappingRuleConfig>,
+        session_id: &str,
+        policy: Arc<dyn PolicyEvaluation>,
+    ) -> Arc<EnforcementPipeline> {
+        let claims = test_claims_for_session(session_id);
+        let registry = ActionClassRegistry::v0_1();
+        let file = MappingRulesFile { rules };
+        let table =
+            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer: IntentNormalizer::new(table),
+            capability_validator: CapabilityValidator::new(
+                CapabilityMap::new(vec![CapabilityEntry {
+                    raw_token: "v4.public.test_token".to_string(),
+                    claims: claims.clone(),
+                }]),
+                Arc::new(MockVerifier { claims }),
+                std::sync::Arc::new(NoRevocations),
+                Duration::from_secs(0),
+                TenancyMode::SingleAgent,
+            ),
+            constraint_enforcer: ConstraintEnforcer::new(policy),
+            credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
                 crate::enforcement::LruSessionStateStore::new(16),
             ),
@@ -1842,6 +2569,915 @@ pub(crate) mod tests {
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.decision, Decision::Allow);
         assert_eq!(payload.dispatch_status, 503);
+    }
+
+    #[tokio::test]
+    async fn test_handle_step_up_denies_with_challenge_as_detail() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_with_policy(vec![allow_rule()], "sess_step_up", Arc::new(StepUpPolicy)),
+            test_connector_registry(),
+            tx,
+        );
+
+        let response = handler
+            .handle(
+                raw_request(Authority::from_static("127.0.0.1:9"), Method::POST),
+                "sess_step_up",
+            )
+            .await;
+
+        match response {
+            HandledResponse::Deny {
+                reason,
+                detail,
+                context,
+            } => {
+                assert_eq!(reason, DenyReason::StepUpRequired);
+                assert_eq!(detail, "manager approval required");
+                // HTTP action params map to the Api denial context.
+                assert_eq!(context, DenialContext::Api);
+            }
+            other => panic!("expected step-up deny, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_step_up");
+    }
+
+    #[tokio::test]
+    async fn test_handle_defer_denies_with_retry_after_ms_in_detail() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_with_policy(vec![allow_rule()], "sess_defer", Arc::new(DeferPolicy)),
+            test_connector_registry(),
+            tx,
+        );
+
+        let response = handler
+            .handle(
+                raw_request(Authority::from_static("127.0.0.1:9"), Method::POST),
+                "sess_defer",
+            )
+            .await;
+
+        match response {
+            HandledResponse::Deny {
+                reason,
+                detail,
+                context,
+            } => {
+                assert_eq!(reason, DenyReason::Deferred);
+                assert_eq!(detail, "retry_after_ms: 250");
+                assert_eq!(context, DenialContext::Api);
+            }
+            other => panic!("expected defer deny, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_defer");
+    }
+
+    #[tokio::test]
+    async fn test_handle_passthrough_with_unsupported_method_aborts() {
+        // TRACE is accepted by `firma_http::Method` but rejected by
+        // `HttpMethod::try_from` (envelope.rs only recognizes GET/POST/PUT/
+        // DELETE/PATCH/HEAD/OPTIONS/CONNECT). A passthrough request with an
+        // unrecognized method never reaches the mapping table's method
+        // check (that only runs for matched/protected requests), so it must
+        // fail later, in `passthrough_envelope`, and the handler must
+        // convert that error into an abort rather than panicking or
+        // silently dropping the request.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline(vec![allow_rule()], false, true),
+            test_connector_registry(),
+            tx,
+        );
+
+        let response = handler
+            .handle(
+                raw_request(Authority::from_static("127.0.0.1:9"), Method::TRACE),
+                "sess_trace",
+            )
+            .await;
+
+        match response {
+            HandledResponse::Aborted { reason, detail } => {
+                assert_eq!(reason, AbortReason::ConnectorInvalidRequest);
+                assert!(!detail.is_empty());
+            }
+            other => panic!("expected aborted for unsupported method, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_trace");
+    }
+
+    /// Minimal fake gateway: accepts one connection, reads one
+    /// `secret.push` line, captures it, and echoes back the given
+    /// `placeholder` as the confirmation response — enough to exercise
+    /// [`RequestHandler::rewrite_with_http_intercept`] without depending on
+    /// firma-run (which firma-sidecar does not, and must not, depend on).
+    async fn fake_push_gateway() -> (
+        SocketAddr,
+        tokio::sync::oneshot::Receiver<serde_json::Value>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake gateway");
+        let addr = listener.local_addr().expect("local_addr");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                if let Ok(n) = stream.read(&mut buf).await {
+                    let line = String::from_utf8_lossy(&buf[..n]);
+                    let request: serde_json::Value =
+                        serde_json::from_str(line.trim()).expect("valid push request JSON");
+                    let placeholder = request["placeholder"].clone();
+                    let _ = tx.send(request);
+                    let response = serde_json::json!({ "type": "ok", "placeholder": placeholder })
+                        .to_string()
+                        + "\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            }
+        });
+        (addr, rx)
+    }
+
+    /// Minimal fake gateway resolve endpoint: accepts one connection, reads
+    /// one `secret.resolve` request line, and replies with a single `ok`
+    /// result carrying `secret_b64` — enough to exercise
+    /// [`RequestHandler::rehydrate_request`] end-to-end without depending on
+    /// firma-run.
+    async fn fake_resolve_gateway(secret_b64: String) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake gateway");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                if stream.read(&mut buf).await.is_ok() {
+                    let response =
+                        format!(r#"[{{"type":"ok","secret_b64":"{secret_b64}"}}]"#) + "\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            }
+        });
+        addr
+    }
+
+    /// Mock upstream that captures the raw bytes of the single request it
+    /// receives — so a test can assert what the connector actually
+    /// forwarded — and replies with a fixed 200 response carrying
+    /// `response_body`.
+    async fn mock_upstream_capturing(
+        response_body: Vec<u8>,
+    ) -> (
+        SocketAddr,
+        CancellationToken,
+        tokio::sync::oneshot::Receiver<Vec<u8>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock upstream");
+        let addr = listener.local_addr().expect("local_addr");
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    if let Ok((mut stream, _)) = accepted {
+                        let mut buf = vec![0u8; 8192];
+                        if let Ok(n) = stream.read(&mut buf).await {
+                            let _ = tx.send(buf[..n].to_vec());
+                        }
+                        let mut response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                            response_body.len()
+                        )
+                        .into_bytes();
+                        response.extend_from_slice(&response_body);
+                        let _ = stream.write_all(&response).await;
+                        let _ = stream.shutdown().await;
+                    }
+                }
+                () = cancel_clone.cancelled() => {}
+            }
+        });
+
+        (addr, cancel, rx)
+    }
+
+    #[tokio::test]
+    async fn test_handle_rehydrates_outbound_placeholder_and_masks_response_echo() {
+        // Round-trips both halves of gateway-backed secret handling that no
+        // existing test covers together: an outbound placeholder in the
+        // agent's request body is resolved and substituted with the real
+        // secret before the connector ever sees it (`rehydrate_request`),
+        // and if the upstream echoes that secret back, the response
+        // returned to the agent has it masked back to the placeholder
+        // (`mask_handled_response`).
+        let secret_value = "sk-real-secret-value";
+        let placeholder = SecretPlaceholder::new();
+        let secret_b64 = base64::engine::general_purpose::STANDARD.encode(secret_value);
+        let gateway_addr = fake_resolve_gateway(secret_b64).await;
+
+        let response_body = format!(r#"{{"echo":"{secret_value}"}}"#).into_bytes();
+        let (upstream_addr, upstream_cancel, captured_rx) =
+            mock_upstream_capturing(response_body).await;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_rehydrate"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_client(GatewayClient::new(
+            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            GatewayClientConfig::default(),
+        ));
+
+        let mut request = raw_request(
+            Authority::from_str(&format!("127.0.0.1:{}", upstream_addr.port()))
+                .expect("valid authority"),
+            Method::POST,
+        );
+        request.body = Some(format!(r#"{{"key":"{placeholder}"}}"#).into_bytes());
+
+        let response = handler.handle(request, "sess_rehydrate").await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                let body = String::from_utf8(dispatched.body).expect("utf8 body");
+                assert!(
+                    !body.contains(secret_value),
+                    "response to the agent must mask the real secret value, got: {body}"
+                );
+                assert!(
+                    body.contains(&placeholder.to_string()),
+                    "response should re-mask the echoed secret back to its placeholder, got: {body}"
+                );
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+
+        let captured = captured_rx.await.expect("upstream captured a request");
+        let captured = String::from_utf8_lossy(&captured);
+        assert!(
+            captured.contains(secret_value),
+            "connector must forward the rehydrated real secret, got: {captured}"
+        );
+        assert!(
+            !captured.contains(&placeholder.to_string()),
+            "the placeholder token must never reach the upstream, got: {captured}"
+        );
+
+        upstream_cancel.cancel();
+    }
+
+    /// Fake gateway resolve endpoint that reports the requested placeholder
+    /// as unknown, exercising the fail-closed branch of
+    /// [`RequestHandler::rehydrate_request`].
+    async fn fake_resolve_gateway_err() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake gateway");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                if stream.read(&mut buf).await.is_ok() {
+                    let response =
+                        r#"[{"type":"err","error":"unknown placeholder"}]"#.to_string() + "\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn test_handle_fails_closed_when_gateway_cannot_resolve_placeholder() {
+        // A request body with a placeholder the gateway cannot resolve must
+        // never reach the connector: forwarding it with the placeholder
+        // still literal (or only partially rehydrated) risks partial side
+        // effects upstream, e.g. a vault call writing, overwriting, or
+        // deleting the wrong secret. `handle` must deny before dispatch
+        // rather than forward the literal token.
+        let placeholder = SecretPlaceholder::new();
+        let gateway_addr = fake_resolve_gateway_err().await;
+
+        let (upstream_addr, upstream_cancel, captured_rx) =
+            mock_upstream_capturing(Vec::new()).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_rehydrate_fail"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_client(GatewayClient::new(
+            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            GatewayClientConfig::default(),
+        ));
+
+        let mut request = raw_request(
+            Authority::from_str(&format!("127.0.0.1:{}", upstream_addr.port()))
+                .expect("valid authority"),
+            Method::POST,
+        );
+        request.body = Some(format!(r#"{{"key":"{placeholder}"}}"#).into_bytes());
+
+        let response = handler.handle(request, "sess_rehydrate_fail").await;
+
+        match response {
+            HandledResponse::Deny { reason, .. } => {
+                assert_eq!(reason, DenyReason::FailClosed);
+            }
+            other => panic!("expected fail-closed deny, got {other:?}"),
+        }
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), captured_rx)
+                .await
+                .is_err(),
+            "connector must never be contacted when a placeholder could not be resolved"
+        );
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.decision, Decision::Deny);
+
+        upstream_cancel.cancel();
+    }
+
+    fn aws_secrets_manager_provider(host: &Authority) -> HttpIntegrationSpec {
+        HttpIntegrationSpec {
+            provider_id: "aws-secrets-manager".to_string(),
+            host: host.to_string(),
+            matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
+                path: None,
+                matcher: firma_core::SecretMatcher::Json {
+                    record_path: "$".to_string(),
+                    value_path: "$.SecretString".to_string(),
+                    name: firma_core::SecretNameSource::Path {
+                        path: "$.Name".to_string(),
+                    },
+                    item_selector: None,
+                    domain_selector: None,
+                },
+            })],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_intercepts_http_vault_response_and_pushes_secret() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": "s3cr3t-db-pass",
+                    "Name": "dbpass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let (gateway_addr, push_rx) = fake_push_gateway().await;
+        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+            .expect("valid authority");
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_secret"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_client(GatewayClient::new(
+            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            GatewayClientConfig::default(),
+        ))
+        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+
+        let response = handler
+            .handle(raw_request(host, Method::POST), "sess_http_secret")
+            .await;
+
+        let body_placeholder = match response {
+            HandledResponse::Ok(dispatched) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&dispatched.body).expect("json body");
+                assert_eq!(body["Name"], "dbpass");
+                body["SecretString"]
+                    .as_str()
+                    .expect("SecretString is a placeholder string")
+                    .to_string()
+            }
+            other => panic!("expected ok, got {other:?}"),
+        };
+        assert!(
+            body_placeholder.starts_with(PLACEHOLDER_PREFIX),
+            "expected a minted placeholder, got {body_placeholder}"
+        );
+
+        let pushed = push_rx.await.expect("gateway received a push");
+        assert_eq!(pushed["placeholder"], body_placeholder);
+        let value_b64 = pushed["value_b64"].as_str().expect("value_b64 field");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(value_b64)
+            .expect("valid base64");
+        assert_eq!(decoded, b"s3cr3t-db-pass");
+        // The matcher has no domain_selector, so the push must be unscoped
+        // (resolves for any request host) rather than defaulted to the
+        // vault's own host — an HTTP vault's response is a credential meant
+        // for later use against some other downstream host.
+        assert_eq!(
+            pushed["domain"],
+            serde_json::json!([]),
+            "expected unscoped push, got domain: {:?}",
+            pushed["domain"]
+        );
+    }
+
+    /// Fake gateway push endpoint that always rejects the push, exercising
+    /// the fail-closed branch of
+    /// [`RequestHandler::rewrite_with_http_intercept`].
+    async fn fake_push_gateway_err() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake gateway");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                if stream.read(&mut buf).await.is_ok() {
+                    let response =
+                        serde_json::json!({ "type": "err", "error": "broker unavailable" })
+                            .to_string()
+                            + "\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn test_handle_aborts_when_http_secret_push_fails() {
+        // The matcher extracts a secret and substitutes its placeholder into
+        // the body in a single synchronous pass, before the push to the
+        // broker is even attempted. If that push then fails, the
+        // already-substituted placeholder can never resolve — handing it to
+        // the agent would be indistinguishable from silently losing the
+        // credential. `handle` must abort the whole response instead of
+        // forwarding a body carrying a dead placeholder.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": "s3cr3t-db-pass",
+                    "Name": "dbpass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let gateway_addr = fake_push_gateway_err().await;
+        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+            .expect("valid authority");
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_push_fail"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_client(GatewayClient::new(
+            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            GatewayClientConfig::default(),
+        ))
+        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+
+        let response = handler
+            .handle(raw_request(host, Method::POST), "sess_http_push_fail")
+            .await;
+
+        match response {
+            HandledResponse::Aborted { reason, detail } => {
+                assert_eq!(reason, AbortReason::CredentialInjectionFailed);
+                assert!(
+                    detail.contains("aws-secrets-manager"),
+                    "detail should name the provider, got: {detail}"
+                );
+            }
+            other => panic!("expected push-failure abort, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.decision, Decision::Abort);
+        assert!(
+            payload.deny_reason.contains("CREDENTIAL_INJECTION_FAILED"),
+            "deny_reason should carry the abort code, got: {}",
+            payload.deny_reason
+        );
+    }
+
+    /// Combined fake gateway serving both `secret.resolve` (always answering
+    /// with the single seeded `secret_b64`) and `secret.push` (always
+    /// accepting, echoing the placeholder) over independent connections —
+    /// needed to exercise a request that both rehydrates an outbound
+    /// placeholder and triggers HTTP-vault interception on the response in
+    /// the same round trip. Every request line received is forwarded on the
+    /// returned channel so a test can inspect gateway traffic.
+    async fn fake_resolve_and_push_gateway(
+        secret_b64: String,
+    ) -> (
+        SocketAddr,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake gateway");
+        let addr = listener.local_addr().expect("local_addr");
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let secret_b64 = secret_b64.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let Ok(n) = stream.read(&mut buf).await else {
+                        return;
+                    };
+                    let Ok(request) = serde_json::from_slice::<serde_json::Value>(&buf[..n]) else {
+                        return;
+                    };
+                    let response = match request["action"].as_str() {
+                        Some("secret.resolve") => {
+                            format!(r#"[{{"type":"ok","secret_b64":"{secret_b64}"}}]"#) + "\n"
+                        }
+                        Some("secret.push") => {
+                            let placeholder = request["placeholder"].clone();
+                            serde_json::json!({ "type": "ok", "placeholder": placeholder })
+                                .to_string()
+                                + "\n"
+                        }
+                        _ => return,
+                    };
+                    let _ = tx.send(request);
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (addr, rx)
+    }
+
+    #[tokio::test]
+    async fn test_handle_interception_before_masking_preserves_real_secret_on_broker() {
+        // Regression test for an ordering bug: if masking (rewriting a
+        // rehydrated secret's echo back to its original placeholder) ran
+        // before HTTP-vault interception, interception's matcher would see
+        // the already-masked *placeholder string* instead of the real
+        // echoed secret, extract that placeholder text as if it were a
+        // fresh secret, and push it to the broker under a brand-new
+        // placeholder — losing the real secret and corrupting the broker's
+        // mapping. `handle` runs interception before masking so interception
+        // always sees the true response bytes.
+        let secret_value = "sk-real-secret-value";
+        let placeholder = SecretPlaceholder::new();
+        let secret_b64 = base64::engine::general_purpose::STANDARD.encode(secret_value);
+        let (gateway_addr, mut gateway_rx) = fake_resolve_and_push_gateway(secret_b64).await;
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": secret_value,
+                    "Name": "dbpass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+            .expect("valid authority");
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_order"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_client(GatewayClient::new(
+            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            GatewayClientConfig::default(),
+        ))
+        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+
+        let mut request = raw_request(host, Method::POST);
+        request.body = Some(format!(r#"{{"key":"{placeholder}"}}"#).into_bytes());
+
+        let response = handler.handle(request, "sess_order").await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&dispatched.body).expect("json body");
+                let new_placeholder = body["SecretString"].as_str().expect("placeholder string");
+                assert!(
+                    new_placeholder.starts_with(PLACEHOLDER_PREFIX),
+                    "expected a minted placeholder, got {new_placeholder}"
+                );
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+
+        let pushed = loop {
+            let msg = gateway_rx
+                .recv()
+                .await
+                .expect("gateway received at least a push");
+            if msg["action"] == "secret.push" {
+                break msg;
+            }
+        };
+        let value_b64 = pushed["value_b64"].as_str().expect("value_b64 field");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(value_b64)
+            .expect("valid base64");
+        assert_eq!(
+            decoded,
+            secret_value.as_bytes(),
+            "the broker must learn the real secret value, not the literal original \
+             placeholder string a mask-before-intercept ordering bug would push instead"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_no_http_secret_provider_configured_forwards_body_unmodified() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": "s3cr3t-db-pass",
+                    "Name": "dbpass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        // No `with_http_secret_providers` call: interception must be a no-op.
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_secret_none"),
+            test_connector_registry(),
+            tx,
+        );
+
+        let response = handler
+            .handle(
+                raw_request(
+                    Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+                        .expect("valid authority"),
+                    Method::POST,
+                ),
+                "sess_http_secret_none",
+            )
+            .await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&dispatched.body).expect("json body");
+                assert_eq!(body["SecretString"], "s3cr3t-db-pass");
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+    }
+
+    fn blocked_command_provider(host: &Authority) -> HttpIntegrationSpec {
+        HttpIntegrationSpec {
+            provider_id: "blocked-vault".to_string(),
+            host: host.to_string(),
+            matchers: vec![HttpMatcherRule::BlockedCommand(PathOnly {
+                path: NonEmptyString::new("/v1/chat/completions".to_string())
+                    .expect("non-empty path literal"),
+            })],
+        }
+    }
+
+    fn safe_command_provider(host: &Authority) -> HttpIntegrationSpec {
+        HttpIntegrationSpec {
+            provider_id: "safe-vault".to_string(),
+            host: host.to_string(),
+            matchers: vec![HttpMatcherRule::SafeCommand(PathOnly {
+                path: NonEmptyString::new("/v1/chat/completions".to_string())
+                    .expect("non-empty path literal"),
+            })],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_http_secret_provider_blocked_path_aborts_before_dispatch() {
+        // A `BlockedCommand` match is a hard block that overrides whatever
+        // the enforcement pipeline decided, and it must fire before the
+        // connector is ever contacted: dispatching first and aborting after
+        // would let a destructive vault command (e.g. delete/overwrite)
+        // execute upstream before the sidecar had a chance to block it.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("should not leak"))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+            .expect("valid authority");
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_blocked"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_http_secret_providers(vec![blocked_command_provider(&host)]);
+
+        let response = handler
+            .handle(raw_request(host, Method::POST), "sess_http_blocked")
+            .await;
+
+        match response {
+            HandledResponse::Aborted { reason, .. } => {
+                assert_eq!(reason, AbortReason::CredentialInjectionBlocked);
+            }
+            other => panic!("expected blocked abort, got {other:?}"),
+        }
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "connector must never contact the upstream for a blocked HTTP secret provider path"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_http_secret_provider_safe_command_passes_body_through_unmodified() {
+        // A `SafeCommand` match resolves to `PassThrough`: the interception
+        // layer must return the dispatched response as-is, without ever
+        // reaching the matcher/gateway machinery.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": "s3cr3t-db-pass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+            .expect("valid authority");
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_safe"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_http_secret_providers(vec![safe_command_provider(&host)]);
+
+        let response = handler
+            .handle(raw_request(host, Method::POST), "sess_http_safe")
+            .await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&dispatched.body).expect("json body");
+                assert_eq!(body["SecretString"], "s3cr3t-db-pass");
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_http_secret_provider_matched_without_gateway_forwards_unmodified() {
+        // A provider is configured (mediation matches), but no secret
+        // gateway was ever wired up via `with_gateway_client`. This is the
+        // "misconfiguration" branch that only logs a warning: the response
+        // must forward unmodified rather than panicking or silently
+        // dropping it.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "SecretString": "s3cr3t-db-pass",
+                    "Name": "dbpass",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+            .expect("valid authority");
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_no_gateway"),
+            test_connector_registry(),
+            tx,
+        )
+        // Provider configured, but no `with_gateway_client` call.
+        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+
+        let response = handler
+            .handle(raw_request(host, Method::POST), "sess_http_no_gateway")
+            .await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&dispatched.body).expect("json body");
+                assert_eq!(body["SecretString"], "s3cr3t-db-pass");
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_http_secret_provider_matcher_compile_failure_forwards_unmodified() {
+        // A `Regex` matcher missing the required `value`/`name` named
+        // groups fails to compile. `rewrite_with_http_intercept` must fail
+        // open (forward the dispatched response unmodified) rather than
+        // aborting or panicking, since the underlying request was already
+        // permitted by the main enforcement pipeline.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("token=abc123"))
+            .mount(&server)
+            .await;
+
+        let (gateway_addr, _push_rx) = fake_push_gateway().await;
+        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
+            .expect("valid authority");
+        let provider = HttpIntegrationSpec {
+            provider_id: "broken-matcher".to_string(),
+            host: host.to_string(),
+            matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
+                path: None,
+                matcher: firma_core::SecretMatcher::Regex {
+                    pattern: "no_named_groups_here".to_string(),
+                },
+            })],
+        };
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_bad_matcher"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_client(GatewayClient::new(
+            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            GatewayClientConfig::default(),
+        ))
+        .with_http_secret_providers(vec![provider]);
+
+        let response = handler
+            .handle(raw_request(host, Method::POST), "sess_http_bad_matcher")
+            .await;
+
+        match response {
+            HandledResponse::Ok(dispatched) => {
+                assert_eq!(dispatched.body, b"token=abc123");
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2332,5 +3968,46 @@ pub(crate) mod tests {
             payload.deny_reason
         );
         assert_eq!(payload.dispatch_status, 0);
+    }
+
+    // ── collect_placeholders ───────────────────────────────────────────────
+
+    #[test]
+    fn collect_placeholders_finds_single_token() {
+        let placeholder = SecretPlaceholder::new();
+        let body = format!("Authorization: Bearer {placeholder}\r\n");
+        let tokens = collect_placeholders(body.as_bytes());
+        assert_eq!(tokens, &[placeholder]);
+    }
+
+    #[test]
+    fn collect_placeholders_deduplicates() {
+        let placeholder = SecretPlaceholder::new();
+        let body = format!("{placeholder} and again {placeholder}");
+        let tokens = collect_placeholders(body.as_bytes());
+        assert_eq!(tokens, &[placeholder]);
+    }
+
+    #[test]
+    fn collect_placeholders_finds_multiple_distinct_tokens() {
+        let placeholder1 = SecretPlaceholder::new();
+        let placeholder2 = SecretPlaceholder::new();
+        let body = format!("{{\"a\":\"{placeholder1}\",\"b\":\"{placeholder2}\"}}");
+        let tokens = collect_placeholders(body.as_bytes());
+        assert_eq!(tokens, &[placeholder1, placeholder2]);
+    }
+
+    #[test]
+    fn collect_placeholders_returns_empty_when_none_present() {
+        let body = b"no placeholders here";
+        assert!(collect_placeholders(body).is_empty());
+    }
+
+    #[test]
+    fn collect_placeholders_stops_at_quote() {
+        let placeholder = SecretPlaceholder::new();
+        let body = format!("\"{placeholder}\"");
+        let tokens = collect_placeholders(body.as_bytes());
+        assert_eq!(tokens, &[placeholder]);
     }
 }

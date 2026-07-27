@@ -1,9 +1,7 @@
 use std::str::FromStr;
 
-use http::{
-    Uri,
-    uri::{Authority, InvalidUri},
-};
+use firma_http::Authority;
+use http::{Uri, uri::InvalidUri};
 
 use super::MatcherError;
 
@@ -35,9 +33,9 @@ pub(super) fn parse_authority(url: &str) -> Result<Authority, MatcherError> {
 
 /// Strips credentials from an authority.
 #[inline]
-fn remove_credentials(authority: &Authority) -> Result<Authority, InvalidUri> {
+fn remove_credentials(authority: &http::uri::Authority) -> Result<Authority, InvalidUri> {
     authority.as_str().split_once('@').map_or_else(
-        || Ok(authority.clone()),
+        || Ok(Authority::from(authority)),
         |(_credentials, domain)| Authority::from_str(domain),
     )
 }

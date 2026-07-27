@@ -9,6 +9,9 @@
 
 use type_safe_id::{StaticType, TypeSafeId};
 
+// fsp = firma secret placeholder
+pub const PLACEHOLDER_PREFIX: &str = "fsp_";
+
 /// Opaque token substituted for a secret value in extraction output.
 ///
 /// Minted per extracted secret and returned to the caller-supplied `mint`
@@ -22,6 +25,19 @@ pub type SecretPlaceholder = TypeSafeId<Inner>;
 pub struct Inner;
 
 impl StaticType for Inner {
-    // fsp = firma secret placeholder
+    // must be `PLACEHOLDER_PREFIX` without the final underscore
     const TYPE: &'static str = "fsp";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_prefix_is_aligned() {
+        assert_eq!(
+            <Inner as StaticType>::TYPE,
+            &PLACEHOLDER_PREFIX[0..PLACEHOLDER_PREFIX.len() - 1]
+        );
+    }
 }
