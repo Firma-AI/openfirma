@@ -112,6 +112,14 @@ agent call passes through the Sidecar before reaching external systems.
   path.
 - `firma-config-loader` — shared `firma.toml` discovery, schema loading, and
   agent profile parsing used by the CLI and runtime crates.
+- `firma-secret-provider` — secret-provider spec types (`IntegrationSpec`:
+  `Cli`/`Http` variants), the built-in `IntegrationRegistry` of CLI vault
+  specs, the extraction engine (`CompiledMatcher`, `SecretPlaceholder`), and
+  the `GatewayRequest` wire types for the Sidecar↔broker secret-gateway
+  protocol. Shared by `firma-run` (CLI vault shims, via
+  `secret_providers` config) and `firma-sidecar` (HTTP vault MITM
+  interception, via the mirrored `http_secret_providers` config). Depends
+  only on `firma-core` and `firma-http` among Firma crates.
 
 ### Key Invariants
 
