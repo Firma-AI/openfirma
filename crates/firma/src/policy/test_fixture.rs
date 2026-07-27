@@ -194,8 +194,8 @@ fn evaluate_to_outcome(path: &Path) -> Outcome {
 ///
 /// Mirrors the Sidecar hot path: the agent id is parsed into an
 /// [`AgentId`] (enforcing the `[a-zA-Z0-9_-]{1,128}` shape) before becoming
-/// a `Firma::Agent` UID; action class and resource host become
-/// `Firma::Action` / `Firma::Resource` UIDs verbatim. Any parse failure is
+/// a `Firma::Agent` UID; action class becomes a `Firma::Action` UID verbatim;
+/// the resource host becomes a `Firma::Resource` UID. Any parse failure is
 /// returned as a ready-to-print fail-closed diagnostic.
 fn build_uids(fixture: &Fixture) -> Result<(EntityUid, EntityUid, EntityUid), String> {
     let agent_id = fixture
