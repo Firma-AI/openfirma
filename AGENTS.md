@@ -128,7 +128,9 @@ agent call passes through the Sidecar before reaching external systems.
 - `firma-secret-provider` — secret-provider spec types (`IntegrationSpec`:
   `Cli`/`Http` variants), the built-in `IntegrationRegistry` of CLI vault
   specs, the extraction engine (`CompiledMatcher`, `SecretPlaceholder`), and
-  the `GatewayRequest` wire types for the Sidecar↔broker secret-gateway
+  the `gateway` module: the `GatewayRequest` wire types plus the
+  `GatewayClient` transport (`resolve_batch`/`push_secret` over a
+  `unix:`/`tcp:` `GatewayEndpoint`) for the Sidecar↔broker secret-gateway
   protocol. Shared by `firma-run` (CLI vault shims, via
   `secret_providers` config) and `firma-sidecar` (HTTP vault MITM
   interception, via the mirrored `http_secret_providers` config). Depends

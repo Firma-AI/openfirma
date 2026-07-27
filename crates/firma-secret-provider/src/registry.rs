@@ -16,19 +16,19 @@
 //! ## Fail-closed subcommand resolution
 //!
 //! Each built-in spec lists rules for the invocation shapes it recognizes.
-//! A [`CliMatcherRule::SensitiveCommand`] is a known secret-emitting shape
-//! (extract and redact); a [`CliMatcherRule::SafeCommand`] is a known-safe
+//! A [`MatcherRule::SensitiveCommand`] is a known secret-emitting shape
+//! (extract and redact); a [`MatcherRule::SafeCommand`] is a known-safe
 //! pass-through (e.g. a `list` subcommand that only ever returns names/ids,
-//! never secret values); a [`CliMatcherRule::BlockedCommand`] is a known
+//! never secret values); a [`MatcherRule::BlockedCommand`] is a known
 //! secret-emitting shape this registry has no way to extract or redact from
 //! (e.g. a subcommand that injects secrets as env vars for a child process,
 //! or prints a bare secret value with no structure a matcher can anchor on)
 //! and is therefore forbidden outright rather than forwarded unredacted. Per
-//! [`CliIntegrationSpec::resolve_args`](crate::CliIntegrationSpec::resolve_args),
+//! [`CliIntegrationSpec::resolve_args`](crate::spec::cli::CliIntegrationSpec::resolve_args),
 //! blocked commands are checked first, then sensitive, then safe; an
 //! invocation whose args match none of the three is also
-//! [`CliArgsResolution::Blocked`](crate::CliArgsResolution::Blocked) — fail
-//! closed by default, on the assumption that an unrecognized invocation
+//! [`MatchingResolution::Blocked`](crate::spec::MatchingResolution::Blocked)
+//! — fail closed by default, on the assumption that an unrecognized invocation
 //! shape may emit secret material this registry has no way to extract or
 //! redact. See each built-in's function-level doc comment below for the
 //! specific retrieval paths explicitly blocked or implicitly closed off for
@@ -204,8 +204,7 @@ fn op_spec() -> CliIntegrationSpec {
                         path: String::from("$.label"),
                     },
                     // $.title is the item name (e.g. "GitHub"); broadcast to
-                    // every extracted field to form the two-segment placeholder
-                    // firma-secret://1password/{item}/{name}.
+                    // every extracted field, for now for debugging purposes only.
                     item_selector: Some(SecretJsonSelector {
                         path: String::from("$.title"),
                         scope: SecretJsonSelectorScope::Document,

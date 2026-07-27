@@ -8,21 +8,27 @@ repository.workspace = true
 description = "Secret-provider spec types and extraction engine shared by firma-run and firma-sidecar"
 
 [dependencies]
+base64 = { workspace = true }
+bytesize = { workspace = true, features = ["serde"] }
 either = { workspace = true }
 firma-core = { workspace = true }
 firma-http = { workspace = true }
 http = { workspace = true }
+jiff = { workspace = true, features = ["serde"] }
 regex = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_json_path = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, default-features = false, features = ["fs", "io-util", "net", "time"] }
 tracing = { workspace = true }
 type-safe-id = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, default-features = false, features = ["macros"] }
 
 [lints]
 workspace = true

@@ -60,6 +60,7 @@ async-stream = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
 block2 = "0.6"
+bytesize = "2.7"
 cedar-policy = "3"
 cedar-policy-core = "3"
 chrono = { version = "0.4", features = ["serde"] }
@@ -85,9 +86,11 @@ firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.1.
 firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.5" }
 firma-stack = { path = "crates/firma-stack", version = "0.1.5" }
 firma-tui = { path = "crates/firma-tui", version = "0.1.5" }
+form_urlencoded = "1"
 fs-err = "3.3"
 fs2 = "0.4.3"
 governor = "0.10"
+headers = "0.4"
 hex = "0.4"
 http = "1"
 http-body = "1"
@@ -95,9 +98,11 @@ http-body-util = "0.1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 insta = { version = "1", features = ["filters", "json", "redactions"] }
+jiff = "0.2"
 libc = "0.2"
 lru = "0.17"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
+mime = "0.3"
 nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 notify = "8"
 objc2 = "0.6"
@@ -110,6 +115,7 @@ pretty_assertions = "1"
 proptest = "1"
 prost = "0.14"
 prost-types = "0.14"
+quick-xml = "0.41"
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }
 regex = "1"

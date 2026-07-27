@@ -18,7 +18,7 @@ use type_safe_id::{StaticType, TypeSafeId};
 pub type SecretPlaceholder = TypeSafeId<Inner>;
 
 /// Marker type binding [`SecretPlaceholder`] to its `fsp` `TypeSafeId` prefix.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Inner;
 
 impl StaticType for Inner {
