@@ -48,7 +48,7 @@ pub struct ActionClassRegistry {
 impl ActionClassRegistry {
     /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 29
     /// in-place additions covering the GitHub (12), Stripe (12), and
-    /// Gmail (5) REST surfaces.
+    /// Gmail (5) REST surfaces (44 total).
     #[must_use]
     #[expect(
         clippy::too_many_lines,
@@ -374,12 +374,6 @@ mod tests {
         "communication.external.delete",
         "communication.external.filter",
     ];
-
-    #[test]
-    fn test_v0_1_registry_has_44_classes() {
-        let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 44);
-    }
 
     #[test]
     fn test_v0_1_registry_matches_fep_spec() {

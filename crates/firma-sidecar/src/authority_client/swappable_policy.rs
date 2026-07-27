@@ -121,3 +121,68 @@ impl PolicyEvaluation for DenyAllPolicyEvaluation {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct PermitPolicy;
+
+    impl PolicyEvaluation for PermitPolicy {
+        fn evaluate(
+            &self,
+            _principal: &AgentId,
+            _action: &str,
+            _resource: &str,
+            _context: serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn is_fresh(&self) -> bool {
+            true
+        }
+
+        fn version(&self) -> Option<String> {
+            None
+        }
+    }
+
+    fn agent() -> AgentId {
+        "agt_01j0000000e008000000000001"
+            .parse()
+            .expect("valid agent id")
+    }
+
+    #[test]
+    fn initial_deny_all_snapshot_denies_and_reports_stale() {
+        let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
+        let decision = swap
+            .evaluate(
+                &agent(),
+                "communication.external.send",
+                "res",
+                serde_json::json!({}),
+            )
+            .expect("decision");
+        assert!(!decision);
+        assert!(!swap.is_fresh());
+    }
+
+    #[test]
+    fn swapped_snapshot_is_forwarded() {
+        let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
+        swap.swap(Box::new(PermitPolicy), 30, Some("v1".to_string()));
+        let decision = swap
+            .evaluate(
+                &agent(),
+                "communication.external.send",
+                "res",
+                serde_json::json!({}),
+            )
+            .expect("decision");
+        assert!(decision);
+        assert!(swap.is_fresh());
+        assert_eq!(swap.version(), Some("v1".to_string()));
+    }
+}
