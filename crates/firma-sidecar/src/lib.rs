@@ -46,4 +46,6 @@ pub mod normalizer;
 pub mod pipeline;
 #[cfg(unix)]
 pub mod run_audit;
+pub mod secret_gateway_client;
+pub mod secret_rewrite;
 pub mod startup;
