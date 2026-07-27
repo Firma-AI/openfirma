@@ -1,5 +1,5 @@
 use firma_core::SecretJsonSelectorScope;
-use firma_secret_provider::{CompiledMatcher, MatcherError};
+use firma_secret_provider::{CompiledMatcher, MatcherError, SecretPlaceholder};
 
 use crate::support::{json, json_with_metadata, selector};
 
@@ -12,7 +12,7 @@ fn secret_does_not_leak_contents() {
             br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB"}]"#,
             &mut |_, value, _, _| {
                 secrets.push((value.to_string(), format!("{value:?}")));
-                String::new()
+                SecretPlaceholder::new()
             },
         )
         .unwrap();
@@ -38,7 +38,9 @@ fn hostless_uri_error_does_not_expose_domain_value() {
     let compiled = CompiledMatcher::compile(&matcher).unwrap();
     let output = format!(r#"[{{"key":"token","value":"AAA","domain":"{sensitive_domain}"}}]"#);
     let error = compiled
-        .rewrite(output.as_bytes(), &mut |_, _, _, _| String::new())
+        .rewrite(output.as_bytes(), &mut |_, _, _, _| {
+            SecretPlaceholder::new()
+        })
         .unwrap_err();
 
     std::assert_matches!(&error, MatcherError::NoHostInUri(uri) if uri == "/vault/path");
@@ -61,7 +63,9 @@ fn authenticated_uri_error_does_not_expose_domain_value() {
     let compiled = CompiledMatcher::compile(&matcher).unwrap();
     let output = format!(r#"[{{"key":"token","value":"AAA","domain":"{sensitive_domain}"}}]"#);
     let error = compiled
-        .rewrite(output.as_bytes(), &mut |_, _, _, _| String::new())
+        .rewrite(output.as_bytes(), &mut |_, _, _, _| {
+            SecretPlaceholder::new()
+        })
         .unwrap_err();
 
     std::assert_matches!(
@@ -88,11 +92,11 @@ fn authenticated_uri_is_sanitized_and_credentials_are_stripped() {
         .rewrite(
             br#"[{"key":"token","value":"AAA","domain":"http://username:password@example.com/path"}]"#, // trufflehog:ignore
             &mut |_, _, domain, _| {
-                domains.push(domain.map(ToString::to_string));
-                String::new()
+                domains.push(domain.iter().map(ToString::to_string).collect::<Vec<_>>());
+                SecretPlaceholder::new()
             },
         )
         .unwrap();
 
-    assert_eq!(domains, [Some("example.com".into())]);
+    assert_eq!(domains, [vec!["example.com".to_owned()]]);
 }

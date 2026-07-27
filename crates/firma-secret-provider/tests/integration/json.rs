@@ -1,7 +1,6 @@
-use firma_secret_provider::{CompiledMatcher, MatcherError};
-use serde_json::Value;
+use firma_secret_provider::{CompiledMatcher, MatcherError, SecretPlaceholder};
 
-use crate::support::json;
+use crate::support::{json, json_record_key_name};
 
 #[test]
 fn relative_paths_rewrite_absolute_escaped_locations() {
@@ -16,25 +15,18 @@ fn relative_paths_rewrite_absolute_escaped_locations() {
         .rewrite(
             br#"{"groups":{"a/b~c":[{"credentials":{"key":"first","v/~":"AAA"}},{"credentials":{"key":"second","v/~":"BBB"}}]},"credentials":{"v/~":"ROOT"}}"#,
             &mut |name, value, _, _| {
-                pairs.push((name.to_owned(), value.expose().to_owned()));
-                format!("P:{name}")
+                pairs.push((name, value.expose().to_owned()));
+                SecretPlaceholder::new()
             },
         )
         .unwrap();
-    let output: Value = serde_json::from_slice(&output).unwrap();
+    let output = String::from_utf8(output).expect("valid utf8");
 
-    assert_eq!(
-        output,
-        serde_json::json!({
-            "groups": {
-                "a/b~c": [
-                    {"credentials": {"key": "first", "v/~": "P:first"}},
-                    {"credentials": {"key": "second", "v/~": "P:second"}}
-                ]
-            },
-            "credentials": {"v/~": "ROOT"}
-        })
-    );
+    insta::with_settings!({
+        filters => vec![(r"fsp_[0-9a-z]{26}", "[placeholder]")],
+    }, {
+        insta::assert_snapshot!("relative_paths_rewrite_absolute_escaped_locations", output);
+    });
     assert_eq!(
         pairs,
         [
@@ -49,22 +41,68 @@ fn root_relative_self_selection_rewrites_the_record() {
     let compiled = CompiledMatcher::compile(&json("$.token", "$", "$")).unwrap();
     let output = compiled
         .rewrite(br#"{"token":"AAA","other":"AAA"}"#, &mut |_, _, _, _| {
-            "PLACEHOLDER".to_owned()
+            SecretPlaceholder::new()
         })
         .unwrap();
-    let output: Value = serde_json::from_slice(&output).unwrap();
+    let output = String::from_utf8(output).expect("valid utf8");
 
+    insta::with_settings!({
+        filters => vec![(r"fsp_[0-9a-z]{26}", "[placeholder]")],
+    }, {
+        insta::assert_snapshot!("root_relative_self_selection_rewrites_the_record", output);
+    });
+}
+
+#[test]
+fn record_key_name_is_derived_from_the_records_own_json_pointer() {
+    let compiled = CompiledMatcher::compile(&json_record_key_name("$.data.data.*", "$")).unwrap();
+    let mut pairs = Vec::new();
+    let output = compiled
+        .rewrite(
+            br#"{"data":{"data":{"password":"hunter2","user":"admin"},"metadata":{"version":1}}}"#,
+            &mut |name, value, _, _| {
+                pairs.push((name, value.expose().to_owned()));
+                SecretPlaceholder::new()
+            },
+        )
+        .unwrap();
+    let output = String::from_utf8(output).expect("valid utf8");
+
+    insta::with_settings!({
+        filters => vec![(r"fsp_[0-9a-z]{26}", "[placeholder]")],
+    }, {
+        insta::assert_snapshot!("record_key_name_is_derived_from_the_records_own_json_pointer", output);
+    });
     assert_eq!(
-        output,
-        serde_json::json!({"token": "PLACEHOLDER", "other": "AAA"})
+        pairs,
+        [
+            ("password".into(), "hunter2".into()),
+            ("user".into(), "admin".into())
+        ]
     );
+}
+
+#[test]
+fn record_key_name_fails_closed_when_record_has_no_parent_key() {
+    let compiled = CompiledMatcher::compile(&json_record_key_name("$", "$")).unwrap();
+    let error = compiled
+        .rewrite(br#""bare-secret""#, &mut |_, _, _, _| {
+            SecretPlaceholder::new()
+        })
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::RecordKeyUnavailable { record_index: 0 }
+    );
+    insta::assert_snapshot!(error.to_string(), @"json matcher name (record_key) has no parent key in record 0");
 }
 
 #[test]
 fn zero_records_fails_closed() {
     let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
     let error = compiled
-        .rewrite(br"[]", &mut |_, _, _, _| String::new())
+        .rewrite(br"[]", &mut |_, _, _, _| SecretPlaceholder::new())
         .unwrap_err();
 
     std::assert_matches!(&error, MatcherError::NoRecords);
@@ -81,8 +119,8 @@ fn missing_record_value_fails_before_minting() {
         .rewrite(
             br#"[{"credentials":{"key":"a","value":"AAA"}},{"credentials":{"key":"b"}}]"#,
             &mut |name, _, _, _| {
-                minted.push(name.to_owned());
-                String::new()
+                minted.push(name);
+                SecretPlaceholder::new()
             },
         )
         .unwrap_err();
@@ -108,7 +146,7 @@ fn multiple_record_name_matches_fail_before_minting() {
             br#"[{"value":"AAA","name":"a"},{"value":"BBB","name":"b","nested":{"name":"other"}}]"#,
             &mut |_, _, _, _| {
                 mint_count += 1;
-                String::new()
+                SecretPlaceholder::new()
             },
         )
         .unwrap_err();
@@ -116,12 +154,12 @@ fn multiple_record_name_matches_fail_before_minting() {
     std::assert_matches!(
         &error,
         MatcherError::RecordSelectorMatchCount {
-            selector: "name_path",
+            selector: "name",
             record_index: 1,
             matches: 2
         }
     );
-    insta::assert_snapshot!(error.to_string(), @"json matcher name_path selected 2 node(s) in record 1; expected exactly one");
+    insta::assert_snapshot!(error.to_string(), @"json matcher name selected 2 node(s) in record 1; expected exactly one");
     assert_eq!(mint_count, 0);
 }
 
@@ -131,19 +169,19 @@ fn json_empty_matches_are_rejected() {
     let mut minted = Vec::new();
     let error = compiled
         .rewrite(br#"[{"key":" ","value":"AAA"}]"#, &mut |name, _, _, _| {
-            minted.push(name.to_owned());
-            String::new()
+            minted.push(name);
+            SecretPlaceholder::new()
         })
         .unwrap_err();
 
     std::assert_matches!(
         &error,
         MatcherError::EmptyNode {
-            selector: "name_path",
+            selector: "name",
             record_index: 0,
         }
     );
-    insta::assert_snapshot!(error.to_string(), @"json matcher name_path selected a whitespace string in record 0");
+    insta::assert_snapshot!(error.to_string(), @"json matcher name selected a whitespace string in record 0");
     assert!(minted.is_empty());
 }
 
@@ -151,7 +189,9 @@ fn json_empty_matches_are_rejected() {
 fn invalid_json_is_classified_with_its_location() {
     let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
     let error = compiled
-        .rewrite(br#"{"key":"value""#, &mut |_, _, _, _| String::new())
+        .rewrite(br#"{"key":"value""#, &mut |_, _, _, _| {
+            SecretPlaceholder::new()
+        })
         .unwrap_err();
 
     std::assert_matches!(
@@ -168,7 +208,7 @@ fn non_string_value_is_rejected() {
     let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
     let error = compiled
         .rewrite(br#"[{"key":"token","value":42}]"#, &mut |_, _, _, _| {
-            String::new()
+            SecretPlaceholder::new()
         })
         .unwrap_err();
 
