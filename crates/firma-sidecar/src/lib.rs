@@ -48,4 +48,5 @@ pub mod pipeline;
 #[cfg(unix)]
 pub mod run_audit;
 pub mod secret_rewrite;
+pub mod secret_store;
 pub mod startup;

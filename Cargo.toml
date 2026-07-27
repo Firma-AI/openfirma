@@ -54,6 +54,7 @@ inherits = "release"
 lto = "thin"
 
 [workspace.dependencies]
+aho-corasick = "1"
 anyhow = "1"
 arbitrary = "1"
 arc-swap = "1"

@@ -11,6 +11,7 @@ description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 loom-tests = []
 
 [dependencies]
+aho-corasick = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
