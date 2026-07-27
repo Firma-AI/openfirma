@@ -1523,6 +1523,7 @@ dependencies = [
  "arbitrary",
  "http",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
