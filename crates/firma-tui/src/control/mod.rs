@@ -7,10 +7,12 @@ mod command;
 mod error;
 mod event;
 mod input;
+mod policies;
 mod render;
 mod runner;
 mod state;
 mod terminal;
+mod toggle;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,15 +22,20 @@ pub use announcement::ControlAnnouncement;
 pub use app::App;
 pub use bindings::{BindingHint, footer_entries};
 pub use command::{ControlCommand, ControlEffect, SelectionMovement};
-pub use error::{AuditSourceError, ControlError, ErrorMessage, RuntimeError};
+pub use error::{
+    AuditSourceError, ControlError, EditorError, ErrorMessage, PolicyDiscoveryError,
+    PolicyRewriteError, RuntimeError,
+};
 pub use event::{Event, Sources, TerminalEventSource, next_with_terminal};
 pub use input::{command_for_key, handle_key};
+pub use policies::PolicyStateReader;
 pub use render::render;
 pub use runner::{ControlCrankOutcome, EventKind, HeadlessRunner};
 pub use state::{
     AuditDecision, AuditFilter, AuditRow, AuditViewportMode, ControlRuntimeState, ControlStatus,
-    Pane,
+    Pane, PolicyRow, PolicyRowStatus,
 };
+pub use toggle::PolicyState;
 
 /// Options used to start Policy Control.
 #[derive(Default)]
@@ -53,6 +60,21 @@ impl ControlOptions {
         self.policy_dir = Some(policy_dir);
         self
     }
+}
+
+/// Reads one policy state from a Cedar source file.
+#[must_use]
+pub fn read_policy_state(path: &std::path::Path, policy_id: &str) -> PolicyState {
+    toggle::read_policy_state(path, policy_id)
+}
+
+/// Reads several policy states from one Cedar source file.
+#[must_use]
+pub fn read_policy_states(
+    path: &std::path::Path,
+    policy_ids: &[String],
+) -> std::collections::HashMap<String, PolicyState> {
+    toggle::read_policy_states(path, policy_ids)
 }
 
 /// Runs the Policy Control event loop.

@@ -5,3 +5,4 @@ mod render;
 mod runner;
 mod status;
 mod support;
+mod toggle;

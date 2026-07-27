@@ -1,19 +1,32 @@
-use std::path::PathBuf;
-
-use crate::support::{app_with_audit_rows, audit_row, render_text};
+use crate::support::{app_with_audit_rows, app_with_default_policies, audit_row, render_text};
 use firma_tui::control::{App, AuditDecision, AuditFilter};
 
 #[test]
-fn empty_state_renders_policy_context_and_empty_audit() -> anyhow::Result<()> {
-    let app = App::new(Some(PathBuf::from("/tmp/policies")), false);
+fn empty_state_renders_policy_and_audit_messages() -> anyhow::Result<()> {
+    let app = App::new(None, false);
 
-    let text = render_text(&app, 100, 24)?;
+    let text = render_text(&app, 180, 24)?;
 
     assert!(text.contains("OPENFIRMA"));
     assert!(text.contains("Policies"));
     assert!(text.contains("Audit"));
-    assert!(text.contains("policy dir: /tmp/policies"));
+    assert!(text.contains("No policies configured."));
+    assert!(text.contains("Add @id(...) Cedar policies to the policy directory."));
     assert!(text.contains("No audit events buffered."));
+
+    Ok(())
+}
+
+#[test]
+fn policy_table_renders_discovered_rows() -> anyhow::Result<()> {
+    let (_temp, app) = app_with_default_policies()?;
+
+    let text = render_text(&app, 120, 24)?;
+
+    assert!(text.contains("[ on ]"));
+    assert!(text.contains("[ off ]"));
+    assert!(text.contains("first-policy"));
+    assert!(text.contains("second-policy"));
 
     Ok(())
 }

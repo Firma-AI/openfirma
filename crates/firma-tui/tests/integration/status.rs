@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-
-use crate::support::{audit_row, status_snapshot};
-use firma_tui::control::{App, AuditDecision, ControlError, ControlRuntimeState};
+use crate::support::{
+    DEFAULT_POLICY_SOURCE, OTHER_POLICY_SOURCE, app_with_policy_files, audit_row, status_snapshot,
+};
+use firma_tui::control::{App, AuditDecision, ControlRuntimeState};
 
 #[test]
 fn initial_status_with_no_policy_dir() {
@@ -29,21 +29,28 @@ last_policy_error: none
 }
 
 #[test]
-fn status_tracks_policy_dir() {
-    let policy_dir = PathBuf::from("/tmp/openfirma-policy-dir");
-    let app = App::new(Some(policy_dir.clone()), false);
+fn status_with_policy_dir_and_policy_count() -> anyhow::Result<()> {
+    let (temp, app) = app_with_policy_files(&[
+        ("default.cedar", DEFAULT_POLICY_SOURCE),
+        ("other.cedar", OTHER_POLICY_SOURCE),
+    ])?;
 
-    assert_eq!(app.status().policy_dir.as_ref(), Some(&policy_dir));
-    insta::assert_snapshot!(status_snapshot(&app.status(), Some(&policy_dir)), @"
+    let status = app.status();
+
+    assert_eq!(status.policy_dir.as_deref(), Some(temp.path()));
+    assert_eq!(status.policy_count, 4);
+    insta::assert_snapshot!(status_snapshot(&status, Some(temp.path())), @"
 runtime_state: running
 policy_dir: <policy-dir>
-policy_count: 0
+policy_count: 4
 audit_connected: false
 audit_rows: 0
 rewrite_queue_len: 0
 pending_rewrites: 0
 last_policy_error: none
 ");
+
+    Ok(())
 }
 
 #[test]
@@ -108,10 +115,11 @@ last_policy_error: none
 }
 
 #[test]
-fn status_records_last_policy_error() {
-    let mut app = App::new(None, false);
+fn status_records_last_policy_error() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let missing_dir = temp.path().join("missing");
+    let app = App::new(Some(missing_dir), false);
 
-    app.set_policy_error(ControlError::runtime("terminal failed"));
     let error_status = app.status();
 
     assert_eq!(error_status.runtime_state, ControlRuntimeState::Error);
@@ -126,6 +134,8 @@ rewrite_queue_len: 0
 pending_rewrites: 0
 last_policy_error: present
 ");
+
+    Ok(())
 }
 
 #[test]

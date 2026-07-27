@@ -1,8 +1,12 @@
 use crate::support::{
-    app_with_audit_rows, audit_row, handle_key, last_visible_audit_index, selected_audit_resource,
+    app_with_audit_rows, app_with_default_policies, app_with_policy_files, audit_row, handle_key,
+    last_visible_audit_index, policy_status, selected_audit_resource,
 };
 use crossterm::event::KeyCode;
-use firma_tui::control::{App, AuditDecision, AuditFilter, AuditViewportMode, Pane};
+use firma_tui::control::{
+    App, AuditDecision, AuditFilter, AuditViewportMode, ControlError, Pane, PolicyDiscoveryError,
+    PolicyRowStatus, PolicyState,
+};
 
 #[test]
 fn tab_switches_panes() {
@@ -15,6 +19,111 @@ fn tab_switches_panes() {
 
     handle_key(&mut app, KeyCode::Tab);
     assert_eq!(app.selected_pane(), Pane::Policies);
+}
+
+#[test]
+fn j_k_and_arrows_clamp_policy_selection() -> anyhow::Result<()> {
+    let (_temp, mut app) = app_with_default_policies()?;
+
+    assert_eq!(app.selected_policy_index(), 0);
+
+    handle_key(&mut app, KeyCode::Char('k'));
+    handle_key(&mut app, KeyCode::Up);
+    assert_eq!(app.selected_policy_index(), 0);
+
+    handle_key(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.selected_policy_index(), 1);
+
+    handle_key(&mut app, KeyCode::Down);
+    handle_key(&mut app, KeyCode::Down);
+    handle_key(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.selected_policy_index(), 2);
+
+    handle_key(&mut app, KeyCode::Char('k'));
+    handle_key(&mut app, KeyCode::Up);
+    assert_eq!(app.selected_policy_index(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn gg_jumps_to_first_policy_row() -> anyhow::Result<()> {
+    let (_temp, mut app) = app_with_default_policies()?;
+
+    app.move_selection_last();
+    assert_eq!(app.selected_policy_index(), 2);
+
+    handle_key(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.selected_policy_index(), 2);
+
+    handle_key(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.selected_policy_index(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn policy_rows_reflect_cedar_disabled_state() -> anyhow::Result<()> {
+    let (_temp, app) = app_with_default_policies()?;
+
+    assert_eq!(
+        policy_status(&app, "first_policy"),
+        Some(PolicyRowStatus::State(PolicyState::Enabled))
+    );
+    assert_eq!(
+        policy_status(&app, "second_policy"),
+        Some(PolicyRowStatus::State(PolicyState::Disabled))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn policy_discovery_ignores_unannotated_cedar_policies() -> anyhow::Result<()> {
+    let source = format!(
+        r"
+permit (
+    principal,
+    action,
+    resource
+);
+{}
+",
+        crate::support::permit_policy("visible_policy")
+    );
+    let (_temp, app) = app_with_policy_files(&[("policies.cedar", &source)])?;
+
+    assert_eq!(app.policies().len(), 1);
+    assert_eq!(
+        app.policies().first().map(|policy| policy.id.as_str()),
+        Some("visible_policy")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn policy_discovery_reports_duplicate_ids() -> anyhow::Result<()> {
+    let source = format!(
+        "{}{}",
+        crate::support::permit_policy("duplicate_policy"),
+        crate::support::permit_policy("duplicate_policy")
+    );
+    let temp = tempfile::tempdir()?;
+    crate::support::write_named_policy_file(temp.path(), "policies.cedar", &source)?;
+    let app = App::new(Some(temp.path().to_path_buf()), false);
+
+    let Some(ControlError::PolicyDiscovery { error, .. }) = app.policy_error() else {
+        anyhow::bail!("duplicate policy id did not produce a discovery error");
+    };
+    assert_eq!(
+        error.as_ref(),
+        &PolicyDiscoveryError::DuplicateId {
+            id: "duplicate_policy".to_string()
+        }
+    );
+
+    Ok(())
 }
 
 #[test]

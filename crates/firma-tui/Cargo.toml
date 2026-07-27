@@ -11,8 +11,11 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+cedar-policy = { workspace = true }
+cedar-policy-core = { workspace = true }
 crossterm = "0.28"
 ratatui = "0.30"
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
