@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 chrono.workspace = true
 ctrlc.workspace = true
 dialoguer.workspace = true
@@ -22,6 +23,7 @@ firma-identifiers.workspace = true
 firma-process-orchestrator.workspace = true
 firma-protobuf.workspace = true
 firma-runtime-state.workspace = true
+firma-secret-provider.workspace = true
 firma-sidecar.workspace = true
 hex.workspace = true
 p256 = { workspace = true }

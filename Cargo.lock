@@ -1685,6 +1685,7 @@ name = "firma-run"
 version = "0.1.6"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "ctrlc",
  "dialoguer",
@@ -1697,6 +1698,7 @@ dependencies = [
  "firma-process-orchestrator",
  "firma-protobuf",
  "firma-runtime-state",
+ "firma-secret-provider",
  "firma-sidecar",
  "firma-test-helpers",
  "fs-err",
