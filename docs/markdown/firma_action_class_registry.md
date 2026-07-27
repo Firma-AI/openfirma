@@ -120,6 +120,19 @@ for the actual send verbs; settings that change deliverability boundaries
 | `communication.external.delete` | Communication | High     | Permanently delete messages or threads          |
 | `communication.external.filter` | Communication | Critical | Create / delete server-side mail filters        |
 
+### Google Calendar coverage — extended in-place
+
+The registry appends four calendar-domain classes for Composio's pinned Google
+Calendar catalog. These semantic classes apply regardless of transport or
+provider.
+
+| Action class      | Domain   | Risk   | Notes                              |
+| ----------------- | -------- | ------ | ---------------------------------- |
+| `calendar.read`   | Calendar | Low    | Read calendars, events, and access |
+| `calendar.create` | Calendar | Medium | Create calendars or events         |
+| `calendar.update` | Calendar | Medium | Update calendars or events         |
+| `calendar.delete` | Calendar | High   | Delete calendars or events         |
+
 ### Out-of-band audit classes (not policy-evaluated)
 
 Some enforcement happens _outside_ the Sidecar's request pipeline and so never

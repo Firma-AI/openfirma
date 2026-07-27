@@ -230,7 +230,7 @@ impl ConstraintEnforcer {
         let context = self.build_context(envelope, claims, signals)?;
 
         // Step 5: Evaluate policies (verdict carries AARM R4 remediation)
-        let resource_display = envelope.intent.resource_display();
+        let resource_display = envelope.intent.policy_resource_display();
         let verdict = self
             .policy
             .evaluate_verdict(
@@ -320,7 +320,7 @@ impl ConstraintEnforcer {
         let policy = Arc::clone(&self.policy);
         let principal = claims.agent_id;
         let action = envelope.intent.action_class.clone();
-        let resource = envelope.intent.resource_display();
+        let resource = envelope.intent.policy_resource_display();
         let eval_task = tokio::task::spawn_blocking(move || {
             policy.evaluate_verdict(&principal, &action, &resource, context)
         });
@@ -367,7 +367,7 @@ impl ConstraintEnforcer {
                 detail: format!(
                     "policy denied action '{}' on resource '{}'",
                     envelope.intent.action_class,
-                    envelope.intent.resource_display()
+                    envelope.intent.policy_resource_display()
                 ),
                 envelope: Some(envelope.clone()),
                 identity: None,
@@ -389,7 +389,7 @@ impl ConstraintEnforcer {
         claims: &CapabilityClaims,
     ) -> Result<(), EnforcementDecision> {
         let action = &envelope.intent.action_class;
-        let resource = envelope.intent.resource_display();
+        let resource = envelope.intent.policy_resource_display();
 
         if claims.action_set.iter().any(|a| a == "*") {
             if matches_resource_scope(&claims.resource_scope, &resource) {
@@ -557,8 +557,73 @@ impl ConstraintEnforcer {
                 context.insert(key.to_string(), serde_json::json!(value));
             }
         }
+        insert_composio_context(&mut context, envelope)?;
 
         Ok(serde_json::Value::Object(context))
+    }
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "the error variant is the fail-closed enforcement decision"
+)]
+fn insert_composio_context(
+    context: &mut serde_json::Map<String, serde_json::Value>,
+    envelope: &NormalizedEnvelope,
+) -> Result<(), EnforcementDecision> {
+    for key in [
+        "composio_toolkit",
+        "composio_tool_slug",
+        "composio_user_id",
+        "composio_account",
+        "composio_session_id",
+    ] {
+        if let Some(value) = envelope
+            .intent
+            .resource
+            .get(key)
+            .filter(|value| !value.is_empty())
+        {
+            context.insert(key.to_string(), serde_json::json!(value));
+        }
+    }
+
+    let batch_index = envelope.intent.resource.get("composio_batch_index");
+    let batch_size = envelope.intent.resource.get("composio_batch_size");
+    match (batch_index, batch_size) {
+        (None, None) => Ok(()),
+        (Some(index), Some(size)) => {
+            let parsed_index = index.parse::<u32>();
+            let parsed_size = size.parse::<u32>();
+            let (Ok(index), Ok(size)) = (parsed_index, parsed_size) else {
+                return Err(invalid_composio_batch(envelope));
+            };
+            if size == 0 || size > 50 || index >= size {
+                return Err(invalid_composio_batch(envelope));
+            }
+            context.insert(
+                "composio_batch_index".to_string(),
+                serde_json::json!(i64::from(index)),
+            );
+            context.insert(
+                "composio_batch_size".to_string(),
+                serde_json::json!(i64::from(size)),
+            );
+            Ok(())
+        }
+        (Some(_), None) | (None, Some(_)) => Err(invalid_composio_batch(envelope)),
+    }
+}
+
+fn invalid_composio_batch(envelope: &NormalizedEnvelope) -> EnforcementDecision {
+    EnforcementDecision::Deny {
+        reason: DenyReason::FailClosed,
+        stage: EnforcementStage::ConstraintEnforcement(
+            ConstraintEnforcementStage::PolicyEvaluation,
+        ),
+        detail: "invalid Composio batch context; failing closed".to_string(),
+        envelope: Some(envelope.clone()),
+        identity: None,
     }
 }
 

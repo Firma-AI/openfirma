@@ -65,6 +65,10 @@ impl std::fmt::Display for ActionClass {
 action_classes! {
     AccountPermissionChange => "account.permission.change",
     BrowserPurchase => "browser.purchase",
+    CalendarCreate => "calendar.create",
+    CalendarDelete => "calendar.delete",
+    CalendarRead => "calendar.read",
+    CalendarUpdate => "calendar.update",
     CodeDestructive => "code.destructive",
     CodeMerge => "code.merge",
     CodeRead => "code.read",

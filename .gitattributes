@@ -1,0 +1,6 @@
+# Composio catalog snapshots are refreshed from the Composio API by
+# scripts/composio_catalog.py and carry no hand-written content. Collapse them
+# in diffs so review attention lands on the mapping files, which hold the
+# manually assigned action class for every tool.
+crates/firma-sidecar/config/composio/*.json linguist-generated=true
+crates/firma-sidecar/config/composio/*.mapping.json linguist-generated=false

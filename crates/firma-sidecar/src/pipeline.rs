@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use crate::audit::{AuditPayload, Decision};
 use crate::authority_client::readiness::ReadinessView;
+use crate::composio::ComposioAction;
 use crate::config::SidecarMode;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::SessionStateStore;
@@ -48,6 +49,44 @@ pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 /// local-exec default so the agent retry cadence is consistent across both
 /// enforcement surfaces.
 const STEP_UP_RETRY_AFTER_MS: u64 = 500;
+
+/// Per-action result produced by composite enforcement.
+#[derive(Debug)]
+pub struct CompositeActionResult {
+    /// The child's complete enforcement decision.
+    pub decision: EnforcementDecision,
+    /// The child's logical audit payload.
+    pub audit_payload: AuditPayload,
+}
+
+/// Aggregate dispatch outcome for one composite transport request.
+#[derive(Debug)]
+pub enum CompositeDisposition {
+    /// Dispatch the original transport request exactly once.
+    Dispatch {
+        /// An admitted child's immutable envelope and credentials.
+        ///
+        /// This is absent when monitor mode forwards a request for which every
+        /// child would have blocked before credential injection.
+        transport: Option<(Box<ExecutionEnvelope>, InjectedCredentials)>,
+        /// Whether the dispatch is an observe-only monitor-mode override.
+        monitor_override: bool,
+    },
+    /// Do not dispatch; derive the client response from this ordered child.
+    Block {
+        /// Zero-based index of the first blocking child.
+        blocker_index: usize,
+    },
+}
+
+/// Ordered child results plus the atomic transport disposition.
+#[derive(Debug)]
+pub struct CompositeEnforcement {
+    /// One result per decoded logical action, in input order.
+    pub children: Vec<CompositeActionResult>,
+    /// Aggregate dispatch or block decision.
+    pub disposition: CompositeDisposition,
+}
 
 /// Construction arguments for [`EnforcementPipeline`].
 ///
@@ -193,22 +232,144 @@ impl EnforcementPipeline {
         (decision, payload)
     }
 
-    /// Enforcement logic, separated so the outer [`enforce`](Self::enforce)
-    /// can unconditionally audit the result.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the verdict match lifts the AARM R4 five-decision set into EnforcementDecision"
-    )]
-    async fn enforce_inner(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
-        if let Err(deny) = self.check_readiness() {
-            return deny;
+    /// Evaluate ordered logical Composio actions and derive one atomic
+    /// transport disposition.
+    ///
+    /// Every child is evaluated in input order. In enforce mode any blocking
+    /// child prevents dispatch and otherwise-admitted siblings are rewritten
+    /// to [`AbortReason::BatchAtomicity`]. In monitor mode policy denials and
+    /// remediations are retained as monitor overrides and the original request
+    /// is dispatched once. Operational `ABORT` outcomes remain blocking.
+    #[must_use]
+    pub async fn enforce_composite(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+        actions: &[ComposioAction],
+    ) -> CompositeEnforcement {
+        let bundle_version = self.constraint_enforcer.policy_version();
+        let mut children = Vec::with_capacity(actions.len());
+
+        for action in actions {
+            let start = std::time::Instant::now();
+            let decision = self
+                .enforce_normalized_inner(action.envelope.clone(), session_id)
+                .await;
+            let mut audit_payload = audit_payload_from_decision(
+                &decision,
+                request,
+                session_id,
+                start.elapsed(),
+                bundle_version.as_deref(),
+            );
+            audit_payload
+                .action
+                .clone_from(&action.envelope.intent.action_class);
+            audit_payload.resource =
+                redact_sensitive_query_params(&action.envelope.intent.policy_resource_display());
+            children.push(CompositeActionResult {
+                decision,
+                audit_payload,
+            });
         }
 
+        let policy_blocker = children
+            .iter()
+            .position(|child| is_composio_blocker(&child.decision));
+        let credential_disagreement =
+            policy_blocker.is_none() && admitted_credentials_disagree(&children);
+        if credential_disagreement {
+            for child in &mut children {
+                rewrite_as_atomic_abort(
+                    child,
+                    "admitted Composio actions produced different credentials",
+                );
+            }
+        }
+
+        let first_blocker = if credential_disagreement {
+            Some(0)
+        } else {
+            policy_blocker
+        };
+
+        if let Some(abort_index) = operational_abort_blocker(&mut children, credential_disagreement)
+        {
+            return CompositeEnforcement {
+                children,
+                disposition: CompositeDisposition::Block {
+                    blocker_index: abort_index,
+                },
+            };
+        }
+
+        if self.mode == SidecarMode::Monitor {
+            let transport = first_admitted_transport(&children);
+            for child in &mut children {
+                if is_monitor_override(&child.decision) {
+                    monitor_override(&mut child.audit_payload);
+                }
+            }
+            return CompositeEnforcement {
+                children,
+                disposition: CompositeDisposition::Dispatch {
+                    transport,
+                    monitor_override: first_blocker.is_some(),
+                },
+            };
+        }
+
+        if let Some(blocker_index) = first_blocker {
+            if !credential_disagreement {
+                for child in &mut children {
+                    if matches!(child.decision, EnforcementDecision::Allow { .. }) {
+                        rewrite_as_atomic_abort(
+                            child,
+                            "another Composio action in the atomic request was blocked",
+                        );
+                    }
+                }
+            }
+            return CompositeEnforcement {
+                children,
+                disposition: CompositeDisposition::Block { blocker_index },
+            };
+        }
+
+        CompositeEnforcement {
+            disposition: CompositeDisposition::Dispatch {
+                transport: first_admitted_transport(&children),
+                monitor_override: false,
+            },
+            children,
+        }
+    }
+
+    /// Enforcement logic, separated so the outer [`enforce`](Self::enforce)
+    /// can unconditionally audit the result.
+    async fn enforce_inner(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
         // Normalize intent (may short-circuit with Deny or Passthrough)
         let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
             Err(decision) => return decision,
         };
+
+        self.enforce_normalized_inner(normalized, session_id).await
+    }
+
+    /// Evaluate an already-normalized immutable logical action.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the verdict match lifts the AARM R4 five-decision set into EnforcementDecision"
+    )]
+    async fn enforce_normalized_inner(
+        &self,
+        normalized: NormalizedEnvelope,
+        session_id: &str,
+    ) -> EnforcementDecision {
+        if let Err(deny) = self.check_readiness() {
+            return deny;
+        }
 
         // Capability validation: select token → validate
         let capability = match self.capability_validator.enforce(&normalized, session_id) {
@@ -222,7 +383,7 @@ impl EnforcementPipeline {
         // into the session's prior-action history (AARM R2 G3).
         let verified_sid = capability.claims.session_id.clone();
         let action_class = normalized.intent.action_class.clone();
-        let resource = normalized.intent.resource_display();
+        let resource = normalized.intent.policy_resource_display();
 
         // Constraint enforcement: scope check + Cedar policy evaluation.
         //
@@ -323,7 +484,7 @@ impl EnforcementPipeline {
                     detail: format!(
                         "policy denied action '{}' on resource '{}'",
                         normalized.intent.action_class,
-                        normalized.intent.resource_display()
+                        normalized.intent.policy_resource_display()
                     ),
                     envelope: Some(normalized),
                     identity: Some(identity),
@@ -466,6 +627,109 @@ impl EnforcementPipeline {
     }
 }
 
+fn is_composio_blocker(decision: &EnforcementDecision) -> bool {
+    !matches!(decision, EnforcementDecision::Allow { .. })
+}
+
+fn is_monitor_override(decision: &EnforcementDecision) -> bool {
+    matches!(
+        decision,
+        EnforcementDecision::Deny { .. }
+            | EnforcementDecision::Modify { .. }
+            | EnforcementDecision::StepUp { .. }
+            | EnforcementDecision::Defer { .. }
+    )
+}
+
+fn operational_abort_blocker(
+    children: &mut [CompositeActionResult],
+    credential_disagreement: bool,
+) -> Option<usize> {
+    let abort_index = children
+        .iter()
+        .position(|child| matches!(child.decision, EnforcementDecision::Abort { .. }))?;
+    if !credential_disagreement {
+        for (index, child) in children.iter_mut().enumerate() {
+            if index != abort_index
+                && matches!(
+                    child.decision,
+                    EnforcementDecision::Allow { .. } | EnforcementDecision::Modify { .. }
+                )
+            {
+                rewrite_as_atomic_abort(
+                    child,
+                    "another Composio action in the atomic request aborted",
+                );
+            }
+        }
+    }
+    Some(abort_index)
+}
+
+fn admitted_credentials_disagree(children: &[CompositeActionResult]) -> bool {
+    let mut credentials = children.iter().filter_map(|child| match &child.decision {
+        EnforcementDecision::Allow { credentials, .. }
+        | EnforcementDecision::Modify { credentials, .. } => Some(credentials.headers()),
+        EnforcementDecision::Deny { .. }
+        | EnforcementDecision::Abort { .. }
+        | EnforcementDecision::Passthrough { .. }
+        | EnforcementDecision::StepUp { .. }
+        | EnforcementDecision::Defer { .. } => None,
+    });
+    let Some(first) = credentials.next() else {
+        return false;
+    };
+    credentials.any(|candidate| candidate != first)
+}
+
+fn first_admitted_transport(
+    children: &[CompositeActionResult],
+) -> Option<(Box<ExecutionEnvelope>, InjectedCredentials)> {
+    children.iter().find_map(|child| match &child.decision {
+        EnforcementDecision::Allow {
+            envelope,
+            credentials,
+            ..
+        }
+        | EnforcementDecision::Modify {
+            envelope,
+            credentials,
+            ..
+        } => Some((Box::new((**envelope).clone()), credentials.clone())),
+        EnforcementDecision::Deny { .. }
+        | EnforcementDecision::Abort { .. }
+        | EnforcementDecision::Passthrough { .. }
+        | EnforcementDecision::StepUp { .. }
+        | EnforcementDecision::Defer { .. } => None,
+    })
+}
+
+fn rewrite_as_atomic_abort(child: &mut CompositeActionResult, detail: &str) {
+    let identity = match &child.decision {
+        EnforcementDecision::Allow { claims, .. } | EnforcementDecision::Modify { claims, .. } => {
+            Some(DenyIdentity::from_claims(claims))
+        }
+        EnforcementDecision::Deny { identity, .. }
+        | EnforcementDecision::Abort { identity, .. }
+        | EnforcementDecision::StepUp { identity, .. }
+        | EnforcementDecision::Defer { identity, .. } => identity.clone(),
+        EnforcementDecision::Passthrough { .. } => None,
+    };
+    child.decision = EnforcementDecision::Abort {
+        reason: AbortReason::BatchAtomicity,
+        detail: detail.to_string(),
+        identity,
+    };
+    child.audit_payload.decision = Decision::Abort;
+    child.audit_payload.deny_reason = format!("{}: {detail}", AbortReason::BatchAtomicity.code());
+}
+
+fn monitor_override(payload: &mut AuditPayload) {
+    let original_reason = std::mem::take(&mut payload.deny_reason);
+    payload.decision = Decision::Allow;
+    payload.deny_reason = format!("monitor_mode: {original_reason}");
+}
+
 /// Extracts an [`AuditPayload`] from an [`EnforcementDecision`].
 ///
 /// This is a pure data extraction — no cryptography, no I/O. Designed
@@ -551,7 +815,7 @@ fn audit_decision_fields(
             token_id: claims.token_id.to_string(),
             agent_id: claims.agent_id.to_string(),
             action: envelope.intent().action_class.clone(),
-            resource: redact_sensitive_query_params(&envelope.intent().resource_display()),
+            resource: redact_sensitive_query_params(&envelope.intent().policy_resource_display()),
             decision_code: Decision::Allow,
             deny_reason: String::new(),
             context_hash: claims.context_hash.clone(),
@@ -587,7 +851,7 @@ fn audit_decision_fields(
                 |e| {
                     (
                         e.intent.action_class.clone(),
-                        redact_sensitive_query_params(&e.intent.resource_display()),
+                        redact_sensitive_query_params(&e.intent.policy_resource_display()),
                     )
                 },
             );
@@ -653,7 +917,7 @@ fn audit_decision_fields(
             token_id: claims.token_id.to_string(),
             agent_id: claims.agent_id.to_string(),
             action: envelope.intent().action_class.clone(),
-            resource: redact_sensitive_query_params(&envelope.intent().resource_display()),
+            resource: redact_sensitive_query_params(&envelope.intent().policy_resource_display()),
             decision_code: Decision::Modify,
             // Surface the applied transformation in the reason field so
             // operators can reconcile the transformed execution against policy
@@ -749,7 +1013,7 @@ fn remediation_action_resource(
         |e| {
             (
                 e.intent.action_class.clone(),
-                redact_sensitive_query_params(&e.intent.resource_display()),
+                redact_sensitive_query_params(&e.intent.policy_resource_display()),
             )
         },
     )

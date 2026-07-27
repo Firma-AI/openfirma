@@ -153,7 +153,7 @@ impl CapabilityValidator {
         // Load the current snapshot; the guard is held for the rest of the
         // function so `entry` borrows a stable map even if a reload swaps in a
         // new one concurrently.
-        let resource_display = envelope.intent.resource_display();
+        let resource_display = envelope.intent.policy_resource_display();
         let capability_map = self.capability_map.load();
         let entry =
             capability_map.select(session_id, &envelope.intent.action_class, &resource_display)?;

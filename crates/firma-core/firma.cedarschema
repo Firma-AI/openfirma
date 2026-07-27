@@ -40,6 +40,13 @@
 //   git_ref            : String  - optional full ref name, e.g. "refs/heads/main"
 //   git_ref_type       : String  - optional coarse ref kind: branch, tag, or ref
 //   git_operation      : String  - optional coarse Git operation: read, write, or delete
+//   composio_toolkit   : String  - optional pinned Composio toolkit
+//   composio_tool_slug : String  - optional pinned Composio tool slug
+//   composio_user_id   : String  - optional Composio user or assistant identity
+//   composio_account   : String  - optional connected account selector or alias
+//   composio_session_id: String  - optional Tool Router or hosted MCP session
+//   composio_batch_index: Long   - optional zero-based multi-execute child index
+//   composio_batch_size: Long    - optional multi-execute child count
 namespace Firma {
     entity Agent;
     entity Resource {
@@ -73,6 +80,13 @@ namespace Firma {
     //   git_ref                 : String — optional full ref name, e.g. "refs/heads/main"
     //   git_ref_type            : String — optional coarse ref kind: branch, tag, or ref
     //   git_operation           : String — optional coarse Git operation: read, write, or delete
+    //   composio_toolkit        : String — optional pinned Composio toolkit
+    //   composio_tool_slug      : String — optional pinned Composio tool slug
+    //   composio_user_id        : String — optional Composio user/assistant identity
+    //   composio_account        : String — optional connected account selector or alias
+    //   composio_session_id     : String — optional Tool Router or MCP session
+    //   composio_batch_index    : Long — optional zero-based batch child index
+    //   composio_batch_size     : Long — optional batch child count
     type EnforcementContext = {
         session_id: String,
         timestamp_ms: Long,
@@ -94,7 +108,14 @@ namespace Firma {
         git_repo?: String,
         git_ref?: String,
         git_ref_type?: String,
-        git_operation?: String
+        git_operation?: String,
+        composio_toolkit?: String,
+        composio_tool_slug?: String,
+        composio_user_id?: String,
+        composio_account?: String,
+        composio_session_id?: String,
+        composio_batch_index?: Long,
+        composio_batch_size?: Long
     };
 
     action "account.permission.change" appliesTo {
@@ -359,6 +380,31 @@ namespace Firma {
     };
 
     action "communication.external.filter" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // Google Calendar coverage additions.
+    action "calendar.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "calendar.create" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "calendar.update" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "calendar.delete" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext

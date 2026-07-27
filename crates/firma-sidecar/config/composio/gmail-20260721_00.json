@@ -1,0 +1,447 @@
+{
+  "toolkit": "gmail",
+  "tools": [
+    {
+      "description": "Adds and/or removes specified Gmail labels for a message; ensure `message_id` and all `label_ids` are valid (use 'listLabels' for custom label IDs).",
+      "name": "Modify email labels",
+      "slug": "GMAIL_ADD_LABEL_TO_EMAIL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to permanently delete multiple Gmail messages in bulk, bypassing Trash with no recovery possible. Use when you need to efficiently remove large numbers of emails (e.g., retention enforcement, mailbox hygiene). Use GMAIL_MOVE_TO_TRASH instead when reversibility may be needed. Always obtain explicit user confirmation and verify a sample of message IDs before executing. High-volume calls may trigger 429 rateLimitExceeded or 403 userRateLimitExceeded errors; apply exponential backoff.",
+      "name": "Batch delete Gmail messages",
+      "slug": "GMAIL_BATCH_DELETE_MESSAGES",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Modify labels on multiple Gmail messages in one efficient API call. Supports up to 1,000 messages per request for bulk operations like archiving, marking as read/unread, or applying custom labels. High-volume calls may return 429 rateLimitExceeded or 403 userRateLimitExceeded; apply exponential backoff.",
+      "name": "Batch modify Gmail messages",
+      "slug": "GMAIL_BATCH_MODIFY_MESSAGES",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Creates a Gmail email draft. While all fields are optional per the Gmail API, practical validation requires at least one of recipient_email, cc, or bcc and at least one of subject or body. Supports To/Cc/Bcc recipients, subject, plain/HTML body (ensure `is_html=True` for HTML), attachments, and threading. Returns a draft_id that must be used as-is with GMAIL_SEND_DRAFT — synthetic or stale IDs will fail. When creating a draft reply to an existing thread (thread_id provided), leave subject empty to stay in the same thread; setting a subject will create a NEW thread instead. HTTP 429 may occur on rapid creation/send sequences; apply exponential backoff.",
+      "name": "Create email draft",
+      "slug": "GMAIL_CREATE_EMAIL_DRAFT",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to create a new Gmail filter with specified criteria and actions. Use when the user wants to automatically organize incoming messages based on sender, subject, size, or other criteria. Note: you can only create a maximum of 1,000 filters per account.",
+      "name": "Create Gmail filter",
+      "slug": "GMAIL_CREATE_FILTER",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Creates a new label with a unique name in the specified user's Gmail account. Returns a labelId (e.g., 'Label_123') required for downstream tools like GMAIL_ADD_LABEL_TO_EMAIL, GMAIL_BATCH_MODIFY_MESSAGES, and GMAIL_MODIFY_THREAD_LABELS — those tools do not accept display names.",
+      "name": "Create label",
+      "slug": "GMAIL_CREATE_LABEL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Send a one-shot prompt to the Sanity Content Agent. Stateless one-shot prompt endpoint. No thread management or message persistence. Ideal for simple, single-turn interactions. Use when you need to send a single prompt and receive a response without maintaining conversation context.",
+      "name": "Create Prompt Post",
+      "slug": "GMAIL_CREATE_PROMPT_POST",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Permanently deletes a specific Gmail draft using its ID with no recovery possible; verify the correct `draft_id` and obtain explicit user confirmation before calling. Ensure the draft exists and the user has necessary permissions for the given `user_id`.",
+      "name": "Delete Draft",
+      "slug": "GMAIL_DELETE_DRAFT",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to permanently delete a Gmail filter by its ID. Use when you need to remove an existing email filtering rule.",
+      "name": "Delete Gmail filter",
+      "slug": "GMAIL_DELETE_FILTER",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Permanently DELETES a user-created Gmail label from the account (not from a message). WARNING: This action DELETES the label definition itself, removing it from all messages. System labels (INBOX, SENT, UNREAD, etc.) cannot be deleted. To add/remove labels from specific messages, use GMAIL_ADD_LABEL_TO_EMAIL action instead.",
+      "name": "Delete label from account (permanent)",
+      "slug": "GMAIL_DELETE_LABEL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Permanently deletes a specific email message by its ID from a Gmail mailbox; for `user_id`, use 'me' for the authenticated user or an email address to which the authenticated user has delegated access.",
+      "name": "Delete message",
+      "slug": "GMAIL_DELETE_MESSAGE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to immediately and permanently delete a specified thread and all its messages. This operation cannot be undone. Use threads.trash instead for reversible deletion.",
+      "name": "Delete thread",
+      "slug": "GMAIL_DELETE_THREAD",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Fetches a list of email messages from a Gmail account, supporting filtering, pagination, and optional full content retrieval. Results are NOT sorted by recency; sort by internalDate client-side. The messages field may be absent or empty (valid no-results state); always null-check before accessing messageId or threadId. Null-check subject and header fields before string operations. For large result sets, prefer ids_only=true or metadata-only listing, then hydrate via GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID.",
+      "name": "Fetch emails",
+      "slug": "GMAIL_FETCH_EMAILS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Fetches a specific email message by its ID, provided the `message_id` exists and is accessible to the authenticated `user_id`. Spam/trash messages are excluded unless upstream list/search calls used `include_spam_trash=true`. Use `internalDate` (milliseconds since epoch) rather than header `Date` for recency checks.",
+      "name": "Fetch message by message ID",
+      "slug": "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves messages from a Gmail thread using its `thread_id`, where the thread must be accessible by the specified `user_id`. Returns a `messages` array; `thread_id` is not echoed in the response. Message order is not guaranteed — sort by `internalDate` to find oldest/newest. Check `labelIds` per message to filter drafts. Concurrent bulk calls may trigger 403 `userRateLimitExceeded` or 429; cap concurrency ~10 and use exponential backoff.",
+      "name": "Fetch Message by Thread ID",
+      "slug": "GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Forward an existing Gmail message to specified recipients, preserving original body and attachments. Verify recipients and content before forwarding to avoid unintended exposure. Bulk forwarding may trigger 429/5xx rate limits; keep concurrency to 5–10 and apply backoff. Messages near Gmail's size limits may fail; reconstruct a smaller draft if needed.",
+      "name": "Forward email message",
+      "slug": "GMAIL_FORWARD_MESSAGE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves a specific attachment by ID from a message in a user's Gmail mailbox, requiring valid message and attachment IDs. Returns the downloaded file with its MIME type and filename. Attachments exceeding ~25 MB may be exposed as Google Drive links — use GOOGLEDRIVE_DOWNLOAD_FILE when a Drive file_id is present instead.",
+      "name": "Get Gmail attachment",
+      "slug": "GMAIL_GET_ATTACHMENT",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to get the auto-forwarding setting for the specified account. Use when you need to retrieve the current auto-forwarding configuration including enabled status, forwarding email address, and message disposition.",
+      "name": "Get Auto-Forwarding Settings",
+      "slug": "GMAIL_GET_AUTO_FORWARDING",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Fetches contacts (connections) for the authenticated Google account, allowing selection of specific data fields and pagination. Only covers saved contacts and 'Other Contacts'; email-header-only senders are out of scope. Contact records may have sparse data — handle missing fields gracefully. People API shares a per-user QPS quota; HTTP 429 requires exponential backoff (1s, 2s, 4s).",
+      "name": "Get contacts",
+      "slug": "GMAIL_GET_CONTACTS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves a single Gmail draft by its ID. Use this to fetch and inspect draft content before sending via GMAIL_SEND_DRAFT. The format parameter controls the level of detail returned.",
+      "name": "Get Draft",
+      "slug": "GMAIL_GET_DRAFT",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to retrieve a specific Gmail filter by its ID. Use when you need to inspect the criteria and actions of an existing filter.",
+      "name": "Get Gmail filter",
+      "slug": "GMAIL_GET_FILTER",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Gets details for a specified Gmail label. Use this to retrieve label information including name, type, visibility settings, message/thread counts, and color.",
+      "name": "Get label details",
+      "slug": "GMAIL_GET_LABEL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to retrieve the language settings for a Gmail user. Use when you need to determine the display language preference for the authenticated user or a specific Gmail account.",
+      "name": "Get Language Settings",
+      "slug": "GMAIL_GET_LANGUAGE_SETTINGS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves either a specific person's details (using `resource_name`) or lists 'Other Contacts' (if `other_contacts` is true), with `person_fields` specifying the data to return. Scope is limited to the authenticated user's own contacts and 'Other Contacts' history only.",
+      "name": "Get People",
+      "slug": "GMAIL_GET_PEOPLE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves Gmail profile information (email address, aggregate messagesTotal/threadsTotal, historyId) for a user. messagesTotal counts individual emails; threadsTotal counts conversations; neither is per-label — use GMAIL_FETCH_EMAILS with label filters for label-specific counts. The returned historyId seeds incremental sync via GMAIL_LIST_HISTORY; if historyIdTooOld is returned, rescan with GMAIL_FETCH_EMAILS before resuming. Response may be wrapped under a top-level data field; unwrap before reading fields. A successful call confirms mailbox connectivity but not full mailbox access if granted scopes are narrow. Use the returned email address to dynamically identify the authenticated account rather than hard-coding it.",
+      "name": "Get Profile",
+      "slug": "GMAIL_GET_PROFILE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to retrieve vacation responder settings for a Gmail user. Use when you need to check if out-of-office auto-replies are configured and view their content.",
+      "name": "Get Vacation Settings",
+      "slug": "GMAIL_GET_VACATION_SETTINGS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to import a message into the user's mailbox with standard email delivery scanning and classification. Use when you need to add an existing email to a Gmail account without sending it through SMTP. This method doesn't perform SPF checks, so it might not work for some spam messages.",
+      "name": "Import message",
+      "slug": "GMAIL_IMPORT_MESSAGE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to insert a message into the user's mailbox similar to IMAP APPEND. Use when you need to add an email directly to a mailbox bypassing most scanning and classification. This does not send a message.",
+      "name": "Insert message into mailbox",
+      "slug": "GMAIL_INSERT_MESSAGE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to list client-side encrypted identities for an authenticated user. Use when you need to retrieve CSE identity configurations including key pair associations.",
+      "name": "List CSE identities",
+      "slug": "GMAIL_LIST_CSE_IDENTITIES",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to list client-side encryption key pairs for an authenticated user. Use when you need to retrieve CSE keypair configurations including public keys and enablement states. Supports pagination for large result sets.",
+      "name": "List CSE key pairs",
+      "slug": "GMAIL_LIST_CSE_KEYPAIRS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves a paginated list of email drafts from a user's Gmail account. Use verbose=true to get full draft details including subject, body, sender, and timestamp. Draft ordering is non-guaranteed; iterate using page_token until it is absent to retrieve all drafts. Newly created drafts may not appear immediately. Rapid calls may trigger 403 userRateLimitExceeded or 429 errors; apply exponential backoff (1s, 2s, 4s) before retrying.",
+      "name": "List Drafts",
+      "slug": "GMAIL_LIST_DRAFTS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to list all Gmail filters (rules) in the mailbox. Use for security audits to detect malicious filter rules or before creating new filters to avoid duplicates.",
+      "name": "List Gmail filters",
+      "slug": "GMAIL_LIST_FILTERS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to list all forwarding addresses for the specified Gmail account. Use when you need to retrieve the email addresses that are allowed to be used for forwarding messages.",
+      "name": "List forwarding addresses",
+      "slug": "GMAIL_LIST_FORWARDING_ADDRESSES",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to list Gmail mailbox change history since a known startHistoryId. Use for incremental mailbox syncs. Persist the latest historyId as a checkpoint across sessions; without it, incremental sync is unreliable. An empty history list in the response is valid and means no new changes occurred.",
+      "name": "List Gmail history",
+      "slug": "GMAIL_LIST_HISTORY",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves all system and user-created labels for a Gmail account in a single unpaginated response. Primary use: obtain internal label IDs (e.g., 'Label_123') required by other Gmail tools — display names cannot be used as label identifiers and cause silent failures or errors. System labels (INBOX, UNREAD, SPAM, TRASH, etc.) are case-sensitive and must be used exactly as returned; INBOX, SPAM, and TRASH are read-only and cannot be added/removed via label modification tools. The Gmail search 'label:' operator accepts display names, but label_ids parameters in tools like GMAIL_FETCH_EMAILS require internal IDs from this tool — mixing conventions yields zero results silently. Do not hardcode label IDs across sessions; refresh via this tool on conflict errors.",
+      "name": "List Gmail labels",
+      "slug": "GMAIL_LIST_LABELS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "DEPRECATED: Use GMAIL_FETCH_EMAILS instead. Lists the messages in the user's mailbox. Use when you need to retrieve a list of email messages with optional filtering by labels or search query.",
+      "name": "List Gmail messages (Deprecated)",
+      "slug": "GMAIL_LIST_MESSAGES",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Lists the send-as aliases for a Gmail account, including the primary address and custom 'from' aliases. Use when you need to retrieve available sending addresses for composing emails.",
+      "name": "List send-as aliases",
+      "slug": "GMAIL_LIST_SEND_AS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Lists S/MIME configs for the specified send-as alias. Use when you need to retrieve all S/MIME certificate configurations associated with a specific send-as email address.",
+      "name": "List S/MIME configs",
+      "slug": "GMAIL_LIST_SMIME_INFO",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves a list of email threads from a Gmail account, identified by `user_id` (email address or 'me'), supporting filtering and pagination. Spam and trash are excluded by default unless explicitly targeted via `label:spam` or `label:trash` in the query.",
+      "name": "List threads",
+      "slug": "GMAIL_LIST_THREADS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Adds or removes specified existing label IDs from a Gmail thread, affecting all its messages; ensure the thread ID is valid. To modify a single message only, use a message-level tool instead.",
+      "name": "Modify thread labels",
+      "slug": "GMAIL_MODIFY_THREAD_LABELS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Moves the specified thread to the trash. Any messages that belong to the thread are also moved to the trash.",
+      "name": "Trash thread",
+      "slug": "GMAIL_MOVE_THREAD_TO_TRASH",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Moves an existing, non-deleted email message to the trash for the specified user. Trashed messages are recoverable and still count toward storage quota until purged. Prefer this over GMAIL_BATCH_DELETE_MESSAGES when recovery may be needed. For bulk operations, use GMAIL_BATCH_MODIFY_MESSAGES or GMAIL_BATCH_DELETE_MESSAGES instead of repeated calls to this tool.",
+      "name": "Move to Trash",
+      "slug": "GMAIL_MOVE_TO_TRASH",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Patches the specified user-created label. System labels (e.g., INBOX, SENT, SPAM) cannot be modified and will be rejected.",
+      "name": "Patch Label",
+      "slug": "GMAIL_PATCH_LABEL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to patch the specified send-as alias for a Gmail user. Use when you need to update properties of an existing send-as email address such as display name, reply-to address, signature, default status, or SMTP configuration.",
+      "name": "Patch send-as alias",
+      "slug": "GMAIL_PATCH_SEND_AS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "DEPRECATED: Use GMAIL_DELETE_LABEL instead. Permanently deletes a specific, existing user-created Gmail label by its ID for a user; cannot delete system labels.",
+      "name": "Remove label (Deprecated)",
+      "slug": "GMAIL_REMOVE_LABEL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Sends a reply within a specific Gmail thread using the original thread's subject; do not provide a custom subject as it will start a new conversation instead of replying in-thread. Requires a valid `thread_id` and at least one of `recipient_email`, `cc`, or `bcc`. Supports optional file attachments.",
+      "name": "Reply to email thread",
+      "slug": "GMAIL_REPLY_TO_THREAD",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Searches contacts by matching the query against names, nicknames, emails, phone numbers, and organizations, optionally including 'Other Contacts'. Only searches the authenticated user's contact directory — people existing solely in message headers won't appear; use GMAIL_FETCH_EMAILS for those. Results may be zero or multiple; never auto-select from ambiguous results. Results paginate via next_page_token; follow until empty and deduplicate by email. Many records lack emailAddresses or names even when requested — handle missing keys. Directory/organization policies may suppress entries.",
+      "name": "Search People",
+      "slug": "GMAIL_SEARCH_PEOPLE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Sends an existing draft email AS-IS to recipients already defined within the draft. IMPORTANT: This action does NOT accept recipient parameters (to, cc, bcc). The Gmail API's drafts/send endpoint sends drafts to whatever recipients are already set in the draft's To, Cc, and Bcc headers - it cannot add or override recipients. If the draft has no recipients, you must either: 1. Create a new draft with recipients using GMAIL_CREATE_EMAIL_DRAFT, then send it 2. Use GMAIL_SEND_EMAIL to send a new email directly with recipients. Send is immediate and irreversible — confirm recipients and content before calling. No scheduling support; trigger at the desired UTC time externally. Gmail enforces ~25 MB message size limit and daily send caps (~500 recipients/day personal, ~2,000/day Workspace).",
+      "name": "Send Draft",
+      "slug": "GMAIL_SEND_DRAFT",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Sends an email via Gmail API using the authenticated user's Google profile display name. Sends immediately and is irreversible — confirm recipients, subject, body, and attachments before calling. At least one of 'to' (or 'recipient_email'), 'cc', or 'bcc' must be provided. At least one of subject or body must be provided. Requires `is_html=True` if the body contains HTML. All common file types including PNG, JPG, PDF, MP4, etc. are supported as attachments. Gmail API limits total message size to ~25 MB after base64 encoding. To reply in an existing thread, use GMAIL_REPLY_TO_THREAD instead. No scheduled send support; enforce timing externally.",
+      "name": "Send Email",
+      "slug": "GMAIL_SEND_EMAIL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves the IMAP settings for a Gmail user account, including whether IMAP is enabled, auto-expunge behavior, expunge behavior, and maximum folder size.",
+      "name": "Get IMAP Settings",
+      "slug": "GMAIL_SETTINGS_GET_IMAP",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to retrieve POP settings for a Gmail account. Use when you need to check the current POP configuration including access window and message disposition.",
+      "name": "Get POP settings",
+      "slug": "GMAIL_SETTINGS_GET_POP",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to retrieve a specific send-as alias configuration for a Gmail user. Use when you need to get details about a send-as email address including display name, signature, SMTP settings, and verification status. Fails with HTTP 404 if the specified address is not a member of the send-as collection.",
+      "name": "Get send-as alias",
+      "slug": "GMAIL_SETTINGS_SEND_AS_GET",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to stop receiving push notifications for a Gmail mailbox. Use when you need to disable watch notifications previously set up via the watch endpoint.",
+      "name": "Stop watch notifications",
+      "slug": "GMAIL_STOP_WATCH",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to remove a message from trash in Gmail. Use when you need to restore a previously trashed email message.",
+      "name": "Untrash Message",
+      "slug": "GMAIL_UNTRASH_MESSAGE",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to remove a thread from trash in Gmail. Use when you need to restore a deleted thread and its messages.",
+      "name": "Untrash thread",
+      "slug": "GMAIL_UNTRASH_THREAD",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Updates (replaces) an existing Gmail draft's content in-place by draft ID. This action replaces the entire draft content with the new message - it does not patch individual fields. All fields are optional; if not provided, you should provide complete draft content to avoid data loss.",
+      "name": "Update draft",
+      "slug": "GMAIL_UPDATE_DRAFT",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to update IMAP settings for a Gmail account. Use when you need to modify IMAP configuration such as enabling/disabling IMAP, setting auto-expunge behavior, or configuring folder size limits.",
+      "name": "Update IMAP settings",
+      "slug": "GMAIL_UPDATE_IMAP_SETTINGS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to update the properties of an existing Gmail label. Use when you need to modify label name, visibility settings, or color.",
+      "name": "Update Label",
+      "slug": "GMAIL_UPDATE_LABEL",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to update the language settings for a Gmail user. Use when you need to change the display language preference for the authenticated user or a specific Gmail account. The returned displayLanguage may differ from the requested value if Gmail selects a close variant.",
+      "name": "Update Language Settings",
+      "slug": "GMAIL_UPDATE_LANGUAGE_SETTINGS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to update POP settings for a Gmail account. Use when you need to configure POP access window or message disposition behavior.",
+      "name": "Update POP settings",
+      "slug": "GMAIL_UPDATE_POP_SETTINGS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to update a send-as alias for a Gmail user. Use when you need to modify display name, signature, reply-to address, or SMTP settings for a send-as email address. Gmail sanitizes HTML signatures before saving. Addresses other than the primary can only be updated by service accounts with domain-wide authority.",
+      "name": "Update send-as alias",
+      "slug": "GMAIL_UPDATE_SEND_AS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Update user attribute values for a resource. Use this action to set or update custom attributes for a user within an organization or project. When setting a value for an attribute key that also exists in SAML, the Sanity value will take precedence and shadow the SAML value.",
+      "name": "Update User Attributes Values",
+      "slug": "GMAIL_UPDATE_USER_ATTRIBUTES_VALUES",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to update vacation responder settings for a Gmail user. Use when you need to configure out-of-office auto-replies.",
+      "name": "Update Vacation Settings",
+      "slug": "GMAIL_UPDATE_VACATION_SETTINGS",
+      "toolkit": "gmail",
+      "version": "20260721_00"
+    }
+  ],
+  "version": "20260721_00"
+}

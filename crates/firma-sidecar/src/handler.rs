@@ -17,9 +17,13 @@ use firma_core::{
 use tokio::sync::mpsc;
 
 use crate::audit::{AuditPayload, Decision};
+use crate::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode, is_protected_host};
 use crate::connector::ConnectorRegistry;
 use crate::normalizer::NormalizedEnvelope;
-use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
+use crate::pipeline::{
+    CompositeActionResult, CompositeDisposition, EnforcementDecision, EnforcementPipeline,
+    RawRequest, audit_payload_from_decision,
+};
 
 /// Response produced by the transport-agnostic request handler.
 #[derive(Debug)]
@@ -246,12 +250,17 @@ impl DispatchOutcome {
 
     /// Applies the outcome to the audit payload in place.
     fn enrich(self, payload: &mut AuditPayload) {
+        self.enrich_ref(payload);
+    }
+
+    /// Applies a shared dispatch outcome to one child audit payload.
+    fn enrich_ref(&self, payload: &mut AuditPayload) {
         payload.dispatch_status = self.dispatch_status;
         payload.dispatch_latency_us = self.dispatch_latency_us;
         payload.response_size = self.response_size;
-        if let Some(decision) = self.decision_override {
+        if let Some(decision) = &self.decision_override {
             payload.decision = decision.decision;
-            payload.deny_reason = decision.deny_reason;
+            payload.deny_reason.clone_from(&decision.deny_reason);
         }
     }
 }
@@ -297,6 +306,7 @@ pub struct DispatchedResponse {
 /// Shared handler used by every interceptor.
 pub struct RequestHandler {
     audit_sink_sender: mpsc::Sender<AuditPayload>,
+    composio_catalogs: Option<Arc<ComposioCatalogs>>,
     connector_registry: Arc<ConnectorRegistry>,
     pipeline: Arc<EnforcementPipeline>,
 }
@@ -312,16 +322,32 @@ impl RequestHandler {
     ) -> Self {
         Self {
             audit_sink_sender,
+            composio_catalogs: None,
             connector_registry,
             pipeline,
         }
+    }
+
+    /// Install validated pinned Composio catalogs.
+    #[must_use]
+    pub fn with_composio_catalogs(mut self, catalogs: Arc<ComposioCatalogs>) -> Self {
+        self.composio_catalogs = Some(catalogs);
+        self
     }
 
     /// Handles one normalized transport request.
     ///
     /// The handler emits exactly one audit payload per call after dispatch
     /// work has completed for allow and passthrough outcomes.
-    pub(crate) async fn handle(&self, request: RawRequest, session_id: &str) -> HandledResponse {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive decision match owns dispatch and audit finalization"
+    )]
+    pub async fn handle(&self, request: RawRequest, session_id: &str) -> HandledResponse {
+        if let Some(response) = self.handle_composio(&request, session_id).await {
+            return response;
+        }
+
         let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         let response = match decision {
@@ -434,6 +460,149 @@ impl RequestHandler {
         response
     }
 
+    async fn handle_composio(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+    ) -> Option<HandledResponse> {
+        let catalogs = self.composio_catalogs.as_deref()?;
+        match decode(request, catalogs) {
+            DecodeResult::Unrelated => None,
+            DecodeResult::Passthrough => {
+                Some(self.handle_composio_passthrough(request, session_id).await)
+            }
+            DecodeResult::Actions(actions) => Some(
+                self.handle_composio_actions(request, session_id, &actions)
+                    .await,
+            ),
+            DecodeResult::Deny(denial) => {
+                let decision = EnforcementDecision::Deny {
+                    reason: DenyReason::MalformedRequest,
+                    stage: crate::enforcement::decision::EnforcementStage::Normalization,
+                    detail: format!("{}: {}", denial.code, denial.detail),
+                    envelope: None,
+                    identity: None,
+                };
+                let audit_payload = audit_payload_from_decision(
+                    &decision,
+                    request,
+                    session_id,
+                    std::time::Duration::ZERO,
+                    None,
+                );
+                self.emit_audit(audit_payload).await;
+                Some(response_from_blocking_decision(&decision))
+            }
+        }
+    }
+
+    async fn handle_composio_passthrough(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+    ) -> HandledResponse {
+        let decision = EnforcementDecision::Passthrough {
+            detail: "recognized Composio non-execution request".to_string(),
+        };
+        let mut audit_payload = audit_payload_from_decision(
+            &decision,
+            request,
+            session_id,
+            std::time::Duration::ZERO,
+            None,
+        );
+        let response = match passthrough_envelope(request, session_id) {
+            Ok(envelope) => {
+                let (response, outcome) =
+                    self.dispatch(envelope, InjectedCredentials::empty()).await;
+                outcome.enrich(&mut audit_payload);
+                match response {
+                    HandledResponse::Ok(dispatched) => HandledResponse::Passthrough(dispatched),
+                    other => other,
+                }
+            }
+            Err(err) => handle_error(err),
+        };
+        self.emit_audit(audit_payload).await;
+        response
+    }
+
+    async fn handle_composio_actions(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+        actions: &[ComposioAction],
+    ) -> HandledResponse {
+        let result = self
+            .pipeline
+            .enforce_composite(request, session_id, actions)
+            .await;
+        let response = match result.disposition {
+            CompositeDisposition::Dispatch {
+                transport,
+                monitor_override,
+            } => {
+                let dispatch = match transport {
+                    Some((envelope, credentials)) => {
+                        let mut dispatch_envelope = *envelope;
+                        hydrate_dispatch_http_fields(&mut dispatch_envelope, request);
+                        self.dispatch(dispatch_envelope, credentials).await
+                    }
+                    None => match passthrough_envelope(request, session_id) {
+                        Ok(envelope) => self.dispatch(envelope, InjectedCredentials::empty()).await,
+                        Err(err) => {
+                            let response = handle_error(err);
+                            let outcome = DispatchOutcome::abort_from_connector(
+                                AbortReason::ConnectorInvalidRequest,
+                                "could not construct Composio monitor dispatch",
+                            );
+                            (response, outcome)
+                        }
+                    },
+                };
+                let (response, outcome) = dispatch;
+                let mut response = response;
+                for child in result.children {
+                    self.emit_enriched_composite_audit(child, &outcome).await;
+                }
+                if monitor_override && let HandledResponse::Ok(dispatched) = response {
+                    response = HandledResponse::Passthrough(dispatched);
+                }
+                return response;
+            }
+            CompositeDisposition::Block { blocker_index } => {
+                result.children.get(blocker_index).map_or_else(
+                    || HandledResponse::Deny {
+                        reason: DenyReason::FailClosed,
+                        detail: "Composio aggregate result had no blocker; failing closed"
+                            .to_string(),
+                        context: DenialContext::Api,
+                    },
+                    |child| response_from_blocking_decision(&child.decision),
+                )
+            }
+        };
+        for child in result.children {
+            self.emit_audit(child.audit_payload).await;
+        }
+        response
+    }
+
+    async fn emit_enriched_composite_audit(
+        &self,
+        mut child: CompositeActionResult,
+        outcome: &DispatchOutcome,
+    ) {
+        outcome.enrich_ref(&mut child.audit_payload);
+        self.emit_audit(child.audit_payload).await;
+    }
+
+    async fn emit_audit(&self, payload: AuditPayload) {
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
+    }
+
     /// Dispatches a `MODIFY` decision: applies the structural transformation
     /// to the dispatch clone, then forwards to the connector.
     ///
@@ -535,6 +704,31 @@ impl RequestHandler {
         mut request: RawRequest,
         session_id: &str,
     ) -> UpgradeAuthorization {
+        if is_protected_host(&request.host, request.is_https) {
+            let detail = "Composio protocol upgrades are unsupported".to_string();
+            let decision = EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: crate::enforcement::decision::EnforcementStage::Normalization,
+                detail: detail.clone(),
+                envelope: None,
+                identity: None,
+            };
+            let audit_payload = audit_payload_from_decision(
+                &decision,
+                &request,
+                session_id,
+                std::time::Duration::ZERO,
+                None,
+            );
+            if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+                tracing::error!("failed to send audit event: {err}");
+            }
+            return UpgradeAuthorization::Deny {
+                reason: DenyReason::FailClosed,
+                detail,
+            };
+        }
+
         let (decision, audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         match decision {
@@ -784,12 +978,67 @@ fn handle_error(err: impl Display) -> HandledResponse {
     }
 }
 
+fn response_from_blocking_decision(decision: &EnforcementDecision) -> HandledResponse {
+    match decision {
+        EnforcementDecision::Deny {
+            reason,
+            detail,
+            envelope,
+            ..
+        } => HandledResponse::Deny {
+            reason: *reason,
+            detail: detail.clone(),
+            context: denial_context_of(envelope.as_ref()),
+        },
+        EnforcementDecision::Abort { reason, detail, .. } => HandledResponse::Aborted {
+            reason: *reason,
+            detail: detail.clone(),
+        },
+        EnforcementDecision::Modify { envelope, .. } => HandledResponse::Deny {
+            reason: DenyReason::FailClosed,
+            detail: "Composio argument modification is unsupported; failing closed".to_string(),
+            context: denial_context_from_params(&envelope.intent().params),
+        },
+        EnforcementDecision::StepUp {
+            challenge,
+            envelope,
+            ..
+        } => HandledResponse::Deny {
+            reason: DenyReason::StepUpRequired,
+            detail: challenge.clone(),
+            context: denial_context_of(envelope.as_ref()),
+        },
+        EnforcementDecision::Defer {
+            retry_after_ms,
+            envelope,
+            ..
+        } => HandledResponse::Deny {
+            reason: DenyReason::Deferred,
+            detail: format!("retry_after_ms: {retry_after_ms}"),
+            context: denial_context_of(envelope.as_ref()),
+        },
+        EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
+            HandledResponse::Deny {
+                reason: DenyReason::FailClosed,
+                detail: "Composio aggregate selected a non-blocking result; failing closed"
+                    .to_string(),
+                context: DenialContext::Api,
+            }
+        }
+    }
+}
+
 fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawRequest) {
     let ActionParams::Http(http) = &mut envelope.intent.params else {
         return;
     };
     http.headers.clone_from(&request.headers);
+    strip_firma_headers(&mut http.headers);
     http.body.clone_from(&request.body);
+}
+
+fn strip_firma_headers(headers: &mut HashMap<firma_http::HeaderName, String>) {
+    headers.retain(|name, _| !name.as_str().starts_with("x-firma-"));
 }
 
 /// Apply a [`ModificationSpec`] redaction to the raw request headers before
@@ -825,12 +1074,14 @@ fn passthrough_envelope<'a>(
     let mut resource = std::collections::BTreeMap::new();
     resource.insert("host".to_string(), request.host.clone());
     resource.insert("path".to_string(), request.path.clone());
+    let mut headers = request.headers.clone();
+    strip_firma_headers(&mut headers);
     let intent = ExecutionIntent {
         action_class: "passthrough".to_string(),
         resource,
         params: ActionParams::Http(HttpParams {
             method,
-            headers: request.headers.clone(),
+            headers,
             body: request.body.clone(),
             query: HashMap::new(),
         }),

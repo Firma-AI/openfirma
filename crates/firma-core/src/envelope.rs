@@ -103,6 +103,19 @@ pub struct ExecutionIntent {
 }
 
 impl ExecutionIntent {
+    /// Derive the logical resource used for policy and audit.
+    ///
+    /// Protocol decoders may set `policy_resource` when one transport request
+    /// represents a logical action on a different resource. Ordinary requests
+    /// fall back to [`Self::resource_display`].
+    #[must_use]
+    pub fn policy_resource_display(&self) -> String {
+        self.resource
+            .get("policy_resource")
+            .cloned()
+            .unwrap_or_else(|| self.resource_display())
+    }
+
     /// Derive a display / scope-check string from the resource map.
     ///
     /// Returns `format!("{host}{path}")` where missing keys resolve to

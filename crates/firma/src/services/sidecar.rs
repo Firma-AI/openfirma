@@ -104,6 +104,25 @@ fn spawn_capability_reload(
     )?))
 }
 
+/// Load the reviewed Composio catalogs compiled into the Sidecar.
+///
+/// Composio multiplexes every connected app onto two hosts and one URL shape,
+/// so the catalogs are what let enforcement see the tool behind a request.
+/// Loading them unconditionally keeps that visibility independent of operator
+/// configuration.
+///
+/// # Errors
+///
+/// Returns an error when a shipped snapshot and its mapping have drifted
+/// apart, which fails startup instead of silently leaving Composio traffic
+/// classified only by transport.
+fn load_composio_catalogs() -> anyhow::Result<Arc<firma_sidecar::composio::ComposioCatalogs>> {
+    let catalogs = firma_sidecar::composio::ComposioCatalogs::builtin()
+        .map_err(|error| anyhow::anyhow!("failed to load Composio catalogs: {error}"))?;
+    debug!(tools = catalogs.len(), "loaded pinned Composio catalogs");
+    Ok(Arc::new(catalogs))
+}
+
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
     let sandbox_id = propagated_sandbox_id()?;
@@ -158,11 +177,14 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let _capability_reload = spawn_capability_reload(&config, &pipeline_runtime, &exit)?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
-    let handler = Arc::new(handler::RequestHandler::new(
-        Arc::clone(&pipeline_runtime.pipeline),
-        connector_registry,
-        audit_payload_tx,
-    ));
+    let handler = Arc::new(
+        handler::RequestHandler::new(
+            Arc::clone(&pipeline_runtime.pipeline),
+            connector_registry,
+            audit_payload_tx,
+        )
+        .with_composio_catalogs(load_composio_catalogs()?),
+    );
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;

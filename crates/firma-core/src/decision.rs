@@ -18,6 +18,9 @@ pub enum AbortReason {
     /// Sidecar failed to inject credentials after enforcement allowed the call.
     #[error("credential injection failed")]
     CredentialInjectionFailed,
+    /// One logical action blocked an otherwise atomic multi-action request.
+    #[error("batch atomicity")]
+    BatchAtomicity,
 }
 
 impl AbortReason {
@@ -29,6 +32,7 @@ impl AbortReason {
             Self::ConnectorFailure => "CONNECTOR_FAILURE",
             Self::ConnectorInvalidRequest => "CONNECTOR_INVALID_REQUEST",
             Self::CredentialInjectionFailed => "CREDENTIAL_INJECTION_FAILED",
+            Self::BatchAtomicity => "BATCH_ATOMICITY",
         }
     }
 }
@@ -523,6 +527,7 @@ mod tests {
                 AbortReason::ConnectorFailure => "CONNECTOR_FAILURE",
                 AbortReason::ConnectorInvalidRequest => "CONNECTOR_INVALID_REQUEST",
                 AbortReason::CredentialInjectionFailed => "CREDENTIAL_INJECTION_FAILED",
+                AbortReason::BatchAtomicity => "BATCH_ATOMICITY",
             };
             assert_eq!(reason.code(), expected);
         }

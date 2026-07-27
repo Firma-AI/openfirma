@@ -72,6 +72,12 @@ An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
 file even without `--force`; other existing generated files are still
 preserved unless `--force` is set.
 
+Select `--mapping composio` to protect hosted MCP and direct Composio execution
+on `app.composio.dev` and `backend.composio.dev`. This mapping configures strict
+HTTPS interception because CONNECT-only traffic does not expose the logical
+tool action. See [Govern Composio tool execution](../composio/) before enabling
+it in production.
+
 ## Re-running on an existing config
 
 When `firma config` finds `firma.toml` in the target directory, it reads the

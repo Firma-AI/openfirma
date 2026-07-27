@@ -48,9 +48,9 @@ pub struct ActionClassRegistry {
 }
 
 impl ActionClassRegistry {
-    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 29
+    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 33
     /// in-place additions covering the GitHub (12), Stripe (12), and
-    /// Gmail (5) REST surfaces.
+    /// Gmail (5) and Google Calendar (4) surfaces.
     #[must_use]
     #[expect(
         clippy::too_many_lines,
@@ -283,6 +283,27 @@ impl ActionClassRegistry {
                 domain: "communication",
                 risk_level: Critical,
             },
+            // ----- Google Calendar coverage additions -----
+            ActionClassDefinition {
+                name: "calendar.read",
+                domain: "calendar",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "calendar.create",
+                domain: "calendar",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "calendar.update",
+                domain: "calendar",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "calendar.delete",
+                domain: "calendar",
+                risk_level: High,
+            },
         ];
 
         let mut classes = HashMap::with_capacity(entries.len());
@@ -326,9 +347,9 @@ mod tests {
 
     /// Registry identifiers.
     ///
-    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The remaining 29
-    /// cover the GitHub (12), Stripe (12), and Gmail (5) REST surfaces and
-    /// are appended in-place without a registry version bump.
+    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The remaining 33
+    /// cover GitHub (12), Stripe (12), Gmail (5), and Calendar (4), appended
+    /// in-place without a registry version bump.
     const FEP_V0_1_CLASSES: &[&str] = &[
         "account.permission.change",
         "browser.purchase",
@@ -377,12 +398,17 @@ mod tests {
         "communication.external.manage",
         "communication.external.delete",
         "communication.external.filter",
+        // Google Calendar coverage additions.
+        "calendar.read",
+        "calendar.create",
+        "calendar.update",
+        "calendar.delete",
     ];
 
     #[test]
-    fn test_v0_1_registry_has_44_classes() {
+    fn test_v0_1_registry_has_48_classes() {
         let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 44);
+        assert_eq!(registry.len(), 48);
     }
 
     #[test]
@@ -456,6 +482,24 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let def = registry.get("communication.external.delete");
         assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::High));
+    }
+
+    #[test]
+    fn calendar_classes_have_fixed_risk_levels() {
+        let registry = ActionClassRegistry::v0_1();
+        let expected = [
+            ("calendar.read", RiskLevel::Low),
+            ("calendar.create", RiskLevel::Medium),
+            ("calendar.update", RiskLevel::Medium),
+            ("calendar.delete", RiskLevel::High),
+        ];
+
+        for (name, risk_level) in expected {
+            assert_eq!(
+                registry.get(name).map(|definition| definition.risk_level),
+                Some(risk_level)
+            );
+        }
     }
 
     #[test]
