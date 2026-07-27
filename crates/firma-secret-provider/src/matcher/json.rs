@@ -1,7 +1,7 @@
 use std::{collections::HashSet, hash::Hash};
 
 use firma_core::{SecretJsonSelector, SecretJsonSelectorScope, SecretNameSource};
-use http::uri::Authority;
+use firma_http::Authority;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 

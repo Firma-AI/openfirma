@@ -78,6 +78,16 @@ pub enum HttpConnectorBuildError {
 /// Connection pooling and HTTP/2 multiplexing are inherited from the
 /// underlying client; the `Arc<Client>` is cheap to clone into the
 /// registry.
+///
+/// The workspace `reqwest` dependency does not enable the `gzip`/`brotli`/
+/// `deflate`/`zstd` features, so this client never automatically decodes a
+/// compressed response body: a `Content-Encoding`-compressed upstream
+/// response is forwarded with its compressed bytes intact. Secret-gateway
+/// response masking and HTTP secret provider interception both scan the raw
+/// body for plaintext content-type structure (JSON/XML/form), so neither
+/// sees anything to redact or extract in a compressed body — a real, if
+/// narrow, sharp edge for any secret-provider host that returns compressed
+/// responses.
 pub struct GenericHttpConnector {
     client: Arc<reqwest::Client>,
     rate_limiter: Option<Arc<DirectRateLimiter>>,

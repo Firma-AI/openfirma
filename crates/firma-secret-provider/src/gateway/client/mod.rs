@@ -17,6 +17,8 @@
 //!
 //! Parse it with [`GatewayEndpoint::parse`] and pass it to [`GatewayClient::resolve_batch`].
 
+use std::collections::HashSet;
+
 use firma_http::{Authority, Str};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -172,10 +174,10 @@ impl GatewayClient {
     /// extracted value is pushed there rather than cached locally.
     ///
     /// `domain` scopes the pushed secret to that request hosts, mirroring a CLI
-    /// intercept's `domain_selector`-derived scope; empty slice means it's unscoped
-    /// (resolves for any request host) — the common case for HTTP vaults, whose
-    /// response carries a credential meant for later use against some other
-    /// downstream host, not the vault itself.
+    /// intercept's `domain_selector`-derived scope; an empty set means it's
+    /// unscoped (resolves for any request host) — the common case for HTTP
+    /// vaults, whose response carries a credential meant for later use against
+    /// some other downstream host, not the vault itself.
     ///
     /// # Errors
     ///
@@ -186,9 +188,9 @@ impl GatewayClient {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn push_secret(
         &self,
-        placeholder: &SecretPlaceholder,
-        value: &SecretString,
-        domain: Vec<Authority>,
+        placeholder: SecretPlaceholder,
+        value: SecretString,
+        domain: HashSet<Authority>,
     ) -> Result<SecretPlaceholder, GatewayClientError> {
         use base64::Engine as _;
 
@@ -228,7 +230,7 @@ impl GatewayClient {
         match serde_json::from_str::<PushResponse>(&response_line) {
             Ok(PushResponse::Ok {
                 placeholder: returned,
-            }) if &returned == placeholder => Ok(returned),
+            }) if returned == placeholder => Ok(returned),
             Ok(PushResponse::Ok {
                 placeholder: returned,
             }) => Err(GatewayClientError::ProtocolViolation(
