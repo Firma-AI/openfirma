@@ -1,3 +1,5 @@
+use crate::glob::glob_match;
+
 use super::{MatcherRule, MatchingResolution, NonEmptyString, SecretMatcher};
 
 pub type HttpMatcherRule = MatcherRule<PathAndMatcher, PathOnly>;
@@ -85,41 +87,4 @@ pub struct PathOnly {
     /// Path glob pattern (e.g. `"/v1/secrets/*"`). `None` matches any path on
     /// the spec's host and acts as the spec's fallback.
     pub path: NonEmptyString,
-}
-
-/// Simple glob matching supporting `*` as a wildcard matching any sequence of
-/// characters (including path separators).
-///
-/// - `*` matches anything.
-/// - `/v1/secrets/*` matches `/v1/secrets/get` and `/v1/secrets/get/abc`.
-fn glob_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == value;
-    }
-
-    let mut pos = 0usize;
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        match value[pos..].find(part) {
-            Some(found) => {
-                if i == 0 && found != 0 {
-                    return false;
-                }
-                pos += found + part.len();
-            }
-            None => return false,
-        }
-    }
-
-    match parts.last() {
-        Some(last) if !last.is_empty() => value.ends_with(last),
-        _ => true,
-    }
 }

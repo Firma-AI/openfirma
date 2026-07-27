@@ -9,6 +9,7 @@
 //! itself against MITM'd response bodies.
 
 pub mod gateway;
+mod glob;
 mod matcher;
 pub mod non_empty;
 mod placeholder;
@@ -16,8 +17,9 @@ mod registry;
 pub mod spec;
 
 pub use gateway::{GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest};
+pub use glob::glob_match;
 pub use matcher::{CompiledMatcher, MatcherError};
-pub use placeholder::SecretPlaceholder;
+pub use placeholder::{PLACEHOLDER_PREFIX, SecretPlaceholder};
 pub use registry::IntegrationRegistry;
 pub use secrecy::{ExposeSecret, SecretString};
 pub use spec::{

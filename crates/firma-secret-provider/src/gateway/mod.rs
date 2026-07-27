@@ -13,6 +13,8 @@
 //! transport that speaks the protocol over a [`client::config::GatewayClientConfig`]-tuned
 //! connection to an [`endpoint::GatewayEndpoint`].
 
+use std::collections::HashSet;
+
 use firma_http::Authority;
 use firma_http::Str;
 use serde::{Deserialize, Serialize};
@@ -64,9 +66,9 @@ pub struct PushRequest<'a> {
     /// Hosts the secret is scoped to, mirroring a CLI intercept's
     /// `domain_selector`-derived scope: one entry per host the matcher
     /// extracted from the item. A secret may legitimately be scoped to more
-    /// than one host; an empty vector means the secret is unscoped and
+    /// than one host; an empty set means the secret is unscoped and
     /// resolves for any request host.
-    pub domain: Vec<Authority>,
+    pub domain: HashSet<Authority>,
 }
 
 /// Per-placeholder outcome of a [`ResolveRequest`]. One placeholder failing
