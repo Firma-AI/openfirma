@@ -88,11 +88,11 @@ fn authenticated_uri_is_sanitized_and_credentials_are_stripped() {
         .rewrite(
             br#"[{"key":"token","value":"AAA","domain":"http://username:password@example.com/path"}]"#, // trufflehog:ignore
             &mut |_, _, domain, _| {
-                domains.push(domain.map(ToString::to_string));
+                domains.push(domain.iter().map(ToString::to_string).collect::<Vec<_>>());
                 String::new()
             },
         )
         .unwrap();
 
-    assert_eq!(domains, [Some("example.com".into())]);
+    assert_eq!(domains, [vec!["example.com".to_owned()]]);
 }

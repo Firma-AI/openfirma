@@ -39,7 +39,7 @@ impl CompiledRegexMatcher {
     pub(super) fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(&str, Secret, Option<&Authority>, Option<&str>) -> String,
+        mint: &mut impl FnMut(&str, Secret, &[Authority], Option<&str>) -> String,
     ) -> Result<Vec<u8>, MatcherError> {
         enum Item<'a> {
             Str(&'a str),
@@ -71,6 +71,7 @@ impl CompiledRegexMatcher {
                     found: self.groups(Some(&caps)).join(", "),
                 })?
                 .map_err(|_| MatcherError::EmptyGroup(NAME))?;
+
             let domain = match caps.name(DOMAIN) {
                 Some(m) => Some(parse_authority(m.as_str())?),
                 None if has_domain => {
@@ -100,11 +101,14 @@ impl CompiledRegexMatcher {
                     name,
                     secret,
                     domain,
-                } => Either::Right(
-                    mint(&name, Secret::new(&secret), domain.as_ref(), None)
-                        .into_bytes()
-                        .into_iter(),
-                ),
+                } => {
+                    let domains = domain.into_iter().collect::<Vec<_>>();
+                    Either::Right(
+                        mint(&name, Secret::new(&secret), &domains, None)
+                            .into_bytes()
+                            .into_iter(),
+                    )
+                }
             })
             .collect())
     }

@@ -1,7 +1,7 @@
 use firma_secret_provider::{CompiledMatcher, MatcherError};
 use serde_json::Value;
 
-use crate::support::json;
+use crate::support::{json, json_record_key_name};
 
 #[test]
 fn relative_paths_rewrite_absolute_escaped_locations() {
@@ -61,6 +61,53 @@ fn root_relative_self_selection_rewrites_the_record() {
 }
 
 #[test]
+fn record_key_name_is_derived_from_the_records_own_json_pointer() {
+    let compiled = CompiledMatcher::compile(&json_record_key_name("$.data.data.*", "$")).unwrap();
+    let mut pairs = Vec::new();
+    let output = compiled
+        .rewrite(
+            br#"{"data":{"data":{"password":"hunter2","user":"admin"},"metadata":{"version":1}}}"#,
+            &mut |name, value, _, _| {
+                pairs.push((name.to_owned(), value.expose().to_owned()));
+                format!("P:{name}")
+            },
+        )
+        .unwrap();
+    let output: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(
+        output,
+        serde_json::json!({
+            "data": {
+                "data": {"password": "P:password", "user": "P:user"},
+                "metadata": {"version": 1}
+            }
+        })
+    );
+    assert_eq!(
+        pairs,
+        [
+            ("password".into(), "hunter2".into()),
+            ("user".into(), "admin".into())
+        ]
+    );
+}
+
+#[test]
+fn record_key_name_fails_closed_when_record_has_no_parent_key() {
+    let compiled = CompiledMatcher::compile(&json_record_key_name("$", "$")).unwrap();
+    let error = compiled
+        .rewrite(br#""bare-secret""#, &mut |_, _, _, _| String::new())
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::RecordKeyUnavailable { record_index: 0 }
+    );
+    insta::assert_snapshot!(error.to_string(), @"json matcher name (record_key) has no parent key in record 0");
+}
+
+#[test]
 fn zero_records_fails_closed() {
     let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
     let error = compiled
@@ -116,12 +163,12 @@ fn multiple_record_name_matches_fail_before_minting() {
     std::assert_matches!(
         &error,
         MatcherError::RecordSelectorMatchCount {
-            selector: "name_path",
+            selector: "name",
             record_index: 1,
             matches: 2
         }
     );
-    insta::assert_snapshot!(error.to_string(), @"json matcher name_path selected 2 node(s) in record 1; expected exactly one");
+    insta::assert_snapshot!(error.to_string(), @"json matcher name selected 2 node(s) in record 1; expected exactly one");
     assert_eq!(mint_count, 0);
 }
 
@@ -139,11 +186,11 @@ fn json_empty_matches_are_rejected() {
     std::assert_matches!(
         &error,
         MatcherError::EmptyNode {
-            selector: "name_path",
+            selector: "name",
             record_index: 0,
         }
     );
-    insta::assert_snapshot!(error.to_string(), @"json matcher name_path selected a whitespace string in record 0");
+    insta::assert_snapshot!(error.to_string(), @"json matcher name selected a whitespace string in record 0");
     assert!(minted.is_empty());
 }
 

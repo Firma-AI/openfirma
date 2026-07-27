@@ -49,13 +49,13 @@ impl CompiledMatcher {
             SecretMatcher::Json {
                 record_path,
                 value_path,
-                name_path,
+                name,
                 item_selector,
                 domain_selector,
             } => CompiledJsonMatcher::compile(
                 record_path,
                 value_path,
-                name_path,
+                name,
                 item_selector.as_ref(),
                 domain_selector.as_ref(),
             )
@@ -69,11 +69,15 @@ impl CompiledMatcher {
 
     /// Extract secrets from `output` and return it rewritten with placeholders.
     ///
-    /// `mint(name, value, domain, item) -> placeholder` is invoked once per
+    /// `mint(name, value, domains, item) -> placeholder` is invoked once per
     /// extracted secret:
     /// - `name`: field label (always present).
     /// - `value`: plaintext secret.
-    /// - `domain`: hostname scope when `domain_selector` is configured, else `None`.
+    /// - `domains`: hostname scopes when `domain_selector` is configured, else
+    ///   empty. A secret may legitimately be scoped to more than one host
+    ///   (e.g. a `domain_selector` matching several URLs on the same vault
+    ///   item), so all of them are passed through; an empty slice means the
+    ///   secret is unscoped and resolves for any host.
     /// - `item`: item title when `item_selector` is configured, else `None`.
     ///
     /// The caller mints and stores the `placeholder → value` mapping and returns
@@ -87,7 +91,7 @@ impl CompiledMatcher {
     pub fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(&str, Secret, Option<&Authority>, Option<&str>) -> String,
+        mint: &mut impl FnMut(&str, Secret, &[Authority], Option<&str>) -> String,
     ) -> Result<Vec<u8>, MatcherError> {
         match &self.kind {
             MatcherKind::Json(matcher) => matcher.rewrite(output, mint),

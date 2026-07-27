@@ -1,0 +1,5 @@
+---
+source: crates/firma-secret-provider/tests/integration/registry.rs
+expression: out
+---
+{"request_id":"abcd1234-5678-90ab-cdef-1234567890ab","data":{"data":{"password":"[placeholder]","username":"[placeholder]"},"metadata":{"version":1}}}

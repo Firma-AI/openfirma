@@ -1,5 +1,6 @@
 use std::{fmt, ops::Deref};
 
+/// Returned by [`NonEmptyStr::new`] when the input is empty (after trimming).
 #[derive(Debug, thiserror::Error)]
 #[error("empty string")]
 pub(super) struct EmptyError;
