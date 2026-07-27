@@ -300,6 +300,15 @@ pub enum CommandMediatorEndpoint {
     Unix { path: PathBuf },
 }
 
+impl std::fmt::Display for CommandMediatorEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tcp { addr } => write!(f, "tcp://{addr}"),
+            Self::Unix { path } => write!(f, "unix://{}", path.display()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandMediatorHitlMode {
