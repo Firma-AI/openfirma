@@ -40,7 +40,7 @@ pub enum ControlCommand {
 ///
 /// Effects are executed by the runner after command application. This keeps
 /// application state free of terminal and process ownership.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlEffect {
     /// Runtime announcement to handle at the event-loop boundary.
     Announce(ControlAnnouncement),

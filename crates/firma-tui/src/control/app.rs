@@ -2,8 +2,12 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::control::state::{
-    AuditFilter, AuditRow, AuditState, AuditViewportMode, ControlRuntimeState, ControlStatus, Pane,
+use crate::control::{
+    error::ControlError,
+    state::{
+        AuditFilter, AuditRow, AuditState, AuditViewportMode, ControlRuntimeState, ControlStatus,
+        Pane,
+    },
 };
 
 /// Mutable application state for Policy Control.
@@ -12,11 +16,14 @@ use crate::control::state::{
 /// pane focus, help visibility, audit buffer state, and the runtime status
 /// rendered in the terminal frame.
 pub struct App {
-    should_quit: bool,
+    runtime_state: ControlRuntimeState,
     selected_pane: Pane,
     help_visible: bool,
     pending_key_prefix: Option<KeyPrefix>,
-    status: ControlStatus,
+    policy_dir: Option<PathBuf>,
+    audit_connected: bool,
+    rewrite_queue_len: usize,
+    last_policy_error: Option<ControlError>,
     audit: AuditState,
 }
 
@@ -25,13 +32,15 @@ impl App {
     /// source state.
     #[must_use]
     pub fn new(policy_dir: Option<PathBuf>, audit_connected: bool) -> Self {
-        let status = ControlStatus::new(policy_dir, audit_connected);
         Self {
-            should_quit: false,
+            runtime_state: ControlRuntimeState::Running,
             selected_pane: Pane::Policies,
             help_visible: false,
             pending_key_prefix: None,
-            status,
+            policy_dir,
+            audit_connected,
+            rewrite_queue_len: 0,
+            last_policy_error: None,
             audit: AuditState::default(),
         }
     }
@@ -47,12 +56,7 @@ impl App {
     /// Returns true once the runner should stop processing events.
     #[must_use]
     pub const fn should_quit(&self) -> bool {
-        self.should_quit || self.status.runtime_state.is_shutting_down()
-    }
-
-    /// Marks the app as ready to exit.
-    pub const fn quit(&mut self) {
-        self.should_quit = true;
+        self.runtime_state.is_shutting_down()
     }
 
     /// Requests a graceful shutdown.
@@ -60,13 +64,47 @@ impl App {
     /// The runtime state is updated before setting the quit flag so the final
     /// status snapshot reflects that shutdown has started.
     pub fn request_quit(&mut self) {
-        self.status.runtime_state = ControlRuntimeState::ShuttingDown;
-        self.quit();
+        self.runtime_state = ControlRuntimeState::ShuttingDown;
     }
 
-    /// Marks the app as accepting input and external events.
-    pub const fn mark_running(&mut self) {
-        self.status.runtime_state = ControlRuntimeState::Running;
+    /// Current lifecycle state.
+    #[must_use]
+    pub const fn runtime_state(&self) -> ControlRuntimeState {
+        self.runtime_state
+    }
+
+    /// Updates status fields owned by runner-managed queues.
+    ///
+    /// A shutting-down queue moves the runtime into shutdown. Otherwise the
+    /// runtime state is recalculated from the current app state.
+    pub fn sync_rewrite_queue(&mut self, rewrite_queue_len: usize, shutting_down: bool) {
+        self.rewrite_queue_len = rewrite_queue_len;
+        if shutting_down {
+            self.runtime_state = ControlRuntimeState::ShuttingDown;
+        } else {
+            self.refresh_runtime_state();
+        }
+    }
+
+    /// Builds a point-in-time status snapshot for rendering and tests.
+    #[must_use]
+    pub fn status(&self) -> ControlStatus {
+        ControlStatus {
+            runtime_state: self.runtime_state,
+            policy_dir: self.policy_dir.clone(),
+            policy_count: 0,
+            audit_connected: self.audit_connected,
+            audit_rows: self.audit.rows_len(),
+            rewrite_queue_len: self.rewrite_queue_len,
+            pending_rewrites: 0,
+            last_policy_error: self.last_policy_error.clone(),
+        }
+    }
+
+    /// Records a policy error and marks the runtime as errored.
+    pub fn set_policy_error(&mut self, error: ControlError) {
+        self.last_policy_error = Some(error);
+        self.runtime_state = ControlRuntimeState::Error;
     }
 
     /// Toggles the help overlay.
@@ -134,16 +172,10 @@ impl App {
         }
     }
 
-    /// Current runtime status rendered by the frame.
-    #[must_use]
-    pub const fn status(&self) -> &ControlStatus {
-        &self.status
-    }
-
     /// Authority policy directory, when it was resolved from the stack config.
     #[must_use]
     pub fn policy_dir(&self) -> Option<&Path> {
-        self.status.policy_dir.as_deref()
+        self.policy_dir.as_deref()
     }
 
     /// Changes the audit decision filter.
@@ -192,7 +224,6 @@ impl App {
     /// Appends one audit row and updates audit selection.
     pub fn push_audit_row(&mut self, row: AuditRow) {
         self.audit.push_row(row);
-        self.status.audit_rows = self.audit.rows_len();
     }
 
     /// Appends several audit rows in source order.
@@ -215,6 +246,20 @@ impl App {
     /// Clears any pending multi-key prefix.
     pub fn clear_g_prefix(&mut self) {
         self.pending_key_prefix = None;
+    }
+
+    fn refresh_runtime_state(&mut self) {
+        if self.runtime_state == ControlRuntimeState::ShuttingDown {
+            return;
+        }
+
+        self.runtime_state = if self.last_policy_error.is_some() {
+            ControlRuntimeState::Error
+        } else if self.rewrite_queue_len > 0 {
+            ControlRuntimeState::Rewriting
+        } else {
+            ControlRuntimeState::Running
+        };
     }
 }
 

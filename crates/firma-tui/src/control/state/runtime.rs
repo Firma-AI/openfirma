@@ -7,6 +7,10 @@ pub enum ControlRuntimeState {
     Starting,
     /// The app is accepting input and external events normally.
     Running,
+    /// A blocking editor temporarily owns the terminal.
+    EditingPolicy,
+    /// At least one policy operation is queued or in progress.
+    Rewriting,
     /// Shutdown has been requested and the runner should stop.
     ShuttingDown,
     /// The app has recorded a recoverable status error.
@@ -20,6 +24,8 @@ impl ControlRuntimeState {
         match self {
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::EditingPolicy => "editing",
+            Self::Rewriting => "rewriting",
             Self::ShuttingDown => "stopping",
             Self::Error => "error",
         }
