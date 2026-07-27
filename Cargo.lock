@@ -1716,6 +1716,7 @@ dependencies = [
  "firma-process-orchestrator",
  "firma-protobuf",
  "firma-runtime-state",
+ "firma-secret-provider",
  "firma-sidecar",
  "firma-test-helpers",
  "fs-err",

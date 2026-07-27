@@ -24,6 +24,7 @@ firma-identifiers.workspace = true
 firma-process-orchestrator.workspace = true
 firma-protobuf.workspace = true
 firma-runtime-state.workspace = true
+firma-secret-provider.workspace = true
 firma-sidecar.workspace = true
 hex.workspace = true
 jiff = { workspace = true, features = ["serde"] }
