@@ -377,6 +377,62 @@ impl From<DeferDuration> for Duration {
     }
 }
 
+/// How to extract `(name, value)` pairs from a vault CLI's stdout or an
+/// HTTP vault's response body.
+///
+/// Defined in `IntegrationRegistry` built-in specs and optional explicit
+/// extractor config; the execution (`JSONPath` / `Regex` compilation and
+/// rewrite) lives in `firma-secret-provider`. Internally tagged
+/// (`{"type": "json", ...}` rather than the default `{"Json": {...}}`) so it
+/// nests as a flat table when embedded in TOML (e.g. the Sidecar's
+/// `http_secret_providers` config) as well as JSON.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SecretMatcher {
+    /// `JSONPath` extraction over structured output.
+    Json {
+        /// `JSONPath` selecting each secret value (`@match_value`).
+        value_path: String,
+        /// `JSONPath` selecting the matching name (`@match_name`), aligned by
+        /// document order with the value path.
+        name_path: String,
+        /// Optional `JSONPath` selecting the item title for structured-item
+        /// stores. Substituted into the `{item}` marker of the placeholder
+        /// template. When the path selects a single node it is broadcast to all
+        /// extracted values; when it selects N nodes they are aligned
+        /// positionally. Use this for integrations that group multiple fields
+        /// under a named item (e.g. 1Password `$.title`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_path: Option<String>,
+        /// Optional `JSONPath` selecting the domain (hostname) associated with
+        /// each secret. When the path selects a single node it is broadcast to
+        /// all extracted values; when it selects N nodes they are aligned
+        /// positionally. A node that is not a string (e.g. `null`) is treated
+        /// as absent (wildcard). Use this for integrations whose vault items
+        /// carry a URL or hostname field (e.g. 1Password `urls[0].href`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        domain_path: Option<String>,
+        /// When `true` and `domain_path` is set, the selected value is parsed
+        /// as a URL and only the `host` portion is stored. Use this for
+        /// integrations that store full URLs rather than bare hostnames
+        /// (e.g. 1Password `urls[].href` stores `https://github.com`).
+        #[serde(default)]
+        domain_is_url: bool,
+    },
+    /// `Regex` extraction over text output. The pattern carries a required
+    /// `value` and `name` named capture group, and an optional `domain` group
+    /// (`@match_pattern`).
+    Regex {
+        /// The `Regex` source.
+        pattern: String,
+        /// When `true` and the pattern has a `domain` capture group, the
+        /// captured value is parsed as a URL and only the `host` portion is
+        /// stored. Mirrors the same flag on the `Json` variant.
+        #[serde(default)]
+        domain_is_url: bool,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

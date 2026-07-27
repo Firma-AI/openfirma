@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fmt,
     hash::{Hash, Hasher},
     ops::Deref,
@@ -81,10 +80,7 @@ impl<'de> Deserialize<'de> for Method {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        struct Temp<'a>(#[serde(borrow)] Cow<'a, str>);
-
-        let temp = Temp::deserialize(deserializer)?;
+        let temp = crate::Str::deserialize(deserializer)?;
         http::Method::from_str(temp.0.as_ref())
             .map(Method)
             .map_err(serde::de::Error::custom)

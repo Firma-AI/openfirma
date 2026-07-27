@@ -1,6 +1,6 @@
 //! Cedar entity UID types and shared schema for Firma policy evaluation.
 //!
-//! Encodes the three roles used in Firma policy evaluation and produces the
+//! Encodes the entity roles used in Firma policy evaluation and produces the
 //! Cedar entity UID via [`TryFrom`] using Cedar's typed builder API.  Both
 //! the Authority (issuance) and the Sidecar (enforcement) must use identical
 //! UID formats — keeping this type in `firma-core` makes that contract
@@ -8,11 +8,11 @@
 //!
 //! # Entity UID conventions
 //!
-//! | Variant    | Cedar type name    | ID source        |
-//! |------------|--------------------|------------------|
-//! | `Agent`    | `Firma::Agent`     | [`AgentId`]      |
-//! | `Action`   | `Firma::Action`    | normalizer string |
-//! | `Resource` | `Firma::Resource`  | normalizer string |
+//! | Variant          | Cedar type name        | ID source          |
+//! |------------------|------------------------|---------------------|
+//! | `Agent`          | `Firma::Agent`         | [`AgentId`]         |
+//! | `Action`         | `Firma::Action`        | normalizer string   |
+//! | `Resource`       | `Firma::Resource`      | normalizer string   |
 //!
 //! # Injection safety
 //!
@@ -313,11 +313,10 @@ forbid (
         let policies = files.concat().parse::<PolicySet>().unwrap();
 
         let errors = validate_policies(&policies, &schema, Some(&files)).unwrap_err();
-        assert_eq!(
-            &errors.0.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            &[
-                "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found"
-            ]
-        );
+        let actual = errors.0.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let expected = vec![
+            "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found".to_string(),
+        ];
+        assert_eq!(actual, expected);
     }
 }
