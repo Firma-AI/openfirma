@@ -1616,6 +1616,7 @@ dependencies = [
 name = "firma-sidecar"
 version = "0.1.4"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "arc-swap",
  "async-trait",
@@ -1651,12 +1652,14 @@ dependencies = [
  "prost-types",
  "rand 0.9.4",
  "rcgen",
+ "regex",
  "reqwest",
  "rustls",
  "rustls-pemfile",
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_json_path",
  "serde_repr",
  "sha2 0.11.0",
  "tempfile",
@@ -1675,6 +1678,7 @@ dependencies = [
  "wiremock",
  "x509-parser",
  "xxhash-rust",
+ "zeroize",
 ]
 
 [[package]]
