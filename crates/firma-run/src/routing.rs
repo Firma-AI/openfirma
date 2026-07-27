@@ -290,6 +290,14 @@ pub struct AutostartFlags {
     /// When `true`, inject `mode = "monitor"` into the synthesized sidecar
     /// config. Passed through from `RunInput.monitor_mode`.
     pub monitor_mode: bool,
+    /// Secret gateway address advertised to the autostarted Sidecar via
+    /// `FIRMA_SECRET_GATEWAY_ADDR`. `None` when no secret providers are configured.
+    pub secret_gateway_addr: Option<String>,
+    /// HTTP-shaped entries from `ResolvedProfile::secret_providers`, mirrored
+    /// into the synthesized sidecar config's `http_secret_providers` so the
+    /// Sidecar's MITM path can intercept matching vault responses. Empty when
+    /// no HTTP providers are configured.
+    pub http_secret_providers: Vec<firma_secret_provider::HttpIntegrationSpec>,
 }
 
 impl Default for AutostartFlags {
@@ -306,6 +314,8 @@ impl Default for AutostartFlags {
             capability_seed_path: None,
             use_http_proxy_sidecar: false,
             monitor_mode: false,
+            secret_gateway_addr: None,
+            http_secret_providers: Vec::new(),
         }
     }
 }
@@ -1183,6 +1193,7 @@ fn create_log_alias(marker_dir: &Path, alias_name: &str, target: &Path) -> Resul
             target.display()
         ))
     })?;
+
     let alias = marker_dir.join(alias_name);
     match std::fs::symlink_metadata(&alias) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
