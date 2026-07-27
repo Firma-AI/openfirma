@@ -70,6 +70,8 @@ fn monitor_mode_opt_in_forwards_allow_env_to_child() {
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
         monitor_mode: true,
+        secret_gateway_addr: None,
+        http_secret_providers: Vec::new(),
     })
     .expect("supervisor spawned");
 

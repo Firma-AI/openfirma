@@ -208,6 +208,14 @@ pub struct AutostartFlags {
     /// When `true`, inject `mode = "monitor"` into the synthesized sidecar
     /// config. Passed through from `RunInput.monitor_mode`.
     pub monitor_mode: bool,
+    /// Secret gateway address advertised to the autostarted Sidecar via
+    /// `FIRMA_SECRET_GATEWAY_ADDR`. `None` when no secret providers are configured.
+    pub secret_gateway_addr: Option<String>,
+    /// HTTP-shaped entries from `ResolvedProfile::secret_providers`, mirrored
+    /// into the synthesized sidecar config's `http_secret_providers` so the
+    /// Sidecar's MITM path can intercept matching vault responses. Empty when
+    /// no HTTP providers are configured.
+    pub http_secret_providers: Vec<firma_secret_provider::HttpIntegrationSpec>,
 }
 
 impl Default for AutostartFlags {
@@ -224,6 +232,8 @@ impl Default for AutostartFlags {
             capability_seed_path: None,
             use_http_proxy_sidecar: false,
             monitor_mode: false,
+            secret_gateway_addr: None,
+            http_secret_providers: Vec::new(),
         }
     }
 }
@@ -779,6 +789,8 @@ fn autostart_sidecar(
         capability_seed_path: flags.capability_seed_path.clone(),
         use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
         monitor_mode: flags.monitor_mode,
+        secret_gateway_addr: flags.secret_gateway_addr.clone(),
+        http_secret_providers: flags.http_secret_providers.clone(),
         // `runtime_dir` is the state dir `firma monitor` resolves, so a
         // per-run sidecar with no configured audit sink still writes a
         // monitorable `<state_dir>/audit.jsonl`.

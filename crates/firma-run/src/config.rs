@@ -35,6 +35,20 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
+    /// Resolved secret-provider integrations: CLI vault tools keyed by binary
+    /// basename, HTTP vaults keyed by `provider_id`. A CLI entry activates a
+    /// secret-mediation shim for that binary (stdio routed through the
+    /// firma-run broker); an HTTP entry is mirrored into the autostarted
+    /// Sidecar's own config so it can intercept MITM'd responses from that
+    /// vault. The map value is the fully resolved
+    /// [`IntegrationSpec`](firma_secret_provider::IntegrationSpec) — a
+    /// built-in looked up by name (CLI only), or a custom spec defined
+    /// inline. An entry being present here is itself the authorization to
+    /// intercept — no separate policy check gates it; see the secrets design
+    /// doc. Merged across `[run.defaults]` and the active profile; entries
+    /// defined later win on name collision (profile overrides defaults,
+    /// custom overrides built-in).
+    pub secret_providers: BTreeMap<String, firma_secret_provider::IntegrationSpec>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
@@ -339,6 +353,9 @@ pub enum SeccompRuntimeMode {
 
 /// Fallback sidecar endpoint used only to keep `ResolvedProfile.sidecar_endpoint`
 /// populated on local autostart, where the supervisor substitutes its own UDS.
+#[cfg(target_family = "unix")]
+const DEFAULT_SIDECAR_ENDPOINT: &str = "unix:///tmp/sidecar.sock";
+#[cfg(not(target_family = "unix"))]
 const DEFAULT_SIDECAR_ENDPOINT: &str = "tcp://127.0.0.1:8080";
 const DEFAULT_MANAGED_POLICY_FILE: &str = "generic-local-command-v1.toml";
 const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
@@ -366,6 +383,151 @@ struct FileConfig {
     profiles: BTreeMap<String, ProfilePatch>,
 }
 
+/// Matcher configuration for a custom secret-provider spec (an inline table
+/// entry in `secret_providers`).
+///
+/// Mirrors [`firma_core::SecretMatcher`] with a `type` discriminator tag so
+/// TOML config reads naturally (e.g. `type = "json"`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum SecretMatcherConfig {
+    Json {
+        value_path: String,
+        name_path: String,
+        #[serde(default)]
+        item_path: Option<String>,
+        #[serde(default)]
+        domain_path: Option<String>,
+        #[serde(default)]
+        domain_is_url: bool,
+    },
+    Regex {
+        pattern: String,
+        #[serde(default)]
+        domain_is_url: bool,
+    },
+}
+
+impl From<SecretMatcherConfig> for firma_core::SecretMatcher {
+    fn from(c: SecretMatcherConfig) -> Self {
+        match c {
+            SecretMatcherConfig::Json {
+                value_path,
+                name_path,
+                item_path,
+                domain_path,
+                domain_is_url,
+            } => Self::Json {
+                value_path,
+                name_path,
+                item_path,
+                domain_path,
+                domain_is_url,
+            },
+            SecretMatcherConfig::Regex {
+                pattern,
+                domain_is_url,
+            } => Self::Regex {
+                pattern,
+                domain_is_url,
+            },
+        }
+    }
+}
+
+/// A custom secret-provider integration spec: one full-table entry in
+/// `secret_providers`, explicitly tagged by `type` so a CLI-only field (e.g.
+/// `name`) and an HTTP-only field (e.g. `host`) can never be mixed on the
+/// same entry — an untagged CLI-vs-HTTP guess would also give worse parse
+/// errors for a malformed table than an explicit tag does.
+///
+/// Minimal CLI example (JSON output with `{ key, value }` pairs):
+///
+/// ```toml
+/// [run.defaults]
+/// secret_providers = [
+///     { type = "cli", name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+/// ]
+/// ```
+///
+/// Minimal HTTP example:
+///
+/// ```toml
+/// [run.defaults]
+/// secret_providers = [
+///     { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+/// ]
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum SecretProviderSpec {
+    Cli(CliProviderSpec),
+    Http(HttpProviderSpec),
+}
+
+/// CLI vault-tool spec: a `type = "cli"` entry in `secret_providers`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CliProviderSpec {
+    /// Binary basename to shim.
+    pub(crate) name: String,
+    /// Stable integration identity, used for placeholder minting and to
+    /// scope pushes to the broker's secret store. Defaults to `name` when
+    /// omitted — most custom integrations have no separate display identity
+    /// from their binary name.
+    #[serde(default)]
+    pub(crate) provider_id: Option<String>,
+    /// Placeholder token template; `{name}` is substituted with the
+    /// percent-encoded secret key (e.g. `"firma-secret://demo/{name}"`).
+    pub(crate) placeholder_template: String,
+    /// How to extract `(name, value)` pairs from the tool's stdout.
+    pub(crate) matcher: SecretMatcherConfig,
+    /// Credential env vars to forward from the broker's environment to the
+    /// subprocess. Defaults to none.
+    #[serde(default)]
+    pub(crate) credential_env_vars: Vec<String>,
+    /// Arg flags to strip before appending `forced_args`. Defaults to none.
+    #[serde(default)]
+    pub(crate) strip_arg_flags: Vec<String>,
+    /// Args appended after stripping. Defaults to none.
+    #[serde(default)]
+    pub(crate) forced_args: Vec<String>,
+}
+
+/// HTTP vault spec: a `type = "http"` entry in `secret_providers`. Mirrored
+/// into the autostarted Sidecar's own config so its MITM path can intercept
+/// matching responses — see [`crate::sidecar::config::synthesize`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct HttpProviderSpec {
+    /// Stable integration identity, used for placeholder minting and to
+    /// scope pushes to the broker's secret store (no default — HTTP
+    /// providers have no binary name to fall back to).
+    pub(crate) provider_id: String,
+    /// Host glob pattern to match against MITM'd responses (e.g.
+    /// `"secretsmanager.*.amazonaws.com"`).
+    pub(crate) host: String,
+    /// Optional path glob pattern. When absent, matches any path on `host`.
+    #[serde(default)]
+    pub(crate) path: Option<String>,
+    /// Placeholder token template; `{name}` is substituted with the
+    /// percent-encoded secret key.
+    pub(crate) placeholder_template: String,
+    /// How to extract `(name, value)` pairs from the response body.
+    pub(crate) matcher: SecretMatcherConfig,
+}
+
+/// One entry in `secret_providers`: either a bare string naming an existing
+/// built-in CLI integration (`"bws"`), or a full table defining a new custom
+/// integration (CLI or HTTP). TOML is self-describing, so this deserializes
+/// untagged based on whether the entry is a string or a table; the CLI-vs-HTTP
+/// distinction *within* the table form is resolved by [`SecretProviderSpec`]'s
+/// own `type` tag, not by this outer untagged split.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum SecretProviderPatch {
+    Named(String),
+    Custom(Box<SecretProviderSpec>),
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub(crate) struct ProfilePatch {
     pub(crate) backend: Option<BackendKind>,
@@ -387,6 +549,12 @@ pub(crate) struct ProfilePatch {
     pub(crate) sidecar_local_exec: Option<CommandMediatorPatch>,
     #[serde(default)]
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    /// Secret providers to activate: bare strings reference a built-in
+    /// integration, tables define a custom one. Additive across
+    /// `[run.defaults]` and the active profile (like `env_passthrough`);
+    /// entries appearing later win on name collision.
+    #[serde(default)]
+    pub(crate) secret_providers: Vec<SecretProviderPatch>,
     #[serde(default)]
     pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
@@ -501,6 +669,8 @@ impl ProfilePatch {
         env_passthrough.extend(higher.env_passthrough);
         let mut executable_policies = self.executable_policies;
         executable_policies.extend(higher.executable_policies);
+        let mut secret_providers = self.secret_providers;
+        secret_providers.extend(higher.secret_providers);
 
         let mounts = if higher.mounts.is_empty() {
             self.mounts
@@ -530,6 +700,7 @@ impl ProfilePatch {
             },
             sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
+            secret_providers,
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
             allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
@@ -596,8 +767,10 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let env_passthrough = patch
         .env_passthrough
         .into_iter()
-        .filter(|item: &String| !item.trim().is_empty())
+        .filter(|item| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
+
+    let secret_providers = resolve_secret_providers(patch.secret_providers)?;
 
     let mut env_set = patch.env_set;
     if let Some(paths) = patch.mask_home_paths {
@@ -665,6 +838,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         capability,
         sidecar_local_exec,
         executable_policies,
+        secret_providers,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
         allow_non_structural: patch.allow_non_structural,
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
@@ -766,12 +940,84 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
+        secret_providers: Vec::new(),
         codex_cli: None,
         use_http_proxy_sidecar: false,
         allow_non_structural: args.allow_non_structural,
         mask_home_paths: None,
         ca_trust_mode: None,
     }
+}
+
+/// Resolve the merged `secret_providers` patch entries into the final
+/// map (CLI entries keyed by binary basename, HTTP entries keyed by
+/// `provider_id`). Entries are processed in order, so a later entry (a
+/// higher-priority profile, or a custom spec appearing after a bare-name
+/// reference) wins on name collision.
+///
+/// # Errors
+///
+/// Returns [`RunError::ConfigValidation`] if a bare-string entry does not name
+/// a known built-in integration.
+fn resolve_secret_providers(
+    patch: Vec<SecretProviderPatch>,
+) -> Result<BTreeMap<String, firma_secret_provider::IntegrationSpec>, RunError> {
+    let builtins = firma_secret_provider::IntegrationRegistry::with_builtins();
+    let mut resolved = BTreeMap::new();
+    for entry in patch {
+        match entry {
+            SecretProviderPatch::Named(name) => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let spec = builtins.get(&name).cloned().ok_or_else(|| {
+                    RunError::ConfigValidation(format!(
+                        "unknown secret provider '{name}'; no built-in integration by that name \
+                         — provide a full spec to define a custom one"
+                    ))
+                })?;
+                resolved.insert(name, firma_secret_provider::IntegrationSpec::Cli(spec));
+            }
+            SecretProviderPatch::Custom(spec) => match *spec {
+                SecretProviderSpec::Cli(cli) => {
+                    let provider_id = cli
+                        .provider_id
+                        .filter(|id| !id.trim().is_empty())
+                        .unwrap_or_else(|| cli.name.clone());
+                    resolved.insert(
+                        cli.name.clone(),
+                        firma_secret_provider::IntegrationSpec::Cli(
+                            firma_secret_provider::CliIntegrationSpec {
+                                binary_name: cli.name,
+                                provider_id,
+                                credential_env_vars: cli.credential_env_vars,
+                                matcher: cli.matcher.into(),
+                                placeholder_template: cli.placeholder_template,
+                                strip_arg_flags: cli.strip_arg_flags,
+                                forced_args: cli.forced_args,
+                            },
+                        ),
+                    );
+                }
+                SecretProviderSpec::Http(http) => {
+                    resolved.insert(
+                        http.provider_id.clone(),
+                        firma_secret_provider::IntegrationSpec::Http(
+                            firma_secret_provider::HttpIntegrationSpec {
+                                provider_id: http.provider_id,
+                                host: http.host,
+                                path: http.path,
+                                matcher: http.matcher.into(),
+                                placeholder_template: http.placeholder_template,
+                            },
+                        ),
+                    );
+                }
+            },
+        }
+    }
+    Ok(resolved)
 }
 
 fn resolve_executable_policies(
@@ -1141,11 +1387,11 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint, capability_from_patch,
-        resolve_profile,
+        SandboxIdentityMode, SeccompRuntimeMode, capability_from_patch, resolve_profile,
     };
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
+    use crate::error::RunError;
 
     fn lease_patch(requested_actions: Option<Vec<String>>) -> CapabilityLeasePatch {
         CapabilityLeasePatch {
@@ -1236,9 +1482,7 @@ mod tests {
         assert_eq!(resolved.backend, BackendKind::default_for_current_host());
         assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp {
-                addr: "127.0.0.1:8080".parse().unwrap()
-            }
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
         );
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::SandboxUser);
         if cfg!(target_os = "linux")
@@ -1381,6 +1625,124 @@ path = "/tmp/capability.token"
     }
 
     #[test]
+    fn secret_providers_merge_across_defaults_and_profile() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+
+        let toml = r#"
+[run.defaults]
+secret_providers = ["bws", "  "]
+
+[run.profiles.codex]
+secret_providers = ["op"]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        // Defaults and profile are additive; blank entries are dropped.
+        assert!(resolved.secret_providers.contains_key("bws"));
+        assert!(resolved.secret_providers.contains_key("op"));
+        assert!(!resolved.secret_providers.contains_key(""));
+    }
+
+    #[test]
+    fn secret_providers_default_to_empty() {
+        let resolved = resolve_profile(&args("codex")).unwrap();
+        assert!(resolved.secret_providers.is_empty());
+    }
+
+    #[test]
+    fn secret_providers_named_entry_unknown_builtin_errors() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = ["not-a-real-integration"]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let err = resolve_profile(&run_args).unwrap_err();
+        assert!(matches!(err, RunError::ConfigValidation(_)));
+    }
+
+    #[test]
+    fn secret_providers_custom_spec_overrides_builtin_of_same_name() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    "bws",
+    { type = "cli", name = "bws", placeholder_template = "firma-secret://custom/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        let spec = resolved.secret_providers.get("bws").unwrap();
+        assert!(
+            spec.as_cli()
+                .expect("bws entry must resolve to a CLI spec")
+                .placeholder_template
+                .contains("custom")
+        );
+    }
+
+    #[test]
+    fn secret_providers_http_entry_resolves_by_provider_id() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        let spec = resolved
+            .secret_providers
+            .get("aws-secrets-manager")
+            .expect("http provider keyed by provider_id")
+            .as_http()
+            .expect("must resolve to an HTTP spec");
+        assert_eq!(spec.host, "secretsmanager.*.amazonaws.com");
+        assert_eq!(spec.provider_id, "aws-secrets-manager");
+    }
+
+    #[test]
+    fn secret_providers_http_entry_missing_type_tag_fails_closed() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    { provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let err = resolve_profile(&run_args).unwrap_err();
+        assert!(matches!(err, RunError::ConfigParse { .. }));
+    }
+
+    #[test]
     fn user_executable_policy_overrides_builtin_sandbox_mode() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
@@ -1417,10 +1779,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&args("claude-code")).unwrap();
         assert_eq!(resolved.id, "claude-code");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
         assert!(resolved.env_passthrough.contains("ANTHROPIC_API_KEY"));
     }
 
@@ -1461,10 +1823,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&args("codex")).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.id, "codex");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
     }
 
     #[test]
@@ -1474,10 +1836,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.id, "generic");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
     }
 
     #[test]
