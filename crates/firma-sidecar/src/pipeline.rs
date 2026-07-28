@@ -248,6 +248,15 @@ impl EnforcementPipeline {
         actions: &[ComposioAction],
     ) -> CompositeEnforcement {
         let bundle_version = self.constraint_enforcer.policy_version();
+
+        // An empty slice would otherwise produce `Dispatch { transport: None }`
+        // with no blocker, which the handler forwards unenforced. The decoder
+        // never emits empty batches, but that invariant lives in another
+        // module, so enforce it here as well.
+        if actions.is_empty() {
+            return empty_composite_fail_closed(request, session_id, bundle_version.as_deref());
+        }
+
         let mut children = Vec::with_capacity(actions.len());
 
         for action in actions {
@@ -624,6 +633,30 @@ impl EnforcementPipeline {
             });
         }
         Ok(())
+    }
+}
+
+/// Fail-closed composite result for an empty decoded action slice.
+fn empty_composite_fail_closed(
+    request: &RawRequest,
+    session_id: &str,
+    bundle_version: Option<&str>,
+) -> CompositeEnforcement {
+    let decision = EnforcementDecision::Deny {
+        reason: DenyReason::FailClosed,
+        stage: EnforcementStage::Normalization,
+        detail: "Composio composite enforcement received no actions; failing closed".to_string(),
+        envelope: None,
+        identity: None,
+    };
+    let audit_payload =
+        audit_payload_from_decision(&decision, request, session_id, Duration::ZERO, bundle_version);
+    CompositeEnforcement {
+        children: vec![CompositeActionResult {
+            decision,
+            audit_payload,
+        }],
+        disposition: CompositeDisposition::Block { blocker_index: 0 },
     }
 }
 

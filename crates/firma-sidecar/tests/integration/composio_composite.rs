@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use firma_core::{
     AbortReason, ActionParams, AgentId, CapabilityClaims, Connector, ConnectorError,
-    ConnectorResponse, ExecutionEnvelope, InjectedCredentials, ModificationSpec, RevocationStore,
-    StepUpSpec, TokenError, TokenId, TokenVerifier, TransportView,
+    ConnectorResponse, DenyReason, ExecutionEnvelope, InjectedCredentials, ModificationSpec,
+    RevocationStore, StepUpSpec, TokenError, TokenId, TokenVerifier, TransportView,
 };
 use firma_http::{HeaderName, Method};
 use firma_sidecar::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode};
@@ -461,6 +461,35 @@ async fn allowed_children_share_one_atomic_dispatch() -> anyhow::Result<()> {
         result.children[1].audit_payload.resource,
         "composio://gmail/GMAIL_SEND_EMAIL"
     );
+    Ok(())
+}
+
+/// An empty action slice must not reach dispatch: without this guard the
+/// disposition would be `Dispatch { transport: None }`, which the handler
+/// forwards unenforced.
+#[tokio::test]
+async fn empty_action_slice_fails_closed() -> anyhow::Result<()> {
+    let (request, _) = request_and_actions()?;
+    let result = pipeline(
+        PolicyMode::Allow,
+        CredentialMode::Shared,
+        SidecarMode::Enforce,
+    )?
+    .enforce_composite(&request, "sess_composite", &[])
+    .await;
+
+    assert!(matches!(
+        result.disposition,
+        CompositeDisposition::Block { blocker_index: 0 }
+    ));
+    assert_eq!(result.children.len(), 1);
+    assert!(matches!(
+        result.children[0].decision,
+        EnforcementDecision::Deny {
+            reason: DenyReason::FailClosed,
+            ..
+        }
+    ));
     Ok(())
 }
 
