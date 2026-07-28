@@ -92,7 +92,10 @@ before dispatch and evaluates them in input order.
 - If every child is allowed, the original request is dispatched once.
 - If any child blocks, the request is not dispatched.
 - Allowed siblings are audited as aborted for batch atomicity.
-- Monitor mode dispatches once and retains each would-block reason.
+- Monitor mode dispatches once and retains each would-block reason. This
+  extends to protocol-level denials: malformed payloads, unknown tools, and
+  protocol upgrades are forwarded in monitor mode with a `monitor_mode:`
+  audit annotation instead of being blocked.
 
 OpenFirma never splits, reorders, or partially forwards the batch.
 

@@ -679,6 +679,90 @@ async fn protected_composio_hosts_reject_protocol_upgrades() -> anyhow::Result<(
     Ok(())
 }
 
+/// Monitor mode must not change agent-visible behavior: a request the
+/// decoder would deny (unknown tool) is forwarded once and the audit
+/// record keeps the would-deny reason.
+#[tokio::test]
+async fn monitor_forwards_protocol_denial_with_would_deny_audit() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::Allow,
+            CredentialMode::Shared,
+            SidecarMode::Monitor,
+        )?),
+        registry,
+        audit_tx,
+    )
+    .with_composio_catalogs(catalogs()?);
+
+    let response = handler
+        .handle(direct_request("GMAIL_TOOL_NOT_IN_CATALOG"), "sess_composite")
+        .await;
+
+    assert!(matches!(response, HandledResponse::Passthrough(_)));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
+    let audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing protocol denial audit"))?;
+    assert_eq!(audit.decision, firma_sidecar::audit::Decision::Allow);
+    assert!(audit.deny_reason.starts_with("monitor_mode:"));
+    assert!(audit.deny_reason.contains("unknown_tool"));
+    Ok(())
+}
+
+/// Monitor mode observes protocol upgrades on protected Composio hosts
+/// instead of hard-blocking them; the returned audit payload keeps the
+/// would-deny reason.
+#[tokio::test]
+async fn monitor_observes_composio_protocol_upgrade() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector));
+    let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::Allow,
+            CredentialMode::Shared,
+            SidecarMode::Monitor,
+        )?),
+        registry,
+        audit_tx,
+    );
+
+    let authorization = handler
+        .authorize_upgrade(
+            RawRequest {
+                method: Method::POST,
+                host: "backend.composio.dev".to_string(),
+                path: "/upgrade".to_string(),
+                headers: HashMap::new(),
+                body: Some(b"{}".to_vec()),
+                is_https: true,
+            },
+            "sess_composite",
+        )
+        .await;
+
+    let UpgradeAuthorization::Allow { audit_payload, .. } = authorization else {
+        anyhow::bail!("expected observed Composio upgrade in monitor mode");
+    };
+    assert_eq!(
+        audit_payload.decision,
+        firma_sidecar::audit::Decision::Allow
+    );
+    assert!(audit_payload.deny_reason.starts_with("monitor_mode:"));
+    Ok(())
+}
+
 #[tokio::test]
 async fn handler_dispatches_original_batch_once_and_audits_every_child() -> anyhow::Result<()> {
     let (mut request, _) = request_and_actions()?;

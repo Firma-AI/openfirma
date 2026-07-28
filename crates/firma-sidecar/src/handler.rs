@@ -22,7 +22,7 @@ use crate::connector::ConnectorRegistry;
 use crate::normalizer::NormalizedEnvelope;
 use crate::pipeline::{
     CompositeActionResult, CompositeDisposition, EnforcementDecision, EnforcementPipeline,
-    RawRequest, audit_payload_from_decision,
+    RawRequest, audit_payload_from_decision, monitor_override,
 };
 
 /// Response produced by the transport-agnostic request handler.
@@ -483,13 +483,23 @@ impl RequestHandler {
                     envelope: None,
                     identity: None,
                 };
-                let audit_payload = audit_payload_from_decision(
+                let mut audit_payload = audit_payload_from_decision(
                     &decision,
                     request,
                     session_id,
                     std::time::Duration::ZERO,
                     None,
                 );
+                // Monitor mode observes protocol-level denials too: forward
+                // the original request once and keep the would-deny reason in
+                // the audit record, matching the pipeline's monitor override.
+                if self.pipeline.is_monitor() {
+                    monitor_override(&mut audit_payload);
+                    return Some(
+                        self.forward_composio_observed(request, session_id, audit_payload)
+                            .await,
+                    );
+                }
                 self.emit_audit(audit_payload).await;
                 Some(response_from_blocking_decision(&decision))
             }
@@ -504,13 +514,26 @@ impl RequestHandler {
         let decision = EnforcementDecision::Passthrough {
             detail: "recognized Composio non-execution request".to_string(),
         };
-        let mut audit_payload = audit_payload_from_decision(
+        let audit_payload = audit_payload_from_decision(
             &decision,
             request,
             session_id,
             std::time::Duration::ZERO,
             None,
         );
+        self.forward_composio_observed(request, session_id, audit_payload)
+            .await
+    }
+
+    /// Dispatch the original Composio request once with no injected
+    /// credentials, enrich and emit the given audit payload, and surface a
+    /// successful dispatch as a passthrough response.
+    async fn forward_composio_observed(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+        mut audit_payload: AuditPayload,
+    ) -> HandledResponse {
         let response = match passthrough_envelope(request, session_id) {
             Ok(envelope) => {
                 let (response, outcome) =
@@ -713,13 +736,23 @@ impl RequestHandler {
                 envelope: None,
                 identity: None,
             };
-            let audit_payload = audit_payload_from_decision(
+            let mut audit_payload = audit_payload_from_decision(
                 &decision,
                 &request,
                 session_id,
                 std::time::Duration::ZERO,
                 None,
             );
+            // Monitor mode observes the upgrade instead of blocking it: the
+            // relay proceeds without injected credentials and the audit
+            // record keeps the would-deny reason.
+            if self.pipeline.is_monitor() {
+                monitor_override(&mut audit_payload);
+                return UpgradeAuthorization::Allow {
+                    credentials: InjectedCredentials::empty(),
+                    audit_payload: Box::new(audit_payload),
+                };
+            }
             if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
                 tracing::error!("failed to send audit event: {err}");
             }

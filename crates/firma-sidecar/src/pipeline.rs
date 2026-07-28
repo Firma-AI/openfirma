@@ -157,6 +157,12 @@ impl EnforcementPipeline {
         self
     }
 
+    /// Return whether the pipeline runs in observe-only monitor mode.
+    #[must_use]
+    pub fn is_monitor(&self) -> bool {
+        self.mode == SidecarMode::Monitor
+    }
+
     /// Install a readiness view for Authority-backed runtime state.
     #[must_use]
     pub(crate) fn with_readiness(mut self, readiness: ReadinessView) -> Self {
@@ -757,7 +763,7 @@ fn rewrite_as_atomic_abort(child: &mut CompositeActionResult, detail: &str) {
     child.audit_payload.deny_reason = format!("{}: {detail}", AbortReason::BatchAtomicity.code());
 }
 
-fn monitor_override(payload: &mut AuditPayload) {
+pub(crate) fn monitor_override(payload: &mut AuditPayload) {
     let original_reason = std::mem::take(&mut payload.deny_reason);
     payload.decision = Decision::Allow;
     payload.deny_reason = format!("monitor_mode: {original_reason}");
