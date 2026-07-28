@@ -1,10 +1,12 @@
 //! State slices for the control surface.
 
 mod audit;
+mod policy;
 mod runtime;
 mod status;
 
 pub use audit::{AuditDecision, AuditFilter, AuditRow, AuditState, AuditViewportMode};
+pub use policy::{PoliciesState, PolicyRow, PolicyRowStatus};
 pub use runtime::ControlRuntimeState;
 pub use status::ControlStatus;
 

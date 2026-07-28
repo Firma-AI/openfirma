@@ -7,7 +7,12 @@ use ratatui::{
     widgets::{Block, BorderType, Borders},
 };
 
-/// Returns a centered rectangle capped to the available area.
+use crate::control::{
+    state::{AuditDecision, PolicyRowStatus},
+    toggle::PolicyState,
+};
+
+/// Returns a centered rectangle constrained to the available area.
 pub fn centered_popup(area: Rect, width: usize, height: usize) -> Rect {
     let width = u16::try_from(width).unwrap_or(u16::MAX).min(area.width);
     let height = u16::try_from(height).unwrap_or(u16::MAX).min(area.height);
@@ -20,7 +25,7 @@ pub fn centered_popup(area: Rect, width: usize, height: usize) -> Rect {
     }
 }
 
-/// Standard unfocused panel block.
+/// Builds a standard rounded panel block.
 pub fn panel(title: &'static str) -> Block<'static> {
     Block::default()
         .title_top(Line::styled(format!(" {title} "), accent_style()))
@@ -29,7 +34,7 @@ pub fn panel(title: &'static str) -> Block<'static> {
         .border_style(dim_style())
 }
 
-/// Panel block whose border reflects focus.
+/// Builds a panel whose border reflects focus.
 pub fn focused_panel(title: &'static str, focused: bool) -> Block<'static> {
     let style = if focused { accent_style() } else { dim_style() };
 
@@ -40,39 +45,24 @@ pub fn focused_panel(title: &'static str, focused: bool) -> Block<'static> {
         .border_style(style)
 }
 
-/// Low-emphasis text and border style.
+/// Normal foreground style for table values.
+pub fn base_style() -> Style {
+    Style::default().fg(Color::White)
+}
+
+/// Muted style for secondary text and borders.
 pub fn dim_style() -> Style {
     Style::default().fg(Color::DarkGray)
 }
 
-/// Normal table text style.
-pub fn base_style() -> Style {
-    Style::default().fg(Color::Gray)
-}
-
-/// Accent style used for focused labels and active controls.
+/// Accent style for active labels and controls.
 pub fn accent_style() -> Style {
     Style::default()
         .fg(Color::LightGreen)
         .add_modifier(Modifier::BOLD)
 }
 
-/// Header text style.
-pub fn header_style() -> Style {
-    Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD)
-}
-
-/// Style for an audit decision label.
-pub fn decision_style(decision: crate::control::AuditDecision) -> Style {
-    match decision {
-        crate::control::AuditDecision::Allow => Style::default().fg(Color::LightGreen),
-        crate::control::AuditDecision::Deny => Style::default().fg(Color::LightRed),
-    }
-}
-
-/// Style applied to a selected row while its pane is focused.
+/// Selected audit-row style.
 pub fn selected_style() -> Style {
     Style::default()
         .fg(Color::Black)
@@ -80,9 +70,67 @@ pub fn selected_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Warning style used for non-running runtime labels.
+/// Selected policy-row style.
+pub fn selected_policy_style() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Header style for table labels.
+pub fn header_style() -> Style {
+    dim_style().add_modifier(Modifier::BOLD)
+}
+
+/// Error style for failed policy and runtime states.
+pub fn error_style() -> Style {
+    Style::default()
+        .fg(Color::LightRed)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Warning style for transitional runtime states.
 pub fn warning_style() -> Style {
     Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD)
+}
+
+/// Returns the terminal style for a policy row status.
+pub fn status_style(status: PolicyRowStatus) -> Style {
+    match status {
+        PolicyRowStatus::State(state) => match state {
+            PolicyState::Enabled => Style::default().fg(Color::LightGreen),
+            PolicyState::Disabled => dim_style(),
+            PolicyState::MissingFile
+            | PolicyState::MissingId
+            | PolicyState::InvalidPolicy
+            | PolicyState::ReadError => error_style(),
+        },
+        PolicyRowStatus::Queued | PolicyRowStatus::Writing => Style::default().fg(Color::Yellow),
+        PolicyRowStatus::Error => error_style(),
+    }
+}
+
+/// Returns the compact terminal label for a policy row status.
+pub const fn status_label(status: PolicyRowStatus) -> &'static str {
+    match status {
+        PolicyRowStatus::State(PolicyState::Enabled) => "[ on ]",
+        PolicyRowStatus::State(PolicyState::Disabled) => "[ off ]",
+        PolicyRowStatus::State(PolicyState::MissingFile) => "[ missing ]",
+        PolicyRowStatus::State(PolicyState::MissingId) => "[ id? ]",
+        PolicyRowStatus::State(PolicyState::InvalidPolicy) => "[ invalid ]",
+        PolicyRowStatus::State(PolicyState::ReadError) => "[ readerr ]",
+        PolicyRowStatus::Queued => "[ queued ]",
+        PolicyRowStatus::Writing => "[ writing ]",
+        PolicyRowStatus::Error => "[ error ]",
+    }
+}
+
+/// Returns the terminal style for an audit decision.
+pub fn decision_style(decision: AuditDecision) -> Style {
+    match decision {
+        AuditDecision::Allow => Style::default().fg(Color::LightGreen),
+        AuditDecision::Deny => Style::default().fg(Color::LightRed),
+    }
 }

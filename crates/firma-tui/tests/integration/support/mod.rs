@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::VecDeque,
+    fs,
     path::Path,
     sync::mpsc::{self, Receiver, Sender},
     time::Duration,
@@ -8,25 +9,74 @@ use std::{
 
 use crossterm::event::KeyCode;
 use firma_tui::control::{
-    App, AuditDecision, AuditRow, ControlEffect, ControlError, ControlStatus, Event,
+    App, AuditDecision, AuditRow, ControlError, ControlStatus, Event, PolicyRowStatus,
     TerminalEventSource,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
-#[derive(Debug, Default)]
+pub const DEFAULT_POLICY_SOURCE: &str = r#"
+@id("first_policy")
+permit (
+    principal,
+    action,
+    resource
+);
+
+@id("second_policy")
+permit (
+    principal,
+    action,
+    resource
+) when { false }; // openfirma-control:disabled
+
+@id("third_policy")
+permit (
+    principal,
+    action,
+    resource
+);
+"#;
+
+pub const OTHER_POLICY_SOURCE: &str = r#"
+@id("fourth_policy")
+permit (
+    principal,
+    action,
+    resource
+) when { false }; // openfirma-control:disabled
+"#;
+
+pub fn permit_policy(id: &str) -> String {
+    format!(
+        r#"
+@id("{id}")
+permit (
+    principal,
+    action,
+    resource
+);
+"#
+    )
+}
+
+#[derive(Default)]
 pub struct FakeTerminal {
     events: RefCell<VecDeque<Event>>,
 }
 
 impl FakeTerminal {
-    pub fn with_key(key: KeyCode) -> Self {
-        Self::with_events([Event::Key(key)])
-    }
-
-    pub fn with_events(events: impl IntoIterator<Item = Event>) -> Self {
+    pub fn new(events: impl IntoIterator<Item = Event>) -> Self {
         Self {
             events: RefCell::new(events.into_iter().collect()),
         }
+    }
+
+    pub fn with_events(events: impl IntoIterator<Item = Event>) -> Self {
+        Self::new(events)
+    }
+
+    pub fn with_key(key: KeyCode) -> Self {
+        Self::new([Event::Key(key)])
     }
 }
 
@@ -36,7 +86,10 @@ impl TerminalEventSource for FakeTerminal {
     }
 
     fn read(&self) -> anyhow::Result<Event> {
-        Ok(self.events.borrow_mut().pop_front().unwrap_or(Event::Tick))
+        self.events
+            .borrow_mut()
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("terminal event queue is empty"))
     }
 }
 
@@ -46,40 +99,71 @@ pub fn audit_row(decision: AuditDecision, index: usize) -> AuditRow {
         decision,
         action_class: format!("class-{index}"),
         resource: format!("resource-{index}"),
-        policy: format!("policy-{index}"),
+        policy: String::new(),
     }
 }
 
 pub fn app_with_audit_rows() -> App {
-    let mut app = App::new(None, true);
+    let mut app = App::default();
     app.push_audit_row(audit_row(AuditDecision::Allow, 0));
     app.push_audit_row(audit_row(AuditDecision::Deny, 1));
     app.push_audit_row(audit_row(AuditDecision::Allow, 2));
     app
 }
 
+pub fn audit_channel() -> (mpsc::Sender<AuditRow>, mpsc::Receiver<AuditRow>) {
+    mpsc::channel()
+}
+
+pub fn app_with_default_policies() -> anyhow::Result<(tempfile::TempDir, App)> {
+    app_with_policy_files(&[("policies.cedar", DEFAULT_POLICY_SOURCE)])
+}
+
+pub fn app_with_policy_files(files: &[(&str, &str)]) -> anyhow::Result<(tempfile::TempDir, App)> {
+    let temp = tempfile::tempdir()?;
+    for (name, source) in files {
+        fs::write(temp.path().join(name), source)?;
+    }
+    let app = App::new(Some(temp.path().to_path_buf()), false);
+
+    assert_eq!(app.policy_error(), None);
+    assert_eq!(
+        app.policies().len(),
+        files
+            .iter()
+            .map(|(_, source)| source.matches("@id(").count())
+            .sum::<usize>()
+    );
+
+    Ok((temp, app))
+}
+
 pub fn audit_channel_with_rows(
     count: usize,
 ) -> anyhow::Result<(Sender<AuditRow>, Receiver<AuditRow>)> {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = audit_channel();
     send_audit_rows(&tx, count)?;
     Ok((tx, rx))
 }
 
 pub fn send_audit_rows(tx: &Sender<AuditRow>, count: usize) -> anyhow::Result<()> {
     for index in 0..count {
-        let decision = if index.is_multiple_of(2) {
-            AuditDecision::Allow
-        } else {
-            AuditDecision::Deny
-        };
-        tx.send(audit_row(decision, index))?;
+        tx.send(indexed_audit_row(index))?;
     }
     Ok(())
 }
 
-pub fn handle_key(app: &mut App, key: KeyCode) -> Vec<ControlEffect> {
-    firma_tui::control::handle_key(app, key)
+pub fn indexed_audit_row(index: usize) -> AuditRow {
+    let decision = if index.is_multiple_of(2) {
+        AuditDecision::Allow
+    } else {
+        AuditDecision::Deny
+    };
+    audit_row(decision, index)
+}
+
+pub fn handle_key(app: &mut App, key: KeyCode) {
+    let _outcome = firma_tui::control::handle_key(app, key);
 }
 
 pub fn last_visible_audit_index(app: &App) -> usize {
@@ -90,6 +174,33 @@ pub fn selected_audit_resource(app: &App) -> Option<&str> {
     app.visible_audit_rows()
         .nth(app.selected_audit_index())
         .map(|row| row.resource.as_str())
+}
+
+pub fn policy_status(app: &App, id: &str) -> Option<PolicyRowStatus> {
+    app.policies()
+        .iter()
+        .find(|policy| policy.id == id)
+        .map(|policy| policy.status)
+}
+
+pub fn write_named_policy_file(
+    dir: &Path,
+    name: &str,
+    source: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let policy_path = dir.join(name);
+    fs::write(&policy_path, source)?;
+    Ok(policy_path)
+}
+
+pub fn write_policy_file(dir: &Path, source: &str) -> anyhow::Result<std::path::PathBuf> {
+    write_named_policy_file(dir, "policies.cedar", source)
+}
+
+pub fn temp_policy_file(source: &str) -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
+    let temp = tempfile::tempdir()?;
+    let policy_path = write_policy_file(temp.path(), source)?;
+    Ok((temp, policy_path))
 }
 
 pub fn render_text(app: &App, width: u16, height: u16) -> anyhow::Result<String> {

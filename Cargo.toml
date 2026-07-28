@@ -51,6 +51,7 @@ async-trait = "0.1"
 base64 = "0.22"
 block2 = "0.6"
 cedar-policy = "3"
+cedar-policy-core = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }

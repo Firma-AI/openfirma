@@ -1688,9 +1688,12 @@ name = "firma-tui"
 version = "0.1.4"
 dependencies = [
  "anyhow",
+ "cedar-policy",
+ "cedar-policy-core",
  "crossterm 0.28.1",
  "insta",
  "ratatui",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

@@ -1,30 +1,31 @@
-//! Runtime state for the Policy Control surface.
+//! UI state coordinator for the control surface.
 
 use std::path::{Path, PathBuf};
 
 use crate::control::{
     error::ControlError,
+    policies::PolicyStateReader,
     state::{
         AuditFilter, AuditRow, AuditState, AuditViewportMode, ControlRuntimeState, ControlStatus,
-        Pane,
+        Pane, PoliciesState, PolicyRow,
     },
 };
 
 /// Mutable application state for Policy Control.
 ///
 /// The runner owns side effects and feeds events into this type. `App` keeps
-/// pane focus, help visibility, audit buffer state, and the runtime status
-/// rendered in the terminal frame.
+/// selection, help visibility, audit buffer state, policy row state, and the
+/// runtime status that is rendered in the terminal frame.
+#[derive(Debug)]
 pub struct App {
     runtime_state: ControlRuntimeState,
     selected_pane: Pane,
     help_visible: bool,
     pending_key_prefix: Option<KeyPrefix>,
-    policy_dir: Option<PathBuf>,
     audit_connected: bool,
     rewrite_queue_len: usize,
-    last_policy_error: Option<ControlError>,
     audit: AuditState,
+    policies: PoliciesState,
 }
 
 impl App {
@@ -32,16 +33,35 @@ impl App {
     /// source state.
     #[must_use]
     pub fn new(policy_dir: Option<PathBuf>, audit_connected: bool) -> Self {
+        Self::with_policy_state_reader(policy_dir, audit_connected, &PolicyStateReader::default())
+    }
+
+    /// Creates application state with an injected policy-state reader.
+    ///
+    /// Tests use this to count or stub disk reads while keeping the same
+    /// policy loading behavior as the interactive runner.
+    #[must_use]
+    pub fn with_policy_state_reader(
+        policy_dir: Option<PathBuf>,
+        audit_connected: bool,
+        state_reader: &PolicyStateReader,
+    ) -> Self {
+        let policies = PoliciesState::with_state_reader(policy_dir, state_reader);
+        let runtime_state = if policies.error().is_some() {
+            ControlRuntimeState::Error
+        } else {
+            ControlRuntimeState::Running
+        };
+
         Self {
-            runtime_state: ControlRuntimeState::Running,
+            runtime_state,
             selected_pane: Pane::Policies,
             help_visible: false,
             pending_key_prefix: None,
-            policy_dir,
             audit_connected,
             rewrite_queue_len: 0,
-            last_policy_error: None,
             audit: AuditState::default(),
+            policies,
         }
     }
 }
@@ -91,19 +111,19 @@ impl App {
     pub fn status(&self) -> ControlStatus {
         ControlStatus {
             runtime_state: self.runtime_state,
-            policy_dir: self.policy_dir.clone(),
-            policy_count: 0,
+            policy_dir: self.policies.dir().map(Path::to_path_buf),
+            policy_count: self.policies.rows().len(),
             audit_connected: self.audit_connected,
             audit_rows: self.audit.rows_len(),
             rewrite_queue_len: self.rewrite_queue_len,
-            pending_rewrites: 0,
-            last_policy_error: self.last_policy_error.clone(),
+            pending_rewrites: self.policies.pending_rewrites(),
+            last_policy_error: self.policies.last_error().cloned(),
         }
     }
 
     /// Records a policy error and marks the runtime as errored.
     pub fn set_policy_error(&mut self, error: ControlError) {
-        self.last_policy_error = Some(error);
+        self.policies.set_error(error);
         self.runtime_state = ControlRuntimeState::Error;
     }
 
@@ -143,7 +163,7 @@ impl App {
     /// Moves selection up in the focused pane.
     pub fn move_selection_up(&mut self) {
         match self.selected_pane {
-            Pane::Policies => {}
+            Pane::Policies => self.policies.move_up(),
             Pane::Audit => self.audit.move_up(),
         }
     }
@@ -151,7 +171,7 @@ impl App {
     /// Moves selection down in the focused pane.
     pub fn move_selection_down(&mut self) {
         match self.selected_pane {
-            Pane::Policies => {}
+            Pane::Policies => self.policies.move_down(),
             Pane::Audit => self.audit.move_down(),
         }
     }
@@ -159,7 +179,7 @@ impl App {
     /// Moves selection to the first row in the focused pane.
     pub fn move_selection_first(&mut self) {
         match self.selected_pane {
-            Pane::Policies => {}
+            Pane::Policies => self.policies.move_first(),
             Pane::Audit => self.audit.move_first(),
         }
     }
@@ -167,7 +187,7 @@ impl App {
     /// Moves selection to the last row in the focused pane.
     pub fn move_selection_last(&mut self) {
         match self.selected_pane {
-            Pane::Policies => {}
+            Pane::Policies => self.policies.move_last(),
             Pane::Audit => self.audit.move_last(),
         }
     }
@@ -175,7 +195,25 @@ impl App {
     /// Authority policy directory, when it was resolved from the stack config.
     #[must_use]
     pub fn policy_dir(&self) -> Option<&Path> {
-        self.policy_dir.as_deref()
+        self.policies.dir()
+    }
+
+    /// Index of the selected policy row.
+    #[must_use]
+    pub fn selected_policy_index(&self) -> usize {
+        self.policies.selected_index()
+    }
+
+    /// Policy rows currently rendered by the policies pane.
+    #[must_use]
+    pub fn policies(&self) -> &[PolicyRow] {
+        self.policies.rows()
+    }
+
+    /// Current policy load error.
+    #[must_use]
+    pub fn policy_error(&self) -> Option<&ControlError> {
+        self.policies.error()
     }
 
     /// Changes the audit decision filter.
@@ -253,9 +291,9 @@ impl App {
             return;
         }
 
-        self.runtime_state = if self.last_policy_error.is_some() {
+        self.runtime_state = if self.policies.error().is_some() {
             ControlRuntimeState::Error
-        } else if self.rewrite_queue_len > 0 {
+        } else if self.policies.pending_rewrites() > 0 || self.rewrite_queue_len > 0 {
             ControlRuntimeState::Rewriting
         } else {
             ControlRuntimeState::Running
