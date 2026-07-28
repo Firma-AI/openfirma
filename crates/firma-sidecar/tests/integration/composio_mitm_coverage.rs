@@ -29,7 +29,9 @@ fn rule(host: &str) -> MappingRuleConfig {
 }
 
 /// The opt-in signal for the coverage check must recognize every host form a
-/// mapping rule can legally use, not just the exact lowercase name.
+/// mapping rule can legally use: exact names, case variants, ports, trailing
+/// dots, and the normalizer's glob language including mid-string wildcards
+/// and the bare catch-all (which does govern Composio traffic at runtime).
 #[test]
 fn mapping_reference_detection_handles_pattern_and_port_forms() {
     for host in [
@@ -38,6 +40,10 @@ fn mapping_reference_detection_handles_pattern_and_port_forms() {
         "*.composio.dev",
         "backend.composio.dev.",
         "backend.composio.dev:443",
+        "backend.*",
+        "*composio.dev",
+        "backend.composio.*",
+        "*",
     ] {
         assert!(
             mapping_references_composio_hosts(&MappingRulesFile {
@@ -47,7 +53,11 @@ fn mapping_reference_detection_handles_pattern_and_port_forms() {
         );
     }
     assert!(!mapping_references_composio_hosts(&MappingRulesFile {
-        rules: vec![rule("api.github.com"), rule("*.github.com")],
+        rules: vec![
+            rule("api.github.com"),
+            rule("*.github.com"),
+            rule("composio.dev.attacker.example"),
+        ],
     }));
 }
 

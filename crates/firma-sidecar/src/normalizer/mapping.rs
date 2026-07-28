@@ -230,7 +230,7 @@ impl MappingTable {
 /// - `*` matches any sequence of non-separator characters
 /// - `*.example.com` matches `api.example.com` but not `deep.api.example.com`
 /// - `/v1/*/completions` matches `/v1/chat/completions`
-fn glob_match(pattern: &str, value: &str) -> bool {
+pub fn glob_match(pattern: &str, value: &str) -> bool {
     if pattern == "*" {
         return true;
     }

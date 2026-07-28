@@ -136,38 +136,35 @@ fn resolve_effective_mode(
     }
 }
 
-/// Return whether any mapping rule host refers to a protected Composio host.
+/// Return whether any mapping rule host would match a protected Composio
+/// host at runtime.
 ///
-/// Rule hosts may be exact names, `*.` wildcard patterns, or carry a port or
-/// trailing dot, so the check reuses the MITM wildcard matcher rather than
-/// exact string comparison. This is the opt-in signal for the startup
-/// Composio MITM coverage check.
+/// Rule hosts speak the normalizer's glob language (a `*` may appear
+/// anywhere, including a bare catch-all) and may be uppercase or carry a
+/// port or trailing dot. Each host is therefore canonicalized exactly like
+/// the decoder canonicalizes request hosts, then matched with the same glob
+/// the mapping table applies at runtime, so a rule that would classify
+/// Composio traffic can never evade this check through its spelling. A
+/// catch-all `*` rule counts: it does govern Composio traffic.
 #[must_use]
 pub fn mapping_references_composio_hosts(rules: &config::MappingRulesFile) -> bool {
-    let rule_hosts = crate::interceptor::https_mitm::normalize_patterns(
-        &rules
-            .rules
+    rules.rules.iter().any(|rule| {
+        let pattern = crate::composio::canonical_host(&rule.host);
+        crate::composio::PROTECTED_HOSTS
             .iter()
-            .map(|rule| rule.host.clone())
-            .collect::<Vec<_>>(),
-    );
-    crate::composio::PROTECTED_HOSTS
-        .iter()
-        .any(|host| crate::interceptor::https_mitm::host_matches_any(host, &rule_hosts))
-        || rules
-            .rules
-            .iter()
-            .any(|rule| crate::composio::is_protected_host(&rule.host))
+            .any(|host| crate::normalizer::mapping::glob_match(&pattern, host))
+    })
 }
 
 /// Warn when mapping rules opt into Composio governance but the HTTPS MITM
 /// configuration cannot decode traffic to the protected Composio hosts.
 ///
 /// The pinned catalogs load unconditionally, yet the decoder only sees
-/// requests the proxy terminates. A deployment that references the Composio
-/// hosts in its mapping rules clearly intends governance, so every coverage
-/// gap is surfaced at startup instead of silently degrading to opaque
-/// tunnels. Deployments that never reference those hosts stay quiet.
+/// requests the proxy terminates. A deployment whose mapping rules would
+/// match the Composio hosts (including through wildcards and catch-alls)
+/// intends to govern that traffic, so every coverage gap is surfaced at
+/// startup instead of silently degrading to opaque tunnels. Deployments
+/// whose rules cannot match those hosts stay quiet.
 fn warn_on_composio_mitm_gaps(config: &config::SidecarConfig, rules: &config::MappingRulesFile) {
     if config.interceptor.mode != config::InterceptorMode::HttpProxy
         || !mapping_references_composio_hosts(rules)

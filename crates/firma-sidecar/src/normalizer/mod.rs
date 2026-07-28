@@ -19,7 +19,7 @@
 //! `DENY: UNCLASSIFIED_INTENT` and no Connector dispatch occurs (fail-closed).
 //! Conforms to the FEP \[I-N1\] enforcement invariant.
 
-mod mapping;
+pub(crate) mod mapping;
 
 use std::collections::{BTreeMap, HashMap};
 use std::str;
