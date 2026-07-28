@@ -149,11 +149,32 @@ fn resolve_effective_mode(
 #[must_use]
 pub fn mapping_references_composio_hosts(rules: &config::MappingRulesFile) -> bool {
     rules.rules.iter().any(|rule| {
-        let pattern = crate::composio::canonical_host(&rule.host);
+        let pattern = canonical_rule_host_pattern(&rule.host);
         crate::composio::PROTECTED_HOSTS
             .iter()
             .any(|host| crate::normalizer::mapping::glob_match(&pattern, host))
     })
+}
+
+/// Canonicalize a mapping-rule host pattern for the coverage check.
+///
+/// On top of the decoder's canonicalization (lowercase, trailing dot,
+/// numeric port), a rule may glob the port (`backend.composio.dev:8*`) and
+/// still match Composio traffic on a nonstandard port at runtime, so a port
+/// segment made of digits and wildcards is stripped as well before the host
+/// part is matched against the protected names.
+fn canonical_rule_host_pattern(host: &str) -> String {
+    let canonical = crate::composio::canonical_host(host);
+    match canonical.rsplit_once(':') {
+        Some((name, port))
+            if !name.is_empty()
+                && !port.is_empty()
+                && port.bytes().all(|b| b.is_ascii_digit() || b == b'*') =>
+        {
+            name.to_string()
+        }
+        _ => canonical,
+    }
 }
 
 /// Warn when mapping rules opt into Composio governance but the HTTPS MITM

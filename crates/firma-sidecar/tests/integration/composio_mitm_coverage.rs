@@ -40,6 +40,8 @@ fn mapping_reference_detection_handles_pattern_and_port_forms() {
         "*.composio.dev",
         "backend.composio.dev.",
         "backend.composio.dev:443",
+        "backend.composio.dev:*",
+        "backend.composio.dev:8*",
         "backend.*",
         "*composio.dev",
         "backend.composio.*",
