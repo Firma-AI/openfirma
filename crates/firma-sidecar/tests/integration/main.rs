@@ -2,6 +2,7 @@ mod capability_reload;
 mod composio_catalog;
 mod composio_cedar;
 mod composio_composite;
+mod composio_mitm_coverage;
 mod composio_protocol;
 mod http_connector;
 mod resource_host_rules;

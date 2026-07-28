@@ -20,6 +20,11 @@ The generated configuration enables strict HTTPS interception for
 `app.composio.dev` and `backend.composio.dev`. Do not add those hosts to
 `bypass_hosts`; opaque CONNECT traffic cannot be decoded at Layer 7.
 
+The Sidecar cross-checks this at startup: when the mapping rules reference
+the Composio hosts but the HTTPS MITM configuration leaves them bypassed,
+unintercepted, or non-strict, it logs one warning per gap so a
+misconfiguration cannot silently downgrade governance to opaque tunnels.
+
 Continue to run your chosen command:
 
 ```bash

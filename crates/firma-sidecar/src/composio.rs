@@ -25,6 +25,10 @@ const BACKEND_HOST: &str = "backend.composio.dev";
 const APP_HOST: &str = "app.composio.dev";
 const MAX_MULTI_ACTIONS: usize = 50;
 
+/// Exact hosts the decoder recognizes; HTTPS MITM must cover both for
+/// Composio governance to see any tool call.
+pub(crate) const PROTECTED_HOSTS: [&str; 2] = [BACKEND_HOST, APP_HOST];
+
 /// Canonical class assigned to Composio account-lifecycle writes.
 ///
 /// Linking, updating, or removing connected accounts and auth configurations

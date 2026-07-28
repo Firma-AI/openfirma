@@ -136,6 +136,28 @@ fn resolve_effective_mode(
     }
 }
 
+/// Warn when mapping rules opt into Composio governance but the HTTPS MITM
+/// configuration cannot decode traffic to the protected Composio hosts.
+///
+/// The pinned catalogs load unconditionally, yet the decoder only sees
+/// requests the proxy terminates. A deployment that references the Composio
+/// hosts in its mapping rules clearly intends governance, so every coverage
+/// gap is surfaced at startup instead of silently degrading to opaque
+/// tunnels. Deployments that never reference those hosts stay quiet.
+fn warn_on_composio_mitm_gaps(config: &config::SidecarConfig, rules: &config::MappingRulesFile) {
+    let references_composio = rules.rules.iter().any(|rule| {
+        crate::composio::PROTECTED_HOSTS.contains(&rule.host.to_ascii_lowercase().as_str())
+    });
+    if config.interceptor.mode != config::InterceptorMode::HttpProxy || !references_composio {
+        return;
+    }
+    for warning in
+        crate::startup::interceptor::composio_mitm_coverage_warnings(&config.interceptor.https_mitm)
+    {
+        tracing::warn!("{warning}");
+    }
+}
+
 /// Build the enforcement pipeline plus stream-client shared state.
 ///
 /// # Errors
@@ -144,6 +166,7 @@ fn resolve_effective_mode(
 pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<PipelineRuntime> {
     let merged_file = load_mapping_rules(config)?;
     let mapping_rules_loaded = merged_file.rule_count();
+    warn_on_composio_mitm_gaps(config, &merged_file);
 
     let registry = pipeline::ActionClassRegistry::v0_1();
     let table = pipeline::MappingTable::from_config(

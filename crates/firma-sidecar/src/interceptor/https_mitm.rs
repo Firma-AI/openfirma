@@ -468,14 +468,14 @@ fn leaf_certificate_params(host: &str) -> Result<CertificateParams, String> {
     Ok(params)
 }
 
-fn host_matches_any(host: &str, patterns: &[String]) -> bool {
+pub fn host_matches_any(host: &str, patterns: &[String]) -> bool {
     let normalized = normalize_host(host);
     patterns
         .iter()
         .any(|pattern| wildcard_match(pattern, &normalized))
 }
 
-fn normalize_patterns(patterns: &[String]) -> Vec<String> {
+pub fn normalize_patterns(patterns: &[String]) -> Vec<String> {
     patterns
         .iter()
         .map(|pattern| normalize_host(pattern))
