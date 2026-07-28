@@ -93,9 +93,10 @@ session identifier, and batch position when those values are present.
 
 Linking or removing a connected account changes what an agent can reach, so
 those requests are governed like tool calls instead of passing through.
-Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `/api/v3/connected_accounts`,
-`/api/v3/auth_configs`, and the Tool Router session `link` route decode into
-one `account.permission.change` action with a synthetic resource:
+Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `connected_accounts`,
+`auth_configs`, and the Tool Router session `link` route (under `/api/v3`
+and `/api/v3.1`) decode into one `account.permission.change` action with a
+synthetic resource:
 
 ```text
 composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT
@@ -148,8 +149,11 @@ for the refresh and review loop.
 
 Unknown toolkits, missing slugs, version mismatches, malformed execution
 payloads, custom tools, raw proxy execution, and shell or workbench tools fail
-closed. Slack and Notion remain unsupported until each has a complete reviewed
-catalog, so every Slack or Notion tool call is denied at the boundary.
+closed. Governed requests carrying a query string are also denied: the query
+never participates in the policy decision, so it must not ride along on an
+admitted dispatch. Slack and Notion remain unsupported until each has a
+complete reviewed catalog, so every Slack or Notion tool call is denied at
+the boundary.
 
 ## Audit safety
 

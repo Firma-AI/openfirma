@@ -144,27 +144,67 @@ fn nonstandard_ports_still_hit_the_protected_hosts() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The logical envelope must never retain the raw query string: clients can
-/// stuff tool arguments after `?`, and the envelope travels inside denial
-/// decisions and diagnostics.
+/// Governed routes deny query strings outright: the policy decision would
+/// not see them, and the dispatched request would silently diverge from the
+/// evaluated one. Read-only passthrough (pagination and the like) keeps its
+/// query untouched.
 #[test]
-fn logical_envelope_drops_the_query_string() -> anyhow::Result<()> {
-    let request = request(
+fn governed_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS?query=secret+search",
+            Some(serde_json::json!({"version": "20251111_00"})),
+        ),
+        (
+            Method::DELETE,
+            "/api/v3/connected_accounts/ca_123?force=1",
+            None,
+        ),
+    ] {
+        let mut governed = request(
+            "backend.composio.dev",
+            path,
+            &body.clone().unwrap_or_else(|| serde_json::json!({})),
+        );
+        governed.method = method;
+        if body.is_none() {
+            governed.body = None;
+        }
+        let DecodeResult::Deny(denial) = decode(&governed, &catalogs()?) else {
+            anyhow::bail!("governed request with a query string must fail closed");
+        };
+        assert_eq!(denial.code, "query_string_unsupported");
+    }
+
+    let mut listing = request(
         "backend.composio.dev",
-        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS?query=secret+search",
-        &serde_json::json!({"version": "20251111_00"}),
+        "/api/v3/connected_accounts?cursor=abc",
+        &serde_json::json!({}),
     );
+    listing.method = Method::GET;
+    assert!(matches!(
+        decode(&listing, &catalogs()?),
+        DecodeResult::Passthrough
+    ));
+    Ok(())
+}
 
-    let decoded = actions(decode(&request, &catalogs()?))?;
-
-    assert_eq!(
-        decoded[0].envelope.intent.resource_display(),
-        "backend.composio.dev/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
+/// Extension methods on lifecycle families are neither writes nor recognized
+/// reads, so they fail closed instead of auditing as passthrough.
+#[test]
+fn extension_methods_on_lifecycle_routes_fail_closed() -> anyhow::Result<()> {
+    let mut trace = request(
+        "backend.composio.dev",
+        "/api/v3/connected_accounts/ca_1",
+        &serde_json::json!({}),
     );
-    assert_eq!(
-        decoded[0].envelope.intent.raw_action_ref,
-        "POST /api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
-    );
+    trace.method = Method::TRACE;
+    trace.body = None;
+    let DecodeResult::Deny(denial) = decode(&trace, &catalogs()?) else {
+        anyhow::bail!("extension method on a lifecycle route must fail closed");
+    };
+    assert_eq!(denial.code, "unsupported_route");
     Ok(())
 }
 

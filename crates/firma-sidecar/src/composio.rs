@@ -97,11 +97,35 @@ pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult
     if host != BACKEND_HOST && host != APP_HOST {
         return DecodeResult::Unrelated;
     }
+    let result = decode_protected(request, &host, catalogs);
+    // A query string never participates in the policy decision, so letting it
+    // ride along on an admitted dispatch would smuggle unevaluated input
+    // upstream. Read-only passthrough keeps its query (pagination and the
+    // like); governed actions refuse it.
+    if matches!(result, DecodeResult::Actions(_)) && request.path.contains('?') {
+        return deny(
+            "query_string_unsupported",
+            "Composio governed requests must not carry a query string",
+        );
+    }
+    result
+}
+
+fn decode_protected(request: &RawRequest, host: &str, catalogs: &ComposioCatalogs) -> DecodeResult {
     if request.method != Method::POST {
-        if let Some(result) = decode_lifecycle_write(request, &host) {
+        if let Some(result) = decode_lifecycle_write(request, host) {
             return result;
         }
-        return if is_recognized_non_execution_path(&host, path_only(&request.path)) {
+        // Lifecycle families accept reads and governed writes only; an
+        // extension method (e.g. TRACE) is neither and must not audit as a
+        // recognized passthrough.
+        if host == BACKEND_HOST
+            && is_lifecycle_path(path_only(&request.path))
+            && !matches!(request.method, Method::GET | Method::HEAD | Method::OPTIONS)
+        {
+            return deny("unsupported_route", "unsupported Composio route");
+        }
+        return if is_recognized_non_execution_path(host, path_only(&request.path)) {
             DecodeResult::Passthrough
         } else {
             deny("unsupported_route", "unsupported Composio route")
@@ -173,6 +197,20 @@ fn decode_backend(
         _ if is_recognized_non_execution_path(BACKEND_HOST, path) => DecodeResult::Passthrough,
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
+}
+
+/// Return whether a path belongs to a governed account-lifecycle family.
+fn is_lifecycle_path(path: &str) -> bool {
+    let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
+    matches!(
+        components.as_slice(),
+        [
+            "api",
+            "v3" | "v3.1",
+            "connected_accounts" | "auth_configs",
+            ..,
+        ] | ["api", "v3" | "v3.1", "tool_router", "session", _, "link"]
+    )
 }
 
 /// Decode an account-lifecycle write into one governed logical action.

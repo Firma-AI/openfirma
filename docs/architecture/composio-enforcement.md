@@ -31,15 +31,19 @@ The decoder recognizes:
 Recognized read-only discovery requests (tool listings, toolkit metadata,
 session reads, MCP session streams and teardown) can pass without tool-action
 evaluation. Account-lifecycle writes are governed, not passed through:
-`POST`/`PATCH`/`PUT`/`DELETE` on `/api/v3/connected_accounts` and
-`/api/v3/auth_configs`, and `POST` on the Tool Router session `link` route,
+`POST`/`PATCH`/`PUT`/`DELETE` on the `connected_accounts`, `auth_configs`,
+and Tool Router session `link` routes (under both `/api/v3` and `/api/v3.1`)
 decode into one logical `account.permission.change` action with a
 `composio://composio/<slug>` resource (for example
 `COMPOSIO_CREATE_CONNECTED_ACCOUNT` or `COMPOSIO_LINK_SESSION_ACCOUNT`), so
 an agent cannot expand its own reachable account surface without capability
-and Cedar evaluation. Unknown execution routes, JSON-RPC batches, malformed
-payloads, unknown toolkits, unpinned slugs, custom tools, raw proxy execution,
-and remote shell or workbench execution fail closed.
+and Cedar evaluation. Extension methods on those routes fail closed rather
+than auditing as passthrough. A governed request carrying a query string is
+denied outright: the query never participates in the policy decision, so it
+must not ride along on an admitted dispatch. Unknown execution routes,
+JSON-RPC batches, malformed payloads, unknown toolkits, unpinned slugs,
+custom tools, raw proxy execution, and remote shell or workbench execution
+fail closed.
 
 ## Logical and transport resources
 
