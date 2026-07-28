@@ -8,15 +8,30 @@
 //! Cedar. This keeps comments, ordering, and operator formatting intact while
 //! still validating the full candidate before it reaches disk.
 
-use std::{collections::HashMap, fmt, fs, io, path::Path, str::FromStr as _};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, fs, io,
+    io::Write,
+    path::Path,
+    str::FromStr as _,
+};
 
+use cedar_policy::PolicySet;
 use cedar_policy_core::{
     ast::{AnyId, PolicyID},
     parser::{self, cst},
 };
+use tempfile::NamedTempFile;
 
 use crate::control::error::{ErrorMessage, PolicyRewriteError};
 
+// The managed disable condition is split into Cedar syntax and ownership
+// marker on purpose. the policy control writes the two pieces together as one
+// canonical condition, but reads them separately: the CST tells us which `when`
+// condition exists and the trailing marker tells us that the condition is ours
+// to normalize or remove. This keeps compact or inline user formatting valid
+// while avoiding accidental edits to a user-owned `when { false }` condition.
+const DISABLE_CONDITION: &str = "when { false };";
 const DISABLE_COMMENT: &str = "// openfirma-control:disabled";
 const POLICY_ID_ANNOTATION: &str = "id";
 
@@ -64,6 +79,63 @@ const fn policy_state_label(state: PolicyState) -> &'static str {
         PolicyState::InvalidPolicy => "invalid policy",
         PolicyState::ReadError => "read error",
     }
+}
+
+/// Sets one `@id(...)` policy in a Cedar file to the requested state.
+///
+/// This is a convenience wrapper around [`set_policy_states`]. It still uses
+/// the same validated, atomic source rewrite path as a batch request.
+///
+/// # Errors
+///
+/// Fails when the requested state is not toggleable, the Cedar file cannot be
+/// read, the policy id cannot be resolved, the rewritten candidate does not
+/// parse, or the candidate cannot be atomically persisted.
+pub fn set_policy_state(
+    path: &Path,
+    policy_id: &str,
+    requested: PolicyState,
+) -> Result<(), PolicyRewriteError> {
+    set_policy_states(path, &[policy_id.to_owned()], requested)
+}
+
+/// Sets several `@id(...)` policies in one Cedar file to the requested state.
+///
+/// The file is read once, policy source spans are located once, edits are
+/// applied from the end of the file back to the front, and the final candidate
+/// is parsed before it replaces the original file. Policies already in the
+/// requested state are left untouched.
+///
+/// # Errors
+///
+/// Fails when the requested state is not toggleable, the Cedar file cannot be
+/// read, any policy id cannot be resolved, the rewritten candidate does not
+/// parse, or the candidate cannot be atomically persisted.
+pub fn set_policy_states(
+    path: &Path,
+    policy_ids: &[String],
+    requested: PolicyState,
+) -> Result<(), PolicyRewriteError> {
+    validate_rewrite_state(requested)?;
+    if policy_ids.is_empty() {
+        return Ok(());
+    }
+
+    let source = fs::read_to_string(path).map_err(|error| PolicyRewriteError::ReadFile {
+        path: path.to_path_buf(),
+        source: ErrorMessage::capture(error),
+    })?;
+    let edits = rewrite_edits_for_policies(&source, policy_ids, requested)?;
+
+    if edits.is_empty() {
+        return Ok(());
+    }
+
+    let candidate = apply_edits(source, edits);
+    validate_cedar(path, &candidate)?;
+    write_candidate(path, candidate.as_bytes())?;
+
+    Ok(())
 }
 
 /// Reads one `@id(...)` policy state from a Cedar file.
@@ -129,21 +201,210 @@ fn default_policy_states(
 }
 
 fn policy_state_from_condition(condition: Option<&ManagedCondition>) -> PolicyState {
-    if condition
-        .copied()
-        .is_some_and(ManagedCondition::disables_policy)
-    {
+    if condition.is_some_and(ManagedCondition::disables_policy) {
         PolicyState::Disabled
     } else {
         PolicyState::Enabled
     }
 }
 
-fn policy_blocks_by_id(source: &str) -> Result<HashMap<String, PolicyBlock>, PolicyRewriteError> {
-    let (_policy_texts, policy_set) = parser::parse_policyset_and_also_return_policy_text(source)
-        .map_err(|error| PolicyRewriteError::ParseSource {
-        source: ErrorMessage::capture(error),
+fn rewrite_body_for_state(
+    body: &str,
+    policy_end: usize,
+    state: PolicyState,
+    condition: Option<ManagedCondition>,
+) -> Result<String, PolicyRewriteError> {
+    match state {
+        PolicyState::Enabled => remove_managed_condition(body, condition),
+        PolicyState::Disabled => write_managed_disable_condition(body, policy_end, condition),
+        PolicyState::MissingFile
+        | PolicyState::MissingId
+        | PolicyState::InvalidPolicy
+        | PolicyState::ReadError => Err(PolicyRewriteError::InvalidRequestedState),
+    }
+}
+
+fn validate_rewrite_state(state: PolicyState) -> Result<(), PolicyRewriteError> {
+    match state {
+        PolicyState::Enabled | PolicyState::Disabled => Ok(()),
+        PolicyState::MissingFile
+        | PolicyState::MissingId
+        | PolicyState::InvalidPolicy
+        | PolicyState::ReadError => Err(PolicyRewriteError::InvalidRequestedState),
+    }
+}
+
+fn rewrite_edits_for_policies(
+    source: &str,
+    policy_ids: &[String],
+    requested: PolicyState,
+) -> Result<Vec<SourceEdit>, PolicyRewriteError> {
+    let blocks = find_policy_blocks(source, policy_ids)?;
+    let conditions = managed_conditions_by_generated_id(source)?;
+    let mut edits = Vec::new();
+
+    for (policy_id, block) in blocks {
+        if let Some(edit) =
+            rewrite_edit_for_policy(source, &policy_id, &block, &conditions, requested)?
+        {
+            edits.push(edit);
+        }
+    }
+
+    Ok(edits)
+}
+
+fn rewrite_edit_for_policy(
+    source: &str,
+    policy_id: &str,
+    block: &PolicyBlock,
+    conditions: &[(PolicyID, Option<ManagedCondition>)],
+    requested: PolicyState,
+) -> Result<Option<SourceEdit>, PolicyRewriteError> {
+    let condition = find_managed_condition(conditions, &block.generated_id)?;
+    let current = policy_state_from_condition(condition.as_ref());
+
+    if !needs_rewrite(current, requested, condition.as_ref()) {
+        return Ok(None);
+    }
+
+    let body = &source[block.start..block.end];
+    let policy_end = block.source_end.checked_sub(block.start).ok_or_else(|| {
+        PolicyRewriteError::InvalidPolicySourceSpan {
+            id: policy_id.to_string(),
+        }
     })?;
+    let body_condition = condition
+        .map(|condition| {
+            condition
+                .relative_to(block.start, block.end)
+                .ok_or_else(|| PolicyRewriteError::ManagedConditionOutsidePolicy {
+                    id: policy_id.to_string(),
+                })
+        })
+        .transpose()?;
+
+    Ok(Some(SourceEdit {
+        start: block.start,
+        end: block.end,
+        replacement: rewrite_body_for_state(body, policy_end, requested, body_condition)?,
+    }))
+}
+
+fn needs_rewrite(
+    current: PolicyState,
+    requested: PolicyState,
+    condition: Option<&ManagedCondition>,
+) -> bool {
+    current != requested || matches!(requested, PolicyState::Enabled) && condition.is_some()
+}
+
+fn write_managed_disable_condition(
+    body: &str,
+    policy_end: usize,
+    condition: Option<ManagedCondition>,
+) -> Result<String, PolicyRewriteError> {
+    condition.map_or_else(
+        || add_disable_condition(body, policy_end),
+        |condition| Ok(normalize_managed_disable_condition(body, condition)),
+    )
+}
+
+fn add_disable_condition(body: &str, policy_end: usize) -> Result<String, PolicyRewriteError> {
+    let terminator = policy_terminator_from_span(body, policy_end)?;
+    let condition = managed_disable_condition();
+
+    let mut out = String::with_capacity(body.len() + condition.len() + 1);
+    out.push_str(&body[..terminator]);
+    out.push(' ');
+    out.push_str(&condition);
+    out.push_str(&body[policy_end..]);
+    Ok(out)
+}
+
+fn normalize_managed_disable_condition(body: &str, condition: ManagedCondition) -> String {
+    let disable_condition = managed_disable_condition();
+    let mut out = String::with_capacity(body.len() + disable_condition.len());
+    out.push_str(&body[..condition.clause_start]);
+    out.push_str(&disable_condition);
+    out.push_str(&body[condition.comment_end..]);
+    out
+}
+
+fn managed_disable_condition() -> String {
+    format!("{DISABLE_CONDITION} {DISABLE_COMMENT}")
+}
+
+fn policy_terminator_from_span(body: &str, policy_end: usize) -> Result<usize, PolicyRewriteError> {
+    let terminator = policy_end
+        .checked_sub(1)
+        .ok_or(PolicyRewriteError::EmptyPolicySourceSpan)?;
+    if body.as_bytes().get(terminator) != Some(&b';') {
+        return Err(PolicyRewriteError::PolicySourceSpanMissingSemicolon);
+    }
+
+    Ok(terminator)
+}
+
+fn remove_managed_condition(
+    body: &str,
+    condition: Option<ManagedCondition>,
+) -> Result<String, PolicyRewriteError> {
+    let Some(condition) = condition else {
+        return Ok(body.to_string());
+    };
+
+    let remove_start = condition_removal_start(body, condition)?;
+
+    let mut out = String::with_capacity(body.len());
+    out.push_str(&body[..remove_start]);
+    out.push(';');
+    out.push_str(&body[condition.comment_end..]);
+    Ok(out)
+}
+
+fn condition_removal_start(
+    body: &str,
+    condition: ManagedCondition,
+) -> Result<usize, PolicyRewriteError> {
+    standalone_condition_removal_start(body, condition)
+        .or_else(|| inline_condition_removal_start(body, condition))
+        .ok_or(PolicyRewriteError::UnattachedManagedCondition)
+}
+
+fn standalone_condition_removal_start(body: &str, condition: ManagedCondition) -> Option<usize> {
+    let remove_start = previous_line_break_start(body, condition.clause_start)?;
+    let line_start = line_start_after_break(body, remove_start);
+    if !body[line_start..condition.clause_start].trim().is_empty() {
+        return None;
+    }
+
+    Some(remove_start)
+}
+
+fn inline_condition_removal_start(body: &str, condition: ManagedCondition) -> Option<usize> {
+    let mut remove_start = condition.clause_start;
+    let bytes = body.as_bytes();
+    while remove_start > 0 && matches!(bytes.get(remove_start - 1), Some(b' ' | b'\t')) {
+        remove_start -= 1;
+    }
+
+    if remove_start == condition.clause_start {
+        return None;
+    }
+
+    let line_start = body[..remove_start]
+        .rfind('\n')
+        .map_or(0, |offset| offset + 1);
+
+    (!body[line_start..remove_start].trim().is_empty()).then_some(remove_start)
+}
+
+fn policy_blocks_by_id(source: &str) -> Result<HashMap<String, PolicyBlock>, PolicyRewriteError> {
+    let (policy_texts, policy_set) = parser::parse_policyset_and_also_return_policy_text(source)
+        .map_err(|error| PolicyRewriteError::ParseSource {
+            source: ErrorMessage::capture(error),
+        })?;
 
     let id_annotation = AnyId::from_str(POLICY_ID_ANNOTATION).map_err(|error| {
         PolicyRewriteError::InvalidPolicyAnnotationKey {
@@ -169,15 +430,91 @@ fn policy_blocks_by_id(source: &str) -> Result<HashMap<String, PolicyBlock>, Pol
             });
         }
 
+        let policy_source = policy_texts.get(policy.id()).copied().ok_or_else(|| {
+            PolicyRewriteError::MissingSourceSpan {
+                id: policy_id.to_string(),
+            }
+        })?;
+
+        let start = source_offset(source, policy_source)?;
+        let source_end = start + policy_source.len();
+        let end = extend_end_for_managed_comment(source, source_end);
+
         blocks.insert(
             policy_id.to_owned(),
             PolicyBlock {
                 generated_id: policy.id().clone(),
+                start,
+                source_end,
+                end,
             },
         );
     }
 
     Ok(blocks)
+}
+
+fn find_policy_blocks(
+    source: &str,
+    policy_ids: &[String],
+) -> Result<Vec<(String, PolicyBlock)>, PolicyRewriteError> {
+    let requested_ids = requested_id_set(policy_ids)?;
+    let mut blocks = policy_blocks_by_id(source)?;
+    let mut found = Vec::new();
+
+    for policy_id in policy_ids {
+        if !requested_ids.contains(policy_id.as_str()) {
+            continue;
+        }
+
+        let Some(block) = blocks.remove(policy_id) else {
+            return Err(PolicyRewriteError::MissingId {
+                id: policy_id.clone(),
+            });
+        };
+
+        found.push((policy_id.clone(), block));
+    }
+
+    Ok(found)
+}
+
+fn requested_id_set(policy_ids: &[String]) -> Result<HashSet<&str>, PolicyRewriteError> {
+    let mut ids = HashSet::new();
+    for policy_id in policy_ids {
+        if !ids.insert(policy_id.as_str()) {
+            return Err(PolicyRewriteError::DuplicateRequestedId {
+                id: policy_id.clone(),
+            });
+        }
+    }
+
+    Ok(ids)
+}
+
+fn source_offset(source: &str, slice: &str) -> Result<usize, PolicyRewriteError> {
+    let source_start = source.as_ptr() as usize;
+    let source_end = source_start + source.len();
+    let slice_start = slice.as_ptr() as usize;
+    let slice_end = slice_start
+        .checked_add(slice.len())
+        .ok_or(PolicyRewriteError::SourceSpanOutsideSource)?;
+
+    if slice_start < source_start || slice_end > source_end {
+        return Err(PolicyRewriteError::SourceSpanOutsideSource);
+    }
+
+    Ok(slice_start - source_start)
+}
+
+fn extend_end_for_managed_comment(source: &str, end: usize) -> usize {
+    let line_end = line_content_end(source, end);
+    let trailing = &source[end..line_end];
+    if trailing.trim() == DISABLE_COMMENT {
+        line_end
+    } else {
+        end
+    }
 }
 
 fn managed_conditions_by_generated_id(
@@ -227,8 +564,12 @@ fn managed_condition(source: &str, policy: &cst::Policy) -> Option<ManagedCondit
             return None;
         }
 
-        managed_condition_end_after_condition(source, condition_node.loc.end())?;
+        let loc = &condition_node.loc;
+        let (clause_end, comment_end) = managed_condition_end_after_condition(source, loc.end())?;
         Some(ManagedCondition {
+            clause_start: loc.start(),
+            clause_end,
+            comment_end,
             expression: ManagedConditionExpr::classify(condition),
         })
     })
@@ -250,6 +591,29 @@ fn is_when_condition(condition: &cst::Cond) -> bool {
     matches!(condition.cond.as_inner(), Some(cst::Ident::When))
 }
 
+fn previous_line_break_start(source: &str, line_start: usize) -> Option<usize> {
+    if line_start == 0 {
+        return None;
+    }
+    let prefix = source.get(..line_start)?;
+    let newline = prefix.rfind('\n')?;
+    if newline > 0 && source.as_bytes().get(newline - 1) == Some(&b'\r') {
+        Some(newline - 1)
+    } else {
+        Some(newline)
+    }
+}
+
+fn line_start_after_break(source: &str, line_break_start: usize) -> usize {
+    if source.as_bytes().get(line_break_start) == Some(&b'\r')
+        && source.as_bytes().get(line_break_start + 1) == Some(&b'\n')
+    {
+        line_break_start + 2
+    } else {
+        line_break_start + 1
+    }
+}
+
 fn line_content_end(source: &str, from: usize) -> usize {
     let newline = source[from..]
         .find('\n')
@@ -261,18 +625,115 @@ fn line_content_end(source: &str, from: usize) -> usize {
     }
 }
 
-struct PolicyBlock {
-    generated_id: PolicyID,
+fn validate_cedar(path: &Path, candidate: &str) -> Result<(), PolicyRewriteError> {
+    candidate.parse::<PolicySet>().map(|_| ()).map_err(|error| {
+        PolicyRewriteError::InvalidCandidate {
+            path: path.to_path_buf(),
+            source: ErrorMessage::capture(error),
+        }
+    })
 }
 
+fn apply_edits(mut source: String, mut edits: Vec<SourceEdit>) -> String {
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.start));
+    for edit in edits {
+        source.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    source
+}
+
+fn write_candidate(path: &Path, candidate: &[u8]) -> Result<(), PolicyRewriteError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| PolicyRewriteError::MissingParentDir {
+            path: path.to_path_buf(),
+        })?;
+
+    let mut temp =
+        NamedTempFile::new_in(parent).map_err(|error| PolicyRewriteError::CreateTempFile {
+            path: parent.to_path_buf(),
+            source: ErrorMessage::capture(error),
+        })?;
+
+    temp.write_all(candidate)
+        .map_err(|error| PolicyRewriteError::WriteTempFile {
+            path: path.to_path_buf(),
+            source: ErrorMessage::capture(error),
+        })?;
+
+    temp.as_file_mut()
+        .sync_all()
+        .map_err(|error| PolicyRewriteError::SyncTempFile {
+            path: path.to_path_buf(),
+            source: ErrorMessage::capture(error),
+        })?;
+
+    temp.persist(path).map(|_| ()).map_err(|error| {
+        let temp_path = error.file.path().to_path_buf();
+        PolicyRewriteError::AtomicReplace {
+            path: path.to_path_buf(),
+            temp_path,
+            source: ErrorMessage::capture(error.error),
+        }
+    })
+}
+
+/// Replacement to apply to the original Cedar source.
+///
+/// Edits are applied from the highest offset to the lowest offset so earlier
+/// replacements cannot invalidate later ranges.
+struct SourceEdit {
+    start: usize,
+    end: usize,
+    replacement: String,
+}
+
+/// Source span for a policy selected by its `@id(...)` annotation.
+///
+/// `source_end` is the policy span returned by Cedar. `end` can extend past it
+/// to include the managed comment when that comment lives after the policy
+/// semicolon.
+struct PolicyBlock {
+    generated_id: PolicyID,
+    start: usize,
+    source_end: usize,
+    end: usize,
+}
+
+/// Managed condition attached to a policy.
+///
+/// The clause range starts at `when` and ends at the semicolon. The comment
+/// range extends through the exact managed marker, allowing removal to include
+/// the marker without touching user comments.
 #[derive(Clone, Copy)]
 struct ManagedCondition {
+    clause_start: usize,
+    clause_end: usize,
+    comment_end: usize,
     expression: ManagedConditionExpression,
 }
 
 impl ManagedCondition {
-    const fn disables_policy(self) -> bool {
+    const fn disables_policy(&self) -> bool {
         matches!(self.expression, ManagedConditionExpression::False)
+    }
+
+    const fn relative_to(self, offset: usize, end: usize) -> Option<Self> {
+        if self.clause_start < offset
+            || self.clause_end < offset
+            || self.comment_end < offset
+            || self.comment_end > end
+        {
+            return None;
+        }
+
+        Some(Self {
+            clause_start: self.clause_start - offset,
+            clause_end: self.clause_end - offset,
+            comment_end: self.comment_end - offset,
+            expression: self.expression,
+        })
     }
 }
 

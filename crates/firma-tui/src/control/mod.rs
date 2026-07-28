@@ -14,7 +14,7 @@ mod state;
 mod terminal;
 mod toggle;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::Receiver;
 
@@ -37,7 +37,11 @@ pub use state::{
 };
 pub use toggle::PolicyState;
 
-/// Options used to start Policy Control.
+/// Startup options for the Policy Control TUI.
+///
+/// The CLI service resolves real stack paths before constructing this value.
+/// The TUI then consumes audit rows from the supplied receiver and displays the
+/// resolved policy directory as its policy source.
 #[derive(Default)]
 pub struct ControlOptions {
     audit_rows: Option<Receiver<AuditRow>>,
@@ -45,7 +49,7 @@ pub struct ControlOptions {
 }
 
 impl ControlOptions {
-    /// Creates options backed by a live audit row receiver.
+    /// Creates options backed by an existing audit-row stream.
     #[must_use]
     pub fn with_audit_rows(audit_rows: Receiver<AuditRow>) -> Self {
         Self {
@@ -54,7 +58,7 @@ impl ControlOptions {
         }
     }
 
-    /// Records the Authority policy directory resolved by the CLI service.
+    /// Sets the Authority policy directory shown and loaded by the TUI.
     #[must_use]
     pub fn with_policy_dir(mut self, policy_dir: PathBuf) -> Self {
         self.policy_dir = Some(policy_dir);
@@ -64,17 +68,47 @@ impl ControlOptions {
 
 /// Reads one policy state from a Cedar source file.
 #[must_use]
-pub fn read_policy_state(path: &std::path::Path, policy_id: &str) -> PolicyState {
+pub fn read_policy_state(path: &Path, policy_id: &str) -> PolicyState {
     toggle::read_policy_state(path, policy_id)
 }
 
 /// Reads several policy states from one Cedar source file.
 #[must_use]
 pub fn read_policy_states(
-    path: &std::path::Path,
+    path: &Path,
     policy_ids: &[String],
 ) -> std::collections::HashMap<String, PolicyState> {
     toggle::read_policy_states(path, policy_ids)
+}
+
+/// Sets one policy in a Cedar source file to the requested state.
+///
+/// # Errors
+///
+/// Fails when the Cedar file cannot be read, the policy id is missing or
+/// malformed, the rewritten candidate does not parse, or the candidate cannot
+/// be atomically persisted.
+pub fn set_policy_state(
+    path: &Path,
+    policy_id: &str,
+    requested: PolicyState,
+) -> Result<(), PolicyRewriteError> {
+    toggle::set_policy_state(path, policy_id, requested)
+}
+
+/// Sets multiple policies in one Cedar source file to the requested state.
+///
+/// # Errors
+///
+/// Fails when the Cedar file cannot be read, any policy id is missing or
+/// malformed, the rewritten candidate does not parse, or the candidate cannot
+/// be atomically persisted.
+pub fn set_policy_states(
+    path: &Path,
+    policy_ids: &[String],
+    requested: PolicyState,
+) -> Result<(), PolicyRewriteError> {
+    toggle::set_policy_states(path, policy_ids, requested)
 }
 
 /// Runs the Policy Control event loop.
