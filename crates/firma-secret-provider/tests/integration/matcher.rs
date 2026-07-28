@@ -120,6 +120,23 @@ fn json_matcher_rejects_misaligned_paths_and_bad_json() {
 }
 
 #[test]
+fn json_name_path_rejects_equal_counts_from_different_parents() {
+    let compiled =
+        CompiledMatcher::compile(&json("$[?(@.value)].value", "$[?(@.key)].key")).unwrap();
+    let mut names_minted = Vec::new();
+    let result = compiled.rewrite(
+        br#"[{"value":"AAA"},{"key":"b","value":"BBB"},{"key":"c"}]"#,
+        &mut |name, _, _, _| {
+            names_minted.push(name.to_owned());
+            String::new()
+        },
+    );
+
+    std::assert_matches!(result, Err(MatcherError::NameParentMismatch));
+    assert!(names_minted.is_empty());
+}
+
+#[test]
 fn regex_matcher_rewrites_value_spans() {
     let compiled =
         CompiledMatcher::compile(&regex(r"(?m)^(?P<name>[^=]+)=(?P<value>.+)$")).unwrap();
@@ -352,6 +369,85 @@ fn json_item_path_broadcasts_title_to_all_fields() {
 }
 
 #[test]
+fn json_positional_metadata_requires_sibling_nodes() {
+    let spec = json_with_item("$[*].value", "$[*].key", "$[*].item", Some("$[*].domain"));
+    let compiled = CompiledMatcher::compile(&spec).unwrap();
+    let mut metadata = Vec::new();
+    compiled
+        .rewrite(
+            br#"[{"key":"a","value":"AAA","item":"one","domain":"a.example"},{"key":"b","value":"BBB","item":"two","domain":"b.example"}]"#,
+            &mut |name, _, domain, item| {
+                metadata.push((
+                    name.to_owned(),
+                    item.map(str::to_owned),
+                    domain.map(ToString::to_string),
+                ));
+                String::new()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        metadata,
+        vec![
+            (
+                "a".to_owned(),
+                Some("one".to_owned()),
+                Some("a.example".to_owned())
+            ),
+            (
+                "b".to_owned(),
+                Some("two".to_owned()),
+                Some("b.example".to_owned())
+            )
+        ]
+    );
+}
+
+#[test]
+fn json_item_path_rejects_equal_counts_from_different_parents() {
+    let spec = json_with_item(
+        "$[?(@.value)].value",
+        "$[?(@.value)].key",
+        "$[?(@.item)].item",
+        None,
+    );
+    let compiled = CompiledMatcher::compile(&spec).unwrap();
+    let mut names_minted = Vec::new();
+    let result = compiled.rewrite(
+        br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB","item":"two"},{"item":"three"}]"#,
+        &mut |name, _, _, _| {
+            names_minted.push(name.to_owned());
+            String::new()
+        },
+    );
+
+    std::assert_matches!(result, Err(MatcherError::ItemParentMismatch));
+    assert!(names_minted.is_empty());
+}
+
+#[test]
+fn json_positional_paths_reject_nested_non_sibling_nodes() {
+    let spec = json_with_domain(
+        "$[*].credentials.value",
+        "$[*].credentials.key",
+        "$[*].metadata.domain",
+    );
+    let compiled = CompiledMatcher::compile(&spec).unwrap();
+    let mut names_minted = Vec::new();
+    let result = compiled.rewrite(
+        br#"[{"credentials":{"key":"a","value":"AAA"},"metadata":{"domain":"a.example"}}]"#,
+        &mut |name, _, _, _| {
+            names_minted.push(name.to_owned());
+            String::new()
+        },
+    );
+
+    std::assert_matches!(result, Err(MatcherError::DomainParentMismatch));
+    assert!(names_minted.is_empty());
+}
+
+#[test]
 fn json_paths_reject_equal_counts_from_different_parents() {
     let spec = json_with_domain(
         "$[?(@.value)].value",
@@ -360,12 +456,15 @@ fn json_paths_reject_equal_counts_from_different_parents() {
     );
     let compiled = CompiledMatcher::compile(&spec).unwrap();
     let mut names_minted = Vec::new();
-    let result = compiled.rewrite( br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB","domain":"b.example"},{"domain":"c.example"}]"#, &mut |name, _, _, _| { names_minted.push(name.to_owned()); String::new() }, );
-    assert_eq!(names_minted, Vec::<String>::new());
-    assert!(
-        result.is_err(),
-        "selectors with different parent locations must not be zipped by order"
+    let result = compiled.rewrite(
+        br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB","domain":"b.example"},{"domain":"c.example"}]"#,
+        &mut |name, _, _, _| {
+            names_minted.push(name.to_owned());
+            String::new()
+        },
     );
+    std::assert_matches!(result, Err(MatcherError::DomainParentMismatch));
+    assert!(names_minted.is_empty());
 }
 
 #[test]

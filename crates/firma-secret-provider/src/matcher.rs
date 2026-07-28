@@ -68,6 +68,13 @@ pub enum MatcherError {
         /// Number of name nodes.
         names: usize,
     },
+    /// The name path selected the right count of nodes, but a node was not a
+    /// sibling of its corresponding value node.
+    #[error(
+        "json matcher name_path selected nodes under different parent elements than value_path; \
+         paths must select sibling nodes"
+    )]
+    NameParentMismatch,
     /// The item path selected a different number of nodes than the value path.
     #[error(
         "json matcher item_path selected {items} node(s) but value_path selected {values}; \
@@ -79,6 +86,13 @@ pub enum MatcherError {
         /// Number of item nodes selected.
         items: usize,
     },
+    /// The item path selected the right count of nodes, but a positional node
+    /// was not a sibling of its corresponding value node.
+    #[error(
+        "json matcher item_path selected nodes under different parent elements than value_path; \
+         paths must select sibling nodes"
+    )]
+    ItemParentMismatch,
     /// The domain path selected a different number of nodes than the value path.
     #[error(
         "json matcher domain_path selected {domains} node(s) but value_path selected {values}; \
@@ -95,7 +109,7 @@ pub enum MatcherError {
     /// would otherwise be silently zipped in the wrong order.
     #[error(
         "json matcher domain_path selected nodes under different parent elements than \
-         value_path; paths must align"
+         value_path; paths must select sibling nodes"
     )]
     DomainParentMismatch,
     /// A selected value or name node was not a JSON string.
@@ -247,61 +261,90 @@ fn parent_pointer(pointer: &str) -> &str {
     pointer.rfind('/').map_or("", |idx| &pointer[..idx])
 }
 
-fn broadcast_optional_values<T: Clone>(
-    raw: Vec<Option<T>>,
-    value_count: usize,
-    is_singular: bool,
-) -> impl ExactSizeIterator<Item = Option<T>> {
-    if is_singular && raw.len() == 1 {
-        Either::Left(std::iter::repeat_n(
-            raw.into_iter().next().flatten(),
-            value_count,
-        ))
-    } else {
-        Either::Right(raw.into_iter())
+struct ValueHit {
+    pointer: String,
+    parent_pointer: String,
+    value: String,
+}
+
+#[derive(Clone, Copy)]
+enum Selector {
+    Name,
+    Item,
+    Domain,
+}
+
+impl Selector {
+    fn misaligned(self, values: usize, selected: usize) -> MatcherError {
+        match self {
+            Self::Name => MatcherError::Misaligned {
+                values,
+                names: selected,
+            },
+            Self::Item => MatcherError::ItemMisaligned {
+                values,
+                items: selected,
+            },
+            Self::Domain => MatcherError::DomainMisaligned {
+                values,
+                domains: selected,
+            },
+        }
+    }
+
+    fn parent_mismatch(self) -> MatcherError {
+        match self {
+            Self::Name => MatcherError::NameParentMismatch,
+            Self::Item => MatcherError::ItemParentMismatch,
+            Self::Domain => MatcherError::DomainParentMismatch,
+        }
     }
 }
 
-/// Resolve `domain_path` against `root`, aligned to the `value_path` hits.
-///
-/// A singular `domain_path` broadcasts its one node to every value. A
-/// non-singular `domain_path` must select exactly `n` nodes *and* each one
-/// must share its parent element with the value node at the same position —
-/// otherwise a coincidental count match would get silently zipped in the
-/// wrong order (see `DomainParentMismatch`).
+fn resolve_nodes<'a>(
+    path: &JsonPath,
+    root: &'a Value,
+    values: &[ValueHit],
+    selector: Selector,
+    allow_shared: bool,
+) -> Result<Vec<&'a Value>, MatcherError> {
+    let located = path.query_located(root);
+    if allow_shared && path.is_singular {
+        if located.len() != 1 {
+            return Err(selector.misaligned(values.len(), located.len()));
+        }
+        let Some(node) = located.iter().next() else {
+            return Err(selector.misaligned(values.len(), 0));
+        };
+        return Ok(std::iter::repeat_n(node.node(), values.len()).collect());
+    }
+
+    if located.len() != values.len() {
+        return Err(selector.misaligned(values.len(), located.len()));
+    }
+
+    located
+        .iter()
+        .zip(values)
+        .map(|(node, value)| {
+            let pointer = node.location().to_json_pointer();
+            if parent_pointer(&pointer) != value.parent_pointer {
+                return Err(selector.parent_mismatch());
+            }
+            Ok(node.node())
+        })
+        .collect()
+}
+
 fn resolve_domains(
     dp: &JsonPath,
     root: &Value,
-    value_parents: &[&str],
-    n: usize,
-) -> Result<impl ExactSizeIterator<Item = Option<Authority>> + 'static, MatcherError> {
-    let located = dp.query_located(root);
-    let iter =
-        if dp.is_singular {
-            // if jsonpath is singular we don't need to check for parents
-            Either::Left(located.iter().map(|node| Ok(node.node().as_str())))
-        } else {
-            // check first to avoid futile work, since iterator length can't change
-            if located.len() != n {
-                return Err(MatcherError::DomainMisaligned {
-                    values: n,
-                    domains: located.len(),
-                });
-            }
-            Either::Right(located.iter().zip(value_parents.iter()).map(
-                |(node, expected_parent)| {
-                    let node_pointer = node.location().to_json_pointer();
-                    if parent_pointer(&node_pointer) != *expected_parent {
-                        return Err(MatcherError::DomainParentMismatch);
-                    }
-                    Ok(node.node().as_str())
-                },
-            ))
-        };
-    let autorities = iter
-        .map(|node| node?.map(validate_domain).transpose())
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(broadcast_optional_values(autorities, n, dp.is_singular))
+    values: &[ValueHit],
+) -> Result<Vec<Option<Authority>>, MatcherError> {
+    resolve_nodes(dp, root, values, Selector::Domain, true)?
+        .into_iter()
+        .map(|node| node.as_str().map(validate_domain).transpose())
+        .collect()
 }
 
 fn rewrite_json(
@@ -324,60 +367,46 @@ fn rewrite_json(
                 .as_str()
                 .ok_or(MatcherError::NonStringNode)?
                 .to_owned();
-            Ok((node.location().to_json_pointer(), value))
+            let pointer = node.location().to_json_pointer();
+            Ok(ValueHit {
+                parent_pointer: parent_pointer(&pointer).to_owned(),
+                pointer,
+                value,
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     if value_hits.is_empty() {
         return Err(MatcherError::NoMatches);
     }
-    let names = matcher
-        .name
-        .query(&root)
-        .iter()
+    let names = resolve_nodes(&matcher.name, &root, &value_hits, Selector::Name, false)?
+        .into_iter()
         .map(|node| Ok(node.as_str().ok_or(MatcherError::NonStringNode)?.to_owned()))
         .collect::<Result<Vec<_>, _>>()?;
-    if value_hits.len() != names.len() {
-        return Err(MatcherError::Misaligned {
-            values: value_hits.len(),
-            names: names.len(),
-        });
-    }
     let n = value_hits.len();
-    let value_parents: Vec<&str> = value_hits
-        .iter()
-        .map(|(pointer, _)| parent_pointer(pointer))
-        .collect();
 
     let items = match &matcher.item {
-        None => Either::Left(std::iter::repeat_n(None, n)),
-        Some(ip) => {
-            let raw: Vec<Option<String>> = ip
-                .query(&root)
-                .iter()
-                .map(|v| v.as_str().map(str::to_owned))
-                .collect();
-            let expanded = broadcast_optional_values(raw, n, ip.is_singular);
-            let ok_len = expanded.len();
-            if ok_len != n {
-                return Err(MatcherError::ItemMisaligned {
-                    values: n,
-                    items: ok_len,
-                });
-            }
-            Either::Right(expanded)
-        }
+        None => vec![None; n],
+        Some(ip) => resolve_nodes(ip, &root, &value_hits, Selector::Item, true)?
+            .into_iter()
+            .map(|node| node.as_str().map(str::to_owned))
+            .collect(),
     };
 
     let domains = match &matcher.domain {
-        None => Either::Left(std::iter::repeat_n(None, n)),
-        Some(dp) => Either::Right(resolve_domains(dp, &root, &value_parents, n)?),
+        None => vec![None; n],
+        Some(dp) => resolve_domains(dp, &root, &value_hits)?,
     };
 
-    for ((((pointer, value), name), item), domain) in
+    for (((value_hit, name), item), domain) in
         value_hits.into_iter().zip(names).zip(items).zip(domains)
     {
-        let placeholder = mint(&name, Secret::new(&value), domain.as_ref(), item.as_deref());
-        if let Some(slot) = root.pointer_mut(&pointer) {
+        let placeholder = mint(
+            &name,
+            Secret::new(&value_hit.value),
+            domain.as_ref(),
+            item.as_deref(),
+        );
+        if let Some(slot) = root.pointer_mut(&value_hit.pointer) {
             *slot = Value::String(placeholder);
         }
     }

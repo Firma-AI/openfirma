@@ -393,8 +393,9 @@ pub enum SecretMatcher {
     Json {
         /// `JSONPath` selecting each secret value (`@match_value`).
         value_path: String,
-        /// `JSONPath` selecting the matching name (`@match_name`), aligned by
-        /// document order with the value path.
+        /// `JSONPath` selecting the matching name (`@match_name`). Each name
+        /// must be a sibling of its corresponding value node; equal result
+        /// counts alone do not establish alignment.
         name_path: String,
         /// Optional `JSONPath` selecting the item title for structured-item stores.
         ///
@@ -405,8 +406,9 @@ pub enum SecretMatcher {
         /// (e.g. 1Password `$.title`).
         ///
         /// A non-singular `JSONPath` is treated as positional. It must select exactly
-        /// as many nodes as `value_path`, and results are aligned in document order.
-        /// Examples include `$[*].title` and `$.items[*].title`.
+        /// as many nodes as `value_path`, and each node must be a sibling of its
+        /// corresponding value node. Examples include `$[*].title` and
+        /// `$.items[*].title`.
         ///
         /// A non-singular path is not broadcast merely because it happens to select
         /// one node for a particular response. This avoids treating a missing
@@ -426,8 +428,9 @@ pub enum SecretMatcher {
         /// (e.g. 1Password `urls[0].href`).
         ///
         /// A non-singular `JSONPath` is treated as positional. It must select exactly
-        /// as many nodes as `value_path`, and results are aligned in document order.
-        /// Examples include `$[*].domain` and `$.items[*].url`.
+        /// as many nodes as `value_path`, and each node must be a sibling of its
+        /// corresponding value node. Examples include `$[*].domain` and
+        /// `$.items[*].url`.
         ///
         /// A non-singular path is not broadcast merely because it happens to select
         /// one node for a particular response. This ensures that a missing domain on
