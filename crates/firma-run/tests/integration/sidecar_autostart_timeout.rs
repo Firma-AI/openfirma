@@ -61,6 +61,8 @@ fn returns_ready_timeout_when_no_ready_line_observed() {
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
         monitor_mode: false,
+        secret_gateway_addr: None,
+        http_secret_providers: Vec::new(),
     });
     let Err(err) = result else {
         panic!("expected timeout, got Ok");

@@ -16,8 +16,10 @@
 //! | `action`    | `Firma::Action::"<action_class>"`    |
 //! | `resource`  | `Firma::Resource::"<resource_uri>"`  |
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use cedar_policy::{
     Authorizer, Context, Decision, Effect, Entities, EntityUid, PolicyId, PolicySet, Request,
@@ -460,7 +462,7 @@ namespace Firma {
         git_operation?: String
     };
     entity Agent;
-    entity Resource;
+    entity Resource { id: String };
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
@@ -519,7 +521,9 @@ namespace Firma {
     }
 
     fn agent() -> AgentId {
-        "agt_01j0000000e008000000000001".parse().unwrap()
+        "agt_01j0000000e008000000000001"
+            .parse()
+            .expect("valid agent id")
     }
 
     #[test]

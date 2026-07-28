@@ -141,8 +141,8 @@ pub fn read_configured_agent_id(path: &std::path::Path) -> Result<AgentId, crate
 fn read_identity_override(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
+        .filter(|value| !value.trim().is_empty())
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

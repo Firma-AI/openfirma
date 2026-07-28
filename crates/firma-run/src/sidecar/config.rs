@@ -344,6 +344,15 @@ pub struct SynthesizeRequest<'a> {
     /// operator template. Enables `firma run --monitor` for a single-run
     /// observe-only mode without editing firma.toml.
     pub monitor_mode: bool,
+    /// HTTP-shaped entries from `ResolvedProfile::secret_providers`, written
+    /// into `[sidecar].http_secret_providers` so the Sidecar's MITM path can
+    /// intercept matching vault responses. A provider entry being present
+    /// here is itself the authorization to intercept — no separate policy
+    /// check gates it. Deliberately a distinct field name from firma-run's own
+    /// `secret_providers` config so the two are never confused — this is a
+    /// read-only mirror the Sidecar consumes, not a config surface an
+    /// operator edits directly. Empty when no HTTP providers are configured.
+    pub http_secret_providers: &'a [firma_secret_provider::HttpIntegrationSpec],
 }
 
 /// Result of template resolution. Returned for tests; production callers
@@ -422,6 +431,7 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     // VS Code profile classifies its GitHub account traffic at CONNECT level.
     ensure_vscode_github_mitm_bypass(&mut value, req.execution_profile)?;
     ensure_mapping_rules(&mut value, req.out_path, req.execution_profile)?;
+    override_http_secret_providers(&mut value, req.http_secret_providers)?;
     write_atomic(req.out_path, &value)?;
     Ok(source)
 }
@@ -625,6 +635,27 @@ fn override_authority_credentials(
         );
         table.remove("pre_shared_key_env");
     }
+    Ok(())
+}
+
+/// Mirror the resolved HTTP-shaped `secret_providers` entries into
+/// `[sidecar].http_secret_providers`. A no-op when `providers` is empty —
+/// most profiles configure no HTTP vaults, and the field's `#[serde(default)]`
+/// on the Sidecar side already treats an absent key as empty.
+fn override_http_secret_providers(
+    value: &mut toml::Value,
+    providers: &[firma_secret_provider::HttpIntegrationSpec],
+) -> Result<(), RunError> {
+    if providers.is_empty() {
+        return Ok(());
+    }
+    let sidecar = sidecar_table_mut(value)?;
+    let serialized = toml::Value::try_from(providers).map_err(|error| {
+        RunError::Internal(format!(
+            "failed to serialize http_secret_providers into sidecar config: {error}"
+        ))
+    })?;
+    sidecar.insert("http_secret_providers".to_string(), serialized);
     Ok(())
 }
 
@@ -1074,6 +1105,7 @@ mod tests {
             capability_seed_path: None,
             audit_fallback_path: None,
             monitor_mode: false,
+            http_secret_providers: &[],
         })
         .unwrap_or_else(|error| panic!("{error}"));
 

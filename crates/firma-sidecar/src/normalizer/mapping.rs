@@ -230,7 +230,12 @@ impl MappingTable {
 /// - `*` matches any sequence of non-separator characters
 /// - `*.example.com` matches `api.example.com` but not `deep.api.example.com`
 /// - `/v1/*/completions` matches `/v1/chat/completions`
-fn glob_match(pattern: &str, value: &str) -> bool {
+///
+/// `pub` (the containing `mapping` module is private, so this is
+/// crate-visible in practice) so other host/path matching needs (e.g.
+/// `handler.rs`'s `http_secret_providers` matching) reuse the same pattern
+/// language instead of a second implementation.
+pub fn glob_match(pattern: &str, value: &str) -> bool {
     if pattern == "*" {
         return true;
     }

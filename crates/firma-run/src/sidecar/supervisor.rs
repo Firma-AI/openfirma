@@ -78,6 +78,13 @@ pub struct SpawnRequest<'a> {
     /// config regardless of the operator template value. Passed through from
     /// `--monitor` on the `firma run` CLI.
     pub monitor_mode: bool,
+    /// Secret gateway address set as `FIRMA_SECRET_GATEWAY_ADDR` on the
+    /// Sidecar process. `None` when no secret providers are configured.
+    pub secret_gateway_addr: Option<String>,
+    /// HTTP-shaped secret providers mirrored into the synthesized sidecar
+    /// config's `http_secret_providers` (see
+    /// [`crate::sidecar::config::SynthesizeRequest::http_secret_providers`]).
+    pub http_secret_providers: Vec<firma_secret_provider::HttpIntegrationSpec>,
 }
 
 /// Captured values from the seven-line ready sequence.
@@ -186,6 +193,7 @@ impl SidecarSupervisor {
                 capability_seed_path: req.capability_seed_path.as_deref(),
                 audit_fallback_path: req.audit_fallback_path.as_deref(),
                 monitor_mode: req.monitor_mode,
+                http_secret_providers: &req.http_secret_providers,
             })?;
 
             let mut cmd = std::process::Command::new(&req.firma_exe);
@@ -205,6 +213,9 @@ impl SidecarSupervisor {
                 .env("FIRMA_RUN_AUDIT_SOCK", &audit_sock_path)
                 .env("NO_COLOR", "1")
                 .env("CLICOLOR", "0");
+            if let Some(ref addr) = req.secret_gateway_addr {
+                cmd.env("FIRMA_SECRET_GATEWAY_ADDR", addr);
+            }
             // The CLI `--monitor` flag is an explicit opt-in. Forward it to
             // the sidecar as the env-var opt-in that monitor mode now
             // requires, so `firma run --monitor` keeps honoring observe-only

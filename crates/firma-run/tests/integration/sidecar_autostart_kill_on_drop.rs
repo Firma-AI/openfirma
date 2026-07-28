@@ -66,6 +66,8 @@ fn drop_terminates_child_within_grace() {
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
         monitor_mode: false,
+        secret_gateway_addr: None,
+        http_secret_providers: Vec::new(),
     })
     .expect("supervisor spawned");
 
@@ -114,6 +116,8 @@ fn marker_files_present_between_ready_and_drop() {
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
         monitor_mode: false,
+        secret_gateway_addr: None,
+        http_secret_providers: Vec::new(),
     })
     .expect("supervisor spawned");
 
