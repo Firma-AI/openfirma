@@ -727,7 +727,7 @@ impl RequestHandler {
         mut request: RawRequest,
         session_id: &str,
     ) -> UpgradeAuthorization {
-        if is_protected_host(&request.host, request.is_https) {
+        if is_protected_host(&request.host) {
             let detail = "Composio protocol upgrades are unsupported".to_string();
             let decision = EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,

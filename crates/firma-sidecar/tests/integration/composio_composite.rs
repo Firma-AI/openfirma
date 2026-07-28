@@ -13,7 +13,10 @@ use firma_core::{
 };
 use firma_http::{HeaderName, Method};
 use firma_sidecar::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode};
-use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, SidecarMode, TenancyMode};
+use firma_sidecar::config::{
+    HttpsMitmConfig, MappingRuleConfig, MappingRulesFile, SidecarMode, TenancyMode,
+};
+use firma_sidecar::interceptor::http::HttpInterceptor;
 use firma_sidecar::connector::ConnectorRegistry;
 use firma_sidecar::credential::{CredentialInjectionError, CredentialInjector};
 use firma_sidecar::handler::{HandledResponse, RequestHandler, UpgradeAuthorization};
@@ -649,7 +652,11 @@ async fn protected_composio_hosts_reject_protocol_upgrades() -> anyhow::Result<(
         audit_tx,
     );
 
-    for host in ["app.composio.dev:443", "backend.composio.dev."] {
+    for host in [
+        "app.composio.dev:443",
+        "backend.composio.dev.",
+        "backend.composio.dev:8443",
+    ] {
         let authorization = handler
             .authorize_upgrade(
                 RawRequest {
@@ -875,6 +882,151 @@ async fn handler_monitor_override_still_dispatches_only_once() -> anyhow::Result
             .ok_or_else(|| anyhow::anyhow!("missing child audit"))?;
         assert_eq!(audit.decision, firma_sidecar::audit::Decision::Allow);
     }
+    Ok(())
+}
+
+async fn read_headers(stream: &mut TcpStream) -> anyhow::Result<String> {
+    let mut collected = Vec::new();
+    let mut buf = [0_u8; 256];
+    loop {
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await??;
+        anyhow::ensure!(read > 0, "connection closed before response headers");
+        collected.extend_from_slice(&buf[..read]);
+        if collected.windows(4).any(|window| window == b"\r\n\r\n") {
+            return Ok(String::from_utf8_lossy(&collected).to_string());
+        }
+    }
+}
+
+/// Build a TLS connector that trusts the interceptor's generated Firma CA,
+/// waiting briefly for first-run CA generation to complete.
+async fn firma_ca_client(ca_dir: &std::path::Path) -> anyhow::Result<TlsConnector> {
+    let ca_path = ca_dir.join("firma-ca.crt");
+    for _ in 0..40 {
+        if ca_path.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let mut roots = RootCertStore::empty();
+    let pem = std::fs::read(&ca_path)?;
+    for certificate in rustls_pemfile::certs(&mut pem.as_slice()) {
+        roots.add(certificate?)?;
+    }
+    Ok(TlsConnector::from(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    )))
+}
+
+/// Drive a Composio denial through the real proxy stack — CONNECT, strict
+/// HTTPS MITM with the generated Firma CA, protocol decode, and the audited
+/// denial — covering the interception layers the in-process handler tests
+/// bypass.
+#[tokio::test]
+async fn composio_denial_travels_through_the_mitm_proxy_stack() -> anyhow::Result<()> {
+    let ca_dir = tempfile::tempdir()?;
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(8);
+    let handler = Arc::new(
+        RequestHandler::new(
+            Arc::new(pipeline(
+                PolicyMode::Allow,
+                CredentialMode::Shared,
+                SidecarMode::Enforce,
+            )?),
+            registry,
+            audit_tx,
+        )
+        .with_composio_catalogs(catalogs()?),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_addr = listener.local_addr()?;
+    let cancel = CancellationToken::new();
+    let interceptor = HttpInterceptor::new(proxy_addr).with_https_mitm(
+        HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["backend.composio.dev".to_string()],
+            strict_hosts: vec!["backend.composio.dev".to_string()],
+            bypass_hosts: Vec::new(),
+            ..HttpsMitmConfig::default()
+        },
+        ca_dir.path().to_path_buf(),
+    );
+    let server = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            let _ = interceptor.run_with_listener(listener, handler, cancel).await;
+        }
+    });
+
+    let mut stream = TcpStream::connect(proxy_addr).await?;
+    stream
+        .write_all(
+            b"CONNECT backend.composio.dev:443 HTTP/1.1\r\n\
+              Host: backend.composio.dev:443\r\n\
+              x-firma-session-id: sess_composite\r\n\r\n",
+        )
+        .await?;
+    let connect_response = read_headers(&mut stream).await?;
+    anyhow::ensure!(
+        connect_response.starts_with("HTTP/1.1 200"),
+        "expected CONNECT 200, got: {connect_response:?}"
+    );
+
+    let tls = firma_ca_client(ca_dir.path()).await?;
+    let mut tls_stream = tls
+        .connect(
+            ServerName::try_from("backend.composio.dev".to_string())?,
+            stream,
+        )
+        .await?;
+
+    let body = serde_json::json!({"version": "20251111_00"}).to_string();
+    let request = format!(
+        "POST /api/v3/tools/execute/GMAIL_TOOL_NOT_IN_CATALOG HTTP/1.1\r\n\
+         Host: backend.composio.dev\r\n\
+         x-firma-session-id: sess_composite\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len(),
+    );
+    tls_stream.write_all(request.as_bytes()).await?;
+    let mut buf = [0_u8; 2048];
+    let read = tokio::time::timeout(Duration::from_secs(5), tls_stream.read(&mut buf)).await??;
+    let response = String::from_utf8_lossy(&buf[..read]).to_string();
+    let status = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    assert_eq!(
+        status, 403,
+        "expected decode denial over the MITM path, got: {response}"
+    );
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 0);
+
+    let mut saw_denial = false;
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(1), audit_rx.recv()).await
+    {
+        if event.decision == firma_sidecar::audit::Decision::Deny
+            && event.deny_reason.contains("unknown_tool")
+        {
+            saw_denial = true;
+            break;
+        }
+    }
+    assert!(saw_denial, "expected an audited unknown_tool denial");
+
+    cancel.cancel();
+    let _ = server.await;
     Ok(())
 }
 

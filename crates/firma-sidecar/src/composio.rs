@@ -93,7 +93,7 @@ pub enum DecodeResult {
 /// Decode a raw HTTP request before generic normalization.
 #[must_use]
 pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult {
-    let host = canonical_host(&request.host, request.is_https);
+    let host = canonical_host(&request.host);
     if host != BACKEND_HOST && host != APP_HOST {
         return DecodeResult::Unrelated;
     }
@@ -285,6 +285,9 @@ fn decode_session(
     session_id: Option<&str>,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
+    // Best-effort marker: Composio may rename this field, so the catalog
+    // lookup below stays the real gate for custom tools; this check only
+    // produces a more specific denial code while the marker matches.
     if payload.contains_key("experimental") {
         return deny(
             "custom_tools_unsupported",
@@ -553,10 +556,7 @@ fn logical_envelope(
     method: HttpMethod,
 ) -> NormalizedEnvelope {
     let mut resource = BTreeMap::from([
-        (
-            "host".to_string(),
-            canonical_host(&request.host, request.is_https),
-        ),
+        ("host".to_string(), canonical_host(&request.host)),
         ("path".to_string(), path_only(&request.path).to_string()),
         ("provider".to_string(), "composio".to_string()),
         (
@@ -710,25 +710,22 @@ fn parse_json_without_duplicate_keys(body: &[u8]) -> Result<Value, serde_json::E
     Ok(payload.0)
 }
 
-pub(crate) fn is_protected_host(host: &str, is_https: bool) -> bool {
-    matches!(
-        canonical_host(host, is_https).as_str(),
-        BACKEND_HOST | APP_HOST
-    )
+pub(crate) fn is_protected_host(host: &str) -> bool {
+    matches!(canonical_host(host).as_str(), BACKEND_HOST | APP_HOST)
 }
 
-fn canonical_host(host: &str, is_https: bool) -> String {
+/// Lowercase the host and strip any trailing `:port`, not just the scheme
+/// default, so a nonstandard port cannot demote a protected host to
+/// `Unrelated` generic normalization.
+fn canonical_host(host: &str) -> String {
     let normalized = host.trim_end_matches('.').to_ascii_lowercase();
-    if is_https {
-        normalized
-            .strip_suffix(":443")
-            .unwrap_or(&normalized)
-            .to_string()
-    } else {
-        normalized
-            .strip_suffix(":80")
-            .unwrap_or(&normalized)
-            .to_string()
+    match normalized.rsplit_once(':') {
+        Some((name, port))
+            if !name.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            name.to_string()
+        }
+        _ => normalized,
     }
 }
 

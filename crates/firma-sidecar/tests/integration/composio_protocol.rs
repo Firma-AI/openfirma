@@ -125,6 +125,25 @@ fn direct_execution_requires_and_uses_the_pinned_version() -> anyhow::Result<()>
     Ok(())
 }
 
+/// A nonstandard port must not demote a protected host to generic
+/// normalization; host matching is port-agnostic.
+#[test]
+fn nonstandard_ports_still_hit_the_protected_hosts() -> anyhow::Result<()> {
+    let request = request(
+        "backend.composio.dev:8443",
+        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
+        &serde_json::json!({"version": "20251111_00"}),
+    );
+
+    let decoded = actions(decode(&request, &catalogs()?))?;
+
+    assert_eq!(
+        decoded[0].envelope.intent.policy_resource_display(),
+        "composio://gmail/GMAIL_FETCH_EMAILS"
+    );
+    Ok(())
+}
+
 /// The logical envelope must never retain the raw query string: clients can
 /// stuff tool arguments after `?`, and the envelope travels inside denial
 /// decisions and diagnostics.
