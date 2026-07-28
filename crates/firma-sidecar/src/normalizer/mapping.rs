@@ -119,6 +119,11 @@ impl MappingRule {
 impl MappingTable {
     /// Load and validate mapping rules from a parsed config.
     ///
+    /// Host patterns are normalized like runtime request hosts (lowercased,
+    /// trailing dot stripped): request hosts arrive in that form, so an
+    /// unnormalized pattern such as `API.GitHub.COM.` could never match
+    /// anything and would sit in the table as a dead rule.
+    ///
     /// # Errors
     /// Returns an error if the rules are structurally invalid or
     /// ambiguous.
@@ -132,13 +137,15 @@ impl MappingTable {
 
         // Duplicate (method, host, path) tuple detection. Two rules
         // with the same triple across merged mapping files produces
-        // ambiguous classification — fail-closed at startup.
+        // ambiguous classification — fail-closed at startup. Hosts are
+        // compared in normalized form so case or trailing-dot variants of
+        // the same rule cannot slip past the check.
         let mut seen: std::collections::HashSet<(Option<Method>, String, String)> =
             std::collections::HashSet::new();
         for (i, rule_cfg) in file.rules.iter().enumerate() {
             let key = (
                 rule_cfg.method.clone(),
-                rule_cfg.host.clone(),
+                normalize_host_pattern(&rule_cfg.host),
                 rule_cfg.path.clone().unwrap_or_default(),
             );
             if !seen.insert(key) {
@@ -159,15 +166,16 @@ impl MappingTable {
                 });
             }
 
+            let host_pattern = normalize_host_pattern(&rule_cfg.host);
             let specificity = MappingRule::compute_specificity(
                 rule_cfg.method.as_ref(),
-                &rule_cfg.host,
+                &host_pattern,
                 rule_cfg.path.as_ref(),
             );
 
             rules.push(MappingRule {
                 method: rule_cfg.method.clone(),
-                host_pattern: rule_cfg.host.clone(),
+                host_pattern,
                 path_pattern: rule_cfg.path.clone(),
                 action_class: rule_cfg.action_class.clone(),
                 specificity,
@@ -225,10 +233,19 @@ impl MappingTable {
     }
 }
 
-/// Simple glob matching supporting `*` as a single-segment wildcard.
+/// Normalize a rule host pattern like runtime request hosts: lowercase and
+/// strip any trailing dot. Ports and wildcards are preserved — a pattern may
+/// legitimately target a nonstandard port.
+fn normalize_host_pattern(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Simple glob matching where `*` matches any sequence of characters.
 ///
-/// - `*` matches any sequence of non-separator characters
-/// - `*.example.com` matches `api.example.com` but not `deep.api.example.com`
+/// The wildcard crosses separators: `*.example.com` matches both
+/// `api.example.com` and `deep.api.example.com`, and a bare `*` matches
+/// everything.
+///
 /// - `/v1/*/completions` matches `/v1/chat/completions`
 pub fn glob_match(pattern: &str, value: &str) -> bool {
     if pattern == "*" {
