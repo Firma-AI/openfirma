@@ -177,6 +177,13 @@ fn decode_backend(
     payload: &Map<String, Value>,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
+    // Lifecycle writes are checked first; execution routes never classify as
+    // lifecycle, and a lifecycle route the write decoder declines (for
+    // example POST to `session/{id}`) falls through to the recognized
+    // passthrough check below.
+    if let Some(result) = decode_lifecycle_write(request, BACKEND_HOST) {
+        return result;
+    }
     let path = path_only(&request.path);
     let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
     match components.as_slice() {
@@ -199,8 +206,6 @@ fn decode_backend(
             session_id,
             "execute_meta",
         ] => decode_meta_route(request, payload, Some(session_id), catalogs),
-        _ if is_lifecycle_path(path) => decode_lifecycle_write(request, BACKEND_HOST)
-            .unwrap_or_else(|| deny("unsupported_route", "unsupported Composio route")),
         _ if is_recognized_non_execution_path(BACKEND_HOST, path) => DecodeResult::Passthrough,
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
@@ -211,25 +216,31 @@ fn decode_backend(
 /// This is the single place the lifecycle route shapes are written down;
 /// path detection and write decoding both derive from it so a new family or
 /// API version cannot be added to one and silently missed by the other.
-enum LifecycleRoute {
+/// Fields borrow from the classified path to keep detection allocation-free.
+enum LifecycleRoute<'a> {
     /// A `connected_accounts` or `auth_configs` route.
     Family {
         /// Slug noun for the family (`CONNECTED_ACCOUNT` or `AUTH_CONFIG`).
         noun: &'static str,
         /// Connected account identifier from the path, when addressed.
-        account_id: Option<String>,
+        account_id: Option<&'a str>,
         /// Whether the path addresses the collection rather than an item.
         is_collection: bool,
+    },
+    /// A Tool Router session resource (`session/{id}`).
+    Session {
+        /// Session identifier from the path.
+        session_id: &'a str,
     },
     /// The Tool Router session `link` route.
     SessionLink {
         /// Session identifier from the path.
-        session_id: String,
+        session_id: &'a str,
     },
 }
 
 /// Classify a path against the governed lifecycle route shapes.
-fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute> {
+fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute<'_>> {
     let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
     match components.as_slice() {
         [
@@ -244,10 +255,13 @@ fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute> {
                 "AUTH_CONFIG"
             },
             account_id: (*family == "connected_accounts")
-                .then(|| rest.first().map(|id| (*id).to_string()))
+                .then(|| rest.first().copied())
                 .flatten(),
             is_collection: rest.is_empty(),
         }),
+        ["api", "v3" | "v3.1", "tool_router", "session", session_id] => {
+            Some(LifecycleRoute::Session { session_id })
+        }
         [
             "api",
             "v3" | "v3.1",
@@ -255,16 +269,9 @@ fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute> {
             "session",
             session_id,
             "link",
-        ] => Some(LifecycleRoute::SessionLink {
-            session_id: (*session_id).to_string(),
-        }),
+        ] => Some(LifecycleRoute::SessionLink { session_id }),
         _ => None,
     }
-}
-
-/// Return whether a path belongs to a governed account-lifecycle family.
-fn is_lifecycle_path(path: &str) -> bool {
-    classify_lifecycle_route(path).is_some()
 }
 
 /// Decode an account-lifecycle write into one governed logical action.
@@ -295,13 +302,32 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
                 request,
                 &format!("COMPOSIO_{verb}_{noun}"),
                 None,
-                account_id.as_deref(),
+                account_id,
+            ))
+        }
+        LifecycleRoute::Session { session_id } => {
+            // Session creation targets the collection and stays a recognized
+            // POST passthrough; deleting or mutating an existing session
+            // changes the agent's reachable surface and is governed.
+            if request.method == Method::POST {
+                return None;
+            }
+            let verb = if request.method == Method::DELETE {
+                "DELETE"
+            } else {
+                "UPDATE"
+            };
+            Some(lifecycle_action(
+                request,
+                &format!("COMPOSIO_{verb}_SESSION"),
+                Some(session_id),
+                None,
             ))
         }
         LifecycleRoute::SessionLink { session_id } => Some(lifecycle_action(
             request,
             "COMPOSIO_LINK_SESSION_ACCOUNT",
-            Some(&session_id),
+            Some(session_id),
             None,
         )),
     }

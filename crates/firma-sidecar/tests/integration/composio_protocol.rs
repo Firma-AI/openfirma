@@ -226,6 +226,44 @@ fn non_read_methods_on_recognized_routes_fail_closed() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Tool Router session creation stays a recognized passthrough, and MCP
+/// session teardown keeps its DELETE: the method allowlists must not break
+/// either flow.
+#[test]
+fn session_creation_and_mcp_teardown_remain_passthrough() -> anyhow::Result<()> {
+    for (method, host, path, has_body) in [
+        (
+            Method::POST,
+            "backend.composio.dev",
+            "/api/v3/tool_router/session",
+            true,
+        ),
+        (
+            Method::POST,
+            "backend.composio.dev",
+            "/api/v3/tool_router/session/trs_1",
+            true,
+        ),
+        (
+            Method::DELETE,
+            "app.composio.dev",
+            "/tool_router/v3/trs_1/mcp",
+            false,
+        ),
+    ] {
+        let mut recognized = request(host, path, &serde_json::json!({}));
+        recognized.method = method.clone();
+        if !has_body {
+            recognized.body = None;
+        }
+        assert!(
+            matches!(decode(&recognized, &catalogs()?), DecodeResult::Passthrough),
+            "{method} {path} must stay passthrough"
+        );
+    }
+    Ok(())
+}
+
 /// MCP session URLs deny query strings uniformly, so a mis-configured URL
 /// fails at the handshake with a clear denial instead of handshaking and
 /// then failing on every tool call.
@@ -591,6 +629,20 @@ fn lifecycle_writes_are_governed_as_account_permission_change() -> anyhow::Resul
             "COMPOSIO_LINK_SESSION_ACCOUNT",
             None,
             Some("trs_1"),
+        ),
+        (
+            Method::DELETE,
+            "/api/v3/tool_router/session/trs_9",
+            "COMPOSIO_DELETE_SESSION",
+            None,
+            Some("trs_9"),
+        ),
+        (
+            Method::PATCH,
+            "/api/v3.1/tool_router/session/trs_9",
+            "COMPOSIO_UPDATE_SESSION",
+            None,
+            Some("trs_9"),
         ),
     ] {
         let mut lifecycle = request("backend.composio.dev", path, &serde_json::json!({}));

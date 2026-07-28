@@ -31,13 +31,18 @@ The decoder recognizes:
 Recognized read-only discovery requests (tool listings, toolkit metadata,
 session reads, MCP session streams and teardown) can pass without tool-action
 evaluation. Account-lifecycle writes are governed, not passed through:
-`POST`/`PATCH`/`PUT`/`DELETE` on the `connected_accounts`, `auth_configs`,
-and Tool Router session `link` routes (under both `/api/v3` and `/api/v3.1`)
-decode into one logical `account.permission.change` action with a
-`composio://composio/<slug>` resource (for example
-`COMPOSIO_CREATE_CONNECTED_ACCOUNT` or `COMPOSIO_LINK_SESSION_ACCOUNT`), so
-an agent cannot expand its own reachable account surface without capability
-and Cedar evaluation. Every recognized route carries a method allowlist:
+`POST`/`PATCH`/`PUT`/`DELETE` on the `connected_accounts` and `auth_configs`
+routes, writes to the Tool Router session `link` route, and
+`PATCH`/`PUT`/`DELETE` on a Tool Router `session/{id}` resource (all under
+both `/api/v3` and `/api/v3.1`) decode into one logical
+`account.permission.change` action with a `composio://composio/<slug>`
+resource (for example `COMPOSIO_CREATE_CONNECTED_ACCOUNT`,
+`COMPOSIO_LINK_SESSION_ACCOUNT`, or `COMPOSIO_DELETE_SESSION`), so an agent
+cannot expand or reshape its own reachable account surface without
+capability and Cedar evaluation. Session creation (`POST` to the session
+collection) stays a recognized passthrough, and tearing down the hosted MCP
+transport session via `DELETE` on the MCP path remains transport-level
+passthrough. Every recognized route carries a method allowlist:
 reads (`GET`/`HEAD`/`OPTIONS`) pass through, MCP session paths additionally
 allow `DELETE` for teardown, lifecycle writes are governed, and any other
 method (for example `TRACE`) fails closed rather than auditing as

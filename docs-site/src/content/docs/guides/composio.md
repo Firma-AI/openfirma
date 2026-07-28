@@ -24,6 +24,8 @@ The Sidecar cross-checks this at startup: when the mapping rules reference
 the Composio hosts but the HTTPS MITM configuration leaves them bypassed,
 unintercepted, or non-strict, it logs one warning per gap so a
 misconfiguration cannot silently downgrade governance to opaque tunnels.
+Wildcard and catch-all rule hosts count as referencing the Composio hosts,
+because such rules do govern that traffic at runtime.
 
 Continue to run your chosen command:
 
@@ -94,9 +96,10 @@ session identifier, and batch position when those values are present.
 Linking or removing a connected account changes what an agent can reach, so
 those requests are governed like tool calls instead of passing through.
 Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `connected_accounts`,
-`auth_configs`, and the Tool Router session `link` route (under `/api/v3`
-and `/api/v3.1`) decode into one `account.permission.change` action with a
-synthetic resource:
+`auth_configs`, and the Tool Router session `link` route, plus `PATCH`,
+`PUT`, and `DELETE` on a Tool Router `session/{id}` resource (under
+`/api/v3` and `/api/v3.1`), decode into one `account.permission.change`
+action with a synthetic resource:
 
 ```text
 composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT
