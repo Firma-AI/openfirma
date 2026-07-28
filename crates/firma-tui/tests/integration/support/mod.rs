@@ -2,15 +2,21 @@ use std::{
     cell::RefCell,
     collections::VecDeque,
     fs,
-    path::Path,
-    sync::mpsc::{self, Receiver, Sender},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
+    thread,
     time::Duration,
 };
 
 use crossterm::event::KeyCode;
 use firma_tui::control::{
-    App, AuditDecision, AuditRow, ControlError, ControlStatus, Event, PolicyRowStatus,
-    TerminalEventSource,
+    App, AuditDecision, AuditRow, ControlCrankOutcome, ControlError, ControlStatus, Event,
+    HeadlessRunner, PolicyRewriteError, PolicyRewriteHandler, PolicyRewriteRequest,
+    PolicyRowStatus, PolicyStateReader, TerminalEventSource, read_policy_states, set_policy_states,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -46,6 +52,22 @@ permit (
 ) when { false }; // openfirma-control:disabled
 "#;
 
+pub const DISABLED_POLICY_SOURCE: &str = r#"
+@id("first_policy")
+permit (
+    principal,
+    action,
+    resource
+) when { false }; // openfirma-control:disabled
+
+@id("second_policy")
+permit (
+    principal,
+    action,
+    resource
+) when { false }; // openfirma-control:disabled
+"#;
+
 pub fn permit_policy(id: &str) -> String {
     format!(
         r#"
@@ -57,6 +79,85 @@ permit (
 );
 "#
     )
+}
+
+pub fn generated_policy_id(prefix: &str, index: usize) -> String {
+    format!("{prefix}_{index:04}")
+}
+
+pub fn generated_policy_ids(prefix: &str, count: usize) -> Vec<String> {
+    (0..count)
+        .map(|index| generated_policy_id(prefix, index))
+        .collect()
+}
+
+pub fn generated_policy_source(
+    prefix: &str,
+    count: usize,
+    disabled: impl Fn(usize) -> bool,
+) -> String {
+    let mut source = String::new();
+    for index in 0..count {
+        source.push_str(&generated_policy(
+            &generated_policy_id(prefix, index),
+            disabled(index),
+        ));
+    }
+
+    source
+}
+
+fn generated_policy(id: &str, disabled: bool) -> String {
+    let suffix = if disabled {
+        " when { false }; // openfirma-control:disabled"
+    } else {
+        ";"
+    };
+
+    format!(
+        r#"
+@id("{id}")
+permit (
+    principal,
+    action,
+    resource
+){suffix}
+"#
+    )
+}
+
+#[derive(Clone, Default)]
+pub struct PolicyStateReadCounts {
+    counts: Arc<Mutex<std::collections::HashMap<PathBuf, usize>>>,
+}
+
+impl PolicyStateReadCounts {
+    pub fn reader(&self) -> PolicyStateReader {
+        let counts = Arc::clone(&self.counts);
+        PolicyStateReader::new(move |file, ids| {
+            if let Ok(mut counts) = counts.lock() {
+                *counts.entry(file.to_path_buf()).or_default() += 1;
+            }
+            read_policy_states(file, ids)
+        })
+    }
+
+    pub fn clear(&self) -> anyhow::Result<()> {
+        self.counts
+            .lock()
+            .map_err(|error| anyhow::anyhow!("policy state read count mutex poisoned: {error}"))?
+            .clear();
+        Ok(())
+    }
+
+    pub fn count_for(&self, file: &Path) -> anyhow::Result<usize> {
+        Ok(*self
+            .counts
+            .lock()
+            .map_err(|error| anyhow::anyhow!("policy state read count mutex poisoned: {error}"))?
+            .get(file)
+            .unwrap_or(&0))
+    }
 }
 
 #[derive(Default)]
@@ -162,6 +263,77 @@ pub fn indexed_audit_row(index: usize) -> AuditRow {
     audit_row(decision, index)
 }
 
+pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+pub struct BlockingRewriteHandler {
+    pub handler: PolicyRewriteHandler,
+    pub release: Sender<()>,
+    pub started: Receiver<Vec<String>>,
+    pub completed: Receiver<Vec<String>>,
+}
+
+pub fn blocking_first_rewrite_handler() -> BlockingRewriteHandler {
+    let (started_rewrite_tx, started_rewrite_rx) = mpsc::channel();
+    let (completed_rewrite_tx, completed_rewrite_rx) = mpsc::channel();
+    let (release_rewrite_tx, release_rewrite_rx) = mpsc::channel();
+    let first_rewrite = Arc::new(AtomicBool::new(true));
+    let handler = Box::new(move |request: &PolicyRewriteRequest| {
+        let ids = request.ids.clone();
+        let _sent = started_rewrite_tx.send(ids.clone()).is_ok();
+
+        if first_rewrite.swap(false, Ordering::SeqCst) {
+            release_rewrite_rx.recv().map_err(|error| {
+                ControlError::policy_rewrite(
+                    &request.file,
+                    request.ids.clone(),
+                    PolicyRewriteError::operation(error.to_string()),
+                )
+            })?;
+        }
+
+        set_policy_states(&request.file, &request.ids, request.requested).map_err(|error| {
+            ControlError::policy_rewrite(&request.file, request.ids.clone(), error)
+        })?;
+        let _sent = completed_rewrite_tx.send(ids).is_ok();
+        Ok(())
+    });
+
+    BlockingRewriteHandler {
+        handler,
+        release: release_rewrite_tx,
+        started: started_rewrite_rx,
+        completed: completed_rewrite_rx,
+    }
+}
+
+pub struct RewriteRelease {
+    release: Option<Sender<()>>,
+}
+
+impl RewriteRelease {
+    pub fn new(release: Sender<()>) -> Self {
+        Self {
+            release: Some(release),
+        }
+    }
+
+    pub fn release(&mut self) -> anyhow::Result<()> {
+        if let Some(release) = self.release.take() {
+            release.send(())?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for RewriteRelease {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _sent = release.send(()).is_ok();
+        }
+    }
+}
+
 pub fn handle_key(app: &mut App, key: KeyCode) {
     let _outcome = firma_tui::control::handle_key(app, key);
 }
@@ -183,6 +355,21 @@ pub fn policy_status(app: &App, id: &str) -> Option<PolicyRowStatus> {
         .map(|policy| policy.status)
 }
 
+pub fn rewrite_ids_for_file(
+    rewrites: &[PolicyRewriteRequest],
+    file_name: &str,
+) -> Option<Vec<String>> {
+    rewrites
+        .iter()
+        .find(|request| {
+            request
+                .file
+                .file_name()
+                .is_some_and(|name| name == file_name)
+        })
+        .map(|request| request.ids.clone())
+}
+
 pub fn write_named_policy_file(
     dir: &Path,
     name: &str,
@@ -201,6 +388,28 @@ pub fn temp_policy_file(source: &str) -> anyhow::Result<(tempfile::TempDir, std:
     let temp = tempfile::tempdir()?;
     let policy_path = write_policy_file(temp.path(), source)?;
     Ok((temp, policy_path))
+}
+
+pub fn crank_until(
+    runner: &mut HeadlessRunner<'_>,
+    mut condition: impl FnMut(&App) -> bool,
+    limit: usize,
+) -> anyhow::Result<ControlCrankOutcome> {
+    if condition(runner.app()) {
+        return Ok(ControlCrankOutcome::NoEvent);
+    }
+
+    let terminal = FakeTerminal::default();
+    let mut last_outcome = ControlCrankOutcome::NoEvent;
+    for _attempt in 0..limit {
+        last_outcome = runner.try_crank(&terminal)?;
+        if condition(runner.app()) {
+            return Ok(last_outcome);
+        }
+        thread::yield_now();
+    }
+
+    anyhow::bail!("condition was not met after {limit} cranks; last outcome: {last_outcome:?}");
 }
 
 pub fn render_text(app: &App, width: u16, height: u16) -> anyhow::Result<String> {

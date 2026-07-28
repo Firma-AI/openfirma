@@ -6,7 +6,10 @@ mod runtime;
 mod status;
 
 pub use audit::{AuditDecision, AuditFilter, AuditRow, AuditState, AuditViewportMode};
-pub use policy::{PoliciesState, PolicyRow, PolicyRowStatus};
+pub use policy::{
+    PoliciesState, PolicyKey, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart,
+    PolicyRow, PolicyRowStatus,
+};
 pub use runtime::ControlRuntimeState;
 pub use status::ControlStatus;
 

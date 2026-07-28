@@ -33,6 +33,14 @@ fn keys_map_to_commands() {
         Some(ControlCommand::MoveSelection(SelectionMovement::Last))
     );
     assert_eq!(
+        command_for_key(&mut app, KeyCode::Char(' ')),
+        Some(ControlCommand::ToggleSelectedPolicy)
+    );
+    assert_eq!(
+        command_for_key(&mut app, KeyCode::Char('t')),
+        Some(ControlCommand::ToggleAllPolicies)
+    );
+    assert_eq!(
         command_for_key(&mut app, KeyCode::Char('a')),
         Some(ControlCommand::SetAuditFilter(AuditFilter::All))
     );
@@ -108,6 +116,10 @@ fn footer_entries_stay_small() {
             BindingHint {
                 key: "tab",
                 label: "Pane",
+            },
+            BindingHint {
+                key: "space",
+                label: "Toggle",
             },
             BindingHint {
                 key: "h",

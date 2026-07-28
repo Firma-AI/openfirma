@@ -120,6 +120,19 @@ const BINDINGS: &[Binding] = &[
         ControlCommand::MoveSelection(SelectionMovement::Last),
     ),
     Binding::new(
+        BindingKey::Single(KeyCode::Char(' ')),
+        "space",
+        "Toggle",
+        ControlCommand::ToggleSelectedPolicy,
+    )
+    .footer(),
+    Binding::new(
+        BindingKey::Single(KeyCode::Char('t')),
+        "t",
+        "Toggle all",
+        ControlCommand::ToggleAllPolicies,
+    ),
+    Binding::new(
         BindingKey::Single(KeyCode::Char('a')),
         "a",
         "All",
