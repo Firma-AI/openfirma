@@ -213,14 +213,21 @@ impl MappingRuleConfig {
         // accepted spellings for a wildcard name are a literal `*`, alone or
         // with a port.
         let normalized_name = match normalized.rsplit_once(':') {
-            Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
-            _ => normalized.as_str(),
-        };
-        let written_name = match host.rsplit_once(':') {
             Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
                 name
             }
-            _ => host,
+            _ => normalized.as_str(),
+        };
+        // Judge the written name literally, trimming only the trailing dots
+        // of the whole spelling so a dotted port (`*:8443.`) still splits;
+        // trimming the name part itself would hide exactly the promotion
+        // this check rejects (`*.:8443`).
+        let written = host.trim_end_matches('.');
+        let written_name = match written.rsplit_once(':') {
+            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                name
+            }
+            _ => written,
         };
         if normalized_name == "*" && written_name != "*" {
             return Err(format!(

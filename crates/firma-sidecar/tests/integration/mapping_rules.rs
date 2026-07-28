@@ -126,6 +126,35 @@ fn degenerate_catch_all_host_patterns_are_rejected() {
     }
 }
 
+/// A literal `*` name with a nonstandard port is a legitimate port-scoped
+/// catch-all: it loads and matches every host on that port, and only that
+/// port.
+#[test]
+fn explicit_port_scoped_catch_all_still_loads_and_matches() -> anyhow::Result<()> {
+    let table = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some(Method::GET),
+                host: "*:8443".to_string(),
+                path: None,
+                action_class: "communication.external.read".to_string(),
+            }],
+        },
+        &ActionClassRegistry::v0_1(),
+        false,
+    )?;
+
+    assert!(matches!(
+        table.find_match(&Method::GET, "anything.example:8443", "/x"),
+        MatchResult::Matched(_)
+    ));
+    assert!(matches!(
+        table.find_match(&Method::GET, "anything.example", "/x"),
+        MatchResult::NotProtected
+    ));
+    Ok(())
+}
+
 /// Case or trailing-dot variants of the same rule are the same rule; the
 /// duplicate check compares normalized hosts so they fail at startup.
 #[test]
