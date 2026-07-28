@@ -16,10 +16,10 @@ use firma_sidecar::composio::{ComposioAction, ComposioCatalogs, DecodeResult, de
 use firma_sidecar::config::{
     HttpsMitmConfig, MappingRuleConfig, MappingRulesFile, SidecarMode, TenancyMode,
 };
-use firma_sidecar::interceptor::http::HttpInterceptor;
 use firma_sidecar::connector::ConnectorRegistry;
 use firma_sidecar::credential::{CredentialInjectionError, CredentialInjector};
 use firma_sidecar::handler::{HandledResponse, RequestHandler, UpgradeAuthorization};
+use firma_sidecar::interceptor::http::HttpInterceptor;
 use firma_sidecar::pipeline::{
     ActionClassRegistry, CapabilityMap, CapabilityValidator, CompositeDisposition,
     ConstraintEnforcer, EnforcementDecision, EnforcementPipeline, IntentNormalizer, MappingTable,
@@ -709,7 +709,10 @@ async fn monitor_forwards_protocol_denial_with_would_deny_audit() -> anyhow::Res
     .with_composio_catalogs(catalogs()?);
 
     let response = handler
-        .handle(direct_request("GMAIL_TOOL_NOT_IN_CATALOG"), "sess_composite")
+        .handle(
+            direct_request("GMAIL_TOOL_NOT_IN_CATALOG"),
+            "sess_composite",
+        )
         .await;
 
     assert!(matches!(response, HandledResponse::Passthrough(_)));
@@ -962,7 +965,9 @@ async fn composio_denial_travels_through_the_mitm_proxy_stack() -> anyhow::Resul
     let server = tokio::spawn({
         let cancel = cancel.clone();
         async move {
-            let _ = interceptor.run_with_listener(listener, handler, cancel).await;
+            let _ = interceptor
+                .run_with_listener(listener, handler, cancel)
+                .await;
         }
     });
 

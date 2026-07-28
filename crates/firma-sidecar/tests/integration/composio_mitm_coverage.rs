@@ -20,7 +20,10 @@ fn covering_config() -> HttpsMitmConfig {
 
 #[test]
 fn full_strict_coverage_produces_no_warnings() {
-    assert_eq!(composio_mitm_coverage_warnings(&covering_config()), Vec::<String>::new());
+    assert_eq!(
+        composio_mitm_coverage_warnings(&covering_config()),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -31,7 +34,10 @@ fn wildcard_patterns_count_as_coverage() {
         bypass_hosts: Vec::new(),
         ..HttpsMitmConfig::default()
     };
-    assert_eq!(composio_mitm_coverage_warnings(&config), Vec::<String>::new());
+    assert_eq!(
+        composio_mitm_coverage_warnings(&config),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

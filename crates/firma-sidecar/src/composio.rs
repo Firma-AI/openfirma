@@ -217,9 +217,19 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
                 account,
             ))
         }
-        ["api", "v3" | "v3.1", "tool_router", "session", session_id, "link"] => Some(
-            lifecycle_action(request, "COMPOSIO_LINK_SESSION_ACCOUNT", Some(session_id), None),
-        ),
+        [
+            "api",
+            "v3" | "v3.1",
+            "tool_router",
+            "session",
+            session_id,
+            "link",
+        ] => Some(lifecycle_action(
+            request,
+            "COMPOSIO_LINK_SESSION_ACCOUNT",
+            Some(session_id),
+            None,
+        )),
         _ => None,
     }
 }

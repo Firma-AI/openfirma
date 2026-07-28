@@ -655,8 +655,13 @@ fn empty_composite_fail_closed(
         envelope: None,
         identity: None,
     };
-    let audit_payload =
-        audit_payload_from_decision(&decision, request, session_id, Duration::ZERO, bundle_version);
+    let audit_payload = audit_payload_from_decision(
+        &decision,
+        request,
+        session_id,
+        Duration::ZERO,
+        bundle_version,
+    );
     CompositeEnforcement {
         children: vec![CompositeActionResult {
             decision,
