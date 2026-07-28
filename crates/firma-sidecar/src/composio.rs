@@ -557,7 +557,7 @@ fn logical_envelope(
             "host".to_string(),
             canonical_host(&request.host, request.is_https),
         ),
-        ("path".to_string(), request.path.clone()),
+        ("path".to_string(), path_only(&request.path).to_string()),
         ("provider".to_string(), "composio".to_string()),
         (
             "policy_resource".to_string(),

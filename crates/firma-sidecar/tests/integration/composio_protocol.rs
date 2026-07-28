@@ -125,6 +125,30 @@ fn direct_execution_requires_and_uses_the_pinned_version() -> anyhow::Result<()>
     Ok(())
 }
 
+/// The logical envelope must never retain the raw query string: clients can
+/// stuff tool arguments after `?`, and the envelope travels inside denial
+/// decisions and diagnostics.
+#[test]
+fn logical_envelope_drops_the_query_string() -> anyhow::Result<()> {
+    let request = request(
+        "backend.composio.dev",
+        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS?query=secret+search",
+        &serde_json::json!({"version": "20251111_00"}),
+    );
+
+    let decoded = actions(decode(&request, &catalogs()?))?;
+
+    assert_eq!(
+        decoded[0].envelope.intent.resource_display(),
+        "backend.composio.dev/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
+    );
+    assert_eq!(
+        decoded[0].envelope.intent.raw_action_ref,
+        "POST /api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
+    );
+    Ok(())
+}
+
 #[test]
 fn direct_execution_rejects_missing_or_wrong_versions() -> anyhow::Result<()> {
     for body in [

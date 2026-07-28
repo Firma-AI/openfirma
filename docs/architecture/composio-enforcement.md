@@ -64,6 +64,15 @@ When every child is allowed, the original request is dispatched exactly once
 and the same connector outcome is copied to every child audit event. Monitor
 mode also dispatches once while retaining each would-block reason.
 
+Two session-state consequences are deliberate and fail-conservative. Every
+evaluated child enters the session's `prior_action_classes` history before
+the batch verdict, so children later aborted for batch atomicity still
+count toward policies like "deny after N sends" even though they never
+dispatched. And when monitor mode forwards a batch in which every child
+would have blocked, the dispatch carries no injected credentials, so the
+observed upstream outcome (typically an auth failure) is not representative
+of what a partially admitted batch would see.
+
 ## Pinned catalogs
 
 Enforcement uses committed snapshots and reviewed mappings under
@@ -77,7 +86,17 @@ loaded at startup:
 
 A tool outside those snapshots is denied with `unknown_tool`, so a Composio
 release that adds tools cannot widen what an agent may do until a maintainer
-classifies the new slugs. Slack and Notion have no reviewed catalog yet
+classifies the new slugs.
+
+Version pinning is enforced asymmetrically because the routes carry
+different information. Direct execution requires an explicit `version` field
+matching the pin and is denied `unpinned_tool` without one. Tool Router
+checks the version only when the request carries one, and hosted MCP calls
+carry none, so on those routes Composio executes whatever version its
+server currently serves while classification still comes from the pinned
+snapshot. A server-side toolkit release can therefore change a slug's
+behavior on the session routes before a maintainer reviews the new
+snapshot; refresh pins promptly when Composio announces toolkit updates. Slack and Notion have no reviewed catalog yet
 (tracked separately as FIR-458), so every Slack or Notion tool call is denied
 at the boundary.
 

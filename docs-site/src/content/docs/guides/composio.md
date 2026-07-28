@@ -118,7 +118,10 @@ before dispatch and evaluates them in input order.
 - Monitor mode dispatches once and retains each would-block reason. This
   extends to protocol-level denials: malformed payloads, unknown tools, and
   protocol upgrades are forwarded in monitor mode with a `monitor_mode:`
-  audit annotation instead of being blocked.
+  audit annotation instead of being blocked. When every child would have
+  blocked, the forwarded request carries no injected credentials, so the
+  observed upstream response may differ from what an admitted batch would
+  see.
 
 OpenFirma never splits, reorders, or partially forwards the batch.
 
