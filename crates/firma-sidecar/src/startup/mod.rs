@@ -36,4 +36,6 @@ pub use self::local_exec::spawn_local_exec_endpoint;
 pub use self::log_contract::{
     StartupReport, compute_policy_bundle_version, log_pre_ready_sequence, log_ready_line,
 };
-pub use self::pipeline::{PipelineRuntime, build_pipeline_runtime};
+pub use self::pipeline::{
+    PipelineRuntime, build_pipeline_runtime, mapping_references_composio_hosts,
+};

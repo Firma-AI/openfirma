@@ -1,7 +1,8 @@
 //! Startup coverage checks for Composio HTTPS MITM interception.
 
-use firma_sidecar::config::HttpsMitmConfig;
-use firma_sidecar::startup::composio_mitm_coverage_warnings;
+use firma_http::Method;
+use firma_sidecar::config::{HttpsMitmConfig, MappingRuleConfig, MappingRulesFile};
+use firma_sidecar::startup::{composio_mitm_coverage_warnings, mapping_references_composio_hosts};
 
 fn covering_config() -> HttpsMitmConfig {
     HttpsMitmConfig {
@@ -16,6 +17,47 @@ fn covering_config() -> HttpsMitmConfig {
         bypass_hosts: Vec::new(),
         ..HttpsMitmConfig::default()
     }
+}
+
+fn rule(host: &str) -> MappingRuleConfig {
+    MappingRuleConfig {
+        method: Some(Method::POST),
+        host: host.to_string(),
+        path: Some("/*".to_string()),
+        action_class: "communication.external.send".to_string(),
+    }
+}
+
+/// The opt-in signal for the coverage check must recognize every host form a
+/// mapping rule can legally use, not just the exact lowercase name.
+#[test]
+fn mapping_reference_detection_handles_pattern_and_port_forms() {
+    for host in [
+        "backend.composio.dev",
+        "BACKEND.Composio.DEV",
+        "*.composio.dev",
+        "backend.composio.dev.",
+        "backend.composio.dev:443",
+    ] {
+        assert!(
+            mapping_references_composio_hosts(&MappingRulesFile {
+                rules: vec![rule(host)],
+            }),
+            "{host} must count as a Composio reference"
+        );
+    }
+    assert!(!mapping_references_composio_hosts(&MappingRulesFile {
+        rules: vec![rule("api.github.com"), rule("*.github.com")],
+    }));
+}
+
+/// The mapping file shipped for Composio must trigger the coverage check.
+#[test]
+fn shipped_composio_mapping_opts_into_the_coverage_check() -> anyhow::Result<()> {
+    let rules: MappingRulesFile =
+        toml::from_str(include_str!("../../config/mappings/composio.toml"))?;
+    assert!(mapping_references_composio_hosts(&rules));
+    Ok(())
 }
 
 #[test]
