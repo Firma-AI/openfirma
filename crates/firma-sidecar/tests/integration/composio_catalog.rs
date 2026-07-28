@@ -11,7 +11,7 @@ use firma_sidecar::composio::ComposioCatalogs;
 fn builtin_catalogs_expose_every_reviewed_tool() -> anyhow::Result<()> {
     let catalogs = ComposioCatalogs::builtin()?;
 
-    assert_eq!(catalogs.len(), 279);
+    assert_eq!(catalogs.len(), 112);
     assert!(!catalogs.is_empty());
 
     let expected = [
@@ -27,8 +27,6 @@ fn builtin_catalogs_expose_every_reviewed_tool() -> anyhow::Result<()> {
             "googlecalendar",
             "account.permission.change",
         ),
-        ("SLACK_SEND_MESSAGE", "slack", "communication.external.send"),
-        ("SLACK_READ_AUDIT_LOGS", "slack", "security.alert.read"),
     ];
     for (slug, toolkit, action_class) in expected {
         let entry = catalogs

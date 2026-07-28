@@ -66,11 +66,12 @@ loaded at startup:
 | --------------- | ------------- | ----- |
 | Gmail           | `20260721_00` | 63    |
 | Google Calendar | `20260721_00` | 49    |
-| Slack           | `20260721_00` | 167   |
 
 A tool outside those snapshots is denied with `unknown_tool`, so a Composio
 release that adds tools cannot widen what an agent may do until a maintainer
-classifies the new slugs.
+classifies the new slugs. Slack and Notion have no reviewed catalog yet
+(tracked separately as FIR-458), so every Slack or Notion tool call is denied
+at the boundary.
 
 Refreshes are maintenance operations, never hot-path network calls:
 
