@@ -200,12 +200,31 @@ impl MappingRuleConfig {
         let normalized = crate::normalizer::mapping::normalize_host_pattern(host);
         if normalized.is_empty() || normalized.starts_with(':') {
             return Err(format!(
-                "host pattern '{host}' normalizes to an empty host name and can never match"
+                "host pattern '{host}' normalizes to a host with an empty name and can never match"
             ));
         }
         if normalized == "*" && host != "*" {
             return Err(format!(
                 "host pattern '{host}' would normalize to the bare catch-all '*'; write '*' explicitly if that is intended"
+            ));
+        }
+        // A port-scoped promotion is just as silent: `*.:8443` normalizes to
+        // `*:8443` and would match every host on that port. The only
+        // accepted spellings for a wildcard name are a literal `*`, alone or
+        // with a port.
+        let normalized_name = match normalized.rsplit_once(':') {
+            Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+            _ => normalized.as_str(),
+        };
+        let written_name = match host.rsplit_once(':') {
+            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                name
+            }
+            _ => host,
+        };
+        if normalized_name == "*" && written_name != "*" {
+            return Err(format!(
+                "host pattern '{host}' would normalize its name to the catch-all '*'; write the '*' explicitly if that is intended"
             ));
         }
         if self.action_class.trim().is_empty() {

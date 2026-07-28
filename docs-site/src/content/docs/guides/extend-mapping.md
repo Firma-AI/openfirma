@@ -61,9 +61,12 @@ Field-by-field:
   `api.acme-saas.com`, `auth.acme-saas.com`, **and** `api.dev.acme-saas.com`.
   There is no single-label form; if you need to exclude deeper subdomains,
   write exact hosts. Hosts are normalized at load time (lowercased, trailing
-  dot and default `:443`/`:80` port stripped) to match how request hosts
-  arrive, and two rules whose hosts differ only in that spelling count as
-  duplicates and fail startup.
+  dots stripped on either side of the port, default `:443`/`:80` port
+  removed, nonstandard ports kept) to match how request hosts arrive, and
+  two rules whose hosts differ only in that spelling count as duplicates and
+  fail startup. Degenerate patterns that would silently normalize into a
+  catch-all (such as `*.` or `*:443`) or into an empty name (such as
+  `:443`) are rejected at startup; write `*` explicitly if you mean it.
 - **`path`** — exact match unless it contains `*`, which likewise crosses
   `/` separators; a trailing `*` means "anything from here".
 - **`action_class`** — must match an identifier from the action-class registry.

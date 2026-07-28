@@ -71,32 +71,40 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A trailing dot hidden behind a nonstandard port must not evade a
-/// host-scoped rule: `host.:8443` and `host:8443` are the same authority.
-/// Exercised through the normalizer, which owns request-host normalization.
+/// A trailing dot must not evade a host-scoped rule whether it hides before
+/// the port (`host.:8443`) or after it (`host:443.`); every spelling of the
+/// same authority normalizes identically. Exercised through the normalizer,
+/// which owns request-host normalization.
 #[test]
-fn trailing_dot_behind_nonstandard_port_cannot_evade_rules() -> anyhow::Result<()> {
-    let table = MappingTable::from_config(
-        &MappingRulesFile {
-            rules: vec![rule("api.github.com:8443")],
-        },
-        &ActionClassRegistry::v0_1(),
-        false,
-    )?;
-    let normalizer = IntentNormalizer::new(table);
+fn trailing_dots_around_ports_cannot_evade_rules() -> anyhow::Result<()> {
+    for (rule_host, request_host) in [
+        ("api.github.com:8443", "API.GitHub.COM.:8443"),
+        ("api.github.com", "api.github.com:443."),
+    ] {
+        let table = MappingTable::from_config(
+            &MappingRulesFile {
+                rules: vec![rule(rule_host)],
+            },
+            &ActionClassRegistry::v0_1(),
+            false,
+        )?;
+        let normalizer = IntentNormalizer::new(table);
 
-    let envelope = normalizer
-        .normalize(&RawRequest {
-            method: Method::GET,
-            host: "API.GitHub.COM.:8443".to_string(),
-            path: "/repos/x".to_string(),
-            headers: HashMap::new(),
-            body: None,
-            is_https: true,
-        })
-        .map_err(|decision| anyhow::anyhow!("expected classification, got {decision:?}"))?;
+        let envelope = normalizer
+            .normalize(&RawRequest {
+                method: Method::GET,
+                host: request_host.to_string(),
+                path: "/repos/x".to_string(),
+                headers: HashMap::new(),
+                body: None,
+                is_https: true,
+            })
+            .map_err(|decision| {
+                anyhow::anyhow!("expected classification for {request_host}, got {decision:?}")
+            })?;
 
-    assert_eq!(envelope.intent.action_class, "communication.external.read");
+        assert_eq!(envelope.intent.action_class, "communication.external.read");
+    }
     Ok(())
 }
 
@@ -104,7 +112,9 @@ fn trailing_dot_behind_nonstandard_port_cannot_evade_rules() -> anyhow::Result<(
 /// or into an unmatchable empty name are rejected at validation.
 #[test]
 fn degenerate_catch_all_host_patterns_are_rejected() {
-    for host in ["*.", "*:443", "*.:443", "*..:80", ".", ":443", ":8080"] {
+    for host in [
+        "*.", "*:443", "*.:443", "*..:80", "*.:8443", ".", ":443", ":8080",
+    ] {
         let result = MappingTable::from_config(
             &MappingRulesFile {
                 rules: vec![rule(host)],

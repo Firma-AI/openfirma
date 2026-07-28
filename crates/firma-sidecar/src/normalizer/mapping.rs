@@ -244,7 +244,10 @@ impl MappingTable {
 /// name-part dot handling (`*.:443` normalizes to `*`, which validation
 /// rejects as a silent catch-all promotion).
 pub fn normalize_host_pattern(host: &str) -> String {
-    let lower = host.trim().to_ascii_lowercase();
+    // Trailing dots are stripped both before the port split (`host:443.`)
+    // and from the name part after it (`host.:443`); either position spells
+    // the same authority.
+    let lower = host.trim().trim_end_matches('.').to_ascii_lowercase();
     let (name, port) = match lower.rsplit_once(':') {
         Some((name, port))
             if !name.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
