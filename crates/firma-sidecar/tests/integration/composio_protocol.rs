@@ -409,10 +409,97 @@ fn mcp_resource_methods_fail_closed() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Account-lifecycle writes are logical actions: they must reach capability
+/// and Cedar evaluation as `account.permission.change` instead of passing
+/// through ungoverned.
+#[test]
+fn lifecycle_writes_are_governed_as_account_permission_change() -> anyhow::Result<()> {
+    for (method, path, slug, account, session) in [
+        (
+            Method::POST,
+            "/api/v3/connected_accounts",
+            "COMPOSIO_CREATE_CONNECTED_ACCOUNT",
+            None,
+            None,
+        ),
+        (
+            Method::DELETE,
+            "/api/v3/connected_accounts/ca_123",
+            "COMPOSIO_DELETE_CONNECTED_ACCOUNT",
+            Some("ca_123"),
+            None,
+        ),
+        (
+            Method::PATCH,
+            "/api/v3/connected_accounts/ca_123",
+            "COMPOSIO_UPDATE_CONNECTED_ACCOUNT",
+            Some("ca_123"),
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v3/connected_accounts/ca_123/refresh",
+            "COMPOSIO_UPDATE_CONNECTED_ACCOUNT",
+            Some("ca_123"),
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v3/auth_configs",
+            "COMPOSIO_CREATE_AUTH_CONFIG",
+            None,
+            None,
+        ),
+        (
+            Method::DELETE,
+            "/api/v3/auth_configs/ac_9",
+            "COMPOSIO_DELETE_AUTH_CONFIG",
+            None,
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v3.1/tool_router/session/trs_1/link",
+            "COMPOSIO_LINK_SESSION_ACCOUNT",
+            None,
+            Some("trs_1"),
+        ),
+    ] {
+        let mut lifecycle = request("backend.composio.dev", path, &serde_json::json!({}));
+        lifecycle.method = method.clone();
+        if method != Method::POST {
+            lifecycle.body = None;
+        }
+        let decoded = actions(decode(&lifecycle, &catalogs()?))?;
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded[0].envelope.intent.action_class,
+            "account.permission.change"
+        );
+        assert_eq!(
+            decoded[0].envelope.intent.policy_resource_display(),
+            format!("composio://composio/{slug}")
+        );
+        assert_eq!(
+            decoded[0].envelope.intent.raw_action_ref,
+            format!("{method} {path}")
+        );
+        assert_eq!(decoded[0].context.connected_account_id.as_deref(), account);
+        assert_eq!(decoded[0].context.session_id.as_deref(), session);
+    }
+    Ok(())
+}
+
 #[test]
 fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Result<()> {
     for (method, host, path, expected_passthrough) in [
         (Method::GET, "backend.composio.dev", "/api/v3/tools", true),
+        (
+            Method::GET,
+            "backend.composio.dev",
+            "/api/v3/connected_accounts",
+            true,
+        ),
         (
             Method::GET,
             "backend.composio.dev",

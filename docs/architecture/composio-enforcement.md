@@ -28,10 +28,18 @@ The decoder recognizes:
 - supported Composio execution meta-tools;
 - `COMPOSIO_MULTI_EXECUTE_TOOL`, with one logical action per child.
 
-Recognized discovery and lifecycle requests can pass without tool-action
-evaluation. Unknown execution routes, JSON-RPC batches, malformed payloads,
-unknown toolkits, unpinned slugs, custom tools, raw proxy execution, and remote
-shell or workbench execution fail closed.
+Recognized read-only discovery requests (tool listings, toolkit metadata,
+session reads, MCP session streams and teardown) can pass without tool-action
+evaluation. Account-lifecycle writes are governed, not passed through:
+`POST`/`PATCH`/`PUT`/`DELETE` on `/api/v3/connected_accounts` and
+`/api/v3/auth_configs`, and `POST` on the Tool Router session `link` route,
+decode into one logical `account.permission.change` action with a
+`composio://composio/<slug>` resource (for example
+`COMPOSIO_CREATE_CONNECTED_ACCOUNT` or `COMPOSIO_LINK_SESSION_ACCOUNT`), so
+an agent cannot expand its own reachable account surface without capability
+and Cedar evaluation. Unknown execution routes, JSON-RPC batches, malformed
+payloads, unknown toolkits, unpinned slugs, custom tools, raw proxy execution,
+and remote shell or workbench execution fail closed.
 
 ## Logical and transport resources
 

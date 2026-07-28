@@ -84,6 +84,24 @@ forbid (
 The context includes toolkit, exact slug, user selector, account selector,
 session identifier, and batch position when those values are present.
 
+## Account lifecycle writes
+
+Linking or removing a connected account changes what an agent can reach, so
+those requests are governed like tool calls instead of passing through.
+Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `/api/v3/connected_accounts`,
+`/api/v3/auth_configs`, and the Tool Router session `link` route decode into
+one `account.permission.change` action with a synthetic resource:
+
+```text
+composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT
+```
+
+A capability must grant `account.permission.change` for these requests to
+succeed, and Cedar can deny them like any other action. Grant that class to
+the backend session that runs OAuth flows and withhold it from agent
+runtimes. Read-only lifecycle requests (`GET` listings, MCP session streams)
+still pass through.
+
 ## Atomic batches
 
 `COMPOSIO_MULTI_EXECUTE_TOOL` is all-or-nothing. OpenFirma decodes every child

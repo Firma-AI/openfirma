@@ -25,6 +25,17 @@ const BACKEND_HOST: &str = "backend.composio.dev";
 const APP_HOST: &str = "app.composio.dev";
 const MAX_MULTI_ACTIONS: usize = 50;
 
+/// Canonical class assigned to Composio account-lifecycle writes.
+///
+/// Linking, updating, or removing connected accounts and auth configurations
+/// changes what an agent can reach through Composio, so those writes are
+/// logical actions rather than ungoverned passthrough.
+const LIFECYCLE_ACTION_CLASS: &str = "account.permission.change";
+
+/// Toolkit segment used by lifecycle policy resources
+/// (`composio://composio/<slug>`).
+const LIFECYCLE_TOOLKIT: &str = "composio";
+
 /// Sanitized metadata attached to one decoded logical action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposioContext {
@@ -83,6 +94,9 @@ pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult
         return DecodeResult::Unrelated;
     }
     if request.method != Method::POST {
+        if let Some(result) = decode_lifecycle_write(request, &host) {
+            return result;
+        }
         return if is_recognized_non_execution_path(&host, path_only(&request.path)) {
             DecodeResult::Passthrough
         } else {
@@ -142,9 +156,93 @@ fn decode_backend(
             session_id,
             "execute_meta",
         ] => decode_meta_route(request, payload, Some(session_id), catalogs),
+        [
+            "api",
+            "v3" | "v3.1",
+            "connected_accounts" | "auth_configs",
+            ..,
+        ]
+        | ["api", "v3" | "v3.1", "tool_router", "session", _, "link"] => {
+            decode_lifecycle_write(request, BACKEND_HOST)
+                .unwrap_or_else(|| deny("unsupported_route", "unsupported Composio route"))
+        }
         _ if is_recognized_non_execution_path(BACKEND_HOST, path) => DecodeResult::Passthrough,
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
+}
+
+/// Decode an account-lifecycle write into one governed logical action.
+///
+/// Returns `None` for requests that are not lifecycle writes (read methods or
+/// unrelated routes), letting the caller fall back to passthrough or denial.
+fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResult> {
+    if host != BACKEND_HOST
+        || !matches!(
+            request.method,
+            Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+        )
+    {
+        return None;
+    }
+    let path = path_only(&request.path);
+    let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
+    match components.as_slice() {
+        [
+            "api",
+            "v3" | "v3.1",
+            family @ ("connected_accounts" | "auth_configs"),
+            rest @ ..,
+        ] => {
+            let verb = match request.method {
+                Method::POST if rest.is_empty() => "CREATE",
+                Method::DELETE => "DELETE",
+                _ => "UPDATE",
+            };
+            let noun = if *family == "connected_accounts" {
+                "CONNECTED_ACCOUNT"
+            } else {
+                "AUTH_CONFIG"
+            };
+            let account = (*family == "connected_accounts")
+                .then(|| rest.first().copied())
+                .flatten();
+            Some(lifecycle_action(
+                request,
+                &format!("COMPOSIO_{verb}_{noun}"),
+                None,
+                account,
+            ))
+        }
+        ["api", "v3" | "v3.1", "tool_router", "session", session_id, "link"] => Some(
+            lifecycle_action(request, "COMPOSIO_LINK_SESSION_ACCOUNT", Some(session_id), None),
+        ),
+        _ => None,
+    }
+}
+
+/// Build the single governed logical action for a lifecycle write.
+fn lifecycle_action(
+    request: &RawRequest,
+    slug: &str,
+    session_id: Option<&str>,
+    account: Option<&str>,
+) -> DecodeResult {
+    let Ok(method) = HttpMethod::try_from(&request.method) else {
+        return deny("unsupported_route", "unsupported Composio route");
+    };
+    let context = ComposioContext {
+        toolkit: LIFECYCLE_TOOLKIT.to_string(),
+        tool_slug: slug.to_string(),
+        user_id: None,
+        connected_account_id: account.map(str::to_string),
+        session_id: session_id.map(str::to_string),
+        batch_index: None,
+        batch_size: None,
+    };
+    DecodeResult::Actions(vec![ComposioAction {
+        envelope: logical_envelope(request, LIFECYCLE_ACTION_CLASS, &context, method),
+        context,
+    }])
 }
 
 fn decode_direct(
@@ -434,7 +532,12 @@ fn action_for_tool(
         batch_size,
     };
     Ok(ComposioAction {
-        envelope: logical_envelope(request, entry.action_class.as_str(), &context),
+        envelope: logical_envelope(
+            request,
+            entry.action_class.as_str(),
+            &context,
+            HttpMethod::POST,
+        ),
         context,
     })
 }
@@ -443,6 +546,7 @@ fn logical_envelope(
     request: &RawRequest,
     action_class: &str,
     context: &ComposioContext,
+    method: HttpMethod,
 ) -> NormalizedEnvelope {
     let mut resource = BTreeMap::from([
         (
@@ -484,13 +588,13 @@ fn logical_envelope(
             action_class: action_class.to_string(),
             resource,
             params: ActionParams::Http(HttpParams {
-                method: HttpMethod::POST,
+                method,
                 headers: HashMap::new(),
                 body: None,
                 query: HashMap::new(),
             }),
             raw_transport: if request.is_https { "https" } else { "http" }.to_string(),
-            raw_action_ref: format!("POST {}", path_only(&request.path)),
+            raw_action_ref: format!("{method} {}", path_only(&request.path)),
         },
         timestamp: Utc::now(),
     }
