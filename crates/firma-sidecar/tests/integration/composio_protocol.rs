@@ -190,21 +190,66 @@ fn governed_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Extension methods on lifecycle families are neither writes nor recognized
-/// reads, so they fail closed instead of auditing as passthrough.
+/// Recognized routes accept only reads (plus DELETE for MCP teardown);
+/// extension methods and non-read verbs fail closed on every family instead
+/// of auditing as passthrough.
 #[test]
-fn extension_methods_on_lifecycle_routes_fail_closed() -> anyhow::Result<()> {
-    let mut trace = request(
-        "backend.composio.dev",
-        "/api/v3/connected_accounts/ca_1",
+fn non_read_methods_on_recognized_routes_fail_closed() -> anyhow::Result<()> {
+    for (method, host, path) in [
+        (
+            Method::TRACE,
+            "backend.composio.dev",
+            "/api/v3/connected_accounts/ca_1",
+        ),
+        (
+            Method::TRACE,
+            "backend.composio.dev",
+            "/api/v3.1/auth_configs/ac_1",
+        ),
+        (
+            Method::TRACE,
+            "backend.composio.dev",
+            "/api/v3/tool_router/session/trs_1/link",
+        ),
+        (Method::TRACE, "backend.composio.dev", "/api/v3/tools"),
+        (Method::PATCH, "backend.composio.dev", "/api/v3/toolkits"),
+        (Method::PUT, "app.composio.dev", "/tool_router/v3/trs_1/mcp"),
+    ] {
+        let mut unsupported = request(host, path, &serde_json::json!({}));
+        unsupported.method = method.clone();
+        unsupported.body = None;
+        let DecodeResult::Deny(denial) = decode(&unsupported, &catalogs()?) else {
+            anyhow::bail!("{method} {path} must fail closed");
+        };
+        assert_eq!(denial.code, "unsupported_route");
+    }
+    Ok(())
+}
+
+/// MCP session URLs deny query strings uniformly, so a mis-configured URL
+/// fails at the handshake with a clear denial instead of handshaking and
+/// then failing on every tool call.
+#[test]
+fn mcp_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
+    let discovery = request(
+        "app.composio.dev",
+        "/tool_router/v3/trs_1/mcp?flag=1",
+        &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+    );
+    let mut stream = request(
+        "app.composio.dev",
+        "/tool_router/v3/trs_1/mcp?flag=1",
         &serde_json::json!({}),
     );
-    trace.method = Method::TRACE;
-    trace.body = None;
-    let DecodeResult::Deny(denial) = decode(&trace, &catalogs()?) else {
-        anyhow::bail!("extension method on a lifecycle route must fail closed");
-    };
-    assert_eq!(denial.code, "unsupported_route");
+    stream.method = Method::GET;
+    stream.body = None;
+
+    for mcp in [discovery, stream] {
+        let DecodeResult::Deny(denial) = decode(&mcp, &catalogs()?) else {
+            anyhow::bail!("MCP request with a query string must fail closed");
+        };
+        assert_eq!(denial.code, "query_string_unsupported");
+    }
     Ok(())
 }
 

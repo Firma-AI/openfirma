@@ -151,9 +151,13 @@ Unknown toolkits, missing slugs, version mismatches, malformed execution
 payloads, custom tools, raw proxy execution, and shell or workbench tools fail
 closed. Governed requests carrying a query string are also denied: the query
 never participates in the policy decision, so it must not ride along on an
-admitted dispatch. Slack and Notion remain unsupported until each has a
-complete reviewed catalog, so every Slack or Notion tool call is denied at
-the boundary.
+admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
+included, so a query-carrying MCP URL fails at the handshake with a clear
+denial instead of breaking only on tool calls. Recognized routes accept only
+read methods (plus `DELETE` for MCP session teardown); anything else fails
+closed. Slack and Notion remain unsupported until each has a complete
+reviewed catalog, so every Slack or Notion tool call is denied at the
+boundary.
 
 ## Audit safety
 

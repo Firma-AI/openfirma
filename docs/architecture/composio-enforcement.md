@@ -37,13 +37,18 @@ decode into one logical `account.permission.change` action with a
 `composio://composio/<slug>` resource (for example
 `COMPOSIO_CREATE_CONNECTED_ACCOUNT` or `COMPOSIO_LINK_SESSION_ACCOUNT`), so
 an agent cannot expand its own reachable account surface without capability
-and Cedar evaluation. Extension methods on those routes fail closed rather
-than auditing as passthrough. A governed request carrying a query string is
-denied outright: the query never participates in the policy decision, so it
-must not ride along on an admitted dispatch. Unknown execution routes,
-JSON-RPC batches, malformed payloads, unknown toolkits, unpinned slugs,
-custom tools, raw proxy execution, and remote shell or workbench execution
-fail closed.
+and Cedar evaluation. Every recognized route carries a method allowlist:
+reads (`GET`/`HEAD`/`OPTIONS`) pass through, MCP session paths additionally
+allow `DELETE` for teardown, lifecycle writes are governed, and any other
+method (for example `TRACE`) fails closed rather than auditing as
+passthrough. A governed request carrying a query string is denied outright:
+the query never participates in the policy decision, so it must not ride
+along on an admitted dispatch. Hosted MCP paths deny query strings on every
+method, discovery included, so a query-carrying MCP URL fails at
+`initialize` with a clear denial instead of handshaking and then failing on
+each `tools/call`. Unknown execution routes, JSON-RPC batches, malformed
+payloads, unknown toolkits, unpinned slugs, custom tools, raw proxy
+execution, and remote shell or workbench execution fail closed.
 
 ## Logical and transport resources
 

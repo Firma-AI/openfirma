@@ -97,6 +97,15 @@ pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult
     if host != BACKEND_HOST && host != APP_HOST {
         return DecodeResult::Unrelated;
     }
+    // MCP session URLs deny query strings uniformly, discovery included, so
+    // a query-carrying URL fails at `initialize` with a clear denial rather
+    // than handshaking and then failing on every `tools/call`.
+    if request.path.contains('?') && is_mcp_path(path_only(&request.path)) {
+        return deny(
+            "query_string_unsupported",
+            "Composio MCP requests must not carry a query string",
+        );
+    }
     let result = decode_protected(request, &host, catalogs);
     // A query string never participates in the policy decision, so letting it
     // ride along on an admitted dispatch would smuggle unevaluated input
@@ -116,16 +125,22 @@ fn decode_protected(request: &RawRequest, host: &str, catalogs: &ComposioCatalog
         if let Some(result) = decode_lifecycle_write(request, host) {
             return result;
         }
-        // Lifecycle families accept reads and governed writes only; an
-        // extension method (e.g. TRACE) is neither and must not audit as a
-        // recognized passthrough.
-        if host == BACKEND_HOST
-            && is_lifecycle_path(path_only(&request.path))
-            && !matches!(request.method, Method::GET | Method::HEAD | Method::OPTIONS)
-        {
+        let path = path_only(&request.path);
+        if !is_recognized_non_execution_path(host, path) {
             return deny("unsupported_route", "unsupported Composio route");
         }
-        return if is_recognized_non_execution_path(host, path_only(&request.path)) {
+        // Recognized routes accept only read methods (plus DELETE for MCP
+        // session teardown); an extension method such as TRACE is neither a
+        // read nor a governed write and must not audit as passthrough.
+        let allowed = if is_mcp_path(path) {
+            matches!(
+                request.method,
+                Method::GET | Method::HEAD | Method::OPTIONS | Method::DELETE
+            )
+        } else {
+            matches!(request.method, Method::GET | Method::HEAD | Method::OPTIONS)
+        };
+        return if allowed {
             DecodeResult::Passthrough
         } else {
             deny("unsupported_route", "unsupported Composio route")
@@ -184,33 +199,72 @@ fn decode_backend(
             session_id,
             "execute_meta",
         ] => decode_meta_route(request, payload, Some(session_id), catalogs),
-        [
-            "api",
-            "v3" | "v3.1",
-            "connected_accounts" | "auth_configs",
-            ..,
-        ]
-        | ["api", "v3" | "v3.1", "tool_router", "session", _, "link"] => {
-            decode_lifecycle_write(request, BACKEND_HOST)
-                .unwrap_or_else(|| deny("unsupported_route", "unsupported Composio route"))
-        }
+        _ if is_lifecycle_path(path) => decode_lifecycle_write(request, BACKEND_HOST)
+            .unwrap_or_else(|| deny("unsupported_route", "unsupported Composio route")),
         _ if is_recognized_non_execution_path(BACKEND_HOST, path) => DecodeResult::Passthrough,
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
 }
 
-/// Return whether a path belongs to a governed account-lifecycle family.
-fn is_lifecycle_path(path: &str) -> bool {
+/// Structural classification of a governed account-lifecycle route.
+///
+/// This is the single place the lifecycle route shapes are written down;
+/// path detection and write decoding both derive from it so a new family or
+/// API version cannot be added to one and silently missed by the other.
+enum LifecycleRoute {
+    /// A `connected_accounts` or `auth_configs` route.
+    Family {
+        /// Slug noun for the family (`CONNECTED_ACCOUNT` or `AUTH_CONFIG`).
+        noun: &'static str,
+        /// Connected account identifier from the path, when addressed.
+        account_id: Option<String>,
+        /// Whether the path addresses the collection rather than an item.
+        is_collection: bool,
+    },
+    /// The Tool Router session `link` route.
+    SessionLink {
+        /// Session identifier from the path.
+        session_id: String,
+    },
+}
+
+/// Classify a path against the governed lifecycle route shapes.
+fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute> {
     let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
-    matches!(
-        components.as_slice(),
+    match components.as_slice() {
         [
             "api",
             "v3" | "v3.1",
-            "connected_accounts" | "auth_configs",
-            ..,
-        ] | ["api", "v3" | "v3.1", "tool_router", "session", _, "link"]
-    )
+            family @ ("connected_accounts" | "auth_configs"),
+            rest @ ..,
+        ] => Some(LifecycleRoute::Family {
+            noun: if *family == "connected_accounts" {
+                "CONNECTED_ACCOUNT"
+            } else {
+                "AUTH_CONFIG"
+            },
+            account_id: (*family == "connected_accounts")
+                .then(|| rest.first().map(|id| (*id).to_string()))
+                .flatten(),
+            is_collection: rest.is_empty(),
+        }),
+        [
+            "api",
+            "v3" | "v3.1",
+            "tool_router",
+            "session",
+            session_id,
+            "link",
+        ] => Some(LifecycleRoute::SessionLink {
+            session_id: (*session_id).to_string(),
+        }),
+        _ => None,
+    }
+}
+
+/// Return whether a path belongs to a governed account-lifecycle family.
+fn is_lifecycle_path(path: &str) -> bool {
+    classify_lifecycle_route(path).is_some()
 }
 
 /// Decode an account-lifecycle write into one governed logical action.
@@ -226,49 +280,30 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
     {
         return None;
     }
-    let path = path_only(&request.path);
-    let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
-    match components.as_slice() {
-        [
-            "api",
-            "v3" | "v3.1",
-            family @ ("connected_accounts" | "auth_configs"),
-            rest @ ..,
-        ] => {
+    match classify_lifecycle_route(path_only(&request.path))? {
+        LifecycleRoute::Family {
+            noun,
+            account_id,
+            is_collection,
+        } => {
             let verb = match request.method {
-                Method::POST if rest.is_empty() => "CREATE",
+                Method::POST if is_collection => "CREATE",
                 Method::DELETE => "DELETE",
                 _ => "UPDATE",
             };
-            let noun = if *family == "connected_accounts" {
-                "CONNECTED_ACCOUNT"
-            } else {
-                "AUTH_CONFIG"
-            };
-            let account = (*family == "connected_accounts")
-                .then(|| rest.first().copied())
-                .flatten();
             Some(lifecycle_action(
                 request,
                 &format!("COMPOSIO_{verb}_{noun}"),
                 None,
-                account,
+                account_id.as_deref(),
             ))
         }
-        [
-            "api",
-            "v3" | "v3.1",
-            "tool_router",
-            "session",
-            session_id,
-            "link",
-        ] => Some(lifecycle_action(
+        LifecycleRoute::SessionLink { session_id } => Some(lifecycle_action(
             request,
             "COMPOSIO_LINK_SESSION_ACCOUNT",
-            Some(session_id),
+            Some(&session_id),
             None,
         )),
-        _ => None,
     }
 }
 
@@ -764,8 +799,9 @@ pub(crate) fn is_protected_host(host: &str) -> bool {
 
 /// Lowercase the host and strip any trailing `:port`, not just the scheme
 /// default, so a nonstandard port cannot demote a protected host to
-/// `Unrelated` generic normalization.
-fn canonical_host(host: &str) -> String {
+/// `Unrelated` generic normalization. Also used to canonicalize mapping-rule
+/// host patterns before glob matching in the startup coverage check.
+pub(crate) fn canonical_host(host: &str) -> String {
     let normalized = host.trim_end_matches('.').to_ascii_lowercase();
     match normalized.rsplit_once(':') {
         Some((name, port))
