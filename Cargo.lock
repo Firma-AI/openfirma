@@ -1689,6 +1689,7 @@ version = "0.1.4"
 dependencies = [
  "anyhow",
  "crossterm 0.28.1",
+ "insta",
  "ratatui",
  "thiserror 2.0.18",
 ]

@@ -116,6 +116,8 @@ impl<'a> HeadlessRunner<'a> {
             return Ok(ControlCrankOutcome::Quit);
         }
 
+        self.sync_status();
+
         let event = event::next_with_terminal(&self.sources, terminal, std::time::Duration::ZERO)?;
         let Some(event_kind) = EventKind::from_event(&event) else {
             return Ok(ControlCrankOutcome::NoEvent);
@@ -134,6 +136,11 @@ impl<'a> HeadlessRunner<'a> {
     /// Executes command side effects against the headless app.
     pub fn execute_effects(&mut self, effects: Vec<ControlEffect>) {
         execute_effects(&mut self.app, effects);
+        self.sync_status();
+    }
+
+    fn sync_status(&mut self) {
+        sync_status(&mut self.app, &self.sources);
     }
 }
 
@@ -153,7 +160,6 @@ impl<'a> Runner<'a> {
     }
 
     fn run(mut self) -> anyhow::Result<ExitCode> {
-        self.app.mark_running();
         while !self.app.should_quit() {
             self.crank()?;
         }
@@ -162,11 +168,20 @@ impl<'a> Runner<'a> {
     }
 
     fn crank(&mut self) -> anyhow::Result<()> {
-        self.tui.draw(&self.app)?;
+        self.draw()?;
         let event = event::next(&self.sources)?;
         let effects = event::handle(&mut self.app, event);
         execute_effects(&mut self.app, effects);
         Ok(())
+    }
+
+    fn draw(&mut self) -> anyhow::Result<()> {
+        self.sync_status();
+        self.tui.draw(&self.app)
+    }
+
+    fn sync_status(&mut self) {
+        sync_status(&mut self.app, &self.sources);
     }
 }
 
@@ -189,7 +204,16 @@ fn handle_control_announcement(
 ) -> Vec<ControlEffect> {
     match announcement {
         ControlAnnouncement::ShutdownRequested => app.request_quit(),
+        ControlAnnouncement::FatalError(error) => {
+            app.set_policy_error(error);
+            app.request_quit();
+        }
+        ControlAnnouncement::QueueDumpRequested | ControlAnnouncement::PolicyReloadRequested => {}
     }
 
     Vec::new()
+}
+
+fn sync_status(app: &mut App, _sources: &Sources<'_>) {
+    app.sync_rewrite_queue(0, false);
 }

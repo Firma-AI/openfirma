@@ -71,7 +71,6 @@ fn help_overlay_renders_bindings_and_footer() -> anyhow::Result<()> {
 #[test]
 fn non_running_status_is_rendered_in_outer_frame() -> anyhow::Result<()> {
     let mut app = App::default();
-    app.mark_running();
     app.request_quit();
 
     let text = render_text(&app, 80, 20)?;

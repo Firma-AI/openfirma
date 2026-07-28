@@ -14,3 +14,6 @@ anyhow = { workspace = true }
 crossterm = "0.28"
 ratatui = "0.30"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

@@ -1,12 +1,16 @@
 use std::{
     cell::RefCell,
     collections::VecDeque,
+    path::Path,
     sync::mpsc::{self, Receiver, Sender},
     time::Duration,
 };
 
 use crossterm::event::KeyCode;
-use firma_tui::control::{App, AuditDecision, AuditRow, ControlEffect, Event, TerminalEventSource};
+use firma_tui::control::{
+    App, AuditDecision, AuditRow, ControlEffect, ControlError, ControlStatus, Event,
+    TerminalEventSource,
+};
 use ratatui::{Terminal, backend::TestBackend};
 
 #[derive(Debug, Default)]
@@ -99,4 +103,42 @@ pub fn render_text(app: &App, width: u16, height: u16) -> anyhow::Result<String>
         .iter()
         .map(ratatui::buffer::Cell::symbol)
         .collect())
+}
+
+pub fn status_snapshot(status: &ControlStatus, expected_policy_dir: Option<&Path>) -> String {
+    let policy_dir = policy_dir_snapshot(status.policy_dir.as_deref(), expected_policy_dir);
+    let last_policy_error = policy_error_snapshot(status.last_policy_error.as_ref());
+
+    format!(
+        "runtime_state: {}\n\
+         policy_dir: {policy_dir}\n\
+         policy_count: {}\n\
+         audit_connected: {}\n\
+         audit_rows: {}\n\
+         rewrite_queue_len: {}\n\
+         pending_rewrites: {}\n\
+         last_policy_error: {last_policy_error}",
+        status.runtime_state.label(),
+        status.policy_count,
+        status.audit_connected,
+        status.audit_rows,
+        status.rewrite_queue_len,
+        status.pending_rewrites,
+    )
+}
+
+fn policy_dir_snapshot(actual: Option<&Path>, expected: Option<&Path>) -> &'static str {
+    match (actual, expected) {
+        (None, None) => "<none>",
+        (Some(actual), Some(expected)) => {
+            assert_eq!(actual, expected);
+            "<policy-dir>"
+        }
+        (None, Some(_)) => "<missing>",
+        (Some(_), None) => "<policy-dir>",
+    }
+}
+
+fn policy_error_snapshot(error: Option<&ControlError>) -> &'static str {
+    if error.is_some() { "present" } else { "none" }
 }
