@@ -188,8 +188,23 @@ impl MappingRuleConfig {
     ///
     /// Returns a message describing the first invalid field.
     pub fn validate(&self) -> Result<(), String> {
-        if self.host.trim().is_empty() {
+        let host = self.host.trim();
+        if host.is_empty() {
             return Err("host must not be empty".into());
+        }
+        // Load-time normalization strips trailing dots and default ports,
+        // which would silently promote a degenerate pattern like `*.` or
+        // `*:443` into the bare catch-all; reject those so intent stays
+        // explicit.
+        let stripped_dots = host.trim_end_matches('.');
+        let normalized = stripped_dots
+            .strip_suffix(":443")
+            .or_else(|| stripped_dots.strip_suffix(":80"))
+            .unwrap_or(stripped_dots);
+        if normalized == "*" && host != "*" {
+            return Err(format!(
+                "host pattern '{host}' would normalize to the bare catch-all '*'; write '*' explicitly if that is intended"
+            ));
         }
         if self.action_class.trim().is_empty() {
             return Err("action_class must not be empty".into());

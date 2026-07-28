@@ -823,20 +823,23 @@ pub(crate) fn is_protected_host(host: &str) -> bool {
     matches!(canonical_host(host).as_str(), BACKEND_HOST | APP_HOST)
 }
 
-/// Lowercase the host and strip any trailing `:port`, not just the scheme
-/// default, so a nonstandard port cannot demote a protected host to
-/// `Unrelated` generic normalization. Also used to canonicalize mapping-rule
-/// host patterns before glob matching in the startup coverage check.
+/// Trim, lowercase, and strip any trailing `:port` and trailing dot — not
+/// just the scheme default — so no host spelling (`Backend.Composio.Dev.`,
+/// `backend.composio.dev.:443`, padded whitespace) can demote a protected
+/// host to `Unrelated` generic normalization. Also used to canonicalize
+/// mapping-rule host patterns before glob matching in the startup coverage
+/// check.
 pub(crate) fn canonical_host(host: &str) -> String {
-    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
-    match normalized.rsplit_once(':') {
+    let normalized = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let without_port = match normalized.rsplit_once(':') {
         Some((name, port))
             if !name.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
         {
-            name.to_string()
+            name
         }
-        _ => normalized,
-    }
+        _ => normalized.as_str(),
+    };
+    without_port.trim_end_matches('.').to_string()
 }
 
 fn path_only(path: &str) -> &str {

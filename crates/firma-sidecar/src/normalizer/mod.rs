@@ -678,10 +678,14 @@ fn normalize_host(host: &str) -> String {
         return trimmed.to_ascii_lowercase();
     }
     let lower = trimmed.trim_end_matches('.').to_ascii_lowercase();
+    // Strip the trailing dot again after the port: `host.:443` keeps its dot
+    // through the first pass because the port hides it, and leaving it would
+    // let that spelling evade host-scoped rules.
     let without_default_port = lower
         .strip_suffix(":443")
         .or_else(|| lower.strip_suffix(":80"))
-        .unwrap_or(&lower);
+        .unwrap_or(&lower)
+        .trim_end_matches('.');
     without_default_port.to_string()
 }
 

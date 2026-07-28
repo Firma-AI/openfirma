@@ -233,11 +233,19 @@ impl MappingTable {
     }
 }
 
-/// Normalize a rule host pattern like runtime request hosts: lowercase and
-/// strip any trailing dot. Ports and wildcards are preserved — a pattern may
+/// Normalize a rule host pattern like runtime request hosts: lowercase,
+/// strip any trailing dot, and strip a default `:443`/`:80` port (runtime
+/// hosts never carry one after [`normalize_host`](super::normalize_host)).
+/// Nonstandard ports and wildcards are preserved — a pattern may
 /// legitimately target a nonstandard port.
 fn normalize_host_pattern(host: &str) -> String {
-    host.trim().trim_end_matches('.').to_ascii_lowercase()
+    let lower = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    lower
+        .strip_suffix(":443")
+        .or_else(|| lower.strip_suffix(":80"))
+        .unwrap_or(&lower)
+        .trim_end_matches('.')
+        .to_string()
 }
 
 /// Simple glob matching where `*` matches any sequence of characters.

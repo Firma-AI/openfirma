@@ -125,22 +125,29 @@ fn direct_execution_requires_and_uses_the_pinned_version() -> anyhow::Result<()>
     Ok(())
 }
 
-/// A nonstandard port must not demote a protected host to generic
-/// normalization; host matching is port-agnostic.
+/// No host spelling (nonstandard port, trailing dot hidden behind a port,
+/// padded whitespace) may demote a protected host to generic normalization.
 #[test]
-fn nonstandard_ports_still_hit_the_protected_hosts() -> anyhow::Result<()> {
-    let request = request(
+fn host_spellings_still_hit_the_protected_hosts() -> anyhow::Result<()> {
+    for host in [
         "backend.composio.dev:8443",
-        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
-        &serde_json::json!({"version": "20251111_00"}),
-    );
+        "backend.composio.dev.:443",
+        " backend.composio.dev ",
+    ] {
+        let request = request(
+            host,
+            "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
+            &serde_json::json!({"version": "20251111_00"}),
+        );
 
-    let decoded = actions(decode(&request, &catalogs()?))?;
+        let decoded = actions(decode(&request, &catalogs()?))?;
 
-    assert_eq!(
-        decoded[0].envelope.intent.policy_resource_display(),
-        "composio://gmail/GMAIL_FETCH_EMAILS"
-    );
+        assert_eq!(
+            decoded[0].envelope.intent.policy_resource_display(),
+            "composio://gmail/GMAIL_FETCH_EMAILS",
+            "{host} must decode as a protected Composio host"
+        );
+    }
     Ok(())
 }
 
@@ -210,6 +217,11 @@ fn non_read_methods_on_recognized_routes_fail_closed() -> anyhow::Result<()> {
             Method::TRACE,
             "backend.composio.dev",
             "/api/v3/tool_router/session/trs_1/link",
+        ),
+        (
+            Method::TRACE,
+            "backend.composio.dev",
+            "/api/v3/tool_router/session/trs_1",
         ),
         (Method::TRACE, "backend.composio.dev", "/api/v3/tools"),
         (Method::PATCH, "backend.composio.dev", "/api/v3/toolkits"),
