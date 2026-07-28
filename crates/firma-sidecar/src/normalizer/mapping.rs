@@ -233,19 +233,31 @@ impl MappingTable {
     }
 }
 
-/// Normalize a rule host pattern like runtime request hosts: lowercase,
-/// strip any trailing dot, and strip a default `:443`/`:80` port (runtime
-/// hosts never carry one after [`normalize_host`](super::normalize_host)).
-/// Nonstandard ports and wildcards are preserved — a pattern may
-/// legitimately target a nonstandard port.
-fn normalize_host_pattern(host: &str) -> String {
-    let lower = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    lower
-        .strip_suffix(":443")
-        .or_else(|| lower.strip_suffix(":80"))
-        .unwrap_or(&lower)
-        .trim_end_matches('.')
-        .to_string()
+/// Normalize a host or rule host pattern into its canonical matching form.
+///
+/// Trims whitespace, lowercases, strips any trailing dot from the name part
+/// (even when a port hides it, as in `host.:8443`), drops a default
+/// `:443`/`:80` port, and re-appends a nonstandard all-digit port. This is
+/// the single normalization shared by runtime request hosts, rule host
+/// patterns, and config validation, so the three can never disagree on what
+/// a spelling means. Wildcards pass through untouched except for the
+/// name-part dot handling (`*.:443` normalizes to `*`, which validation
+/// rejects as a silent catch-all promotion).
+pub fn normalize_host_pattern(host: &str) -> String {
+    let lower = host.trim().to_ascii_lowercase();
+    let (name, port) = match lower.rsplit_once(':') {
+        Some((name, port))
+            if !name.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            (name, Some(port))
+        }
+        _ => (lower.as_str(), None),
+    };
+    let name = name.trim_end_matches('.');
+    match port {
+        Some("443" | "80") | None => name.to_string(),
+        Some(port) => format!("{name}:{port}"),
+    }
 }
 
 /// Simple glob matching where `*` matches any sequence of characters.

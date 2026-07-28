@@ -194,13 +194,15 @@ impl MappingRuleConfig {
         }
         // Load-time normalization strips trailing dots and default ports,
         // which would silently promote a degenerate pattern like `*.` or
-        // `*:443` into the bare catch-all; reject those so intent stays
-        // explicit.
-        let stripped_dots = host.trim_end_matches('.');
-        let normalized = stripped_dots
-            .strip_suffix(":443")
-            .or_else(|| stripped_dots.strip_suffix(":80"))
-            .unwrap_or(stripped_dots);
+        // `*:443` into the bare catch-all, or erase one like `:443`
+        // entirely. Validate against the same normalization the mapping
+        // table applies so no spelling can slip between the two.
+        let normalized = crate::normalizer::mapping::normalize_host_pattern(host);
+        if normalized.is_empty() || normalized.starts_with(':') {
+            return Err(format!(
+                "host pattern '{host}' normalizes to an empty host name and can never match"
+            ));
+        }
         if normalized == "*" && host != "*" {
             return Err(format!(
                 "host pattern '{host}' would normalize to the bare catch-all '*'; write '*' explicitly if that is intended"

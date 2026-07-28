@@ -1,9 +1,11 @@
 //! Load-time normalization of mapping-rule host patterns.
 
+use std::collections::HashMap;
+
 use firma_http::Method;
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::normalizer::MatchResult;
-use firma_sidecar::pipeline::{ActionClassRegistry, MappingTable};
+use firma_sidecar::pipeline::{ActionClassRegistry, IntentNormalizer, MappingTable, RawRequest};
 
 fn rule(host: &str) -> MappingRuleConfig {
     MappingRuleConfig {
@@ -69,11 +71,40 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Degenerate wildcard hosts that would silently normalize into the bare
-/// catch-all are rejected at validation.
+/// A trailing dot hidden behind a nonstandard port must not evade a
+/// host-scoped rule: `host.:8443` and `host:8443` are the same authority.
+/// Exercised through the normalizer, which owns request-host normalization.
+#[test]
+fn trailing_dot_behind_nonstandard_port_cannot_evade_rules() -> anyhow::Result<()> {
+    let table = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![rule("api.github.com:8443")],
+        },
+        &ActionClassRegistry::v0_1(),
+        false,
+    )?;
+    let normalizer = IntentNormalizer::new(table);
+
+    let envelope = normalizer
+        .normalize(&RawRequest {
+            method: Method::GET,
+            host: "API.GitHub.COM.:8443".to_string(),
+            path: "/repos/x".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        })
+        .map_err(|decision| anyhow::anyhow!("expected classification, got {decision:?}"))?;
+
+    assert_eq!(envelope.intent.action_class, "communication.external.read");
+    Ok(())
+}
+
+/// Degenerate hosts that would silently normalize into the bare catch-all
+/// or into an unmatchable empty name are rejected at validation.
 #[test]
 fn degenerate_catch_all_host_patterns_are_rejected() {
-    for host in ["*.", "*:443"] {
+    for host in ["*.", "*:443", "*.:443", "*..:80", ".", ":443", ":8080"] {
         let result = MappingTable::from_config(
             &MappingRulesFile {
                 rules: vec![rule(host)],

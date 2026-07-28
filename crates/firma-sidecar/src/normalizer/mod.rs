@@ -663,30 +663,24 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
 ///
 /// DNS names are ASCII case-insensitive (RFC 4343) and a trailing dot
 /// denotes a fully-qualified name with no semantic difference to the bare
-/// host. A default port (`:443` / `:80`) is also stripped so that
-/// `api.openai.com:443`, `api.openai.com:80`, and `api.openai.com` all match
-/// rules written for the bare host. IPv6 literals (`[::1]`, `[::1]:443`) are
-/// lowercased but otherwise preserved.
+/// host — including when a port hides it (`host.:8443`). A default port
+/// (`:443` / `:80`) is also stripped so that `api.openai.com:443`,
+/// `api.openai.com:80`, and `api.openai.com` all match rules written for
+/// the bare host; nonstandard ports are preserved. IPv6 literals (`[::1]`,
+/// `[::1]:443`) are lowercased but otherwise preserved.
 ///
 /// This runs on the hot path in [`IntentNormalizer::normalize`] before the
 /// mapping-table lookup so that an attacker cannot evade host-scoped rules by
 /// varying the case, trailing dot, or default port of the `Host` header.
+/// Delegates to the same normalization applied to rule host patterns at load
+/// time, so a request host and a rule host can never disagree in form.
 fn normalize_host(host: &str) -> String {
     let trimmed = host.trim();
     // IPv6 literal: lowercase only; preserve brackets and any port.
     if trimmed.starts_with('[') {
         return trimmed.to_ascii_lowercase();
     }
-    let lower = trimmed.trim_end_matches('.').to_ascii_lowercase();
-    // Strip the trailing dot again after the port: `host.:443` keeps its dot
-    // through the first pass because the port hides it, and leaving it would
-    // let that spelling evade host-scoped rules.
-    let without_default_port = lower
-        .strip_suffix(":443")
-        .or_else(|| lower.strip_suffix(":80"))
-        .unwrap_or(&lower)
-        .trim_end_matches('.');
-    without_default_port.to_string()
+    mapping::normalize_host_pattern(trimmed)
 }
 
 /// Normalize a request path according to the canonicalization rules:
