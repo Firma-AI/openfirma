@@ -106,6 +106,25 @@ it to the snapshot or error output. Every new slug remains unmapped until a
 reviewer assigns a canonical class. Validation rejects missing mappings,
 unknown classes, version drift, and source/mapping differences.
 
+## Classification caveats
+
+Single-class mapping cannot express every provider nuance. Reviewed
+judgement calls worth knowing when authoring policies:
+
+- `GMAIL_UPDATE_VACATION_SETTINGS` is `communication.external.send`: the
+  auto-responder emails an arbitrary body to every correspondent, so it is a
+  send channel, not filter management.
+- `GMAIL_CREATE_FILTER` stays `communication.external.filter`, but a filter
+  action can forward matching inbound mail to an external address. Granting
+  the class grants that forwarding path.
+- `GOOGLECALENDAR_CREATE_EVENT` (`calendar.create`) emails invites with
+  arbitrary text to arbitrary attendees, so it is an outbound channel even
+  without a `communication.external.*` grant.
+- `GOOGLECALENDAR_BATCH_EVENTS` multiplexes create, update, and delete in
+  one call. It is pinned to `calendar.delete`, the highest-risk operation it
+  can perform, so a capability that excludes deletes can never reach it —
+  but a delete-only grant does let it create or update events.
+
 ## Cedar policy
 
 Composio actions use the existing canonical classes. Policies can also match

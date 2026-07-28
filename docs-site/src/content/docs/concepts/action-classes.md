@@ -67,6 +67,18 @@ For example, a scheduling assistant may receive `calendar.read` and
 This prevents a capability for finding availability from silently becoming a
 capability to cancel or rewrite existing meetings.
 
+Some classes carry escalation channels a policy author should price in:
+
+- `communication.external.filter` covers mail-filter management, and a Gmail
+  filter can forward matching inbound mail to an external address. Granting
+  the class permits setting up that forwarding even when
+  `communication.external.send` is denied. Tools that emit messages
+  themselves (for example a vacation auto-responder with an arbitrary body)
+  are classified `communication.external.send`, not `filter`.
+- `calendar.create` can email invites with arbitrary description text to
+  arbitrary external attendees, so it is an outbound channel even without
+  any `communication.external.*` grant.
+
 ## How a request becomes a class
 
 The Sidecar's normalizer holds a **mapping table** loaded from TOML at startup. Each entry binds a `(method, host, path)` tuple to an action class:

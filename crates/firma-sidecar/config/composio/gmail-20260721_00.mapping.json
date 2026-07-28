@@ -62,7 +62,7 @@
     "GMAIL_UPDATE_POP_SETTINGS": "communication.external.manage",
     "GMAIL_UPDATE_SEND_AS": "communication.external.manage",
     "GMAIL_UPDATE_USER_ATTRIBUTES_VALUES": "account.permission.change",
-    "GMAIL_UPDATE_VACATION_SETTINGS": "communication.external.filter"
+    "GMAIL_UPDATE_VACATION_SETTINGS": "communication.external.send"
   },
   "toolkit": "gmail",
   "version": "20260721_00"
