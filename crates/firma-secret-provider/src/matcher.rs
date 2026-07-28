@@ -12,7 +12,7 @@
 use std::str::FromStr;
 
 use either::Either;
-use firma_core::SecretMatcher;
+use firma_core::{SecretJsonSelector, SecretJsonSelectorScope, SecretMatcher};
 use http::{
     Uri,
     uri::{Authority, InvalidUri},
@@ -60,47 +60,37 @@ pub enum MatcherError {
     /// The vault output was not valid UTF-8 (regex matcher).
     #[error("vault output is not valid UTF-8")]
     NotUtf8,
-    /// The value and name paths selected a different number of nodes.
-    #[error("json matcher selected {values} value(s) but {names} name(s); paths must align")]
-    Misaligned {
-        /// Number of value nodes.
-        values: usize,
-        /// Number of name nodes.
-        names: usize,
-    },
-    /// The item path selected a different number of nodes than the value path.
+    /// The record selector did not identify any logical records.
+    #[error("json matcher record_path selected no records")]
+    NoRecords,
+    /// A record-relative selector did not select exactly one node.
     #[error(
-        "json matcher item_path selected {items} node(s) but value_path selected {values}; \
-         paths must align"
+        "json matcher {selector} selected {matches} node(s) in record {record_index}; expected exactly one"
     )]
-    ItemMisaligned {
-        /// Number of value nodes.
-        values: usize,
-        /// Number of item nodes selected.
-        items: usize,
+    RecordSelectorMatchCount {
+        /// Name of the selector field.
+        selector: &'static str,
+        /// Zero-based index of the record selected by `record_path`.
+        record_index: usize,
+        /// Number of nodes selected within the record.
+        matches: usize,
     },
-    /// The domain path selected a different number of nodes than the value path.
-    #[error(
-        "json matcher domain_path selected {domains} node(s) but value_path selected {values}; \
-         paths must align"
-    )]
-    DomainMisaligned {
-        /// Number of value nodes.
-        values: usize,
-        /// Number of domain nodes selected.
-        domains: usize,
+    /// A document-scoped selector did not select exactly one node.
+    #[error("json matcher {selector} selected {matches} document node(s); expected exactly one")]
+    DocumentSelectorMatchCount {
+        /// Name of the selector field.
+        selector: &'static str,
+        /// Number of nodes selected from the document root.
+        matches: usize,
     },
-    /// The domain path selected the right count of nodes, but from different
-    /// parent elements than the value path — a coincidental count match that
-    /// would otherwise be silently zipped in the wrong order.
-    #[error(
-        "json matcher domain_path selected nodes under different parent elements than \
-         value_path; paths must align"
-    )]
-    DomainParentMismatch,
     /// A selected value or name node was not a JSON string.
-    #[error("json matcher: a selected value/name node is not a string")]
-    NonStringNode,
+    #[error("json matcher {selector} selected a non-string node in record {record_index}")]
+    NonStringNode {
+        /// Name of the selector field.
+        selector: &'static str,
+        /// Zero-based index of the record selected by `record_path`.
+        record_index: usize,
+    },
     /// Re-serializing the rewritten JSON failed.
     #[error("failed to serialize rewritten output: {0}")]
     Serialize(#[source] serde_json::Error),
@@ -133,17 +123,20 @@ pub enum CompiledMatcher {
     Regex(CompiledRegexMatcher),
 }
 
-/// Compiled `JSONPath` value/name selectors.
+/// Compiled record-relative `JSONPath` selectors.
 #[derive(Debug)]
 pub struct CompiledJsonMatcher {
-    /// Selects each secret value node.
-    pub value: JsonPath,
-    /// Selects each matching name node.
-    pub name: JsonPath,
-    /// Optional path selecting the item title (for structured-item stores).
-    pub item: Option<JsonPath>,
-    /// Optional path selecting the domain/hostname per item.
-    pub domain: Option<JsonPath>,
+    record: JsonPath,
+    value: JsonPath,
+    name: JsonPath,
+    item: Option<CompiledJsonSelector>,
+    domain: Option<CompiledJsonSelector>,
+}
+
+#[derive(Debug)]
+struct CompiledJsonSelector {
+    path: JsonPath,
+    scope: SecretJsonSelectorScope,
 }
 
 /// Compiled regex with `value` and `name` named groups.
@@ -163,29 +156,31 @@ impl CompiledMatcher {
     pub fn compile(spec: &SecretMatcher) -> Result<Self, MatcherError> {
         match spec {
             SecretMatcher::Json {
+                record_path,
                 value_path,
                 name_path,
-                item_path,
-                domain_path,
+                item_selector,
+                domain_selector,
             } => {
-                let value =
-                    JsonPath::parse(value_path).map_err(|error| MatcherError::JsonPath {
-                        path: value_path.clone(),
-                        reason: error,
-                    })?;
-                let name = JsonPath::parse(name_path).map_err(|error| MatcherError::JsonPath {
-                    path: name_path.clone(),
-                    reason: error,
-                })?;
-                let parse_opt_path = |p: &str| {
-                    JsonPath::parse(p).map_err(|error| MatcherError::JsonPath {
-                        path: p.to_owned(),
+                let parse_path = |path: &str| {
+                    JsonPath::parse(path).map_err(|error| MatcherError::JsonPath {
+                        path: path.to_owned(),
                         reason: error,
                     })
                 };
-                let item = item_path.as_deref().map(parse_opt_path).transpose()?;
-                let domain = domain_path.as_deref().map(parse_opt_path).transpose()?;
+                let compile_selector = |selector: &SecretJsonSelector| {
+                    Ok(CompiledJsonSelector {
+                        path: parse_path(&selector.path)?,
+                        scope: selector.scope,
+                    })
+                };
+                let record = parse_path(record_path)?;
+                let value = parse_path(value_path)?;
+                let name = parse_path(name_path)?;
+                let item = item_selector.as_ref().map(compile_selector).transpose()?;
+                let domain = domain_selector.as_ref().map(compile_selector).transpose()?;
                 Ok(Self::Json(CompiledJsonMatcher {
+                    record,
                     value,
                     name,
                     item,
@@ -218,8 +213,8 @@ impl CompiledMatcher {
     /// extracted secret:
     /// - `name`: field label (always present).
     /// - `value`: plaintext secret.
-    /// - `domain`: hostname scope when `domain_path` is configured, else `None`.
-    /// - `item`: item title when `item_path` is configured, else `None`.
+    /// - `domain`: hostname scope when `domain_selector` is configured, else `None`.
+    /// - `item`: item title when `item_selector` is configured, else `None`.
     ///
     /// The caller mints and stores the `placeholder → value` mapping and returns
     /// the placeholder to substitute in place of the value.
@@ -241,67 +236,77 @@ impl CompiledMatcher {
     }
 }
 
-/// Strip the last segment off a JSON Pointer, yielding the pointer to its
-/// parent element (e.g. `/0/domain` -> `/0`).
-fn parent_pointer(pointer: &str) -> &str {
-    pointer.rfind('/').map_or("", |idx| &pointer[..idx])
+struct Record<'a> {
+    pointer: String,
+    node: &'a Value,
 }
 
-fn broadcast_optional_values<T: Clone>(
-    raw: Vec<Option<T>>,
-    value_count: usize,
-    is_singular: bool,
-) -> impl ExactSizeIterator<Item = Option<T>> {
-    if is_singular && raw.len() == 1 {
-        Either::Left(std::iter::repeat_n(
-            raw.into_iter().next().flatten(),
-            value_count,
-        ))
-    } else {
-        Either::Right(raw.into_iter())
+struct ValueHit {
+    pointer: String,
+    value: String,
+}
+
+fn one_record_node<'a>(
+    path: &JsonPath,
+    record: &'a Record<'a>,
+    selector: &'static str,
+    record_index: usize,
+) -> Result<(&'a Value, String), MatcherError> {
+    let located = path.query_located(record.node);
+    if located.len() != 1 {
+        return Err(MatcherError::RecordSelectorMatchCount {
+            selector,
+            record_index,
+            matches: located.len(),
+        });
     }
+    let Some(node) = located.iter().next() else {
+        return Err(MatcherError::RecordSelectorMatchCount {
+            selector,
+            record_index,
+            matches: 0,
+        });
+    };
+    let relative_pointer = node.location().to_json_pointer();
+    let absolute_pointer = match (record.pointer.is_empty(), relative_pointer.is_empty()) {
+        (true, _) => relative_pointer,
+        (_, true) => record.pointer.clone(),
+        (false, false) => format!("{}{relative_pointer}", record.pointer),
+    };
+    Ok((node.node(), absolute_pointer))
 }
 
-/// Resolve `domain_path` against `root`, aligned to the `value_path` hits.
-///
-/// A singular `domain_path` broadcasts its one node to every value. A
-/// non-singular `domain_path` must select exactly `n` nodes *and* each one
-/// must share its parent element with the value node at the same position —
-/// otherwise a coincidental count match would get silently zipped in the
-/// wrong order (see `DomainParentMismatch`).
-fn resolve_domains(
-    dp: &JsonPath,
+fn optional_strings(
+    selector: &CompiledJsonSelector,
     root: &Value,
-    value_parents: &[&str],
-    n: usize,
-) -> Result<impl ExactSizeIterator<Item = Option<Authority>> + 'static, MatcherError> {
-    let located = dp.query_located(root);
-    let iter =
-        if dp.is_singular {
-            // if jsonpath is singular we don't need to check for parents
-            Either::Left(located.iter().map(|node| Ok(node.node().as_str())))
-        } else {
-            // check first to avoid futile work, since iterator length can't change
-            if located.len() != n {
-                return Err(MatcherError::DomainMisaligned {
-                    values: n,
-                    domains: located.len(),
+    records: &[Record<'_>],
+    selector_name: &'static str,
+) -> Result<Vec<Option<String>>, MatcherError> {
+    match selector.scope {
+        SecretJsonSelectorScope::Record => records
+            .iter()
+            .enumerate()
+            .map(|(record_index, record)| {
+                one_record_node(&selector.path, record, selector_name, record_index)
+                    .map(|(node, _)| node.as_str().map(str::to_owned))
+            })
+            .collect(),
+        SecretJsonSelectorScope::Document => {
+            let nodes = selector.path.query(root);
+            if nodes.len() != 1 {
+                return Err(MatcherError::DocumentSelectorMatchCount {
+                    selector: selector_name,
+                    matches: nodes.len(),
                 });
             }
-            Either::Right(located.iter().zip(value_parents.iter()).map(
-                |(node, expected_parent)| {
-                    let node_pointer = node.location().to_json_pointer();
-                    if parent_pointer(&node_pointer) != *expected_parent {
-                        return Err(MatcherError::DomainParentMismatch);
-                    }
-                    Ok(node.node().as_str())
-                },
-            ))
-        };
-    let autorities = iter
-        .map(|node| node?.map(validate_domain).transpose())
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(broadcast_optional_values(autorities, n, dp.is_singular))
+            let value = nodes
+                .iter()
+                .next()
+                .and_then(|node| node.as_str())
+                .map(str::to_owned);
+            Ok(std::iter::repeat_n(value, records.len()).collect())
+        }
+    }
 }
 
 fn rewrite_json(
@@ -311,73 +316,71 @@ fn rewrite_json(
 ) -> Result<Vec<u8>, MatcherError> {
     let mut root: Value = serde_json::from_slice(output).map_err(MatcherError::Json)?;
 
-    // Collect value-node JSON pointers + their string values, aligned names,
-    // items, and optional domains — all before mutating (queries borrow `root`
-    // immutably).
-    let value_hits = matcher
-        .value
+    // Resolve and validate the complete extraction before invoking `mint`.
+    let records = matcher
+        .record
         .query_located(&root)
         .iter()
-        .map(|node| {
+        .map(|node| Record {
+            pointer: node.location().to_json_pointer(),
+            node: node.node(),
+        })
+        .collect::<Vec<_>>();
+    if records.is_empty() {
+        return Err(MatcherError::NoRecords);
+    }
+
+    let value_hits = records
+        .iter()
+        .enumerate()
+        .map(|(record_index, record)| {
+            let (node, pointer) =
+                one_record_node(&matcher.value, record, "value_path", record_index)?;
             let value = node
-                .node()
                 .as_str()
-                .ok_or(MatcherError::NonStringNode)?
+                .ok_or(MatcherError::NonStringNode {
+                    selector: "value_path",
+                    record_index,
+                })?
                 .to_owned();
-            Ok((node.location().to_json_pointer(), value))
+            Ok(ValueHit { pointer, value })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if value_hits.is_empty() {
-        return Err(MatcherError::NoMatches);
-    }
-    let names = matcher
-        .name
-        .query(&root)
+    let names = records
         .iter()
-        .map(|node| Ok(node.as_str().ok_or(MatcherError::NonStringNode)?.to_owned()))
+        .enumerate()
+        .map(|(record_index, record)| {
+            let (node, _) = one_record_node(&matcher.name, record, "name_path", record_index)?;
+            node.as_str()
+                .ok_or(MatcherError::NonStringNode {
+                    selector: "name_path",
+                    record_index,
+                })
+                .map(str::to_owned)
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    if value_hits.len() != names.len() {
-        return Err(MatcherError::Misaligned {
-            values: value_hits.len(),
-            names: names.len(),
-        });
-    }
-    let n = value_hits.len();
-    let value_parents: Vec<&str> = value_hits
-        .iter()
-        .map(|(pointer, _)| parent_pointer(pointer))
-        .collect();
-
     let items = match &matcher.item {
-        None => Either::Left(std::iter::repeat_n(None, n)),
-        Some(ip) => {
-            let raw: Vec<Option<String>> = ip
-                .query(&root)
-                .iter()
-                .map(|v| v.as_str().map(str::to_owned))
-                .collect();
-            let expanded = broadcast_optional_values(raw, n, ip.is_singular);
-            let ok_len = expanded.len();
-            if ok_len != n {
-                return Err(MatcherError::ItemMisaligned {
-                    values: n,
-                    items: ok_len,
-                });
-            }
-            Either::Right(expanded)
-        }
+        None => vec![None; records.len()],
+        Some(selector) => optional_strings(selector, &root, &records, "item_selector")?,
     };
-
     let domains = match &matcher.domain {
-        None => Either::Left(std::iter::repeat_n(None, n)),
-        Some(dp) => Either::Right(resolve_domains(dp, &root, &value_parents, n)?),
+        None => vec![None; records.len()],
+        Some(selector) => optional_strings(selector, &root, &records, "domain_selector")?
+            .into_iter()
+            .map(|domain| domain.as_deref().map(validate_domain).transpose())
+            .collect::<Result<Vec<_>, _>>()?,
     };
 
-    for ((((pointer, value), name), item), domain) in
+    for (((value_hit, name), item), domain) in
         value_hits.into_iter().zip(names).zip(items).zip(domains)
     {
-        let placeholder = mint(&name, Secret::new(&value), domain.as_ref(), item.as_deref());
-        if let Some(slot) = root.pointer_mut(&pointer) {
+        let placeholder = mint(
+            &name,
+            Secret::new(&value_hit.value),
+            domain.as_ref(),
+            item.as_deref(),
+        );
+        if let Some(slot) = root.pointer_mut(&value_hit.pointer) {
             *slot = Value::String(placeholder);
         }
     }

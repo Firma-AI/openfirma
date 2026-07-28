@@ -391,58 +391,25 @@ impl From<DeferDuration> for Duration {
 pub enum SecretMatcher {
     /// `JSONPath` extraction over structured output.
     Json {
-        /// `JSONPath` selecting each secret value (`@match_value`).
+        /// `JSONPath` evaluated once against the document root to select each
+        /// logical secret record.
+        record_path: String,
+        /// Record-relative `JSONPath` selecting the secret value
+        /// (`@match_value`). It must select exactly one string from each record.
         value_path: String,
-        /// `JSONPath` selecting the matching name (`@match_name`), aligned by
-        /// document order with the value path.
+        /// Record-relative `JSONPath` selecting the matching name
+        /// (`@match_name`). It must select exactly one string from each record.
         name_path: String,
-        /// Optional `JSONPath` selecting the item title for structured-item stores.
-        ///
-        /// A syntactically singular `JSONPath`, as defined by RFC 9535, is treated as
-        /// shared metadata. If it selects one node, that value is broadcast to every
-        /// extracted secret. Examples include `$.title` and `$.items[0].title`.
-        /// Use this for integrations that group multiple fields under a named item
-        /// (e.g. 1Password `$.title`).
-        ///
-        /// A non-singular `JSONPath` is treated as positional. It must select exactly
-        /// as many nodes as `value_path`, and results are aligned in document order.
-        /// Examples include `$[*].title` and `$.items[*].title`.
-        ///
-        /// A non-singular path is not broadcast merely because it happens to select
-        /// one node for a particular response. This avoids treating a missing
-        /// positional value as shared metadata.
-        ///
-        /// Selecting zero nodes or a positional count that differs from `value_path`
-        /// is an error.
+        /// Optional scoped selector for the structured-item title. Record-scoped
+        /// selectors run once per record; document-scoped selectors run once at
+        /// the document root and are broadcast to every record.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        item_path: Option<String>,
-        /// Optional `JSONPath` selecting the domain authority associated with each
-        /// secret.
-        ///
-        /// A syntactically singular `JSONPath`, as defined by RFC 9535, is treated as a
-        /// shared domain. If it selects one node, that domain is broadcast to every
-        /// extracted secret. Examples include `$.url` and `$.urls[0].href`.
-        /// Use this for integrations whose vault items carry a URL or hostname field
-        /// (e.g. 1Password `urls[0].href`).
-        ///
-        /// A non-singular `JSONPath` is treated as positional. It must select exactly
-        /// as many nodes as `value_path`, and results are aligned in document order.
-        /// Examples include `$[*].domain` and `$.items[*].url`.
-        ///
-        /// A non-singular path is not broadcast merely because it happens to select
-        /// one node for a particular response. This ensures that a missing domain on
-        /// one secret fails closed rather than causing another secret's domain to be
-        /// broadcast.
-        ///
-        /// String values are parsed as HTTP authorities or URLs and normalized to an
-        /// authority suitable for matching outbound request destinations. A selected
-        /// `null` or other non-string node is treated as an absent domain for that
-        /// position.
-        ///
-        /// Selecting zero nodes or a positional count that differs from `value_path`
-        /// is an error.
+        item_selector: Option<SecretJsonSelector>,
+        /// Optional scoped selector for the domain associated with each secret.
+        /// String nodes are validated and normalized as HTTP authorities or URLs;
+        /// `null` and other non-string nodes represent an absent domain.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        domain_path: Option<String>,
+        domain_selector: Option<SecretJsonSelector>,
     },
     /// `Regex` extraction over text output. The pattern carries a required
     /// `value` and `name` named capture group, and an optional `domain` group
@@ -451,6 +418,30 @@ pub enum SecretMatcher {
         /// The `Regex` source.
         pattern: String,
     },
+}
+
+/// A `JSONPath` selector whose evaluation root is explicit.
+///
+/// The scope is part of the serialized shape, for example
+/// `{"path":"$.title","scope":"document"}`. Selector cardinality is always
+/// exactly one at each applicable root; scope is never inferred from `JSONPath`
+/// syntax.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SecretJsonSelector {
+    /// `JSONPath` evaluated at the root selected by [`Self::scope`].
+    pub path: String,
+    /// Whether the path is relative to each record or to the whole document.
+    pub scope: SecretJsonSelectorScope,
+}
+
+/// Evaluation root for a [`SecretJsonSelector`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretJsonSelectorScope {
+    /// Evaluate independently against every node selected by `record_path`.
+    Record,
+    /// Evaluate once against the document root and broadcast the selected node.
+    Document,
 }
 
 #[cfg(test)]
