@@ -98,7 +98,7 @@ impl App {
     ///
     /// A shutting-down queue moves the runtime into shutdown. Otherwise the
     /// runtime state is recalculated from the current app state.
-    pub fn sync_rewrite_queue(&mut self, rewrite_queue_len: usize, shutting_down: bool) {
+    pub(crate) fn sync_rewrite_queue(&mut self, rewrite_queue_len: usize, shutting_down: bool) {
         self.rewrite_queue_len = rewrite_queue_len;
         if shutting_down {
             self.runtime_state = ControlRuntimeState::ShuttingDown;
@@ -215,6 +215,45 @@ impl App {
     #[must_use]
     pub fn policy_error(&self) -> Option<&ControlError> {
         self.policies.error()
+    }
+
+    /// Source file for the selected policy row.
+    #[must_use]
+    pub(crate) fn selected_policy_file(&self) -> Option<&Path> {
+        self.policies.selected_file()
+    }
+
+    /// Requests an edit session for the selected policy source.
+    ///
+    /// This has no effect outside the policy pane. If a policy rewrite is
+    /// pending, the request is rejected and the policy state records an error.
+    pub fn request_policy_edit(&mut self) -> bool {
+        if self.selected_pane != Pane::Policies {
+            return false;
+        }
+
+        let requested = self.policies.request_edit();
+        if requested {
+            self.runtime_state = ControlRuntimeState::EditingPolicy;
+        } else {
+            self.refresh_runtime_state();
+        }
+
+        requested
+    }
+
+    /// Reloads policies from disk.
+    ///
+    /// Existing audit rows are preserved. Policy selection is clamped if the
+    /// reload changes the row count.
+    pub fn reload_policies(&mut self) {
+        self.policies.reload();
+        self.refresh_runtime_state();
+    }
+
+    /// Marks the external policy editor session as finished.
+    pub fn finish_policy_edit(&mut self) {
+        self.refresh_runtime_state();
     }
 
     /// Changes the audit decision filter.

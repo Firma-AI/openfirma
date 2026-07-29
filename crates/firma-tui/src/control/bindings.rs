@@ -133,6 +133,12 @@ const BINDINGS: &[Binding] = &[
         ControlCommand::ToggleAllPolicies,
     ),
     Binding::new(
+        BindingKey::Single(KeyCode::Char('e')),
+        "e",
+        "Edit policy",
+        ControlCommand::OpenPolicySource,
+    ),
+    Binding::new(
         BindingKey::Single(KeyCode::Char('a')),
         "a",
         "All",
