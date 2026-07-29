@@ -2,13 +2,13 @@ use std::{fmt, ops::Deref};
 
 #[derive(Debug, thiserror::Error)]
 #[error("empty string")]
-pub struct EmptyError;
+pub(super) struct EmptyError;
 
-/// A borrowed string checked to be non-empty
-pub struct NonEmptyStr<'a>(&'a str);
+/// A borrowed string checked to be non-empty.
+pub(super) struct NonEmptyStr<'a>(&'a str);
 
 impl<'a> NonEmptyStr<'a> {
-    pub(crate) fn new(value: &'a str) -> Result<Self, EmptyError> {
+    pub(super) fn new(value: &'a str) -> Result<Self, EmptyError> {
         let value = value.trim();
         if value.is_empty() {
             Err(EmptyError)

@@ -9,11 +9,9 @@
 //! itself against MITM'd response bodies.
 
 mod matcher;
-mod non_empty_str;
 mod placeholder;
 mod secret;
 
-pub use matcher::{CompiledJsonMatcher, CompiledMatcher, CompiledRegexMatcher, MatcherError};
-pub use non_empty_str::NonEmptyStr;
+pub use matcher::{CompiledMatcher, MatcherError};
 pub use placeholder::SecretPlaceholder;
 pub use secret::Secret;

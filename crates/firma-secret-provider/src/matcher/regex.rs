@@ -2,8 +2,8 @@ use either::Either;
 use http::uri::Authority;
 use regex::{Captures, Regex};
 
-use super::{MatcherError, domain::parse_authority};
-use crate::{NonEmptyStr, Secret};
+use super::{MatcherError, domain::parse_authority, non_empty::NonEmptyStr};
+use crate::Secret;
 
 const NAME: &str = "name";
 const VALUE: &str = "value";
@@ -11,9 +11,8 @@ const DOMAIN: &str = "domain";
 
 /// Compiled regex with `value` and `name` named groups.
 #[derive(Debug)]
-pub struct CompiledRegexMatcher {
-    /// The compiled pattern.
-    pub pattern: Regex,
+pub(super) struct CompiledRegexMatcher {
+    pattern: Regex,
 }
 
 impl CompiledRegexMatcher {

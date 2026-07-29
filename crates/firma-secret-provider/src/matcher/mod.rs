@@ -12,6 +12,7 @@
 mod domain;
 mod error;
 mod json;
+mod non_empty;
 mod regex;
 
 use firma_core::SecretMatcher;
@@ -20,15 +21,19 @@ use http::uri::Authority;
 use crate::Secret;
 
 pub use error::MatcherError;
-pub use json::CompiledJsonMatcher;
-pub use regex::CompiledRegexMatcher;
+
+use json::CompiledJsonMatcher;
+use regex::CompiledRegexMatcher;
 
 /// A compiled, ready-to-run secret matcher.
 #[derive(Debug)]
-pub enum CompiledMatcher {
-    /// Extracts secrets via `JSONPath` value/name selectors over a JSON body.
+pub struct CompiledMatcher {
+    kind: MatcherKind,
+}
+
+#[derive(Debug)]
+enum MatcherKind {
     Json(CompiledJsonMatcher),
-    /// Extracts secrets via a regex with `value` and `name` named groups over raw text.
     Regex(CompiledRegexMatcher),
 }
 
@@ -54,11 +59,12 @@ impl CompiledMatcher {
                 item_selector.as_ref(),
                 domain_selector.as_ref(),
             )
-            .map(Self::Json),
+            .map(MatcherKind::Json),
             SecretMatcher::Regex { pattern } => {
-                CompiledRegexMatcher::compile(pattern).map(Self::Regex)
+                CompiledRegexMatcher::compile(pattern).map(MatcherKind::Regex)
             }
         }
+        .map(|kind| Self { kind })
     }
 
     /// Extract secrets from `output` and return it rewritten with placeholders.
@@ -83,9 +89,9 @@ impl CompiledMatcher {
         output: &[u8],
         mint: &mut impl FnMut(&str, Secret, Option<&Authority>, Option<&str>) -> String,
     ) -> Result<Vec<u8>, MatcherError> {
-        match self {
-            Self::Json(matcher) => matcher.rewrite(output, mint),
-            Self::Regex(matcher) => matcher.rewrite(output, mint),
+        match &self.kind {
+            MatcherKind::Json(matcher) => matcher.rewrite(output, mint),
+            MatcherKind::Regex(matcher) => matcher.rewrite(output, mint),
         }
     }
 }

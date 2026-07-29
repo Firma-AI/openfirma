@@ -3,12 +3,12 @@ use http::uri::Authority;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
-use super::{MatcherError, domain::parse_authority};
-use crate::{NonEmptyStr, Secret};
+use super::{MatcherError, domain::parse_authority, non_empty::NonEmptyStr};
+use crate::Secret;
 
 /// Compiled record-relative `JSONPath` selectors.
 #[derive(Debug)]
-pub struct CompiledJsonMatcher {
+pub(super) struct CompiledJsonMatcher {
     record: JsonPath,
     value: JsonPath,
     name: JsonPath,
