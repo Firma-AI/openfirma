@@ -23,6 +23,12 @@
 //! is omitted (the socket file's filesystem permissions are the primary
 //! access control).
 //!
+//! The same-UID peer check cannot distinguish the sandboxed agent (which runs
+//! as the Sidecar's UID and can reach the socket) from the operator, so
+//! management commands (`local.exec.approve` / `local.exec.revoke`) additionally
+//! require an operator management token (see [`super::handler::RedactedManagementToken`]).
+//! Without a configured token, management commands are rejected fail-closed.
+//!
 //! # Lifecycle
 //!
 //! The endpoint removes any stale socket file before binding and removes it
@@ -374,7 +380,11 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::local_exec::handler::{DefaultAction, LocalExecDecision, LocalExecHandlerConfig};
+    use crate::local_exec::handler::{
+        DefaultAction, LocalExecDecision, LocalExecHandlerConfig, RedactedManagementToken,
+    };
+
+    const MGMT_TOKEN: &str = "endpoint-test-mgmt-token";
 
     async fn start_endpoint(
         tmp: &tempfile::TempDir,
@@ -386,6 +396,7 @@ mod tests {
             expected_sandbox_id: None,
             token_ttl: Duration::from_mins(1),
             retry_after_ms: 500,
+            management_token: Some(RedactedManagementToken::new(MGMT_TOKEN.to_string())),
         };
         let handler = LocalExecHandler::new(config);
         let endpoint = LocalExecEndpoint::new(socket_path.clone(), handler);
@@ -450,6 +461,14 @@ mod tests {
         }
     }
 
+    fn mgmt(action: &str, token_id: &str) -> LocalExecManagementRequest {
+        LocalExecManagementRequest {
+            action: action.to_string(),
+            token_id: token_id.to_string(),
+            management_token: Some(MGMT_TOKEN.to_string()),
+        }
+    }
+
     #[tokio::test]
     async fn endpoint_allow_policy() {
         let tmp = tempfile::tempdir().unwrap();
@@ -489,10 +508,7 @@ mod tests {
         );
 
         // Operator approves via management command.
-        let approve = LocalExecManagementRequest {
-            action: "local.exec.approve".to_string(),
-            token_id: token.clone(),
-        };
+        let approve = mgmt("local.exec.approve", &token);
         let mgmt_resp = send_management(&path, &approve).await;
         assert_eq!(mgmt_resp.outcome, ManagementOutcome::Ok);
 
@@ -516,10 +532,7 @@ mod tests {
         let token = pending.approval_token.unwrap();
 
         // Operator revokes.
-        let revoke = LocalExecManagementRequest {
-            action: "local.exec.revoke".to_string(),
-            token_id: token.clone(),
-        };
+        let revoke = mgmt("local.exec.revoke", &token);
         let mgmt_resp = send_management(&path, &revoke).await;
         assert_eq!(mgmt_resp.outcome, ManagementOutcome::Ok);
 
@@ -529,6 +542,51 @@ mod tests {
         let denied = send_governance(&path, &retry).await;
         assert_eq!(denied.decision, LocalExecDecision::Deny);
         assert!(denied.reason.unwrap_or_default().contains("revoked"));
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn endpoint_management_rejects_missing_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, cancel) = start_endpoint(&tmp, DefaultAction::PendingHitl).await;
+
+        let pending = send_governance(&path, &base_request()).await;
+        let token = pending.approval_token.unwrap();
+
+        // A same-UID process (e.g. the sandboxed agent) tries to self-approve
+        // without the operator management token — must be rejected.
+        let mut approve = mgmt("local.exec.approve", &token);
+        approve.management_token = None;
+        let resp = send_management(&path, &approve).await;
+        assert_eq!(resp.outcome, ManagementOutcome::Unauthorized);
+
+        // The token is still pending: the failed self-approve did not release it.
+        let mut retry = base_request();
+        retry.approval_token = Some(token.clone());
+        let still_pending = send_governance(&path, &retry).await;
+        assert_eq!(still_pending.decision, LocalExecDecision::PendingHitl);
+
+        // The operator, with the token, can still approve.
+        let approve = mgmt("local.exec.approve", &token);
+        let resp = send_management(&path, &approve).await;
+        assert_eq!(resp.outcome, ManagementOutcome::Ok);
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn endpoint_management_rejects_wrong_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, cancel) = start_endpoint(&tmp, DefaultAction::PendingHitl).await;
+
+        let pending = send_governance(&path, &base_request()).await;
+        let token = pending.approval_token.unwrap();
+
+        let mut approve = mgmt("local.exec.approve", &token);
+        approve.management_token = Some("wrong-token".to_string());
+        let resp = send_management(&path, &approve).await;
+        assert_eq!(resp.outcome, ManagementOutcome::Unauthorized);
 
         cancel.cancel();
     }

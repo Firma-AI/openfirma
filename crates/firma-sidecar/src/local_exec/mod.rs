@@ -24,6 +24,16 @@
 //! - [`endpoint`] — Async UDS listener. Binds the socket, accepts connections,
 //!   dispatches to the handler (governance or management), and manages the
 //!   pruning task lifecycle.
+//!
+//! # Management authentication
+//!
+//! Governance requests (`local.exec`) and management commands
+//! (`local.exec.approve` / `local.exec.revoke`) share the same UDS, and the
+//! sandboxed agent runs as the Sidecar's UID and can reach the socket. To stop
+//! the agent from self-approving its own pending HITL tokens, management
+//! commands require an operator [`handler::RedactedManagementToken`] (configured
+//! via `local_exec.management_token_env` / `management_token_path`, constant-time
+//! compared). When no token is configured, management is disabled fail-closed.
 
 pub mod endpoint;
 pub mod handler;
@@ -33,5 +43,6 @@ pub use self::endpoint::LocalExecEndpoint;
 pub use self::handler::{
     DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig,
     LocalExecManagementRequest, LocalExecManagementResponse, ManagementOutcome,
+    RedactedManagementToken,
 };
 pub use self::token_store::{ApproveResult, RevokeResult, TokenStore};

@@ -355,6 +355,32 @@ Flow references:
 - Local-exec mediator client: `crates/firma-run/src/mediator.rs`
 - Sidecar local-exec endpoint: `crates/firma-sidecar/src/local_exec/endpoint.rs`
 
+### HITL approval requires a management token
+
+When `default_action = "pending_hitl"`, the Sidecar returns a pending decision and an approval token. An operator then releases the held request with `firma token approve <token-id>` (or denies it with `firma token revoke`).
+
+The governance request (`local.exec`) and the management commands (`local.exec.approve` / `local.exec.revoke`) share one Unix domain socket, and the sandboxed agent runs as the same UID as the Sidecar and can reach that socket. To prevent the agent from self-approving its own pending tokens, **management commands require an operator management token** that the agent cannot read. Configure exactly one source on the Sidecar:
+
+```toml
+[sidecar.local_exec]
+socket_path = "/run/firma/local-exec.sock"
+default_action = "pending_hitl"
+# Option A: read the token from an environment variable the operator sets.
+management_token_env = "FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN"
+# Option B: read the token from a file the agent cannot read.
+# management_token_path = "/etc/firma/local-exec.mgmt-token"
+```
+
+Then provide the same token to the CLI (the two sides must compare equal):
+
+```bash
+export FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN="$(cat /etc/firma/local-exec.mgmt-token)"
+firma token approve <token-id> --socket /run/firma/local-exec.sock
+# or: firma token approve <token-id> --management-token-path /etc/firma/local-exec.mgmt-token
+```
+
+Without a management token configured, the Sidecar starts but **rejects every management command fail-closed** (and logs a warning under `pending_hitl`). A request missing or mismatching the token gets `outcome: "unauthorized"`. The token is constant-time compared and redacted in logs.
+
 ## Step 5: Use the right capability
 
 For Stage 1 to allow the call, the Sidecar must have a capability matching `(session_id, action_class, resource)`. Two options:

@@ -22,6 +22,7 @@
 //! All deny paths include a human-readable `reason` string so operators can
 //! diagnose why a launch was blocked.
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,6 +33,59 @@ use sha2::Digest as _;
 use super::token_store::{
     ApproveResult, InMemoryTokenStore, RevokeResult, TokenStore, TokenValidationResult,
 };
+
+// ---------------------------------------------------------------------------
+// Management token (operator authentication for approve/revoke)
+// ---------------------------------------------------------------------------
+
+/// Operator credential that must accompany every management command
+/// (`local.exec.approve` / `local.exec.revoke`).
+///
+/// The local-exec governance endpoint and its management channel share one
+/// Unix domain socket, so filesystem permissions and the same-UID peer check
+/// cannot distinguish the sandboxed agent (which runs as the sidecar's UID and
+/// can reach the socket) from the operator. Without a management token the
+/// agent can self-approve its own pending HITL tokens, defeating the
+/// human-in-the-loop control. The management token closes that gap: it is
+/// resolved from the operator's environment or a file the agent cannot read
+/// and compared in constant time. When no token is configured, management
+/// commands are rejected fail-closed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactedManagementToken(String);
+
+impl RedactedManagementToken {
+    /// Wrap a plaintext management token.
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Expose the plaintext secret for comparison only.
+    #[must_use]
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for RedactedManagementToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RedactedManagementToken(...)")
+    }
+}
+
+/// Constant-time comparison so a management-token mismatch does not leak
+/// timing information. Different lengths still short-circuit (the length is
+/// not secret for a credential presented over a local UDS).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
 
 // ---------------------------------------------------------------------------
 // Governance wire types
@@ -93,6 +147,11 @@ pub struct LocalExecManagementRequest {
     pub action: String,
     /// Opaque token ID returned in the original `pending_hitl` response.
     pub token_id: String,
+    /// Operator management token. Required when the endpoint is configured with
+    /// `local_exec.management_token_env` / `management_token_path`; the request
+    /// is rejected fail-closed when absent or mismatched.
+    #[serde(default)]
+    pub management_token: Option<String>,
 }
 
 /// Outcome of a management operation, serialized as a `snake_case` string.
@@ -105,6 +164,9 @@ pub enum ManagementOutcome {
     AlreadyRevoked,
     Expired,
     UnsupportedAction,
+    /// The operator management token was absent, mismatched, or no token is
+    /// configured on the endpoint (management is disabled fail-closed).
+    Unauthorized,
 }
 
 /// JSON response sent back to the operator after a management command.
@@ -144,6 +206,10 @@ pub struct LocalExecHandlerConfig {
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (milliseconds).
     pub retry_after_ms: u64,
+    /// Operator credential required on every management command. When `None`,
+    /// management commands are rejected fail-closed (the agent could otherwise
+    /// self-approve its own HITL tokens over the shared socket).
+    pub management_token: Option<RedactedManagementToken>,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,10 +286,57 @@ impl LocalExecHandler {
     }
 
     /// Process an operator management command (approve or revoke).
+    ///
+    /// Every management command must present the configured management token
+    /// (constant-time compared). When no token is configured on the endpoint,
+    /// management is disabled fail-closed so the sandboxed agent — which shares
+    /// the sidecar's UID and can reach the same socket — cannot self-approve its
+    /// own pending HITL tokens.
     pub fn decide_management(
         &self,
         request: &LocalExecManagementRequest,
     ) -> LocalExecManagementResponse {
+        if let Some(expected) = &self.config.management_token {
+            match request.management_token.as_deref() {
+                Some(presented) if constant_time_eq(presented.as_bytes(), expected.expose_secret().as_bytes()) => {}
+                Some(_) => {
+                    tracing::warn!(
+                        action = %request.action,
+                        token_id = %request.token_id,
+                        "local-exec management: invalid management token"
+                    );
+                    return LocalExecManagementResponse {
+                        outcome: ManagementOutcome::Unauthorized,
+                        reason: Some("invalid management token".to_string()),
+                    };
+                }
+                None => {
+                    tracing::warn!(
+                        action = %request.action,
+                        token_id = %request.token_id,
+                        "local-exec management: missing management token"
+                    );
+                    return LocalExecManagementResponse {
+                        outcome: ManagementOutcome::Unauthorized,
+                        reason: Some("missing management token".to_string()),
+                    };
+                }
+            }
+        } else {
+            tracing::warn!(
+                action = %request.action,
+                token_id = %request.token_id,
+                "local-exec management rejected: no management token configured (management disabled)"
+            );
+            return LocalExecManagementResponse {
+                outcome: ManagementOutcome::Unauthorized,
+                reason: Some(
+                    "management token not configured; set local_exec.management_token_env or management_token_path"
+                        .to_string(),
+                ),
+            };
+        }
+
         match request.action.as_str() {
             "local.exec.approve" => {
                 let result = self.token_store.approve(&request.token_id);
@@ -481,6 +594,15 @@ mod tests {
             expected_sandbox_id: None,
             token_ttl: Duration::from_mins(1),
             retry_after_ms: 500,
+            management_token: Some(RedactedManagementToken::new("test-mgmt-token".to_string())),
+        }
+    }
+
+    fn mgmt_request(action: &str, token_id: &str) -> LocalExecManagementRequest {
+        LocalExecManagementRequest {
+            action: action.to_string(),
+            token_id: token_id.to_string(),
+            management_token: Some("test-mgmt-token".to_string()),
         }
     }
 
@@ -625,10 +747,7 @@ mod tests {
         let pending = h.decide(&request());
         let token = pending.approval_token.unwrap();
 
-        let mgmt = LocalExecManagementRequest {
-            action: "local.exec.approve".to_string(),
-            token_id: token,
-        };
+        let mgmt = mgmt_request("local.exec.approve", &token);
         let resp = h.decide_management(&mgmt);
         assert_eq!(resp.outcome, ManagementOutcome::Ok);
     }
@@ -639,10 +758,7 @@ mod tests {
         let pending = h.decide(&request());
         let token = pending.approval_token.unwrap();
 
-        let mgmt = LocalExecManagementRequest {
-            action: "local.exec.revoke".to_string(),
-            token_id: token,
-        };
+        let mgmt = mgmt_request("local.exec.revoke", &token);
         let resp = h.decide_management(&mgmt);
         assert_eq!(resp.outcome, ManagementOutcome::Ok);
     }
@@ -650,10 +766,7 @@ mod tests {
     #[test]
     fn management_approve_not_found() {
         let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
-        let mgmt = LocalExecManagementRequest {
-            action: "local.exec.approve".to_string(),
-            token_id: "no-such-token".to_string(),
-        };
+        let mgmt = mgmt_request("local.exec.approve", "no-such-token");
         assert_eq!(
             h.decide_management(&mgmt).outcome,
             ManagementOutcome::NotFound
@@ -663,13 +776,61 @@ mod tests {
     #[test]
     fn management_unsupported_action() {
         let h = LocalExecHandler::new(config(DefaultAction::Allow));
-        let mgmt = LocalExecManagementRequest {
-            action: "local.exec.delete".to_string(),
-            token_id: "tok".to_string(),
-        };
+        let mgmt = mgmt_request("local.exec.delete", "tok");
         assert_eq!(
             h.decide_management(&mgmt).outcome,
             ManagementOutcome::UnsupportedAction
         );
+    }
+
+    #[test]
+    fn management_missing_token_is_unauthorized() {
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
+        let pending = h.decide(&request());
+        let token = pending.approval_token.unwrap();
+
+        let mut mgmt = mgmt_request("local.exec.approve", &token);
+        mgmt.management_token = None;
+        let resp = h.decide_management(&mgmt);
+        assert_eq!(resp.outcome, ManagementOutcome::Unauthorized);
+    }
+
+    #[test]
+    fn management_wrong_token_is_unauthorized() {
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
+        let pending = h.decide(&request());
+        let token = pending.approval_token.unwrap();
+
+        let mut mgmt = mgmt_request("local.exec.approve", &token);
+        mgmt.management_token = Some("wrong-token".to_string());
+        let resp = h.decide_management(&mgmt);
+        assert_eq!(resp.outcome, ManagementOutcome::Unauthorized);
+    }
+
+    #[test]
+    fn management_disabled_when_no_token_configured() {
+        let mut cfg = config(DefaultAction::PendingHitl);
+        cfg.management_token = None;
+        let h = LocalExecHandler::new(cfg);
+        let pending = h.decide(&request());
+        let token = pending.approval_token.unwrap();
+
+        let mut mgmt = mgmt_request("local.exec.approve", &token);
+        mgmt.management_token = None;
+        let resp = h.decide_management(&mgmt);
+        assert_eq!(resp.outcome, ManagementOutcome::Unauthorized);
+        assert!(
+            resp.reason
+                .unwrap_or_default()
+                .contains("management token not configured")
+        );
+    }
+
+    #[test]
+    fn redacted_management_token_debug_redacts() {
+        let token = RedactedManagementToken::new("secret-value".to_string());
+        let rendered = format!("{token:?}");
+        assert!(rendered.contains("RedactedManagementToken"));
+        assert!(!rendered.contains("secret-value"));
     }
 }

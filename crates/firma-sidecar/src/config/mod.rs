@@ -259,6 +259,9 @@ impl SidecarConfig {
         for p in &mut self.capability_seed.paths {
             rebase(p);
         }
+        if let Some(local_exec) = self.local_exec.as_mut() {
+            local_exec.rebase_defaults(config_dir);
+        }
         self.enforcement.rebase_defaults(config_dir);
     }
 }
@@ -914,6 +917,22 @@ pub struct LocalExecConfig {
     /// responses (milliseconds, default: 500).
     #[serde(default = "LocalExecConfig::default_retry_after_ms")]
     pub retry_after_ms: u64,
+
+    /// Environment variable holding the management token that operators must
+    /// present on `local.exec.approve` / `local.exec.revoke` commands. Required
+    /// to use the HITL approval flow: without it management commands are
+    /// rejected fail-closed, so the sandboxed agent — which shares the
+    /// sidecar's UID — cannot self-approve its own pending tokens.
+    ///
+    /// Mutually exclusive with `management_token_path`.
+    #[serde(default)]
+    pub management_token_env: Option<String>,
+
+    /// File containing the management token (read once at startup). Mutually
+    /// exclusive with `management_token_env`. Relative paths are rebased
+    /// against the config directory.
+    #[serde(default)]
+    pub management_token_path: Option<PathBuf>,
 }
 
 impl LocalExecConfig {
@@ -947,7 +966,39 @@ impl LocalExecConfig {
         if self.retry_after_ms == 0 {
             return Err("retry_after_ms must be > 0".to_string());
         }
+        let has_env = self
+            .management_token_env
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty());
+        let has_path = self
+            .management_token_path
+            .as_deref()
+            .is_some_and(|p| !p.as_os_str().is_empty());
+        if has_env && has_path {
+            return Err(
+                "management_token_env and management_token_path are mutually exclusive".to_string(),
+            );
+        }
+        if let Some(path) = self.management_token_path.as_deref()
+            && !path.as_os_str().is_empty()
+            && !path.is_absolute()
+        {
+            return Err(format!(
+                "management_token_path must be absolute, got: {}",
+                path.display()
+            ));
+        }
         Ok(())
+    }
+
+    /// Rebase a relative `management_token_path` against the config directory.
+    pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
+        if let Some(path) = self.management_token_path.as_mut()
+            && !path.as_os_str().is_empty()
+            && path.is_relative()
+        {
+            *path = config_dir.join(&*path);
+        }
     }
 }
 
@@ -1719,6 +1770,89 @@ drain_timeout_secs = 10
         assert_eq!(
             config.interceptor.socket_path.as_deref(),
             Some(std::path::Path::new("/tmp/firma.sock"))
+        );
+    }
+
+    fn local_exec_valid() -> LocalExecConfig {
+        LocalExecConfig {
+            socket_path: PathBuf::from("/run/firma/local-exec.sock"),
+            default_action: crate::local_exec::handler::DefaultAction::PendingHitl,
+            token_ttl_secs: 300,
+            retry_after_ms: 500,
+            management_token_env: None,
+            management_token_path: None,
+        }
+    }
+
+    #[test]
+    fn local_exec_management_token_sources_mutually_exclusive() {
+        let mut config = local_exec_valid();
+        config.management_token_env = Some("FIRMA_MGMT".to_string());
+        config.management_token_path = Some(PathBuf::from("/etc/firma/mgmt.token"));
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("mutually exclusive"),
+            "expected mutually-exclusive error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn local_exec_management_token_path_must_be_absolute() {
+        let mut config = local_exec_valid();
+        config.management_token_path = Some(PathBuf::from("mgmt.token"));
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("management_token_path must be absolute"),
+            "expected absolute-path error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn local_exec_management_token_env_only_is_valid() {
+        let mut config = local_exec_valid();
+        config.management_token_env = Some("FIRMA_MGMT".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn local_exec_no_management_token_is_valid() {
+        // No token configured is a valid (management-disabled) state; the
+        // handler/startup enforce fail-closed, not config validation.
+        let config = local_exec_valid();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn local_exec_rebase_rewrites_relative_management_token_path() {
+        let mut config = local_exec_valid();
+        config.management_token_path = Some(PathBuf::from("secrets/mgmt.token"));
+        config.rebase_defaults(std::path::Path::new("/etc/firma"));
+        assert_eq!(
+            config.management_token_path.as_deref(),
+            Some(std::path::Path::new("/etc/firma/secrets/mgmt.token"))
+        );
+    }
+
+    #[test]
+    fn sidecar_config_rebases_local_exec_management_token_path() {
+        let mut config = SidecarConfig {
+            local_exec: Some(local_exec_valid()),
+            ..SidecarConfig::default()
+        };
+        config
+            .local_exec
+            .as_mut()
+            .unwrap()
+            .management_token_path = Some(PathBuf::from("mgmt.token"));
+        config.rebase_defaults(std::path::Path::new("/cfg"));
+        assert_eq!(
+            config
+                .local_exec
+                .as_ref()
+                .unwrap()
+                .management_token_path
+                .as_deref(),
+            Some(std::path::Path::new("/cfg/mgmt.token"))
         );
     }
 }
