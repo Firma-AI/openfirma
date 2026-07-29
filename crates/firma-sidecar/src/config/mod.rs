@@ -1774,8 +1774,15 @@ drain_timeout_secs = 10
     }
 
     fn local_exec_valid() -> LocalExecConfig {
+        // `socket_path` must be absolute on every target; a Unix-only path like
+        // `/run/...` is not absolute on Windows and would trip validation before
+        // the management-token checks these tests exercise.
+        #[cfg(unix)]
+        let socket_path = PathBuf::from("/run/firma/local-exec.sock");
+        #[cfg(not(unix))]
+        let socket_path = PathBuf::from("C:\\firma\\local-exec.sock");
         LocalExecConfig {
-            socket_path: PathBuf::from("/run/firma/local-exec.sock"),
+            socket_path,
             default_action: crate::local_exec::handler::DefaultAction::PendingHitl,
             token_ttl_secs: 300,
             retry_after_ms: 500,
@@ -1788,7 +1795,14 @@ drain_timeout_secs = 10
     fn local_exec_management_token_sources_mutually_exclusive() {
         let mut config = local_exec_valid();
         config.management_token_env = Some("FIRMA_MGMT".to_string());
-        config.management_token_path = Some(PathBuf::from("/etc/firma/mgmt.token"));
+        #[cfg(unix)]
+        {
+            config.management_token_path = Some(PathBuf::from("/etc/firma/mgmt.token"));
+        }
+        #[cfg(not(unix))]
+        {
+            config.management_token_path = Some(PathBuf::from("C:\\etc\\firma\\mgmt.token"));
+        }
         let err = config.validate().unwrap_err();
         assert!(
             err.contains("mutually exclusive"),
@@ -1826,11 +1840,22 @@ drain_timeout_secs = 10
     fn local_exec_rebase_rewrites_relative_management_token_path() {
         let mut config = local_exec_valid();
         config.management_token_path = Some(PathBuf::from("secrets/mgmt.token"));
-        config.rebase_defaults(std::path::Path::new("/etc/firma"));
-        assert_eq!(
-            config.management_token_path.as_deref(),
-            Some(std::path::Path::new("/etc/firma/secrets/mgmt.token"))
-        );
+        #[cfg(unix)]
+        {
+            config.rebase_defaults(std::path::Path::new("/etc/firma"));
+            assert_eq!(
+                config.management_token_path.as_deref(),
+                Some(std::path::Path::new("/etc/firma/secrets/mgmt.token"))
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            config.rebase_defaults(std::path::Path::new("C:\\etc\\firma"));
+            assert_eq!(
+                config.management_token_path.as_deref(),
+                Some(std::path::Path::new("C:\\etc\\firma\\secrets\\mgmt.token"))
+            );
+        }
     }
 
     #[test]
@@ -1839,20 +1864,33 @@ drain_timeout_secs = 10
             local_exec: Some(local_exec_valid()),
             ..SidecarConfig::default()
         };
-        config
-            .local_exec
-            .as_mut()
-            .unwrap()
-            .management_token_path = Some(PathBuf::from("mgmt.token"));
-        config.rebase_defaults(std::path::Path::new("/cfg"));
-        assert_eq!(
-            config
-                .local_exec
-                .as_ref()
-                .unwrap()
-                .management_token_path
-                .as_deref(),
-            Some(std::path::Path::new("/cfg/mgmt.token"))
-        );
+        config.local_exec.as_mut().unwrap().management_token_path =
+            Some(PathBuf::from("mgmt.token"));
+        #[cfg(unix)]
+        {
+            config.rebase_defaults(std::path::Path::new("/cfg"));
+            assert_eq!(
+                config
+                    .local_exec
+                    .as_ref()
+                    .unwrap()
+                    .management_token_path
+                    .as_deref(),
+                Some(std::path::Path::new("/cfg/mgmt.token"))
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            config.rebase_defaults(std::path::Path::new("C:\\cfg"));
+            assert_eq!(
+                config
+                    .local_exec
+                    .as_ref()
+                    .unwrap()
+                    .management_token_path
+                    .as_deref(),
+                Some(std::path::Path::new("C:\\cfg\\mgmt.token"))
+            );
+        }
     }
 }

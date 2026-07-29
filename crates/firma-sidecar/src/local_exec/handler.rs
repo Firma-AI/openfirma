@@ -297,30 +297,22 @@ impl LocalExecHandler {
         request: &LocalExecManagementRequest,
     ) -> LocalExecManagementResponse {
         if let Some(expected) = &self.config.management_token {
-            match request.management_token.as_deref() {
-                Some(presented) if constant_time_eq(presented.as_bytes(), expected.expose_secret().as_bytes()) => {}
-                Some(_) => {
-                    tracing::warn!(
-                        action = %request.action,
-                        token_id = %request.token_id,
-                        "local-exec management: invalid management token"
-                    );
-                    return LocalExecManagementResponse {
-                        outcome: ManagementOutcome::Unauthorized,
-                        reason: Some("invalid management token".to_string()),
-                    };
-                }
-                None => {
-                    tracing::warn!(
-                        action = %request.action,
-                        token_id = %request.token_id,
-                        "local-exec management: missing management token"
-                    );
-                    return LocalExecManagementResponse {
-                        outcome: ManagementOutcome::Unauthorized,
-                        reason: Some("missing management token".to_string()),
-                    };
-                }
+            let presented = request.management_token.as_deref();
+            if !matches!(presented, Some(t) if constant_time_eq(t.as_bytes(), expected.expose_secret().as_bytes()))
+            {
+                tracing::warn!(
+                    action = %request.action,
+                    token_id = %request.token_id,
+                    "local-exec management: management token missing or invalid"
+                );
+                return LocalExecManagementResponse {
+                    outcome: ManagementOutcome::Unauthorized,
+                    reason: Some(if presented.is_some() {
+                        "invalid management token".to_string()
+                    } else {
+                        "missing management token".to_string()
+                    }),
+                };
             }
         } else {
             tracing::warn!(

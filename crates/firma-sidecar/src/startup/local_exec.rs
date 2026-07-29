@@ -109,9 +109,7 @@ fn resolve_management_token(
             .map_err(|_| anyhow::anyhow!("management_token_env {env_name} is not set"))?;
         let token = trim_trailing_newlines(value);
         if token.is_empty() {
-            return Err(anyhow::anyhow!(
-                "management_token_env {env_name} is empty"
-            ));
+            return Err(anyhow::anyhow!("management_token_env {env_name} is empty"));
         }
         return Ok(Some(RedactedManagementToken::new(token)));
     }

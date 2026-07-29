@@ -128,9 +128,7 @@ fn resolve_management_token(args: &TokenActionArgs) -> anyhow::Result<Option<Str
         Ok(value) => {
             let token = trim_trailing_newlines(value);
             if token.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "{MANAGEMENT_TOKEN_ENV} is set but empty"
-                ));
+                return Err(anyhow::anyhow!("{MANAGEMENT_TOKEN_ENV} is set but empty"));
             }
             Ok(Some(token))
         }
