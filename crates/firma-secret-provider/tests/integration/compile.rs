@@ -4,7 +4,7 @@ use crate::support::{json, json_with_metadata, regex, selector};
 use firma_core::SecretJsonSelectorScope;
 
 #[test]
-fn compile_rejects_bad_jsonpath_and_regex() {
+fn compile_rejects_bad_jsonpaths() {
     for matcher in [
         json("$[", "$.value", "$.key"),
         json("$", "$[", "$.key"),
@@ -17,31 +17,45 @@ fn compile_rejects_bad_jsonpath_and_regex() {
             None,
         ),
     ] {
+        let error = CompiledMatcher::compile(&matcher).unwrap_err();
         std::assert_matches!(
-            CompiledMatcher::compile(&matcher),
-            Err(MatcherError::JsonPath { .. })
+            error,
+            MatcherError::JsonPath { path, .. } if path == "$["
         );
     }
-    std::assert_matches!(
-        CompiledMatcher::compile(&regex("(")),
-        Err(MatcherError::Regex(_))
-    );
 }
 
 #[test]
-fn compile_regex_requires_value_and_name_groups() {
+fn compile_rejects_invalid_regex() {
+    let error = CompiledMatcher::compile(&regex("(")).unwrap_err();
+
+    std::assert_matches!(error, MatcherError::Regex(regex::Error::Syntax(_)));
+}
+
+#[test]
+fn compile_regex_requires_value_group() {
+    let error = CompiledMatcher::compile(&regex("(?P<name>.+)")).unwrap_err();
+
     std::assert_matches!(
-        CompiledMatcher::compile(&regex("(?P<name>.+)")),
-        Err(MatcherError::MissingGroup {
+        &error,
+        MatcherError::MissingGroup {
             missing: "value",
-            ..
-        })
+            found,
+        } if found == "name"
     );
+    insta::assert_snapshot!(error.to_string(), @"regex matcher must contain a named `value` capture group, found name");
+}
+
+#[test]
+fn compile_regex_requires_name_group() {
+    let error = CompiledMatcher::compile(&regex("(?P<value>.+)")).unwrap_err();
+
     std::assert_matches!(
-        CompiledMatcher::compile(&regex("(?P<value>.+)")),
-        Err(MatcherError::MissingGroup {
+        &error,
+        MatcherError::MissingGroup {
             missing: "name",
-            ..
-        })
+            found,
+        } if found == "value"
     );
+    insta::assert_snapshot!(error.to_string(), @"regex matcher must contain a named `name` capture group, found value");
 }

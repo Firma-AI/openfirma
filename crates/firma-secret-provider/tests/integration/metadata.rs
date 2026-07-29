@@ -95,13 +95,14 @@ fn record_scoped_singular_metadata_does_not_broadcast() {
         .unwrap_err();
 
     std::assert_matches!(
-        error,
+        &error,
         MatcherError::RecordSelectorMatchCount {
             selector: "item_selector",
             record_index: 1,
             matches: 0
         }
     );
+    insta::assert_snapshot!(error.to_string(), @"json matcher item_selector selected 0 node(s) in record 1; expected exactly one");
     assert!(minted.is_empty());
 }
 
@@ -150,7 +151,8 @@ fn invalid_later_domain_fails_before_minting() {
         )
         .unwrap_err();
 
-    std::assert_matches!(error, MatcherError::NoHostInUri(_));
+    std::assert_matches!(&error, MatcherError::NoHostInUri(uri) if uri == "/hostless");
+    insta::assert_snapshot!(error.to_string(), @"no host uri /hostless");
     assert!(minted.is_empty());
 }
 
@@ -172,10 +174,11 @@ fn document_selector_requires_exactly_one_match() {
         )
         .unwrap_err();
     std::assert_matches!(
-        error,
+        &error,
         MatcherError::DocumentSelectorMatchCount {
             selector: "item_selector",
             matches: 2
         }
     );
+    insta::assert_snapshot!(error.to_string(), @"json matcher item_selector selected 2 document node(s); expected exactly one");
 }

@@ -35,7 +35,8 @@ fn hostless_uri_error_does_not_expose_domain_value() {
         .rewrite(output.as_bytes(), &mut |_, _, _, _| String::new())
         .unwrap_err();
 
-    std::assert_matches!(&error, MatcherError::NoHostInUri(_));
+    std::assert_matches!(&error, MatcherError::NoHostInUri(uri) if uri == "/vault/path");
+    insta::assert_snapshot!(error.to_string(), @"no host uri /vault/path");
     for rendered in [error.to_string(), format!("{error:?}")] {
         assert!(!rendered.contains("super-secret"));
     }
@@ -57,7 +58,10 @@ fn authenticated_uri_error_does_not_expose_domain_value() {
         .rewrite(output.as_bytes(), &mut |_, _, _, _| String::new())
         .unwrap_err();
 
-    std::assert_matches!(&error, MatcherError::InvalidUri { .. });
+    std::assert_matches!(
+        &error,
+        MatcherError::InvalidUri { uri, .. } if uri == "/value/path"
+    );
     for rendered in [error.to_string(), format!("{error:?}")] {
         assert!(!rendered.contains("super-secret"));
     }

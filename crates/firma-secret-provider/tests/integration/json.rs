@@ -60,11 +60,12 @@ fn root_relative_self_selection_rewrites_the_record() {
 #[test]
 fn zero_records_fails_closed() {
     let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
+    let error = compiled
+        .rewrite(br"[]", &mut |_, _, _, _| String::new())
+        .unwrap_err();
 
-    std::assert_matches!(
-        compiled.rewrite(br"[]", &mut |_, _, _, _| String::new()),
-        Err(MatcherError::NoRecords)
-    );
+    std::assert_matches!(&error, MatcherError::NoRecords);
+    insta::assert_snapshot!(error.to_string(), @"json matcher record_path selected no records");
 }
 
 #[test]
@@ -84,13 +85,14 @@ fn missing_record_value_fails_before_minting() {
         .unwrap_err();
 
     std::assert_matches!(
-        error,
+        &error,
         MatcherError::RecordSelectorMatchCount {
             selector: "value_path",
             record_index: 1,
             matches: 0
         }
     );
+    insta::assert_snapshot!(error.to_string(), @"json matcher value_path selected 0 node(s) in record 1; expected exactly one");
     assert!(minted.is_empty());
 }
 
@@ -109,13 +111,14 @@ fn multiple_record_name_matches_fail_before_minting() {
         .unwrap_err();
 
     std::assert_matches!(
-        error,
+        &error,
         MatcherError::RecordSelectorMatchCount {
             selector: "name_path",
             record_index: 1,
             matches: 2
         }
     );
+    insta::assert_snapshot!(error.to_string(), @"json matcher name_path selected 2 node(s) in record 1; expected exactly one");
     assert_eq!(mint_count, 0);
 }
 
@@ -131,8 +134,12 @@ fn json_empty_matches_are_rejected() {
         .unwrap_err();
 
     std::assert_matches!(
-        error,
-        MatcherError::EmptyNode { selector, .. } if selector == "name_path"
+        &error,
+        MatcherError::EmptyNode {
+            selector: "name_path",
+            record_index: 0,
+        }
     );
+    insta::assert_snapshot!(error.to_string(), @"json matcher name_path selected a whitespace string in record 0");
     assert!(minted.is_empty());
 }
