@@ -16,5 +16,8 @@ serde_json_path = { workspace = true }
 thiserror = { workspace = true }
 type-safe-id = { workspace = true }
 
+[dev-dependencies]
+insta = { workspace = true }
+
 [lints]
 workspace = true

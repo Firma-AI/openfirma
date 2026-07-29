@@ -1606,6 +1606,7 @@ dependencies = [
  "either",
  "firma-core",
  "http",
+ "insta",
  "regex",
  "serde_json",
  "serde_json_path",
