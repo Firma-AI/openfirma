@@ -72,7 +72,8 @@ pub enum MatcherError {
         /// Zero-based index of the record selected by `record_path`.
         record_index: usize,
     },
-    /// Re-serializing the rewritten JSON failed.
+    /// Re-serializing the rewritten JSON failed defensively; ordinary
+    /// [`serde_json::Value`] serialization is expected to be infallible.
     #[error("failed to serialize rewritten output: {0}")]
     Serialize(#[source] serde_json::Error),
     /// Found Uri is not valid.

@@ -11,12 +11,18 @@ fn secret_does_not_leak_contents() {
         .rewrite(
             br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB"}]"#,
             &mut |_, value, _, _| {
-                secrets.push(value.to_string());
+                secrets.push((value.to_string(), format!("{value:?}")));
                 String::new()
             },
         )
         .unwrap();
-    assert_eq!(secrets, ["<secret>", "<secret>"]);
+    assert_eq!(
+        secrets,
+        [
+            ("<secret>".to_owned(), "<secret>".to_owned()),
+            ("<secret>".to_owned(), "<secret>".to_owned())
+        ]
+    );
 }
 
 #[test]

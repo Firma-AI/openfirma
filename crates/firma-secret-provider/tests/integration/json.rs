@@ -24,14 +24,17 @@ fn relative_paths_rewrite_absolute_escaped_locations() {
     let output: Value = serde_json::from_slice(&output).unwrap();
 
     assert_eq!(
-        output["groups"]["a/b~c"][0]["credentials"]["v/~"],
-        "P:first"
+        output,
+        serde_json::json!({
+            "groups": {
+                "a/b~c": [
+                    {"credentials": {"key": "first", "v/~": "P:first"}},
+                    {"credentials": {"key": "second", "v/~": "P:second"}}
+                ]
+            },
+            "credentials": {"v/~": "ROOT"}
+        })
     );
-    assert_eq!(
-        output["groups"]["a/b~c"][1]["credentials"]["v/~"],
-        "P:second"
-    );
-    assert_eq!(output["credentials"]["v/~"], "ROOT");
     assert_eq!(
         pairs,
         [
@@ -142,4 +145,39 @@ fn json_empty_matches_are_rejected() {
     );
     insta::assert_snapshot!(error.to_string(), @"json matcher name_path selected a whitespace string in record 0");
     assert!(minted.is_empty());
+}
+
+#[test]
+fn invalid_json_is_classified_with_its_location() {
+    let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
+    let error = compiled
+        .rewrite(br#"{"key":"value""#, &mut |_, _, _, _| String::new())
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::Json(source)
+            if source.classify() == serde_json::error::Category::Eof
+                && source.line() == 1
+                && source.column() == 14
+    );
+}
+
+#[test]
+fn non_string_value_is_rejected() {
+    let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
+    let error = compiled
+        .rewrite(br#"[{"key":"token","value":42}]"#, &mut |_, _, _, _| {
+            String::new()
+        })
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::NonStringNode {
+            selector: "value_path",
+            record_index: 0,
+        }
+    );
+    insta::assert_snapshot!(error.to_string(), @"json matcher value_path selected a non-string node in record 0");
 }

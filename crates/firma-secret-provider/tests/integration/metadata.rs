@@ -182,3 +182,30 @@ fn document_selector_requires_exactly_one_match() {
     );
     insta::assert_snapshot!(error.to_string(), @"json matcher item_selector selected 2 document node(s); expected exactly one");
 }
+
+#[test]
+fn document_selector_rejects_zero_matches() {
+    let matcher = json_with_metadata(
+        "$.fields[*]",
+        "$.value",
+        "$.key",
+        Some(selector("$.title", SecretJsonSelectorScope::Document)),
+        None,
+    );
+    let compiled = CompiledMatcher::compile(&matcher).unwrap();
+    let error = compiled
+        .rewrite(
+            br#"{"fields":[{"key":"a","value":"AAA"}]}"#,
+            &mut |_, _, _, _| String::new(),
+        )
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::DocumentSelectorMatchCount {
+            selector: "item_selector",
+            matches: 0,
+        }
+    );
+    insta::assert_snapshot!(error.to_string(), @"json matcher item_selector selected 0 document node(s); expected exactly one");
+}
