@@ -1,6 +1,8 @@
 //! Event pump for the Policy Control terminal UI.
 
-use std::{collections::VecDeque, path::PathBuf, process::ExitCode, sync::mpsc::Receiver};
+use std::{
+    collections::VecDeque, path::PathBuf, process::ExitCode, sync::mpsc::Receiver, time::Duration,
+};
 
 use crate::control::{
     ControlOptions,
@@ -8,8 +10,12 @@ use crate::control::{
     app::App,
     command::ControlEffect,
     event::{self, Event, Sources},
+    rewrite::PolicyRewriteHandler,
+    state::AuditRow,
     terminal::Tui,
 };
+
+const EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Runs the Policy Control event loop in a real terminal session.
 ///
@@ -46,6 +52,8 @@ pub enum EventKind {
     Mouse,
     /// Terminal resize was consumed.
     Resize,
+    /// A policy rewrite notification was consumed.
+    Rewrite,
 }
 
 impl EventKind {
@@ -55,6 +63,7 @@ impl EventKind {
             Event::Key(_) => Some(Self::Input),
             Event::Mouse => Some(Self::Mouse),
             Event::Resize => Some(Self::Resize),
+            Event::PolicyRewrite(_) => Some(Self::Rewrite),
             Event::Tick => None,
         }
     }
@@ -80,11 +89,24 @@ impl<'a> HeadlessRunner<'a> {
     #[must_use]
     pub fn with_audit_rows(
         policy_dir: Option<PathBuf>,
-        audit_rows: Option<&'a Receiver<crate::control::AuditRow>>,
+        audit_rows: Option<&'a Receiver<AuditRow>>,
     ) -> Self {
         Self {
             app: App::new(policy_dir, audit_rows.is_some()),
             sources: Sources::new(audit_rows),
+        }
+    }
+
+    /// Creates a headless runner with an injected rewrite handler.
+    #[must_use]
+    pub fn with_policy_rewrite_handler(
+        policy_dir: Option<PathBuf>,
+        audit_rows: Option<&'a Receiver<AuditRow>>,
+        handler: PolicyRewriteHandler,
+    ) -> Self {
+        Self {
+            app: App::new(policy_dir, audit_rows.is_some()),
+            sources: Sources::with_policy_rewrite_handler(audit_rows, handler),
         }
     }
 
@@ -135,7 +157,7 @@ impl<'a> HeadlessRunner<'a> {
 
     /// Executes command side effects against the headless app.
     pub fn execute_effects(&mut self, effects: Vec<ControlEffect>) {
-        execute_effects(&mut self.app, effects);
+        execute_effects(&mut self.app, &mut self.sources, effects);
         self.sync_status();
     }
 
@@ -169,9 +191,9 @@ impl<'a> Runner<'a> {
 
     fn crank(&mut self) -> anyhow::Result<()> {
         self.draw()?;
-        let event = event::next(&self.sources)?;
+        let event = event::next(&self.sources, EVENT_POLL_TIMEOUT)?;
         let effects = event::handle(&mut self.app, event);
-        execute_effects(&mut self.app, effects);
+        execute_effects(&mut self.app, &mut self.sources, effects);
         Ok(())
     }
 
@@ -185,27 +207,44 @@ impl<'a> Runner<'a> {
     }
 }
 
-fn execute_effects(app: &mut App, effects: Vec<ControlEffect>) {
+fn execute_effects(app: &mut App, sources: &mut Sources<'_>, effects: Vec<ControlEffect>) {
     let mut queue = VecDeque::from(effects);
     while let Some(effect) = queue.pop_front() {
-        queue.extend(execute_effect(app, effect));
+        queue.extend(execute_effect(app, sources, effect));
     }
 }
 
-fn execute_effect(app: &mut App, effect: ControlEffect) -> Vec<ControlEffect> {
+fn execute_effect(
+    app: &mut App,
+    sources: &mut Sources<'_>,
+    effect: ControlEffect,
+) -> Vec<ControlEffect> {
     match effect {
-        ControlEffect::Announce(announcement) => handle_control_announcement(app, announcement),
+        ControlEffect::Announce(announcement) => {
+            handle_control_announcement(app, sources, announcement)
+        }
+        ControlEffect::EnqueuePolicyRewrite(request) => {
+            let _queued = sources.enqueue_policy_rewrite(request);
+            Vec::new()
+        }
     }
 }
 
 fn handle_control_announcement(
     app: &mut App,
+    sources: &mut Sources<'_>,
     announcement: ControlAnnouncement,
 ) -> Vec<ControlEffect> {
     match announcement {
-        ControlAnnouncement::ShutdownRequested => app.request_quit(),
+        ControlAnnouncement::ShutdownRequested => {
+            sources.shutdown_policy_rewrites();
+            sync_status(app, sources);
+            app.request_quit();
+        }
         ControlAnnouncement::FatalError(error) => {
             app.set_policy_error(error);
+            sources.shutdown_policy_rewrites();
+            sync_status(app, sources);
             app.request_quit();
         }
         ControlAnnouncement::QueueDumpRequested | ControlAnnouncement::PolicyReloadRequested => {}
@@ -214,6 +253,9 @@ fn handle_control_announcement(
     Vec::new()
 }
 
-fn sync_status(app: &mut App, _sources: &Sources<'_>) {
-    app.sync_rewrite_queue(0, false);
+fn sync_status(app: &mut App, sources: &Sources<'_>) {
+    app.sync_rewrite_queue(
+        sources.rewrite_queue_len(),
+        sources.rewrite_queue_shutting_down(),
+    );
 }

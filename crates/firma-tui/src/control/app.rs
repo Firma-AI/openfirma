@@ -7,7 +7,8 @@ use crate::control::{
     policies::PolicyStateReader,
     state::{
         AuditFilter, AuditRow, AuditState, AuditViewportMode, ControlRuntimeState, ControlStatus,
-        Pane, PoliciesState, PolicyRow,
+        Pane, PoliciesState, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart,
+        PolicyRow,
     },
 };
 
@@ -33,7 +34,7 @@ impl App {
     /// source state.
     #[must_use]
     pub fn new(policy_dir: Option<PathBuf>, audit_connected: bool) -> Self {
-        Self::with_policy_state_reader(policy_dir, audit_connected, &PolicyStateReader::default())
+        Self::with_policy_state_reader(policy_dir, audit_connected, PolicyStateReader::default())
     }
 
     /// Creates application state with an injected policy-state reader.
@@ -44,7 +45,7 @@ impl App {
     pub fn with_policy_state_reader(
         policy_dir: Option<PathBuf>,
         audit_connected: bool,
-        state_reader: &PolicyStateReader,
+        state_reader: PolicyStateReader,
     ) -> Self {
         let policies = PoliciesState::with_state_reader(policy_dir, state_reader);
         let runtime_state = if policies.error().is_some() {
@@ -269,6 +270,43 @@ impl App {
         for row in rows {
             self.push_audit_row(row);
         }
+    }
+
+    /// Queues a toggle request for the selected policy.
+    ///
+    /// This has no effect outside the policy pane or while the selected policy
+    /// already has a pending rewrite.
+    pub fn request_selected_policy_toggle(&mut self) -> Option<PolicyRewriteRequest> {
+        if self.selected_pane != Pane::Policies {
+            return None;
+        }
+
+        let request = self.policies.request_selected_toggle();
+        self.refresh_runtime_state();
+        request
+    }
+
+    /// Queues toggle requests for policies that need to change.
+    ///
+    /// If every policy is enabled, the requested state is disabled. Otherwise
+    /// the requested state is enabled. Rows already matching the requested
+    /// state are skipped.
+    pub fn request_all_policy_toggle(&mut self) -> Vec<PolicyRewriteRequest> {
+        let requests = self.policies.request_all_toggle();
+        self.refresh_runtime_state();
+        requests
+    }
+
+    /// Applies a completed policy rewrite and refreshes disk-derived state.
+    pub fn finish_policy_rewrite(&mut self, completion: &PolicyRewriteCompletion) {
+        self.policies.finish_rewrite(completion);
+        self.refresh_runtime_state();
+    }
+
+    /// Marks rows from a started policy rewrite as writing.
+    pub fn start_policy_rewrite(&mut self, policy: &PolicyRewriteStart) {
+        self.policies.start_rewrite(policy);
+        self.runtime_state = ControlRuntimeState::Rewriting;
     }
 
     /// Starts a pending `g` prefix for `gg` navigation.

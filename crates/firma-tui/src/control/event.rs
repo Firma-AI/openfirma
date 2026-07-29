@@ -5,33 +5,46 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEventKind};
 
-use crate::control::{app::App, command::ControlEffect, input, state::AuditRow};
+use crate::control::{
+    app::App,
+    command::ControlEffect,
+    input,
+    rewrite::{PolicyRewriteEvent, PolicyRewriteHandler, PolicyRewriteQueue},
+    state::{AuditRow, PolicyRewriteRequest},
+};
 
-const EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(100);
 const AUDIT_BATCH_LIMIT: usize = 64;
-const READY_EVENT_PRIORITY: &[ControlQueueKind] =
-    &[ControlQueueKind::Input, ControlQueueKind::Audit];
-const POST_WAIT_EVENT_PRIORITY: &[ControlQueueKind] =
-    &[ControlQueueKind::Audit, ControlQueueKind::Tick];
+const READY_EVENT_PRIORITY: &[ControlQueueKind] = &[
+    ControlQueueKind::Input,
+    ControlQueueKind::Rewrite,
+    ControlQueueKind::Audit,
+];
+const POST_WAIT_EVENT_PRIORITY: &[ControlQueueKind] = &[
+    ControlQueueKind::Rewrite,
+    ControlQueueKind::Audit,
+    ControlQueueKind::Tick,
+];
 
-/// Event queue checked by the event pump.
-///
-/// Input is checked before audit rows so keyboard handling remains responsive
-/// even when the audit stream is busy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ControlQueueKind {
     Input,
+    Rewrite,
     Audit,
     Tick,
 }
 
-/// Event consumed by the command layer.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Event consumed by the Policy Control runner.
+///
+/// Terminal input, audit rows, rewrite notifications, and ticks all flow
+/// through this single type so command handling can remain deterministic.
+#[derive(Debug)]
 pub enum Event {
-    /// Batch of sidecar audit rows from the monitor audit source.
+    /// Batch of audit rows drained from the monitor-backed audit source.
     Audit(Vec<AuditRow>),
-    /// Pressed key.
+    /// Pressed terminal key.
     Key(KeyCode),
+    /// Policy rewrite worker notification.
+    PolicyRewrite(PolicyRewriteEvent),
     /// Terminal resize notification.
     Resize,
     /// Mouse input, currently ignored by command handling.
@@ -49,14 +62,14 @@ pub trait TerminalEventSource {
     ///
     /// # Errors
     ///
-    /// Returns an error when the terminal event source cannot be polled.
+    /// Returns an error when the terminal source cannot be polled.
     fn poll(&self, timeout: Duration) -> anyhow::Result<bool>;
 
     /// Reads the next terminal event.
     ///
     /// # Errors
     ///
-    /// Returns an error when the next terminal event cannot be read.
+    /// Returns an error when the terminal source cannot read the next event.
     fn read(&self) -> anyhow::Result<Event>;
 }
 
@@ -73,31 +86,76 @@ impl TerminalEventSource for CrosstermTerminalSource {
 }
 
 /// External event sources consumed by the TUI.
+///
+/// Audit rows are borrowed from the CLI service. Policy rewrite events are
+/// owned here so shutdown can stop accepting new rewrites before the runner
+/// exits.
 pub struct Sources<'a> {
     audit_rows: Option<&'a Receiver<AuditRow>>,
+    policy_rewrites: PolicyRewriteQueue,
 }
 
 impl<'a> Sources<'a> {
-    /// Creates sources with an optional audit receiver.
+    /// Creates sources with an optional audit receiver and a default rewrite
+    /// queue.
     #[must_use]
-    pub const fn new(audit_rows: Option<&'a Receiver<AuditRow>>) -> Self {
-        Self { audit_rows }
+    pub fn new(audit_rows: Option<&'a Receiver<AuditRow>>) -> Self {
+        Self::with_policy_rewrite_queue(audit_rows, PolicyRewriteQueue::new())
+    }
+
+    /// Creates sources with an injected rewrite handler for tests.
+    #[must_use]
+    pub fn with_policy_rewrite_handler(
+        audit_rows: Option<&'a Receiver<AuditRow>>,
+        handler: PolicyRewriteHandler,
+    ) -> Self {
+        Self::with_policy_rewrite_queue(audit_rows, PolicyRewriteQueue::with_handler(handler))
+    }
+
+    fn with_policy_rewrite_queue(
+        audit_rows: Option<&'a Receiver<AuditRow>>,
+        policy_rewrites: PolicyRewriteQueue,
+    ) -> Self {
+        Self {
+            audit_rows,
+            policy_rewrites,
+        }
+    }
+
+    /// Enqueues a policy rewrite if the queue is still accepting work.
+    #[must_use]
+    pub fn enqueue_policy_rewrite(&self, request: PolicyRewriteRequest) -> bool {
+        self.policy_rewrites.enqueue(request)
+    }
+
+    /// Number of rewrite requests waiting behind the active worker.
+    #[must_use]
+    pub fn rewrite_queue_len(&self) -> usize {
+        self.policy_rewrites.len()
+    }
+
+    /// Returns true once rewrite shutdown has started.
+    #[must_use]
+    pub fn rewrite_queue_shutting_down(&self) -> bool {
+        self.policy_rewrites.is_shutting_down()
+    }
+
+    /// Stops accepting rewrite requests and lets active work finish.
+    pub fn shutdown_policy_rewrites(&mut self) {
+        self.policy_rewrites.shutdown();
     }
 }
 
 /// Returns the next event from terminal and external sources.
 ///
-/// Input is checked before audit rows. Audit rows are drained in bounded
-/// batches so a noisy audit log cannot starve keyboard input.
-///
-/// # Errors
-///
-/// Returns an error when terminal polling or terminal event reading fails.
-pub fn next(sources: &Sources<'_>) -> anyhow::Result<Event> {
-    next_with_terminal(sources, &CrosstermTerminalSource, EVENT_POLL_TIMEOUT)
+/// Input and rewrite notifications are checked before audit rows. Audit rows
+/// are drained in bounded batches so a noisy audit log cannot starve keyboard
+/// input.
+pub fn next(sources: &Sources<'_>, timeout: Duration) -> anyhow::Result<Event> {
+    next_with_terminal(sources, &CrosstermTerminalSource, timeout)
 }
 
-/// Returns the next control event using an injected terminal source.
+/// Returns the next event using an injected terminal source.
 ///
 /// # Errors
 ///
@@ -143,6 +201,7 @@ fn next_event_from_queue(
 ) -> anyhow::Result<Option<Event>> {
     match queue {
         ControlQueueKind::Input => next_input_event(terminal),
+        ControlQueueKind::Rewrite => Ok(next_rewrite_event(sources)),
         ControlQueueKind::Audit => Ok(next_audit_event(sources)),
         ControlQueueKind::Tick => Ok(Some(Event::Tick)),
     }
@@ -154,6 +213,10 @@ fn next_input_event(terminal: &impl TerminalEventSource) -> anyhow::Result<Optio
     } else {
         Ok(None)
     }
+}
+
+fn next_rewrite_event(sources: &Sources<'_>) -> Option<Event> {
+    sources.policy_rewrites.try_recv().map(Event::PolicyRewrite)
 }
 
 fn next_audit_event(sources: &Sources<'_>) -> Option<Event> {
@@ -185,14 +248,25 @@ fn read_crossterm_event() -> anyhow::Result<Event> {
     }
 }
 
-/// Applies one event to app state and returns runner side effects.
+/// Applies an event to application state and returns runner-owned effects.
 pub fn handle(app: &mut App, event: Event) -> Vec<ControlEffect> {
     match event {
         Event::Audit(rows) => {
             app.push_audit_rows(rows);
             Vec::new()
         }
+        Event::PolicyRewrite(event) => {
+            handle_policy_rewrite_event(app, event);
+            Vec::new()
+        }
         Event::Key(key) => input::handle_key(app, key),
         Event::Mouse | Event::Resize | Event::Tick => Vec::new(),
+    }
+}
+
+fn handle_policy_rewrite_event(app: &mut App, event: PolicyRewriteEvent) {
+    match event {
+        PolicyRewriteEvent::Started(policy) => app.start_policy_rewrite(&policy),
+        PolicyRewriteEvent::Completed(completion) => app.finish_policy_rewrite(&completion),
     }
 }

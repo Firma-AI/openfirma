@@ -1,6 +1,10 @@
 //! Commands and side effects for Policy Control.
 
-use crate::control::{announcement::ControlAnnouncement, app::App, state::AuditFilter};
+use crate::control::{
+    announcement::ControlAnnouncement,
+    app::App,
+    state::{AuditFilter, PolicyRewriteRequest},
+};
 
 /// Selection movement requested by keyboard input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +30,10 @@ pub enum ControlCommand {
     ToggleHelp,
     /// Close the help overlay.
     CloseHelp,
+    /// Toggle the selected policy row.
+    ToggleSelectedPolicy,
+    /// Toggle every policy row that needs to change.
+    ToggleAllPolicies,
     /// Change the audit decision filter.
     SetAuditFilter(AuditFilter),
     /// Move selection in the focused pane.
@@ -40,10 +48,12 @@ pub enum ControlCommand {
 ///
 /// Effects are executed by the runner after command application. This keeps
 /// application state free of terminal and process ownership.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum ControlEffect {
     /// Runtime announcement to handle at the event-loop boundary.
     Announce(ControlAnnouncement),
+    /// Policy rewrite request to enqueue on the serialized worker.
+    EnqueuePolicyRewrite(PolicyRewriteRequest),
 }
 
 impl ControlCommand {
@@ -59,6 +69,16 @@ impl ControlCommand {
                 app.close_help();
                 Vec::new()
             }
+            Self::ToggleSelectedPolicy => app
+                .request_selected_policy_toggle()
+                .map(ControlEffect::EnqueuePolicyRewrite)
+                .into_iter()
+                .collect(),
+            Self::ToggleAllPolicies => app
+                .request_all_policy_toggle()
+                .into_iter()
+                .map(ControlEffect::EnqueuePolicyRewrite)
+                .collect(),
             Self::SetAuditFilter(audit_filter) => {
                 app.set_audit_filter(audit_filter);
                 Vec::new()

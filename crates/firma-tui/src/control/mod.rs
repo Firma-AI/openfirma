@@ -9,6 +9,7 @@ mod event;
 mod input;
 mod policies;
 mod render;
+mod rewrite;
 mod runner;
 mod state;
 mod terminal;
@@ -30,10 +31,12 @@ pub use event::{Event, Sources, TerminalEventSource, next_with_terminal};
 pub use input::{command_for_key, handle_key};
 pub use policies::PolicyStateReader;
 pub use render::render;
+pub use rewrite::{PolicyRewriteEvent, PolicyRewriteHandler};
 pub use runner::{ControlCrankOutcome, EventKind, HeadlessRunner};
 pub use state::{
     AuditDecision, AuditFilter, AuditRow, AuditViewportMode, ControlRuntimeState, ControlStatus,
-    Pane, PolicyRow, PolicyRowStatus,
+    Pane, PolicyKey, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart, PolicyRow,
+    PolicyRowStatus,
 };
 pub use toggle::PolicyState;
 
