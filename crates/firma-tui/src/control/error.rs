@@ -335,7 +335,7 @@ impl ControlError {
 
     /// Creates an external editor failure.
     #[must_use]
-    pub fn editor(path: impl Into<PathBuf>, error: EditorError) -> Self {
+    pub(crate) fn editor(path: impl Into<PathBuf>, error: EditorError) -> Self {
         Self::Editor {
             path: path.into(),
             error: Box::new(error),

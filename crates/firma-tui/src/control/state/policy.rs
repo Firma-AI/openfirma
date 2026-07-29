@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::control::{
-    error::{ControlError, PolicyRewriteError},
+    error::{ControlError, EditorError, PolicyRewriteError},
     policies::{self, PolicyMapping, PolicyStateReader},
     toggle::PolicyState,
 };
@@ -136,6 +136,54 @@ impl PoliciesState {
             .iter()
             .filter(|policy| policy.status.rewrite_pending())
             .count()
+    }
+
+    #[must_use]
+    pub fn selected_file(&self) -> Option<&Path> {
+        self.rows
+            .get(self.selected_index)
+            .map(|policy| policy.file.as_path())
+    }
+
+    /// Reserves the selected policy source for an editor session.
+    ///
+    /// Opening the editor while a rewrite is queued or writing would let two
+    /// independent writers race on the same Cedar files. The editor request is
+    /// therefore rejected until pending rewrites have finished and the rows
+    /// have been refreshed from disk.
+    pub fn request_edit(&mut self) -> bool {
+        if self.any_rewrite_pending() {
+            let Some(file) = self.selected_file().map(Path::to_path_buf) else {
+                return false;
+            };
+
+            self.error = Some(ControlError::editor(file, EditorError::PendingRewrite));
+            return false;
+        }
+
+        self.selected_file().is_some()
+    }
+
+    /// Reloads policy rows from the current policy directory.
+    ///
+    /// Successful reload replaces the discovered row set, clears policy errors,
+    /// and clamps selection if the edited source added or removed rows. Failed
+    /// reload keeps the previous rows visible and records the new error so the
+    /// operator can fix the Cedar file without losing the last usable view.
+    pub fn reload(&mut self) {
+        match load_rows_from_dir(self.dir.clone(), &self.state_reader) {
+            Ok(loaded) => {
+                self.error = None;
+                self.last_error = None;
+                self.dir = loaded.dir;
+                self.rows = loaded.rows;
+                self.clamp_selected_index();
+            }
+            Err(error) => {
+                self.error = Some(error.clone());
+                self.last_error = Some(error);
+            }
+        }
     }
 
     pub fn request_selected_toggle(&mut self) -> Option<PolicyRewriteRequest> {
@@ -291,6 +339,10 @@ impl PoliciesState {
 
     fn any_rewrite_pending(&self) -> bool {
         self.rows.iter().any(|row| row.status.rewrite_pending())
+    }
+
+    fn clamp_selected_index(&mut self) {
+        self.selected_index = self.selected_index.min(self.rows.len().saturating_sub(1));
     }
 
     fn request_toggle(&mut self, index: usize) -> Option<PolicyRewriteRequest> {

@@ -1,5 +1,7 @@
 //! Commands and side effects for Policy Control.
 
+use std::path::PathBuf;
+
 use crate::control::{
     announcement::ControlAnnouncement,
     app::App,
@@ -36,6 +38,8 @@ pub enum ControlCommand {
     ToggleAllPolicies,
     /// Change the audit decision filter.
     SetAuditFilter(AuditFilter),
+    /// Open the selected policy source in an editor.
+    OpenPolicySource,
     /// Move selection in the focused pane.
     MoveSelection(SelectionMovement),
     /// Move focus to the next pane.
@@ -54,6 +58,8 @@ pub enum ControlEffect {
     Announce(ControlAnnouncement),
     /// Policy rewrite request to enqueue on the serialized worker.
     EnqueuePolicyRewrite(PolicyRewriteRequest),
+    /// Open a policy source path in the operator's editor.
+    OpenPolicySource(PathBuf),
 }
 
 impl ControlCommand {
@@ -83,6 +89,7 @@ impl ControlCommand {
                 app.set_audit_filter(audit_filter);
                 Vec::new()
             }
+            Self::OpenPolicySource => open_policy_source_effect(app),
             Self::MoveSelection(movement) => {
                 apply_selection_movement(app, movement);
                 Vec::new()
@@ -96,6 +103,16 @@ impl ControlCommand {
             )],
         }
     }
+}
+
+fn open_policy_source_effect(app: &mut App) -> Vec<ControlEffect> {
+    if !app.request_policy_edit() {
+        return Vec::new();
+    }
+
+    app.selected_policy_file()
+        .map(std::path::Path::to_path_buf)
+        .map_or_else(Vec::new, |path| vec![ControlEffect::OpenPolicySource(path)])
 }
 
 fn apply_selection_movement(app: &mut App, movement: SelectionMovement) {
