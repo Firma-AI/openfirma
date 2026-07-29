@@ -1,8 +1,10 @@
 //! Consistent terminal output formatting for the firma CLI.
 //!
-//! Emits a standardized `[LEVEL]` prefix with tty-aware ANSI color and
-//! 80-column wrapping with hanging indent. Stream selection mirrors Unix
-//! convention: `ok`/`info` go to stdout, `warn`/`err` go to stderr.
+//! Emits a standardized `[LEVEL]` prefix with tty-aware ANSI color. Stream
+//! selection mirrors Unix convention: `ok`/`info` go to stdout, `warn`/`err`
+//! go to stderr. Lines are not hard-wrapped — the terminal soft-wraps long
+//! messages itself, so output stays a single logical line and callers grepping
+//! stdout/stderr aren't broken by injected line breaks.
 //!
 //! Use [`ok`], [`info`], [`warn`], [`err`] from CLI subcommands instead of
 //! raw `println!` / `eprintln!` so warnings, errors, and status lines all
@@ -14,11 +16,10 @@
     reason = "Info is reserved for future callers in the shared CLI output surface"
 )]
 
-use std::io::{IsTerminal as _, Write as _};
+use std::io::Write as _;
 
 use owo_colors::{OwoColorize as _, Stream};
 
-const TERM_WIDTH: usize = 80;
 /// Width of the fixed `[LEVEL]` prefix including its trailing space.
 const PREFIX_WIDTH: usize = 7;
 
@@ -80,16 +81,15 @@ pub fn err(msg: impl AsRef<str>) {
 }
 
 fn emit(level: Level, msg: &str) {
+    let lines = format_lines(level, msg);
     match level {
         Level::Ok | Level::Info => {
-            let lines = format_lines(level, msg, std::io::stdout().is_terminal());
             let mut out = std::io::stdout().lock();
             for line in lines {
                 let _ = writeln!(out, "{line}");
             }
         }
         Level::Warn | Level::Err => {
-            let lines = format_lines(level, msg, std::io::stderr().is_terminal());
             let mut out = std::io::stderr().lock();
             for line in lines {
                 let _ = writeln!(out, "{line}");
@@ -98,58 +98,26 @@ fn emit(level: Level, msg: &str) {
     }
 }
 
-/// Wrap `msg` and prepend the level prefix on the first line.
+/// Prepend the level prefix to the first line of `msg` and align the rest.
 ///
-/// When `is_tty` is true, lines are wrapped at 80 cols with continuation lines
-/// indented by `PREFIX_WIDTH` spaces so they visually align with the start of
-/// the first line's message text. When false (piped / captured), the original
-/// message is preserved verbatim so callers grepping stderr aren't broken by
-/// embedded newlines. Multi-paragraph input (separated by blank lines) is
-/// handled paragraph by paragraph so the blank lines survive.
-fn format_lines(level: Level, msg: &str, is_tty: bool) -> Vec<String> {
+/// No hard-wrapping is applied, so each logical line is left to the terminal's
+/// own soft-wrap and piped/captured output keeps the full phrase on one line
+/// for grepping. Explicit newlines inside `msg` start a continuation line
+/// indented by `PREFIX_WIDTH` spaces so it lines up under the first line's
+/// message text rather than the `[LEVEL]` prefix.
+fn format_lines(level: Level, msg: &str) -> Vec<String> {
     let prefix = level.colored_prefix();
-
-    if !is_tty {
-        let mut out = Vec::new();
-        let mut first = true;
-        for line in msg.split('\n') {
-            if first {
-                out.push(format!("{prefix}{line}"));
-                first = false;
-            } else {
-                out.push(line.to_string());
-            }
-        }
-        if out.is_empty() {
-            out.push(prefix);
-        }
-        return out;
-    }
-
     let indent = " ".repeat(PREFIX_WIDTH);
-    let wrap_width = TERM_WIDTH.saturating_sub(PREFIX_WIDTH).max(20);
-    let options = textwrap::Options::new(wrap_width).subsequent_indent(indent.as_str());
 
     let mut out = Vec::new();
     let mut first = true;
-    for paragraph in msg.split("\n\n") {
-        if !first {
-            out.push(String::new());
+    for line in msg.split('\n') {
+        if first {
+            out.push(format!("{prefix}{line}"));
+            first = false;
+        } else {
+            out.push(format!("{indent}{line}"));
         }
-        first = false;
-        if paragraph.is_empty() {
-            continue;
-        }
-        let mut wrapped = textwrap::wrap(paragraph, &options).into_iter();
-        if let Some(head) = wrapped.next() {
-            out.push(format!("{prefix}{head}"));
-        }
-        for tail in wrapped {
-            out.push(tail.into_owned());
-        }
-    }
-    if out.is_empty() {
-        out.push(prefix);
     }
     out
 }
@@ -177,23 +145,19 @@ mod tests {
 
     #[test]
     fn short_message_has_single_line_with_prefix() {
-        let lines = format_lines(Level::Warn, "config file missing", true);
+        let lines = format_lines(Level::Warn, "config file missing");
         assert_eq!(lines.len(), 1);
         assert_eq!(strip_ansi(&lines[0]), "[WARN] config file missing");
     }
 
     #[test]
-    fn long_message_wraps_at_80_cols_with_hanging_indent() {
+    fn long_message_stays_on_one_line_so_terminal_soft_wraps() {
         let msg = "this configuration includes private signing keys; ensure \
                    file mode is 0600 before distributing the bundle";
-        let lines = format_lines(Level::Warn, msg, true);
-        assert!(lines.len() >= 2);
-        let cleaned: Vec<String> = lines.iter().map(|l| strip_ansi(l)).collect();
-        assert!(cleaned[0].starts_with("[WARN] "));
-        for line in cleaned.iter().skip(1) {
-            assert!(line.starts_with("       "), "got: {line:?}");
-            assert!(line.len() <= TERM_WIDTH, "line too long: {line:?}");
-        }
+        let lines = format_lines(Level::Warn, msg);
+        assert_eq!(lines.len(), 1);
+        let cleaned = strip_ansi(&lines[0]);
+        assert_eq!(cleaned, format!("[WARN] {msg}"));
     }
 
     #[test]
@@ -205,16 +169,16 @@ mod tests {
 
     #[test]
     fn empty_message_still_emits_prefix() {
-        let lines = format_lines(Level::Info, "", true);
+        let lines = format_lines(Level::Info, "");
         assert_eq!(lines.len(), 1);
         assert!(strip_ansi(&lines[0]).starts_with("[INFO] "));
     }
 
     #[test]
-    fn non_tty_skips_wrapping_so_scripts_can_grep_the_full_phrase() {
+    fn message_kept_verbatim_so_scripts_can_grep_the_full_phrase() {
         let msg = "invalid capability seed '/very/long/path/to/seed/file.toml': \
                    raw_token claims do not match seed claims";
-        let lines = format_lines(Level::Err, msg, false);
+        let lines = format_lines(Level::Err, msg);
         assert_eq!(lines.len(), 1);
         let cleaned = strip_ansi(&lines[0]);
         assert!(cleaned.starts_with("[ERR]  "));
@@ -222,11 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn blank_line_between_paragraphs_preserved() {
-        let lines = format_lines(Level::Info, "first paragraph\n\nsecond paragraph", true);
+    fn embedded_newlines_indent_continuation_under_message_text() {
+        let lines = format_lines(Level::Info, "first line\nsecond line");
         let cleaned: Vec<String> = lines.iter().map(|l| strip_ansi(l)).collect();
-        assert_eq!(cleaned[0], "[INFO] first paragraph");
-        assert!(cleaned.iter().any(String::is_empty));
-        assert!(cleaned.iter().any(|l| l.starts_with("[INFO] second")));
+        assert_eq!(cleaned[0], "[INFO] first line");
+        assert_eq!(cleaned[1], "       second line");
+        assert_eq!(cleaned[1].len(), PREFIX_WIDTH + "second line".len());
     }
 }

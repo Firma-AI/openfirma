@@ -46,7 +46,6 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
-textwrap = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, default-features = false, features = ["fs", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
