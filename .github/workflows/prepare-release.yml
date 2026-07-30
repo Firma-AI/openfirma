@@ -88,7 +88,9 @@ jobs:
 
       - name: Install dprint
         if: steps.release-plz.outputs.prs_created == 'true'
-        run: curl -fsSL https://dprint.dev/install.sh | sh -s "$DPRINT_VERSION"
+        run: |
+          curl -fsSL https://dprint.dev/install.sh | sh -s "$DPRINT_VERSION"
+          echo "$HOME/.dprint/bin" >> "$GITHUB_PATH"
 
       - name: Refresh release PR extras
         if: steps.release-plz.outputs.prs_created == 'true'
