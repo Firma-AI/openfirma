@@ -15,6 +15,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use firma_http::{HeaderName, Method};
+use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
@@ -151,17 +153,36 @@ impl InterceptorHook for GrpcInterceptor {
 
 impl Interceptor for GrpcInterceptor {
     async fn run(
-        mut self,
+        self,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), InterceptorError> {
-        let address = self.address;
+        let listener = TcpListener::bind(self.address)
+            .await
+            .map_err(|e| InterceptorError::BindFailed(e.to_string()))?;
+        self.run_with_listener(listener, handler, cancel).await
+    }
+}
+
+impl GrpcInterceptor {
+    /// Run the interceptor using an already bound listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InterceptorError`] if the server encounters an unrecoverable
+    /// error.
+    pub async fn run_with_listener(
+        mut self,
+        listener: TcpListener,
+        handler: Arc<RequestHandler>,
+        cancel: CancellationToken,
+    ) -> Result<(), InterceptorError> {
         self.handler = Some(handler);
 
         let svc = InterceptorHookServer::new(self);
         Server::builder()
             .add_service(svc)
-            .serve_with_shutdown(address, cancel.cancelled())
+            .serve_with_incoming_shutdown(TcpListenerStream::new(listener), cancel.cancelled())
             .await
             .map_err(|e| InterceptorError::ServerError(e.to_string()))
     }
@@ -546,17 +567,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_intercept_empty_body_becomes_none() {
-        let addr = free_addr();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let handler = test_handler(test_pipeline_allow());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
-        let server_handle =
-            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let server_handle = tokio::spawn(async move {
+            interceptor
+                .run_with_listener(listener, handler, cancel_clone)
+                .await
+        });
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
