@@ -224,7 +224,7 @@ jobs:
   vscode-e2e:
     name: VS Code E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -254,7 +254,9 @@ jobs:
         shell: bash
 
       - name: Install bubblewrap
-        run: sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
 
       # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1, which
       # transitions bwrap to a profile that strips CAP_NET_ADMIN inside its user
@@ -274,9 +276,10 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/bwrap
 
       # `real_vscode_accepts_managed_launch_contract` is excluded: it needs a real
-      # VS Code desktop binary, which no hosted runner provides.
+      # VS Code desktop binary, which no hosted runner provides. `--no-tests=fail`
+      # keeps a rename from silently turning this job into a no-op.
       - name: Run managed VS Code launch tests
-        run: cargo nextest run -p firma --test vscode --run-ignored all -E 'test(fake_vscode)'
+        run: cargo nextest run -p firma --test vscode --run-ignored all --no-tests=fail -E 'test(fake_vscode)'
 
   musl:
     name: Musl (${{ matrix.target }})

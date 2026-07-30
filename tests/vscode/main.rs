@@ -16,8 +16,19 @@ fn firma_bin() -> PathBuf {
 }
 
 fn command_available(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path)
+            // An empty PATH entry means the current directory; a launcher found
+            // there is not one the user meaningfully has installed.
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .any(|dir| {
+                std::fs::metadata(dir.join(name)).is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+            })
+    })
 }
 
 fn output_text(output: &Output) -> (String, String) {
@@ -124,7 +135,7 @@ fn write_fake_code(path: &Path) {
 }
 
 #[test]
-#[ignore = "requires a bubblewrap-capable sandbox host; run via the vscode-e2e CI job or `--run-ignored all`"]
+#[ignore = "requires a bubblewrap-capable sandbox host; run with --run-ignored all -E 'test(fake_vscode)'"]
 fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("cfg");
@@ -197,11 +208,20 @@ fn real_vscode_accepts_managed_launch_contract() {
         &["--version"],
     );
     let (stdout, stderr) = assert_run_succeeded(&output);
+    // `firma run` writes its own output too, so a merely non-empty first line
+    // proves nothing. `code --version` emits a semver line, a commit hash, and
+    // an architecture; pin the version line specifically.
     assert!(
-        stdout
-            .lines()
-            .next()
-            .is_some_and(|line| !line.trim().is_empty()),
-        "expected VS Code version output\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        stdout.lines().any(is_semver_line),
+        "expected a VS Code version line in stdout\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
+}
+
+/// Reports whether a line looks like `code --version`'s leading semver line.
+fn is_semver_line(line: &str) -> bool {
+    let parts: Vec<&str> = line.trim().split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
