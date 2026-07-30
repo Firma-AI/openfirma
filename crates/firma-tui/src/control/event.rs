@@ -9,7 +9,7 @@ use crate::control::{
     app::App,
     command::ControlEffect,
     input,
-    rewrite::{PolicyRewriteEvent, PolicyRewriteHandler, PolicyRewriteQueue},
+    rewrite::{PolicyRewriteEvent, PolicyRewriteHandler, PolicyRewriteQueue, RewriteEventProbe},
     state::{AuditRow, PolicyRewriteRequest},
 };
 
@@ -110,6 +110,19 @@ impl<'a> Sources<'a> {
         handler: PolicyRewriteHandler,
     ) -> Self {
         Self::with_policy_rewrite_queue(audit_rows, PolicyRewriteQueue::with_handler(handler))
+    }
+
+    /// Creates sources with an injected rewrite handler and dispatch probe.
+    #[must_use]
+    pub fn with_observed_policy_rewrite_handler(
+        audit_rows: Option<&'a Receiver<AuditRow>>,
+        handler: PolicyRewriteHandler,
+    ) -> (Self, RewriteEventProbe) {
+        let (policy_rewrites, rewrite_probe) = PolicyRewriteQueue::with_handler_and_probe(handler);
+        (
+            Self::with_policy_rewrite_queue(audit_rows, policy_rewrites),
+            rewrite_probe,
+        )
     }
 
     fn with_policy_rewrite_queue(

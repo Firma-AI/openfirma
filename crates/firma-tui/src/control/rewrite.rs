@@ -9,13 +9,14 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::{Receiver, Sender, channel},
+        mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use crate::control::{
-    error::ControlError,
+    error::{ControlError, RewriteEventProbeError},
     state::{PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart},
     toggle,
 };
@@ -40,6 +41,61 @@ pub enum PolicyRewriteEvent {
     Started(PolicyRewriteStart),
     /// The worker has finished the batch.
     Completed(PolicyRewriteCompletion),
+}
+
+/// Coarse kind of rewrite event dispatched by the worker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PolicyRewriteEventKind {
+    /// A started event was sent to the runner channel.
+    Started,
+    /// A completed event was sent to the runner channel.
+    Completed,
+}
+
+/// Probe used by headless tests to observe rewrite event dispatch.
+///
+/// Rewrite handlers can signal that their own work has returned before the
+/// queue worker has sent the corresponding runner event. This probe is tied to
+/// the worker's event dispatch point, so tests can wait for the event that
+/// `try_crank` will actually observe.
+pub struct RewriteEventProbe {
+    dispatched: Receiver<PolicyRewriteEventKind>,
+}
+
+impl RewriteEventProbe {
+    /// Waits until the worker has dispatched a completion event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the event is not observed before `timeout` or the
+    /// worker-side probe channel is closed.
+    pub fn wait_for_completed(&self, timeout: Duration) -> Result<(), RewriteEventProbeError> {
+        self.wait_for(PolicyRewriteEventKind::Completed, timeout)
+    }
+
+    fn wait_for(
+        &self,
+        expected: PolicyRewriteEventKind,
+        timeout: Duration,
+    ) -> Result<(), RewriteEventProbeError> {
+        let started = Instant::now();
+        loop {
+            let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
+                return Err(RewriteEventProbeError::Timeout { timeout });
+            };
+
+            match self.dispatched.recv_timeout(remaining) {
+                Ok(event_kind) if event_kind == expected => return Ok(()),
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(RewriteEventProbeError::Timeout { timeout });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(RewriteEventProbeError::Disconnected);
+                }
+            }
+        }
+    }
 }
 
 /// Background queue responsible for serializing Cedar rewrites.
@@ -68,6 +124,29 @@ impl PolicyRewriteQueue {
     /// code should normally use [`Self::new`].
     #[must_use]
     pub fn with_handler(handler: PolicyRewriteHandler) -> Self {
+        Self::with_handler_and_dispatch_tx(handler, None)
+    }
+
+    /// Creates a queue with an injected rewrite handler and dispatch probe.
+    ///
+    /// The probe observes events only after they have been sent to the runner
+    /// channel. This is mainly useful for deterministic tests around event
+    /// priority.
+    #[must_use]
+    pub fn with_handler_and_probe(handler: PolicyRewriteHandler) -> (Self, RewriteEventProbe) {
+        let (dispatched_tx, dispatched_rx) = channel();
+        (
+            Self::with_handler_and_dispatch_tx(handler, Some(dispatched_tx)),
+            RewriteEventProbe {
+                dispatched: dispatched_rx,
+            },
+        )
+    }
+
+    fn with_handler_and_dispatch_tx(
+        handler: PolicyRewriteHandler,
+        event_dispatch_tx: Option<Sender<PolicyRewriteEventKind>>,
+    ) -> Self {
         let (request_tx, request_rx) = channel();
         let (event_tx, event_rx) = channel();
         let queued_requests = Arc::new(AtomicUsize::new(0));
@@ -85,6 +164,7 @@ impl PolicyRewriteQueue {
                 &worker_queued_requests,
                 &worker_shutdown_requested,
                 &handler,
+                event_dispatch_tx.as_ref(),
             );
         });
 
@@ -170,6 +250,7 @@ fn worker_loop(
     queued_requests: &AtomicUsize,
     shutdown_requested: &AtomicBool,
     policy_rewrite_handler: &PolicyRewriteHandler,
+    event_dispatch_tx: Option<&Sender<PolicyRewriteEventKind>>,
 ) {
     while let Ok(request) = request_rx.recv() {
         queued_requests.fetch_sub(1, Ordering::SeqCst);
@@ -178,13 +259,15 @@ fn worker_loop(
             break;
         }
 
-        if event_tx
-            .send(PolicyRewriteEvent::Started(PolicyRewriteStart {
+        if !send_rewrite_event(
+            event_tx,
+            event_dispatch_tx,
+            PolicyRewriteEventKind::Started,
+            PolicyRewriteEvent::Started(PolicyRewriteStart {
                 file: request.file.clone(),
                 ids: request.ids.clone(),
-            }))
-            .is_err()
-        {
+            }),
+        ) {
             break;
         }
 
@@ -195,15 +278,17 @@ fn worker_loop(
             requested,
         } = request;
 
-        if event_tx
-            .send(PolicyRewriteEvent::Completed(PolicyRewriteCompletion {
+        if !send_rewrite_event(
+            event_tx,
+            event_dispatch_tx,
+            PolicyRewriteEventKind::Completed,
+            PolicyRewriteEvent::Completed(PolicyRewriteCompletion {
                 file,
                 ids,
                 requested,
                 result,
-            }))
-            .is_err()
-        {
+            }),
+        ) {
             break;
         }
 
@@ -212,6 +297,23 @@ fn worker_loop(
             break;
         }
     }
+}
+
+fn send_rewrite_event(
+    event_tx: &Sender<PolicyRewriteEvent>,
+    event_dispatch_tx: Option<&Sender<PolicyRewriteEventKind>>,
+    event_kind: PolicyRewriteEventKind,
+    event: PolicyRewriteEvent,
+) -> bool {
+    if event_tx.send(event).is_err() {
+        return false;
+    }
+
+    if let Some(event_dispatch_tx) = event_dispatch_tx {
+        let _ = event_dispatch_tx.send(event_kind);
+    }
+
+    true
 }
 
 fn discard_pending_requests(
