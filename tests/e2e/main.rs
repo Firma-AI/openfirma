@@ -4,6 +4,7 @@ mod agent;
 mod audit;
 mod config;
 mod policy;
+mod release_metadata;
 mod runner;
 mod scenario;
 mod scenarios;
