@@ -481,11 +481,17 @@ fn vscode_shim_script(real_code: &Path, user_data_dir: &Path, extensions_dir: &P
 ///
 /// `cmd.exe` consumes `%` while parsing each line, so a path such as
 /// `C:\100% projects` would otherwise be truncated or replaced by an
-/// environment variable expansion before VS Code ever sees it. Doubling `%`
-/// is the batch-file escape for a literal percent sign.
+/// environment variable expansion before VS Code ever sees it.
+///
+/// The payload sits on a `call` line, and `call` re-runs percent expansion on
+/// the remainder of the line — the same mechanism that makes `call echo %%VAR%%`
+/// print the variable's value. A literal `%` therefore has to survive *two*
+/// passes, so it is quadrupled rather than doubled:
+/// `%%%%` → `%%` → `%`. `shim_launches_target_with_percent_in_managed_path`
+/// pins this by executing the generated shim.
 #[cfg(windows)]
 fn batch_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\"").replace('%', "%%"))
+    format!("\"{}\"", value.replace('"', "\"\"").replace('%', "%%%%"))
 }
 
 #[cfg(not(windows))]

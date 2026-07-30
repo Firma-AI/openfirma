@@ -291,51 +291,81 @@ fn shell_quoting_escapes_embedded_single_quotes() {
     assert_eq!(testing::shell_single_quote("a'b"), "'a'\\''b'");
 }
 
+/// Records each argument it receives, one per line, into `%FIRMA_TEST_RECORD%`.
+///
+/// `%1` substitution is not re-scanned, so a value containing `%` is written
+/// out verbatim — which is what makes this usable as an argv oracle.
 #[cfg(windows)]
-#[test]
-fn batch_quoting_escapes_percent_and_embedded_quotes() {
-    // cmd.exe expands `%` while parsing the shim, so an unescaped percent sign
-    // silently rewrites the managed state path.
-    assert_eq!(
-        testing::batch_quote(r"C:\100% projects\.firma"),
-        "\"C:\\100%% projects\\.firma\""
-    );
-    assert_eq!(testing::batch_quote("a\"b"), "\"a\"\"b\"");
+const RECORDING_LAUNCHER: &str = "@echo off\r\n\
+     if exist \"%FIRMA_TEST_RECORD%\" del \"%FIRMA_TEST_RECORD%\"\r\n\
+     :loop\r\n\
+     if \"%~1\"==\"\" exit /b 0\r\n\
+     >>\"%FIRMA_TEST_RECORD%\" echo %1\r\n\
+     shift\r\n\
+     goto loop\r\n";
+
+/// Executes the generated shim and returns the arguments the launcher saw.
+///
+/// Asserting on the script text alone cannot validate the escaping, because any
+/// expected value would have to be built with the very escaper under test. Only
+/// running `cmd.exe` over the script settles what VS Code actually receives.
+#[cfg(windows)]
+fn launch_shim_and_record_args(
+    state_dir: &Path,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let launcher = tmpdir.path().join("fake-code.cmd");
+    let shim = tmpdir.path().join("code.cmd");
+    let record = tmpdir.path().join("args.txt");
+    fs::write(&launcher, RECORDING_LAUNCHER)?;
+
+    let user_data_dir = state_dir.join("user-data");
+    let extensions_dir = state_dir.join("extensions");
+    fs::write(
+        &shim,
+        testing::vscode_shim_script(&launcher, &user_data_dir, &extensions_dir),
+    )?;
+
+    let status = std::process::Command::new("cmd")
+        .arg("/c")
+        .arg(&shim)
+        .env("FIRMA_TEST_RECORD", &record)
+        .status()?;
+    assert!(status.success(), "shim exited with {status}");
+
+    Ok(fs::read_to_string(&record)?
+        .lines()
+        .map(|line| line.trim().trim_matches('"').to_string())
+        .collect())
 }
 
+#[cfg(windows)]
 #[test]
-fn shim_script_embeds_escaped_managed_state_directories() {
-    let real_code = Path::new("/opt/vs code/bin/code");
-    let user_data_dir = Path::new("/state/100% dir/user-data");
-    let extensions_dir = Path::new("/state/100% dir/extensions");
+fn shim_launches_target_with_managed_state_directories() -> Result<(), Box<dyn std::error::Error>> {
+    let state_dir = Path::new(r"C:\firma-test\state");
 
-    let script = testing::vscode_shim_script(real_code, user_data_dir, extensions_dir);
+    let args = launch_shim_and_record_args(state_dir)?;
 
-    // The directories must survive shell parsing exactly, otherwise VS Code
-    // writes outside the managed state directory.
-    #[cfg(windows)]
-    {
-        assert!(script.contains(&format!(
-            "--user-data-dir {}",
-            testing::batch_quote(&user_data_dir.display().to_string())
-        )));
-        assert!(script.contains(&format!(
-            "--extensions-dir {}",
-            testing::batch_quote(&extensions_dir.display().to_string())
-        )));
-        assert!(!script.contains("100% dir"), "bare percent left unescaped");
-    }
-    #[cfg(not(windows))]
-    {
-        assert!(script.contains(&format!(
-            "--user-data-dir {}",
-            testing::shell_single_quote(&user_data_dir.display().to_string())
-        )));
-        assert!(script.contains(&format!(
-            "--extensions-dir {}",
-            testing::shell_single_quote(&extensions_dir.display().to_string())
-        )));
-    }
+    assert!(args.contains(&state_dir.join("user-data").display().to_string()));
+    assert!(args.contains(&state_dir.join("extensions").display().to_string()));
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn shim_launches_target_with_percent_in_managed_path() -> Result<(), Box<dyn std::error::Error>> {
+    // cmd.exe expands `%` while parsing, and `call` expands a second time. An
+    // under-escaped path silently points VS Code outside the managed state dir.
+    let state_dir = Path::new(r"C:\firma-test\100% projects\state");
+
+    let args = launch_shim_and_record_args(state_dir)?;
+
+    let expected = state_dir.join("user-data").display().to_string();
+    assert!(
+        args.contains(&expected),
+        "managed user-data dir did not survive cmd.exe parsing\nexpected: {expected}\ngot: {args:#?}"
+    );
+    Ok(())
 }
 
 #[cfg(unix)]
