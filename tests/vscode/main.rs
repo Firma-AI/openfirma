@@ -1,5 +1,6 @@
 //! Black-box coverage for the managed VS Code launch contract.
 
+#![cfg(target_os = "linux")]
 #![allow(
     clippy::expect_used,
     clippy::panic,
@@ -7,28 +8,13 @@
     reason = "test code: panics are acceptable test failures"
 )]
 
-#[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
 use std::process::{Command, Output};
 
-#[cfg(target_os = "linux")]
-const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
-    "bubblewrap is not installed",
-    "backend error (bwrap)",
-    "user namespace creation is restricted",
-    "unprivileged user namespaces",
-    "max_user_namespaces",
-    "requires unprivileged user namespaces",
-    "WSL",
-];
-
-#[cfg(target_os = "linux")]
 fn firma_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
-#[cfg(target_os = "linux")]
 fn command_available(name: &str) -> bool {
     Command::new("which")
         .arg(name)
@@ -36,7 +22,6 @@ fn command_available(name: &str) -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-#[cfg(target_os = "linux")]
 fn output_text(output: &Output) -> (String, String) {
     (
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -44,14 +29,6 @@ fn output_text(output: &Output) -> (String, String) {
     )
 }
 
-#[cfg(target_os = "linux")]
-fn sandbox_unavailable(stderr: &str) -> bool {
-    SANDBOX_UNAVAILABLE_MARKERS
-        .iter()
-        .any(|marker| stderr.contains(marker))
-}
-
-#[cfg(target_os = "linux")]
 fn prepend_path(bin_dir: &Path) -> String {
     let previous = std::env::var_os("PATH")
         .map(|value| value.to_string_lossy().into_owned())
@@ -63,7 +40,6 @@ fn prepend_path(bin_dir: &Path) -> String {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn scaffold_vscode_config(config_dir: &Path, state_dir: &Path, workspace: &Path) {
     let output = Command::new(firma_bin())
         .args([
@@ -91,7 +67,6 @@ fn scaffold_vscode_config(config_dir: &Path, state_dir: &Path, workspace: &Path)
     );
 }
 
-#[cfg(target_os = "linux")]
 fn run_vscode_profile(
     config_path: &Path,
     workspace: &Path,
@@ -113,21 +88,15 @@ fn run_vscode_profile(
     command.output().expect("spawn firma run")
 }
 
-#[cfg(target_os = "linux")]
-fn assert_run_succeeded_or_skip(output: &Output) -> Option<(String, String)> {
+fn assert_run_succeeded(output: &Output) -> (String, String) {
     let (stdout, stderr) = output_text(output);
-    if !output.status.success() && sandbox_unavailable(&stderr) {
-        eprintln!("skipping: sandbox unavailable on this host:\n{stderr}");
-        return None;
-    }
     assert!(
         output.status.success(),
         "firma run failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    Some((stdout, stderr))
+    (stdout, stderr)
 }
 
-#[cfg(target_os = "linux")]
 fn write_fake_code(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -153,7 +122,6 @@ fn write_fake_code(path: &Path) {
     std::fs::set_permissions(path, permissions).expect("chmod fake code");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -174,9 +142,7 @@ fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
         Some(prepend_path(&host_bin)),
         &["."],
     );
-    if assert_run_succeeded_or_skip(&output).is_none() {
-        return;
-    }
+    assert_run_succeeded(&output);
 
     let user_data_dir = config_dir.join("vscode").join("user-data");
     let extensions_dir = config_dir.join("vscode").join("extensions");
@@ -199,13 +165,9 @@ fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
     let settings = std::fs::read_to_string(user_data_dir.join("User").join("settings.json"))
         .expect("read VS Code settings");
     let parsed: serde_json::Value = serde_json::from_str(&settings).expect("parse settings");
-    assert_eq!(
-        parsed.get("github-authentication.preferDeviceCodeFlow"),
-        Some(&serde_json::Value::Bool(true))
-    );
+    assert_eq!(parsed["github-authentication.preferDeviceCodeFlow"], true);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires real VS Code desktop binary and a desktop-capable sandbox host"]
 fn real_vscode_accepts_managed_launch_contract() {
@@ -213,10 +175,10 @@ fn real_vscode_accepts_managed_launch_contract() {
         eprintln!("skipping: set FIRMA_E2E_REAL_VSCODE=1 to run the real VS Code e2e test");
         return;
     }
-    if !command_available("code") {
-        eprintln!("skipping: real VS Code 'code' binary not found on PATH");
-        return;
-    }
+    assert!(
+        command_available("code"),
+        "real VS Code 'code' binary not found on PATH"
+    );
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("cfg");
@@ -231,9 +193,7 @@ fn real_vscode_accepts_managed_launch_contract() {
         None,
         &["--version"],
     );
-    let Some((stdout, stderr)) = assert_run_succeeded_or_skip(&output) else {
-        return;
-    };
+    let (stdout, stderr) = assert_run_succeeded(&output);
     assert!(
         stdout
             .lines()
