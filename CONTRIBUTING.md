@@ -37,11 +37,12 @@ We actively welcome your Pull Requests! A couple of things to keep in mind befor
 
 PR titles must use `type(scope)!: description`. The scope and breaking `!`
 marker are optional. Accepted types are `ai`, `build`, `chore`, `ci`, `docs`,
-`feat`, `fix`, `perf`, `refactor`, `revert`, `security`, and `test`.
+`feat`, `fix`, `perf`, `refactor`, `revert`, `security`, `style`, and `test`.
 
 Release notes are generated from PR titles. `ai`, `build`, `chore`, `ci`,
-`refactor`, and `test` PRs are excluded. Those types cannot use `!` because a
-public breaking change must not be hidden.
+`refactor`, `style`, and `test` PRs are grouped under a final, collapsible
+**Internal Improvements** block. Those types cannot use `!`; use a user-facing
+type for a public breaking change.
 
 Before submitting your PR, please run these checks locally:
 

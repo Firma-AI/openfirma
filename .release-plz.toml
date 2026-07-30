@@ -22,7 +22,7 @@ Review and edit the release notes in `CHANGELOG.md`.
 [changelog]
 header = """# Changelog
 
-All notable user-facing changes to OpenFirma are documented in this file.
+User-facing changes are listed first. Internal improvements are grouped at the end.
 """
 body = """
 
@@ -35,7 +35,7 @@ body = """
 {% endfor %}
 {% endif %}
 {% for group, grouped_commits in commits | group_by(attribute="group") %}
-{% if group != "other" %}
+{% if group != "other" and group != "<!-- 6 -->Internal Improvements" %}
 {% set visible = grouped_commits | filter(attribute="breaking", value=false) %}
 {% if visible | length > 0 %}
 ### {{ group | striptags | trim | upper_first }}
@@ -51,16 +51,32 @@ body = """
 - @{{ contributor.username }}
 {% endfor %}
 {% endif %}
+{% set internal = commits | filter(attribute="group", value="<!-- 6 -->Internal Improvements") | filter(attribute="breaking", value=false) %}
+{% if internal | length > 0 %}
+<details>
+<summary>Internal Improvements</summary>
+
+{% for commit in internal %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message }}{{ self::pr(commit=commit) }}
+{% endfor %}
+</details>
+{% endif %}
 {% macro pr(commit) %}{% if commit.remote.pr_number %} ([#{{ commit.remote.pr_number }}](https://github.com/Firma-AI/openfirma/pull/{{ commit.remote.pr_number }})){% endif %}{% endmacro %}
 """
 commit_parsers = [
-  { message = "^security", group = "<!-- 0 -->Security" },
-  { message = "^feat", group = "<!-- 1 -->Added" },
-  { message = "^fix", group = "<!-- 2 -->Fixed" },
-  { message = "^perf", group = "<!-- 3 -->Performance" },
-  { message = "^revert", group = "<!-- 4 -->Changed" },
-  { message = "^docs?", group = "<!-- 5 -->Documentation" },
-  { message = "^(ai|build|chore|ci|refactor|test)", skip = true },
+  { message = '^security(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 0 -->Security" },
+  { message = '^feat(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 1 -->Added" },
+  { message = '^fix(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 2 -->Fixed" },
+  { message = '^perf(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 3 -->Performance" },
+  { message = '^revert(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 4 -->Changed" },
+  { message = '^docs(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 5 -->Documentation" },
+  { message = '^ai(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 6 -->Internal Improvements" },
+  { message = '^build(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 6 -->Internal Improvements" },
+  { message = '^chore(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 6 -->Internal Improvements" },
+  { message = '^ci(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 6 -->Internal Improvements" },
+  { message = '^refactor(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 6 -->Internal Improvements" },
+  { message = '^style(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 6 -->Internal Improvements" },
+  { message = '^test(?:\([a-z0-9][a-z0-9._/-]*\))?!?: ', group = "<!-- 6 -->Internal Improvements" },
   { message = "^.*", skip = true },
 ]
 

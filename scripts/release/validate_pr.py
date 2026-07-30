@@ -24,9 +24,10 @@ ALLOWED_TYPES = (
     "refactor",
     "revert",
     "security",
+    "style",
     "test",
 )
-EXCLUDED_TYPES = frozenset(("ai", "build", "chore", "ci", "refactor", "test"))
+INTERNAL_TYPES = frozenset(("ai", "build", "chore", "ci", "refactor", "style", "test"))
 TITLE_PATTERN = re.compile(
     rf"^({'|'.join(ALLOWED_TYPES)})(?:\(([a-z0-9][a-z0-9._/-]*)\))?(!)?: (\S.*)$"
 )
@@ -40,9 +41,9 @@ def validate_title(title: str) -> None:
             f"title must match type(scope)!: description; allowed types: {allowed}"
         )
     type_, _, marker, _ = match.groups()
-    if marker == "!" and type_ in EXCLUDED_TYPES:
+    if marker == "!" and type_ in INTERNAL_TYPES:
         raise ValueError(
-            f"the breaking marker is not allowed for changelog-excluded type '{type_}'"
+            f"the breaking marker is not allowed for internal type '{type_}'"
         )
 
 
