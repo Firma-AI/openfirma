@@ -50,6 +50,12 @@ pub enum CedarEvaluatorError {
     #[error("invalid entity UID: {0}")]
     EntityUidParse(#[source] cedar_policy::ParseErrors),
 
+    #[error("failed to build resource entity: {0}")]
+    ResourceEntity(#[source] firma_core::cedar::ResourceEntityError),
+
+    #[error("failed to build Cedar entity store: {0}")]
+    EntityStore(#[source] Box<cedar_policy::EntitiesError>),
+
     #[error("failed to build Cedar context: {0}")]
     ContextBuild(#[source] Box<cedar_policy::ContextJsonError>),
 
@@ -195,9 +201,13 @@ impl CedarPolicyEvaluator {
         let action_uid: EntityUid = FirmaEntityUid::Action(action.to_string())
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let resource_uid: EntityUid = FirmaEntityUid::Resource(resource.to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
+        // Build the resource as a full entity (not a bare UID) so `resource.host`,
+        // `resource.path`, and `resource.id` are available to policies. A bare
+        // UID with an empty entity store makes every `resource.<attr>` access
+        // error, silently skipping the guarded condition.
+        let resource_entity = FirmaEntityUid::resource_entity(resource)
+            .map_err(CedarEvaluatorError::ResourceEntity)?;
+        let resource_uid = resource_entity.uid();
 
         let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
             .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
@@ -211,7 +221,12 @@ impl CedarPolicyEvaluator {
         )
         .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
 
-        let entities = Entities::empty();
+        // Entity store validation is intentionally schema-less (`None`): the
+        // resource attributes are already schema-declared and validated when
+        // policies load, and skipping conformance here keeps custom operator
+        // schema overrides that omit host/path from failing closed on every call.
+        let entities = Entities::from_entities([resource_entity], None)
+            .map_err(|e| CedarEvaluatorError::EntityStore(Box::new(e)))?;
         Ok(Authorizer::new().is_authorized(&request, &self.policy_set, &entities))
     }
 }

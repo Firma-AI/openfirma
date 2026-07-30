@@ -1,0 +1,18 @@
+# `firma policy test` fixture: a request whose resource host is the cloud
+# metadata endpoint must be DENIED by the host-keyed forbid, proving that
+# `resource.host` rules fire in the offline validator (parity with the Sidecar).
+
+[fixture]
+expected = "DENY"
+
+[fixture.principal]
+agent_id = "agt_01j0000000e008000000000001"
+
+[fixture.action]
+class = "communication.external.send"
+
+[fixture.resource]
+host = "169.254.169.254"
+
+[bundle]
+path = "host_forbid_bundle/"
