@@ -16,10 +16,8 @@ fn firma_bin() -> PathBuf {
 }
 
 fn command_available(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .output()
-        .is_ok_and(|output| output.status.success())
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
 }
 
 fn output_text(output: &Output) -> (String, String) {
@@ -85,6 +83,9 @@ fn run_vscode_profile(
     if let Some(path) = path {
         command.env("PATH", path);
     }
+    // The shim passes `--wait`, so this blocks until the launcher exits. Both
+    // callers use a launcher that returns immediately; the run-away case is
+    // bounded by the nextest `slow-timeout` in `.config/nextest.toml`.
     command.output().expect("spawn firma run")
 }
 
@@ -123,6 +124,7 @@ fn write_fake_code(path: &Path) {
 }
 
 #[test]
+#[ignore = "requires a bubblewrap-capable sandbox host; run via the vscode-e2e CI job or `--run-ignored all`"]
 fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("cfg");
@@ -148,6 +150,9 @@ fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
     let extensions_dir = config_dir.join("vscode").join("extensions");
     let record = std::fs::read_to_string(workspace.join("vscode-invocation.txt"))
         .expect("read fake VS Code invocation");
+    // The managed argument contract is restated here on purpose rather than
+    // shared with `firma-run`: this suite pins what the shipped binary emits, so
+    // importing the producer's own constants would make the check circular.
     let expected = [
         format!("PWD={}", workspace.display()),
         "ARG_0=--no-sandbox".to_string(),
@@ -168,13 +173,11 @@ fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
     assert_eq!(parsed["github-authentication.preferDeviceCodeFlow"], true);
 }
 
+// `#[ignore]` is the only gate: selecting this test is an explicit opt-in, so
+// it must never report success without exercising a real VS Code binary.
 #[test]
 #[ignore = "requires real VS Code desktop binary and a desktop-capable sandbox host"]
 fn real_vscode_accepts_managed_launch_contract() {
-    if std::env::var("FIRMA_E2E_REAL_VSCODE").as_deref() != Ok("1") {
-        eprintln!("skipping: set FIRMA_E2E_REAL_VSCODE=1 to run the real VS Code e2e test");
-        return;
-    }
     assert!(
         command_available("code"),
         "real VS Code 'code' binary not found on PATH"
