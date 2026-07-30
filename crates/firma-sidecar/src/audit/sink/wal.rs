@@ -93,7 +93,12 @@ impl WalAuditSink {
         // file semantics, which can be platform-specific when mixed
         // with seek/read/truncate during compaction.
         let write_result = if file.seek(std::io::SeekFrom::End(0)).await.is_ok() {
-            file.write_all(line.as_bytes()).await
+            match file.write_all(line.as_bytes()).await {
+                // Replays read the WAL through a separate file descriptor, so
+                // the append must be externally visible before returning.
+                Ok(()) => file.flush().await,
+                Err(err) => Err(err),
+            }
         } else {
             Err(std::io::Error::other(
                 "failed to seek WAL to end before write",
@@ -105,7 +110,7 @@ impl WalAuditSink {
             Err(err) => {
                 tracing::error!(
                     event_id = %event.event_id,
-                    "failed to write audit event to WAL: {err}"
+                    "failed to append audit event to WAL: {err}"
                 );
             }
         }
@@ -624,24 +629,16 @@ mod tests {
         let contents = tokio::fs::read_to_string(&wal_path)
             .await
             .unwrap_or_else(|e| panic!("read: {e}"));
-        let lines: Vec<&str> = contents.lines().collect();
+        let event_ids: Vec<String> = contents
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<ExecutionEvent>(line)
+                    .unwrap_or_else(|e| panic!("deserialize WAL event: {e}"))
+                    .event_id
+            })
+            .collect();
 
-        // The newest event must always survive — compaction never
-        // drops the most recent audit signal.
-        assert!(
-            lines.iter().any(|l| l.contains("\"c\"")),
-            "newest event 'c' should be in WAL, got: {contents}"
-        );
-        // The oldest event must have been compacted away.
-        assert!(
-            !lines.iter().any(|l| l.contains("\"a\"")),
-            "oldest event 'a' should have been compacted away, got: {contents}"
-        );
-        assert!(
-            lines.len() <= 3,
-            "WAL should contain at most 3 lines after compaction + append, found {}",
-            lines.len()
-        );
+        assert_eq!(event_ids, ["b", "c"]);
         assert!(
             wal_size <= cap,
             "WAL size {wal_size} should be within cap {cap}"
