@@ -266,14 +266,21 @@ setup_tmp() {
 }
 
 download_archive() {
-    # Release tag carries the v prefix (v0.7.0); asset filenames do not.
-    version_bare=${VERSION#v}
-    ARCHIVE_NAME="firma-${version_bare}-${TARGET}.tar.gz"
+    ARCHIVE_NAME="firma-${TARGET}.tar.gz"
     ARCHIVE_PATH="${TMP_DIR}/${ARCHIVE_NAME}"
-    CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
     base="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
     info "downloading ${ARCHIVE_NAME} ..."
-    fetch_to "${base}/${ARCHIVE_NAME}"          "$ARCHIVE_PATH"
+    if ! fetch_to "${base}/${ARCHIVE_NAME}" "$ARCHIVE_PATH"; then
+        rm -f "$ARCHIVE_PATH"
+        version_bare=${VERSION#v}
+        ARCHIVE_NAME="firma-${version_bare}-${TARGET}.tar.gz"
+        ARCHIVE_PATH="${TMP_DIR}/${ARCHIVE_NAME}"
+        info "cargo-dist archive unavailable; trying legacy archive ${ARCHIVE_NAME} ..."
+        fetch_to "${base}/${ARCHIVE_NAME}" "$ARCHIVE_PATH" \
+            || die "could not download a release archive for ${VERSION} (${TARGET})"
+    fi
+
+    CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
     fetch_to "${base}/${ARCHIVE_NAME}.sha256"   "$CHECKSUM_PATH"
 }
 

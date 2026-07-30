@@ -19,6 +19,14 @@ command -v corepack >/dev/null 2>&1 || {
   exit 1
 }
 
+# shellcheck source=../../tool-versions.env
+. "$ROOT/tool-versions.env"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Installing uv..."
+  curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+fi
+
 if ! command -v protoc >/dev/null 2>&1; then
   echo "Installing protoc..."
   if [ "$(uname)" = "Darwin" ]; then
@@ -37,8 +45,6 @@ fi
 
 if ! command -v dprint >/dev/null 2>&1; then
   echo "Installing dprint..."
-  # shellcheck source=../../tool-versions.env
-  . "$ROOT/tool-versions.env"
   curl -fsSL https://dprint.dev/install.sh | sh -s "$DPRINT_VERSION"
 fi
 

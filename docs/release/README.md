@@ -1,72 +1,57 @@
-# Release checklist
+# Release OpenFirma
 
-Use this when cutting a new OpenFirma release. The goal is to keep prebuilt
-installers, the Homebrew tap, and the docs in sync.
+OpenFirma releases are prepared and published by GitHub Actions. Do not edit
+versions or push release tags manually.
 
-## Before tagging
+## Prepare the release
 
-1. Confirm `workspace.package.version` in the root `Cargo.toml` matches the tag
-   you are about to ship (without the leading `v`).
-2. Run CI-parity checks locally:
+Dispatch the `Prepare Release` workflow on `main`:
 
-   ```bash
-   just check
-   ```
+```bash
+gh workflow run prepare-release.yml
+```
 
-3. Confirm `main` is green in GitHub Actions.
+The workflow infers the next SemVer version from the changes since the previous
+release. There is no version-bump input. When preparation finishes, it opens a
+release PR containing the proposed version and changelog.
 
-## Cut the release
+## Review the release PR
 
-1. Tag and push:
+Review the complete diff, paying particular attention to:
 
-   ```bash
-   git tag -a v0.1.0 -m "v0.1.0"
-   git push origin v0.1.0
-   ```
+- The proposed version.
+- The new `CHANGELOG.md` section and its links.
+- Any generated dependency or lockfile changes.
 
-2. Watch the release workflow:
+Edit the changelog when an entry needs clearer user-facing wording. If the
+release PR becomes stale, dispatch `Prepare Release` again and review the
+updated candidate.
 
-   ```bash
-   gh run watch --repo Firma-AI/openfirma
-   ```
+Do not merge until every required check passes, including the release E2E
+matrix. Changes that land immediately ahead of the release PR in the merge
+queue may be included in the release without appearing in its changelog. This
+narrow ordering race is accepted.
 
-   The workflow builds six platform tarballs/zip files, generates a changelog
-   with git-cliff, and publishes the GitHub Release assets.
+## Publish
 
-## After the GitHub Release is published
+Merge the release PR, then monitor the workflows triggered by the merge. A
+successful run creates the version tag, publishes the GitHub Release and its
+artifacts, and updates the Homebrew tap.
 
-1. Bump the Homebrew tap (automated when `HOMEBREW_TAP_TOKEN` is configured,
-   or run manually):
+If publication fails, rerun the failed workflow. Do not create the tag or
+partially publish the release by hand.
 
-   ```bash
-   ./scripts/update-homebrew-tap.sh 0.1.0
-   ```
+## Verify the release
 
-   Commit and push the result to `Firma-AI/homebrew-openfirma`.
+After publication, verify the install path and basic commands:
 
-2. Verify the install path end-to-end:
+```bash
+brew uninstall firma 2>/dev/null || true
+curl -sSf https://install.openfirma.ai | sh
+firma --version
+firma config --help
+firma sidecar start --help
+```
 
-   ```bash
-   brew uninstall firma 2>/dev/null || true
-   curl -sSf https://install.openfirma.ai | sh
-   firma --version
-   firma config --help
-   firma sidecar start --help
-   ```
-
-3. Smoke-test the quickstart on macOS and Linux:
-
-   ```bash
-   firma config --yes
-   firma sidecar start --detach
-   firma run -- echo hello
-   firma monitor --tail
-   ```
-
-## Notes
-
-- The installer prefers Homebrew on macOS when `brew` is available. If the tap
-  lags the GitHub Release, users get a stale binary — always bump the tap in the
-  same release window.
-- Release notes for each version live in `docs/release/v0.x.y.md`. Update that
-  file in the same PR as the version bump when the user-facing story changes.
+Confirm that the installed version matches the GitHub Release and that the
+Homebrew tap reports the same version before announcing the release.

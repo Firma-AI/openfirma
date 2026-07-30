@@ -1,5 +1,8 @@
 <!--
 Keep this PR description skimmable:
+- Title: `type(scope)!: description`
+- Types: ai, build, chore, ci, docs, feat, fix, perf, refactor, revert,
+  security, test
 - 1-3 sentences in "Why"
 - 3-5 bullets in "What Changed"
 - Prefer links to issues/docs over repeated background

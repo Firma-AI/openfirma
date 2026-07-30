@@ -1,10 +1,16 @@
-# zizmor configuration — https://docs.zizmor.sh/configuration/
+# zizmor configuration - https://docs.zizmor.sh/configuration/
 #
 # Require a full commit-SHA pin for every `uses:` (the `hash-pin` policy).
 # Version-tag pins are rejected: a tag is mutable and does not pin the action to
 # reviewed code. Each `uses:` carries a `# vX.Y.Z` comment so Renovate/Dependabot
 # can still track upstream releases.
 rules:
+  template-injection:
+    ignore:
+      - release.yml
+  unpinned-images:
+    ignore:
+      - release.yml
   unpinned-uses:
     config:
       policies:
