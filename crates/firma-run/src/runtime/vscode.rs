@@ -477,9 +477,15 @@ fn vscode_shim_script(real_code: &Path, user_data_dir: &Path, extensions_dir: &P
     )
 }
 
+/// Escapes a value for literal inclusion in the generated batch shim.
+///
+/// `cmd.exe` consumes `%` while parsing each line, so a path such as
+/// `C:\100% projects` would otherwise be truncated or replaced by an
+/// environment variable expansion before VS Code ever sees it. Doubling `%`
+/// is the batch-file escape for a literal percent sign.
 #[cfg(windows)]
 fn batch_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
+    format!("\"{}\"", value.replace('"', "\"\"").replace('%', "%%"))
 }
 
 #[cfg(not(windows))]
@@ -610,6 +616,27 @@ pub mod testing {
     #[must_use]
     pub fn shell_single_quote(value: &str) -> String {
         super::shell_single_quote(value)
+    }
+
+    /// Escapes a path for inclusion in the Windows batch shim.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn batch_quote(value: &str) -> String {
+        super::batch_quote(value)
+    }
+
+    /// Renders the shim script that launches the host VS Code binary.
+    ///
+    /// The managed state directories are baked into the script as literals, so
+    /// the escaping applied here is what keeps them intact once the shell
+    /// parses the file.
+    #[must_use]
+    pub fn vscode_shim_script(
+        real_code: &Path,
+        user_data_dir: &Path,
+        extensions_dir: &Path,
+    ) -> String {
+        super::vscode_shim_script(real_code, user_data_dir, extensions_dir)
     }
 
     /// Links a Unix desktop socket into the isolated runtime directory.

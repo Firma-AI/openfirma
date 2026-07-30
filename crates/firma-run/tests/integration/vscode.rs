@@ -291,6 +291,53 @@ fn shell_quoting_escapes_embedded_single_quotes() {
     assert_eq!(testing::shell_single_quote("a'b"), "'a'\\''b'");
 }
 
+#[cfg(windows)]
+#[test]
+fn batch_quoting_escapes_percent_and_embedded_quotes() {
+    // cmd.exe expands `%` while parsing the shim, so an unescaped percent sign
+    // silently rewrites the managed state path.
+    assert_eq!(
+        testing::batch_quote(r"C:\100% projects\.firma"),
+        "\"C:\\100%% projects\\.firma\""
+    );
+    assert_eq!(testing::batch_quote("a\"b"), "\"a\"\"b\"");
+}
+
+#[test]
+fn shim_script_embeds_escaped_managed_state_directories() {
+    let real_code = Path::new("/opt/vs code/bin/code");
+    let user_data_dir = Path::new("/state/100% dir/user-data");
+    let extensions_dir = Path::new("/state/100% dir/extensions");
+
+    let script = testing::vscode_shim_script(real_code, user_data_dir, extensions_dir);
+
+    // The directories must survive shell parsing exactly, otherwise VS Code
+    // writes outside the managed state directory.
+    #[cfg(windows)]
+    {
+        assert!(script.contains(&format!(
+            "--user-data-dir {}",
+            testing::batch_quote(&user_data_dir.display().to_string())
+        )));
+        assert!(script.contains(&format!(
+            "--extensions-dir {}",
+            testing::batch_quote(&extensions_dir.display().to_string())
+        )));
+        assert!(!script.contains("100% dir"), "bare percent left unescaped");
+    }
+    #[cfg(not(windows))]
+    {
+        assert!(script.contains(&format!(
+            "--user-data-dir {}",
+            testing::shell_single_quote(&user_data_dir.display().to_string())
+        )));
+        assert!(script.contains(&format!(
+            "--extensions-dir {}",
+            testing::shell_single_quote(&extensions_dir.display().to_string())
+        )));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn replace_symlink_replaces_existing_link() -> Result<(), Box<dyn std::error::Error>> {

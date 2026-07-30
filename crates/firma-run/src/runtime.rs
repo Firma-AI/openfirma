@@ -816,6 +816,19 @@ mod tests {
     use super::{RunIdentity, build_execution_env};
     use crate::backend::SandboxHandle;
 
+    /// Quotes a path the way the platform's VS Code shim does.
+    fn quote_shim_path(path: &std::path::Path) -> String {
+        let value = path.display().to_string();
+        #[cfg(windows)]
+        {
+            super::vscode::testing::batch_quote(&value)
+        }
+        #[cfg(not(windows))]
+        {
+            super::vscode::testing::shell_single_quote(&value)
+        }
+    }
+
     #[test]
     fn appended_ca_bundle_concatenates_system_roots_and_firma_ca() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -1420,8 +1433,17 @@ mod tests {
         assert!(script.contains("--no-sandbox"));
         assert!(script.contains("--wait"));
         assert!(script.contains("--new-window"));
-        assert!(script.contains("--user-data-dir"));
-        assert!(script.contains("--extensions-dir"));
+        // Assert the substituted paths, not just the flag names: the shim now
+        // bakes them in as literals, so a quoting regression would still leave
+        // the flags present but point VS Code outside the managed state dir.
+        assert!(script.contains(&format!(
+            "--user-data-dir {}",
+            quote_shim_path(&state_dir.join("user-data"))
+        )));
+        assert!(script.contains(&format!(
+            "--extensions-dir {}",
+            quote_shim_path(&state_dir.join("extensions"))
+        )));
         assert!(script.contains(&real_code.display().to_string()));
         assert!(!env.contains_key("FIRMA_RUN_VSCODE_USER_DATA_DIR"));
         assert!(!env.contains_key("FIRMA_RUN_VSCODE_EXTENSIONS_DIR"));
