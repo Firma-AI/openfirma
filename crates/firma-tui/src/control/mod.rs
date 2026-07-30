@@ -25,13 +25,13 @@ pub use bindings::{BindingHint, footer_entries};
 pub use command::{ControlCommand, ControlEffect, SelectionMovement};
 pub use error::{
     AuditSourceError, ControlError, EditorError, ErrorMessage, PolicyDiscoveryError,
-    PolicyRewriteError, RuntimeError,
+    PolicyRewriteError, RewriteEventProbeError, RuntimeError,
 };
 pub use event::{Event, Sources, TerminalEventSource, next_with_terminal};
 pub use input::{command_for_key, handle_key};
 pub use policies::PolicyStateReader;
 pub use render::render;
-pub use rewrite::{PolicyRewriteEvent, PolicyRewriteHandler};
+pub use rewrite::{PolicyRewriteEvent, PolicyRewriteHandler, RewriteEventProbe};
 pub use runner::{ControlCrankOutcome, EventKind, HeadlessRunner};
 pub use state::{
     AuditDecision, AuditFilter, AuditRow, AuditViewportMode, ControlRuntimeState, ControlStatus,

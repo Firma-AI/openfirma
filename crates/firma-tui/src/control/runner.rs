@@ -10,7 +10,7 @@ use crate::control::{
     app::App,
     command::ControlEffect,
     event::{self, Event, Sources},
-    rewrite::PolicyRewriteHandler,
+    rewrite::{PolicyRewriteHandler, RewriteEventProbe},
     state::AuditRow,
     terminal::Tui,
 };
@@ -108,6 +108,29 @@ impl<'a> HeadlessRunner<'a> {
             app: App::new(policy_dir, audit_rows.is_some()),
             sources: Sources::with_policy_rewrite_handler(audit_rows, handler),
         }
+    }
+
+    /// Creates a headless runner with an injected rewrite handler and dispatch
+    /// probe.
+    ///
+    /// The returned probe observes events only after they have been sent to the
+    /// runner channel. Tests use it when they need to distinguish "the handler
+    /// returned" from "the event pump can now see the completion".
+    #[must_use]
+    pub fn with_observed_policy_rewrite_handler(
+        policy_dir: Option<PathBuf>,
+        audit_rows: Option<&'a Receiver<AuditRow>>,
+        handler: PolicyRewriteHandler,
+    ) -> (Self, RewriteEventProbe) {
+        let (sources, rewrite_probe) =
+            Sources::with_observed_policy_rewrite_handler(audit_rows, handler);
+        (
+            Self {
+                app: App::new(policy_dir, audit_rows.is_some()),
+                sources,
+            },
+            rewrite_probe,
+        )
     }
 
     /// Returns the current application state.

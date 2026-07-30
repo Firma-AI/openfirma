@@ -104,7 +104,7 @@ fn rewrite_beats_audit() -> anyhow::Result<()> {
         completed,
     } = blocking_first_rewrite_handler();
     let mut release_rewrite = RewriteRelease::new(release);
-    let mut runner = HeadlessRunner::with_policy_rewrite_handler(
+    let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
         Some(temp.path().to_path_buf()),
         Some(&audit_rx),
         handler,
@@ -137,6 +137,7 @@ fn rewrite_beats_audit() -> anyhow::Result<()> {
         completed.recv_timeout(REWRITE_TEST_TIMEOUT)?,
         vec!["policy_one".to_string()]
     );
+    rewrite_probe.wait_for_completed(REWRITE_TEST_TIMEOUT)?;
     let completion_outcome = runner.try_crank(&FakeTerminal::default())?;
 
     assert_eq!(

@@ -3,6 +3,7 @@
 use std::{
     fmt,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use thiserror::Error;
@@ -34,6 +35,20 @@ impl ErrorMessage {
     pub fn capture(error: impl fmt::Display) -> Self {
         Self::new(error.to_string())
     }
+}
+
+/// Error returned while waiting on a rewrite event probe.
+#[derive(Debug, Error)]
+pub enum RewriteEventProbeError {
+    /// The expected event was not observed before the wait budget expired.
+    #[error("rewrite completion event was not observed within {timeout:?}")]
+    Timeout {
+        /// Total timeout supplied by the caller.
+        timeout: Duration,
+    },
+    /// The rewrite worker side of the probe was dropped before completion.
+    #[error("rewrite event probe disconnected before completion was observed")]
+    Disconnected,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
