@@ -4,7 +4,7 @@ use crate::support::{
     BlockingRewriteHandler, FakeTerminal, REWRITE_TEST_TIMEOUT, RewriteRelease, audit_channel,
     audit_channel_with_rows, blocking_first_rewrite_handler, crank_until, generated_policy_ids,
     generated_policy_source, permit_policy, policy_status, send_audit_rows,
-    write_named_policy_file, write_policy_file,
+    wait_for_rewrite_event_dispatch, write_named_policy_file, write_policy_file,
 };
 use crossterm::event::KeyCode;
 use firma_tui::control::{
@@ -137,6 +137,15 @@ fn rewrite_beats_audit() -> anyhow::Result<()> {
         completed.recv_timeout(REWRITE_TEST_TIMEOUT)?,
         vec!["policy_one".to_string()]
     );
+    // The completion signal above fires from inside the test handler, which
+    // runs before the queue's worker thread pushes the real
+    // `PolicyRewriteEvent::Completed` onto its own channel: there is an
+    // unavoidable gap between "handler returned" and "event enqueued". A
+    // `try_crank` sampled inside that gap would find no rewrite event yet
+    // and drain the pending audit rows instead, so give the worker thread a
+    // moment to finish its dispatch before taking the one decisive crank
+    // this test asserts on.
+    wait_for_rewrite_event_dispatch();
     let completion_outcome = runner.try_crank(&FakeTerminal::default())?;
 
     assert_eq!(

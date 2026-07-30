@@ -265,6 +265,20 @@ pub fn indexed_audit_row(index: usize) -> AuditRow {
 
 pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Gives the rewrite worker thread a moment to enqueue its
+/// `PolicyRewriteEvent` after a test's own out-of-band completion signal
+/// fires.
+///
+/// Test rewrite handlers report "started"/"completed" on their own channel
+/// from inside the handler closure, which necessarily runs before the queue
+/// worker pushes the corresponding `PolicyRewriteEvent` onto its own
+/// channel. Tests that immediately assert on `try_crank` picking up that
+/// event over other ready sources need this margin so they do not sample
+/// the event queue inside that gap.
+pub fn wait_for_rewrite_event_dispatch() {
+    thread::sleep(Duration::from_millis(20));
+}
+
 pub struct BlockingRewriteHandler {
     pub handler: PolicyRewriteHandler,
     pub release: Sender<()>,
