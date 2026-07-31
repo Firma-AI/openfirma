@@ -64,7 +64,7 @@ pub(super) fn prepare_vscode_shim(
         ))
     })?;
 
-    let script = vscode_shim_script(&real_code);
+    let script = vscode_shim_script(&real_code, &user_data_dir, &extensions_dir);
     std::fs::write(&shim_path, script).map_err(|error| {
         RunError::Internal(format!(
             "write VS Code shim {}: {error}",
@@ -75,14 +75,6 @@ pub(super) fn prepare_vscode_shim(
     set_executable_permissions(&shim_path)?;
     seed_vscode_user_settings(&user_data_dir)?;
 
-    env.insert(
-        "FIRMA_RUN_VSCODE_USER_DATA_DIR".to_string(),
-        user_data_dir.display().to_string(),
-    );
-    env.insert(
-        "FIRMA_RUN_VSCODE_EXTENSIONS_DIR".to_string(),
-        extensions_dir.display().to_string(),
-    );
     env.insert(
         "TMPDIR".to_string(),
         desktop_runtime_dir.display().to_string(),
@@ -457,35 +449,49 @@ pub(super) fn vscode_shim_path(shim_dir: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn vscode_shim_script(real_code: &Path) -> String {
+fn vscode_shim_script(real_code: &Path, user_data_dir: &Path, extensions_dir: &Path) -> String {
     let quoted_real_code = batch_quote(&real_code.display().to_string());
+    let quoted_user_data_dir = batch_quote(&user_data_dir.display().to_string());
+    let quoted_extensions_dir = batch_quote(&extensions_dir.display().to_string());
     format!(
         "@echo off\r\n\
          setlocal\r\n\
-         if \"%FIRMA_RUN_VSCODE_USER_DATA_DIR%\"==\"\" exit /b 2\r\n\
-         if \"%FIRMA_RUN_VSCODE_EXTENSIONS_DIR%\"==\"\" exit /b 2\r\n\
          call {quoted_real_code} --no-sandbox --wait --new-window \
-         --user-data-dir \"%FIRMA_RUN_VSCODE_USER_DATA_DIR%\" \
-         --extensions-dir \"%FIRMA_RUN_VSCODE_EXTENSIONS_DIR%\" %*\r\n\
+         --user-data-dir {quoted_user_data_dir} \
+         --extensions-dir {quoted_extensions_dir} %*\r\n\
          exit /b %ERRORLEVEL%\r\n"
     )
 }
 
 #[cfg(not(windows))]
-fn vscode_shim_script(real_code: &Path) -> String {
+fn vscode_shim_script(real_code: &Path, user_data_dir: &Path, extensions_dir: &Path) -> String {
     let quoted_real_code = shell_single_quote(&real_code.display().to_string());
+    let quoted_user_data_dir = shell_single_quote(&user_data_dir.display().to_string());
+    let quoted_extensions_dir = shell_single_quote(&extensions_dir.display().to_string());
     format!(
         "#!/bin/sh\n\
          set -eu\n\
          exec {quoted_real_code} --no-sandbox --wait --new-window \
-         --user-data-dir \"${{FIRMA_RUN_VSCODE_USER_DATA_DIR:?}}\" \
-         --extensions-dir \"${{FIRMA_RUN_VSCODE_EXTENSIONS_DIR:?}}\" \"$@\"\n"
+         --user-data-dir {quoted_user_data_dir} \
+         --extensions-dir {quoted_extensions_dir} \"$@\"\n"
     )
 }
 
+/// Escapes a value for literal inclusion in the generated batch shim.
+///
+/// `cmd.exe` consumes `%` while parsing each line, so a path such as
+/// `C:\100% projects` would otherwise be truncated or replaced by an
+/// environment variable expansion before VS Code ever sees it.
+///
+/// The payload sits on a `call` line, and `call` re-runs percent expansion on
+/// the remainder of the line — the same mechanism that makes `call echo %%VAR%%`
+/// print the variable's value. A literal `%` therefore has to survive *two*
+/// passes, so it is quadrupled rather than doubled:
+/// `%%%%` → `%%` → `%`. `shim_launches_target_with_percent_in_managed_path`
+/// pins this by executing the generated shim.
 #[cfg(windows)]
 fn batch_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
+    format!("\"{}\"", value.replace('"', "\"\"").replace('%', "%%%%"))
 }
 
 #[cfg(not(windows))]
@@ -616,6 +622,27 @@ pub mod testing {
     #[must_use]
     pub fn shell_single_quote(value: &str) -> String {
         super::shell_single_quote(value)
+    }
+
+    /// Escapes a path for inclusion in the Windows batch shim.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn batch_quote(value: &str) -> String {
+        super::batch_quote(value)
+    }
+
+    /// Renders the shim script that launches the host VS Code binary.
+    ///
+    /// The managed state directories are baked into the script as literals, so
+    /// the escaping applied here is what keeps them intact once the shell
+    /// parses the file.
+    #[must_use]
+    pub fn vscode_shim_script(
+        real_code: &Path,
+        user_data_dir: &Path,
+        extensions_dir: &Path,
+    ) -> String {
+        super::vscode_shim_script(real_code, user_data_dir, extensions_dir)
     }
 
     /// Links a Unix desktop socket into the isolated runtime directory.

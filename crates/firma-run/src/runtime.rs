@@ -816,6 +816,19 @@ mod tests {
     use super::{RunIdentity, build_execution_env};
     use crate::backend::SandboxHandle;
 
+    /// Quotes a path the way the platform's VS Code shim does.
+    fn quote_shim_path(path: &std::path::Path) -> String {
+        let value = path.display().to_string();
+        #[cfg(windows)]
+        {
+            super::vscode::testing::batch_quote(&value)
+        }
+        #[cfg(not(windows))]
+        {
+            super::vscode::testing::shell_single_quote(&value)
+        }
+    }
+
     #[test]
     fn appended_ca_bundle_concatenates_system_roots_and_firma_ca() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -1420,17 +1433,20 @@ mod tests {
         assert!(script.contains("--no-sandbox"));
         assert!(script.contains("--wait"));
         assert!(script.contains("--new-window"));
-        assert!(script.contains("--user-data-dir"));
-        assert!(script.contains("--extensions-dir"));
+        // Assert the substituted paths, not just the flag names: the shim now
+        // bakes them in as literals, so a quoting regression would still leave
+        // the flags present but point VS Code outside the managed state dir.
+        assert!(script.contains(&format!(
+            "--user-data-dir {}",
+            quote_shim_path(&state_dir.join("user-data"))
+        )));
+        assert!(script.contains(&format!(
+            "--extensions-dir {}",
+            quote_shim_path(&state_dir.join("extensions"))
+        )));
         assert!(script.contains(&real_code.display().to_string()));
-        assert_eq!(
-            env.get("FIRMA_RUN_VSCODE_USER_DATA_DIR"),
-            Some(&state_dir.join("user-data").display().to_string())
-        );
-        assert_eq!(
-            env.get("FIRMA_RUN_VSCODE_EXTENSIONS_DIR"),
-            Some(&state_dir.join("extensions").display().to_string())
-        );
+        assert!(!env.contains_key("FIRMA_RUN_VSCODE_USER_DATA_DIR"));
+        assert!(!env.contains_key("FIRMA_RUN_VSCODE_EXTENSIONS_DIR"));
         let settings_path = state_dir
             .join("user-data")
             .join("User")
@@ -1484,8 +1500,6 @@ mod tests {
             "#!/bin/sh\n\
              set -eu\n\
              {\n\
-             printf 'USER_DATA=%s\\n' \"$FIRMA_RUN_VSCODE_USER_DATA_DIR\"\n\
-             printf 'EXTENSIONS=%s\\n' \"$FIRMA_RUN_VSCODE_EXTENSIONS_DIR\"\n\
              i=0\n\
              for arg in \"$@\"; do\n\
              printf 'ARG_%s=%s\\n' \"$i\" \"$arg\"\n\
@@ -1535,8 +1549,6 @@ mod tests {
         let extensions_dir = state_dir.join("extensions").display().to_string();
         let record = fs::read_to_string(&record_path).unwrap_or_else(|e| panic!("{e}"));
         let expected = [
-            format!("USER_DATA={user_data_dir}"),
-            format!("EXTENSIONS={extensions_dir}"),
             "ARG_0=--no-sandbox".to_string(),
             "ARG_1=--wait".to_string(),
             "ARG_2=--new-window".to_string(),

@@ -218,6 +218,69 @@ jobs:
             exit 1
           fi
 
+  # The managed VS Code launch suite drives `firma run` end to end, so it needs a
+  # working structural sandbox. That is unavailable in the `check` job, so the
+  # suite is `#[ignore]`d there and selected explicitly here instead.
+  vscode-e2e:
+    name: VS Code E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          rustflags: ""
+
+      - name: Load tool versions
+        shell: bash
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: ${{ env.PROTOC_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@ead08b90bd7b2e6d81963fb9cf0b7239f66d5db4 # v1.21.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-nextest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: command -v cargo-nextest || cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
+        shell: bash
+
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+
+      # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1, which
+      # transitions bwrap to a profile that strips CAP_NET_ADMIN inside its user
+      # namespace, so it cannot bring up loopback (RTM_NEWADDR). Install the
+      # targeted AppArmor profile that lets bwrap keep its caps in the userns.
+      - name: Allow bwrap user namespaces via AppArmor profile
+        run: |
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+              userns,
+              include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
+      # `real_vscode_accepts_managed_launch_contract` is excluded: it needs a real
+      # VS Code desktop binary, which no hosted runner provides. `--no-tests=fail`
+      # keeps a rename from silently turning this job into a no-op.
+      - name: Run managed VS Code launch tests
+        run: cargo nextest run -p firma --test vscode --run-ignored all --no-tests=fail -E 'test(fake_vscode)'
+
   musl:
     name: Musl (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}

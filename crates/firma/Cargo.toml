@@ -84,9 +84,13 @@ wiremock = { workspace = true }
 nix = { workspace = true }
 
 [[test]]
+name = "architecture"
+path = "../../tests/architecture/main.rs"
+
+[[test]]
 name = "e2e"
 path = "../../tests/e2e/main.rs"
 
 [[test]]
-name = "architecture"
-path = "../../tests/architecture/main.rs"
+name = "vscode"
+path = "../../tests/vscode/main.rs"
