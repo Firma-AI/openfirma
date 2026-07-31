@@ -289,9 +289,14 @@ impl LocalExecHandler {
     ///
     /// Every management command must present the configured management token
     /// (constant-time compared). When no token is configured on the endpoint,
-    /// management is disabled fail-closed so the sandboxed agent — which shares
-    /// the sidecar's UID and can reach the same socket — cannot self-approve its
-    /// own pending HITL tokens.
+    /// management is disabled fail-closed.
+    ///
+    /// This token is a **defense-in-depth** control. The primary self-approval
+    /// boundary is socket isolation: `firma-run` shadows the local-exec socket
+    /// with `/dev/null` inside the `bwrap` sandbox so the agent cannot reach this
+    /// endpoint. Under same-UID sandboxing the agent can read the token (env or
+    /// same-UID file), so the token alone does not stop self-approval — it
+    /// protects deployments where the agent could reach a management socket.
     pub fn decide_management(
         &self,
         request: &LocalExecManagementRequest,

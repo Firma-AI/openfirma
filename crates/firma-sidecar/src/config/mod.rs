@@ -921,8 +921,14 @@ pub struct LocalExecConfig {
     /// Environment variable holding the management token that operators must
     /// present on `local.exec.approve` / `local.exec.revoke` commands. Required
     /// to use the HITL approval flow: without it management commands are
-    /// rejected fail-closed, so the sandboxed agent — which shares the
-    /// sidecar's UID — cannot self-approve its own pending tokens.
+    /// rejected fail-closed.
+    ///
+    /// This token is a **defense-in-depth** control, not the primary self-approval
+    /// boundary. The primary boundary is socket isolation: `firma-run` shadows
+    /// the local-exec governance socket with `/dev/null` inside the `bwrap`
+    /// sandbox so the agent cannot reach the management endpoint. Under same-UID
+    /// sandboxing the agent can read this env var (or a same-UID token file), so
+    /// the token alone does not prevent self-approval — rely on socket isolation.
     ///
     /// Mutually exclusive with `management_token_path`.
     #[serde(default)]
@@ -930,7 +936,9 @@ pub struct LocalExecConfig {
 
     /// File containing the management token (read once at startup). Mutually
     /// exclusive with `management_token_env`. Relative paths are rebased
-    /// against the config directory.
+    /// against the config directory. See [`Self::management_token_env`] for
+    /// the defense-in-depth vs. socket-isolation threat model; a same-UID
+    /// agent can read this file.
     #[serde(default)]
     pub management_token_path: Option<PathBuf>,
 }

@@ -25,9 +25,13 @@
 //!
 //! The same-UID peer check cannot distinguish the sandboxed agent (which runs
 //! as the Sidecar's UID and can reach the socket) from the operator, so
-//! management commands (`local.exec.approve` / `local.exec.revoke`) additionally
-//! require an operator management token (see [`super::handler::RedactedManagementToken`]).
-//! Without a configured token, management commands are rejected fail-closed.
+//! self-approval is prevented by **socket isolation**: `firma-run` shadows this
+//! socket with `/dev/null` inside the `bwrap` sandbox, so the agent cannot
+//! `connect()` to it. Management commands (`local.exec.approve` /
+//! `local.exec.revoke`) additionally require an operator management token (see
+//! [`super::handler::RedactedManagementToken`]) as defense-in-depth for
+//! deployments where the agent could reach the socket. Without a configured
+//! token, management commands are rejected fail-closed.
 //!
 //! # Lifecycle
 //!

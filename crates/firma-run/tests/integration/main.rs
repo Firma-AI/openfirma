@@ -14,6 +14,7 @@ mod capability_refresh;
 mod capability_routing;
 mod helper;
 mod identity;
+mod local_exec_socket_isolation;
 mod log;
 mod profile_alias;
 mod sidecar_autostart_env_sandbox_id;

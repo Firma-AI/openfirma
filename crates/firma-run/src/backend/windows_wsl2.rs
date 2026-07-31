@@ -276,6 +276,7 @@ mod tests {
             },
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
+            local_exec_socket: None,
         }
     }
 

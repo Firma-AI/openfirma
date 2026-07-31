@@ -1014,6 +1014,7 @@ mod tests {
             sidecar_endpoint: test_sidecar_endpoint(),
             seccomp_filter_path: None,
             identity_mode: SandboxIdentityMode::SandboxUser,
+            local_exec_socket: None,
         }
     }
 

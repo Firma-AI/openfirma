@@ -121,6 +121,15 @@ for _firma_var in $(env | grep '^FIRMA_RUN_' | cut -d= -f1 || true); do
 done
 unset _firma_var
 
+# Defense-in-depth: also strip FIRMA_LOCAL_EXEC_* (the management-token env and
+# related control vars) so a leaked token is useless even if the bwrap socket
+# mask is ever bypassed. The local-exec governance socket itself is shadowed
+# with /dev/null in the sandbox by firma-run; this only closes the env leak.
+for _firma_var in $(env | grep '^FIRMA_LOCAL_EXEC_' | cut -d= -f1 || true); do
+  unset "$_firma_var"
+done
+unset _firma_var
+
 # Run wrapped command in the foreground so interactive CLIs keep terminal semantics.
 # When the loopback egress guard is wired, launch the agent through the
 # guarded runner: it installs the seccomp connect filter, hands the listener fd

@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 #[cfg(target_os = "linux")]
 use std::{fs::File, os::fd::AsRawFd};
@@ -256,6 +257,12 @@ impl SandboxBackend for BwrapBackend {
             }
         }
 
+        // Isolate the sidecar's local-exec governance socket from the sandboxed
+        // agent (shadow it with /dev/null + strip the management-token env var).
+        // The agent shares the sidecar's UID and reaches sibling sockets through
+        // the root bind; without this it could self-approve pending HITL tokens.
+        apply_local_exec_isolation(&mut command, launch);
+
         for (key, value) in &launch.env {
             command.arg("--setenv").arg(key).arg(value);
         }
@@ -459,6 +466,54 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[
     }
 }
 
+/// Build the bwrap arguments that mask the sidecar's local-exec governance
+/// socket from the sandboxed agent.
+///
+/// The agent runs as the sidecar's UID and can reach sibling sockets via the
+/// root bind, so a reachable `decide` / `decide_management` endpoint would let a
+/// sandboxed agent self-approve pending HITL tokens (the management token it
+/// could read from the inherited environment or a same-UID file is not a
+/// sufficient barrier). Overlaying `/dev/null` over the socket path inside the
+/// sandbox shadows it: the agent sees `/dev/null` and `connect()` fails, while
+/// `firma-run` mediates `decide` in the parent (host) process and the operator
+/// reaches management on the host.
+///
+/// Returns `--ro-bind /dev/null <socket>` for an absolute Unix socket path, or
+/// an empty vec when governance is absent or uses a TCP endpoint (left to the
+/// sidecar's management-token gate). Only absolute paths are masked: bwrap
+/// resolves mount destinations inside the sandbox root, so a relative path
+/// would not target the real socket.
+#[must_use]
+pub fn local_exec_socket_mask_args(socket: Option<&Path>) -> Vec<std::ffi::OsString> {
+    socket
+        .filter(|p| p.is_absolute())
+        .map_or_else(Vec::new, |p| {
+            vec![
+                OsStr::new("--ro-bind").into(),
+                OsStr::new("/dev/null").into(),
+                p.as_os_str().into(),
+            ]
+        })
+}
+
+/// Isolate the sidecar's local-exec governance socket from the sandboxed agent.
+///
+/// Shadow the socket with `/dev/null` (see [`local_exec_socket_mask_args`]) and
+/// strip the canonical management-token env var as defense-in-depth, so a
+/// leaked token is useless even if the socket mask is ever bypassed. Custom
+/// `management_token_env` names are not knowable here and rely on the socket
+/// mask.
+fn apply_local_exec_isolation(command: &mut Command, launch: &LaunchSpec) {
+    for arg in local_exec_socket_mask_args(launch.local_exec_socket.as_deref()) {
+        command.arg(arg);
+    }
+    if launch.local_exec_socket.is_some() {
+        command
+            .arg("--unsetenv")
+            .arg("FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN");
+    }
+}
+
 fn command_available(binary: &str) -> bool {
     Command::new(binary)
         .arg("--version")
@@ -640,6 +695,7 @@ mod tests {
             },
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
+            local_exec_socket: None,
         };
         let suffixes = vec![
             ".ssh".to_string(),

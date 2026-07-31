@@ -42,6 +42,7 @@ pub enum NetworkConfinement {
 
 pub use firecracker::FirecrackerBackend;
 pub use linux_bwrap::BwrapBackend;
+pub use linux_bwrap::local_exec_socket_mask_args;
 pub use macos_vz::VzBackend;
 pub use windows_wsl2::Wsl2Backend;
 
@@ -148,6 +149,17 @@ pub struct LaunchSpec {
     /// loading instead of relying on environment-variable indirection.
     pub seccomp_filter_path: Option<PathBuf>,
     pub identity_mode: SandboxIdentityMode,
+    /// Absolute path of the sidecar's local-exec governance Unix socket, when
+    /// local-exec governance is configured for this profile.
+    ///
+    /// Backends that share the host mount namespace with the sandboxed agent
+    /// (notably `bwrap`, which runs the agent as the sidecar's UID) use this to
+    /// mask the socket from the agent's mount namespace, so the agent cannot
+    /// reach the `decide` / `decide_management` endpoint. `firma-run` mediates
+    /// `decide` in the parent (host) process and the operator reaches management
+    /// on the host, so the agent needs no access to this socket. `None` when
+    /// local-exec governance is absent or uses a TCP endpoint.
+    pub local_exec_socket: Option<PathBuf>,
 }
 
 /// Backend interface for sandbox runtime implementations.
