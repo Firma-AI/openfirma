@@ -5,8 +5,11 @@ use http::uri::Authority;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
-use super::{MatcherError, domain::parse_authority, non_empty::NonEmptyStr};
-use crate::{Secret, SecretPlaceholder};
+use crate::{
+    SecretPlaceholder, SecretString,
+    matcher::{MatcherError, domain::parse_authority},
+    non_empty::NonEmptyStr,
+};
 
 /// Compiled record-relative `JSONPath` selectors.
 #[derive(Debug)]
@@ -76,7 +79,12 @@ impl CompiledJsonMatcher {
     pub(super) fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(String, Secret, HashSet<Authority>, Option<String>) -> SecretPlaceholder,
+        mint: &mut impl FnMut(
+            String,
+            SecretString,
+            HashSet<Authority>,
+            Option<String>,
+        ) -> SecretPlaceholder,
     ) -> Result<Vec<u8>, MatcherError> {
         let mut root: Value = serde_json::from_slice(output).map_err(MatcherError::Json)?;
 
@@ -158,12 +166,7 @@ impl CompiledJsonMatcher {
         for (((value_hit, name), item), domain) in
             value_hits.into_iter().zip(names).zip(items).zip(domains)
         {
-            let placeholder = mint(
-                name,
-                Secret::new(value_hit.value.into_bytes()),
-                domain,
-                item,
-            );
+            let placeholder = mint(name, SecretString::from(value_hit.value), domain, item);
             if let Some(slot) = root.pointer_mut(&value_hit.pointer) {
                 *slot = Value::String(placeholder.to_string());
             }
@@ -202,7 +205,7 @@ impl CompiledJsonSelector {
                 .collect(),
             SecretJsonSelectorScope::Document => {
                 let nodes = self.path.query(root);
-                if nodes.len() != 1 {
+                if nodes.len() > 1 {
                     return Err(MatcherError::DocumentSelectorMatchCount {
                         selector: selector_name,
                         matches: nodes.len(),
@@ -218,11 +221,10 @@ impl CompiledJsonSelector {
         }
     }
 
-    /// Like [`Self::resolve_optional`], but accepts any number of matched
-    /// nodes rather than requiring exactly one: every string node
-    /// contributes an entry, non-string nodes are skipped, and zero matches
-    /// yield an empty list. Used for `domain_selector`, where a secret may
-    /// legitimately be scoped to more than one host.
+    /// Resolves one or more domain nodes at each applicable root. Every node
+    /// must be a string that passes `validate`; results are deduplicated into
+    /// a set. Zero matches, non-string nodes, or validation failures reject
+    /// the complete extraction before minting.
     fn resolve_many<T>(
         &self,
         root: &Value,
@@ -238,12 +240,23 @@ impl CompiledJsonSelector {
                 .iter()
                 .enumerate()
                 .map(|(record_index, record)| {
-                    self.path
+                    let set = self
+                        .path
                         .query(record.node)
                         .iter()
-                        .filter_map(|node| node.as_str())
-                        .map(|node| validate(node, selector_name, record_index))
-                        .collect()
+                        .map(|node| {
+                            node.as_str()
+                                .map(|node| validate(node, selector_name, record_index))
+                                .ok_or(MatcherError::NonStringNode {
+                                    selector: selector_name,
+                                    record_index,
+                                })?
+                        })
+                        .collect::<Result<HashSet<_>, _>>()?;
+                    if set.is_empty() {
+                        return Err(MatcherError::NoDomainMatched);
+                    }
+                    Ok(set)
                 })
                 .collect(),
             SecretJsonSelectorScope::Document => {
@@ -251,9 +264,18 @@ impl CompiledJsonSelector {
                     .path
                     .query(root)
                     .iter()
-                    .filter_map(|node| node.as_str())
-                    .map(|node| validate(node, selector_name, 0))
+                    .map(|node| {
+                        node.as_str()
+                            .map(|node| validate(node, selector_name, 0))
+                            .ok_or(MatcherError::NonStringNode {
+                                selector: selector_name,
+                                record_index: 0,
+                            })?
+                    })
                     .collect::<Result<HashSet<_>, _>>()?;
+                if values.is_empty() {
+                    return Err(MatcherError::NoDomainMatched);
+                }
                 Ok(std::iter::repeat_n(values, records.len()).collect())
             }
         }

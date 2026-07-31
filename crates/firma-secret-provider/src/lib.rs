@@ -10,17 +10,14 @@
 
 mod gateway;
 mod matcher;
+pub mod non_empty;
 mod placeholder;
 mod registry;
-mod secret;
-mod spec;
+pub mod spec;
 
 pub use gateway::{GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest};
 pub use matcher::{CompiledMatcher, MatcherError};
 pub use placeholder::SecretPlaceholder;
 pub use registry::IntegrationRegistry;
-pub use secret::Secret;
-pub use spec::{
-    CliArgsResolution, CliIntegrationSpec, CliMatcherRule, CliSpecError, HttpIntegrationSpec,
-    HttpMatcherRule, IntegrationSpec,
-};
+pub use secrecy::SecretString;
+pub use spec::{IntegrationSpec, MatcherRule, MatchingResolution};

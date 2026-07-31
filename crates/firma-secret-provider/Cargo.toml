@@ -13,13 +13,13 @@ firma-core = { workspace = true }
 firma-http = { workspace = true }
 http = { workspace = true }
 regex = { workspace = true }
+secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_json_path = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 type-safe-id = { workspace = true }
-zeroize = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

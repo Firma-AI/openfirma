@@ -43,7 +43,7 @@ Do not use `.unwrap()`, `.expect()`, `panic!()`, or `unsafe`. Prefer
 ## Rust Tests
 
 Before adding or moving Rust tests, load and follow the
-[`rust-tests-guidelines`](.claude/skills/rust-tests-guidelines/SKILL.md) skill.
+[`rust-tests-guidelines`](.skills/rust-tests-guidelines/SKILL.md) skill.
 
 ## Supported Platforms
 

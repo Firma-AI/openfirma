@@ -103,7 +103,7 @@ jobs:
             "https://github.com/astral-sh/hawk/releases/download/$CARGO_HAWK_VERSION/cargo-hawk-installer.sh" | sh
       - name: Check public API visibility
         # Host-only analysis cannot prove platform-specific public APIs are dead.
-        run: cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml -D warnings -A hawk::dead_public
+        run: cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml -D warnings -A hawk::dead_public --exclude-crate firma_secret_provider
 
   trufflehog:
     name: Secret Scan

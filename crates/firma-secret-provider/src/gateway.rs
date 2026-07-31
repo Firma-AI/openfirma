@@ -50,19 +50,20 @@ pub struct PushRequest<'a> {
     pub placeholder: Str<'a>,
     /// Base64-encoded plaintext secret value.
     pub value_b64: Str<'a>,
-    /// Host the secret is scoped to, mirroring a CLI intercept's
-    /// `domain_path`-derived scope: `Some(host)` when the matcher's
-    /// `domain_path` extracted a host from the item, `None` when it
-    /// did not (the secret then resolves for any request host).
-    #[serde(borrow, default)]
-    pub domain: Option<Str<'a>>,
+    /// Hosts the secret is scoped to, mirroring a CLI intercept's
+    /// `domain_selector`-derived scope: one entry per host the matcher
+    /// extracted from the item. A secret may legitimately be scoped to more
+    /// than one host; an empty vector means the secret is unscoped and
+    /// resolves for any request host.
+    #[serde(borrow)]
+    pub domain: Vec<Str<'a>>,
 }
 
 /// Per-placeholder outcome of a [`ResolveRequest`]. One placeholder failing
 /// to resolve (unknown token, wrong domain scope) does not fail the whole
 /// batch — each entry reports its own success or error.
 #[derive(Deserialize, Serialize)]
-#[serde(untagged)]
+#[serde(tag = "type")]
 pub enum PlaceholderResult<'a> {
     /// Base64-encoded plaintext secret value.
     Ok {
@@ -76,7 +77,7 @@ pub enum PlaceholderResult<'a> {
 
 /// Outcome of a [`PushRequest`].
 #[derive(Deserialize, Serialize)]
-#[serde(untagged)]
+#[serde(tag = "type")]
 pub enum PushResponse<'a> {
     /// Echoes back the stored placeholder token.
     Ok {

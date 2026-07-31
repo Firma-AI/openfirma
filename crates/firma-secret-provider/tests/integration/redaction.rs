@@ -1,5 +1,6 @@
 use firma_core::SecretJsonSelectorScope;
 use firma_secret_provider::{CompiledMatcher, MatcherError, SecretPlaceholder};
+use secrecy::ExposeSecret;
 
 use crate::support::{json, json_with_metadata, selector};
 
@@ -11,7 +12,7 @@ fn secret_does_not_leak_contents() {
         .rewrite(
             br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB"}]"#,
             &mut |_, value, _, _| {
-                secrets.push((value.to_string(), format!("{value:?}")));
+                secrets.push((value.expose_secret().to_owned(), format!("{value:?}")));
                 SecretPlaceholder::new()
             },
         )
@@ -19,14 +20,14 @@ fn secret_does_not_leak_contents() {
     assert_eq!(
         secrets,
         [
-            ("<secret>".to_owned(), "<secret>".to_owned()),
-            ("<secret>".to_owned(), "<secret>".to_owned())
+            ("AAA".to_owned(), "SecretBox<str>([REDACTED])".to_owned()),
+            ("BBB".to_owned(), "SecretBox<str>([REDACTED])".to_owned())
         ]
     );
 }
 
 #[test]
-fn hostless_uri_error_does_not_expose_domain_value() {
+fn hostless_uri_error_redacts_query_secret() {
     let sensitive_domain = "/vault/path?token=super-secret";
     let matcher = json_with_metadata(
         "$[*]",
@@ -51,7 +52,7 @@ fn hostless_uri_error_does_not_expose_domain_value() {
 }
 
 #[test]
-fn authenticated_uri_error_does_not_expose_domain_value() {
+fn authenticated_uri_error_redacts_credentials() {
     let sensitive_domain = "username:super-secret@/value/path";
     let matcher = json_with_metadata(
         "$[*]",
