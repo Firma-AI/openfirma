@@ -25,7 +25,7 @@ version = "0.1.6"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/Firma-AI/openfirma"
-rust-version = "1.96"
+rust-version = "1.97"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
