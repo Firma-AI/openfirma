@@ -12,10 +12,14 @@ use firma_runtime_state::pidfile;
 /// Result of a [`stop`] call.
 #[derive(Debug, Clone)]
 pub struct StopOutcome {
-    /// `true` if at least one component required a hard kill
-    /// (`SIGKILL` / `TerminateProcess`) because the soft-signal grace
-    /// window expired; `false` when every child exited cleanly within the
-    /// configured timeout.
+    /// `true` if at least one component still had a platform termination
+    /// target after the soft-signal grace window and a hard termination
+    /// (`SIGKILL` / `TerminateProcess`) was requested; `false` when every
+    /// target disappeared within the configured timeout.
+    ///
+    /// On Unix, the kernel can report a process group containing only
+    /// unreaped zombies as present, resulting in a conservative hard-kill
+    /// request even though no process in the group is still executing.
     pub forced: bool,
 }
 
@@ -39,7 +43,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         .into_iter()
         .flatten()
     {
-        if pid.is_alive() {
+        if SystemPlatform::termination_target_exists(pid.get()) {
             debug!(pid = %pid, "sending soft signal");
             if let Err(e) = SystemPlatform::signal_soft(pid.get()) {
                 // Not fatal: hard-kill will still run after the grace window.
@@ -53,8 +57,10 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        let authority_dead = authority_pid.is_none_or(|pid| !pid.is_alive());
-        let sidecar_dead = sidecar_pid.is_none_or(|pid| !pid.is_alive());
+        let authority_dead =
+            authority_pid.is_none_or(|pid| !SystemPlatform::termination_target_exists(pid.get()));
+        let sidecar_dead =
+            sidecar_pid.is_none_or(|pid| !SystemPlatform::termination_target_exists(pid.get()));
         if authority_dead && sidecar_dead {
             info!("all children exited cleanly");
             cleanup(state_dir)?;
@@ -70,7 +76,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         .into_iter()
         .flatten()
     {
-        if pid.is_alive() {
+        if SystemPlatform::termination_target_exists(pid.get()) {
             info!(pid = %pid, "soft-signal grace exceeded; hard-killing");
             let _ = SystemPlatform::signal_hard(pid.get());
             forced = true;

@@ -166,7 +166,7 @@ fn rollback(state_dir: &Path) {
     // original failure that triggered this path.
     for name in ["authority.pid", "sidecar.pid"] {
         if let Ok(Some(pid)) = pidfile::read(&state_dir.join(name))
-            && pid.is_alive()
+            && SystemPlatform::termination_target_exists(pid.get())
         {
             let _ = SystemPlatform::signal_hard(pid.get());
         }

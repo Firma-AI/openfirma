@@ -11,7 +11,7 @@ use nix::unistd::Pid;
 
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
-use firma_runtime_state::ChildExt as _;
+use firma_runtime_state::{ChildExt as _, UserProcessId};
 
 pub struct UnixPlatform;
 
@@ -24,6 +24,21 @@ fn raw_pid(pid: u32) -> Result<Pid> {
 impl Platform for UnixPlatform {
     fn new_group() -> Result<Group> {
         Ok(Group { pgid: 0 })
+    }
+
+    fn termination_target_exists(group_pid: u32) -> bool {
+        // Reap the leader when it is our direct child before probing the group.
+        // Otherwise a leader-only group remains visible while its zombie waits
+        // to be reaped, causing an unnecessary hard-kill escalation.
+        if let Some(pid) = UserProcessId::new(group_pid) {
+            let _ = pid.is_alive();
+        }
+        raw_pid(group_pid).is_ok_and(|pid| {
+            matches!(
+                killpg(pid, None::<Signal>),
+                Ok(()) | Err(nix::errno::Errno::EPERM)
+            )
+        })
     }
 
     fn spawn_in_group(group: &Group, cmd: &mut Command, log_path: &Path) -> Result<SpawnedChild> {
