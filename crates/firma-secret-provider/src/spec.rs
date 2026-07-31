@@ -10,6 +10,8 @@
 
 use firma_core::SecretMatcher;
 
+use crate::non_empty::NonEmptyVec;
+
 /// A resolved secret-provider integration: either a CLI vault tool or an
 /// HTTP vault.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -87,61 +89,46 @@ impl CliIntegrationSpec {
     /// args: apply a matcher, forward stdout unredacted as a known-safe
     /// pass-through, or block the invocation outright.
     ///
-    /// Rules with a specific `args_match` prefix are tried first, in
-    /// declaration order; a rule with `args_match: None` is the fallback
-    /// default. The selected rule's `matcher` decides the outcome: `Some`
-    /// extracts and redacts via that matcher, `None` is a known-safe
-    /// pass-through (the rule exists only to name an argv shape that never
-    /// emits secret material). If no rule matches and there is no fallback,
-    /// the invocation is [`CliArgsResolution::Blocked`].
+    /// Follows a specific order:
+    /// * first blocked commands, that should be forbidden no matter what
+    /// * second sensitive commands, to apply secret redaction
+    /// * third safe commands, to let through without redaction
+    ///
+    /// Any command not falling in any of those rules will be blocked as an
+    /// extra safety measure.
     #[must_use]
     pub fn resolve_args(&self, args: &[String]) -> CliArgsResolution<'_> {
-        let rule = self
-            .matchers
-            .iter()
-            .find(|rule| {
-                rule.args_match
-                    .as_deref()
-                    .is_some_and(|prefix| args.starts_with(prefix))
-            })
-            .or_else(|| self.matchers.iter().find(|rule| rule.args_match.is_none()));
-
-        match rule {
-            Some(CliMatcherRule {
-                matcher: Some(matcher),
-                ..
-            }) => CliArgsResolution::Matcher(matcher),
-            Some(CliMatcherRule { matcher: None, .. }) => CliArgsResolution::PassThrough,
-            None => CliArgsResolution::Blocked,
-        }
-    }
-
-    /// Validates the spec's `matchers`.
-    ///
-    /// Rejects a rule that combines `args_match: None` (the spec's
-    /// fallback, selected when no more specific rule matches) with
-    /// `matcher: None` (a pass-through, forwarding stdout unredacted with no
-    /// extraction). Unlike a pass-through scoped to a specific `args_match`
-    /// prefix, that combination applies to *every* invocation not caught by
-    /// a more specific rule, silently defeating
-    /// [`CliIntegrationSpec::resolve_args`]'s fail-closed default — almost
-    /// certainly not what was intended.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CliSpecError::AmbiguousFallbackPassThrough`] if such a rule
-    /// is present.
-    pub fn validate(&self) -> Result<(), CliSpecError> {
+        // blocked commands
         if self
             .matchers
             .iter()
-            .any(|rule| rule.args_match.is_none() && rule.matcher.is_none())
+            .filter_map(CliMatcherRule::as_blocked_command)
+            .any(|args_and_matcher| args.starts_with(&args_and_matcher.args_match))
         {
-            return Err(CliSpecError::AmbiguousFallbackPassThrough {
-                binary_name: self.binary_name.clone(),
-            });
+            return CliArgsResolution::Blocked;
         }
-        Ok(())
+
+        // sensitive commands
+        if let Some(args_and_matcher) = self
+            .matchers
+            .iter()
+            .filter_map(CliMatcherRule::as_sensitive_command)
+            .find(|args_and_matcher| args.starts_with(&args_and_matcher.args_match))
+        {
+            return CliArgsResolution::Matcher(&args_and_matcher.matcher);
+        }
+
+        // safe commands
+        if self
+            .matchers
+            .iter()
+            .filter_map(CliMatcherRule::as_safe_command)
+            .any(|args_and_matcher| args.starts_with(&args_and_matcher.args_match))
+        {
+            return CliArgsResolution::PassThrough;
+        }
+
+        CliArgsResolution::Blocked
     }
 
     /// Rewrites the shim-requested args for the actual subprocess
@@ -180,41 +167,59 @@ pub enum CliArgsResolution<'a> {
     Blocked,
 }
 
-/// Errors from validating a [`CliIntegrationSpec`]. See
-/// [`CliIntegrationSpec::validate`].
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CliSpecError {
-    /// A rule combines `args_match: None` (the spec's fallback) with
-    /// `matcher: None` (a pass-through), so it silently forwards every
-    /// invocation not caught by a more specific rule instead of failing
-    /// closed to [`CliArgsResolution::Blocked`].
-    #[error(
-        "{binary_name}: a matcher rule combines args_match: None (fallback) with matcher: None \
-         (pass-through), which passes every unmatched invocation through unredacted instead of \
-         failing closed; give the fallback rule a real matcher or remove it"
-    )]
-    AmbiguousFallbackPassThrough {
-        /// The spec's binary name, for a useful error message.
-        binary_name: String,
-    },
-}
-
 /// One candidate rule for a [`CliIntegrationSpec`], scoped to invocations
 /// whose args start with `args_match` (or to any invocation, if `None`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CliMatcherRule {
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CliMatcherRule {
+    /// Command we want to redact secret from
+    SensitiveCommand(ArgsAndMatcher),
+    /// Command we let through without redaction
+    SafeCommand(ArgsOnly),
+    /// Command we know should be forbidden no matter what
+    BlockedCommand(ArgsOnly),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArgsAndMatcher {
     /// Argv prefix (subcommand and positional args, e.g. `["secret",
     /// "get"]`) that an invocation's args must start with to select this
-    /// rule. `None` matches any invocation and acts as the spec's fallback.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args_match: Option<Vec<String>>,
-    /// How to extract `(name, value)` pairs from the tool's stdout. `None`
-    /// marks `args_match` as a known-safe pass-through: an argv shape that
-    /// never emits secret material, so stdout is forwarded unredacted with
-    /// no extraction attempted. Combining this with `args_match: None` is
-    /// rejected by [`CliIntegrationSpec::validate`] — see that method's docs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matcher: Option<SecretMatcher>,
+    /// rule.
+    #[serde(default)]
+    pub args_match: Vec<String>,
+    /// How to extract `(name, value)` pairs from the tool's stdout.
+    pub matcher: SecretMatcher,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArgsOnly {
+    /// Argv prefix (subcommand and positional args, e.g. `["secret",
+    /// "get"]`) that an invocation's args must start with to select this
+    /// rule.
+    pub args_match: NonEmptyVec<String>,
+}
+
+impl CliMatcherRule {
+    fn as_sensitive_command(&self) -> Option<&ArgsAndMatcher> {
+        match self {
+            Self::SensitiveCommand(args_and_matcher) => Some(args_and_matcher),
+            _ => None,
+        }
+    }
+
+    fn as_safe_command(&self) -> Option<&ArgsOnly> {
+        match self {
+            Self::SafeCommand(args) => Some(args),
+            _ => None,
+        }
+    }
+
+    fn as_blocked_command(&self) -> Option<&ArgsOnly> {
+        match self {
+            Self::BlockedCommand(args) => Some(args),
+            _ => None,
+        }
+    }
 }
 
 /// Per-HTTP-vault behavior spec: which traffic to intercept, how to extract

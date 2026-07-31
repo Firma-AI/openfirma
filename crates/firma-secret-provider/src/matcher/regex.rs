@@ -4,8 +4,11 @@ use either::Either;
 use http::uri::Authority;
 use regex::{Captures, Regex};
 
-use super::{MatcherError, domain::parse_authority, non_empty::NonEmptyStr};
-use crate::{Secret, SecretPlaceholder};
+use crate::{
+    SecretPlaceholder, SecretString,
+    matcher::{MatcherError, domain::parse_authority},
+    non_empty::NonEmptyStr,
+};
 
 const NAME: &str = "name";
 const VALUE: &str = "value";
@@ -41,14 +44,19 @@ impl CompiledRegexMatcher {
     pub(super) fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(String, Secret, HashSet<Authority>, Option<String>) -> SecretPlaceholder,
+        mint: &mut impl FnMut(
+            String,
+            SecretString,
+            HashSet<Authority>,
+            Option<String>,
+        ) -> SecretPlaceholder,
     ) -> Result<Vec<u8>, MatcherError> {
         enum Item<'a> {
             Str(&'a str),
             // Regex matchers are for flat KV stores; item is always absent.
             Mint {
                 name: String,
-                secret: Secret,
+                secret: SecretString,
                 domains: HashSet<Authority>,
             },
         }
@@ -90,7 +98,7 @@ impl CompiledRegexMatcher {
             items.push(Item::Str(&text[last..value.start()]));
             items.push(Item::Mint {
                 name: name.to_owned(),
-                secret: Secret::new(value.as_str().as_bytes().to_owned()),
+                secret: SecretString::from(value.as_str()),
                 domains,
             });
             last = value.end();

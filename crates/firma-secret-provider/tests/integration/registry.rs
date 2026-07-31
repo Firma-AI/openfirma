@@ -1,13 +1,30 @@
 use firma_core::{SecretMatcher, SecretNameSource};
 use firma_secret_provider::{
-    CliArgsResolution, CliIntegrationSpec, CliMatcherRule, CliSpecError, CompiledMatcher,
-    IntegrationRegistry,
+    ArgsAndMatcher, CliArgsResolution, CliIntegrationSpec, CliMatcherRule, CompiledMatcher,
+    IntegrationRegistry, SecretPlaceholder,
 };
 
 use crate::support::{Entry, rewrite_mint_placeholders};
 
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| String::from(*word)).collect()
+}
+
+fn builtin_matcher(binary: &str, command_args: &[&str]) -> Result<CompiledMatcher, String> {
+    let registry = IntegrationRegistry::with_builtins();
+    let spec = registry
+        .for_binary(binary)
+        .ok_or_else(|| format!("missing built-in spec for {binary}"))?;
+    let matcher = match spec.resolve_args(&args(command_args)) {
+        CliArgsResolution::Matcher(matcher) => matcher,
+        other => {
+            return Err(format!(
+                "expected matcher for {binary} {command_args:?}, got {other:?}"
+            ));
+        }
+    };
+    CompiledMatcher::compile(matcher)
+        .map_err(|error| format!("failed to compile {binary} matcher: {error}"))
 }
 
 #[test]
@@ -55,33 +72,67 @@ fn bws_matcher_resolves_by_subcommand() {
 }
 
 #[test]
-fn bws_known_safe_subcommands_pass_through() {
+fn all_builtin_known_safe_subcommands_pass_through() {
     let registry = IntegrationRegistry::with_builtins();
-    let spec = registry.for_binary("bws").expect("bws spec");
+    let cases: &[(&str, &[&str])] = &[
+        ("bws", &["project", "list"]),
+        ("bws", &["project", "get", "some-id"]),
+        ("op", &["whoami"]),
+        ("op", &["account", "list"]),
+        ("op", &["vault", "list"]),
+        ("op", &["item", "list"]),
+        ("vault", &["kv", "list", "secret/"]),
+        ("vault", &["list", "secret/"]),
+        ("vault", &["status"]),
+        ("vault", &["policy", "list"]),
+        ("doppler", &["me"]),
+        ("doppler", &["projects", "list"]),
+        ("doppler", &["environments", "list"]),
+        ("doppler", &["configs", "list"]),
+    ];
 
-    assert_eq!(
-        spec.resolve_args(&args(&["project", "list"])),
-        CliArgsResolution::PassThrough
-    );
-    assert_eq!(
-        spec.resolve_args(&args(&["project", "get", "some-id"])),
-        CliArgsResolution::PassThrough
-    );
+    for (binary, command_args) in cases {
+        let spec = registry
+            .for_binary(binary)
+            .unwrap_or_else(|| panic!("missing built-in spec for {binary}"));
+        assert_eq!(
+            spec.resolve_args(&args(command_args)),
+            CliArgsResolution::PassThrough,
+            "expected {binary} {command_args:?} to pass through",
+        );
+    }
 }
 
 #[test]
-fn unrecognized_subcommands_are_blocked_fail_closed() {
+fn all_builtin_secret_commands_select_a_compilable_matcher() {
+    for (binary, command_args) in [
+        ("bws", &["secret", "list"][..]),
+        ("bws", &["secret", "get", "some-id"][..]),
+        ("op", &["item", "get", "some-id"][..]),
+        ("vault", &["kv", "get", "secret/example"][..]),
+        ("doppler", &["secrets", "download"][..]),
+    ] {
+        let _compiled =
+            builtin_matcher(binary, command_args).unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+#[test]
+fn documented_secret_paths_are_explicitly_blocked() {
     let registry = IntegrationRegistry::with_builtins();
 
     // Each of these is a real, documented retrieval path for its tool that
-    // this registry has no matcher for (see the registry module docs): none
-    // may be silently forwarded unredacted.
+    // this registry has no matcher for (see the registry module docs), and
+    // each now has its own `CliMatcherRule::BlockedCommand` rule rather than
+    // relying on the implicit fail-closed fallback: none may be silently
+    // forwarded unredacted.
     let cases: &[(&str, &[&str])] = &[
         ("bws", &["run", "--", "printenv"]),
         ("bws", &["secret", "create"]),
+        ("bws", &["secret", "edit"]),
         ("op", &["read", "op://vault/item/field"]),
         ("op", &["inject"]),
-        ("vault", &["login"]),
+        ("vault", &["read", "secret/policy"]),
         ("doppler", &["run", "--", "printenv"]),
         ("doppler", &["secrets", "get", "SOME_NAME", "--plain"]),
     ];
@@ -96,6 +147,21 @@ fn unrecognized_subcommands_are_blocked_fail_closed() {
             "expected {binary} {case_args:?} to be blocked",
         );
     }
+}
+
+#[test]
+fn unrecognized_invocation_falls_back_to_blocked() {
+    let registry = IntegrationRegistry::with_builtins();
+
+    // `vault login` matches no blocked, sensitive, or safe rule for `vault`
+    // at all: it hits the implicit fail-closed fallback in
+    // `CliIntegrationSpec::resolve_args`, distinct from an explicit
+    // `BlockedCommand` rule.
+    let spec = registry.for_binary("vault").expect("vault spec");
+    assert_eq!(
+        spec.resolve_args(&args(&["login"])),
+        CliArgsResolution::Blocked,
+    );
 }
 
 #[test]
@@ -119,27 +185,25 @@ fn bws_spec_has_expected_credential_env_and_placeholder() {
 #[test]
 fn push_custom_spec_takes_precedence_over_builtin() {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry
-        .push(CliIntegrationSpec {
-            binary_name: String::from("bws"),
-            provider_id: String::from("custom"),
-            credential_env_vars: vec![],
-            matchers: vec![CliMatcherRule {
-                args_match: None,
-                matcher: Some(SecretMatcher::Json {
-                    record_path: String::from("$[*]"),
-                    value_path: String::from("$.value"),
-                    name: SecretNameSource::Path {
-                        path: String::from("$.key"),
-                    },
-                    item_selector: None,
-                    domain_selector: None,
-                }),
-            }],
-            strip_arg_flags: vec![],
-            forced_args: vec![],
-        })
-        .expect("valid custom spec");
+    registry.push(CliIntegrationSpec {
+        binary_name: String::from("bws"),
+        provider_id: String::from("custom"),
+        credential_env_vars: vec![],
+        matchers: vec![CliMatcherRule::SensitiveCommand(ArgsAndMatcher {
+            args_match: vec![],
+            matcher: SecretMatcher::Json {
+                record_path: String::from("$[*]"),
+                value_path: String::from("$.value"),
+                name: SecretNameSource::Path {
+                    path: String::from("$.key"),
+                },
+                item_selector: None,
+                domain_selector: None,
+            },
+        })],
+        strip_arg_flags: vec![],
+        forced_args: vec![],
+    });
     let spec = registry.for_binary("bws").expect("bws spec after push");
     assert!(spec.provider_id.eq("custom"));
     // The custom spec's args_match: None makes it a universal fallback,
@@ -151,163 +215,243 @@ fn push_custom_spec_takes_precedence_over_builtin() {
 }
 
 #[test]
-fn all_builtin_specs_validate() {
+fn builtins_force_expected_output_formats() {
     let registry = IntegrationRegistry::with_builtins();
-    for name in ["bws", "op", "vault", "doppler"] {
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        (
+            "bws",
+            &["secret", "get", "id"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            "bws",
+            &["secret", "get", "id", "--output", "table"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            "bws",
+            &["secret", "get", "id", "--output=yaml"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            "op",
+            &["item", "get", "id"],
+            &["item", "get", "id", "--format", "json"],
+        ),
+        (
+            "op",
+            &["item", "get", "id", "--format", "table"],
+            &["item", "get", "id", "--format", "json"],
+        ),
+        (
+            "op",
+            &["item", "get", "id", "--format=table"],
+            &["item", "get", "id", "--format", "json"],
+        ),
+        (
+            "vault",
+            &["kv", "get", "secret/foo"],
+            &["kv", "get", "secret/foo", "-format", "json"],
+        ),
+        (
+            "vault",
+            &["kv", "get", "-format", "table", "secret/foo"],
+            &["kv", "get", "secret/foo", "-format", "json"],
+        ),
+        (
+            "vault",
+            &["kv", "get", "-format=table", "secret/foo"],
+            &["kv", "get", "secret/foo", "-format", "json"],
+        ),
+        (
+            "vault",
+            &["kv", "get", "--format", "table", "secret/foo"],
+            &["kv", "get", "secret/foo", "-format", "json"],
+        ),
+        (
+            "doppler",
+            &["secrets", "download"],
+            &["secrets", "download", "--format", "env"],
+        ),
+        (
+            "doppler",
+            &["secrets", "download", "--format", "json"],
+            &["secrets", "download", "--format", "env"],
+        ),
+        (
+            "doppler",
+            &["secrets", "download", "--format=json"],
+            &["secrets", "download", "--format", "env"],
+        ),
+    ];
+
+    for (binary, requested, expected) in cases {
         let spec = registry
-            .for_binary(name)
-            .unwrap_or_else(|| panic!("missing built-in spec for {name}"));
-        assert!(
-            spec.validate().is_ok(),
-            "built-in {name} failed to validate"
+            .for_binary(binary)
+            .unwrap_or_else(|| panic!("missing built-in spec for {binary}"));
+        assert_eq!(
+            spec.rewrite_args(&args(requested)),
+            args(expected),
+            "unexpected rewritten args for {binary} {requested:?}",
         );
     }
 }
 
 #[test]
-fn validate_rejects_a_fallback_rule_that_is_also_a_pass_through() {
-    let spec = CliIntegrationSpec {
-        binary_name: String::from("footgun"),
-        provider_id: String::from("footgun"),
-        credential_env_vars: vec![],
-        // args_match: None (fallback) + matcher: None (pass-through) means
-        // every invocation this spec doesn't otherwise recognize is
-        // forwarded unredacted instead of blocked — the opposite of fail
-        // closed.
-        matchers: vec![CliMatcherRule {
-            args_match: None,
-            matcher: None,
-        }],
-        strip_arg_flags: vec![],
-        forced_args: vec![],
-    };
-
-    assert_eq!(
-        spec.validate(),
-        Err(CliSpecError::AmbiguousFallbackPassThrough {
-            binary_name: String::from("footgun"),
-        })
-    );
-}
-
-#[test]
-fn push_rejects_ambiguous_fallback_pass_through_and_leaves_registry_unchanged() {
+fn rewrite_args_leaves_args_untouched_when_no_strip_flags_configured() {
     let mut registry = IntegrationRegistry::with_builtins();
-
-    let result = registry.push(CliIntegrationSpec {
-        binary_name: String::from("bws"),
-        provider_id: String::from("malicious-replacement"),
+    registry.push(CliIntegrationSpec {
+        binary_name: String::from("foo"),
+        provider_id: String::from("test"),
         credential_env_vars: vec![],
-        matchers: vec![CliMatcherRule {
-            args_match: None,
-            matcher: None,
-        }],
+        matchers: vec![CliMatcherRule::SensitiveCommand(ArgsAndMatcher {
+            args_match: vec![],
+            matcher: SecretMatcher::Json {
+                record_path: String::from("$[*]"),
+                value_path: String::from("$.value"),
+                name: SecretNameSource::Path {
+                    path: String::from("$.key"),
+                },
+                item_selector: None,
+                domain_selector: None,
+            },
+        })],
         strip_arg_flags: vec![],
         forced_args: vec![],
     });
-
-    assert_eq!(
-        result,
-        Err(CliSpecError::AmbiguousFallbackPassThrough {
-            binary_name: String::from("bws"),
-        })
-    );
-    // The built-in must still be in place: a rejected push must not
-    // partially apply.
-    let spec = registry.for_binary("bws").expect("bws spec");
-    assert!(spec.provider_id.eq("bitwarden"));
-}
-
-#[test]
-fn a_pass_through_scoped_to_a_specific_prefix_is_not_ambiguous() {
-    // Unlike the args_match: None + matcher: None combo, a pass-through
-    // scoped to a specific prefix only forwards that one invocation shape
-    // unredacted; it doesn't weaken the spec's fail-closed default for
-    // everything else, so it must validate cleanly.
-    let spec = CliIntegrationSpec {
-        binary_name: String::from("footgun"),
-        provider_id: String::from("footgun"),
-        credential_env_vars: vec![],
-        matchers: vec![CliMatcherRule {
-            args_match: Some(vec![String::from("whoami")]),
-            matcher: None,
-        }],
-        strip_arg_flags: vec![],
-        forced_args: vec![],
-    };
-
-    assert_eq!(spec.validate(), Ok(()));
-}
-
-#[test]
-fn rewrite_args_strips_two_token_and_single_token_flag_forms() {
-    let registry = IntegrationRegistry::with_builtins();
-    let spec = registry.for_binary("vault").expect("vault spec");
-
-    // Two-token form: `-format table` — both tokens must be dropped.
-    let rewritten = spec.rewrite_args(&args(&["kv", "get", "-format", "table", "secret/foo"]));
-    assert_eq!(
-        rewritten,
-        args(&["kv", "get", "secret/foo", "-format", "json"])
-    );
-
-    // Single-token form: `-format=table` — the whole token must be dropped,
-    // without consuming the following unrelated arg.
-    let rewritten = spec.rewrite_args(&args(&["kv", "get", "-format=table", "secret/foo"]));
-    assert_eq!(
-        rewritten,
-        args(&["kv", "get", "secret/foo", "-format", "json"])
-    );
-
-    // Both the short (`-format`) and long (`--format`) flag spellings are
-    // recognized.
-    let rewritten = spec.rewrite_args(&args(&["kv", "get", "--format", "table", "secret/foo"]));
-    assert_eq!(
-        rewritten,
-        args(&["kv", "get", "secret/foo", "-format", "json"])
-    );
-}
-
-#[test]
-fn rewrite_args_is_a_no_op_append_when_flag_is_absent() {
-    let registry = IntegrationRegistry::with_builtins();
-    let spec = registry.for_binary("vault").expect("vault spec");
-
-    let rewritten = spec.rewrite_args(&args(&["kv", "get", "secret/foo"]));
-    assert_eq!(
-        rewritten,
-        args(&["kv", "get", "secret/foo", "-format", "json"])
-    );
-}
-
-#[test]
-fn rewrite_args_leaves_args_untouched_when_no_strip_flags_configured() {
-    let mut registry = IntegrationRegistry::with_builtins();
-    registry
-        .push(CliIntegrationSpec {
-            binary_name: String::from("foo"),
-            provider_id: String::from("test"),
-            credential_env_vars: vec![],
-            matchers: vec![CliMatcherRule {
-                args_match: None,
-                matcher: Some(SecretMatcher::Json {
-                    record_path: String::from("$[*]"),
-                    value_path: String::from("$.value"),
-                    name: SecretNameSource::Path {
-                        path: String::from("$.key"),
-                    },
-                    item_selector: None,
-                    domain_selector: None,
-                }),
-            }],
-            strip_arg_flags: vec![],
-            forced_args: vec![],
-        })
-        .expect("insert successful");
     let spec = registry.for_binary("foo").expect("foo spec");
 
     let rewritten = spec.rewrite_args(&args(&["secret", "get", "some-id"]));
     assert_eq!(rewritten, args(&["secret", "get", "some-id"]));
+}
+
+#[test]
+fn vault_kv_v1_output_fails_closed() {
+    let compiled = builtin_matcher("vault", &["kv", "get", "secret/example"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut minted = Vec::new();
+    let error = compiled
+        .rewrite(
+            br#"{"data":{"password":"hunter2"}}"#,
+            &mut |name, _, _, _| {
+                minted.push(name);
+                SecretPlaceholder::new()
+            },
+        )
+        .unwrap_err();
+
+    std::assert_matches!(&error, firma_secret_provider::MatcherError::NoRecords);
+    insta::assert_snapshot!(error.to_string(), @"json matcher record_path selected no records");
+    assert!(minted.is_empty());
+}
+
+#[test]
+fn vault_field_output_fails_closed() {
+    let compiled = builtin_matcher("vault", &["kv", "get", "-field=password", "secret/example"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut minted = Vec::new();
+    let error = compiled
+        .rewrite(b"hunter2\n", &mut |name, _, _, _| {
+            minted.push(name);
+            SecretPlaceholder::new()
+        })
+        .unwrap_err();
+
+    std::assert_matches!(&error, firma_secret_provider::MatcherError::Json(_));
+    assert!(minted.is_empty());
+}
+
+#[test]
+fn op_redacts_secrets_in_custom_string_fields() {
+    let compiled = builtin_matcher("op", &["item", "get", "example"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    let input = br#"{
+        "title":"Production",
+        "urls":[{"href":"https://api.example.com"}],
+        "fields":[
+            {"id":"password","type":"CONCEALED","label":"password","value":"password-secret"},
+            {"id":"custom-api-key","type":"STRING","label":"api key","value":"string-secret"}
+        ]
+    }"#;
+    let (output, entries) = rewrite_mint_placeholders(&compiled, input)
+        .unwrap_or_else(|error| panic!("1Password rewrite failed: {error}"));
+
+    assert_eq!(
+        entries,
+        [
+            Entry {
+                name: String::from("password"),
+                value: String::from("password-secret"),
+                domains: vec![String::from("api.example.com")],
+                item: Some(String::from("Production")),
+            },
+            Entry {
+                name: String::from("api key"),
+                value: String::from("string-secret"),
+                domains: vec![String::from("api.example.com")],
+                item: Some(String::from("Production")),
+            },
+        ]
+    );
+    assert!(
+        !output
+            .windows(b"string-secret".len())
+            .any(|window| window == b"string-secret")
+    );
+}
+
+#[test]
+fn op_rewrites_multiple_secret_fields() {
+    let compiled = builtin_matcher("op", &["item", "get", "example"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    let input = br#"{
+        "title":"Production",
+        "urls":[{"href":"https://api.example.com"}],
+        "fields":[
+            {"id":"password","type":"CONCEALED","label":"password","value":"first-secret"},
+            {"id":"api-key","type":"CONCEALED","label":"api key","value":"second-secret"}
+        ]
+    }"#;
+    let (output, entries) = rewrite_mint_placeholders(&compiled, input)
+        .unwrap_or_else(|error| panic!("1Password rewrite failed: {error}"));
+
+    assert_eq!(entries.len(), 2);
+    for secret in [b"first-secret".as_slice(), b"second-secret".as_slice()] {
+        assert!(!output.windows(secret.len()).any(|window| window == secret));
+    }
+}
+
+#[test]
+fn op_redacts_password_and_leaves_totp_clear() {
+    let compiled = builtin_matcher("op", &["item", "get", "example"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    eprintln!("{compiled:?}");
+    let input = br#"{
+        "title":"Production",
+        "urls":[{"href":"https://login.example.com"}],
+        "fields":[
+            {"id":"password","type":"CONCEALED","label":"password","value":"password-secret"},
+            {"id":"otp","type":"OTP","label":"one-time password","value":"123456"}
+        ]
+    }"#;
+    let (output, entries) = rewrite_mint_placeholders(&compiled, input)
+        .unwrap_or_else(|error| panic!("1Password rewrite failed: {error}"));
+
+    assert_eq!(
+        entries,
+        [Entry {
+            name: String::from("password"),
+            value: String::from("password-secret"),
+            domains: vec![String::from("login.example.com")],
+            item: Some(String::from("Production")),
+        }]
+    );
+    assert!(output.windows(6).any(|window| window == b"123456"));
+    assert!(
+        !output
+            .windows(15)
+            .any(|window| window == b"password-secret")
+    );
 }
 
 /// One built-in provider output fixture: which spec + CLI invocation
@@ -377,13 +521,21 @@ fn provider_test_cases() -> Vec<ProviderTestCase> {
               ]
             }}"#
             ),
-            expected_entries: vec![Entry {
-                name: String::from("token"),
-                value: op_secret,
-                domains: vec![String::from("github.com")],
-                item: Some(String::from("GitHub")),
-            }],
-            unredacted: &["user.name"],
+            expected_entries: vec![
+                Entry {
+                    name: String::from("username"),
+                    value: String::from("user.name"),
+                    domains: vec![String::from("github.com")],
+                    item: Some(String::from("GitHub")),
+                },
+                Entry {
+                    name: String::from("token"),
+                    value: op_secret,
+                    domains: vec![String::from("github.com")],
+                    item: Some(String::from("GitHub")),
+                },
+            ],
+            unredacted: &[],
         },
         ProviderTestCase {
             name: "op_excludes_only_known_non_secret_field_types",

@@ -1,0 +1,6 @@
+---
+source: crates/firma-secret-provider/tests/integration/regex.rs
+expression: output
+---
+a=[placeholder]
+b=[placeholder]

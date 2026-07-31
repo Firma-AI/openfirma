@@ -1,4 +1,5 @@
 use firma_secret_provider::{CompiledMatcher, MatcherError, SecretPlaceholder};
+use secrecy::ExposeSecret;
 
 use crate::support::{json, json_record_key_name};
 
@@ -15,7 +16,7 @@ fn relative_paths_rewrite_absolute_escaped_locations() {
         .rewrite(
             br#"{"groups":{"a/b~c":[{"credentials":{"key":"first","v/~":"AAA"}},{"credentials":{"key":"second","v/~":"BBB"}}]},"credentials":{"v/~":"ROOT"}}"#,
             &mut |name, value, _, _| {
-                pairs.push((name, value.expose().to_owned()));
+                pairs.push((name, value.expose_secret().to_owned()));
                 SecretPlaceholder::new()
             },
         )
@@ -61,7 +62,7 @@ fn record_key_name_is_derived_from_the_records_own_json_pointer() {
         .rewrite(
             br#"{"data":{"data":{"password":"hunter2","user":"admin"},"metadata":{"version":1}}}"#,
             &mut |name, value, _, _| {
-                pairs.push((name, value.expose().to_owned()));
+                pairs.push((name, value.expose_secret().to_owned()));
                 SecretPlaceholder::new()
             },
         )

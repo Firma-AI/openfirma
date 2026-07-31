@@ -1,5 +1,6 @@
 use firma_core::SecretJsonSelectorScope;
 use firma_secret_provider::{CompiledMatcher, MatcherError, SecretPlaceholder};
+use secrecy::ExposeSecret;
 
 use crate::support::{json, json_with_metadata, selector};
 
@@ -11,7 +12,7 @@ fn secret_does_not_leak_contents() {
         .rewrite(
             br#"[{"key":"a","value":"AAA"},{"key":"b","value":"BBB"}]"#,
             &mut |_, value, _, _| {
-                secrets.push((value.to_string(), format!("{value:?}")));
+                secrets.push((value.expose_secret().to_owned(), format!("{value:?}")));
                 SecretPlaceholder::new()
             },
         )
@@ -19,8 +20,14 @@ fn secret_does_not_leak_contents() {
     assert_eq!(
         secrets,
         [
-            ("<secret>".to_owned(), "<secret>".to_owned()),
-            ("<secret>".to_owned(), "<secret>".to_owned())
+            (
+                "Secret(<3 bytes redacted>)".to_owned(),
+                "Secret(<3 bytes redacted>)".to_owned()
+            ),
+            (
+                "Secret(<3 bytes redacted>)".to_owned(),
+                "Secret(<3 bytes redacted>)".to_owned()
+            )
         ]
     );
 }

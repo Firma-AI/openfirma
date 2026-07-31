@@ -14,27 +14,35 @@
 //!
 //! ## Fail-closed subcommand resolution
 //!
-//! Each built-in spec only lists rules for the invocation shapes it
-//! recognizes. A [`CliMatcherRule`] with a `matcher` is a known
-//! secret-emitting shape (extract and redact); a rule with `matcher: None`
-//! is a known-safe pass-through (e.g. a `list` subcommand that only ever
-//! returns names/ids, never secret values). Per
+//! Each built-in spec lists rules for the invocation shapes it recognizes.
+//! A [`CliMatcherRule::SensitiveCommand`] is a known secret-emitting shape
+//! (extract and redact); a [`CliMatcherRule::SafeCommand`] is a known-safe
+//! pass-through (e.g. a `list` subcommand that only ever returns names/ids,
+//! never secret values); a [`CliMatcherRule::BlockedCommand`] is a known
+//! secret-emitting shape this registry has no way to extract or redact from
+//! (e.g. a subcommand that injects secrets as env vars for a child process,
+//! or prints a bare secret value with no structure a matcher can anchor on)
+//! and is therefore forbidden outright rather than forwarded unredacted. Per
 //! [`CliIntegrationSpec::resolve_args`](crate::CliIntegrationSpec::resolve_args),
-//! an invocation whose args match neither kind of rule is
+//! blocked commands are checked first, then sensitive, then safe; an
+//! invocation whose args match none of the three is also
 //! [`CliArgsResolution::Blocked`](crate::CliArgsResolution::Blocked) — fail
-//! closed, on the assumption that an unrecognized invocation shape may emit
-//! secret material this registry has no way to extract or redact. See each
-//! built-in's function-level doc comment below for the specific retrieval
-//! paths this closes off for that tool, and for the remaining gaps that
-//! `args_match` alone can't close (a subcommand whose *shape* is recognized
-//! but whose output doesn't fit the matcher, e.g. `vault kv get` against a
-//! KV v1 mount).
+//! closed by default, on the assumption that an unrecognized invocation
+//! shape may emit secret material this registry has no way to extract or
+//! redact. See each built-in's function-level doc comment below for the
+//! specific retrieval paths explicitly blocked or implicitly closed off for
+//! that tool, and for the remaining gaps that `args_match` alone can't close
+//! (a subcommand whose *shape* is recognized but whose output doesn't fit
+//! the matcher, e.g. `vault kv get` against a KV v1 mount).
 
 use std::collections::BTreeMap;
 
 use firma_core::{SecretJsonSelector, SecretJsonSelectorScope, SecretMatcher, SecretNameSource};
 
-use crate::spec::{CliIntegrationSpec, CliMatcherRule, CliSpecError};
+use crate::{
+    non_empty::non_empty_vec,
+    spec::{ArgsAndMatcher, ArgsOnly, CliIntegrationSpec, CliMatcherRule},
+};
 
 /// Registry of CLI integration specs, keyed by binary basename.
 ///
@@ -67,17 +75,10 @@ impl IntegrationRegistry {
 
     /// Add a custom spec. If a spec with the same binary name already exists
     /// (e.g. a built-in), the custom one replaces it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CliSpecError`] if `spec` fails
-    /// [`CliIntegrationSpec::validate`]; the registry is left unchanged.
-    pub fn push(&mut self, spec: CliIntegrationSpec) -> Result<(), CliSpecError> {
-        spec.validate()?;
+    pub fn push(&mut self, spec: CliIntegrationSpec) {
         if let Some(old_spec) = self.specs.insert(spec.binary_name.clone(), spec) {
             tracing::warn!("replacing {} secret manager specs", old_spec.binary_name);
         }
-        Ok(())
     }
 }
 
@@ -92,17 +93,26 @@ impl IntegrationRegistry {
 //
 // `bws run -- <command>` injects secrets as env vars for a child process and
 // never prints them; `bws secret create`/`edit` echo the secret value back.
-// Neither matches a rule below, so both are blocked (fail closed) rather
-// than forwarded unredacted.
+// All three are explicitly blocked below rather than left to the implicit
+// fail-closed default, since they are real, documented retrieval paths.
 fn bws_spec() -> CliIntegrationSpec {
     CliIntegrationSpec {
         binary_name: String::from("bws"),
         provider_id: String::from("bitwarden"),
         credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
         matchers: vec![
-            CliMatcherRule {
-                args_match: Some(vec![String::from("secret"), String::from("list")]),
-                matcher: Some(SecretMatcher::Json {
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("run")],
+            }),
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secret"), String::from("create")],
+            }),
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secret"), String::from("edit")],
+            }),
+            CliMatcherRule::SensitiveCommand(ArgsAndMatcher {
+                args_match: vec![String::from("secret"), String::from("list")],
+                matcher: SecretMatcher::Json {
                     record_path: String::from("$[*]"),
                     value_path: String::from("$.value"),
                     name: SecretNameSource::Path {
@@ -110,11 +120,11 @@ fn bws_spec() -> CliIntegrationSpec {
                     },
                     item_selector: None,
                     domain_selector: None,
-                }),
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("secret"), String::from("get")]),
-                matcher: Some(SecretMatcher::Json {
+                },
+            }),
+            CliMatcherRule::SensitiveCommand(ArgsAndMatcher {
+                args_match: vec![String::from("secret"), String::from("get")],
+                matcher: SecretMatcher::Json {
                     record_path: String::from("$"),
                     value_path: String::from("$.value"),
                     name: SecretNameSource::Path {
@@ -122,16 +132,14 @@ fn bws_spec() -> CliIntegrationSpec {
                     },
                     item_selector: None,
                     domain_selector: None,
-                }),
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("project"), String::from("list")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("project"), String::from("get")]),
-                matcher: None,
-            },
+                },
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("project"), String::from("list")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("project"), String::from("get")],
+            }),
         ],
         strip_arg_flags: vec![String::from("--output")],
         forced_args: vec![String::from("--output"), String::from("json")],
@@ -153,20 +161,25 @@ fn bws_spec() -> CliIntegrationSpec {
 // through unredacted rather than needing a matcher.
 //
 // `op read op://vault/item/field` and `op inject` print the raw secret as
-// plain text, not JSON. Neither matches `item get` (or any pass-through
-// rule) below, so both are blocked (fail closed) rather than forwarded
-// unredacted.
+// plain text, not JSON. Both are explicitly blocked below rather than left
+// to the implicit fail-closed default, since they are real, documented
+// retrieval paths.
 fn op_spec() -> CliIntegrationSpec {
     CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
         credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
         matchers: vec![
-            CliMatcherRule {
-                args_match: Some(vec![String::from("item"), String::from("get")]),
-                matcher: Some(SecretMatcher::Json {
-                    record_path: String::from("$"),
-                    value_path: String::from(concat!(
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("read")],
+            }),
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("inject")],
+            }),
+            CliMatcherRule::SensitiveCommand(ArgsAndMatcher {
+                args_match: vec![String::from("item"), String::from("get")],
+                matcher: SecretMatcher::Json {
+                    record_path: String::from(concat!(
                         "$.fields[?(",
                         "@.type != \"ADDRESS\"",
                         " && @.type != \"CREDIT_CARD_TYPE\"",
@@ -175,28 +188,15 @@ fn op_spec() -> CliIntegrationSpec {
                         " && @.type != \"GENDER\"",
                         " && @.type != \"MENU\"",
                         " && @.type != \"MONTH_YEAR\"",
+                        " && @.type != \"OTP\"",
                         " && @.type != \"PHONE\"",
                         " && @.type != \"REFERENCE\"",
-                        " && @.type != \"STRING\"",
                         " && @.type != \"URL\"",
-                        ")].value"
+                        ")]"
                     )),
+                    value_path: String::from("$.value"),
                     name: SecretNameSource::Path {
-                        path: String::from(concat!(
-                            "$.fields[?(",
-                            "@.type != \"ADDRESS\"",
-                            " && @.type != \"CREDIT_CARD_TYPE\"",
-                            " && @.type != \"DATE\"",
-                            " && @.type != \"EMAIL\"",
-                            " && @.type != \"GENDER\"",
-                            " && @.type != \"MENU\"",
-                            " && @.type != \"MONTH_YEAR\"",
-                            " && @.type != \"PHONE\"",
-                            " && @.type != \"REFERENCE\"",
-                            " && @.type != \"STRING\"",
-                            " && @.type != \"URL\"",
-                            ")].label"
-                        )),
+                        path: String::from("$.label"),
                     },
                     // $.title is the item name (e.g. "GitHub"); broadcast to
                     // every extracted field to form the two-segment placeholder
@@ -211,24 +211,20 @@ fn op_spec() -> CliIntegrationSpec {
                         path: String::from("$.urls[*].href"),
                         scope: SecretJsonSelectorScope::Document,
                     }),
-                }),
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("whoami")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("account"), String::from("list")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("vault"), String::from("list")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("item"), String::from("list")]),
-                matcher: None,
-            },
+                },
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("whoami")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("account"), String::from("list")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("vault"), String::from("list")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("item"), String::from("list")],
+            }),
         ],
         strip_arg_flags: vec![String::from("--format")],
         forced_args: vec![String::from("--format"), String::from("json")],
@@ -248,8 +244,9 @@ fn op_spec() -> CliIntegrationSpec {
 // unredacted rather than needing a matcher.
 //
 // Any non-`kv` `vault read` target (policies, transit keys, auth config,
-// etc.) uses a `read` subcommand, not `kv get`, so it doesn't match a rule
-// below and is blocked (fail closed) rather than forwarded unredacted.
+// etc.) uses a `read` subcommand, not `kv get`. It is explicitly blocked
+// below rather than left to the implicit fail-closed default, since it is a
+// real, documented retrieval path.
 //
 // Remaining gap `args_match` can't close: `vault kv get` on a KV v1 mount
 // uses the same subcommand as v2 but returns `data` without the nested
@@ -268,32 +265,31 @@ fn vault_spec() -> CliIntegrationSpec {
             String::from("VAULT_NAMESPACE"),
         ],
         matchers: vec![
-            CliMatcherRule {
-                args_match: Some(vec![String::from("kv"), String::from("get")]),
-                matcher: Some(SecretMatcher::Json {
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("read")],
+            }),
+            CliMatcherRule::SensitiveCommand(ArgsAndMatcher {
+                args_match: vec![String::from("kv"), String::from("get")],
+                matcher: SecretMatcher::Json {
                     record_path: String::from("$.data.data.*"),
                     value_path: String::from("$"),
                     name: SecretNameSource::RecordKey,
                     item_selector: None,
                     domain_selector: None,
-                }),
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("kv"), String::from("list")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("list")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("status")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("policy"), String::from("list")]),
-                matcher: None,
-            },
+                },
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("list")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("list")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("status")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("policy"), String::from("list")],
+            }),
         ],
         // Strip any -format/-format= flag and force JSON, regardless of what
         // the agent requested.
@@ -311,38 +307,42 @@ fn vault_spec() -> CliIntegrationSpec {
 // through unredacted rather than needing a matcher.
 //
 // `doppler run -- <command>` injects secrets as env vars for a child process
-// and never prints them; `doppler secrets get <name> --plain` prints a bare
-// value with no `=` for the regex to anchor on. Neither matches `secrets
-// download` (or any pass-through rule) below, so both are blocked (fail
-// closed) rather than forwarded unredacted.
+// and never prints them; `doppler secrets get <name>` (with or without
+// `--plain`) either prints a bare value with no `=` for the regex to anchor
+// on, or a table with no forced structured format. Both are explicitly
+// blocked below rather than left to the implicit fail-closed default, since
+// they are real, documented retrieval paths distinct from `secrets
+// download`.
 fn doppler_spec() -> CliIntegrationSpec {
     CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),
         credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
         matchers: vec![
-            CliMatcherRule {
-                args_match: Some(vec![String::from("secrets"), String::from("download")]),
-                matcher: Some(SecretMatcher::Regex {
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("run")],
+            }),
+            CliMatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secrets"), String::from("get")],
+            }),
+            CliMatcherRule::SensitiveCommand(ArgsAndMatcher {
+                args_match: vec![String::from("secrets"), String::from("download")],
+                matcher: SecretMatcher::Regex {
                     pattern: String::from(r"(?m)^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.+)$"),
-                }),
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("me")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("projects"), String::from("list")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("environments"), String::from("list")]),
-                matcher: None,
-            },
-            CliMatcherRule {
-                args_match: Some(vec![String::from("configs"), String::from("list")]),
-                matcher: None,
-            },
+                },
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("me")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("projects"), String::from("list")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("environments"), String::from("list")],
+            }),
+            CliMatcherRule::SafeCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("configs"), String::from("list")],
+            }),
         ],
         strip_arg_flags: vec![String::from("--format")],
         forced_args: vec![String::from("--format"), String::from("env")],

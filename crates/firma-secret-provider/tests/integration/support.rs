@@ -1,5 +1,6 @@
 use firma_core::{SecretJsonSelector, SecretJsonSelectorScope, SecretMatcher, SecretNameSource};
 use firma_secret_provider::{CompiledMatcher, MatcherError, SecretPlaceholder};
+use secrecy::ExposeSecret;
 
 pub fn selector(path: &str, scope: SecretJsonSelectorScope) -> SecretJsonSelector {
     SecretJsonSelector {
@@ -81,8 +82,7 @@ pub fn rewrite_mint_placeholders(
     let out = matcher.rewrite(output, &mut |name, value, domains, item| {
         entries.push(Entry {
             name,
-            #[expect(clippy::expect_used, reason = "Value must be a valid utf8 byte array")]
-            value: String::from_utf8(value.expose().to_owned()).expect("valid utf8"),
+            value: value.expose_secret().to_owned(),
             domains: domains
                 .iter()
                 .map(|authority| authority.as_str().to_owned())

@@ -12,7 +12,6 @@
 mod domain;
 mod error;
 mod json;
-mod non_empty;
 mod regex;
 
 use std::collections::HashSet;
@@ -20,7 +19,7 @@ use std::collections::HashSet;
 use firma_core::SecretMatcher;
 use http::uri::Authority;
 
-use crate::{Secret, SecretPlaceholder};
+use crate::{SecretPlaceholder, SecretString};
 
 pub use error::MatcherError;
 
@@ -78,7 +77,7 @@ impl CompiledMatcher {
     /// - `domains`: hostname scopes when `domain_selector` is configured, else
     ///   empty. A secret may legitimately be scoped to more than one host
     ///   (e.g. a `domain_selector` matching several URLs on the same vault
-    ///   item), so all of them are passed through; an empty slice means the
+    ///   item), so all of them are passed through; an empty set means the
     ///   secret is unscoped and resolves for any host.
     /// - `item`: item title when `item_selector` is configured, else `None`.
     ///
@@ -93,7 +92,12 @@ impl CompiledMatcher {
     pub fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(String, Secret, HashSet<Authority>, Option<String>) -> SecretPlaceholder,
+        mint: &mut impl FnMut(
+            String,
+            SecretString,
+            HashSet<Authority>,
+            Option<String>,
+        ) -> SecretPlaceholder,
     ) -> Result<Vec<u8>, MatcherError> {
         match &self.kind {
             MatcherKind::Json(matcher) => matcher.rewrite(output, mint),
