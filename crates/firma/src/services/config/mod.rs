@@ -63,7 +63,7 @@ struct ExistingConfigDefaults {
     invalid_agent_id: Option<String>,
 }
 
-static TPL_CEDAR_ISSUANCE: &str = include_str!("../../templates/issuance.cedar");
+static TPL_CEDAR_ISSUANCE: &str = include_str!("../../../templates/issuance.cedar");
 
 /// Entry point for `firma config`.
 ///

@@ -13,11 +13,11 @@
 //! - V1 never returns `Err`; the trait's `Result` is kept for forward
 //!   compatibility.
 
-#[path = "revocation/bloom.rs"]
+#[path = "bloom.rs"]
 pub(crate) mod bloom;
-#[path = "revocation/lru.rs"]
+#[path = "lru.rs"]
 pub(crate) mod lru;
-#[path = "revocation/metrics.rs"]
+#[path = "metrics.rs"]
 pub(crate) mod metrics;
 
 use firma_core::{RevocationStore, TokenError, TokenId};
