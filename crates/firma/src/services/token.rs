@@ -35,6 +35,7 @@ fn send_management(action: &str, args: &TokenActionArgs) -> anyhow::Result<ExitC
     #[cfg(target_family = "unix")]
     {
         let socket_path = strip_unix_prefix(&args.socket);
+        let management_token = resolve_management_token(args)?;
 
         let mut stream = UnixStream::connect(socket_path).map_err(|e| {
             anyhow::anyhow!(
@@ -50,6 +51,7 @@ fn send_management(action: &str, args: &TokenActionArgs) -> anyhow::Result<ExitC
         let request = serde_json::json!({
             "action": action,
             "token_id": args.token_id,
+            "management_token": management_token,
         });
         let mut payload =
             serde_json::to_vec(&request).map_err(|e| anyhow::anyhow!("serialize request: {e}"))?;
@@ -99,4 +101,49 @@ fn send_management(action: &str, args: &TokenActionArgs) -> anyhow::Result<ExitC
 #[cfg(target_family = "unix")]
 fn strip_unix_prefix(s: &str) -> &str {
     s.strip_prefix("unix://").unwrap_or(s)
+}
+
+/// Default environment variable holding the operator management token.
+#[cfg(target_family = "unix")]
+const MANAGEMENT_TOKEN_ENV: &str = "FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN";
+
+/// Resolve the operator management token to attach to the management command.
+///
+/// Precedence: `--management-token-path` (file) over the
+/// [`MANAGEMENT_TOKEN_ENV`] environment variable. The sidecar must be
+/// configured with the matching source so the token compares equal.
+#[cfg(target_family = "unix")]
+fn resolve_management_token(args: &TokenActionArgs) -> anyhow::Result<Option<String>> {
+    if let Some(path) = args.management_token_path.as_deref() {
+        let value = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("read management token file '{path}': {e}"))?;
+        let token = trim_trailing_newlines(value);
+        if token.is_empty() {
+            return Err(anyhow::anyhow!("management token file '{path}' is empty"));
+        }
+        return Ok(Some(token));
+    }
+
+    match std::env::var(MANAGEMENT_TOKEN_ENV) {
+        Ok(value) => {
+            let token = trim_trailing_newlines(value);
+            if token.is_empty() {
+                return Err(anyhow::anyhow!("{MANAGEMENT_TOKEN_ENV} is set but empty"));
+            }
+            Ok(Some(token))
+        }
+        Err(_) => Err(anyhow::anyhow!(
+            "management token is required: pass --management-token-path <file> or set the \
+             {MANAGEMENT_TOKEN_ENV} environment variable (must match the sidecar's \
+             local_exec.management_token_env / management_token_path)"
+        )),
+    }
+}
+
+#[cfg(target_family = "unix")]
+fn trim_trailing_newlines(mut value: String) -> String {
+    while value.ends_with('\n') || value.ends_with('\r') {
+        value.pop();
+    }
+    value
 }

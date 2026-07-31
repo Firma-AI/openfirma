@@ -36,6 +36,7 @@ fn handler(expected_sandbox_id: Option<SandboxId>) -> LocalExecHandler {
         expected_sandbox_id,
         token_ttl: Duration::from_mins(1),
         retry_after_ms: 100,
+        management_token: None,
     })
 }
 

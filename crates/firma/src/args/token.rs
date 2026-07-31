@@ -30,4 +30,10 @@ pub struct TokenActionArgs {
     /// filesystem path or `unix:///path/to/sock`.
     #[arg(long, default_value = "/tmp/firma-sidecar-tools.sock")]
     pub socket: String,
+
+    /// Path to a file containing the operator management token (must match the
+    /// sidecar's `local_exec.management_token_path`). When omitted the token is
+    /// read from the `FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN` environment variable.
+    #[arg(long)]
+    pub management_token_path: Option<String>,
 }

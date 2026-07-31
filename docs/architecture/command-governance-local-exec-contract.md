@@ -64,9 +64,12 @@ Optional strict startup gate:
 ## Security Notes
 
 1. Governance endpoint should bind decision to `sandbox_id` + `session_id` to reduce replay/confusion.
-2. On Linux, local-exec UDS endpoint validates peer UID (`SO_PEERCRED`) and rejects cross-UID callers fail-closed.
+2. On Linux, local-exec UDS endpoint validates peer uid (`SO_PEERCRED`) and rejects cross-UID callers fail-closed. Peer-UID alone does **not** separate the sandboxed agent from the operator, since the agent runs as the Sidecar's UID; the management boundary is socket isolation plus the management token (see below).
 3. Socket file permissions are hardened to owner-only (`0600`) at bind time; operator/CLI access assumes same-UID local control plane.
 4. `approval_token` replay prevention is enforced server-side via token state (`Pending/Approved/Consumed/Expired/Revoked`) and context binding (fingerprint + session/sandbox/agent).
+5. **Self-approval prevention (two layers):**
+   - **Primary — socket isolation.** `firma-run` shadows the local-exec governance socket with `/dev/null` inside the `bwrap` sandbox, so the sandboxed agent cannot `connect()` to `decide` or `decide_management`. The agent needs no access: `firma-run` mediates `decide` in the parent (host) process before the agent starts, and the operator reaches `approve`/`revoke` on the host. `firma-run` also strips `FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN` from the inherited environment.
+   - **Defense-in-depth — management token.** The Sidecar additionally requires an operator management token on every `approve`/`revoke`, fail-closed when unconfigured. This protects deployments where the agent could reach a management socket (non-`bwrap` backends, TCP endpoints, or a misconfigured socket path). Under same-UID sandboxing the token is not a sufficient barrier on its own (the agent can read it from the inherited env or a same-UID file), so do not rely on it alone — rely on socket isolation.
 
 ## Testing Guidance
 

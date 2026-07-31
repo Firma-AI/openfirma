@@ -9,7 +9,8 @@ use serde::Serialize;
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
 use crate::capability::read_capability_token;
 use crate::config::{
-    CaTrustMode, CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile,
+    CaTrustMode, CapabilitySource, CommandMediatorEndpoint, ResolvedProfile, SidecarEndpoint,
+    resolve_profile,
 };
 use crate::error::RunError;
 use crate::identity::RunIdentity;
@@ -314,6 +315,16 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             sidecar_endpoint: effective_endpoint,
             seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
             identity_mode: profile.identity_mode,
+            // Mask the local-exec governance Unix socket from the sandboxed
+            // agent (see backend::local_exec_socket_mask_args). Only a Unix
+            // endpoint resolves to a maskable path; TCP endpoints leave
+            // management to the sidecar's token gate.
+            local_exec_socket: profile.sidecar_local_exec.as_ref().and_then(|m| {
+                match &m.endpoint {
+                    CommandMediatorEndpoint::Unix { path } => Some(path.clone()),
+                    CommandMediatorEndpoint::Tcp { .. } => None,
+                }
+            }),
         };
 
         let child = {

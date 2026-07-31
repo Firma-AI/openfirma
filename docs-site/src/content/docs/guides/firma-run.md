@@ -355,6 +355,38 @@ Flow references:
 - Local-exec mediator client: `crates/firma-run/src/mediator.rs`
 - Sidecar local-exec endpoint: `crates/firma-sidecar/src/local_exec/endpoint.rs`
 
+### HITL approval
+
+When `default_action = "pending_hitl"`, the Sidecar returns a pending decision and an approval token. An operator then releases the held request with `firma token approve <token-id>` (or denies it with `firma token revoke`).
+
+The governance request (`local.exec`) and the management commands (`local.exec.approve` / `local.exec.revoke`) share one Unix domain socket. The sandboxed agent runs as the same UID as the Sidecar and, left unconfined, could reach that socket — so HITL is protected by **two layers**:
+
+1. **Socket isolation (primary).** `firma-run` shadows the local-exec governance socket with `/dev/null` inside the `bwrap` sandbox, so the agent's `connect()` to it fails. The agent needs no access to this socket: `firma-run` mediates `decide` in the parent (host) process before the agent starts, and the operator reaches `approve`/`revoke` on the host. This is the boundary that prevents self-approval, because the agent cannot reach the management endpoint at all. As defense-in-depth, `firma-run` also strips `FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN` from the inherited environment.
+2. **Management token (defense-in-depth).** Even with the socket masked, the Sidecar additionally requires an operator management token on every `local.exec.approve` / `local.exec.revoke` command. This protects deployments where the agent could reach a management socket (non-`bwrap` backends, TCP endpoints, or a misconfigured socket path), and it fail-closes if the token is missing. Configure exactly one source on the Sidecar:
+
+```toml
+[sidecar.local_exec]
+socket_path = "/run/firma/local-exec.sock"
+default_action = "pending_hitl"
+# Option A: read the token from an environment variable the operator sets.
+# Note: with the bwrap backend this env var is stripped from the agent, but on
+# Linux the initial /proc/<pid>/environ is still same-UID readable; prefer the
+# file source when the agent shares the Sidecar's UID.
+management_token_env = "FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN"
+# Option B (preferred under same-UID sandboxing): read the token from a file.
+# management_token_path = "/etc/firma/local-exec.mgmt-token"
+```
+
+Then provide the same token to the CLI (the two sides must compare equal):
+
+```bash
+export FIRMA_LOCAL_EXEC_MANAGEMENT_TOKEN="$(cat /etc/firma/local-exec.mgmt-token)"
+firma token approve <token-id> --socket /run/firma/local-exec.sock
+# or: firma token approve <token-id> --management-token-path /etc/firma/local-exec.mgmt-token
+```
+
+Without a management token configured, the Sidecar starts but **rejects every management command fail-closed** (and logs a warning under `pending_hitl`). A request missing or mismatching the token gets `outcome: "unauthorized"`. The token is constant-time compared and redacted in logs. **Do not rely on the token alone under same-UID sandboxing** — the agent can read it from the inherited environment or a same-UID file; rely on socket isolation as the primary boundary.
+
 ## Step 5: Use the right capability
 
 For Stage 1 to allow the call, the Sidecar must have a capability matching `(session_id, action_class, resource)`. Two options:
