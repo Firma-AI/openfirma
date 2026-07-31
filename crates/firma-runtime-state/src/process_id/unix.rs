@@ -11,29 +11,34 @@ impl UserProcessId {
         (*self).into()
     }
 
-    /// Return whether this process ID appears to identify a live process.
+    /// Reap this process if it is an exited direct child.
     ///
-    /// On Unix, this reaps exited child zombies before falling back to
-    /// `kill(pid, 0)` for non-child processes. It is intended for local
-    /// runtime-state observation, not for process ownership or signaling.
+    /// Returns `true` only when an exited or signaled child was reaped. Returns
+    /// `false` when the process is still running, is not a direct child, or its
+    /// status could not be queried.
     #[must_use]
-    pub fn is_alive(self) -> bool {
-        let pid = self.as_nix_pid();
-        // If the process is our direct child and has exited, reap the zombie
-        // here. Otherwise we cannot `waitpid` it, and `kill(pid, 0)` still
-        // reports a zombie as present.
-        match nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
-            Ok(
-                nix::sys::wait::WaitStatus::Exited(_, _)
-                | nix::sys::wait::WaitStatus::Signaled(_, _, _),
-            ) => false,
-            Ok(_) => true,
-            Err(nix::errno::Errno::ECHILD) => matches!(
-                nix::sys::signal::kill(pid, None),
-                Ok(()) | Err(nix::errno::Errno::EPERM)
+    pub fn reap_if_exited(self) -> bool {
+        matches!(
+            nix::sys::wait::waitpid(
+                self.as_nix_pid(),
+                Some(nix::sys::wait::WaitPidFlag::WNOHANG)
             ),
-            Err(_) => false,
-        }
+            Ok(nix::sys::wait::WaitStatus::Exited(_, _)
+                | nix::sys::wait::WaitStatus::Signaled(_, _, _))
+        )
+    }
+
+    /// Return whether this process ID identifies an existing process.
+    ///
+    /// This probe is non-destructive. An unreaped zombie therefore counts as
+    /// existing. It does not establish process ownership, and the operating
+    /// system may reuse the PID after this method returns.
+    #[must_use]
+    pub fn process_exists(self) -> bool {
+        matches!(
+            nix::sys::signal::kill(self.as_nix_pid(), None),
+            Ok(()) | Err(nix::errno::Errno::EPERM)
+        )
     }
 
     /// Send `SIGTERM` to this process ID.

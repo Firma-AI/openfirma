@@ -69,7 +69,7 @@ fn probe(state_dir: &Path, name: &str) -> ComponentStatus {
         };
     };
 
-    if !pid.is_alive() {
+    if pid.reap_if_exited() || !pid.process_exists() {
         return ComponentStatus {
             name: name.into(),
             pid: Some(pid),

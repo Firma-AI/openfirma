@@ -48,7 +48,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn termination_target_exists(group_pid: u32) -> bool {
-        UserProcessId::new(group_pid).is_some_and(UserProcessId::is_alive)
+        UserProcessId::new(group_pid).is_some_and(UserProcessId::process_exists)
     }
 
     fn spawn_in_group(group: &Group, cmd: &mut Command, log_path: &Path) -> Result<SpawnedChild> {

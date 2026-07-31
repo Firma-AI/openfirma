@@ -37,14 +37,14 @@ pub fn block_until_exit(children: Children) -> Result<()> {
             // confuse tonic graceful shutdown and leave children stuck.
             return Ok(());
         }
-        if !children.authority_pid.is_alive() {
+        if children.authority_pid.reap_if_exited() || !children.authority_pid.process_exists() {
             warn!(
                 pid = %children.authority_pid,
                 "authority exited unexpectedly"
             );
             return Ok(());
         }
-        if !children.sidecar_pid.is_alive() {
+        if children.sidecar_pid.reap_if_exited() || !children.sidecar_pid.process_exists() {
             warn!(pid = %children.sidecar_pid, "sidecar exited unexpectedly");
             return Ok(());
         }

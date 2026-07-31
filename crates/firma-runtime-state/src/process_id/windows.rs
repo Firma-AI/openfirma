@@ -10,12 +10,22 @@ pub(super) fn in_range_for_platform(_raw: u32) -> bool {
     reason = "Windows process liveness uses raw Win32 process handles"
 )]
 impl UserProcessId {
-    /// Return whether this process ID appears to identify a live process.
+    /// Reap this process if it is an exited direct child.
     ///
-    /// This is intended for local runtime-state observation, not for process
-    /// ownership or signaling.
+    /// Windows process handles do not require Unix-style child reaping, so this
+    /// method has no effect and always returns `false`.
     #[must_use]
-    pub fn is_alive(self) -> bool {
+    pub fn reap_if_exited(self) -> bool {
+        let _ = self;
+        false
+    }
+
+    /// Return whether this process ID identifies a running process.
+    ///
+    /// This probe is non-destructive. It does not establish process ownership,
+    /// and the operating system may reuse the PID after this method returns.
+    #[must_use]
+    pub fn process_exists(self) -> bool {
         use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
         use windows_sys::Win32::System::Threading::{
             GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,

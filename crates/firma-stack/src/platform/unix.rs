@@ -31,7 +31,7 @@ impl Platform for UnixPlatform {
         // Otherwise a leader-only group remains visible while its zombie waits
         // to be reaped, causing an unnecessary hard-kill escalation.
         if let Some(pid) = UserProcessId::new(group_pid) {
-            let _ = pid.is_alive();
+            let _ = pid.reap_if_exited();
         }
         raw_pid(group_pid).is_ok_and(|pid| {
             matches!(

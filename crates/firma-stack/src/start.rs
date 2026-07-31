@@ -260,7 +260,8 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
     // Stale when no recorded supervisor or component pid is still alive.
     for name in ["stack.pid", "authority.pid", "sidecar.pid"] {
         if let Some(pid) = pidfile::read(&state_dir.join(name))?
-            && pid.is_alive()
+            && !pid.reap_if_exited()
+            && pid.process_exists()
         {
             return Ok(false);
         }
@@ -272,7 +273,7 @@ fn reap_stale(state_dir: &Path) -> Result<()> {
     for name in ["authority.pid", "sidecar.pid", "stack.pid"] {
         let path = state_dir.join(name);
         if let Some(pid) = pidfile::read(&path)?
-            && !pid.is_alive()
+            && (pid.reap_if_exited() || !pid.process_exists())
         {
             pidfile::remove(&path)?;
         }

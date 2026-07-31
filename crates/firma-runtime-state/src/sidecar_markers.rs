@@ -101,7 +101,7 @@ fn marker_uptime_secs(marker_dir: &Path) -> Option<u64> {
 /// to a live sidecar (deleting it would orphan its socket).
 fn is_stale(marker_dir: &Path) -> bool {
     match read_metadata(marker_dir) {
-        Ok(meta) => !meta.pid.is_alive(),
+        Ok(meta) => meta.pid.reap_if_exited() || !meta.pid.process_exists(),
         Err(_) => false,
     }
 }
@@ -223,7 +223,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     } else {
         PathBuf::from(&meta.listen)
     };
-    let state = if !meta.pid.is_alive() {
+    let state = if meta.pid.reap_if_exited() || !meta.pid.process_exists() {
         State::Stopped
     } else if endpoint_responds(&meta.listen, &listen) {
         State::Running
