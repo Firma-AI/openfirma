@@ -218,6 +218,29 @@ pub struct MountSpec {
     pub(crate) read_only: bool,
 }
 
+impl MountSpec {
+    /// True if the mount target sits *strictly inside* a `.firma/` directory —
+    /// a *proper* ancestor is named `.firma` (e.g. the `vscode` profile's
+    /// `.firma/vscode/` state).
+    ///
+    /// The bwrap backend uses this to order profile mounts around the `.firma/`
+    /// config mask: such a mount is an intentional subpath re-expose, emitted
+    /// *after* the mask via last-write-wins. Everything else — a parent of a
+    /// `.firma/` (e.g. the workspace root) *and* a mount whose target *is* a
+    /// `.firma/` — returns `false` and is emitted *before* the mask, so the mask
+    /// always wins and cannot be replaced wholesale by a mount over `.firma/`
+    /// itself.
+    pub(crate) fn reexposes_firma_subpath(&self) -> bool {
+        // Skip the target itself (`ancestors()` yields it first): a mount whose
+        // target *is* `.firma` would replace the entire mask, so it is not a
+        // legitimate subpath re-expose.
+        self.target.ancestors().skip(1).any(|ancestor| {
+            ancestor.file_name().and_then(std::ffi::OsStr::to_str)
+                == Some(firma_config_loader::CONFIG_DIR_NAME)
+        })
+    }
+}
+
 /// Network policy toggles used by backend implementations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NetworkPolicy {
@@ -1140,10 +1163,31 @@ mod tests {
     use crate::runtime::RunInput;
 
     use super::{
-        BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
+        BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource, MountSpec,
         SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint, capability_from_patch,
         resolve_profile,
     };
+
+    fn mount_targeting(target: &str) -> MountSpec {
+        MountSpec {
+            source: PathBuf::from(target),
+            target: PathBuf::from(target),
+            read_only: false,
+        }
+    }
+
+    #[test]
+    fn reexposes_firma_subpath_distinguishes_subpath_from_dir_itself() {
+        // Subpath inside a `.firma/` (vscode state): re-exposed after the mask.
+        assert!(mount_targeting("/home/u/work/.firma/vscode").reexposes_firma_subpath());
+        // The `.firma/` directory itself: emitted before the mask so a mount over
+        // it can't replace the mask.
+        assert!(!mount_targeting("/home/u/work/.firma").reexposes_firma_subpath());
+        // Parent of `.firma/` (workspace root): masked, so emitted before it.
+        assert!(!mount_targeting("/home/u/work").reexposes_firma_subpath());
+        // Unrelated path with no `.firma` ancestor.
+        assert!(!mount_targeting("/home/u/other/vscode").reexposes_firma_subpath());
+    }
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
 

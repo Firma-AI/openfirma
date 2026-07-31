@@ -47,6 +47,7 @@
     reason = "test code: panics are acceptable test failures"
 )]
 
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -529,4 +530,349 @@ fn shell_quote(path: &Path) -> String {
 
 fn first_existing(candidates: &[&str]) -> Option<PathBuf> {
     candidates.iter().map(PathBuf::from).find(|p| p.exists())
+}
+
+/// The `.firma/` config mask survives the `codex` profile's workspace mount.
+///
+/// `codex` binds the run cwd (a *parent* of the workspace `.firma/`) read-write.
+/// Without careful mount ordering that bind would re-expose `firma.toml` over
+/// the mask. Plant a sentinel in the config; the sandboxed command cats it to
+/// stdout and the mask holds iff stdout lacks the sentinel. The
+/// `filesystem_layout_*` unit tests guard the ordering directly; this is the
+/// end-to-end proof.
+#[test]
+fn masks_firma_config_under_workspace_mount() {
+    // A TOML comment unique to the file: seeing it in stdout means a leak.
+    const SENTINEL: &str = "firma-mask-structural-sentinel";
+    // Proves the command ran, so sentinel-free stdout can't pass vacuously.
+    const RAN_MARKER: &str = "STRUCTURAL-SANDBOX-RAN";
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let cfg_dir = workspace.join(".firma");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+
+    // Scaffold from the workspace so the codex profile bakes its workspace-parent
+    // mount (`source = target = <workspace>`) — the mount under test.
+    let status = Command::new(firma_bin())
+        .args([
+            "config",
+            "-y",
+            "--mode",
+            "agent-local",
+            "--profile",
+            "codex",
+            "--posture",
+            "dev",
+        ])
+        .arg("--output-dir")
+        .arg(&cfg_dir)
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .current_dir(&workspace)
+        .status()
+        .expect("spawn firma config");
+    assert!(status.success(), "firma config scaffold failed");
+
+    // Plant the sentinel as a trailing comment.
+    let config_path = cfg_dir.join("firma.toml");
+    let generated = std::fs::read_to_string(&config_path).expect("read generated config");
+    std::fs::write(&config_path, format!("{generated}\n# {SENTINEL}\n"))
+        .expect("plant sentinel in config");
+
+    // cat the config to the sandbox stdout. firma's own logs go to stderr, so
+    // stdout carries only the agent command's output.
+    let shell = format!(
+        "cat {config} 2>/dev/null; echo {RAN_MARKER}",
+        config = shell_quote(&config_path),
+    );
+    let output = Command::new(firma_bin())
+        .args(["run", "--profile", "codex"])
+        .arg("--config")
+        .arg(&config_path)
+        .args(["--", "sh", "-c", &shell])
+        .current_dir(&workspace)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("spawn firma run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "firma run failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+
+    // The marker proves the command ran, so a sentinel-free stdout isn't vacuous.
+    assert!(
+        stdout.contains(RAN_MARKER),
+        "sandboxed command did not run:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+
+    // Mask held: the cat'd config never reached stdout.
+    assert!(
+        !stdout.contains(SENTINEL),
+        "config mask leaked under the codex workspace mount — the agent read \
+         firma.toml.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// A missing, higher-precedence `.firma/` candidate must not be plantable from
+/// inside the sandbox.
+#[test]
+fn missing_nearer_firma_candidate_cannot_be_planted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let run_cwd = workspace.join("service");
+    let config_dir = workspace.join(".firma");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&run_cwd).expect("mkdir run cwd");
+    scaffold_mask_test_config(&config_dir, &state_dir, &workspace);
+
+    let planted_config = run_cwd.join(".firma/firma.toml");
+    assert!(
+        !planted_config.exists(),
+        "precondition: nearer config candidate must be absent"
+    );
+    let shell = format!(
+        "mkdir -p {candidate_dir} && printf '%s\\n' '# planted by sandbox' > {candidate}; \
+         echo {ran}",
+        candidate_dir = shell_quote(planted_config.parent().expect("candidate parent")),
+        candidate = shell_quote(&planted_config),
+        ran = MASK_TEST_RAN_MARKER,
+    );
+
+    let output = run_structural_shell(None, &run_cwd, &shell);
+    assert_mask_test_ran(&output);
+    assert!(
+        !planted_config.exists(),
+        "sandbox created a higher-precedence host config at {}",
+        planted_config.display()
+    );
+}
+
+/// A symlinked `.firma` directory is rejected before launch.
+///
+/// Masking the canonical target is not enough: when the lexical `.firma` entry
+/// sits in a writable workspace, an agent could unlink the symlink and replace
+/// it with a real `.firma/firma.toml` for the next run. Fail closed instead.
+#[test]
+fn directory_symlink_config_fails_closed_before_agent_launch() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let external_config_dir = workspace.join("external-config");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    let config_file = scaffold_mask_test_config(&external_config_dir, &state_dir, &workspace);
+    let lexical_firma = workspace.join(".firma");
+    std::os::unix::fs::symlink(&external_config_dir, &lexical_firma)
+        .expect("symlink workspace .firma to external config directory");
+
+    let shell = format!(
+        "rm {firma_dir} && mkdir {firma_dir} && printf '%s\\n' '# poisoned' > {config}; \
+         echo {ran}",
+        firma_dir = shell_quote(&lexical_firma),
+        config = shell_quote(&workspace.join(".firma/firma.toml")),
+        ran = MASK_TEST_RAN_MARKER,
+    );
+    let output = run_structural_shell(None, &workspace, &shell);
+    assert!(
+        !output.status.success(),
+        "firma run unexpectedly allowed a symlinked .firma directory"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_RAN_MARKER),
+        "sandboxed command ran even though symlinked .firma should fail closed"
+    );
+    let metadata = std::fs::symlink_metadata(&lexical_firma).expect("inspect lexical .firma");
+    assert!(
+        metadata.file_type().is_symlink(),
+        "sandbox replaced the host .firma symlink"
+    );
+    assert!(
+        std::fs::read_to_string(&config_file)
+            .expect("read canonical config")
+            .contains(MASK_TEST_SENTINEL),
+        "canonical config was unexpectedly modified"
+    );
+}
+
+/// Masking the lexical `.firma/` directory must also protect a selected
+/// `firma.toml` that is itself a symlink to a writable workspace file.
+#[test]
+fn file_symlink_config_cannot_be_read_or_modified_via_target() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let config_dir = workspace.join(".firma");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    let lexical_config = scaffold_mask_test_config(&config_dir, &state_dir, &workspace);
+    let canonical_target = workspace.join("firma-target.toml");
+    std::fs::rename(&lexical_config, &canonical_target).expect("move config to symlink target");
+    std::os::unix::fs::symlink(&canonical_target, &lexical_config)
+        .expect("symlink firma.toml to workspace target");
+    let original = std::fs::read_to_string(&canonical_target).expect("read pristine target");
+
+    let shell = format!(
+        "cat {target} 2>/dev/null; printf '%s\\n' '# modified by sandbox' >> {target}; \
+         echo {ran}",
+        target = shell_quote(&canonical_target),
+        ran = MASK_TEST_RAN_MARKER,
+    );
+    let output = run_structural_shell(None, &workspace, &shell);
+    assert_mask_test_ran(&output);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
+        "sandbox read the selected config through the canonical file-symlink target"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&canonical_target).expect("read target after run"),
+        original,
+        "sandbox modified the selected config through its canonical symlink target"
+    );
+}
+
+/// A general-purpose mount of the workspace at another target must not create
+/// an unmasked alias for the config directory contained in that workspace.
+#[test]
+fn workspace_mount_alias_does_not_reexpose_firma_config() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let config_dir = workspace.join(".firma");
+    let mount_alias = tmp.path().join("workspace-alias");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    std::fs::create_dir_all(&mount_alias).expect("mkdir mount alias target");
+    let config_file = scaffold_mask_test_config(&config_dir, &state_dir, &workspace);
+    append_profile_mount(&config_file, &workspace, &mount_alias);
+
+    let aliased_config = mount_alias.join(".firma/firma.toml");
+    let shell = format!(
+        "cat {config} 2>/dev/null; echo {ran}",
+        config = shell_quote(&aliased_config),
+        ran = MASK_TEST_RAN_MARKER,
+    );
+    let output = run_structural_shell(Some(&config_file), &workspace, &shell);
+    assert_mask_test_ran(&output);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
+        "workspace mount exposed firma.toml through {}",
+        aliased_config.display()
+    );
+}
+
+/// A general-purpose mount directly targeting `.firma/` must not be implicitly
+/// authorized to replace the security mask after it has been installed.
+#[test]
+fn mount_targeting_firma_dir_does_not_replace_mask() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let config_dir = workspace.join(".firma");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    let config_file = scaffold_mask_test_config(&config_dir, &state_dir, &workspace);
+    append_profile_mount(&config_file, &config_dir, &config_dir);
+
+    let shell = format!(
+        "cat {config} 2>/dev/null; echo {ran}",
+        config = shell_quote(&config_file),
+        ran = MASK_TEST_RAN_MARKER,
+    );
+    let output = run_structural_shell(Some(&config_file), &workspace, &shell);
+    assert_mask_test_ran(&output);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
+        "post-mask mount targeting .firma re-exposed the selected config"
+    );
+}
+
+/// A general-purpose mount whose *source* is `.firma/`, bound at an unrelated
+/// target, must not re-expose the selected config through that aliased path.
+#[test]
+fn firma_source_mount_alias_does_not_reexpose_config() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let config_dir = workspace.join(".firma");
+    let alias = tmp.path().join("firma-alias");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    let config_file = scaffold_mask_test_config(&config_dir, &state_dir, &workspace);
+    append_profile_mount(&config_file, &config_dir, &alias);
+
+    let aliased_config = alias.join("firma.toml");
+    let shell = format!(
+        "cat {config} 2>/dev/null; echo {ran}",
+        config = shell_quote(&aliased_config),
+        ran = MASK_TEST_RAN_MARKER,
+    );
+    let output = run_structural_shell(Some(&config_file), &workspace, &shell);
+    assert_mask_test_ran(&output);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
+        "firma source mount re-exposed firma.toml through {}",
+        aliased_config.display()
+    );
+}
+
+const MASK_TEST_SENTINEL: &str = "firma-mask-adversarial-sentinel";
+const MASK_TEST_RAN_MARKER: &str = "FIRMA-MASK-ADVERSARIAL-RAN";
+
+fn scaffold_mask_test_config(config_dir: &Path, state_dir: &Path, workspace: &Path) -> PathBuf {
+    bootstrap_config(config_dir, state_dir, workspace);
+    let config_file = config_dir.join("firma.toml");
+    disable_host_home_masks(&config_file);
+    let generated = std::fs::read_to_string(&config_file).expect("read generated config");
+    std::fs::write(
+        &config_file,
+        format!("{generated}\n# {MASK_TEST_SENTINEL}\n"),
+    )
+    .expect("plant config sentinel");
+    config_file
+}
+
+fn append_profile_mount(config_file: &Path, source: &Path, target: &Path) {
+    let mut config = std::fs::read_to_string(config_file).expect("read generated config");
+    write!(
+        config,
+        "\n[[run.profiles.generic.mounts]]\n\
+         source = \"{}\"\n\
+         target = \"{}\"\n\
+         read_only = false\n",
+        source.display(),
+        target.display(),
+    )
+    .expect("render adversarial profile mount");
+    std::fs::write(config_file, config).expect("append adversarial profile mount");
+}
+
+fn run_structural_shell(
+    config_file: Option<&Path>,
+    cwd: &Path,
+    shell: &str,
+) -> std::process::Output {
+    let mut command = Command::new(firma_bin());
+    command.args(["run", "--profile", "generic"]);
+    if let Some(config_file) = config_file {
+        command.arg("--config").arg(config_file);
+    }
+    command
+        .args(["--", "sh", "-c", shell])
+        .current_dir(cwd)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("spawn firma run")
+}
+
+fn assert_mask_test_ran(output: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "firma run failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains(MASK_TEST_RAN_MARKER),
+        "sandboxed command did not run:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
 }
