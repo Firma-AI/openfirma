@@ -22,4 +22,5 @@ mod sidecar_startup_contract;
 mod sidecar_status_cli;
 mod sidecar_tampered_seed_e2e;
 mod stack_lifecycle;
+mod stack_teardown_forced_grandchildren;
 mod stack_teardown_grandchildren;
