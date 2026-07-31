@@ -171,7 +171,7 @@ fn unknown_binary_returns_none() {
 }
 
 #[test]
-fn bws_spec_has_expected_credential_env_and_placeholder() {
+fn bws_spec_has_expected_credential_env_and_provider_id() {
     let registry = IntegrationRegistry::with_builtins();
     let spec = registry.for_binary("bws").expect("bws spec");
     assert!(
@@ -206,8 +206,8 @@ fn push_custom_spec_takes_precedence_over_builtin() {
     });
     let spec = registry.for_binary("bws").expect("bws spec after push");
     assert!(spec.provider_id.eq("custom"));
-    // The custom spec's args_match: None makes it a universal fallback,
-    // overriding both of the built-in's subcommand-specific rules.
+    // The custom spec's empty args prefix matches every invocation in the
+    // sensitive-command category.
     assert!(matches!(
         spec.resolve_args(&args(&["secret", "get"])),
         CliArgsResolution::Matcher(_)

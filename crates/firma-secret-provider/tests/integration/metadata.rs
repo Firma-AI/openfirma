@@ -355,7 +355,7 @@ fn invalid_later_domain_fails_before_minting() {
 }
 
 #[test]
-fn document_selector_requires_exactly_one_match() {
+fn document_item_selector_rejects_multiple_matches() {
     let matcher = json_with_metadata(
         "$.fields[*]",
         "$.value",
@@ -378,7 +378,7 @@ fn document_selector_requires_exactly_one_match() {
             matches: 2
         }
     );
-    insta::assert_snapshot!(error.to_string(), @"json matcher item_selector selected 2 document node(s); expected exactly one");
+    insta::assert_snapshot!(error.to_string(), @"json matcher item_selector selected 2 document node(s); expected at most one");
 }
 
 #[test]

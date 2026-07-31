@@ -1,5 +1,6 @@
-//! Secret-provider integration specs: how to extract secrets from a
-//! provider's output and how to mint placeholder tokens for them.
+//! Secret-provider integration specs: how to classify provider commands and
+//! extract secrets from provider output. Callers own placeholder minting and
+//! persistence for extracted values.
 //!
 //! A provider is either a CLI vault tool (stdout intercepted by firma-run's
 //! broker via a stdio shim) or an HTTP vault (response bodies intercepted by
@@ -22,8 +23,8 @@ pub enum IntegrationSpec {
 
 impl IntegrationSpec {
     /// Stable integration identity (e.g. `"bitwarden"`, `"aws-secrets-manager"`),
-    /// for both origins. Used to key placeholder minting and to scope pushes
-    /// to the broker's secret store.
+    /// for both origins. Consumers use it to associate extracted secrets with
+    /// the integration that produced them.
     #[must_use]
     pub fn provider_id(&self) -> &str {
         match self {
@@ -51,9 +52,8 @@ impl IntegrationSpec {
     }
 }
 
-/// Per-CLI-tool behavior spec: credentials to forward, how to extract
-/// secrets from stdout, and how to mint placeholder tokens for the
-/// extracted values.
+/// Per-CLI-tool behavior spec: credentials to forward, command
+/// classification, output normalization, and secret extraction from stdout.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CliIntegrationSpec {
     /// Binary basename (e.g. `"bws"`).
@@ -168,7 +168,8 @@ pub enum CliArgsResolution<'a> {
 }
 
 /// One candidate rule for a [`CliIntegrationSpec`], scoped to invocations
-/// whose args start with `args_match` (or to any invocation, if `None`).
+/// whose args start with `args_match`. An empty prefix matches every
+/// invocation in that rule's command category.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CliMatcherRule {
@@ -222,9 +223,9 @@ impl CliMatcherRule {
     }
 }
 
-/// Per-HTTP-vault behavior spec: which traffic to intercept, how to extract
-/// secrets from the response body, and how to mint placeholder tokens for
-/// the extracted values.
+/// Per-HTTP-vault behavior spec: which traffic to intercept and how to extract
+/// secrets from the response body. Callers own placeholder minting and
+/// persistence for extracted values.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HttpIntegrationSpec {
     /// Stable integration identity (e.g. `"aws-secrets-manager"`).

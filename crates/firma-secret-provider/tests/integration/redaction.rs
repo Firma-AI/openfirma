@@ -33,7 +33,7 @@ fn secret_does_not_leak_contents() {
 }
 
 #[test]
-fn hostless_uri_error_does_not_expose_domain_value() {
+fn hostless_uri_error_redacts_query_secret() {
     let sensitive_domain = "/vault/path?token=super-secret";
     let matcher = json_with_metadata(
         "$[*]",
@@ -58,7 +58,7 @@ fn hostless_uri_error_does_not_expose_domain_value() {
 }
 
 #[test]
-fn authenticated_uri_error_does_not_expose_domain_value() {
+fn authenticated_uri_error_redacts_credentials() {
     let sensitive_domain = "username:super-secret@/value/path";
     let matcher = json_with_metadata(
         "$[*]",

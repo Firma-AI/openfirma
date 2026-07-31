@@ -7,7 +7,7 @@
 //! buffer and rewrites it with placeholders supplied by a mint callback, so
 //! the agent only ever sees placeholders. Used by `firma-run`'s broker for
 //! CLI vault stdout and by `firma-sidecar`'s HTTPS MITM path for HTTP vault
-//! response bodies. See `docs/architecture/secrets-interception.md`.
+//! response bodies.
 
 mod domain;
 mod error;

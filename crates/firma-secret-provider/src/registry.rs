@@ -1,8 +1,9 @@
 //! Built-in integration specs for supported CLI secret managers.
 //!
 //! Each spec names the vault CLI binary, lists the credential env vars the
-//! broker must forward to the subprocess, specifies how to extract secrets from
-//! the tool's stdout, and provides the placeholder template used to mint tokens.
+//! broker must forward to the subprocess, and specifies how to classify
+//! commands and extract secrets from the tool's stdout. Placeholder minting is
+//! owned by the caller of the extraction engine.
 //!
 //! CLI-only: every built-in is a vault CLI tool. There are no built-in HTTP
 //! vaults — every HTTP provider must be fully user-defined (matching how
@@ -146,15 +147,16 @@ fn bws_spec() -> CliIntegrationSpec {
     }
 }
 
-// `op item get <item> --format json` returns a single item object. We
-// exclude only field types 1Password documents as never holding secret
-// material (ADDRESS, CREDIT_CARD_TYPE, DATE, EMAIL, GENDER, MENU,
-// MONTH_YEAR, PHONE, REFERENCE, STRING, URL) rather than allowlisting the
-// known secret ones. Fail closed: an unrecognized `type` — including any
-// field type 1Password adds after this list was written — falls through the
-// exclusion and is treated as a secret and redacted, even if it turns out
-// not to need it. The item's primary URL is broadcast as the domain scope
-// for all extracted fields.
+// `op item get <item> --format json` returns a single item object. Field types
+// 1Password documents as non-secret metadata (ADDRESS, CREDIT_CARD_TYPE, DATE,
+// EMAIL, GENDER, MENU, MONTH_YEAR, PHONE, REFERENCE, URL) are left unchanged.
+// OTP is also left unchanged so the numeric one-time code remains usable.
+// STRING fields are redacted because custom text fields may hold sensitive
+// material such as recovery codes. Fail closed: an unrecognized `type` —
+// including any field type 1Password adds after this list was written — falls
+// through the exclusion and is treated as a secret and redacted, even if it
+// turns out not to need it. Every item URL is normalized, deduplicated, and
+// broadcast as a domain scope for all extracted fields.
 //
 // `whoami`/`account list`/`vault list`/`item list` return account, vault, or
 // item metadata (ids, titles, categories) with no field values, so they pass
@@ -205,8 +207,9 @@ fn op_spec() -> CliIntegrationSpec {
                         path: String::from("$.title"),
                         scope: SecretJsonSelectorScope::Document,
                     }),
-                    // Selects one URL for the whole item; rewrite_json
-                    // broadcasts it to every extracted field value.
+                    // Selects every URL for the whole item; rewrite_json
+                    // normalizes and deduplicates them, then broadcasts the
+                    // resulting domain set to every extracted field value.
                     domain_selector: Some(SecretJsonSelector {
                         path: String::from("$.urls[*].href"),
                         scope: SecretJsonSelectorScope::Document,

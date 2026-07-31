@@ -400,19 +400,23 @@ pub enum SecretMatcher {
         /// How the matching name is derived for each record, aligned by
         /// document order with the value path.
         name: SecretNameSource,
-        /// Optional scoped selector for the structured-item title. Record-scoped
-        /// selectors run once per record; document-scoped selectors run once at
-        /// the document root and are broadcast to every record.
+        /// Optional scoped selector for the structured-item title. A
+        /// record-scoped selector must match exactly one node per record. A
+        /// document-scoped selector may match zero or one node; its value is
+        /// broadcast to every record. For either scope, a selected non-string
+        /// node leaves the item absent, while an empty string is rejected.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item_selector: Option<SecretJsonSelector>,
         /// Optional scoped selector for the domain(s) associated with each
         /// secret. Unlike `item_selector`, this selector may match any number
         /// of nodes: a secret can legitimately be scoped to more than one
         /// host (e.g. several URLs on the same vault item), and each matched
-        /// string node contributes one domain. String nodes are validated
-        /// and normalized as HTTP authorities or URLs; `null` and other
-        /// non-string nodes are skipped, and zero matches leave the secret
-        /// unscoped (it resolves for any host).
+        /// string node contributes one domain. String nodes are validated and
+        /// normalized as HTTP authorities or URLs, then deduplicated. Once a
+        /// selector is configured, every applicable root must yield at least
+        /// one valid string domain: zero matches, non-string nodes, or invalid
+        /// domains reject the complete rewrite before any placeholder is
+        /// minted. Omit the selector to leave a secret unscoped.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         domain_selector: Option<SecretJsonSelector>,
     },
@@ -452,9 +456,11 @@ pub enum SecretNameSource {
 ///
 /// The scope is part of the serialized shape, for example
 /// `{"path":"$.title","scope":"document"}`; scope is never inferred from
-/// `JSONPath` syntax. Selector cardinality at each applicable root is exactly
-/// one for `item_selector`; `domain_selector` instead accepts any number of
-/// matches (see its field docs on [`SecretMatcher::Json`]).
+/// `JSONPath` syntax. Cardinality depends on both the selector's role and its
+/// scope: record-scoped item selectors require one match per record, while a
+/// document-scoped item selector accepts zero or one match. Domain selectors
+/// require one or more valid string matches at every applicable root. See the
+/// field docs on [`SecretMatcher::Json`] for failure behavior.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SecretJsonSelector {
     /// `JSONPath` evaluated at the root selected by [`Self::scope`].
@@ -469,7 +475,7 @@ pub struct SecretJsonSelector {
 pub enum SecretJsonSelectorScope {
     /// Evaluate independently against every node selected by `record_path`.
     Record,
-    /// Evaluate once against the document root and broadcast the selected node.
+    /// Evaluate once against the document root and broadcast the selector results.
     Document,
 }
 

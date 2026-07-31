@@ -221,11 +221,10 @@ impl CompiledJsonSelector {
         }
     }
 
-    /// Like [`Self::resolve_optional`], but accepts any number of matched
-    /// nodes rather than requiring exactly one: every string node
-    /// contributes an entry, non-string nodes are skipped, and zero matches
-    /// yield an empty list. Used for `domain_selector`, where a secret may
-    /// legitimately be scoped to more than one host.
+    /// Resolves one or more domain nodes at each applicable root. Every node
+    /// must be a string that passes `validate`; results are deduplicated into
+    /// a set. Zero matches, non-string nodes, or validation failures reject
+    /// the complete extraction before minting.
     fn resolve_many<T>(
         &self,
         root: &Value,
