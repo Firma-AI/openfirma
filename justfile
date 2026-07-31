@@ -26,6 +26,9 @@ fmt:
 lint:
   cargo clippy --all-features --all-targets -- -D warnings
 
+hawk:
+  . ./tool-versions.env; cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml
+
 test:
   cargo nextest run --all-features --all-targets --no-fail-fast
   # nextest runs unit + integration tests; it does not run doctests, so those
