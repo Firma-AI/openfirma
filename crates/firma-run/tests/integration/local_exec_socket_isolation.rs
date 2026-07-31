@@ -13,7 +13,15 @@ use firma_run::backend::local_exec_socket_mask_args;
 
 #[test]
 fn mask_overlays_devnull_on_absolute_socket() {
-    let args = local_exec_socket_mask_args(Some(Path::new("/run/firma/sidecar-tools.sock")));
+    // An absolute path per the host platform: the bwrap mask runs on Linux,
+    // but the arg builder is pure and compiled everywhere, so exercise it with
+    // a path that `is_absolute()` accepts on the current target.
+    let socket = if cfg!(windows) {
+        Path::new(r"C:\run\firma\sidecar-tools.sock")
+    } else {
+        Path::new("/run/firma/sidecar-tools.sock")
+    };
+    let args = local_exec_socket_mask_args(Some(socket));
     let rendered: Vec<String> = args
         .iter()
         .map(|a| a.to_string_lossy().into_owned())
@@ -23,7 +31,7 @@ fn mask_overlays_devnull_on_absolute_socket() {
         vec![
             "--ro-bind".to_string(),
             "/dev/null".to_string(),
-            "/run/firma/sidecar-tools.sock".to_string(),
+            socket.to_string_lossy().into_owned(),
         ],
         "the local-exec socket must be shadowed by /dev/null inside the sandbox"
     );
