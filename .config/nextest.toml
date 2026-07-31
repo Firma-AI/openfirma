@@ -1,7 +1,25 @@
 # nextest configuration.
 
+experimental = ["setup-scripts"]
+
+[scripts.setup.compute-architecture-metadata-unix]
+command = ["tests/architecture/setup-metadata.sh"]
+
+[scripts.setup.compute-architecture-metadata-windows]
+command = ["pwsh", "-NoProfile", "-File", "tests/architecture/setup-metadata.ps1"]
+
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.default.scripts]]
+filter = 'binary_id(firma::architecture)'
+platform = { host = "cfg(unix)" }
+setup = "compute-architecture-metadata-unix"
+
+[[profile.default.scripts]]
+filter = 'binary_id(firma::architecture)'
+platform = { host = "cfg(windows)" }
+setup = "compute-architecture-metadata-windows"
 
 # Some e2e enforcement scenarios require structural confinement (Linux `bwrap`).
 # On macOS `firma run` falls back to non-structural compatibility mode

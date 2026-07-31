@@ -11,11 +11,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use guppy::MetadataCommand;
-
 #[test]
 fn crate_tests_use_single_binary_layout() -> Result<(), Box<dyn std::error::Error>> {
-    let graph = MetadataCommand::new().build_graph()?;
+    let graph = crate::metadata::load()?;
     let workspace_root = graph.workspace().root();
     let mut violations = Vec::new();
 
