@@ -156,6 +156,14 @@ pub struct LaunchSpec {
     )]
     pub(crate) seccomp_filter_path: Option<PathBuf>,
     pub(crate) identity_mode: SandboxIdentityMode,
+    /// Resolved `firma.toml` the agent is running under, if any.
+    ///
+    /// The Linux bwrap backend masks this file (and, when it lives in a
+    /// `.firma/` directory, the whole directory) so the agent cannot read
+    /// Authority topology / `agent_id` or poison its own config for a later
+    /// run. It can sit outside the workspace cwd because config discovery walks
+    /// up parent directories.
+    pub(crate) config_file: Option<PathBuf>,
 }
 
 /// Backend interface for sandbox runtime implementations.

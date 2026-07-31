@@ -24,5 +24,8 @@ pub const CONFIG_DIR_NAME: &str = ".firma";
 pub const CONFIG_ENV_NAME: &str = "FIRMA_CONFIG";
 
 pub use profile::AgentProfile;
-pub use resolver::{ConfigResolveError, ConfigResolver, ConfigSource, ResolvedConfig};
+pub use resolver::{
+    ConfigResolveError, ConfigResolver, ConfigSource, FirmaConfigCandidate,
+    FirmaConfigCandidateAncestors, ResolvedConfig,
+};
 pub use schema::{FirmaConfig, load_section};

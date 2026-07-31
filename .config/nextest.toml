@@ -44,4 +44,4 @@ setup = "compute-architecture-metadata-windows"
 # enforcement.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "macos")'
-default-filter = 'not (binary_id(firma::live-agent) & test(/^(claude|codex)::(block_raw_tcp_egress|fs_read_deny|fs_delete_deny)$/))'
+default-filter = 'not (binary_id(firma::live-agent) & test(/^(claude|codex)::(block_raw_tcp_egress|fs_read_deny|fs_delete_deny|firma_config_masked)$/))'

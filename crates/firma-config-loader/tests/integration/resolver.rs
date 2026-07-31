@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use firma_config_loader::{
     CONFIG_DIR_NAME, CONFIG_ENV_NAME, ConfigResolveError, ConfigResolver, ConfigSource,
+    FirmaConfigCandidateAncestors,
 };
 use fs_err as fs;
 
@@ -291,4 +292,49 @@ fn nothing_found_returns_none() {
 
         assert_matches!(provider.resolve_config(None).expect("resolve config"), None);
     });
+}
+
+fn candidate_dirs(start: &Path, ceiling: Option<&Path>) -> Vec<PathBuf> {
+    FirmaConfigCandidateAncestors::new(start, ceiling)
+        .map(|candidate| candidate.config_dir)
+        .collect()
+}
+
+#[test]
+fn candidates_walk_up_nearest_first() {
+    let dirs = candidate_dirs(Path::new("/a/b/c"), None);
+    assert_eq!(
+        dirs,
+        vec![
+            PathBuf::from("/a/b/c/.firma"),
+            PathBuf::from("/a/b/.firma"),
+            PathBuf::from("/a/.firma"),
+            PathBuf::from("/.firma"),
+        ]
+    );
+}
+
+#[test]
+fn candidate_pairs_config_file_under_dir() {
+    let first = FirmaConfigCandidateAncestors::new(Path::new("/a/b"), None)
+        .next()
+        .expect("at least one candidate");
+    assert_eq!(first.config_dir, PathBuf::from("/a/b/.firma"));
+    assert_eq!(first.config_file(), PathBuf::from("/a/b/.firma/firma.toml"));
+}
+
+#[test]
+fn ceiling_is_inclusive_and_stops_walk() {
+    let dirs = candidate_dirs(Path::new("/a/b/c"), Some(Path::new("/a/b")));
+    assert_eq!(
+        dirs,
+        vec![PathBuf::from("/a/b/c/.firma"), PathBuf::from("/a/b/.firma"),],
+        "walk yields the ceiling directory then stops"
+    );
+}
+
+#[test]
+fn ceiling_outside_start_yields_nothing() {
+    let dirs = candidate_dirs(Path::new("/a/b"), Some(Path::new("/other")));
+    assert!(dirs.is_empty());
 }

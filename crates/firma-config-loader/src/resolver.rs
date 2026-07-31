@@ -9,6 +9,80 @@ use fs_err as fs;
 
 use crate::{CONFIG_DIR_NAME, CONFIG_ENV_NAME, CONFIG_FILE_NAME, FirmaConfig};
 
+/// A candidate `.firma/` location produced while walking up the directory tree.
+///
+/// Yielded nearest-first by [`FirmaConfigCandidateAncestors`]. Discovery reads
+/// [`config_file`](Self::config_file) to find the winning config; the sandbox
+/// backend masks [`config_dir`](Self::config_dir) so an agent cannot read or
+/// poison it. Paths are constructed by joining, not stat'd — callers decide
+/// whether each candidate exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirmaConfigCandidate {
+    /// The `.firma/` directory for this ancestor (`<dir>/.firma`).
+    pub config_dir: PathBuf,
+}
+
+impl FirmaConfigCandidate {
+    /// The `firma.toml` candidate inside this `.firma/` directory
+    /// (`<dir>/.firma/firma.toml`), at its canonical fixed name.
+    #[must_use]
+    pub fn config_file(&self) -> PathBuf {
+        self.config_dir.join(CONFIG_FILE_NAME)
+    }
+}
+
+/// Iterator over ancestor `.firma/` candidates, nearest-first.
+///
+/// Built via [`FirmaConfigCandidateAncestors::new`]. An optional inclusive ceiling stops
+/// iteration after the ceiling directory, and yields nothing when the start path
+/// is not within the ceiling.
+#[derive(Debug, Clone)]
+pub struct FirmaConfigCandidateAncestors<'a> {
+    ancestors: std::path::Ancestors<'a>,
+    ceiling: Option<&'a Path>,
+    done: bool,
+}
+
+impl<'a> FirmaConfigCandidateAncestors<'a> {
+    /// Walk up from `start`, yielding each ancestor's `.firma/` candidate
+    /// nearest-first.
+    ///
+    /// Shared by config discovery ([`ConfigResolver::resolve_config`], which
+    /// reads the first existing `firma.toml`) and the Linux sandbox mask (which
+    /// hides every candidate directory). Centralizing the walk keeps both in
+    /// lockstep: the mask covers exactly the set discovery can select.
+    ///
+    /// When `ceiling` is `Some`, the walk is bounded to that directory
+    /// (inclusive), and yields nothing when `start` is not within it. Pass
+    /// `None` for an unbounded walk to the filesystem root.
+    #[must_use]
+    pub fn new(start: &'a Path, ceiling: Option<&'a Path>) -> Self {
+        let out_of_bounds = ceiling.is_some_and(|ceiling| !start.starts_with(ceiling));
+        Self {
+            ancestors: start.ancestors(),
+            ceiling,
+            done: out_of_bounds,
+        }
+    }
+}
+
+impl Iterator for FirmaConfigCandidateAncestors<'_> {
+    type Item = FirmaConfigCandidate;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let dir = self.ancestors.next()?;
+        // Stop after (inclusive) the ceiling so it is still a candidate.
+        if self.ceiling.is_some_and(|ceiling| dir == ceiling) {
+            self.done = true;
+        }
+        let config_dir = dir.join(CONFIG_DIR_NAME);
+        Some(FirmaConfigCandidate { config_dir })
+    }
+}
+
 /// A helper to determine which configuration should be applied to the
 /// `firma` command that's about to execute.
 ///
@@ -142,15 +216,8 @@ impl ConfigResolver {
             path: PathBuf::default(),
             reason: e.into(),
         })?;
-        let walk_ceiling = {
-            let walk_ceiling = self.walk_ceiling.as_deref();
-            if walk_ceiling.is_some_and(|ceiling| !cwd.starts_with(ceiling)) {
-                return Ok(None);
-            }
-            walk_ceiling
-        };
-        for dir in cwd.ancestors() {
-            let candidate = dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+        for candidate in FirmaConfigCandidateAncestors::new(&cwd, self.walk_ceiling.as_deref()) {
+            let candidate = candidate.config_file();
             match fs::read_to_string(&candidate) {
                 Ok(text) => {
                     let config = FirmaConfig::parse(&candidate, &text).map_err(|reason| {
@@ -173,9 +240,6 @@ impl ConfigResolver {
                         reason: error.into(),
                     });
                 }
-            }
-            if walk_ceiling.is_some_and(|ceiling| dir == ceiling) {
-                break;
             }
         }
 
