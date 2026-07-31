@@ -7,8 +7,8 @@ mod status;
 
 pub use audit::{AuditDecision, AuditFilter, AuditRow, AuditState, AuditViewportMode};
 pub use policy::{
-    PoliciesState, PolicyKey, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart,
-    PolicyRow, PolicyRowStatus,
+    PoliciesState, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart, PolicyRow,
+    PolicyRowStatus,
 };
 pub use runtime::ControlRuntimeState;
 pub use status::ControlStatus;
@@ -25,7 +25,7 @@ pub enum Pane {
 impl Pane {
     /// Returns the next pane in the focus cycle.
     #[must_use]
-    pub const fn next(self) -> Self {
+    pub(crate) const fn next(self) -> Self {
         match self {
             Self::Policies => Self::Audit,
             Self::Audit => Self::Policies,

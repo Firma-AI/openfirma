@@ -46,7 +46,7 @@ pub use macos_vz::VzBackend;
 pub use windows_wsl2::Wsl2Backend;
 
 /// Shared default home-relative paths considered sensitive across agent CLIs.
-pub const DEFAULT_SENSITIVE_HOME_SUFFIXES: &[&str] = &[
+pub(crate) const DEFAULT_SENSITIVE_HOME_SUFFIXES: &[&str] = &[
     ".ssh",
     ".aws",
     ".azure",
@@ -69,7 +69,7 @@ pub enum BackendKind {
 impl BackendKind {
     /// Default backend for current host platform.
     #[must_use]
-    pub fn default_for_current_host() -> Self {
+    pub(crate) fn default_for_current_host() -> Self {
         #[cfg(target_os = "linux")]
         {
             return Self::Bwrap;
@@ -137,17 +137,21 @@ pub struct EnforcementProof {
 /// Launch payload for wrapped command.
 #[derive(Debug, Clone)]
 pub struct LaunchSpec {
-    pub executable: String,
-    pub args: Vec<String>,
-    pub cwd: PathBuf,
-    pub env: BTreeMap<String, String>,
-    pub sidecar_endpoint: SidecarEndpoint,
+    pub(crate) executable: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) sidecar_endpoint: SidecarEndpoint,
     /// Optional static seccomp cBPF artifact path resolved by runtime.
     ///
     /// Backends should treat this as the authoritative source for seccomp
     /// loading instead of relying on environment-variable indirection.
-    pub seccomp_filter_path: Option<PathBuf>,
-    pub identity_mode: SandboxIdentityMode,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "seccomp is consumed only by the Linux backend")
+    )]
+    pub(crate) seccomp_filter_path: Option<PathBuf>,
+    pub(crate) identity_mode: SandboxIdentityMode,
 }
 
 /// Backend interface for sandbox runtime implementations.
@@ -202,7 +206,7 @@ pub trait SandboxBackend: Send + Sync {
 
 /// Construct backend implementation for a kind.
 #[must_use]
-pub fn build_backend(kind: BackendKind) -> Box<dyn SandboxBackend> {
+pub(crate) fn build_backend(kind: BackendKind) -> Box<dyn SandboxBackend> {
     match kind {
         BackendKind::Bwrap => Box::new(BwrapBackend::new()),
         BackendKind::Vz => Box::new(VzBackend::new()),

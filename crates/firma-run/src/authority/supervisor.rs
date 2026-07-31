@@ -292,7 +292,7 @@ impl AuthoritySupervisor {
 
     /// The URL the spawned Authority is reachable at.
     #[must_use]
-    pub fn url(&self) -> String {
+    pub(crate) fn url(&self) -> String {
         format!("http://{}", self.listen_addr)
     }
 
@@ -310,7 +310,7 @@ impl AuthoritySupervisor {
 
     /// Path to the Ed25519 public key for this run's authority instance.
     #[must_use]
-    pub fn pub_key_path(&self) -> PathBuf {
+    pub(crate) fn pub_key_path(&self) -> PathBuf {
         self.pub_key_path.clone()
     }
 }

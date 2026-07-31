@@ -31,9 +31,9 @@ const EPERM_ERRNO: u32 = 1;
 /// Runtime seccomp materialization outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeccompMaterialized {
-    pub bpf_path: PathBuf,
-    pub metadata_path: PathBuf,
-    pub metadata: SeccompArtifactMetadata,
+    pub(crate) bpf_path: PathBuf,
+    metadata_path: PathBuf,
+    pub(crate) metadata: SeccompArtifactMetadata,
 }
 
 /// Resolve the effective seccomp filter for a profile.
@@ -45,7 +45,7 @@ pub struct SeccompMaterialized {
 ///
 /// Returns an error when managed policy compilation, artifact write, or
 /// checksum verification fails.
-pub fn resolve_effective_seccomp(
+pub(crate) fn resolve_effective_seccomp(
     profile: &ResolvedProfile,
 ) -> Result<Option<SeccompMaterialized>, RunError> {
     let Some(managed) = &profile.seccomp_policy else {
@@ -72,17 +72,17 @@ struct CedarSubsetPolicyFile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SeccompArtifactMetadata {
-    pub policy_schema_version: u32,
-    pub policy_id: String,
-    pub policy_version: String,
-    pub sha256: String,
-    pub generated_at: String,
-    pub compiler_version: String,
-    pub target_arch: String,
-    pub default_action: String,
-    pub source_policy_refs: Vec<String>,
-    pub source_policy_sha256: String,
-    pub denied_syscalls: Vec<String>,
+    policy_schema_version: u32,
+    pub(crate) policy_id: String,
+    pub(crate) policy_version: String,
+    pub(crate) sha256: String,
+    generated_at: String,
+    pub(crate) compiler_version: String,
+    pub(crate) target_arch: String,
+    default_action: String,
+    source_policy_refs: Vec<String>,
+    source_policy_sha256: String,
+    denied_syscalls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

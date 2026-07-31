@@ -79,7 +79,7 @@ impl PersistentSessionStateStore {
     /// Returns an error if the file cannot be created/opened for append.
     /// A corrupt or unreadable log is treated as an empty cache (graceful
     /// degradation) rather than a hard failure.
-    pub fn open(path: impl AsRef<Path>, capacity: usize) -> std::io::Result<Self> {
+    pub(crate) fn open(path: impl AsRef<Path>, capacity: usize) -> std::io::Result<Self> {
         let cap = NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
         let path = path.as_ref().to_path_buf();
         let cache = replay(&path, cap).unwrap_or_else(|err| {
@@ -98,7 +98,7 @@ impl PersistentSessionStateStore {
 
     /// Default path for the persistent store under a runtime directory.
     #[must_use]
-    pub fn default_path(runtime_dir: &Path) -> PathBuf {
+    pub(crate) fn default_path(runtime_dir: &Path) -> PathBuf {
         runtime_dir.join("session-state.jsonl")
     }
 }

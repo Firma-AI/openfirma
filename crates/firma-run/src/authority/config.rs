@@ -16,13 +16,13 @@ use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthorityConnectSection {
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
-    pub url: Option<String>,
+    pub(crate) url: Option<String>,
     /// Path to the PEM CA certificate that signed the authority's TLS cert.
-    pub ca_cert_path: Option<PathBuf>,
+    pub(crate) ca_cert_path: Option<PathBuf>,
     /// Path to the authority's Ed25519 public key for PASETO token verification.
-    pub public_key_path: Option<PathBuf>,
+    pub(crate) public_key_path: Option<PathBuf>,
     /// Sidecar credentials presented on Authority RPCs.
-    pub credentials: Option<SidecarCredentialsConfig>,
+    pub(crate) credentials: Option<SidecarCredentialsConfig>,
 }
 
 /// Snapshot of routing-relevant sections.
@@ -30,11 +30,11 @@ pub struct AuthorityConnectSection {
 pub struct AuthoritySection {
     /// `true` when `[authority]` is present — the file declares a
     /// co-located Mini Authority that `firma run` should autostart.
-    pub local: bool,
+    pub(crate) local: bool,
     /// Parsed `[authority].listen_addr`, defaulting to `[::1]:50051`.
-    pub listen_addr: std::net::SocketAddr,
+    pub(crate) listen_addr: std::net::SocketAddr,
     /// Client-side connect coordinates lifted from `[sidecar.authority]`.
-    pub connect: Option<AuthorityConnectSection>,
+    pub(crate) connect: Option<AuthorityConnectSection>,
 }
 
 impl Default for AuthoritySection {
@@ -92,7 +92,7 @@ struct UserConfig {
 ///
 /// Returns an error on I/O failure (other than `NotFound`) or TOML
 /// parse failure.
-pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError> {
+pub(crate) fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError> {
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),

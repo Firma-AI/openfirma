@@ -60,5 +60,5 @@ pub enum TenancyMode {
 pub struct TenancyConfig {
     /// Tenancy mode. Default: [`TenancyMode::SingleAgent`].
     #[serde(default)]
-    pub mode: TenancyMode,
+    pub(crate) mode: TenancyMode,
 }

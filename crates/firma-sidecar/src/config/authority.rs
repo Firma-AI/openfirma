@@ -12,56 +12,57 @@ use crate::authority_credentials::SidecarCredentialsConfig;
 pub struct AuthorityConfig {
     /// Authority-registered `TypeID` for the agent represented by this Sidecar.
     #[serde(default)]
-    pub agent_id: Option<AgentId>,
+    #[expect(dead_code, reason = "accepted for configuration compatibility")]
+    pub(crate) agent_id: Option<AgentId>,
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`). When set, the
     /// sidecar streams policy bundles and revocations from the Authority.
     #[serde(default)]
     pub url: Option<String>,
     /// Connection timeout in seconds.
     #[serde(default = "default_connect_timeout_secs")]
-    pub connect_timeout_secs: u64,
+    pub(crate) connect_timeout_secs: u64,
     /// Minimum reconnect backoff in milliseconds.
     #[serde(default = "default_min_backoff_ms")]
-    pub reconnect_min_backoff_ms: u64,
+    pub(crate) reconnect_min_backoff_ms: u64,
     /// Maximum reconnect backoff in seconds.
     #[serde(default = "default_max_backoff_secs")]
-    pub reconnect_max_backoff_secs: u64,
+    pub(crate) reconnect_max_backoff_secs: u64,
     /// Grace period before the revocation stream is considered ready.
     #[serde(default = "default_readiness_grace_ms")]
-    pub revocation_readiness_grace_ms: u64,
+    pub(crate) revocation_readiness_grace_ms: u64,
     /// Flip revocation readiness back to false on disconnect.
     #[serde(default)]
-    pub revocation_fail_closed_on_disconnect: bool,
+    pub(crate) revocation_fail_closed_on_disconnect: bool,
     /// Path to the Authority's PASETO v4 Ed25519 public key (32 raw
     /// bytes, as written by `firma-authority generate-key`). Required
     /// when `[capability_seed].paths` is non-empty so the sidecar can
     /// verify the seed signatures.
     #[serde(default)]
-    pub public_key_path: Option<PathBuf>,
+    pub(crate) public_key_path: Option<PathBuf>,
     /// Path to the PEM-encoded CA certificate used to verify the Authority's
     /// TLS certificate.
     ///
     /// Requirement is context-dependent and enforced in `SidecarConfig::validate`:
     /// required for `https://` authority URLs, optional for loopback `http://`.
     #[serde(default)]
-    pub ca_cert_path: Option<PathBuf>,
+    pub(crate) ca_cert_path: Option<PathBuf>,
     /// Allow an insecure plain `http://` authority URL to a non-loopback
     /// host. Defaults to `false` (secure-by-default).
     #[serde(default)]
-    pub allow_insecure_remote_authority: bool,
+    pub(crate) allow_insecure_remote_authority: bool,
     /// Path to the PEM-encoded mTLS client certificate presented to the
     /// Authority during the TLS handshake. Required when the Authority is
     /// configured with `mtls_client_ca_cert_path`. Must be set together
     /// with `tls_client_key_path` or not at all.
     #[serde(default)]
-    pub tls_client_cert_path: Option<PathBuf>,
+    pub(crate) tls_client_cert_path: Option<PathBuf>,
     /// Path to the PEM-encoded mTLS client private key. Must be set
     /// together with `tls_client_cert_path` or not at all.
     #[serde(default)]
-    pub tls_client_key_path: Option<PathBuf>,
+    pub(crate) tls_client_key_path: Option<PathBuf>,
     /// Credentials presented on each outbound Authority RPC.
     #[serde(default)]
-    pub credentials: Option<SidecarCredentialsConfig>,
+    pub(crate) credentials: Option<SidecarCredentialsConfig>,
 }
 
 impl AuthorityConfig {
@@ -70,7 +71,7 @@ impl AuthorityConfig {
     /// # Errors
     ///
     /// Returns a human-readable field error for invalid values.
-    pub fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if let Some(ref url) = self.url
             && url.trim().is_empty()
         {

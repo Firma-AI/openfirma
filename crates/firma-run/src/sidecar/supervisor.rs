@@ -30,7 +30,7 @@ use firma_runtime_state::UserProcessId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
-pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
+pub(crate) const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
 
 /// Grace period between `SIGTERM` and `SIGKILL` in [`Drop`].
 const STOP_GRACE: Duration = Duration::from_secs(5);
@@ -346,7 +346,7 @@ impl SidecarSupervisor {
 
     /// The UDS endpoint the spawned sidecar is listening on.
     #[must_use]
-    pub fn endpoint(&self) -> SidecarEndpoint {
+    pub(crate) fn endpoint(&self) -> SidecarEndpoint {
         self.endpoint.clone()
     }
 

@@ -40,7 +40,7 @@ impl EnforcementError {
     /// Convert any internal error to a DENY decision.
     /// This is the fail-closed guarantee.
     #[must_use]
-    pub fn into_deny(self, stage: EnforcementStage) -> EnforcementDecision {
+    pub(crate) fn into_deny(self, stage: EnforcementStage) -> EnforcementDecision {
         let (reason, detail) = match &self {
             Self::NormalizationFailed { detail } => {
                 (DenyReason::UnclassifiedIntent, detail.clone())

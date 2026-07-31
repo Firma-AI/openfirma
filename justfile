@@ -27,7 +27,8 @@ lint:
   cargo clippy --all-features --all-targets -- -D warnings
 
 hawk:
-  . ./tool-versions.env; cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml
+  # Host-only analysis cannot prove platform-specific public APIs are dead.
+  . ./tool-versions.env; cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml -D warnings -A hawk::dead_public
 
 test:
   cargo nextest run --all-features --all-targets --no-fail-fast

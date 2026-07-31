@@ -123,7 +123,7 @@ impl App {
     }
 
     /// Records a policy error and marks the runtime as errored.
-    pub fn set_policy_error(&mut self, error: ControlError) {
+    pub(crate) fn set_policy_error(&mut self, error: ControlError) {
         self.policies.set_error(error);
         self.runtime_state = ControlRuntimeState::Error;
     }
@@ -134,7 +134,7 @@ impl App {
     }
 
     /// Closes the help overlay.
-    pub const fn close_help(&mut self) {
+    pub(crate) const fn close_help(&mut self) {
         self.help_visible = false;
     }
 
@@ -266,7 +266,7 @@ impl App {
     }
 
     /// Appends several audit rows in source order.
-    pub fn push_audit_rows(&mut self, rows: impl IntoIterator<Item = AuditRow>) {
+    pub(crate) fn push_audit_rows(&mut self, rows: impl IntoIterator<Item = AuditRow>) {
         for row in rows {
             self.push_audit_row(row);
         }
@@ -310,17 +310,17 @@ impl App {
     }
 
     /// Starts a pending `g` prefix for `gg` navigation.
-    pub fn start_g_prefix(&mut self) {
+    pub(crate) fn start_g_prefix(&mut self) {
         self.pending_key_prefix = Some(KeyPrefix::G);
     }
 
     /// Consumes the pending `g` prefix and reports whether it was set.
-    pub fn take_g_prefix(&mut self) -> bool {
+    pub(crate) fn take_g_prefix(&mut self) -> bool {
         matches!(self.pending_key_prefix.take(), Some(KeyPrefix::G))
     }
 
     /// Clears any pending multi-key prefix.
-    pub fn clear_g_prefix(&mut self) {
+    pub(crate) fn clear_g_prefix(&mut self) {
         self.pending_key_prefix = None;
     }
 

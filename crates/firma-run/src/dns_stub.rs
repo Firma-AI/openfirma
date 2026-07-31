@@ -38,7 +38,7 @@ impl HostDnsStubHandle {
     ///
     /// Returns [`RunError::Spawn`] if the listeners cannot be bound or threads
     /// cannot be spawned.
-    pub fn start() -> Result<Self, RunError> {
+    pub(crate) fn start() -> Result<Self, RunError> {
         let (udp, tcp, listen_addr) = bind_stub_pair()?;
 
         udp.set_nonblocking(true).map_err(|error| {
@@ -81,7 +81,7 @@ impl HostDnsStubHandle {
 
     /// UDP+TCP address the stub is listening on.
     #[must_use]
-    pub fn listen_addr(&self) -> SocketAddr {
+    pub(crate) fn listen_addr(&self) -> SocketAddr {
         self.listen_addr
     }
 }

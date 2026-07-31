@@ -13,9 +13,9 @@ pub use firma_runtime_state::SandboxId;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunIdentity {
     pub sandbox_id: SandboxId,
-    pub session_id: String,
-    pub agent_id: AgentId,
-    pub execution_profile: String,
+    pub(crate) session_id: String,
+    pub(crate) agent_id: AgentId,
+    pub(crate) execution_profile: String,
 }
 
 impl RunIdentity {
@@ -51,7 +51,7 @@ impl RunIdentity {
 
     /// Header-style attribution keys suitable for transport bridges.
     #[must_use]
-    pub fn attribution_headers(&self) -> BTreeMap<String, String> {
+    fn attribution_headers(&self) -> BTreeMap<String, String> {
         let mut headers = BTreeMap::new();
         headers.insert(
             "x-firma-sandbox-id".to_string(),

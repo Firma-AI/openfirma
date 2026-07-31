@@ -51,9 +51,9 @@ use super::error::EnforcementError;
 #[derive(Debug, Clone)]
 pub struct ValidatedCapability {
     /// The raw PASETO v4 token string.
-    pub raw_token: String,
+    pub(crate) raw_token: String,
     /// Verified claims extracted from the token.
-    pub claims: CapabilityClaims,
+    pub(crate) claims: CapabilityClaims,
 }
 
 pub struct CapabilityMapHandle(Arc<ArcSwap<CapabilityMap>>);

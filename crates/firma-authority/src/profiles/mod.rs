@@ -7,7 +7,7 @@
 
 mod developer;
 
-pub use developer::DEVELOPER_CEDAR;
+pub(crate) use developer::DEVELOPER_CEDAR;
 
 /// Profile name used when a caller does not request one explicitly.
 ///

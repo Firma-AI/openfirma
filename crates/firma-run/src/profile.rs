@@ -10,7 +10,7 @@ use crate::config::{
 use crate::error::RunError;
 
 /// Returns built-in profile patch for a given profile id.
-pub(crate) fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> {
+pub fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> {
     match AgentProfile::from_name(profile) {
         Some(AgentProfile::Generic) => Ok(generic_profile()),
         Some(AgentProfile::Codex) => Ok(codex_profile()),

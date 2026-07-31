@@ -31,7 +31,7 @@
 //! consumers to verify event integrity without trusting the transport.
 
 pub mod builder;
-pub mod sink;
+pub(crate) mod sink;
 
 use std::future::Future;
 
@@ -52,7 +52,7 @@ use tokio_util::sync::CancellationToken;
 /// object-safe. That is intentional: the concrete sink type is selected
 /// once at startup based on the `[audit]` config section, so dynamic
 /// dispatch is unnecessary.
-pub trait AuditSink {
+pub(crate) trait AuditSink {
     /// Drives the sink, consuming events from `rx` until `exit` is
     /// cancelled or an unrecoverable error occurs.
     ///
@@ -130,44 +130,44 @@ pub enum Decision {
 #[derive(Debug, Clone)]
 pub struct AuditPayload {
     /// Session that produced this event.
-    pub session_id: String,
+    pub(crate) session_id: String,
     /// Capability token ID evaluated during enforcement.
-    pub token_id: String,
+    pub(crate) token_id: String,
     /// Agent that initiated the action.
-    pub agent_id: String,
+    pub(crate) agent_id: String,
     /// Canonical action class from the normalizer (e.g., `llm.inference`).
-    pub action: String,
+    pub(crate) action: String,
     /// Target resource identifier (e.g., URL, table name).
-    pub resource: String,
+    pub(crate) resource: String,
     /// Enforcement outcome.
-    pub decision: Decision,
+    pub(crate) decision: Decision,
     /// Human-readable reason when decision is DENY or ABORT. Empty on
     /// ALLOW, except in monitor mode where an overridden DENY carries
     /// `"monitor_mode: <original_deny_reason>"`.
-    pub deny_reason: String,
+    pub(crate) deny_reason: String,
     /// Wall-clock time spent in the enforcement pipeline, in
     /// microseconds.
-    pub enforcement_latency_us: i64,
+    pub(crate) enforcement_latency_us: i64,
     /// Integrity hash of the Cedar context used during evaluation.
-    pub context_hash: String,
+    pub(crate) context_hash: String,
     /// Policy bundle version active at decision time.
-    pub bundle_version: String,
+    pub(crate) bundle_version: String,
     /// HTTP status code returned by the connector. Zero when the call
     /// never dispatched (pre-dispatch DENY or ABORT).
-    pub dispatch_status: i32,
+    pub(crate) dispatch_status: i32,
     /// Connector dispatch latency in microseconds. Zero when the call
     /// never dispatched.
-    pub dispatch_latency_us: i64,
+    pub(crate) dispatch_latency_us: i64,
     /// Target response body size in bytes. Zero when the call never
     /// dispatched or the target returned no body.
-    pub response_size: i64,
+    pub(crate) response_size: i64,
     /// Tamper-evident provenance chain anchor (AARM R2 G2) for admitted
     /// (Allow/Modify) actions; empty for pre-dispatch outcomes.
-    pub provenance: String,
+    pub(crate) provenance: String,
     /// Server-derived conversation thread identity (AARM R2 G2).
-    pub thread_id: String,
+    pub(crate) thread_id: String,
     /// Server-derived parent action identity (AARM R2 G2).
-    pub parent_action_id: String,
+    pub(crate) parent_action_id: String,
 }
 
 /// Domain-level audit event produced by the enforcement pipeline.
@@ -176,52 +176,52 @@ pub struct AuditPayload {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionEvent {
     /// Unique event identifier (UUID v7, time-ordered).
-    pub event_id: String,
+    event_id: String,
     /// Session that produced this event.
-    pub session_id: String,
+    session_id: String,
     /// Capability token ID evaluated during enforcement.
-    pub token_id: String,
+    token_id: String,
     /// Agent that initiated the action.
-    pub agent_id: String,
+    agent_id: String,
     /// Canonical action class from the normalizer (e.g., `http_get`).
-    pub action: String,
+    action: String,
     /// Target resource identifier (e.g., URL, table name).
-    pub resource: String,
+    resource: String,
     /// Enforcement outcome.
-    pub decision: Decision,
+    decision: Decision,
     /// Human-readable reason when decision is DENY or ABORT. Empty on
     /// ALLOW, except in monitor mode where an overridden DENY carries
     /// `"monitor_mode: <original_deny_reason>"`.
-    pub deny_reason: String,
+    deny_reason: String,
     /// Wall-clock time spent in the enforcement pipeline, in
     /// microseconds.
-    pub enforcement_latency_us: i64,
+    enforcement_latency_us: i64,
     /// Integrity hash of the Cedar context used during evaluation.
-    pub context_hash: String,
+    context_hash: String,
     /// Policy bundle version active at decision time.
-    pub bundle_version: String,
+    bundle_version: String,
     /// Event timestamp as nanoseconds since the Unix epoch.
-    pub timestamp: Option<u128>,
+    timestamp: Option<u128>,
     /// HTTP status code returned by the connector. Zero when the call
     /// never dispatched (pre-dispatch DENY or ABORT).
-    pub dispatch_status: i32,
+    dispatch_status: i32,
     /// Connector dispatch latency in microseconds. Zero when the call
     /// never dispatched.
-    pub dispatch_latency_us: i64,
+    dispatch_latency_us: i64,
     /// Target response body size in bytes. Zero when the call never
     /// dispatched or the target returned no body.
-    pub response_size: i64,
+    response_size: i64,
     /// Per-run identity scoping the event to a single `firma run`
     /// invocation. Matches the marker directory name written by the
     /// `SidecarSupervisor`. Empty when the sidecar is not autostarted.
-    pub sandbox_id: String,
+    sandbox_id: String,
     /// Tamper-evident provenance chain anchor (AARM R2 G2) for admitted
     /// (Allow/Modify) actions. Empty for pre-dispatch outcomes.
-    pub provenance: String,
+    provenance: String,
     /// Server-derived conversation thread identity (AARM R2 G2).
-    pub thread_id: String,
+    thread_id: String,
     /// Server-derived parent action identity (AARM R2 G2).
-    pub parent_action_id: String,
+    parent_action_id: String,
     /// ECDSA signature (DER-encoded) over all preceding fields.
     ///
     /// Serialized in JSON as a standard base64 string so it round-trips
@@ -229,7 +229,7 @@ pub struct ExecutionEvent {
     /// without byte loss or reinterpretation. The proto wire type keeps
     /// the raw bytes unchanged.
     #[serde(with = "base64_signature")]
-    pub signature: Vec<u8>,
+    signature: Vec<u8>,
 }
 
 /// Serde adapter that encodes the audit signature as a standard,

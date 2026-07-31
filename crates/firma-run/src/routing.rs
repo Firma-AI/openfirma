@@ -162,7 +162,7 @@ pub struct NetworkRuntime {
 impl NetworkRuntime {
     /// Returns environment values to merge into wrapped process launch env.
     #[must_use]
-    pub fn env_overrides(&self) -> &EnvOverrides {
+    pub(crate) fn env_overrides(&self) -> &EnvOverrides {
         &self.env_overrides
     }
 
@@ -170,7 +170,7 @@ impl NetworkRuntime {
     /// May differ from the configured profile endpoint when autostart
     /// substituted a UDS path for the per-run sidecar.
     #[must_use]
-    pub fn sidecar_endpoint(&self) -> &SidecarEndpoint {
+    pub(crate) fn sidecar_endpoint(&self) -> &SidecarEndpoint {
         &self.sidecar_endpoint
     }
 }

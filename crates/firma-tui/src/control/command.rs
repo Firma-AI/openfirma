@@ -59,7 +59,7 @@ pub enum ControlEffect {
 impl ControlCommand {
     /// Applies the command to app state and returns runner-owned effects.
     #[must_use]
-    pub fn apply(self, app: &mut App) -> Vec<ControlEffect> {
+    pub(crate) fn apply(self, app: &mut App) -> Vec<ControlEffect> {
         match self {
             Self::ToggleHelp => {
                 app.toggle_help();

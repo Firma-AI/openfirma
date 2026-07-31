@@ -40,7 +40,7 @@ pub enum AuthoritySelection {
 /// Returns [`RunError::MissingAuthority`] when no CLI flag is set and
 /// the user config carries neither `[authority]` nor
 /// `[sidecar.authority].url`.
-pub fn resolve(
+pub(crate) fn resolve(
     cli: &AuthorityCli,
     no_autostart: bool,
     user_config_path: Option<&Path>,

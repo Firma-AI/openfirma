@@ -39,7 +39,7 @@ impl ReadinessFlag {
     }
 
     /// Mark the policy bundle stream ready or not ready.
-    pub fn set_policy_bundle_ready(&self, ready: bool) {
+    pub(crate) fn set_policy_bundle_ready(&self, ready: bool) {
         self.tx
             .send_modify(|state| state.policy_bundle_ready = ready);
     }
@@ -83,13 +83,13 @@ impl ReadinessFlag {
 impl ReadinessView {
     /// Return a lock-free snapshot of current readiness.
     #[must_use]
-    pub fn snapshot(&self) -> ReadinessState {
+    pub(crate) fn snapshot(&self) -> ReadinessState {
         *self.rx.borrow()
     }
 
     /// Construct a view that is already fully ready.
     #[must_use]
-    pub fn all_ready() -> Self {
+    pub(crate) fn all_ready() -> Self {
         let (_flag, view) = ReadinessFlag::new(ReadinessState {
             policy_bundle_ready: true,
             revocation_ready: true,

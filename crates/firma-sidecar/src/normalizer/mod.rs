@@ -96,8 +96,8 @@ const DEFAULT_SENSITIVE_QUERY_PARAMS: &[&str] = &[
 /// after Stage 1 validation when constructing the full `ExecutionEnvelope`.
 #[derive(Debug, Clone)]
 pub struct NormalizedEnvelope {
-    pub intent: ExecutionIntent,
-    pub timestamp: DateTime<Utc>,
+    pub(crate) intent: ExecutionIntent,
+    pub(crate) timestamp: DateTime<Utc>,
 }
 
 /// Raw intercepted request — the input to the enforcement pipeline.
@@ -185,7 +185,7 @@ impl IntentNormalizer {
     }
 
     #[must_use]
-    pub fn with_custom_query_params(
+    pub(crate) fn with_custom_query_params(
         mapping_table: MappingTable,
         custom_params: Vec<String>,
     ) -> Self {

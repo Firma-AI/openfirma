@@ -14,8 +14,8 @@ use crate::control::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PolicyRow {
     pub id: String,
-    pub file: PathBuf,
-    pub state: PolicyState,
+    file: PathBuf,
+    state: PolicyState,
     pub status: PolicyRowStatus,
 }
 
@@ -29,15 +29,9 @@ pub enum PolicyRowStatus {
 
 impl PolicyRowStatus {
     #[must_use]
-    pub const fn rewrite_pending(self) -> bool {
+    const fn rewrite_pending(self) -> bool {
         matches!(self, Self::Queued | Self::Writing)
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PolicyKey {
-    pub id: String,
-    pub file: PathBuf,
 }
 
 #[derive(Debug)]

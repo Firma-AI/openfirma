@@ -46,11 +46,11 @@ pub enum Outcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionOutcome {
     /// Canonical action class of the evaluated action.
-    pub action_class: String,
+    pub(crate) action_class: String,
     /// Resource display string (`host` + `path`) of the evaluated action.
-    pub resource: String,
+    pub(crate) resource: String,
     /// Categorical decision outcome.
-    pub outcome: Outcome,
+    pub(crate) outcome: Outcome,
 }
 
 /// Maximum number of prior-action outcomes retained per session. Bounded
@@ -69,21 +69,21 @@ pub(crate) const HISTORY_CAP: usize = 8;
 pub struct RuntimeSignals {
     /// Number of calls observed in the current session, including this
     /// one. First call in a session is 1.
-    pub action_count: u64,
+    pub(crate) action_count: u64,
     /// Static or pre-computed numeric risk attribute. V1 placeholder
     /// = 0.0.
-    pub risk_score: f64,
+    pub(crate) risk_score: f64,
     /// Cumulative number of denied actions in this session (AARM R2 G3).
-    pub deny_count: u64,
+    pub(crate) deny_count: u64,
     /// Bounded prior-action history (most recent first appended); the
     /// Cedar context derives `prior_action_classes` and `last_resource`
     /// from it.
-    pub history: Vec<ActionOutcome>,
+    pub(crate) history: Vec<ActionOutcome>,
     /// Most recent provenance chain anchor from the prior admitted
     /// action (AARM R2 G2). `None` when no prior action has been admitted
     /// yet. Read BEFORE `advance_provenance` to capture the parent action
     /// id for the current envelope.
-    pub last_provenance: Option<String>,
+    pub(crate) last_provenance: Option<String>,
 }
 
 impl RuntimeSignals {
@@ -93,7 +93,7 @@ impl RuntimeSignals {
         clippy::cast_possible_truncation,
         reason = "conversion intentionally floors risk score into Cedar Long semantics"
     )]
-    pub fn risk_score_long(&self) -> i64 {
+    pub(crate) fn risk_score_long(&self) -> i64 {
         // Fail-closed: NaN risk collapses to the most-positive Long so
         // `context.risk_score > N` policies always deny.
         if self.risk_score.is_nan() {
@@ -227,7 +227,7 @@ impl LruSessionStateStore {
 
     /// Construct with the default capacity (`DEFAULT_CAPACITY`).
     #[must_use]
-    pub fn with_default_capacity() -> Self {
+    fn with_default_capacity() -> Self {
         Self::new(DEFAULT_CAPACITY)
     }
 }

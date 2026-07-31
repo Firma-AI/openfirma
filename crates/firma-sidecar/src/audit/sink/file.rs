@@ -33,7 +33,7 @@ pub struct FileAuditSink {
 
 impl FileAuditSink {
     /// Constructs a new [`FileAuditSink`] writing to `path`.
-    pub fn new<P>(path: P) -> Self
+    pub(crate) fn new<P>(path: P) -> Self
     where
         P: AsRef<Path>,
     {

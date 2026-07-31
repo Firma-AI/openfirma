@@ -66,7 +66,7 @@ pub struct ConfigResolveError {
     pub config_source: ConfigSource,
     pub path: PathBuf,
     #[source]
-    pub reason: anyhow::Error,
+    reason: anyhow::Error,
 }
 
 impl ConfigResolver {

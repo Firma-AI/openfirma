@@ -17,11 +17,11 @@ pub enum AuditFilter {
 
 impl AuditFilter {
     /// Filters in the order rendered by the audit filter bar.
-    pub const ALL: [Self; 3] = [Self::All, Self::Deny, Self::Allow];
+    pub(crate) const ALL: [Self; 3] = [Self::All, Self::Deny, Self::Allow];
 
     /// Short lowercase label rendered in the filter bar.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::All => "all",
             Self::Allow => "allow",
@@ -50,7 +50,7 @@ pub enum AuditDecision {
 impl AuditDecision {
     /// Short lowercase label rendered in the audit table.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Allow => "allow",
             Self::Deny => "deny",

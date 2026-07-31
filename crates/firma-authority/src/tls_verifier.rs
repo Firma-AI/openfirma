@@ -42,7 +42,7 @@ impl AllowListClientVerifier {
     ///
     /// * `inner` — Standard PKI verifier (e.g. from `WebPkiClientVerifier::builder_with_provider`).
     /// * `allow_list` — Set of authorized identities; shared with the server for logging.
-    pub fn new(
+    pub(crate) fn new(
         inner: Arc<dyn ClientCertVerifier>,
         allow_list: Arc<AuthorizedClientSet>,
         supported_algs: WebPkiSupportedAlgorithms,

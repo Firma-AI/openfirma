@@ -4,10 +4,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Default)]
 pub(super) struct RevocationMetrics {
-    pub(super) bloom_hits: AtomicU64,
-    pub(super) lru_hits: AtomicU64,
-    pub(super) bloom_positive_lru_miss: AtomicU64,
-    pub(super) revocations_total: AtomicU64,
+    bloom_hits: AtomicU64,
+    lru_hits: AtomicU64,
+    bloom_positive_lru_miss: AtomicU64,
+    revocations_total: AtomicU64,
 }
 
 /// Snapshot of revocation cache counters.

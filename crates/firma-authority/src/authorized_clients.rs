@@ -28,7 +28,7 @@ impl AuthorizedClientSet {
     ///
     /// Returns [`ConfigError::IoError`] if the file cannot be read, or
     /// [`ConfigError::ParseError`] if the TOML is malformed.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+    pub(crate) fn load(path: &Path) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
             path: path.to_path_buf(),
             reason: e.to_string(),
@@ -64,19 +64,20 @@ impl AuthorizedClientSet {
 
     /// Return `true` if `identity` (a CN or DNS SAN) is in the allow-list.
     #[must_use]
-    pub fn contains(&self, identity: &str) -> bool {
+    pub(crate) fn contains(&self, identity: &str) -> bool {
         self.identities.contains(identity)
     }
 
     /// Number of entries in the allow-list.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.identities.len()
     }
 
     /// `true` when the allow-list is empty (no clients are authorized).
+    #[cfg(test)]
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.identities.is_empty()
     }
 }

@@ -133,7 +133,7 @@ pub enum DenialContext {
 ///
 /// `ToolUse` → `Tool`; `Http` / `DbQuery` → `Api`.
 #[must_use]
-pub fn denial_context_from_params(params: &ActionParams) -> DenialContext {
+fn denial_context_from_params(params: &ActionParams) -> DenialContext {
     match params {
         ActionParams::ToolUse(_) => DenialContext::Tool,
         ActionParams::Http(_) | ActionParams::DbQuery(_) => DenialContext::Api,
@@ -147,7 +147,7 @@ pub fn denial_context_from_params(params: &ActionParams) -> DenialContext {
 /// [`DenialContext::Api`] — the hard-block shape. A tool denial on a
 /// non-tool call would silently mask the failure.
 #[must_use]
-pub fn denial_context_of(envelope: Option<&NormalizedEnvelope>) -> DenialContext {
+fn denial_context_of(envelope: Option<&NormalizedEnvelope>) -> DenialContext {
     envelope.map_or(DenialContext::Api, |e| {
         denial_context_from_params(&e.intent.params)
     })
@@ -156,7 +156,7 @@ pub fn denial_context_of(envelope: Option<&NormalizedEnvelope>) -> DenialContext
 /// Serialize a denial into the canonical JSON body used by HTTP-facing
 /// interceptors.
 #[must_use]
-pub fn deny_body_json(reason: DenyReason, detail: &str) -> Vec<u8> {
+pub(crate) fn deny_body_json(reason: DenyReason, detail: &str) -> Vec<u8> {
     serde_json::json!({
         "denied": true,
         "reason": reason,
@@ -175,7 +175,8 @@ pub fn deny_body_json(reason: DenyReason, detail: &str) -> Vec<u8> {
 #[must_use]
 // Public API reserved for a future tool-call interceptor; V1 has no
 // tool-call transport so the function is only called from tests.
-pub fn tool_denial_body_json(
+#[cfg(test)]
+fn tool_denial_body_json(
     reason: DenyReason,
     detail: &str,
     action_class: &str,
@@ -198,7 +199,7 @@ pub fn tool_denial_body_json(
 /// Agents key off the `aborted` boolean flag to distinguish abort
 /// responses from upstream-reported errors.
 #[must_use]
-pub fn abort_body_json(reason: AbortReason, detail: &str) -> Vec<u8> {
+pub(crate) fn abort_body_json(reason: AbortReason, detail: &str) -> Vec<u8> {
     serde_json::json!({
         "aborted": true,
         "reason": reason.code(),
@@ -286,11 +287,11 @@ fn dispatched_from(response: ConnectorResponse) -> DispatchedResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchedResponse {
     /// Target HTTP status code.
-    pub status: u16,
+    pub(crate) status: u16,
     /// Target response headers.
-    pub headers: HashMap<String, String>,
+    pub(crate) headers: HashMap<String, String>,
     /// Target response body.
-    pub body: Vec<u8>,
+    pub(crate) body: Vec<u8>,
 }
 
 /// Shared handler used by every interceptor.
@@ -320,7 +321,7 @@ impl RequestHandler {
     ///
     /// The handler emits exactly one audit payload per call after dispatch
     /// work has completed for allow and passthrough outcomes.
-    pub async fn handle(&self, request: RawRequest, session_id: &str) -> HandledResponse {
+    pub(crate) async fn handle(&self, request: RawRequest, session_id: &str) -> HandledResponse {
         let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         let response = match decision {
@@ -480,7 +481,7 @@ impl RequestHandler {
     ///
     /// On [`ConnectDecision::Allow`], the HTTP proxy interceptor proceeds with
     /// tunnel establishment and byte relay.
-    pub async fn handle_connect(
+    pub(crate) async fn handle_connect(
         &self,
         mut request: RawRequest,
         session_id: &str,
@@ -529,7 +530,7 @@ impl RequestHandler {
     ///
     /// Intended for upgraded protocols (for example WebSocket) where dispatch
     /// switches from request/response to long-lived byte relay.
-    pub async fn authorize_upgrade(
+    pub(crate) async fn authorize_upgrade(
         &self,
         mut request: RawRequest,
         session_id: &str,
@@ -594,7 +595,7 @@ impl RequestHandler {
     }
 
     /// Emits audit payload for an authorized HTTP upgrade flow.
-    pub async fn emit_upgrade_audit(
+    pub(crate) async fn emit_upgrade_audit(
         &self,
         mut payload: AuditPayload,
         dispatch_status: u16,
@@ -615,7 +616,7 @@ impl RequestHandler {
     /// preserved, as the post-ALLOW abort always has an identity) and rewrites
     /// the decision to [`Decision::Abort`]. No upstream response was produced, so
     /// the dispatch fields stay zero.
-    pub async fn emit_upgrade_abort_audit(
+    pub(crate) async fn emit_upgrade_abort_audit(
         &self,
         mut payload: AuditPayload,
         reason: AbortReason,
@@ -633,7 +634,7 @@ impl RequestHandler {
 
     /// Emits a synthetic audit event when CONNECT was policy-allowed but
     /// upstream tunnel establishment/relay failed after authorization.
-    pub async fn emit_connect_relay_failure_audit(
+    pub(crate) async fn emit_connect_relay_failure_audit(
         &self,
         session_id: &str,
         host: &str,
@@ -670,7 +671,7 @@ impl RequestHandler {
     /// otherwise return 403 to the client with no audit trail, leaving
     /// the deny invisible to `firma monitor` (FIR-208). No capability was
     /// validated on these paths, so `agent_id` / `token_id` are empty.
-    pub async fn emit_synthetic_deny(
+    pub(crate) async fn emit_synthetic_deny(
         &self,
         session_id: &str,
         action: &str,
@@ -903,7 +904,11 @@ pub(crate) mod tests {
         MappingTable, PipelineArgs,
     };
 
-    pub fn test_connector_registry() -> Arc<ConnectorRegistry> {
+    #[expect(
+        clippy::redundant_pub_crate,
+        reason = "shared by sibling interceptor test modules"
+    )]
+    pub(crate) fn test_connector_registry() -> Arc<ConnectorRegistry> {
         let default = crate::connector::provider::GenericHttpConnector::default_for_unconfigured()
             .expect("default connector should build in tests");
         Arc::new(ConnectorRegistry::new(Arc::new(default)))

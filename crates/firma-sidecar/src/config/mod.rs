@@ -92,14 +92,14 @@ pub struct SidecarConfig {
     pub policy: PolicyConfig,
     /// Certificate authority directory.
     #[serde(default)]
-    pub ca: CaConfig,
+    pub(crate) ca: CaConfig,
     /// Log settings (level only; file/filter come from CLI args).
     #[serde(default)]
-    pub log: LogConfig,
+    log: LogConfig,
     /// Per-target credential injection entries, keyed by an arbitrary
     /// label (e.g. `[credentials.openai]`).
     #[serde(default)]
-    pub credentials: HashMap<String, CredentialConfig>,
+    pub(crate) credentials: HashMap<String, CredentialConfig>,
     /// Outbound connector settings (default timeout + per-host
     /// overrides with rate limits).
     #[serde(default)]
@@ -110,10 +110,10 @@ pub struct SidecarConfig {
     /// Enforcement engine settings (mapping rules, capability
     /// validation, constraint enforcement).
     #[serde(flatten)]
-    pub enforcement: EnforcementConfig,
+    pub(crate) enforcement: EnforcementConfig,
     /// Revocation cache settings (bloom filter + LRU sizing).
     #[serde(default)]
-    pub revocation: RevocationConfig,
+    pub(crate) revocation: RevocationConfig,
     /// Static capability provisioning for the demo path. Until the
     /// sidecar wires the gRPC `IssueCapability` client, operators can
     /// pre-issue tokens via `firma-authority issue` and list the
@@ -129,10 +129,10 @@ pub struct SidecarConfig {
     /// contact for pre-execution governance decisions. If absent, the
     /// local-exec endpoint is not started.
     #[serde(default)]
-    pub local_exec: Option<LocalExecConfig>,
+    pub(crate) local_exec: Option<LocalExecConfig>,
     /// Tenancy settings (agent isolation mode).
     #[serde(default)]
-    pub tenancy: TenancyConfig,
+    pub(crate) tenancy: TenancyConfig,
 }
 
 impl SidecarConfig {
@@ -334,13 +334,13 @@ pub struct InterceptorConfig {
     pub socket_path: Option<PathBuf>,
     /// Seconds to wait for in-flight requests to drain on shutdown.
     #[serde(default = "default_drain_timeout")]
-    pub drain_timeout_secs: u64,
+    drain_timeout_secs: u64,
     /// Maximum request body size accepted by proxy interceptors.
     #[serde(default = "default_max_request_body_bytes")]
-    pub max_request_body_bytes: usize,
+    pub(crate) max_request_body_bytes: usize,
     /// CONNECT/MITM relay timeout controls.
     #[serde(default)]
-    pub connect_relay: ConnectRelayConfig,
+    pub(crate) connect_relay: ConnectRelayConfig,
     /// HTTPS MITM settings used by the HTTP proxy interceptor.
     #[serde(default)]
     pub https_mitm: HttpsMitmConfig,
@@ -350,7 +350,7 @@ pub struct InterceptorConfig {
     /// with an audit trail rather than silently unbounded buffering
     /// that could OOM-kill the enforcer.
     #[serde(default = "default_total_body_budget_bytes")]
-    pub total_body_budget_bytes: usize,
+    pub(crate) total_body_budget_bytes: usize,
 }
 
 impl InterceptorConfig {
@@ -412,10 +412,10 @@ impl Default for InterceptorConfig {
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
     #[serde(default = "default_connect_setup_timeout_secs")]
-    pub setup_timeout_secs: u64,
+    pub(crate) setup_timeout_secs: u64,
     /// Hard cap for the full tunnel/MITM session lifetime.
     #[serde(default = "default_connect_session_max_secs")]
-    pub session_max_secs: u64,
+    pub(crate) session_max_secs: u64,
 }
 
 impl ConnectRelayConfig {
@@ -448,28 +448,28 @@ impl Default for ConnectRelayConfig {
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     #[serde(default = "default_https_mitm_enabled")]
-    pub enabled: bool,
+    pub(crate) enabled: bool,
     /// Optional explicit CA certificate path. Defaults under `ca.dir`.
     #[serde(default)]
-    pub ca_cert_path: Option<PathBuf>,
+    pub(crate) ca_cert_path: Option<PathBuf>,
     /// Optional explicit CA private key path. Defaults under `ca.dir`.
     #[serde(default)]
-    pub ca_key_path: Option<PathBuf>,
+    pub(crate) ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
     #[serde(default = "default_https_mitm_intercept_hosts")]
-    pub intercept_hosts: Vec<String>,
+    pub(crate) intercept_hosts: Vec<String>,
     /// Host patterns that should bypass interception and use CONNECT tunnel.
     #[serde(default)]
-    pub bypass_hosts: Vec<String>,
+    pub(crate) bypass_hosts: Vec<String>,
     /// Dynamic leaf certificate TTL in seconds.
     #[serde(default = "default_https_mitm_cert_ttl_secs")]
-    pub cert_ttl_secs: u64,
+    pub(crate) cert_ttl_secs: u64,
     /// Maximum number of cached leaf certificates.
     #[serde(default = "default_https_mitm_cert_cache_capacity")]
-    pub cert_cache_capacity: usize,
+    pub(crate) cert_cache_capacity: usize,
     /// Host patterns that must be intercepted; failures are hard deny.
     #[serde(default = "default_https_mitm_strict_hosts")]
-    pub strict_hosts: Vec<String>,
+    pub(crate) strict_hosts: Vec<String>,
 }
 
 impl HttpsMitmConfig {
@@ -557,7 +557,7 @@ impl Default for PolicyConfig {
 pub struct CaConfig {
     /// Directory containing CA key material.
     #[serde(default = "default_ca_dir")]
-    pub dir: PathBuf,
+    pub(crate) dir: PathBuf,
 }
 
 impl CaConfig {
@@ -585,7 +585,7 @@ impl Default for CaConfig {
 pub struct LogConfig {
     /// Log level: `trace`, `debug`, `info`, `warn`, or `error`.
     #[serde(default = "default_log_level")]
-    pub level: String,
+    level: String,
 }
 
 impl LogConfig {
@@ -640,27 +640,27 @@ pub enum CredentialTransform {
 pub struct CredentialConfig {
     /// Injection mode. Default: `basic`.
     #[serde(default)]
-    pub mode: CredentialMode,
+    pub(crate) mode: CredentialMode,
     /// Host that this credential applies to.
-    pub target_host: String,
+    pub(crate) target_host: String,
     /// HTTP header name to inject (e.g. `Authorization`).
-    pub header: HeaderName,
+    pub(crate) header: HeaderName,
     /// Optional prefix prepended to the resolved value
     /// (e.g. `"Bearer "`).
     #[serde(default)]
-    pub prefix: Option<String>,
+    pub(crate) prefix: Option<String>,
     /// Optional transform applied to the resolved secret before injection.
     #[serde(default)]
-    pub transform: Option<CredentialTransform>,
+    pub(crate) transform: Option<CredentialTransform>,
     // -- basic mode fields --
     /// Environment variable whose value is injected (basic mode).
     #[serde(default)]
-    pub value_from_env: Option<String>,
+    pub(crate) value_from_env: Option<String>,
     // -- vault mode fields --
     /// Filesystem path to the secret file rendered by Vault Agent
     /// (vault mode).
     #[serde(default)]
-    pub secret_path: Option<PathBuf>,
+    pub(crate) secret_path: Option<PathBuf>,
 }
 
 impl CredentialConfig {
@@ -783,9 +783,9 @@ fn default_https_mitm_strict_hosts() -> Vec<String> {
 }
 
 /// Sentinel: unset `policy.dir`.
-pub(crate) const DEFAULT_POLICY_DIR: &str = "./policies/";
+const DEFAULT_POLICY_DIR: &str = "./policies/";
 /// Sentinel: unset `ca.dir` (state-managed; never re-based).
-pub(crate) const DEFAULT_CA_DIR: &str = "./firma-ca/";
+const DEFAULT_CA_DIR: &str = "./firma-ca/";
 
 fn default_policy_dir() -> PathBuf {
     PathBuf::from(DEFAULT_POLICY_DIR)
@@ -896,7 +896,7 @@ pub struct LocalExecConfig {
     /// Absolute path to the Unix domain socket file.
     ///
     /// Example: `/run/firma/local-exec.sock`
-    pub socket_path: PathBuf,
+    pub(crate) socket_path: PathBuf,
 
     /// Policy applied to every fresh local-exec request.
     ///
@@ -904,16 +904,16 @@ pub struct LocalExecConfig {
     /// - `"deny"` — deny all executions unconditionally.
     /// - `"pending_hitl"` — require HITL approval via the token flow.
     #[serde(default = "LocalExecConfig::default_action")]
-    pub default_action: crate::local_exec::handler::DefaultAction,
+    pub(crate) default_action: crate::local_exec::handler::DefaultAction,
 
     /// Approval token time-to-live in seconds (default: 300).
     #[serde(default = "LocalExecConfig::default_token_ttl_secs")]
-    pub token_ttl_secs: u64,
+    pub(crate) token_ttl_secs: u64,
 
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (milliseconds, default: 500).
     #[serde(default = "LocalExecConfig::default_retry_after_ms")]
-    pub retry_after_ms: u64,
+    pub(crate) retry_after_ms: u64,
 }
 
 impl LocalExecConfig {
@@ -934,7 +934,7 @@ impl LocalExecConfig {
     /// # Errors
     ///
     /// Returns an error when the socket path is not absolute.
-    pub fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         if !self.socket_path.is_absolute() {
             return Err(format!(
                 "socket_path must be absolute, got: {}",

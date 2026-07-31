@@ -9,13 +9,13 @@ use crate::enforcement::revocation::RevocationConfig as StoreConfig;
 pub struct RevocationConfig {
     /// Expected distinct revoked tokens the bloom is sized for.
     #[serde(default = "default_capacity")]
-    pub capacity: usize,
+    pub(crate) capacity: usize,
     /// Target false positive rate.
     #[serde(default = "default_fpr")]
-    pub fpr: f64,
+    pub(crate) fpr: f64,
     /// Capacity of the confirmed-positive LRU cache.
     #[serde(default = "default_lru_capacity")]
-    pub lru_capacity: usize,
+    pub(crate) lru_capacity: usize,
 }
 
 impl Default for RevocationConfig {

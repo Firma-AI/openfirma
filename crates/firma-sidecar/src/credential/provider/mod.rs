@@ -19,7 +19,7 @@ pub enum CredentialValueTransform {
 
 /// Render a resolved secret value for injection.
 #[must_use]
-pub fn render_secret_value(
+pub(crate) fn render_secret_value(
     raw: &str,
     prefix: Option<&str>,
     transform: Option<CredentialValueTransform>,

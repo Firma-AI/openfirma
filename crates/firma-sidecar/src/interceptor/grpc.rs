@@ -52,7 +52,7 @@ pub struct GrpcInterceptor {
 impl GrpcInterceptor {
     /// Creates a new [`GrpcInterceptor`] that listens on the specified address.
     #[must_use]
-    pub fn new(address: SocketAddr) -> Self {
+    pub(crate) fn new(address: SocketAddr) -> Self {
         Self {
             address,
             handler: None,
@@ -171,7 +171,7 @@ impl GrpcInterceptor {
     ///
     /// Returns [`InterceptorError`] if the server encounters an unrecoverable
     /// error.
-    pub async fn run_with_listener(
+    async fn run_with_listener(
         mut self,
         listener: TcpListener,
         handler: Arc<RequestHandler>,

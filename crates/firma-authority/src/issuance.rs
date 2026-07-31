@@ -29,8 +29,8 @@ pub struct IssuanceRequest<'a> {
 /// Successful issuance output.
 #[derive(Debug)]
 pub struct IssuanceResult {
-    pub raw_token: String,
-    pub claims: CapabilityClaims,
+    pub(crate) raw_token: String,
+    pub(crate) claims: CapabilityClaims,
 }
 
 /// Failure modes for the issuance pipeline.
