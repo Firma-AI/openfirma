@@ -209,15 +209,6 @@ mod tests {
         IntentNormalizer, MappingTable, PipelineArgs,
     };
 
-    /// Returns an available localhost address by binding to port 0.
-    fn free_addr() -> SocketAddr {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .ok()
-            .and_then(|l| l.local_addr().ok());
-        // SAFETY: this is test-only code; binding port 0 always succeeds
-        listener.unwrap()
-    }
-
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
@@ -442,16 +433,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_intercept_aborts_reports_abort_reason() {
-        let addr = free_addr();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
         let handler = test_handler(test_pipeline_abort());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
-        let server_handle =
-            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let server_handle = tokio::spawn(async move {
+            interceptor
+                .run_with_listener(listener, handler, cancel_clone)
+                .await
+        });
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
@@ -486,17 +479,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_intercept_allows_valid_request() {
-        let addr = free_addr();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let handler = test_handler(test_pipeline_allow());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
-        let server_handle =
-            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let server_handle = tokio::spawn(async move {
+            interceptor
+                .run_with_listener(listener, handler, cancel_clone)
+                .await
+        });
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
@@ -529,16 +524,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_intercept_denies_when_no_capability() {
-        let addr = free_addr();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
         let handler = test_handler(test_pipeline_deny_all());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
-        let server_handle =
-            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let server_handle = tokio::spawn(async move {
+            interceptor
+                .run_with_listener(listener, handler, cancel_clone)
+                .await
+        });
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
@@ -609,16 +606,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_intercept_denies_malformed_request_missing_host() {
-        let addr = free_addr();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
         let handler = test_handler(test_pipeline_allow());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
-        let server_handle =
-            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let server_handle = tokio::spawn(async move {
+            interceptor
+                .run_with_listener(listener, handler, cancel_clone)
+                .await
+        });
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
