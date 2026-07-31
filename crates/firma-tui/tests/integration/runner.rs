@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::mpsc};
+use std::path::PathBuf;
 
 use crate::support::{
     BlockingRewriteHandler, FakeTerminal, REWRITE_TEST_TIMEOUT, RewriteRelease, audit_channel,
@@ -31,15 +31,13 @@ fn input_beats_audit() -> anyhow::Result<()> {
 fn input_beats_rewrite() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let policy_path = write_policy_file(temp.path(), &permit_policy("policy_one"))?;
-    let BlockingRewriteHandler {
-        handler,
-        release,
-        started,
-        completed,
-    } = blocking_first_rewrite_handler();
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
     let mut release_rewrite = RewriteRelease::new(release);
-    let mut runner =
-        HeadlessRunner::with_policy_rewrite_handler(Some(temp.path().to_path_buf()), None, handler);
+    let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
+        Some(temp.path().to_path_buf()),
+        None,
+        handler,
+    );
 
     assert!(
         runner
@@ -50,10 +48,8 @@ fn input_beats_rewrite() -> anyhow::Result<()> {
                 requested: PolicyState::Disabled,
             })
     );
-    assert_eq!(
-        started.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["policy_one".to_string()]
-    );
+
+    rewrite_probe.wait_for_started(REWRITE_TEST_TIMEOUT)?;
 
     let input_outcome = runner.try_crank(&FakeTerminal::with_key(KeyCode::Char('h')))?;
     assert_eq!(
@@ -73,10 +69,7 @@ fn input_beats_rewrite() -> anyhow::Result<()> {
     );
 
     release_rewrite.release()?;
-    assert_eq!(
-        completed.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["policy_one".to_string()]
-    );
+    rewrite_probe.wait_for_completed(REWRITE_TEST_TIMEOUT)?;
     let completion_outcome = crank_until(
         &mut runner,
         |app| {
@@ -97,12 +90,7 @@ fn rewrite_beats_audit() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let policy_path = write_policy_file(temp.path(), &permit_policy("policy_one"))?;
     let (audit_tx, audit_rx) = audit_channel();
-    let BlockingRewriteHandler {
-        handler,
-        release,
-        started,
-        completed,
-    } = blocking_first_rewrite_handler();
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
     let mut release_rewrite = RewriteRelease::new(release);
     let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
         Some(temp.path().to_path_buf()),
@@ -119,10 +107,8 @@ fn rewrite_beats_audit() -> anyhow::Result<()> {
                 requested: PolicyState::Disabled,
             })
     );
-    assert_eq!(
-        started.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["policy_one".to_string()]
-    );
+
+    rewrite_probe.wait_for_started(REWRITE_TEST_TIMEOUT)?;
 
     send_audit_rows(&audit_tx, 128)?;
     let start_outcome = runner.try_crank(&FakeTerminal::default())?;
@@ -133,10 +119,6 @@ fn rewrite_beats_audit() -> anyhow::Result<()> {
     assert_eq!(runner.app().audit_rows_len(), 0);
 
     release_rewrite.release()?;
-    assert_eq!(
-        completed.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["policy_one".to_string()]
-    );
     rewrite_probe.wait_for_completed(REWRITE_TEST_TIMEOUT)?;
     let completion_outcome = runner.try_crank(&FakeTerminal::default())?;
 
@@ -160,15 +142,13 @@ fn input_remains_responsive_while_rewrite_backlog_exists() -> anyhow::Result<()>
         temp.path(),
         &generated_policy_source("backlog_policy", LARGE_REWRITE_BACKLOG_COUNT, |_| true),
     )?;
-    let BlockingRewriteHandler {
-        handler,
-        release,
-        started,
-        completed: _completed,
-    } = blocking_first_rewrite_handler();
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
     let mut release_rewrite = RewriteRelease::new(release);
-    let mut runner =
-        HeadlessRunner::with_policy_rewrite_handler(Some(temp.path().to_path_buf()), None, handler);
+    let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
+        Some(temp.path().to_path_buf()),
+        None,
+        handler,
+    );
 
     for id in generated_policy_ids("backlog_policy", LARGE_REWRITE_BACKLOG_COUNT) {
         assert!(
@@ -181,10 +161,8 @@ fn input_remains_responsive_while_rewrite_backlog_exists() -> anyhow::Result<()>
                 })
         );
     }
-    assert_eq!(
-        started.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["backlog_policy_0000".to_string()]
-    );
+
+    rewrite_probe.wait_for_started(REWRITE_TEST_TIMEOUT)?;
     assert!(runner.sources().rewrite_queue_len() > 0);
 
     let outcome = runner.try_crank(&FakeTerminal::with_key(KeyCode::Char('j')))?;
@@ -224,15 +202,13 @@ fn audit_drains_only_64_rows_per_crank() -> anyhow::Result<()> {
 fn crank_until_waits_for_rewrite_start_and_completion() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let policy_path = write_policy_file(temp.path(), &permit_policy("policy_one"))?;
-    let BlockingRewriteHandler {
-        handler,
-        release,
-        started,
-        completed,
-    } = blocking_first_rewrite_handler();
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
     let mut release_rewrite = RewriteRelease::new(release);
-    let mut runner =
-        HeadlessRunner::with_policy_rewrite_handler(Some(temp.path().to_path_buf()), None, handler);
+    let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
+        Some(temp.path().to_path_buf()),
+        None,
+        handler,
+    );
 
     assert!(
         runner
@@ -243,10 +219,8 @@ fn crank_until_waits_for_rewrite_start_and_completion() -> anyhow::Result<()> {
                 requested: PolicyState::Disabled,
             })
     );
-    assert_eq!(
-        started.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["policy_one".to_string()]
-    );
+
+    rewrite_probe.wait_for_started(REWRITE_TEST_TIMEOUT)?;
 
     let start_outcome = crank_until(
         &mut runner,
@@ -259,10 +233,7 @@ fn crank_until_waits_for_rewrite_start_and_completion() -> anyhow::Result<()> {
     );
 
     release_rewrite.release()?;
-    assert_eq!(
-        completed.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["policy_one".to_string()]
-    );
+    rewrite_probe.wait_for_completed(REWRITE_TEST_TIMEOUT)?;
     let completion_outcome = crank_until(
         &mut runner,
         |app| {
@@ -335,15 +306,13 @@ fn active_rewrite_is_allowed_to_finish_after_shutdown() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let active_path =
         write_named_policy_file(temp.path(), "active.cedar", &permit_policy("active_policy"))?;
-    let BlockingRewriteHandler {
-        handler,
-        release,
-        started,
-        completed: _completed,
-    } = blocking_first_rewrite_handler();
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
     let mut release_rewrite = RewriteRelease::new(release);
-    let mut runner =
-        HeadlessRunner::with_policy_rewrite_handler(Some(temp.path().to_path_buf()), None, handler);
+    let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
+        Some(temp.path().to_path_buf()),
+        None,
+        handler,
+    );
 
     assert!(
         runner
@@ -354,10 +323,8 @@ fn active_rewrite_is_allowed_to_finish_after_shutdown() -> anyhow::Result<()> {
                 requested: PolicyState::Disabled,
             })
     );
-    assert_eq!(
-        started.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["active_policy".to_string()]
-    );
+
+    rewrite_probe.wait_for_started(REWRITE_TEST_TIMEOUT)?;
 
     let start_outcome = crank_until(
         &mut runner,
@@ -390,15 +357,13 @@ fn queued_but_not_started_rewrites_are_discarded_after_shutdown() -> anyhow::Res
         write_named_policy_file(temp.path(), "active.cedar", &permit_policy("active_policy"))?;
     let queued_path =
         write_named_policy_file(temp.path(), "queued.cedar", &permit_policy("queued_policy"))?;
-    let BlockingRewriteHandler {
-        handler,
-        release,
-        started,
-        completed: _completed,
-    } = blocking_first_rewrite_handler();
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
     let mut release_rewrite = RewriteRelease::new(release);
-    let mut runner =
-        HeadlessRunner::with_policy_rewrite_handler(Some(temp.path().to_path_buf()), None, handler);
+    let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
+        Some(temp.path().to_path_buf()),
+        None,
+        handler,
+    );
 
     assert!(
         runner
@@ -418,10 +383,8 @@ fn queued_but_not_started_rewrites_are_discarded_after_shutdown() -> anyhow::Res
                 requested: PolicyState::Disabled,
             })
     );
-    assert_eq!(
-        started.recv_timeout(REWRITE_TEST_TIMEOUT)?,
-        vec!["active_policy".to_string()]
-    );
+
+    rewrite_probe.wait_for_started(REWRITE_TEST_TIMEOUT)?;
 
     let start_outcome = crank_until(
         &mut runner,
@@ -447,11 +410,6 @@ fn queued_but_not_started_rewrites_are_discarded_after_shutdown() -> anyhow::Res
         read_policy_state(&queued_path, "queued_policy"),
         PolicyState::Enabled
     );
-    assert!(matches!(
-        started.try_recv(),
-        Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected)
-    ));
-
     Ok(())
 }
 

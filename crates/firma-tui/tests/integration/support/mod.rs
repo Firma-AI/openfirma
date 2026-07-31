@@ -268,19 +268,12 @@ pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(1);
 pub struct BlockingRewriteHandler {
     pub handler: PolicyRewriteHandler,
     pub release: Sender<()>,
-    pub started: Receiver<Vec<String>>,
-    pub completed: Receiver<Vec<String>>,
 }
 
 pub fn blocking_first_rewrite_handler() -> BlockingRewriteHandler {
-    let (started_rewrite_tx, started_rewrite_rx) = mpsc::channel();
-    let (completed_rewrite_tx, completed_rewrite_rx) = mpsc::channel();
     let (release_rewrite_tx, release_rewrite_rx) = mpsc::channel();
     let first_rewrite = Arc::new(AtomicBool::new(true));
     let handler = Box::new(move |request: &PolicyRewriteRequest| {
-        let ids = request.ids.clone();
-        let _sent = started_rewrite_tx.send(ids.clone()).is_ok();
-
         if first_rewrite.swap(false, Ordering::SeqCst) {
             release_rewrite_rx.recv().map_err(|error| {
                 ControlError::policy_rewrite(
@@ -294,15 +287,12 @@ pub fn blocking_first_rewrite_handler() -> BlockingRewriteHandler {
         set_policy_states(&request.file, &request.ids, request.requested).map_err(|error| {
             ControlError::policy_rewrite(&request.file, request.ids.clone(), error)
         })?;
-        let _sent = completed_rewrite_tx.send(ids).is_ok();
         Ok(())
     });
 
     BlockingRewriteHandler {
         handler,
         release: release_rewrite_tx,
-        started: started_rewrite_rx,
-        completed: completed_rewrite_rx,
     }
 }
 

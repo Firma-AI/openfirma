@@ -63,6 +63,16 @@ pub struct RewriteEventProbe {
 }
 
 impl RewriteEventProbe {
+    /// Waits until the worker has dispatched a started event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the event is not observed before `timeout` or the
+    /// worker-side probe channel is closed.
+    pub fn wait_for_started(&self, timeout: Duration) -> Result<(), RewriteEventProbeError> {
+        self.wait_for(PolicyRewriteEventKind::Started, timeout)
+    }
+
     /// Waits until the worker has dispatched a completion event.
     ///
     /// # Errors
