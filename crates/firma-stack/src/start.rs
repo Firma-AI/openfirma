@@ -244,7 +244,8 @@ fn acquire_lock(state_dir: &Path) -> Result<()> {
         .create_new(true)
         .open(&lock)
     {
-        Ok(_) => Ok(()),
+        Ok(_) if is_stack_stale(state_dir)? => Ok(()),
+        Ok(_) => Err(StackError::AlreadyRunning { path: lock }),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             if is_stack_stale(state_dir)? {
                 std::fs::remove_file(&lock)?;
@@ -257,11 +258,15 @@ fn acquire_lock(state_dir: &Path) -> Result<()> {
 }
 
 fn is_stack_stale(state_dir: &Path) -> Result<bool> {
-    // Stale when no recorded supervisor or component pid is still alive.
-    for name in ["stack.pid", "authority.pid", "sidecar.pid"] {
+    if let Some(pid) = pidfile::read(&state_dir.join("stack.pid"))?
+        && !pid.reap_if_exited()
+        && pid.process_exists()
+    {
+        return Ok(false);
+    }
+    for name in ["authority.pid", "sidecar.pid"] {
         if let Some(pid) = pidfile::read(&state_dir.join(name))?
-            && !pid.reap_if_exited()
-            && pid.process_exists()
+            && SystemPlatform::termination_target_exists(pid.get())
         {
             return Ok(false);
         }
@@ -270,13 +275,19 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
 }
 
 fn reap_stale(state_dir: &Path) -> Result<()> {
-    for name in ["authority.pid", "sidecar.pid", "stack.pid"] {
+    for name in ["authority.pid", "sidecar.pid"] {
         let path = state_dir.join(name);
         if let Some(pid) = pidfile::read(&path)?
-            && (pid.reap_if_exited() || !pid.process_exists())
+            && !SystemPlatform::termination_target_exists(pid.get())
         {
             pidfile::remove(&path)?;
         }
+    }
+    let supervisor = state_dir.join("stack.pid");
+    if let Some(pid) = pidfile::read(&supervisor)?
+        && (pid.reap_if_exited() || !pid.process_exists())
+    {
+        pidfile::remove(&supervisor)?;
     }
     Ok(())
 }
