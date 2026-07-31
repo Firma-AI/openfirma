@@ -1,11 +1,10 @@
 use std::fs;
 
 use anyhow::Context as _;
-use guppy::MetadataCommand;
 
 #[test]
 fn changelog_include_matches_workspace_packages() -> Result<(), anyhow::Error> {
-    let graph = MetadataCommand::new().build_graph()?;
+    let graph = crate::metadata::load()?;
     let workspace = graph.workspace();
     let workspace_root = workspace.root();
     let config_source = fs::read_to_string(workspace_root.join(".release-plz.toml"))?;
