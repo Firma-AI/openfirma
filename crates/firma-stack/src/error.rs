@@ -76,6 +76,13 @@ pub enum StackError {
         timeout_secs: u64,
     },
 
+    /// One or more process targets remained present after forced termination.
+    #[error("termination targets remained present after {timeout_secs}s")]
+    TerminationTimeout {
+        /// Internal settlement window used after hard termination.
+        timeout_secs: u64,
+    },
+
     /// Generic I/O error not classified by a more specific variant.
     #[error("io error: {0}")]
     Io(#[from] io::Error),

@@ -26,8 +26,8 @@ pub enum StartMode {
     Detached,
 }
 
-/// Handle returned by [`spawn_stack`] and [`start`] once the stack has
-/// reached the ready state.
+/// Informational handle returned by [`start`] or [`RunningStack::handle`] once
+/// the stack has reached the ready state.
 ///
 /// The handle is informational only: it does not own the children's lifecycle
 /// (pid files on disk are the source of truth). Callers tear the stack down
@@ -41,8 +41,9 @@ pub struct StackHandle {
 
 /// An in-process stack whose component child handles are owned by the caller.
 ///
-/// Dropping this value releases the child handles without terminating the
-/// stack. Call [`RunningStack::shutdown`] for an orderly teardown.
+/// Call [`RunningStack::shutdown`] for an orderly teardown. Dropping this value
+/// does not terminate the stack and should be reserved for callers that are
+/// immediately exiting and transferring observation to another process.
 pub struct RunningStack {
     owned: OwnedStack,
 }
@@ -87,7 +88,8 @@ impl RunningStack {
 ///
 /// Returns ownership of the component child handles once both components are
 /// listening and the sidecar CA material is on disk. The caller must eventually
-/// call [`RunningStack::shutdown`] or [`crate::stop()`] to tear the stack down.
+/// call [`RunningStack::shutdown`] to tear the stack down and collect its
+/// children.
 ///
 /// Used by `firma-demo-tui` and as the first step of [`start`].
 ///

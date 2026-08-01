@@ -123,17 +123,27 @@ firma sidecar stop --state-dir /var/run/firma --timeout 10
 Stop order is intentional: the Sidecar is soft-signalled first so the
 Authority's tonic graceful shutdown is not blocked on long-lived gRPC
 streams. The supervisor and Authority follow. Survivors past
-`--timeout` (default 2 s) are hard-killed; children are reaped via
-`waitpid(WNOHANG)`. On Unix, an addressable process group is treated as
-alive even when its leader has exited, ensuring orphaned descendants are
-also hard-killed. A group containing only unreaped descendant zombies may
-therefore be reported as requiring the hard-kill fallback.
+`--timeout` (default 2 s) are hard-killed. Firma then waits up to 2 seconds
+for every termination target to disappear before deleting runtime state.
 
-If a process-group probe or hard termination fails, `firma` still attempts
-every recorded target, then returns an error and retains the stack pidfiles and
-lock. Fix the underlying permission or platform error, then run
-`firma stack stop` again; the persisted termination targets remain available
-for that retry.
+Foreground startup retains the component child handles and is solely
+responsible for collecting those children. Status commands, external stop
+commands, and the detached supervisor use non-destructive probes and never
+attempt to reap a process they do not own. If either component exits during
+detached operation, the supervisor tears down the other component before it
+exits; it does not signal its own process group from that teardown path.
+
+On Unix, an addressable process group is treated as alive even when its leader
+has exited, ensuring orphaned descendants are also hard-killed. A group
+containing only unreaped zombies remains conservatively present to a
+non-owner observer.
+
+If a process-group probe or hard termination fails, or a target remains present
+after the post-termination settlement window, `firma` still attempts every
+recorded target, then returns an error and retains the stack pidfiles and lock.
+Fix the underlying permission or platform error, or allow the owning parent to
+collect a zombie, then run `firma sidecar stop` again; the persisted termination
+targets remain available for that retry.
 
 Exit codes: `0` on success (graceful or hard-kill fallback), `2` on error.
 
