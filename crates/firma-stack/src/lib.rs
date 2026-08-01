@@ -7,6 +7,7 @@ pub mod start;
 pub mod status;
 pub mod stop;
 
+mod component;
 mod detach;
 mod platform;
 mod readiness;
@@ -70,6 +71,28 @@ pub mod test_support {
         crate::supervisor::collect_child_in_background(child)
     }
 
+    /// Simulate component-reaper thread creation failure and recover both children.
+    #[must_use]
+    pub fn recover_raw_children_after_reaper_failure(
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> Vec<std::process::Child> {
+        let components = vec![
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+        ];
+        match crate::supervisor::collect_in_background_with(components, |_| {
+            Err(std::io::Error::other("injected reaper start failure"))
+        }) {
+            Ok(_) => Vec::new(),
+            Err(error) => error
+                .into_components()
+                .into_iter()
+                .map(|component| component.into_parts().0)
+                .collect(),
+        }
+    }
+
     /// Construct an owned running stack from arbitrary child processes.
     #[must_use]
     pub fn running_stack_from_raw(
@@ -78,8 +101,8 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> crate::RunningStack {
         crate::RunningStack::from_components(
-            owned_component(authority),
-            owned_component(sidecar),
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
             state_dir.to_path_buf(),
         )
     }
@@ -137,8 +160,8 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> crate::error::Result<()> {
         let stack = crate::RunningStack::from_components(
-            owned_component(authority),
-            owned_component(sidecar),
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
             state_dir.to_path_buf(),
         );
         crate::start::supervise_running_stack(stack, state_dir, timeout)
@@ -164,14 +187,18 @@ pub mod test_support {
         Ok(pid)
     }
 
-    fn owned_component(child: std::process::Child) -> crate::spawn::SpawnedComponent {
+    fn owned_component(
+        role: crate::component::ComponentRole,
+        child: std::process::Child,
+    ) -> crate::component::OwnedComponent {
         use firma_runtime_state::ChildExt as _;
 
         let leader_pid = child.process_id();
-        crate::spawn::SpawnedComponent {
+        crate::component::OwnedComponent::from_child(
+            role,
             child,
             leader_pid,
-            termination_target: crate::platform::TerminationTarget::for_leader(leader_pid),
-        }
+            crate::platform::TerminationTarget::for_leader(leader_pid),
+        )
     }
 }

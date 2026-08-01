@@ -6,19 +6,19 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
+use crate::component::OwnedComponent;
 use crate::error::Result;
 use crate::platform::TerminationTarget;
-use crate::spawn::SpawnedComponent;
 use firma_runtime_state::ChildExt as _;
 
 pub fn block_until_owned_exit(
-    authority: &mut SpawnedComponent,
-    sidecar: &mut SpawnedComponent,
+    authority: &mut OwnedComponent,
+    sidecar: &mut OwnedComponent,
 ) -> Result<()> {
     let stop = install_stop_handler();
     debug!(
-        authority_pid = %authority.leader_pid,
-        sidecar_pid = %sidecar.leader_pid,
+        authority_pid = %authority.leader_pid(),
+        sidecar_pid = %sidecar.leader_pid(),
         "foreground supervisor watching owned children"
     );
 
@@ -27,12 +27,12 @@ pub fn block_until_owned_exit(
             info!("Ctrl-C received; caller will tear stack down");
             return Ok(());
         }
-        if authority.child.try_wait()?.is_some() {
-            warn!(pid = %authority.leader_pid, "authority exited unexpectedly");
+        if authority.try_wait()?.is_some() {
+            warn!(pid = %authority.leader_pid(), "authority exited unexpectedly");
             return Ok(());
         }
-        if sidecar.child.try_wait()?.is_some() {
-            warn!(pid = %sidecar.leader_pid, "sidecar exited unexpectedly");
+        if sidecar.try_wait()?.is_some() {
+            warn!(pid = %sidecar.leader_pid(), "sidecar exited unexpectedly");
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -48,11 +48,91 @@ fn install_stop_handler() -> Arc<AtomicBool> {
     stop
 }
 
+/// Failure to transfer component ownership into a background reaper.
+///
+/// The owned components remain available through [`Self::into_components`],
+/// allowing the caller to retry, terminate them synchronously, or retain them.
+pub struct ReaperStartError {
+    source: std::io::Error,
+    components: Arc<std::sync::Mutex<Option<Vec<OwnedComponent>>>>,
+}
+
+impl ReaperStartError {
+    /// Return the operating-system error that prevented thread creation.
+    pub const fn source(&self) -> &std::io::Error {
+        &self.source
+    }
+
+    /// Recover every process capability offered to the failed reaper.
+    pub fn into_components(self) -> Vec<OwnedComponent> {
+        match self.components.lock() {
+            Ok(mut components) => components.take().unwrap_or_default(),
+            Err(components) => components.into_inner().take().unwrap_or_default(),
+        }
+    }
+
+    /// Hard-terminate and synchronously collect the recovered components.
+    ///
+    /// This is the fail-closed fallback for callers, such as `Drop`
+    /// implementations, that cannot return ownership to their own caller.
+    pub fn terminate_and_collect(self, timeout: Duration) {
+        let mut components = self.into_components();
+        for component in &mut components {
+            let _ = component.termination_target().signal_hard();
+            let _ = component.kill_leader();
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        for component in &mut components {
+            let _ = collect_child_until(component.child_mut(), deadline);
+        }
+    }
+}
+
+/// Transfer component ownership to a named background reaper.
+///
+/// On thread-creation failure, no process capability is dropped; the returned
+/// error carries the complete input collection.
 pub fn collect_in_background(
-    authority: SpawnedComponent,
-    sidecar: SpawnedComponent,
-) -> Option<std::thread::JoinHandle<()>> {
-    spawn_collector(vec![authority.into(), sidecar.into()])
+    components: Vec<OwnedComponent>,
+) -> std::result::Result<std::thread::JoinHandle<()>, ReaperStartError> {
+    collect_in_background_with(components, |job| {
+        std::thread::Builder::new()
+            .name("firma-component-reaper".into())
+            .spawn(job)
+    })
+}
+
+/// Start a component reaper through the supplied thread-spawn operation.
+///
+/// This seam keeps ownership recovery testable without exhausting real process
+/// resources. Production callers use [`collect_in_background`].
+pub fn collect_in_background_with(
+    components: Vec<OwnedComponent>,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>,
+) -> std::result::Result<std::thread::JoinHandle<()>, ReaperStartError> {
+    let components = Arc::new(std::sync::Mutex::new(Some(components)));
+    let worker_components = Arc::clone(&components);
+    spawn(Box::new(move || {
+            let mut components = match worker_components.lock() {
+                Ok(mut components) => components.take().unwrap_or_default(),
+                Err(components) => components.into_inner().take().unwrap_or_default(),
+            };
+            while !components.is_empty() {
+                components.retain_mut(|component| match component.try_wait() {
+                    Ok(None) => true,
+                    Ok(Some(_)) => false,
+                    Err(error) if child_was_collected_externally(&error) => false,
+                    Err(error) => {
+                        debug!(role = component.role().name(), %error, "component collection probe failed; retrying");
+                        true
+                    }
+                });
+                if !components.is_empty() {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }))
+        .map_err(|source| ReaperStartError { source, components })
 }
 
 pub fn collect_child_in_background(
@@ -95,12 +175,10 @@ struct CollectedChild {
     target: TerminationTarget,
 }
 
-impl From<SpawnedComponent> for CollectedChild {
-    fn from(component: SpawnedComponent) -> Self {
-        Self {
-            child: component.child,
-            target: component.termination_target,
-        }
+impl From<OwnedComponent> for CollectedChild {
+    fn from(component: OwnedComponent) -> Self {
+        let (child, target) = component.into_parts();
+        Self { child, target }
     }
 }
 

@@ -91,6 +91,35 @@ fn dropping_owner_transfers_child_collection() {
 }
 
 #[test]
+fn reaper_start_failure_returns_owned_children_alive() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+
+    let mut children =
+        firma_stack::test_support::recover_raw_children_after_reaper_failure(authority, sidecar);
+
+    assert_eq!(children.len(), 2);
+    assert!(
+        UserProcessId::new(authority_pid)
+            .expect("authority PID")
+            .process_exists()
+            .expect("probe authority")
+    );
+    assert!(
+        UserProcessId::new(sidecar_pid)
+            .expect("sidecar PID")
+            .process_exists()
+            .expect("probe sidecar")
+    );
+    for child in &mut children {
+        child.kill().expect("kill recovered child");
+        child.wait().expect("collect recovered child");
+    }
+}
+
+#[test]
 fn detached_supervisor_child_is_collected_for_long_lived_launcher() {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path();
