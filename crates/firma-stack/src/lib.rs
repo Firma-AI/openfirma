@@ -147,7 +147,7 @@ pub mod test_support {
         let supervision_result =
             crate::supervisor::block_until_owned_exit(&mut authority, &mut sidecar);
         let teardown_result =
-            crate::stop::stop_owned(state_dir, timeout, &mut authority, &mut sidecar);
+            crate::stop::stop_owned(state_dir, timeout, &mut authority, &mut sidecar, None);
         if teardown_result.is_ok() {
             let _ = sidecar.wait();
             let _ = authority.wait();
@@ -183,6 +183,22 @@ pub mod test_support {
             owned_component(crate::component::ComponentRole::Sidecar, sidecar),
             state_dir.to_path_buf(),
             forbid_reaper_start,
+        )
+    }
+
+    /// Bind a raw running stack's cleanup to one supervisor identity.
+    pub fn set_running_stack_owner(stack: &mut crate::RunningStack, owner: u32) {
+        if let Some(owner) = firma_runtime_state::UserProcessId::new(owner) {
+            stack.set_state_owner(owner);
+        }
+    }
+
+    /// Return the PID-scoped detached readiness path.
+    #[must_use]
+    pub fn supervisor_ready_path(state_dir: &std::path::Path, owner: u32) -> std::path::PathBuf {
+        firma_runtime_state::UserProcessId::new(owner).map_or_else(
+            || state_dir.join("invalid-supervisor.ready"),
+            |owner| crate::start::supervisor_ready_path(state_dir, owner),
         )
     }
 

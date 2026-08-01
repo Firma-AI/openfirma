@@ -77,6 +77,7 @@ struct OwnedStack {
     sidecar: OwnedComponent,
     state_dir: PathBuf,
     reaper_launcher: ReaperLauncher,
+    state_owner: Option<UserProcessId>,
 }
 
 /// Ownership states for an in-process stack.
@@ -310,7 +311,18 @@ impl RunningStack {
                 sidecar,
                 state_dir,
                 reaper_launcher,
+                state_owner: None,
             }),
+        }
+    }
+
+    /// Scope runtime-state cleanup to the owning detached supervisor.
+    ///
+    /// This identity changes only which published state [`RunningStack::shutdown`]
+    /// may remove; [`OwnedComponent`] values remain the process capabilities.
+    pub(crate) fn set_state_owner(&mut self, state_owner: UserProcessId) {
+        if let RunningStackState::Owned(owned) = &mut self.state {
+            owned.state_owner = Some(state_owner);
         }
     }
 
@@ -348,6 +360,7 @@ impl RunningStack {
             timeout,
             &mut owned.authority,
             &mut owned.sidecar,
+            owned.state_owner,
         );
         if result.is_ok() {
             let _ = owned.sidecar.wait();
@@ -640,7 +653,6 @@ fn remove_startup_state(state_dir: &Path) {
         "sidecar.pid",
         "sidecar.listen",
         "stack.pid",
-        "stack.ready",
         "stack.lock",
     ] {
         let _ = pidfile::remove(&state_dir.join(name));
@@ -685,8 +697,14 @@ pub(crate) fn supervise_running_stack(
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
         StackError::Platform("current process returned invalid process id".into())
     })?;
+    stack.set_state_owner(supervisor_pid);
     let attachment_result = pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)
-        .and_then(|()| pidfile::write(&state_dir.join("stack.ready"), supervisor_pid))
+        .and_then(|()| {
+            pidfile::write(
+                &supervisor_ready_path(state_dir, supervisor_pid),
+                supervisor_pid,
+            )
+        })
         .map_err(StackError::from);
     if let Err(error) = attachment_result {
         let rollback = stack.shutdown(Duration::from_secs(10));
@@ -723,7 +741,7 @@ pub(crate) fn wait_for_supervisor_attachment(
     let expected_pid = UserProcessId::new(supervisor.id()).ok_or_else(|| {
         StackError::Platform("detached supervisor returned invalid process id".into())
     })?;
-    let ready_path = state_dir.join("stack.ready");
+    let ready_path = supervisor_ready_path(state_dir, expected_pid);
     let deadline = Instant::now() + timeout;
     loop {
         if supervisor.try_wait()?.is_some() {
@@ -753,6 +771,15 @@ pub(crate) fn wait_for_supervisor_attachment(
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Return the readiness path scoped to one detached supervisor identity.
+///
+/// Scoping publication prevents one supervisor attempt from acknowledging or
+/// removing another attempt's readiness state. Cleanup authorization remains
+/// governed separately by [`RunningStack::set_state_owner`].
+pub(crate) fn supervisor_ready_path(state_dir: &Path, supervisor_pid: UserProcessId) -> PathBuf {
+    state_dir.join(format!("stack.{supervisor_pid}.ready"))
 }
 
 /// Map one [`ComponentRole`] to a unified-config [`SpawnRequest`].
