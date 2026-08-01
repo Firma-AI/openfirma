@@ -32,7 +32,8 @@ pub struct StopOutcome {
 /// state is retained when probing or hard termination fails so cleanup can be
 /// retried.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
-    stop_inner(state_dir, timeout, || Ok(()))
+    let supervisor = read_target(state_dir, "stack.pid")?;
+    stop_inner(state_dir, timeout, supervisor, || Ok(()))
 }
 
 pub(crate) fn stop_owned(
@@ -41,20 +42,25 @@ pub(crate) fn stop_owned(
     authority: &mut Child,
     sidecar: &mut Child,
 ) -> Result<StopOutcome> {
-    stop_inner(state_dir, timeout, || {
+    let supervisor = read_target(state_dir, "stack.pid")?;
+    stop_inner(state_dir, timeout, supervisor, || {
         let _ = sidecar.try_wait()?;
         let _ = authority.try_wait()?;
         Ok(())
     })
 }
 
+pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
+    stop_inner(state_dir, timeout, None, || Ok(()))
+}
+
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
+    stack_target: Option<TerminationTarget>,
     mut collect_owned: impl FnMut() -> Result<()>,
 ) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
-    let stack_target = read_target(state_dir, "stack.pid")?;
     let authority_target = read_target(state_dir, "authority.pid")?;
     let sidecar_target = read_target(state_dir, "sidecar.pid")?;
     debug!(
