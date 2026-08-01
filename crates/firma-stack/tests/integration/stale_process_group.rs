@@ -9,7 +9,6 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use firma_stack::{StackConfig, StackError, State};
-use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
 struct ProcessGroupCleanup(Option<Pid>);
@@ -60,9 +59,10 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
     command
         .env("CHILD_READY_MARKER", &child_ready_marker)
         .env("LIVENESS_FIFO", &liveness_fifo);
-    let group_pid =
-        firma_stack::test_support::spawn_raw_into_group(state_dir, "authority", &mut command)
+    let mut leader =
+        firma_stack::test_support::spawn_raw_owned_into_group(state_dir, "authority", &mut command)
             .expect("spawn authority group");
+    let group_pid = leader.id();
     let mut cleanup = ProcessGroupCleanup::new(group_pid);
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -74,11 +74,7 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    let leader = Pid::from_raw(i32::try_from(group_pid).expect("group PID fits i32"));
-    assert_eq!(
-        waitpid(leader, Some(WaitPidFlag::empty())).expect("reap authority leader"),
-        WaitStatus::Exited(leader, 0),
-    );
+    assert!(leader.wait().expect("collect authority leader").success());
 
     let status = firma_stack::status(state_dir).expect("probe orphaned group");
     let authority = status
@@ -139,4 +135,43 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
     };
     assert!(fifo_closed, "grandchild still holds its liveness FIFO");
     cleanup.disarm();
+}
+
+#[test]
+fn forced_termination_retains_state_until_target_disappears() {
+    let dir = tempfile::tempdir().expect("dir");
+    let state_dir = dir.path();
+    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
+
+    let ready = state_dir.join("authority.ready");
+    let mut command = Command::new("sh");
+    command
+        .args([
+            "-c",
+            "trap '' TERM; printf ready > \"$AUTHORITY_READY\"; while :; do sleep 1; done",
+        ])
+        .env("AUTHORITY_READY", &ready);
+    let mut child =
+        firma_stack::test_support::spawn_raw_owned_into_group(state_dir, "authority", &mut command)
+            .expect("spawn authority");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready.exists() {
+        assert!(Instant::now() < deadline, "authority did not become ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let error = firma_stack::stop(state_dir, Duration::ZERO).expect_err("zombie target remains");
+    assert!(
+        matches!(error, StackError::TerminationTimeout { timeout_secs: 2 }),
+        "unexpected stop error: {error}"
+    );
+    insta::assert_snapshot!(error.to_string(), @"termination targets remained present after 2s");
+    assert!(state_dir.join("authority.pid").exists());
+    assert!(state_dir.join("stack.lock").exists());
+
+    child.wait().expect("collect authority");
+    let outcome = firma_stack::stop(state_dir, Duration::ZERO).expect("retry stop");
+    assert!(!outcome.forced);
+    assert!(!state_dir.join("authority.pid").exists());
+    assert!(!state_dir.join("stack.lock").exists());
 }

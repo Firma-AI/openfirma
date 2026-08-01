@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 
 use firma_runtime_state::{UserProcessId, pidfile};
 use nix::sys::signal::{Signal, killpg};
-use nix::sys::wait::waitpid;
 use nix::unistd::Pid;
 
 #[test]
@@ -16,19 +15,23 @@ fn component_exit_tears_down_peers_without_signalling_supervisor() {
 
     let mut authority = Command::new("sh");
     authority.args(["-c", "while :; do sleep 1; done"]);
-    let authority_pid =
-        firma_stack::test_support::spawn_raw_into_group(state_dir, "authority", &mut authority)
-            .expect("spawn authority");
+    let mut authority = firma_stack::test_support::spawn_raw_owned_into_group(
+        state_dir,
+        "authority",
+        &mut authority,
+    )
+    .expect("spawn authority");
+    let authority_pid = authority.id();
 
     let mut sidecar = Command::new("sh");
     sidecar.args(["-c", "trap 'exit 0' TERM; while :; do sleep 0.1; done"]);
-    let sidecar_pid =
-        firma_stack::test_support::spawn_raw_into_group(state_dir, "sidecar", &mut sidecar)
+    let mut sidecar =
+        firma_stack::test_support::spawn_raw_owned_into_group(state_dir, "sidecar", &mut sidecar)
             .expect("spawn sidecar");
+    let sidecar_pid = sidecar.id();
 
-    let sidecar_waiter = std::thread::spawn(move || {
-        waitpid(as_pid(sidecar_pid), None).expect("collect sidecar leader")
-    });
+    let sidecar_waiter =
+        std::thread::spawn(move || sidecar.wait().expect("collect sidecar leader"));
     let state_dir_for_supervisor = state_dir.to_path_buf();
     let (result_tx, result_rx) = mpsc::channel();
     let supervisor = std::thread::spawn(move || {
@@ -37,7 +40,7 @@ fn component_exit_tears_down_peers_without_signalling_supervisor() {
 
     wait_for_pidfile(&state_dir.join("stack.pid"));
     killpg(as_pid(authority_pid), Signal::SIGKILL).expect("kill authority group");
-    waitpid(as_pid(authority_pid), None).expect("collect authority leader");
+    authority.wait().expect("collect authority leader");
 
     let result = match result_rx.recv_timeout(Duration::from_secs(5)) {
         Ok(result) => result,
