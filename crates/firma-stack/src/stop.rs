@@ -43,6 +43,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         supervisor,
         authority,
         sidecar,
+        None,
         || Ok(()),
     )
 }
@@ -52,6 +53,7 @@ pub(crate) fn stop_owned(
     timeout: Duration,
     authority: &mut SpawnedComponent,
     sidecar: &mut SpawnedComponent,
+    state_owner: Option<firma_runtime_state::UserProcessId>,
 ) -> Result<StopOutcome> {
     stop_inner(
         state_dir,
@@ -59,6 +61,7 @@ pub(crate) fn stop_owned(
         None,
         Some(authority.termination_target),
         Some(sidecar.termination_target),
+        state_owner,
         || {
             let _ = sidecar.child.try_wait()?;
             let _ = authority.child.try_wait()?;
@@ -73,6 +76,7 @@ fn stop_inner(
     stack_target: Option<TerminationTarget>,
     authority_target: Option<TerminationTarget>,
     sidecar_target: Option<TerminationTarget>,
+    state_owner: Option<firma_runtime_state::UserProcessId>,
     mut collect_owned: impl FnMut() -> Result<()>,
 ) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
@@ -112,7 +116,7 @@ fn stop_inner(
         }
         if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
             info!("all component targets exited cleanly");
-            cleanup(state_dir)?;
+            cleanup(state_dir, state_owner)?;
             return Ok(StopOutcome { forced: false });
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -175,7 +179,7 @@ fn stop_inner(
         info!(%error, "teardown incomplete; retaining runtime state");
         return Err(error);
     }
-    cleanup(state_dir)?;
+    cleanup(state_dir, state_owner)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
 }
@@ -210,14 +214,29 @@ fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>
     Ok(pidfile::read(&state_dir.join(name))?.map(TerminationTarget::from_stored_id))
 }
 
-fn cleanup(state_dir: &Path) -> Result<()> {
+fn cleanup(
+    state_dir: &Path,
+    state_owner: Option<firma_runtime_state::UserProcessId>,
+) -> Result<()> {
+    let current_owner = pidfile::read(&state_dir.join("stack.pid"))?;
+    if let Some(expected_owner) = state_owner
+        && current_owner != Some(expected_owner)
+    {
+        info!(%expected_owner, ?current_owner, "runtime state now belongs to another supervisor; skipping cleanup");
+        return Ok(());
+    }
+    if let Some(current_owner) = current_owner {
+        pidfile::remove(&crate::start::supervisor_ready_path(
+            state_dir,
+            current_owner,
+        ))?;
+    }
     for name in [
         "authority.pid",
         "authority.listen",
         "sidecar.pid",
         "sidecar.listen",
         "stack.pid",
-        "stack.ready",
         "stack.lock",
     ] {
         pidfile::remove(&state_dir.join(name))?;

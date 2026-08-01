@@ -8,7 +8,6 @@ use tracing::{debug, info};
 use crate::error::{Result, StackError};
 
 pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -> Result<Child> {
-    firma_runtime_state::pidfile::remove(&state_dir.join("stack.ready"))?;
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
 

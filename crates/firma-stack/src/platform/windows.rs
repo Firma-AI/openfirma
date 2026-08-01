@@ -66,7 +66,7 @@ impl Platform for WindowsPlatform {
 
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         cmd.stdout(Stdio::from(log)).stderr(Stdio::from(stderr_log));
-        let mut child = cmd.spawn().map_err(|source| StackError::Spawn {
+        let child = cmd.spawn().map_err(|source| StackError::Spawn {
             component: log_path
                 .file_stem()
                 .and_then(|name| name.to_str())

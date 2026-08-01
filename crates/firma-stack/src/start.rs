@@ -58,6 +58,7 @@ struct OwnedStack {
     authority: crate::spawn::SpawnedComponent,
     sidecar: crate::spawn::SpawnedComponent,
     state_dir: PathBuf,
+    state_owner: Option<UserProcessId>,
 }
 
 struct StartupGuard {
@@ -186,7 +187,14 @@ impl RunningStack {
                 authority,
                 sidecar,
                 state_dir,
+                state_owner: None,
             }),
+        }
+    }
+
+    pub(crate) fn set_state_owner(&mut self, state_owner: UserProcessId) {
+        if let Some(owned) = self.owned.as_mut() {
+            owned.state_owner = Some(state_owner);
         }
     }
 
@@ -210,6 +218,7 @@ impl RunningStack {
             timeout,
             &mut owned.authority,
             &mut owned.sidecar,
+            owned.state_owner,
         );
         if result.is_ok() {
             let _ = owned.sidecar.child.wait();
@@ -434,7 +443,6 @@ fn remove_startup_state(state_dir: &Path) {
         "sidecar.pid",
         "sidecar.listen",
         "stack.pid",
-        "stack.ready",
         "stack.lock",
     ] {
         let _ = pidfile::remove(&state_dir.join(name));
@@ -469,8 +477,16 @@ pub(crate) fn supervise_running_stack(
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
         StackError::Platform("current process returned invalid process id".into())
     })?;
+    if let Some(owned) = stack.owned.as_mut() {
+        owned.state_owner = Some(supervisor_pid);
+    }
     let attachment_result = pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)
-        .and_then(|()| pidfile::write(&state_dir.join("stack.ready"), supervisor_pid))
+        .and_then(|()| {
+            pidfile::write(
+                &supervisor_ready_path(state_dir, supervisor_pid),
+                supervisor_pid,
+            )
+        })
         .map_err(StackError::from);
     if let Err(error) = attachment_result {
         let rollback = stack.shutdown(Duration::from_secs(10));
@@ -500,7 +516,7 @@ pub(crate) fn wait_for_supervisor_attachment(
     let expected_pid = UserProcessId::new(supervisor.id()).ok_or_else(|| {
         StackError::Platform("detached supervisor returned invalid process id".into())
     })?;
-    let ready_path = state_dir.join("stack.ready");
+    let ready_path = supervisor_ready_path(state_dir, expected_pid);
     let deadline = Instant::now() + timeout;
     loop {
         if supervisor.try_wait()?.is_some() {
@@ -530,6 +546,10 @@ pub(crate) fn wait_for_supervisor_attachment(
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+pub(crate) fn supervisor_ready_path(state_dir: &Path, supervisor_pid: UserProcessId) -> PathBuf {
+    state_dir.join(format!("stack.{supervisor_pid}.ready"))
 }
 
 fn spawn_with_config(

@@ -40,6 +40,40 @@ fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
 }
 
 #[test]
+fn old_owner_does_not_remove_new_generation_state() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    let mut stack =
+        firma_stack::test_support::running_stack_from_raw(state_dir, authority, sidecar);
+    let old_owner = if std::process::id() == 1 { 2 } else { 1 };
+    firma_stack::test_support::set_running_stack_owner(&mut stack, old_owner);
+
+    let new_owner = UserProcessId::new(std::process::id()).expect("new owner PID");
+    pidfile::write(&state_dir.join("stack.pid"), new_owner).expect("write new owner");
+    pidfile::write(&state_dir.join("authority.pid"), new_owner).expect("write new authority");
+    pidfile::write(&state_dir.join("sidecar.pid"), new_owner).expect("write new sidecar");
+    std::fs::write(state_dir.join("stack.lock"), "new generation").expect("write new lock");
+    let new_ready = firma_stack::test_support::supervisor_ready_path(state_dir, new_owner.get());
+    pidfile::write(&new_ready, new_owner).expect("write new readiness");
+
+    stack.shutdown(Duration::ZERO).expect("stop old owner");
+
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+    assert_eq!(
+        pidfile::read(&state_dir.join("stack.pid")).expect("read owner"),
+        Some(new_owner)
+    );
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("stack.lock")).expect("read lock"),
+        "new generation"
+    );
+    assert!(new_ready.exists());
+}
+
+#[test]
 fn dropping_owner_transfers_child_collection() {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path();
@@ -91,7 +125,9 @@ fn detached_owner_collects_failed_component_and_tears_down_peer() {
         let _ = result_tx.send(result);
     });
 
-    wait_for_file(&state_dir.join("stack.ready"));
+    let owner_ready =
+        firma_stack::test_support::supervisor_ready_path(state_dir, std::process::id());
+    wait_for_file(&owner_ready);
     firma_stack::test_support::terminate_raw(authority_pid).expect("terminate authority");
 
     let result = match result_rx.recv_timeout(Duration::from_secs(5)) {
@@ -114,6 +150,11 @@ fn detached_owner_collects_failed_component_and_tears_down_peer() {
 fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path();
+    let unrelated_owner = UserProcessId::new(if std::process::id() == 1 { 2 } else { 1 })
+        .expect("unrelated owner PID");
+    let unrelated_ready =
+        firma_stack::test_support::supervisor_ready_path(state_dir, unrelated_owner.get());
+    pidfile::write(&unrelated_ready, unrelated_owner).expect("write unrelated readiness");
     let mut command = Command::new(std::env::current_exe().expect("test executable"));
     command
         .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
@@ -137,6 +178,7 @@ fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
         "unexpected attachment error: {error}"
     );
     insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited before attaching");
+    assert!(unrelated_ready.exists(), "unrelated readiness was removed");
 }
 
 #[test]
@@ -201,8 +243,9 @@ fn owned_child_fixture() {
         pidfile::write(&Path::new(&state_dir).join("stack.pid"), pid)
             .expect("write supervisor pidfile");
         if std::env::var_os(SUPERVISOR_ACKNOWLEDGE).is_some() {
-            pidfile::write(&Path::new(&state_dir).join("stack.ready"), pid)
-                .expect("write supervisor readiness");
+            let ready =
+                firma_stack::test_support::supervisor_ready_path(Path::new(&state_dir), pid.get());
+            pidfile::write(&ready, pid).expect("write supervisor readiness");
         }
         return;
     }

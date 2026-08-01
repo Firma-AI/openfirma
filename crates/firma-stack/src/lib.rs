@@ -84,6 +84,22 @@ pub mod test_support {
         )
     }
 
+    /// Bind a raw running stack's cleanup to one supervisor identity.
+    pub fn set_running_stack_owner(stack: &mut crate::RunningStack, owner: u32) {
+        if let Some(owner) = firma_runtime_state::UserProcessId::new(owner) {
+            stack.set_state_owner(owner);
+        }
+    }
+
+    /// Return the PID-scoped detached readiness path.
+    #[must_use]
+    pub fn supervisor_ready_path(state_dir: &std::path::Path, owner: u32) -> std::path::PathBuf {
+        firma_runtime_state::UserProcessId::new(owner).map_or_else(
+            || state_dir.join("invalid-supervisor.ready"),
+            |owner| crate::start::supervisor_ready_path(state_dir, owner),
+        )
+    }
+
     /// Forcefully terminate a raw process using the stack platform abstraction.
     ///
     /// # Errors
