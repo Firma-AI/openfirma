@@ -22,7 +22,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
 use crate::shutdown_event::windows_shutdown_event_name;
-use firma_runtime_state::{ChildExt as _, UserProcessId};
+use firma_runtime_state::ChildExt as _;
 
 pub struct WindowsPlatform;
 

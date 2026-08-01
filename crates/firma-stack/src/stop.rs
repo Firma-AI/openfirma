@@ -14,7 +14,7 @@ use firma_runtime_state::pidfile;
 pub struct StopOutcome {
     /// `true` if at least one component still had a platform termination
     /// target after the soft-signal grace window and a hard termination
-    /// (`SIGKILL` / `TerminateProcess`) was requested; `false` when every
+    /// (`SIGKILL` / `TerminateProcess`) was requested successfully; `false` when every
     /// target disappeared within the configured timeout.
     ///
     /// On Unix, the kernel can report a process group containing only
@@ -27,7 +27,8 @@ pub struct StopOutcome {
 ///
 /// # Errors
 ///
-/// Returns pidfile or cleanup errors.
+/// Returns pidfile, process-probe, termination, or cleanup errors. Runtime
+/// state is retained when hard termination fails so cleanup can be retried.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
     let stack_target = read_target(state_dir, "stack.pid")?;
@@ -81,15 +82,26 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Hard-kill survivors. This is the expected path for components that
     // hang in their own graceful-shutdown logic; not an error.
     let mut forced = false;
+    let mut termination_error = None;
     for target in [stack_target, authority_target, sidecar_target]
         .into_iter()
         .flatten()
     {
         if target.exists()? {
             info!(id = %target.stored_id(), "soft-signal grace exceeded; hard-killing");
-            let _ = target.signal_hard();
-            forced = true;
+            match target.signal_hard() {
+                Ok(()) => forced = true,
+                Err(error) => {
+                    info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
+                    if termination_error.is_none() {
+                        termination_error = Some(error);
+                    }
+                }
+            }
         }
+    }
+    if let Some(error) = termination_error {
+        return Err(error);
     }
     cleanup(state_dir)?;
     info!(forced, "stop complete");

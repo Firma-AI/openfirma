@@ -51,8 +51,8 @@ pub struct StackHandle {
 /// # Errors
 ///
 /// Returns state-directory, lock, spawn, or readiness errors. On failure
-/// after children have been spawned, this function tears them down and
-/// removes any pid/listen/lock files it created before returning the error.
+/// after children have been spawned, this function tears them down. Runtime
+/// state is retained when hard termination fails so callers can retry cleanup.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
@@ -132,8 +132,8 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
 /// # Errors
 ///
 /// Returns state directory, spawn, readiness, or detach errors. On failure
-/// after children have been spawned, this function tears them down and
-/// removes any pid/listen/lock files it created before returning the error.
+/// after children have been spawned, this function tears them down. Runtime
+/// state is retained when hard termination fails so callers can retry cleanup.
 pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<StackHandle> {
     let handle = spawn_stack(cfg, state_dir)?;
     match mode {
@@ -147,7 +147,7 @@ pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<Sta
             // Foreground exit (Ctrl-C, child died): caller is leaving. Tear
             // children down and remove pid/listen/lock files so the next
             // `start` does not trip on stale state.
-            let _ = crate::stop::stop(state_dir, Duration::from_secs(10));
+            crate::stop::stop(state_dir, Duration::from_secs(10))?;
         }
         StartMode::Detached => {
             info!("forking detached supervisor");
@@ -161,13 +161,29 @@ fn rollback(state_dir: &Path) {
     // Best-effort teardown: kill any spawned children and remove the artifacts
     // we wrote. Errors during rollback are ignored — they would mask the
     // original failure that triggered this path.
+    let mut cleanup_safe = true;
     for name in ["authority.pid", "sidecar.pid"] {
-        if let Ok(Some(id)) = pidfile::read(&state_dir.join(name))
-            && let target = TerminationTarget::from_stored_id(id)
-            && !matches!(target.exists(), Ok(false))
-        {
-            let _ = target.signal_hard();
+        let path = state_dir.join(name);
+        match pidfile::read(&path) {
+            Ok(Some(id)) => {
+                let target = TerminationTarget::from_stored_id(id);
+                if !matches!(target.exists(), Ok(false))
+                    && let Err(error) = target.signal_hard()
+                {
+                    debug!(target = %id, %error, "rollback hard termination failed");
+                    cleanup_safe = false;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                debug!(path = %path.display(), %error, "rollback could not read termination target");
+                cleanup_safe = false;
+            }
         }
+    }
+    if !cleanup_safe {
+        debug!("rollback retained runtime state for a later cleanup attempt");
+        return;
     }
     for name in [
         "authority.pid",
