@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
-use crate::error::Result;
+use crate::error::{Result, StackError};
 use crate::platform::TerminationTarget;
 use firma_runtime_state::pidfile;
 
@@ -28,7 +28,8 @@ pub struct StopOutcome {
 /// # Errors
 ///
 /// Returns pidfile, process-probe, termination, or cleanup errors. Runtime
-/// state is retained when hard termination fails so cleanup can be retried.
+/// state is retained when probing or hard termination fails so cleanup can be
+/// retried.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
     let stack_target = read_target(state_dir, "stack.pid")?;
@@ -45,11 +46,12 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // gRPC streams to the authority close cleanly; that lets the authority's
     // tonic graceful shutdown finish instead of blocking on long-lived
     // server-streaming RPCs.
+    let mut teardown_error = None;
     for target in [sidecar_target, stack_target, authority_target]
         .into_iter()
         .flatten()
     {
-        if target.exists()? {
+        if target_may_exist(target, &mut teardown_error) {
             debug!(id = %target.stored_id(), "sending soft signal");
             if let Err(e) = target.signal_soft() {
                 // Not fatal: hard-kill will still run after the grace window.
@@ -62,15 +64,14 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
 
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        let authority_dead = match authority_target {
-            Some(target) => !target.exists()?,
-            None => true,
-        };
-        let sidecar_dead = match sidecar_target {
-            Some(target) => !target.exists()?,
-            None => true,
-        };
+    while teardown_error.is_none() && Instant::now() < deadline {
+        let authority_dead =
+            authority_target.is_none_or(|target| !target_may_exist(target, &mut teardown_error));
+        let sidecar_dead =
+            sidecar_target.is_none_or(|target| !target_may_exist(target, &mut teardown_error));
+        if teardown_error.is_some() {
+            break;
+        }
         if authority_dead && sidecar_dead {
             info!("all children exited cleanly");
             cleanup(state_dir)?;
@@ -82,30 +83,42 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Hard-kill survivors. This is the expected path for components that
     // hang in their own graceful-shutdown logic; not an error.
     let mut forced = false;
-    let mut termination_error = None;
     for target in [stack_target, authority_target, sidecar_target]
         .into_iter()
         .flatten()
     {
-        if target.exists()? {
+        if target_may_exist(target, &mut teardown_error) {
             info!(id = %target.stored_id(), "soft-signal grace exceeded; hard-killing");
             match target.signal_hard() {
                 Ok(()) => forced = true,
                 Err(error) => {
                     info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
-                    if termination_error.is_none() {
-                        termination_error = Some(error);
+                    if teardown_error.is_none() {
+                        teardown_error = Some(error);
                     }
                 }
             }
         }
     }
-    if let Some(error) = termination_error {
+    if let Some(error) = teardown_error {
         return Err(error);
     }
     cleanup(state_dir)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
+}
+
+fn target_may_exist(target: TerminationTarget, teardown_error: &mut Option<StackError>) -> bool {
+    match target.exists() {
+        Ok(exists) => exists,
+        Err(error) => {
+            info!(id = %target.stored_id(), %error, "termination-target probe failed; signalling conservatively");
+            if teardown_error.is_none() {
+                *teardown_error = Some(error);
+            }
+            true
+        }
+    }
 }
 
 fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>> {

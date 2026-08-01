@@ -129,8 +129,9 @@ alive even when its leader has exited, ensuring orphaned descendants are
 also hard-killed. A group containing only unreaped descendant zombies may
 therefore be reported as requiring the hard-kill fallback.
 
-If hard termination fails, `firma` returns an error and retains the stack
-pidfiles and lock. Fix the underlying permission or platform error, then run
+If a process-group probe or hard termination fails, `firma` still attempts
+every recorded target, then returns an error and retains the stack pidfiles and
+lock. Fix the underlying permission or platform error, then run
 `firma stack stop` again; the persisted termination targets remain available
 for that retry.
 
