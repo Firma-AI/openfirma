@@ -75,7 +75,13 @@ impl TerminationTarget {
     }
 
     pub fn signal_hard(self) -> Result<()> {
-        SystemPlatform::signal_hard(self)
+        match SystemPlatform::signal_hard(self) {
+            Ok(()) => Ok(()),
+            Err(signal_error) => match self.exists() {
+                Ok(false) => Ok(()),
+                Ok(true) | Err(_) => Err(signal_error),
+            },
+        }
     }
 }
 
