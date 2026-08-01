@@ -9,10 +9,6 @@ fn current_process_exists() {
 
 #[cfg(unix)]
 #[test]
-#[expect(
-    clippy::zombie_processes,
-    reason = "the test explicitly verifies and then collects a zombie child"
-)]
 fn reaping_is_explicit_and_process_probe_is_non_destructive() {
     use std::io::Read as _;
     use std::process::{Command, Stdio};

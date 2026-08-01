@@ -10,7 +10,8 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
 use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
@@ -22,6 +23,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
 use crate::shutdown_event::windows_shutdown_event_name;
+use crate::supervisor::{collect_child_in_background, collect_child_until};
 use firma_runtime_state::ChildExt as _;
 
 pub struct WindowsPlatform;
@@ -81,8 +83,7 @@ impl Platform for WindowsPlatform {
             unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, leader_pid.get()) };
         if process_handle.is_null() {
             let err = unsafe { GetLastError() };
-            let _ = child.kill();
-            let _ = child.wait();
+            cleanup_failed_child(child);
             return Err(StackError::Platform(format!(
                 "OpenProcess failed (error {err})"
             )));
@@ -95,8 +96,7 @@ impl Platform for WindowsPlatform {
         };
         unsafe { CloseHandle(process_handle) };
         if assigned == 0 {
-            let _ = child.kill();
-            let _ = child.wait();
+            cleanup_failed_child(child);
             return Err(StackError::Platform(format!(
                 "AssignProcessToJobObject failed (error {assign_err})"
             )));
@@ -153,6 +153,13 @@ impl Platform for WindowsPlatform {
             return Err(StackError::Platform("TerminateProcess failed".into()));
         }
         Ok(())
+    }
+}
+
+fn cleanup_failed_child(mut child: Child) {
+    let _ = child.kill();
+    if !collect_child_until(&mut child, Instant::now() + Duration::from_secs(2)) {
+        let _ = collect_child_in_background(child);
     }
 }
 

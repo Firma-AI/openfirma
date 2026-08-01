@@ -83,6 +83,15 @@ pub enum StackError {
         timeout_secs: u64,
     },
 
+    /// A startup operation failed and its required rollback also failed.
+    #[error("{operation}; rollback failed: {rollback}")]
+    Rollback {
+        /// Original startup or attachment failure.
+        operation: Box<Self>,
+        /// Failure encountered while tearing the partial stack down.
+        rollback: Box<Self>,
+    },
+
     /// Generic I/O error not classified by a more specific variant.
     #[error("io error: {0}")]
     Io(#[from] io::Error),

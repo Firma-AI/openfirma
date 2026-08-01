@@ -110,10 +110,6 @@ fn dead_pid_is_stopped() {
 
 #[cfg(unix)]
 #[test]
-#[expect(
-    clippy::zombie_processes,
-    reason = "the test verifies observational handling before collecting the child"
-)]
 fn exited_unreaped_child_is_unhealthy() {
     use std::io::Read as _;
     use std::process::Stdio;

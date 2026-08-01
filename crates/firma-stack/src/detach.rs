@@ -7,7 +7,8 @@ use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 
-pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
+pub fn spawn_supervisor(state_dir: &Path) -> Result<Child> {
+    firma_runtime_state::pidfile::remove(&state_dir.join("stack.ready"))?;
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
 
@@ -54,7 +55,7 @@ pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
 
     let child = spawn_detached(&build)?;
     info!(pid = child.id(), "supervisor spawned");
-    Ok(())
+    Ok(child)
 }
 
 /// Spawn the supervisor command produced by `build`, detached from the parent.
