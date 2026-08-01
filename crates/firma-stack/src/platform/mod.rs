@@ -6,7 +6,7 @@ mod unix;
 mod windows;
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command};
 
 use crate::error::Result;
 use firma_runtime_state::UserProcessId;
@@ -39,6 +39,7 @@ impl Drop for Group {
 }
 
 pub struct SpawnedChild {
+    pub child: Child,
     pub leader_pid: UserProcessId,
     pub termination_target: TerminationTarget,
 }

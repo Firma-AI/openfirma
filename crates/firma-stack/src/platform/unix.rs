@@ -66,8 +66,8 @@ impl Platform for UnixPlatform {
             source,
         })?;
         let leader_pid = child.process_id();
-        std::mem::forget(child);
         Ok(SpawnedChild {
+            child,
             leader_pid,
             termination_target: TerminationTarget::for_leader(leader_pid),
         })

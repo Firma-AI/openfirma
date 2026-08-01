@@ -1,6 +1,6 @@
 //! `start` and `supervise` entry points.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tracing::{debug, info};
@@ -39,12 +39,50 @@ pub struct StackHandle {
     sidecar_pid: UserProcessId,
 }
 
+/// An in-process stack whose component child handles are owned by the caller.
+///
+/// Dropping this value releases the child handles without terminating the
+/// stack. Call [`RunningStack::shutdown`] for an orderly teardown.
+pub struct RunningStack {
+    owned: OwnedStack,
+}
+
+struct OwnedStack {
+    authority: crate::spawn::SpawnedComponent,
+    sidecar: crate::spawn::SpawnedComponent,
+    state_dir: PathBuf,
+}
+
+impl RunningStack {
+    /// Return an informational handle containing the component process IDs.
+    #[must_use]
+    pub fn handle(&self) -> StackHandle {
+        StackHandle {
+            authority_pid: self.owned.authority.leader_pid,
+            sidecar_pid: self.owned.sidecar.leader_pid,
+        }
+    }
+
+    /// Stop the stack, consuming this process's ownership of its child handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns process-probe, termination, or runtime-state cleanup errors.
+    pub fn shutdown(mut self, timeout: Duration) -> Result<crate::stop::StopOutcome> {
+        let result = crate::stop::stop(&self.owned.state_dir, timeout);
+        if result.is_ok() {
+            let _ = self.owned.sidecar.child.wait();
+            let _ = self.owned.authority.child.wait();
+        }
+        result
+    }
+}
+
 /// Spawn the stack and wait for readiness without blocking on supervision.
 ///
-/// Returns once both components are listening and the sidecar CA material is
-/// on disk. The caller owns lifecycle: it must eventually call
-/// [`crate::stop()`] to tear the stack down (or rely on the OS reaping pids when
-/// the parent process exits).
+/// Returns ownership of the component child handles once both components are
+/// listening and the sidecar CA material is on disk. The caller must eventually
+/// call [`RunningStack::shutdown`] or [`crate::stop()`] to tear the stack down.
 ///
 /// Used by `firma-demo-tui` and as the first step of [`start`].
 ///
@@ -53,7 +91,7 @@ pub struct StackHandle {
 /// Returns state-directory, lock, spawn, or readiness errors. On failure
 /// after children have been spawned, this function tears them down. Runtime
 /// state is retained when hard termination fails so callers can retry cleanup.
-pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
+pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
     debug!("acquiring stack lock");
@@ -62,13 +100,14 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     reap_stale(state_dir)?;
 
     match spawn_stack_inner(cfg, state_dir) {
-        Ok(handle) => {
+        Ok(stack) => {
+            let handle = stack.handle();
             info!(
                 authority_pid = %handle.authority_pid,
                 sidecar_pid = %handle.sidecar_pid,
                 "firma stack ready"
             );
-            Ok(handle)
+            Ok(stack)
         }
         Err(error) => {
             debug!(%error, "spawn failed; rolling back");
@@ -78,7 +117,7 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     }
 }
 
-fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
+fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
     let group = SystemPlatform::new_group()?;
     let exe = cfg.firma_bin.as_deref();
     // Parse the unified firma.toml once; the probes below share it.
@@ -121,9 +160,12 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE — children survive parent exit.
     let _ = group;
 
-    Ok(StackHandle {
-        authority_pid: auth.leader_pid,
-        sidecar_pid: side.leader_pid,
+    Ok(RunningStack {
+        owned: OwnedStack {
+            authority: auth,
+            sidecar: side,
+            state_dir: state_dir.to_path_buf(),
+        },
     })
 }
 
@@ -135,7 +177,8 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
 /// after children have been spawned, this function tears them down. Runtime
 /// state is retained when hard termination fails so callers can retry cleanup.
 pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<StackHandle> {
-    let handle = spawn_stack(cfg, state_dir)?;
+    let stack = spawn_stack(cfg, state_dir)?;
+    let handle = stack.handle();
     match mode {
         StartMode::Foreground => {
             info!("entering foreground supervisor loop");

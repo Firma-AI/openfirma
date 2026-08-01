@@ -15,7 +15,7 @@ mod supervisor;
 
 pub use config::{StackConfig, resolve_stack_config};
 pub use error::StackError;
-pub use start::{StackHandle, StartMode, spawn_stack, start, supervise};
+pub use start::{RunningStack, StackHandle, StartMode, spawn_stack, start, supervise};
 pub use status::{ComponentStatus, StackStatus, State, status};
 pub use stop::{StopOutcome, stop};
 
