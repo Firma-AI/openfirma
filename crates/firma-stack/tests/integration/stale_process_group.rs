@@ -99,8 +99,8 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
         other => panic!("unexpected startup error: {other}"),
     }
     assert!(
-        lock_path.exists(),
-        "startup did not recover the missing lock"
+        !lock_path.exists(),
+        "blocked startup published a generation it does not own"
     );
     assert!(
         state_dir.join("authority.pid").exists(),
@@ -109,7 +109,7 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
 
     let error = firma_stack::spawn_stack(&config, state_dir)
         .err()
-        .expect("recovered lock must continue to block startup");
+        .expect("live component group must continue to block startup");
     match error {
         StackError::AlreadyRunning { path } => assert_eq!(path, lock_path),
         other => panic!("unexpected startup error: {other}"),

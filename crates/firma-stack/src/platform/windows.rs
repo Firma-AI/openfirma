@@ -13,11 +13,22 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+};
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+};
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, EVENT_MODIFY_STATE, OpenEventW, OpenProcess,
-    PROCESS_SET_QUOTA, PROCESS_TERMINATE, SetEvent, TerminateProcess,
+    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, EVENT_MODIFY_STATE,
+    GetCurrentProcess, OpenEventW, OpenProcess, OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    ResumeThread, SetEvent, THREAD_SUSPEND_RESUME, TerminateProcess,
 };
 
 use crate::error::{Result, StackError};
@@ -36,12 +47,6 @@ pub fn close_job_object(handle: HANDLE) {
 
 impl Platform for WindowsPlatform {
     fn new_group() -> Result<Group> {
-        // Note: we intentionally do NOT set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
-        // The Job Object is used only to group children for inspection / teardown.
-        // If the parent process exits (e.g. `firma stack start --detach` returning
-        // after spawning the supervisor), children must survive. Stop reaches
-        // children via the per-pid named shutdown event (see `signal_soft`) and
-        // falls back to TerminateProcess.
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if job.is_null() {
             return Err(StackError::Platform("CreateJobObjectW failed".into()));
@@ -49,7 +54,47 @@ impl Platform for WindowsPlatform {
         Ok(Group { job })
     }
 
-    fn termination_target_exists(target: TerminationTarget) -> Result<bool> {
+    fn arm_group_termination(group: &Group) -> Result<()> {
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let configured = unsafe {
+            SetInformationJobObject(
+                group.job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                u32::try_from(std::mem::size_of_val(&limits)).unwrap_or(u32::MAX),
+            )
+        };
+        if configured == 0 {
+            let error = unsafe { GetLastError() };
+            return Err(StackError::Platform(format!(
+                "SetInformationJobObject failed (error {error})"
+            )));
+        }
+        Ok(())
+    }
+
+    fn termination_target_exists(target: &TerminationTarget) -> Result<bool> {
+        if let Some(job) = target.job() {
+            let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
+                unsafe { std::mem::zeroed() };
+            let queried = unsafe {
+                QueryInformationJobObject(
+                    job,
+                    JobObjectBasicAccountingInformation,
+                    std::ptr::from_mut(&mut accounting).cast(),
+                    u32::try_from(std::mem::size_of_val(&accounting)).unwrap_or(u32::MAX),
+                    std::ptr::null_mut(),
+                )
+            };
+            if queried == 0 {
+                let error = unsafe { GetLastError() };
+                return Err(StackError::Platform(format!(
+                    "QueryInformationJobObject failed (error {error})"
+                )));
+            }
+            return Ok(accounting.ActiveProcesses != 0);
+        }
         target.stored_id().process_exists().map_err(StackError::Io)
     }
 
@@ -64,7 +109,9 @@ impl Platform for WindowsPlatform {
             .open(log_path)?;
         let stderr_log = log.try_clone()?;
 
-        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        // No component code may execute before Job assignment. This closes the
+        // descendant-escape window between CreateProcess and assignment.
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
         cmd.stdout(Stdio::from(log)).stderr(Stdio::from(stderr_log));
         let child = cmd.spawn().map_err(|source| StackError::Spawn {
             component: log_path
@@ -101,14 +148,26 @@ impl Platform for WindowsPlatform {
                 "AssignProcessToJobObject failed (error {assign_err})"
             )));
         }
+        let termination_target = match duplicate_job_target(group.job, leader_pid) {
+            Ok(target) => target,
+            Err(error) => {
+                cleanup_failed_child(child);
+                return Err(error);
+            }
+        };
+        if let Err(error) = resume_suspended_process(leader_pid) {
+            let _ = termination_target.signal_hard();
+            cleanup_failed_child(child);
+            return Err(error);
+        }
         Ok(SpawnedChild {
             child,
             leader_pid,
-            termination_target: TerminationTarget::for_leader(leader_pid),
+            termination_target,
         })
     }
 
-    fn signal_soft(target: TerminationTarget) -> Result<()> {
+    fn signal_soft(target: &TerminationTarget) -> Result<()> {
         // `GenerateConsoleCtrlEvent` only delivers to processes that share the
         // caller's console. The stop process runs in a different console than the
         // children, and the children are spawned with `CREATE_NO_WINDOW` (no
@@ -142,7 +201,16 @@ impl Platform for WindowsPlatform {
         Ok(())
     }
 
-    fn signal_hard(target: TerminationTarget) -> Result<()> {
+    fn signal_hard(target: &TerminationTarget) -> Result<()> {
+        if let Some(job) = target.job() {
+            if unsafe { TerminateJobObject(job, 1) } == 0 {
+                let error = unsafe { GetLastError() };
+                return Err(StackError::Platform(format!(
+                    "TerminateJobObject failed (error {error})"
+                )));
+            }
+            return Ok(());
+        }
         let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, target.stored_id().get()) };
         if handle.is_null() {
             return Err(StackError::Platform("OpenProcess(TERMINATE) failed".into()));
@@ -154,6 +222,78 @@ impl Platform for WindowsPlatform {
         }
         Ok(())
     }
+}
+
+fn duplicate_job_target(
+    job: HANDLE,
+    leader_pid: firma_runtime_state::UserProcessId,
+) -> Result<TerminationTarget> {
+    let process = unsafe { GetCurrentProcess() };
+    let mut duplicate = std::ptr::null_mut();
+    let duplicated = unsafe {
+        DuplicateHandle(
+            process,
+            job,
+            process,
+            &raw mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if duplicated == 0 {
+        let error = unsafe { GetLastError() };
+        return Err(StackError::Platform(format!(
+            "DuplicateHandle(job) failed (error {error})"
+        )));
+    }
+    Ok(TerminationTarget::for_job(leader_pid, duplicate))
+}
+
+fn resume_suspended_process(leader_pid: firma_runtime_state::UserProcessId) -> Result<()> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        let error = unsafe { GetLastError() };
+        return Err(StackError::Platform(format!(
+            "CreateToolhelp32Snapshot(threads) failed (error {error})"
+        )));
+    }
+    let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+    entry.dwSize = u32::try_from(std::mem::size_of::<THREADENTRY32>()).unwrap_or(u32::MAX);
+    let mut found = false;
+    let mut has_entry = unsafe { Thread32First(snapshot, &raw mut entry) } != 0;
+    while has_entry {
+        if entry.th32OwnerProcessID == leader_pid.get() {
+            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+            if thread.is_null() {
+                let error = unsafe { GetLastError() };
+                unsafe { CloseHandle(snapshot) };
+                return Err(StackError::Platform(format!(
+                    "OpenThread(SUSPEND_RESUME) failed (error {error})"
+                )));
+            }
+            let previous_suspend_count = unsafe { ResumeThread(thread) };
+            unsafe { CloseHandle(thread) };
+            if previous_suspend_count == u32::MAX {
+                let error = unsafe { GetLastError() };
+                unsafe { CloseHandle(snapshot) };
+                return Err(StackError::Platform(format!(
+                    "ResumeThread failed (error {error})"
+                )));
+            }
+            found = true;
+            break;
+        }
+        has_entry = unsafe { Thread32Next(snapshot, &raw mut entry) } != 0;
+    }
+    unsafe { CloseHandle(snapshot) };
+    if !found {
+        return Err(StackError::Platform(format!(
+            "suspended process {} had no resumable primary thread",
+            leader_pid.get()
+        )));
+    }
+    Ok(())
 }
 
 fn cleanup_failed_child(mut child: Child) {
@@ -175,6 +315,82 @@ mod tests {
     use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
     use super::*;
+
+    const JOB_FIXTURE_STAGE: &str = "FIRMA_WINDOWS_JOB_FIXTURE_STAGE";
+    const JOB_FIXTURE_MARKER: &str = "FIRMA_WINDOWS_JOB_FIXTURE_MARKER";
+    const JOB_FIXTURE_TEST: &str =
+        "platform::windows::tests::owned_job_target_terminates_descendant_after_leader_exit";
+
+    #[test]
+    fn owned_job_target_terminates_descendant_after_leader_exit() {
+        match std::env::var(JOB_FIXTURE_STAGE).as_deref() {
+            Ok("grandchild") => loop {
+                std::thread::sleep(Duration::from_secs(60));
+            },
+            Ok("child") => {
+                let marker = std::env::var_os(JOB_FIXTURE_MARKER).expect("fixture marker");
+                let grandchild = Command::new(std::env::current_exe().expect("test executable"))
+                    .args(["--exact", JOB_FIXTURE_TEST])
+                    .env(JOB_FIXTURE_STAGE, "grandchild")
+                    .spawn()
+                    .expect("spawn grandchild fixture");
+                std::fs::write(marker, grandchild.id().to_string()).expect("write grandchild PID");
+                return;
+            }
+            _ => {}
+        }
+
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let marker = state_dir.path().join("grandchild.pid");
+        let group = WindowsPlatform::new_group().expect("create job");
+        WindowsPlatform::arm_group_termination(&group).expect("arm job termination");
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .args(["--exact", JOB_FIXTURE_TEST])
+            .env(JOB_FIXTURE_STAGE, "child")
+            .env(JOB_FIXTURE_MARKER, &marker);
+        let mut spawned = WindowsPlatform::spawn_in_group(
+            &group,
+            &mut command,
+            &state_dir.path().join("job-fixture.log"),
+        )
+        .expect("spawn job leader");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "grandchild fixture did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(spawned.child.wait().expect("collect leader").success());
+        let grandchild_pid: u32 = std::fs::read_to_string(&marker)
+            .expect("read grandchild PID")
+            .trim()
+            .parse()
+            .expect("parse grandchild PID");
+        let grandchild_pid = UserProcessId::new(grandchild_pid).expect("grandchild PID");
+
+        assert!(spawned.termination_target.exists().expect("query job"));
+        spawned
+            .termination_target
+            .signal_hard()
+            .expect("terminate owned job");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while grandchild_pid.process_exists().expect("probe grandchild") {
+            assert!(
+                Instant::now() < deadline,
+                "grandchild survived job termination"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !spawned
+                .termination_target
+                .exists()
+                .expect("query empty job")
+        );
+    }
 
     /// Round-trip: a process that creates the per-PID shutdown event under
     /// the name dictated by `windows_shutdown_event_name` must be woken by

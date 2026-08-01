@@ -1,7 +1,8 @@
 //! Owned-child supervision and collection.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tracing::{debug, info, warn};
@@ -11,11 +12,75 @@ use crate::error::Result;
 use crate::platform::TerminationTarget;
 use firma_runtime_state::ChildExt as _;
 
+static PROCESS_STOP_EPOCH: OnceLock<std::result::Result<Arc<SignalEpoch>, String>> =
+    OnceLock::new();
+
+struct SignalEpoch {
+    current: AtomicU64,
+    subscriptions: AtomicU64,
+}
+
+/// Per-supervision snapshot of the process-wide termination-signal epoch.
+pub struct StopSignal {
+    epoch: Arc<SignalEpoch>,
+    baseline: u64,
+}
+
+impl StopSignal {
+    /// Install the process-wide handler before publishing supervisor readiness.
+    ///
+    /// Repeated calls share the process-wide handler and notification state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a platform error when the process handler cannot be installed.
+    pub fn install() -> Result<Self> {
+        match PROCESS_STOP_EPOCH.get_or_init(|| {
+            let epoch = Arc::new(SignalEpoch {
+                current: AtomicU64::new(0),
+                subscriptions: AtomicU64::new(0),
+            });
+            let handler_epoch = Arc::clone(&epoch);
+            ctrlc::set_handler(move || {
+                handler_epoch.current.fetch_add(1, Ordering::Relaxed);
+            })
+            .map(|()| epoch)
+            .map_err(|error| error.to_string())
+        }) {
+            Ok(epoch) => {
+                let observed = epoch.current.load(Ordering::Relaxed);
+                let subscription = epoch.subscriptions.fetch_add(1, Ordering::Relaxed);
+                let baseline = if subscription == 0 { 0 } else { observed };
+                Ok(Self {
+                    epoch: Arc::clone(epoch),
+                    baseline,
+                })
+            }
+            Err(error) => Err(crate::error::StackError::Platform(format!(
+                "install termination handler failed: {error}"
+            ))),
+        }
+    }
+
+    /// Return whether `SIGINT`, `SIGTERM`, `SIGHUP`, or console shutdown fired.
+    pub(crate) fn requested(&self) -> bool {
+        self.epoch.current.load(Ordering::Relaxed) != self.baseline
+    }
+}
+
 pub fn block_until_owned_exit(
     authority: &mut OwnedComponent,
     sidecar: &mut OwnedComponent,
 ) -> Result<()> {
-    let stop = install_stop_handler();
+    block_until_owned_exit_with(&StopSignal::install()?, authority, sidecar)
+}
+
+/// Supervise owned children using a handler installed before readiness.
+pub fn block_until_owned_exit_with(
+    stop: &StopSignal,
+    authority: &mut OwnedComponent,
+    sidecar: &mut OwnedComponent,
+) -> Result<()> {
     debug!(
         authority_pid = %authority.leader_pid(),
         sidecar_pid = %sidecar.leader_pid(),
@@ -23,8 +88,8 @@ pub fn block_until_owned_exit(
     );
 
     loop {
-        if stop.load(Ordering::SeqCst) {
-            info!("Ctrl-C received; caller will tear stack down");
+        if stop.requested() {
+            info!("termination signal received; caller will tear stack down");
             return Ok(());
         }
         if authority.try_wait()?.is_some() {
@@ -37,15 +102,6 @@ pub fn block_until_owned_exit(
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-}
-
-fn install_stop_handler() -> Arc<AtomicBool> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_handler = Arc::clone(&stop);
-    let _ = ctrlc::set_handler(move || {
-        stop_handler.store(true, Ordering::SeqCst);
-    });
-    stop
 }
 
 /// Failure to transfer component ownership into a background reaper.
@@ -233,4 +289,30 @@ fn child_was_collected_externally(error: &std::io::Error) -> bool {
 #[cfg(windows)]
 fn child_was_collected_externally(_error: &std::io::Error) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_stop_signal_ignores_previous_epochs() {
+        let epoch = Arc::new(SignalEpoch {
+            current: AtomicU64::new(0),
+            subscriptions: AtomicU64::new(0),
+        });
+        let first = StopSignal {
+            epoch: Arc::clone(&epoch),
+            baseline: epoch.current.load(Ordering::Relaxed),
+        };
+
+        epoch.current.fetch_add(1, Ordering::Relaxed);
+        assert!(first.requested());
+
+        let second = StopSignal {
+            epoch: Arc::clone(&epoch),
+            baseline: epoch.current.load(Ordering::Relaxed),
+        };
+        assert!(!second.requested());
+    }
 }

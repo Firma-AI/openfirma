@@ -94,9 +94,9 @@ impl OwnedComponent {
         self.leader_pid
     }
 
-    /// Return the copyable platform capability used to signal the process tree.
-    pub const fn termination_target(&self) -> TerminationTarget {
-        self.termination_target
+    /// Borrow the platform capability used to signal the process tree.
+    pub const fn termination_target(&self) -> &TerminationTarget {
+        &self.termination_target
     }
 
     /// Probe and collect the leader if it has exited without relinquishing ownership.
@@ -120,6 +120,11 @@ impl OwnedComponent {
     /// Borrow the child handle for bounded collection loops.
     pub fn child_mut(&mut self) -> &mut Child {
         &mut self.child
+    }
+
+    /// Borrow child collection and process-tree termination capabilities together.
+    pub fn child_and_target(&mut self) -> (&mut Child, &TerminationTarget) {
+        (&mut self.child, &self.termination_target)
     }
 
     /// Relinquish component ownership into its child and termination capabilities.

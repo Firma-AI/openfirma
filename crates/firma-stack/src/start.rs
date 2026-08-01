@@ -11,8 +11,10 @@ use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
+use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::supervisor::{
-    block_until_owned_exit, collect_child_in_background, collect_child_until, collect_in_background,
+    StopSignal, block_until_owned_exit, block_until_owned_exit_with, collect_child_in_background,
+    collect_child_until, collect_in_background,
 };
 use firma_runtime_state::{UserProcessId, pidfile};
 
@@ -29,8 +31,7 @@ pub enum StartMode {
     Detached,
 }
 
-/// Informational handle returned by [`start`] or [`RunningStack::handle`] once
-/// the stack has reached the ready state.
+/// Informational handle returned by [`start`] once the stack is ready.
 ///
 /// The handle is informational only: it does not own the children's lifecycle
 /// (runtime-state files on disk are the source of truth). Callers tear the stack down
@@ -59,7 +60,8 @@ struct OwnedStack {
     authority: OwnedComponent,
     sidecar: OwnedComponent,
     state_dir: PathBuf,
-    state_owner: Option<UserProcessId>,
+    state_lease: StateLease,
+    startup_transaction: Option<StateTransaction>,
 }
 
 /// Ownership states for an in-process stack.
@@ -68,7 +70,7 @@ struct OwnedStack {
 /// A successful shutdown or ownership transfer moves permanently to `Stopped`.
 enum RunningStackState {
     /// This process may supervise, terminate, collect, and clean up the stack.
-    Owned(OwnedStack),
+    Owned(Box<OwnedStack>),
     /// Process authority has been consumed by shutdown or transferred away.
     Stopped,
 }
@@ -80,6 +82,8 @@ enum RunningStackState {
 struct StartupGuard {
     state: StartupState,
     state_dir: PathBuf,
+    state_lease: StateLease,
+    transaction: Option<StateTransaction>,
 }
 
 /// Valid ownership states while the Authority and Sidecar are starting.
@@ -100,12 +104,22 @@ enum StartupState {
     Finished,
 }
 
+/// Launcher states in the two-phase detached-supervisor handoff.
+enum LauncherAttachmentState {
+    /// Waiting for the supervisor to publish component readiness.
+    AwaitingReadiness,
+    /// Readiness was acknowledged; waiting for supervisor confirmation.
+    AwaitingConfirmation,
+}
+
 impl StartupGuard {
-    /// Begin an empty startup state after the caller acquires the lock.
-    fn new(state_dir: &Path) -> Self {
+    /// Begin an empty startup generation with an atomically acquired lease.
+    fn new(state_dir: &Path, state_lease: StateLease, transaction: StateTransaction) -> Self {
         Self {
             state: StartupState::Empty,
             state_dir: state_dir.to_path_buf(),
+            state_lease,
+            transaction: Some(transaction),
         }
     }
 
@@ -159,9 +173,15 @@ impl StartupGuard {
     /// present in startup order.
     fn finish(mut self) -> Result<RunningStack> {
         match std::mem::replace(&mut self.state, StartupState::Finished) {
-            StartupState::ComponentsStarted { authority, sidecar } => Ok(
-                RunningStack::from_components(authority, sidecar, self.state_dir.clone()),
-            ),
+            StartupState::ComponentsStarted { authority, sidecar } => {
+                Ok(RunningStack::from_components(
+                    authority,
+                    sidecar,
+                    self.state_dir.clone(),
+                    self.state_lease,
+                    self.transaction.take(),
+                ))
+            }
             state => {
                 self.state = state;
                 Err(StackError::Platform(
@@ -177,7 +197,7 @@ impl Drop for StartupGuard {
         let state = std::mem::replace(&mut self.state, StartupState::Finished);
         let components = match state {
             StartupState::Empty => {
-                remove_startup_state(&self.state_dir);
+                remove_startup_state(&self.state_dir, self.state_lease, self.transaction.as_ref());
                 return;
             }
             StartupState::AuthorityStarted { authority } => vec![authority],
@@ -186,11 +206,21 @@ impl Drop for StartupGuard {
             }
             StartupState::Finished => return,
         };
-        rollback_startup_components(components, &self.state_dir);
+        rollback_startup_components(
+            components,
+            &self.state_dir,
+            self.state_lease,
+            self.transaction.as_ref(),
+        );
     }
 }
 
-fn rollback_startup_components(mut components: Vec<OwnedComponent>, state_dir: &Path) {
+fn rollback_startup_components(
+    mut components: Vec<OwnedComponent>,
+    state_dir: &Path,
+    state_lease: StateLease,
+    transaction: Option<&StateTransaction>,
+) {
     debug!(state_dir = %state_dir.display(), "startup failed; collecting owned children");
     for component in &mut components {
         if let Err(error) = component.termination_target().signal_hard() {
@@ -229,7 +259,7 @@ fn rollback_startup_components(mut components: Vec<OwnedComponent>, state_dir: &
             }
         }
         if all_absent && children_collected {
-            remove_startup_state(state_dir);
+            remove_startup_state(state_dir, state_lease, transaction);
             return;
         }
         if probe_failed || Instant::now() >= deadline {
@@ -250,6 +280,8 @@ impl RunningStack {
         authority: OwnedComponent,
         sidecar: OwnedComponent,
         state_dir: PathBuf,
+        state_lease: StateLease,
+        startup_transaction: Option<StateTransaction>,
     ) -> Self {
         let handle = StackHandle {
             authority_pid: authority.leader_pid(),
@@ -257,19 +289,13 @@ impl RunningStack {
         };
         Self {
             handle,
-            state: RunningStackState::Owned(OwnedStack {
+            state: RunningStackState::Owned(Box::new(OwnedStack {
                 authority,
                 sidecar,
                 state_dir,
-                state_owner: None,
-            }),
-        }
-    }
-
-    /// Associate owned cleanup with the detached supervisor process.
-    pub(crate) fn set_state_owner(&mut self, state_owner: UserProcessId) {
-        if let RunningStackState::Owned(owned) = &mut self.state {
-            owned.state_owner = Some(state_owner);
+                state_lease,
+                startup_transaction,
+            })),
         }
     }
 
@@ -283,9 +309,16 @@ impl RunningStack {
         }
     }
 
+    /// Release exclusive state mutation after detached attachment is published.
+    fn mark_ready(&mut self) -> Result<()> {
+        let owned = self.owned_mut()?;
+        owned.startup_transaction = None;
+        Ok(())
+    }
+
     /// Return an informational handle containing the component process IDs.
     #[must_use]
-    pub fn handle(&self) -> StackHandle {
+    fn handle(&self) -> StackHandle {
         self.handle
     }
 
@@ -298,12 +331,15 @@ impl RunningStack {
         let RunningStackState::Owned(owned) = &mut self.state else {
             return Ok(crate::stop::StopOutcome { forced: false });
         };
+        // A detached attachment failure may tear down before publishing ready.
+        // Release startup serialization before the owned stop reacquires it.
+        owned.startup_transaction = None;
         let result = crate::stop::stop_owned(
             &owned.state_dir,
             timeout,
             &mut owned.authority,
             &mut owned.sidecar,
-            owned.state_owner,
+            owned.state_lease,
         );
         if result.is_ok() {
             let _ = owned.sidecar.wait();
@@ -317,6 +353,7 @@ impl RunningStack {
     fn transfer_to_observer(&mut self) -> bool {
         let state = std::mem::replace(&mut self.state, RunningStackState::Stopped);
         if let RunningStackState::Owned(owned) = state {
+            let owned = *owned;
             return match collect_in_background(vec![owned.authority, owned.sidecar]) {
                 Ok(_) => true,
                 Err(error) => {
@@ -352,17 +389,31 @@ impl Drop for RunningStack {
 /// state is retained when target disappearance cannot be confirmed so callers
 /// can retry cleanup.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
+    spawn_stack_with_phase(cfg, state_dir, true, StackGeneration::new())
+}
+
+/// Spawn a stack while optionally deferring complete-state publication.
+fn spawn_stack_with_phase(
+    cfg: &StackConfig,
+    state_dir: &Path,
+    publish_ready: bool,
+    generation: StackGeneration,
+) -> Result<RunningStack> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
+    let transaction = StateTransaction::acquire(state_dir)?;
     debug!("acquiring stack lock");
-    acquire_lock(state_dir)?;
+    let state_lease = acquire_lock(state_dir, &transaction, generation)?;
+    let mut startup = StartupGuard::new(state_dir, state_lease, transaction);
     debug!("reaping stale pidfiles");
     reap_stale(state_dir)?;
 
-    let mut startup = StartupGuard::new(state_dir);
     match spawn_stack_inner(cfg, state_dir, &mut startup) {
         Ok(()) => {
-            let stack = startup.finish()?;
+            let mut stack = startup.finish()?;
+            if publish_ready {
+                stack.mark_ready()?;
+            }
             let handle = stack.handle();
             info!(
                 authority_pid = %handle.authority_pid,
@@ -384,6 +435,7 @@ fn spawn_stack_inner(
     startup: &mut StartupGuard,
 ) -> Result<()> {
     let group = SystemPlatform::new_group()?;
+    SystemPlatform::arm_group_termination(&group)?;
     let exe = cfg.firma_bin.as_deref();
     // Parse the unified firma.toml once; the probes below share it.
     let config = FirmaToml::read(&cfg.config_file)?;
@@ -441,10 +493,10 @@ fn spawn_stack_inner(
         debug!("sidecar HTTPS MITM inactive; skipping CA material readiness probe");
     }
 
-    // The Group goes out of scope at the end of this function. On Unix that
-    // is a no-op (children sit in their own pgrp). On Windows, the Drop impl
-    // closes the Job Object handle; that is safe because we do NOT set
-    // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE — children survive parent exit.
+    // The Group goes out of scope at the end of this function. On Unix that is
+    // a no-op because children sit in their own process groups. On Windows,
+    // each OwnedComponent retains a duplicate of the shared Job Object handle,
+    // so closing the original handle does not terminate the ready stack.
     let _ = group;
 
     Ok(())
@@ -483,48 +535,34 @@ fn start_foreground(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> 
 
 fn start_detached(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
+    let generation = StackGeneration::new();
     info!("forking detached supervisor owner");
-    let mut supervisor = crate::detach::spawn_supervisor(state_dir, cfg)?;
-    let supervisor_pid = UserProcessId::new(supervisor.id()).ok_or_else(|| {
-        StackError::Platform("detached supervisor returned invalid process id".into())
-    })?;
+    let mut supervisor = crate::detach::spawn_supervisor(state_dir, cfg, generation)?;
     if let Err(error) =
         wait_for_supervisor_attachment(state_dir, &mut supervisor, Duration::from_mins(4))
     {
         terminate_detached_supervisor(&mut supervisor);
-        let rollback = rollback_detached_start(
-            state_dir,
-            supervisor_pid,
-            matches!(&error, StackError::Readiness { .. }),
-        );
+        let rollback = rollback_detached_start(state_dir, generation);
         return Err(with_rollback(error, rollback));
     }
     let handle = match read_stack_handle(state_dir) {
         Ok(handle) => handle,
         Err(error) => {
             terminate_detached_supervisor(&mut supervisor);
-            let rollback = rollback_detached_start(state_dir, supervisor_pid, false);
+            let rollback = rollback_detached_start(state_dir, generation);
             return Err(with_rollback(error, rollback));
         }
     };
     if collect_child_in_background(supervisor).is_none() {
         let error = StackError::Platform("could not start detached supervisor collector".into());
-        let rollback = rollback_detached_start(state_dir, supervisor_pid, false);
+        let rollback = rollback_detached_start(state_dir, generation);
         return Err(with_rollback(error, rollback));
     }
     Ok(handle)
 }
 
-fn rollback_detached_start(
-    state_dir: &Path,
-    supervisor_pid: UserProcessId,
-    force: bool,
-) -> Result<()> {
-    let owns_state = pidfile::read(&state_dir.join("stack.pid"))? == Some(supervisor_pid);
-    if !force && !owns_state {
-        return Ok(());
-    }
-    crate::stop::stop(state_dir, Duration::from_secs(10)).map(|_| ())
+fn rollback_detached_start(state_dir: &Path, generation: StackGeneration) -> Result<()> {
+    crate::stop::stop_generation(state_dir, Duration::from_secs(10), generation).map(|_| ())
 }
 
 fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
@@ -546,16 +584,17 @@ fn read_stack_handle(state_dir: &Path) -> Result<StackHandle> {
     })
 }
 
-fn remove_startup_state(state_dir: &Path) {
-    for name in [
-        "authority.pid",
-        "authority.listen",
-        "sidecar.pid",
-        "sidecar.listen",
-        "stack.pid",
-        "stack.lock",
-    ] {
-        let _ = pidfile::remove(&state_dir.join(name));
+fn remove_startup_state(
+    state_dir: &Path,
+    state_lease: StateLease,
+    transaction: Option<&StateTransaction>,
+) {
+    let Some(transaction) = transaction else {
+        debug!("startup rollback lost state transaction; retaining runtime state");
+        return;
+    };
+    if let Err(error) = crate::stop::cleanup_generation(state_dir, Some(state_lease), transaction) {
+        debug!(%error, "startup rollback retained runtime state");
     }
 }
 
@@ -575,8 +614,22 @@ fn with_rollback<T>(operation: StackError, rollback: Result<T>) -> StackError {
 ///
 /// Returns startup, readiness, supervision, termination, or cleanup errors.
 pub fn supervise_owned(cfg: &StackConfig, state_dir: &Path) -> Result<()> {
-    let stack = spawn_stack(cfg, state_dir)?;
-    supervise_running_stack(stack, state_dir, Duration::from_secs(10))
+    supervise_owned_generation(cfg, state_dir, StackGeneration::new())
+}
+
+/// Spawn and own a detached stack for a launcher-assigned generation.
+///
+/// # Errors
+///
+/// Returns startup, readiness, supervision, termination, or cleanup errors.
+pub fn supervise_owned_generation(
+    cfg: &StackConfig,
+    state_dir: &Path,
+    generation: StackGeneration,
+) -> Result<()> {
+    let stop_signal = StopSignal::install()?;
+    let stack = spawn_stack_with_phase(cfg, state_dir, false, generation)?;
+    supervise_running_stack_with_signal(stack, state_dir, Duration::from_secs(10), &stop_signal)
 }
 
 pub(crate) fn supervise_running_stack(
@@ -584,19 +637,40 @@ pub(crate) fn supervise_running_stack(
     state_dir: &Path,
     timeout: Duration,
 ) -> Result<()> {
+    let stop_signal = match StopSignal::install() {
+        Ok(stop_signal) => stop_signal,
+        Err(error) => {
+            let rollback = stack.shutdown(Duration::from_secs(10));
+            return Err(with_rollback(error, rollback));
+        }
+    };
+    supervise_running_stack_with_signal(stack, state_dir, timeout, &stop_signal)
+}
+
+/// Attach and run a stack after its process-wide signal guard is installed.
+fn supervise_running_stack_with_signal(
+    mut stack: RunningStack,
+    state_dir: &Path,
+    timeout: Duration,
+    stop_signal: &StopSignal,
+) -> Result<()> {
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
         StackError::Platform("current process returned invalid process id".into())
     })?;
-    stack.set_state_owner(supervisor_pid);
-    let attachment_result = pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)
-        .and_then(|()| {
-            pidfile::write(
-                &supervisor_ready_path(state_dir, supervisor_pid),
-                supervisor_pid,
-            )
-        })
-        .map_err(StackError::from);
+    let attachment_result = (|| {
+        let ready_path = supervisor_ready_path(state_dir, supervisor_pid);
+        pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)?;
+        pidfile::write(&ready_path, supervisor_pid)?;
+        wait_for_launcher_ack(&ready_path, stop_signal, Duration::from_mins(4))?;
+        pidfile::write(
+            &supervisor_attached_path(state_dir, supervisor_pid),
+            supervisor_pid,
+        )?;
+        stack.mark_ready()?;
+        Ok(())
+    })();
     if let Err(error) = attachment_result {
+        let _ = stack.mark_ready();
         let rollback = stack.shutdown(Duration::from_secs(10));
         return Err(with_rollback(error, rollback));
     }
@@ -604,7 +678,7 @@ pub(crate) fn supervise_running_stack(
     info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "detached supervisor owns ready stack");
     let supervision_result = {
         let owned = stack.owned_mut()?;
-        block_until_owned_exit(&mut owned.authority, &mut owned.sidecar)
+        block_until_owned_exit_with(stop_signal, &mut owned.authority, &mut owned.sidecar)
     };
     info!("detached supervisor tearing down owned components");
     let teardown_result = stack.shutdown(timeout);
@@ -623,26 +697,47 @@ pub(crate) fn wait_for_supervisor_attachment(
         StackError::Platform("detached supervisor returned invalid process id".into())
     })?;
     let ready_path = supervisor_ready_path(state_dir, expected_pid);
+    let attached_path = supervisor_attached_path(state_dir, expected_pid);
     let deadline = Instant::now() + timeout;
+    let mut attachment = LauncherAttachmentState::AwaitingReadiness;
     loop {
-        if supervisor.try_wait()?.is_some() {
-            return Err(StackError::Platform(
-                "detached supervisor exited before attaching".into(),
-            ));
-        }
-        if let Some(ready_pid) = pidfile::read(&ready_path)? {
+        if matches!(attachment, LauncherAttachmentState::AwaitingReadiness)
+            && let Some(ready_pid) = pidfile::read(&ready_path)?
+        {
             if ready_pid != expected_pid {
                 return Err(StackError::Platform(format!(
                     "detached supervisor readiness belongs to pid {ready_pid}, expected {expected_pid}"
                 )));
             }
             pidfile::remove(&ready_path)?;
+            attachment = LauncherAttachmentState::AwaitingConfirmation;
+        }
+        if matches!(attachment, LauncherAttachmentState::AwaitingConfirmation)
+            && let Some(attached_pid) = pidfile::read(&attached_path)?
+        {
+            if attached_pid != expected_pid {
+                return Err(StackError::Platform(format!(
+                    "detached supervisor attachment belongs to pid {attached_pid}, expected {expected_pid}"
+                )));
+            }
+            pidfile::remove(&attached_path)?;
             if supervisor.try_wait()?.is_some() {
                 return Err(StackError::Platform(
-                    "detached supervisor exited after acknowledging attachment".into(),
+                    "detached supervisor exited after confirming attachment".into(),
                 ));
             }
             return Ok(());
+        }
+        if supervisor.try_wait()?.is_some() {
+            let phase = match attachment {
+                LauncherAttachmentState::AwaitingReadiness => "before announcing readiness",
+                LauncherAttachmentState::AwaitingConfirmation => {
+                    "after readiness but before confirming attachment"
+                }
+            };
+            return Err(StackError::Platform(format!(
+                "detached supervisor exited {phase}"
+            )));
         }
         if Instant::now() >= deadline {
             return Err(StackError::Readiness {
@@ -656,6 +751,39 @@ pub(crate) fn wait_for_supervisor_attachment(
 
 pub(crate) fn supervisor_ready_path(state_dir: &Path, supervisor_pid: UserProcessId) -> PathBuf {
     state_dir.join(format!("stack.{supervisor_pid}.ready"))
+}
+
+/// Return the second-phase attachment confirmation scoped to one supervisor.
+pub(crate) fn supervisor_attached_path(state_dir: &Path, supervisor_pid: UserProcessId) -> PathBuf {
+    state_dir.join(format!("stack.{supervisor_pid}.attached"))
+}
+
+/// Wait for the launcher to acknowledge the first handshake phase.
+///
+/// # Errors
+///
+/// Returns termination-request or acknowledgement-timeout errors.
+fn wait_for_launcher_ack(
+    ready_path: &Path,
+    stop_signal: &StopSignal,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while ready_path.try_exists()? {
+        if stop_signal.requested() {
+            return Err(StackError::Platform(
+                "termination requested before launcher attachment".into(),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(StackError::Readiness {
+                component: "detached launcher acknowledgement".into(),
+                timeout_secs: timeout.as_secs(),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
 }
 
 fn spawn_with_config(
@@ -680,23 +808,20 @@ fn spawn_with_config(
     )
 }
 
-fn acquire_lock(state_dir: &Path) -> Result<()> {
+fn acquire_lock(
+    state_dir: &Path,
+    _transaction: &StateTransaction,
+    generation: StackGeneration,
+) -> Result<StateLease> {
     let lock = state_dir.join("stack.lock");
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock)
-    {
-        Ok(_) if is_stack_stale(state_dir)? => Ok(()),
-        Ok(_) => Err(StackError::AlreadyRunning { path: lock }),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if is_stack_stale(state_dir)? {
-                std::fs::remove_file(&lock)?;
-                return acquire_lock(state_dir);
-            }
-            Err(StackError::AlreadyRunning { path: lock })
+    loop {
+        if !is_stack_stale(state_dir)? {
+            return Err(StackError::AlreadyRunning { path: lock });
         }
-        Err(error) => Err(error.into()),
+        if let Some(state_lease) = StateLease::try_claim(state_dir, generation)? {
+            return Ok(state_lease);
+        }
+        std::fs::remove_file(&lock)?;
     }
 }
 

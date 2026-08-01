@@ -16,6 +16,10 @@ pub struct Args {
     #[arg(long)]
     pub config: PathBuf,
 
+    /// Launcher-assigned generation that scopes rollback and cleanup authority.
+    #[arg(long)]
+    pub generation: firma_stack::StackGeneration,
+
     /// Optional binary override used to spawn Authority and Sidecar.
     #[arg(long)]
     pub firma_bin: Option<PathBuf>,

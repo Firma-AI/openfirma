@@ -78,15 +78,17 @@ firma sidecar start --detach
 
 What `start` does, in order:
 
-1. With `--detach`, forks the hidden owning supervisor; without it, the current
-   process remains the owner.
+1. With `--detach`, assigns a random startup generation and forks the hidden
+   owning supervisor; without it, the current process remains the owner.
 2. The owner boots the Authority in its own process group and probes its gRPC
    port until it accepts connections.
 3. The owner boots the Sidecar in its own process group.
 4. The owner probes the Sidecar's listen port and waits for
    `generated-firma-ca/` material when HTTPS MITM is active.
-5. With `--detach`, the supervisor acknowledges readiness and the launcher exits
-   0. Without it, the owner continues blocking in the foreground.
+5. With `--detach`, the supervisor announces readiness, waits for the launcher's
+   acknowledgement, then confirms attachment. The launcher exits 0 only after
+   that two-phase handoff. Without detachment, the owner continues blocking in
+   the foreground.
 
 If readiness fails at any step, `start` rolls back — every spawned child
 is signalled and pid/listen/lock files are cleaned up. You will not be
@@ -128,12 +130,28 @@ Authority's tonic graceful shutdown is not blocked on long-lived gRPC
 streams. The supervisor and Authority follow. Survivors past
 `--timeout` (default 2 s) are hard-killed. Firma then waits up to 2 seconds
 for every termination target to disappear before deleting runtime state.
+Cleanup is generation-fenced: `stack.lock` contains a random identity for the
+current lock acquisition. A delayed stop or supervisor from an older generation
+may still finish collecting its own children, but it cannot delete runtime state
+written by a replacement stack. Startup and stop also serialize state snapshots
+through `.stack-state.lock`; supervisor PIDs remain process identities and are
+not treated as cleanup authority.
+
+Detached rollback carries the generation assigned before the supervisor was
+spawned. If another generation has replaced it, rollback skips both signalling
+and cleanup rather than acting on the replacement's pidfiles.
 
 Foreground startup retains the component child handles and collects those
 children itself. In detached mode, the hidden supervisor spawns the components,
 retains their child handles, and remains their owning parent until teardown.
 Status and external stop commands use non-destructive probes and never attempt
 to reap another process's child.
+
+On Windows, the owner also retains duplicated handles to the components' Job
+Object. Hard shutdown terminates the Job rather than only its leader, and the
+final handle closing terminates descendants if the owner exits unexpectedly.
+External status and stop processes reconstruct leader-only targets from
+pidfiles; the owning supervisor remains responsible for full-tree cleanup.
 
 The detached command returns success only after the supervisor has spawned both
 components, completed their readiness checks, and acknowledged ownership. If a
@@ -151,6 +169,12 @@ recorded target, then returns an error and retains the stack pidfiles and lock.
 Fix the underlying permission or platform error, or allow the owning parent to
 collect a zombie, then run `firma sidecar stop` again; the persisted termination
 targets remain available for that retry.
+
+If `stack.lock` contains a malformed generation, an explicit `firma sidecar
+stop` still terminates the recorded targets while holding the state transaction,
+but returns an error and retains all runtime state because cleanup ownership
+cannot be established. Generation-scoped startup rollback remains fail closed
+and does not signal targets when the lock cannot be matched.
 
 Exit codes: `0` on success (graceful or hard-kill fallback), `2` on error.
 
@@ -215,7 +239,8 @@ verification, structured search, debugging surprise denies — see
 <state_dir>/
   authority.pid          authority.log          authority.listen
   sidecar.pid            sidecar.log            sidecar.listen
-  stack.pid              stack.lock             supervisor.log
+  stack.pid              stack.lock             .stack-state.lock
+  supervisor.log
   audit.jsonl
   generated-firma-ca/
 ```
@@ -254,6 +279,12 @@ running two supervisors against one set of pidfiles is undefined.
 is the point of `--detach`. The supervisor reparents to PID 1 (Unix)
 or runs as a Job Object (Windows) and survives the shell exiting.
 Stop it with `firma sidecar stop`, not by killing the terminal.
+
+**Detached startup fails with access denied on Windows.** Firma requires the
+supervisor to break away from the launcher's Job Object. If that Job forbids
+breakaway, Firma fails startup rather than claim a detached lifetime it cannot
+guarantee. Run foreground mode or launch Firma from a Job that permits
+`CREATE_BREAKAWAY_FROM_JOB`.
 
 ## What's next
 

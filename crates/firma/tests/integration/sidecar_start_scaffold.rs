@@ -5,6 +5,10 @@
 //! when HTTPS MITM is active. The default Anthropic-only scaffold ships MITM
 //! disabled, so the daemon timed out and never came up. Readiness now gates
 //! the CA-material probe on `HttpsMitmConfig::is_active()`.
+//! On Unix, the teardown half also sends `SIGTERM` to the detached supervisor
+//! and verifies that its preinstalled handler owns component cleanup.
+//! A second detached start with a missing lock must not claim or terminate the
+//! existing stack.
 
 #![allow(
     clippy::expect_used,
@@ -20,6 +24,46 @@ use firma_config_loader::CONFIG_FILE_NAME;
 
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
+}
+
+fn assert_failed_restart_preserves_stack(cfg_path: &std::path::Path, state_dir: &std::path::Path) {
+    let authority_pid = firma_stack::test_support::pidfile::read(&state_dir.join("authority.pid"))
+        .expect("read authority pidfile")
+        .expect("authority pid");
+    let sidecar_pid = firma_stack::test_support::pidfile::read(&state_dir.join("sidecar.pid"))
+        .expect("read sidecar pidfile")
+        .expect("sidecar pid");
+
+    std::fs::remove_file(state_dir.join("stack.lock")).expect("remove stack lock");
+    let restart_stderr = state_dir.join("restart.stderr.log");
+    let restart_status = firma()
+        .args(["sidecar", "start", "--detach", "--config"])
+        .arg(cfg_path)
+        .args(["--state-dir"])
+        .arg(state_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(
+            File::create(&restart_stderr).expect("create restart log"),
+        ))
+        .status()
+        .expect("run second firma sidecar start");
+    assert!(
+        !restart_status.success(),
+        "second start unexpectedly succeeded"
+    );
+    let restart_diagnostics = std::fs::read_to_string(&restart_stderr).unwrap_or_default();
+    assert!(
+        authority_pid.process_exists().expect("probe authority"),
+        "failed startup rollback terminated the existing authority: {restart_diagnostics}"
+    );
+    assert!(
+        sidecar_pid.process_exists().expect("probe sidecar"),
+        "failed startup rollback terminated the existing sidecar: {restart_diagnostics}"
+    );
+    assert!(
+        !state_dir.join("stack.lock").exists(),
+        "blocked startup published a generation it does not own"
+    );
 }
 
 #[test]
@@ -95,28 +139,42 @@ fn start_launches_from_anthropic_scaffold() {
         "stack did not come up: stack.pid missing"
     );
 
+    assert_failed_restart_preserves_stack(&cfg_path, &state_dir);
+
     let authority_pid = firma_stack::test_support::pidfile::read(&state_dir.join("authority.pid"))
         .expect("read authority pidfile")
         .expect("authority pid");
     let sidecar_pid = firma_stack::test_support::pidfile::read(&state_dir.join("sidecar.pid"))
         .expect("read sidecar pidfile")
         .expect("sidecar pid");
+    let supervisor_pid = firma_stack::test_support::pidfile::read(&stack_pid)
+        .expect("read supervisor pidfile")
+        .expect("supervisor pid");
+
+    #[cfg(unix)]
+    {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(
+                i32::try_from(supervisor_pid.get()).expect("supervisor PID fits pid_t"),
+            ),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .expect("SIGTERM detached supervisor");
+    }
+    #[cfg(windows)]
     firma_stack::test_support::terminate_raw(authority_pid.get()).expect("terminate authority");
 
     let deadline = Instant::now() + Duration::from_secs(15);
-    while Instant::now() < deadline && state_dir.join("stack.lock").exists() {
+    while Instant::now() < deadline
+        && (supervisor_pid.process_exists().expect("probe supervisor")
+            || authority_pid.process_exists().expect("probe authority")
+            || sidecar_pid.process_exists().expect("probe sidecar"))
+    {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let cleaned_up = !state_dir.join("stack.lock").exists();
-    if !cleaned_up {
-        let _ = firma()
-            .args(["sidecar", "stop", "--state-dir"])
-            .arg(&state_dir)
-            .status();
-    }
     assert!(
-        cleaned_up,
-        "owning supervisor did not clean up after authority exit"
+        !supervisor_pid.process_exists().expect("probe supervisor"),
+        "detached supervisor still exists after termination"
     );
     assert!(
         !authority_pid.process_exists().expect("probe authority"),
@@ -126,5 +184,12 @@ fn start_launches_from_anthropic_scaffold() {
         !sidecar_pid.process_exists().expect("probe sidecar"),
         "sidecar peer still exists after authority exit"
     );
+
+    let stop_status = firma()
+        .args(["sidecar", "stop", "--state-dir"])
+        .arg(&state_dir)
+        .status()
+        .expect("clean retained state");
+    assert!(stop_status.success(), "could not clean retained state");
     assert!(!state_dir.join("stack.pid").exists());
 }

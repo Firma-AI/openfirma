@@ -10,6 +10,7 @@ pub fn run(args: Args) -> ExitCode {
     let Args {
         state_dir,
         config,
+        generation,
         firma_bin,
     } = args;
     info!(state_dir = %state_dir.display(), "supervisor process starting");
@@ -18,7 +19,7 @@ pub fn run(args: Args) -> ExitCode {
         config_file: config,
         firma_bin,
     };
-    match firma_stack::supervise_owned(&config, &state_dir) {
+    match firma_stack::supervise_owned_generation(&config, &state_dir, generation) {
         Ok(()) => {
             info!("supervisor exited cleanly");
             ExitCode::SUCCESS

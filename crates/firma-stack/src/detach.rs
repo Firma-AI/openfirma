@@ -7,7 +7,11 @@ use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 
-pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -> Result<Child> {
+pub fn spawn_supervisor(
+    state_dir: &Path,
+    config: &crate::config::StackConfig,
+    generation: crate::StackGeneration,
+) -> Result<Child> {
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
 
@@ -26,6 +30,8 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
             .arg(state_dir)
             .arg("--config")
             .arg(&config.config_file)
+            .arg("--generation")
+            .arg(generation.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr_log));
@@ -36,7 +42,6 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
             // Detach from the controlling terminal so closing the parent shell
             // does not deliver SIGHUP to the supervisor. `setsid` must run in
             // the child between fork and exec.
@@ -48,8 +53,9 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
             // the pre-exec closure. No allocator or locks are used.
             unsafe {
                 cmd.pre_exec(|| {
-                    let _ = nix::unistd::setsid();
-                    Ok(())
+                    nix::unistd::setsid()
+                        .map(|_| ())
+                        .map_err(std::io::Error::from)
                 });
             }
         }
@@ -66,13 +72,9 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
 ///
 /// On Windows the supervisor is first launched with
 /// `CREATE_BREAKAWAY_FROM_JOB` so it survives the parent's Job Object being
-/// torn down. When the parent runs inside a Job Object that does not grant
-/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` — common under `cargo run`, Windows
-/// Terminal, and CI runners — `CreateProcess` rejects that flag with
-/// `ERROR_ACCESS_DENIED` (os error 5). In that case we retry without the
-/// breakaway flag: on Windows 8+ the supervisor is then placed in a nested
-/// Job Object, which still outlives the parent because the stack's Job Object
-/// is created without `KILL_ON_JOB_CLOSE`.
+/// torn down. If the parent Job does not grant breakaway, startup fails closed:
+/// launching inside that Job would make detached lifetime depend on an external
+/// kill-on-close policy that Firma cannot inspect or control.
 fn spawn_detached<F>(build: &F) -> Result<Child>
 where
     F: Fn() -> Result<Command>,
@@ -84,27 +86,14 @@ where
             CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
         };
 
-        const ERROR_ACCESS_DENIED: i32 = 5;
         let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
 
         let mut cmd = build()?;
         cmd.creation_flags(base | CREATE_BREAKAWAY_FROM_JOB);
-        match cmd.spawn() {
-            Ok(child) => Ok(child),
-            Err(source) if source.raw_os_error() == Some(ERROR_ACCESS_DENIED) => {
-                debug!("breakaway-from-job denied by parent Job Object; retrying nested");
-                let mut cmd = build()?;
-                cmd.creation_flags(base);
-                cmd.spawn().map_err(|source| StackError::Spawn {
-                    component: "supervisor".into(),
-                    source,
-                })
-            }
-            Err(source) => Err(StackError::Spawn {
-                component: "supervisor".into(),
-                source,
-            }),
-        }
+        cmd.spawn().map_err(|source| StackError::Spawn {
+            component: "supervisor (breakaway required)".into(),
+            source,
+        })
     }
 
     #[cfg(unix)]

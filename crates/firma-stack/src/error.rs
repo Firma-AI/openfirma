@@ -56,6 +56,21 @@ pub enum StackError {
         path: PathBuf,
     },
 
+    /// Runtime-state cleanup could not acquire serialization without blocking.
+    #[error("stack runtime state is busy at '{path}'; cleanup deferred")]
+    RuntimeStateBusy {
+        /// Runtime-state directory whose cleanup transaction is held elsewhere.
+        path: PathBuf,
+    },
+
+    /// The persisted generation capability is present but not a UUID.
+    #[error("invalid stack.lock generation")]
+    InvalidStackGeneration {
+        /// UUID parser failure retained for diagnostics.
+        #[source]
+        source: uuid::Error,
+    },
+
     /// Spawning a child component (authority or sidecar) failed.
     #[error("failed to spawn '{component}': {source}")]
     Spawn {

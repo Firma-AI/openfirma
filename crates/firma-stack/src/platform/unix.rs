@@ -26,7 +26,11 @@ impl Platform for UnixPlatform {
         Ok(Group { pgid: 0 })
     }
 
-    fn termination_target_exists(target: TerminationTarget) -> Result<bool> {
+    fn arm_group_termination(_group: &Group) -> Result<()> {
+        Ok(())
+    }
+
+    fn termination_target_exists(target: &TerminationTarget) -> Result<bool> {
         let group_pid = target.stored_id();
         match killpg(raw_pid(group_pid.get())?, None::<Signal>) {
             Ok(()) | Err(nix::errno::Errno::EPERM) => Ok(true),
@@ -69,12 +73,12 @@ impl Platform for UnixPlatform {
         })
     }
 
-    fn signal_soft(target: TerminationTarget) -> Result<()> {
+    fn signal_soft(target: &TerminationTarget) -> Result<()> {
         killpg(raw_pid(target.stored_id().get())?, Signal::SIGTERM)
             .map_err(|error| StackError::Platform(format!("killpg(SIGTERM) failed: {error}")))
     }
 
-    fn signal_hard(target: TerminationTarget) -> Result<()> {
+    fn signal_hard(target: &TerminationTarget) -> Result<()> {
         killpg(raw_pid(target.stored_id().get())?, Signal::SIGKILL)
             .map_err(|error| StackError::Platform(format!("killpg(SIGKILL) failed: {error}")))
     }
