@@ -117,7 +117,7 @@ rustls = { version = "0.23", default-features = false, features = ["logging", "r
 rustls-pemfile = "2"
 rustls-platform-verifier = "0.7"
 same-file = "1"
-seccompiler = "0.5"
+seccompiler = { git = "https://github.com/lu-zero/seccompiler", branch = "pr/get-syscall-nr" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_json_path = "0.7"

@@ -4359,8 +4359,7 @@ dependencies = [
 [[package]]
 name = "seccompiler"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+source = "git+https://github.com/lu-zero/seccompiler?branch=pr%2Fget-syscall-nr#06d8b299cb5d328b964fadacd119585c97f47142"
 dependencies = [
  "libc",
 ]

@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
-use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule, TargetArch};
+use seccompiler::{
+    BpfProgram, SeccompAction, SeccompFilter, SeccompRule, SyscallTable, TargetArch,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -120,38 +122,12 @@ impl SyscallId {
         }
     }
 
+    /// Resolves this syscall's arch-specific number via seccompiler's
+    /// generated syscall tables. Returns `None` when the syscall does not
+    /// exist on `target_arch` (e.g. `rename`/`rmdir`/`unlink` on aarch64,
+    /// which only expose the `*at` variants).
     fn number_for_arch(self, target_arch: TargetArch) -> Option<i64> {
-        match target_arch {
-            TargetArch::x86_64 => match self {
-                Self::Execve => Some(59),
-                Self::Execveat => Some(322),
-                Self::Rename => Some(82),
-                Self::Renameat => Some(264),
-                Self::Renameat2 => Some(316),
-                Self::Rmdir => Some(84),
-                Self::Setgid => Some(106),
-                Self::Setresgid => Some(119),
-                Self::Setresuid => Some(117),
-                Self::Setuid => Some(105),
-                Self::Unlink => Some(87),
-                Self::Unlinkat => Some(263),
-            },
-            TargetArch::aarch64 => match self {
-                Self::Execve => Some(221),
-                Self::Execveat => Some(281),
-                Self::Rename | Self::Rmdir | Self::Unlink => None,
-                Self::Renameat => Some(38),
-                Self::Renameat2 => Some(276),
-                Self::Setgid => Some(144),
-                Self::Setresgid => Some(149),
-                Self::Setresuid => Some(147),
-                Self::Setuid => Some(146),
-                Self::Unlinkat => Some(35),
-            },
-            // The managed seccomp baseline only targets x86_64 and aarch64;
-            // current_target_arch() rejects every other host before this is reached.
-            TargetArch::riscv64 => None,
-        }
+        SyscallTable::new(target_arch).get_syscall_nr(self.name())
     }
 }
 
@@ -783,6 +759,61 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn syscall_table_matches_previously_hand_maintained_syscall_numbers() {
+        // Regression guard: these are the exact numbers the hand-maintained
+        // `SyscallId::number_for_arch` table used before it was replaced by
+        // `seccompiler::SyscallTable`. If the fork's generated tables ever
+        // disagree with these, the managed seccomp policy would silently
+        // deny/allow the wrong syscalls.
+        let x86_64_expected: &[(&str, i64)] = &[
+            ("execve", 59),
+            ("execveat", 322),
+            ("rename", 82),
+            ("renameat", 264),
+            ("renameat2", 316),
+            ("rmdir", 84),
+            ("setgid", 106),
+            ("setresgid", 119),
+            ("setresuid", 117),
+            ("setuid", 105),
+            ("unlink", 87),
+            ("unlinkat", 263),
+        ];
+        let aarch64_expected: &[(&str, Option<i64>)] = &[
+            ("execve", Some(221)),
+            ("execveat", Some(281)),
+            ("rename", None),
+            ("renameat", Some(38)),
+            ("renameat2", Some(276)),
+            ("rmdir", None),
+            ("setgid", Some(144)),
+            ("setresgid", Some(149)),
+            ("setresuid", Some(147)),
+            ("setuid", Some(146)),
+            ("unlink", None),
+            ("unlinkat", Some(35)),
+        ];
+
+        let x86_64_table = SyscallTable::new(TargetArch::x86_64);
+        for (name, expected_nr) in x86_64_expected {
+            assert_eq!(
+                x86_64_table.get_syscall_nr(name),
+                Some(*expected_nr),
+                "x86_64 {name}"
+            );
+        }
+
+        let aarch64_table = SyscallTable::new(TargetArch::aarch64);
+        for (name, expected_nr) in aarch64_expected {
+            assert_eq!(
+                aarch64_table.get_syscall_nr(name),
+                *expected_nr,
+                "aarch64 {name}"
+            );
+        }
+    }
 
     #[test]
     fn maps_supported_actions_to_expected_syscalls() {
