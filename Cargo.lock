@@ -1691,6 +1691,7 @@ dependencies = [
  "firma-fs",
  "firma-runtime-state",
  "firma-sidecar",
+ "fs2",
  "insta",
  "nix 0.31.3",
  "serde",
@@ -1699,6 +1700,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "uuid",
  "windows-sys 0.59.0",
 ]
 
@@ -1796,6 +1798,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73fde052dbfc920003cfd2c8e2c6e6d4cc7c1091538c3a24226cec0665ab08c0"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]

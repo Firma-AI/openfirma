@@ -50,9 +50,9 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     stop_inner(
         state_dir,
         timeout,
-        supervisor,
-        authority,
-        sidecar,
+        supervisor.as_ref(),
+        authority.as_ref(),
+        sidecar.as_ref(),
         None,
         || Ok(()),
     )
@@ -69,16 +69,18 @@ pub(crate) fn stop_owned(
     sidecar: &mut OwnedComponent,
     state_owner: Option<firma_runtime_state::UserProcessId>,
 ) -> Result<StopOutcome> {
+    let (authority_child, authority_target) = authority.child_and_target();
+    let (sidecar_child, sidecar_target) = sidecar.child_and_target();
     stop_inner(
         state_dir,
         timeout,
         None,
-        Some(authority.termination_target()),
-        Some(sidecar.termination_target()),
+        Some(authority_target),
+        Some(sidecar_target),
         state_owner,
         || {
-            let _ = sidecar.try_wait()?;
-            let _ = authority.try_wait()?;
+            let _ = sidecar_child.try_wait()?;
+            let _ = authority_child.try_wait()?;
             Ok(())
         },
     )
@@ -98,9 +100,9 @@ pub(crate) fn stop_owned(
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
-    stack_target: Option<TerminationTarget>,
-    authority_target: Option<TerminationTarget>,
-    sidecar_target: Option<TerminationTarget>,
+    stack_target: Option<&TerminationTarget>,
+    authority_target: Option<&TerminationTarget>,
+    sidecar_target: Option<&TerminationTarget>,
     state_owner: Option<firma_runtime_state::UserProcessId>,
     mut collect_owned: impl FnMut() -> Result<()>,
 ) -> Result<StopOutcome> {
@@ -211,7 +213,7 @@ fn stop_inner(
 
 /// Prove that every component target is absent under [`target_may_exist`] policy.
 fn targets_absent<const N: usize>(
-    targets: [Option<TerminationTarget>; N],
+    targets: [Option<&TerminationTarget>; N],
     teardown_error: &mut Option<StackError>,
 ) -> bool {
     let mut all_absent = true;
@@ -228,7 +230,7 @@ fn targets_absent<const N: usize>(
 /// Failure of [`TerminationTarget::exists`] records the first teardown error
 /// and returns possible presence, ensuring the caller still attempts signals
 /// and cannot authorize [`cleanup`].
-fn target_may_exist(target: TerminationTarget, teardown_error: &mut Option<StackError>) -> bool {
+fn target_may_exist(target: &TerminationTarget, teardown_error: &mut Option<StackError>) -> bool {
     match target.exists() {
         Ok(exists) => exists,
         Err(error) => {

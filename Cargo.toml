@@ -65,7 +65,7 @@ cedar-policy-core = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
-ctrlc = "3.5"
+ctrlc = { version = "3.5", features = ["termination"] }
 dialoguer = "0.11"
 dirs = "6"
 dispatch2 = "0.3"
@@ -86,6 +86,7 @@ firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.5" }
 firma-stack = { path = "crates/firma-stack", version = "0.1.5" }
 firma-tui = { path = "crates/firma-tui", version = "0.1.5" }
 fs-err = "3.3"
+fs2 = "0.4.3"
 governor = "0.10"
 hex = "0.4"
 http = "1"
@@ -147,7 +148,7 @@ type-safe-id = { version = "0.3.3", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 wait-timeout = "0.2"
 webpki-roots = "1"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
 wiremock = "0.6"
 x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
