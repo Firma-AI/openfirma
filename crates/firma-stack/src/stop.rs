@@ -1,6 +1,7 @@
 //! Tear down a running stack.
 
 use std::path::Path;
+use std::process::Child;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
@@ -31,6 +32,27 @@ pub struct StopOutcome {
 /// state is retained when probing or hard termination fails so cleanup can be
 /// retried.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
+    stop_inner(state_dir, timeout, || Ok(()))
+}
+
+pub(crate) fn stop_owned(
+    state_dir: &Path,
+    timeout: Duration,
+    authority: &mut Child,
+    sidecar: &mut Child,
+) -> Result<StopOutcome> {
+    stop_inner(state_dir, timeout, || {
+        let _ = sidecar.try_wait()?;
+        let _ = authority.try_wait()?;
+        Ok(())
+    })
+}
+
+fn stop_inner(
+    state_dir: &Path,
+    timeout: Duration,
+    mut collect_owned: impl FnMut() -> Result<()>,
+) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
     let stack_target = read_target(state_dir, "stack.pid")?;
     let authority_target = read_target(state_dir, "authority.pid")?;
@@ -46,7 +68,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // gRPC streams to the authority close cleanly; that lets the authority's
     // tonic graceful shutdown finish instead of blocking on long-lived
     // server-streaming RPCs.
-    let mut teardown_error = None;
+    let mut teardown_error = collect_owned().err();
     for target in [sidecar_target, stack_target, authority_target]
         .into_iter()
         .flatten()
@@ -65,6 +87,10 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
     while teardown_error.is_none() && Instant::now() < deadline {
+        if let Err(error) = collect_owned() {
+            teardown_error = Some(error);
+            break;
+        }
         let authority_dead =
             authority_target.is_none_or(|target| !target_may_exist(target, &mut teardown_error));
         let sidecar_dead =
