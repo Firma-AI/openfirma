@@ -42,6 +42,7 @@ signal-hook.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
+seccompiler = { workspace = true }
 
 [dev-dependencies]
 chrono.workspace = true

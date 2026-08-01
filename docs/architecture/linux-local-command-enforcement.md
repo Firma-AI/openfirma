@@ -402,3 +402,6 @@ All must be true:
 ## Notes
 
 1. Production enforcement logic is in Rust runtime path (`seccomp` + mediator gate), not in shell scripts.
+2. BPF program compilation uses the [`seccompiler`](https://crates.io/crates/seccompiler) crate
+   (rust-vmm/Firecracker) rather than hand-emitted BPF opcodes. Denied syscall numbers per
+   architecture are still resolved from a mapping maintained in `crates/firma-run/src/seccomp.rs`.
