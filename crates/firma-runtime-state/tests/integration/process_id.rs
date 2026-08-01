@@ -11,7 +11,7 @@ fn current_process_exists() {
 #[test]
 #[expect(
     clippy::zombie_processes,
-    reason = "the test explicitly reaps the child through UserProcessId"
+    reason = "the test explicitly verifies and then collects a zombie child"
 )]
 fn reaping_is_explicit_and_process_probe_is_non_destructive() {
     use std::io::Read as _;
@@ -30,7 +30,7 @@ fn reaping_is_explicit_and_process_probe_is_non_destructive() {
         pid.process_exists().expect("probe zombie"),
         "zombie should exist before reaping"
     );
-    assert!(pid.reap_if_exited(), "exited child should be reaped");
+    child.wait().expect("collect exited child");
     assert!(
         !pid.process_exists().expect("probe reaped child"),
         "reaped child should not exist"

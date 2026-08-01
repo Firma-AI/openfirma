@@ -10,7 +10,7 @@ use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
-use crate::supervisor::{Children, block_until_exit};
+use crate::supervisor::{ObservedChildren, block_until_observed_exit, block_until_owned_exit};
 use firma_runtime_state::{UserProcessId, pidfile};
 
 /// Mode in which [`start`] manages the stack after readiness.
@@ -69,7 +69,12 @@ impl RunningStack {
     ///
     /// Returns process-probe, termination, or runtime-state cleanup errors.
     pub fn shutdown(mut self, timeout: Duration) -> Result<crate::stop::StopOutcome> {
-        let result = crate::stop::stop(&self.owned.state_dir, timeout);
+        let result = crate::stop::stop_owned(
+            &self.owned.state_dir,
+            timeout,
+            &mut self.owned.authority.child,
+            &mut self.owned.sidecar.child,
+        );
         if result.is_ok() {
             let _ = self.owned.sidecar.child.wait();
             let _ = self.owned.authority.child.wait();
@@ -177,20 +182,17 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack
 /// after children have been spawned, this function tears them down. Runtime
 /// state is retained when hard termination fails so callers can retry cleanup.
 pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<StackHandle> {
-    let stack = spawn_stack(cfg, state_dir)?;
+    let mut stack = spawn_stack(cfg, state_dir)?;
     let handle = stack.handle();
     match mode {
         StartMode::Foreground => {
             info!("entering foreground supervisor loop");
-            block_until_exit(Children {
-                authority_pid: handle.authority_pid,
-                sidecar_pid: handle.sidecar_pid,
-            })?;
+            block_until_owned_exit(&mut stack.owned.authority, &mut stack.owned.sidecar)?;
             info!("foreground supervisor exiting; tearing down stack");
             // Foreground exit (Ctrl-C, child died): caller is leaving. Tear
             // children down and remove pid/listen/lock files so the next
             // `start` does not trip on stale state.
-            crate::stop::stop(state_dir, Duration::from_secs(10))?;
+            stack.shutdown(Duration::from_secs(10))?;
         }
         StartMode::Detached => {
             info!("forking detached supervisor");
@@ -260,7 +262,7 @@ pub fn supervise(state_dir: &Path) -> Result<()> {
         sidecar_pid = %sidecar_pid,
         "supervisor re-attached to children"
     );
-    block_until_exit(Children {
+    block_until_observed_exit(ObservedChildren {
         authority_pid,
         sidecar_pid,
     })?;
@@ -349,8 +351,5 @@ fn reap_stale(state_dir: &Path) -> Result<()> {
 }
 
 fn process_exists(pid: UserProcessId) -> Result<bool> {
-    if pid.reap_if_exited() {
-        return Ok(false);
-    }
     pid.process_exists().map_err(StackError::Io)
 }
