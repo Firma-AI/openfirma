@@ -40,7 +40,7 @@ pub struct WalAuditSink {
 
 impl WalAuditSink {
     /// Constructs a new [`WalAuditSink`].
-    pub fn new(
+    pub(crate) fn new(
         endpoint: impl Into<String>,
         wal_path: impl AsRef<Path>,
         wal_max_bytes: u64,

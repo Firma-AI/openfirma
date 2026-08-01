@@ -8,10 +8,9 @@ pub mod revocation;
 pub mod seed;
 pub mod server;
 pub mod service;
-pub mod startup;
+pub(crate) mod startup;
 pub mod tls_verifier;
 
-pub use authorized_clients::AuthorizedClientSet;
 pub use cedar_loader::CedarPolicyStore;
 pub use config::{AuthorityConfig, AuthorityTlsConfig};
 pub use issuance::{IssuanceError, IssuanceRequest, IssuanceResult, issue_capability};
@@ -19,4 +18,3 @@ pub use keygen::{KeygenError, KeypairPaths, write_keypair};
 pub use profiles::{DEFAULT_PROFILE, UnknownProfileError, cedar_for};
 pub use revocation::RevocationStore;
 pub use server::Server;
-pub use startup::{StartupReport, log_ready_sequence};

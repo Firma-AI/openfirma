@@ -30,11 +30,11 @@ use self::metrics::{RevocationMetrics, RevocationMetricsSnapshot};
 #[derive(Debug, Clone, Copy)]
 pub struct RevocationConfig {
     /// Expected distinct revoked tokens the bloom is sized for.
-    pub capacity: usize,
+    pub(crate) capacity: usize,
     /// Target false positive rate. Must be `0.0 < fpr < 1.0`.
-    pub fpr: f64,
+    pub(crate) fpr: f64,
     /// Capacity of the confirmed-positive LRU cache.
-    pub lru_capacity: usize,
+    pub(crate) lru_capacity: usize,
 }
 
 impl Default for RevocationConfig {
@@ -68,7 +68,7 @@ impl BloomLruRevocationStore {
 
     /// Snapshot of metrics counters.
     #[must_use]
-    pub fn metrics(&self) -> RevocationMetricsSnapshot {
+    pub(crate) fn metrics(&self) -> RevocationMetricsSnapshot {
         self.metrics.snapshot()
     }
 }

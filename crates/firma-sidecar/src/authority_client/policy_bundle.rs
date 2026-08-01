@@ -60,26 +60,26 @@ impl BundleParser for CedarBundleParser {
 }
 
 /// Server-streaming task for policy bundle updates.
-pub struct PolicyBundleTask {
+pub(crate) struct PolicyBundleTask {
     /// Shared Authority channel.
-    pub channel: Channel,
+    pub(crate) channel: Channel,
     /// Swappable evaluator read by Stage 2.
-    pub swappable: Arc<SwappablePolicyEvaluation>,
+    pub(crate) swappable: Arc<SwappablePolicyEvaluation>,
     /// Readiness writer.
-    pub readiness: Arc<ReadinessFlag>,
+    pub(crate) readiness: Arc<ReadinessFlag>,
     /// Reconnect backoff.
-    pub backoff: ExponentialBackoff,
+    pub(super) backoff: ExponentialBackoff,
     /// Shutdown token.
-    pub cancel: CancellationToken,
+    pub(crate) cancel: CancellationToken,
     /// Bundle parser.
-    pub bundle_parser: Arc<dyn BundleParser + Send + Sync>,
+    pub(crate) bundle_parser: Arc<dyn BundleParser + Send + Sync>,
     /// Credentials presented on each stream connection.
-    pub credentials: Option<ResolvedSidecarCredentials>,
+    pub(crate) credentials: Option<ResolvedSidecarCredentials>,
 }
 
 impl PolicyBundleTask {
     /// Run the stream loop until cancelled.
-    pub async fn run(mut self) {
+    pub(crate) async fn run(mut self) {
         let mut last_version: Option<String> = None;
         loop {
             let cancel = self.cancel.clone();

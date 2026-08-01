@@ -20,7 +20,7 @@ pub struct SwappablePolicyEvaluation {
 impl SwappablePolicyEvaluation {
     /// Create a new swappable evaluator with the supplied initial snapshot.
     #[must_use]
-    pub fn new(initial: Box<dyn PolicyEvaluation + Send + Sync>) -> Self {
+    pub(crate) fn new(initial: Box<dyn PolicyEvaluation + Send + Sync>) -> Self {
         Self {
             inner: ArcSwap::from_pointee(initial),
             deadline_unix_ms: AtomicI64::new(0),
@@ -30,7 +30,7 @@ impl SwappablePolicyEvaluation {
     }
 
     /// Swap in a new policy evaluator and refresh its TTL deadline.
-    pub fn swap(
+    pub(crate) fn swap(
         &self,
         new_eval: Box<dyn PolicyEvaluation + Send + Sync>,
         ttl_seconds: u32,

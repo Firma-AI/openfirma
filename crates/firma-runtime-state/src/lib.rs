@@ -10,7 +10,7 @@ pub mod state_dir;
 pub mod status;
 
 pub use error::{Result, RuntimeStateError};
-pub use process_id::{ChildExt, SignalProcessError, UserProcessId, UserProcessIdError};
+pub use process_id::{ChildExt, SignalProcessError, UserProcessId};
 pub use runtime_paths::{capabilities_dir_from, default_runtime_dir, run_dir_from, run_entry_from};
 pub use sandbox_id::{SandboxId, SandboxIdParseError};
 pub use sidecar_markers::{MetadataFile, SidecarEntry, gc_stale, get, list};

@@ -78,7 +78,7 @@ pub struct LocalExecResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry_after_ms: Option<u64>,
+    pub(crate) retry_after_ms: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,9 +90,9 @@ pub struct LocalExecResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalExecManagementRequest {
     /// `"local.exec.approve"` or `"local.exec.revoke"`.
-    pub action: String,
+    pub(crate) action: String,
     /// Opaque token ID returned in the original `pending_hitl` response.
-    pub token_id: String,
+    pub(crate) token_id: String,
 }
 
 /// Outcome of a management operation, serialized as a `snake_case` string.
@@ -110,9 +110,9 @@ pub enum ManagementOutcome {
 /// JSON response sent back to the operator after a management command.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalExecManagementResponse {
-    pub outcome: ManagementOutcome,
+    pub(crate) outcome: ManagementOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub(crate) reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,8 +185,12 @@ impl LocalExecHandler {
     ///
     /// Exposed so the background pruning task can hold an `Arc` to the same
     /// store without cloning the handler.
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+    )]
     #[must_use]
-    pub fn token_store(&self) -> Arc<dyn TokenStore> {
+    pub(crate) fn token_store(&self) -> Arc<dyn TokenStore> {
         Arc::clone(&self.token_store)
     }
 
@@ -220,7 +224,11 @@ impl LocalExecHandler {
     }
 
     /// Process an operator management command (approve or revoke).
-    pub fn decide_management(
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+    )]
+    pub(crate) fn decide_management(
         &self,
         request: &LocalExecManagementRequest,
     ) -> LocalExecManagementResponse {
@@ -408,6 +416,10 @@ fn deny(reason: &str) -> LocalExecResponse {
     }
 }
 
+#[cfg_attr(
+    all(windows, not(test)),
+    expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+)]
 fn management_response_from_approve(result: ApproveResult) -> LocalExecManagementResponse {
     let (outcome, reason) = match result {
         ApproveResult::Ok => (ManagementOutcome::Ok, None),
@@ -428,6 +440,10 @@ fn management_response_from_approve(result: ApproveResult) -> LocalExecManagemen
     }
 }
 
+#[cfg_attr(
+    all(windows, not(test)),
+    expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+)]
 fn management_response_from_revoke(result: RevokeResult) -> LocalExecManagementResponse {
     let (outcome, reason) = match result {
         RevokeResult::Ok => (ManagementOutcome::Ok, None),

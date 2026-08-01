@@ -14,9 +14,9 @@ use firma_core::token::TokenId;
 /// An event representing the revocation of a capability token.
 #[derive(Debug, Clone)]
 pub struct RevocationEntry {
-    pub token_id: TokenId,
-    pub reason: String,
-    pub timestamp: DateTime<Utc>,
+    pub(crate) token_id: TokenId,
+    pub(crate) reason: String,
+    pub(crate) timestamp: DateTime<Utc>,
 }
 
 /// In-memory revocation store with file-based ingestion.
@@ -203,7 +203,7 @@ impl RevocationStore {
     }
 
     /// Get all revocation events after the given timestamp (for stream replay).
-    pub async fn events_since(&self, since: DateTime<Utc>) -> Vec<RevocationEntry> {
+    pub(crate) async fn events_since(&self, since: DateTime<Utc>) -> Vec<RevocationEntry> {
         self.state
             .read()
             .await
@@ -319,7 +319,7 @@ impl RevocationStore {
     /// # Errors
     ///
     /// Returns an error if the OS file watcher cannot be created or registered.
-    pub fn watch(self) -> Result<RevocationStoreWatcher> {
+    pub(crate) fn watch(self) -> Result<RevocationStoreWatcher> {
         use notify::Watcher as _;
 
         let path = self.revocation_file.clone();
@@ -421,7 +421,7 @@ impl Deref for RevocationStoreWatcher {
 impl RevocationStoreWatcher {
     /// Subscribe to new revocation events as they are ingested from the file.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
         self.tx.subscribe()
     }
 

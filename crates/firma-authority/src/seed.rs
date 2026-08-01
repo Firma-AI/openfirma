@@ -15,15 +15,15 @@ use crate::IssuanceResult;
 
 #[derive(Debug, Serialize)]
 pub struct SeedFile {
-    pub raw_token: String,
-    pub token_id: TokenId,
-    pub agent_id: String,
-    pub session_id: String,
-    pub action_set: Vec<String>,
-    pub resource_scope: String,
-    pub issued_at: String,
-    pub expiry: String,
-    pub context_hash: String,
+    raw_token: String,
+    token_id: TokenId,
+    agent_id: String,
+    session_id: String,
+    action_set: Vec<String>,
+    resource_scope: String,
+    issued_at: String,
+    expiry: String,
+    context_hash: String,
 }
 
 impl SeedFile {

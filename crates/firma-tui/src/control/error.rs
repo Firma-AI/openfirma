@@ -310,7 +310,7 @@ impl ControlError {
 
     /// Creates a policy discovery failure.
     #[must_use]
-    pub fn policy_discovery(path: impl Into<PathBuf>, error: PolicyDiscoveryError) -> Self {
+    pub(crate) fn policy_discovery(path: impl Into<PathBuf>, error: PolicyDiscoveryError) -> Self {
         Self::PolicyDiscovery {
             path: path.into(),
             error: Box::new(error),

@@ -39,7 +39,7 @@ const DEFAULT_LISTEN_ADDR: &str = "[::1]:0";
 /// - [`RunError::AuthorityBootstrapNoTty`] when stdin/stderr is not a TTY.
 /// - [`RunError::AuthorityBootstrapDeclined`] when the user answers `N`.
 /// - [`RunError::Internal`] on terminal I/O failure.
-pub fn run_prompt(prompt: &mut dyn AuthorityPromptIo) -> Result<(), RunError> {
+pub(crate) fn run_prompt(prompt: &mut dyn AuthorityPromptIo) -> Result<(), RunError> {
     if !prompt.is_tty() {
         return Err(RunError::AuthorityBootstrapNoTty);
     }
@@ -61,7 +61,7 @@ pub fn run_prompt(prompt: &mut dyn AuthorityPromptIo) -> Result<(), RunError> {
 ///
 /// Returns [`RunError::Internal`] if the current working directory
 /// cannot be read.
-pub fn resolve_persist_target(existing_config: Option<&Path>) -> Result<PathBuf, RunError> {
+pub(crate) fn resolve_persist_target(existing_config: Option<&Path>) -> Result<PathBuf, RunError> {
     if let Some(path) = existing_config {
         return Ok(path.to_path_buf());
     }
@@ -80,7 +80,7 @@ pub fn resolve_persist_target(existing_config: Option<&Path>) -> Result<PathBuf,
 ///
 /// - [`RunError::ConfigParse`] when the existing file is not valid TOML.
 /// - [`RunError::Internal`] on I/O or serialization failure.
-pub fn persist_authority_section(path: &Path) -> Result<(), RunError> {
+pub(crate) fn persist_authority_section(path: &Path) -> Result<(), RunError> {
     let mut doc: DocumentMut = match fs::read_to_string(path) {
         Ok(text) => text
             .parse()

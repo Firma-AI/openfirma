@@ -99,7 +99,7 @@ impl<'a> Sources<'a> {
     /// Creates sources with an optional audit receiver and a default rewrite
     /// queue.
     #[must_use]
-    pub fn new(audit_rows: Option<&'a Receiver<AuditRow>>) -> Self {
+    pub(crate) fn new(audit_rows: Option<&'a Receiver<AuditRow>>) -> Self {
         Self::with_policy_rewrite_queue(audit_rows, PolicyRewriteQueue::new())
     }
 
@@ -114,7 +114,7 @@ impl<'a> Sources<'a> {
 
     /// Creates sources with an injected rewrite handler and dispatch probe.
     #[must_use]
-    pub fn with_observed_policy_rewrite_handler(
+    pub(crate) fn with_observed_policy_rewrite_handler(
         audit_rows: Option<&'a Receiver<AuditRow>>,
         handler: PolicyRewriteHandler,
     ) -> (Self, RewriteEventProbe) {
@@ -149,12 +149,12 @@ impl<'a> Sources<'a> {
 
     /// Returns true once rewrite shutdown has started.
     #[must_use]
-    pub fn rewrite_queue_shutting_down(&self) -> bool {
+    pub(crate) fn rewrite_queue_shutting_down(&self) -> bool {
         self.policy_rewrites.is_shutting_down()
     }
 
     /// Stops accepting rewrite requests and lets active work finish.
-    pub fn shutdown_policy_rewrites(&mut self) {
+    pub(crate) fn shutdown_policy_rewrites(&mut self) {
         self.policy_rewrites.shutdown();
     }
 }

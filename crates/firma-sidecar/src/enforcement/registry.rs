@@ -31,9 +31,11 @@ pub enum RiskLevel {
 /// Definition of a single action class in the registry.
 #[derive(Debug, Clone)]
 pub struct ActionClassDefinition {
-    pub name: &'static str,
-    pub domain: &'static str,
-    pub risk_level: RiskLevel,
+    name: &'static str,
+    #[expect(dead_code, reason = "canonical registry metadata")]
+    domain: &'static str,
+    #[cfg_attr(not(test), expect(dead_code, reason = "canonical registry metadata"))]
+    risk_level: RiskLevel,
 }
 
 /// The v0.1 Canonical Action Class Registry.
@@ -293,19 +295,21 @@ impl ActionClassRegistry {
 
     /// Check if an action class name is in the registry.
     #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
+    pub(crate) fn contains(&self, name: &str) -> bool {
         self.classes.contains_key(name)
     }
 
     /// Get the definition for an action class.
+    #[cfg(test)]
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&ActionClassDefinition> {
+    fn get(&self, name: &str) -> Option<&ActionClassDefinition> {
         self.classes.get(name)
     }
 
     /// Return the number of registered action classes.
+    #[cfg(test)]
     #[must_use]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.classes.len()
     }
 

@@ -3,6 +3,7 @@ name = "firma-secret-provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 description = "Secret-provider spec types and extraction engine shared by firma-run and firma-sidecar"
 

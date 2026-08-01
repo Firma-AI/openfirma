@@ -25,13 +25,14 @@ impl BasicCredentialInjector {
     /// Creates a new `BasicCredentialInjector` from a pre-built map
     /// of connector IDs to header sets.
     #[must_use]
-    pub fn new(credentials: HashMap<String, HashMap<HeaderName, String>>) -> Self {
+    pub(crate) fn new(credentials: HashMap<String, HashMap<HeaderName, String>>) -> Self {
         Self { credentials }
     }
 
     /// Creates an empty injector with no configured connectors.
+    #[cfg(test)]
     #[must_use]
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             credentials: HashMap::new(),
         }
@@ -39,19 +40,22 @@ impl BasicCredentialInjector {
 
     /// Registers headers for a connector ID, replacing any previous
     /// entry.
-    pub fn insert(&mut self, connector_id: String, headers: HashMap<HeaderName, String>) {
+    #[cfg(test)]
+    fn insert(&mut self, connector_id: String, headers: HashMap<HeaderName, String>) {
         self.credentials.insert(connector_id, headers);
     }
 
     /// Returns the number of configured connectors.
+    #[cfg(test)]
     #[must_use]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.credentials.len()
     }
 
     /// Returns `true` if no connectors are configured.
+    #[cfg(test)]
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.credentials.is_empty()
     }
 }

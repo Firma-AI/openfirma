@@ -164,7 +164,7 @@ impl ConstraintEnforcer {
 
     /// Return the active policy bundle version, if one has been installed.
     #[must_use]
-    pub fn policy_version(&self) -> Option<String> {
+    pub(crate) fn policy_version(&self) -> Option<String> {
         self.policy.version()
     }
 
@@ -191,7 +191,7 @@ impl ConstraintEnforcer {
         clippy::result_large_err,
         reason = "domain decision carries denial context"
     )]
-    pub fn evaluate(
+    pub(crate) fn evaluate(
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
@@ -279,7 +279,7 @@ impl ConstraintEnforcer {
     /// (`PolicyBundleStale`), policy evaluation times out
     /// (`EnforcementTimeout`), or the policy evaluator returns an error
     /// (`FailClosed`), or the policy denies the action (`PolicyDenied`).
-    pub async fn evaluate_with_timeout(
+    pub(crate) async fn evaluate_with_timeout(
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,

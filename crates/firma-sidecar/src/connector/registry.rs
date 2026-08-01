@@ -38,7 +38,7 @@ impl ConnectorRegistry {
     /// host that has not been registered via
     /// [`register_host`](Self::register_host).
     #[must_use]
-    pub fn new(default: Arc<dyn Connector>) -> Self {
+    pub(crate) fn new(default: Arc<dyn Connector>) -> Self {
         Self {
             hosts: HashMap::new(),
             default,
@@ -50,7 +50,7 @@ impl ConnectorRegistry {
     /// Replaces any previously registered override for the same host.
     /// Host matching is exact string equality against the
     /// envelope-derived host; there is no wildcard or suffix match.
-    pub fn register_host(&mut self, host: String, connector: Arc<dyn Connector>) {
+    pub(crate) fn register_host(&mut self, host: String, connector: Arc<dyn Connector>) {
         self.hosts.insert(host, connector);
     }
 
@@ -60,7 +60,7 @@ impl ConnectorRegistry {
     /// override is registered. The returned `Arc` is cheap to clone
     /// and is safe to hold across await points.
     #[must_use]
-    pub fn select(&self, host: &str) -> Arc<dyn Connector> {
+    pub(crate) fn select(&self, host: &str) -> Arc<dyn Connector> {
         self.hosts
             .get(host)
             .cloned()
@@ -70,7 +70,7 @@ impl ConnectorRegistry {
     /// Returns `true` when `host` has an override registered.
     #[must_use]
     #[cfg(test)]
-    pub fn has_override(&self, host: &str) -> bool {
+    fn has_override(&self, host: &str) -> bool {
         self.hosts.contains_key(host)
     }
 }

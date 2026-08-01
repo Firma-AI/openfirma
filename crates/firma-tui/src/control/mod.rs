@@ -27,7 +27,7 @@ pub use error::{
     AuditSourceError, ControlError, EditorError, ErrorMessage, PolicyDiscoveryError,
     PolicyRewriteError, RewriteEventProbeError, RuntimeError,
 };
-pub use event::{Event, Sources, TerminalEventSource, next_with_terminal};
+pub use event::{Event, Sources, TerminalEventSource};
 pub use input::{command_for_key, handle_key};
 pub use policies::PolicyStateReader;
 pub use render::render;
@@ -35,7 +35,7 @@ pub use rewrite::{PolicyRewriteEvent, PolicyRewriteHandler, RewriteEventProbe};
 pub use runner::{ControlCrankOutcome, EventKind, HeadlessRunner};
 pub use state::{
     AuditDecision, AuditFilter, AuditRow, AuditViewportMode, ControlRuntimeState, ControlStatus,
-    Pane, PolicyKey, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart, PolicyRow,
+    Pane, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart, PolicyRow,
     PolicyRowStatus,
 };
 pub use toggle::PolicyState;

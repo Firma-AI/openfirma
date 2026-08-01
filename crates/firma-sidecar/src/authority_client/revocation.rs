@@ -15,30 +15,30 @@ use crate::authority_client::readiness::ReadinessFlag;
 use crate::authority_credentials::ResolvedSidecarCredentials;
 
 /// Server-streaming task for revocation events.
-pub struct RevocationTask {
+pub(crate) struct RevocationTask {
     /// Shared Authority channel.
-    pub channel: Channel,
+    pub(crate) channel: Channel,
     /// Store shared with Stage 1.
-    pub store: Arc<dyn RevocationStore + Send + Sync>,
+    pub(crate) store: Arc<dyn RevocationStore + Send + Sync>,
     /// Readiness writer.
-    pub readiness: Arc<ReadinessFlag>,
+    pub(crate) readiness: Arc<ReadinessFlag>,
     /// Reconnect backoff.
-    pub backoff: ExponentialBackoff,
+    pub(super) backoff: ExponentialBackoff,
     /// Shutdown token.
-    pub cancel: CancellationToken,
+    pub(crate) cancel: CancellationToken,
     /// Whether disconnects make the revocation cache not-ready.
-    pub fail_closed_on_disconnect: bool,
+    pub(crate) fail_closed_on_disconnect: bool,
     /// Milliseconds after a successful connect before readiness flips.
-    pub readiness_grace_ms: u64,
+    pub(crate) readiness_grace_ms: u64,
     /// Last seen revocation timestamp for replay.
-    pub last_event_time: Option<Timestamp>,
+    pub(crate) last_event_time: Option<Timestamp>,
     /// Credentials presented on each stream connection.
-    pub credentials: Option<ResolvedSidecarCredentials>,
+    pub(crate) credentials: Option<ResolvedSidecarCredentials>,
 }
 
 impl RevocationTask {
     /// Run the stream loop until cancelled.
-    pub async fn run(mut self) {
+    pub(crate) async fn run(mut self) {
         loop {
             let cancel = self.cancel.clone();
             tokio::select! {

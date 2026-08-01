@@ -124,7 +124,7 @@ pub enum SidecarCredentialSource {
 impl SidecarCredentialSource {
     /// Return the source kind for structured logs.
     #[must_use]
-    pub const fn kind(&self) -> &'static str {
+    pub(crate) const fn kind(&self) -> &'static str {
         match self {
             Self::Env(_) => "env",
             Self::File(_) => "file",
@@ -136,13 +136,13 @@ impl SidecarCredentialSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSidecarCredentials {
     /// Workspace the Sidecar belongs to.
-    pub workspace_id: String,
+    pub(crate) workspace_id: String,
     /// Authority-assigned Sidecar identity.
-    pub sidecar_id: String,
+    pub(crate) sidecar_id: String,
     /// Resolved pre-shared key.
-    pub pre_shared_key: RedactedPreSharedKey,
+    pub(crate) pre_shared_key: RedactedPreSharedKey,
     /// Source used to resolve the PSK.
-    pub source: SidecarCredentialSource,
+    pub(crate) source: SidecarCredentialSource,
 }
 
 impl ResolvedSidecarCredentials {
@@ -163,14 +163,15 @@ pub struct RedactedPreSharedKey(String);
 
 impl RedactedPreSharedKey {
     /// Wrap a plaintext pre-shared key.
+    #[cfg(test)]
     #[must_use]
-    pub fn new(value: String) -> Self {
+    pub(crate) fn new(value: String) -> Self {
         Self(value)
     }
 
     /// Expose the plaintext secret for the final Authority request message.
     #[must_use]
-    pub fn expose_secret(&self) -> &str {
+    fn expose_secret(&self) -> &str {
         &self.0
     }
 }

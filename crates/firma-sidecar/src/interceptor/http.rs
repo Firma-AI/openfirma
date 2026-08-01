@@ -136,7 +136,7 @@ pub struct HttpInterceptor {
 impl HttpInterceptor {
     /// Create a new [`HttpInterceptor`] that listens on the specified address.
     #[must_use]
-    pub fn new(address: SocketAddr) -> Self {
+    pub(crate) fn new(address: SocketAddr) -> Self {
         // Startup always injects explicit config via `with_https_mitm`; keep
         // the raw constructor conservative to avoid surprising side effects in
         // tests and local helper usage.
@@ -157,7 +157,7 @@ impl HttpInterceptor {
 
     /// Attach HTTPS MITM configuration to this interceptor.
     #[must_use]
-    pub fn with_https_mitm(mut self, config: HttpsMitmConfig, ca_dir: PathBuf) -> Self {
+    pub(crate) fn with_https_mitm(mut self, config: HttpsMitmConfig, ca_dir: PathBuf) -> Self {
         self.https_mitm_config = config;
         self.ca_dir = ca_dir;
         self
@@ -165,21 +165,21 @@ impl HttpInterceptor {
 
     /// Set the maximum request body size accepted by the interceptor.
     #[must_use]
-    pub fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
+    pub(crate) fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
         self.max_request_body_bytes = max_request_body_bytes;
         self
     }
 
     /// Set the global ceiling for concurrent request body buffering.
     #[must_use]
-    pub fn with_total_body_budget_bytes(mut self, total_body_budget_bytes: usize) -> Self {
+    pub(crate) fn with_total_body_budget_bytes(mut self, total_body_budget_bytes: usize) -> Self {
         self.total_body_budget_bytes = total_body_budget_bytes;
         self
     }
 
     /// Set CONNECT tunnel/MITM relay timeout controls.
     #[must_use]
-    pub fn with_connect_relay(mut self, connect_relay: ConnectRelayConfig) -> Self {
+    pub(crate) fn with_connect_relay(mut self, connect_relay: ConnectRelayConfig) -> Self {
         self.connect_relay = connect_relay;
         self
     }
@@ -211,7 +211,7 @@ impl HttpInterceptor {
     ///
     /// Returns [`InterceptorError`] if TLS MITM runtime initialization fails
     /// or the server loop encounters an unrecoverable error.
-    pub async fn run_with_listener(
+    pub(crate) async fn run_with_listener(
         mut self,
         listener: TcpListener,
         handler: Arc<RequestHandler>,

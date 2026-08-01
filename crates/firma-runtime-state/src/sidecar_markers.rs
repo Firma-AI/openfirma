@@ -11,7 +11,7 @@ use crate::process_id::UserProcessId;
 use crate::runtime_paths::{run_dir_from, run_entry_from};
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
-pub const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
+const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// On-disk schema of `<runtime>/run/<sandbox_id>/metadata.toml`.
 #[derive(Debug, Clone, Deserialize, Serialize)]

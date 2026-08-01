@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Sentinel: unset `policy_dir`.
-pub(crate) const DEFAULT_POLICY_DIR: &str = "policies/";
+const DEFAULT_POLICY_DIR: &str = "policies/";
 /// Sentinel: unset `issuance_policy_dir`.
-pub(crate) const DEFAULT_ISSUANCE_POLICY_DIR: &str = "issuance-policies/";
+const DEFAULT_ISSUANCE_POLICY_DIR: &str = "issuance-policies/";
 /// Sentinel: unset `key_file`.
-pub(crate) const DEFAULT_KEY_FILE: &str = "firma-authority.key";
+const DEFAULT_KEY_FILE: &str = "firma-authority.key";
 
 /// Authority configuration loaded from TOML file and/or environment variables.
 ///
@@ -76,26 +76,21 @@ pub struct AuthorityTlsConfig {
     pub authorized_clients_path: Option<PathBuf>,
 }
 
-/// Fully validated TLS identity paths.
-#[derive(Debug, Clone)]
-pub struct TlsIdentityPaths {
-    pub cert_path: PathBuf,
-    pub key_path: PathBuf,
-}
-
 impl AuthorityConfig {
     /// Load configuration by merging an optional TOML file with environment variable overrides.
     ///
     /// # Errors
     ///
     /// Returns an error if the config file exists but cannot be parsed.
-    pub fn load(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
+    #[cfg(test)]
+    fn load(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
         let mut config = Self::parse_file(config_path)?;
         config.apply_env_overrides();
         Ok(config)
     }
 
     /// Parse the TOML file (or take defaults) without env overrides.
+    #[cfg(test)]
     fn parse_file(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
         match config_path {
             Some(path) => {
@@ -174,7 +169,8 @@ impl AuthorityConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError::IoError`] / [`ConfigError::ParseError`].
-    pub fn load_resolved(
+    #[cfg(test)]
+    fn load_resolved(
         file: &std::path::Path,
         config_dir: &std::path::Path,
     ) -> Result<Self, ConfigError> {
@@ -214,22 +210,6 @@ impl AuthorityConfig {
         config.apply_env_overrides();
 
         Ok(Some(config))
-    }
-
-    /// Returns TLS identity paths when both TLS fields are configured.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if only one of `tls_cert_path` / `tls_key_path` is set.
-    pub fn tls_identity_paths(&self) -> Result<Option<TlsIdentityPaths>, String> {
-        match (&self.tls.tls_cert_path, &self.tls.tls_key_path) {
-            (Some(cert_path), Some(key_path)) => Ok(Some(TlsIdentityPaths {
-                cert_path: cert_path.clone(),
-                key_path: key_path.clone(),
-            })),
-            (None, None) => Ok(None),
-            _ => Err("tls_cert_path and tls_key_path must both be set or both be unset".into()),
-        }
     }
 
     /// Re-base every relative resource path against `config_dir`;

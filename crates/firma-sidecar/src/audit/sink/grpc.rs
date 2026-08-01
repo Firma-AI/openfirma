@@ -24,7 +24,7 @@ pub struct GrpcAuditSink {
 
 impl GrpcAuditSink {
     /// Constructs a new [`GrpcAuditSink`] targeting `endpoint`.
-    pub fn new(endpoint: impl Into<String>) -> Self {
+    pub(crate) fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
         }

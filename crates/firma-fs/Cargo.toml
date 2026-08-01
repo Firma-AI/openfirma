@@ -3,6 +3,7 @@ name = "firma-fs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 description = "Filesystem helpers shared by OpenFirma crates"
 

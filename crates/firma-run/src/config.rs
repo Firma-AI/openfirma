@@ -23,30 +23,30 @@ fn backend_supports_structural_network(backend: BackendKind) -> bool {
 pub struct ResolvedProfile {
     pub id: String,
     pub backend: BackendKind,
-    pub sidecar_endpoint: SidecarEndpoint,
-    pub sidecar_selection: crate::sidecar::SidecarSelection,
+    pub(crate) sidecar_endpoint: SidecarEndpoint,
+    pub(crate) sidecar_selection: crate::sidecar::SidecarSelection,
     pub env_passthrough: BTreeSet<String>,
     pub env_set: BTreeMap<String, String>,
-    pub mounts: Vec<MountSpec>,
-    pub seccomp_policy: Option<SeccompPolicyConfig>,
-    pub allowed_domains: Vec<String>,
-    pub network: NetworkPolicy,
-    pub identity_mode: SandboxIdentityMode,
+    pub(crate) mounts: Vec<MountSpec>,
+    pub(crate) seccomp_policy: Option<SeccompPolicyConfig>,
+    pub(crate) allowed_domains: Vec<String>,
+    pub(crate) network: NetworkPolicy,
+    pub(crate) identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
-    pub sidecar_local_exec: Option<CommandMediatorConfig>,
-    pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
+    pub(crate) sidecar_local_exec: Option<CommandMediatorConfig>,
+    pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
-    pub use_http_proxy_sidecar: bool,
+    pub(crate) use_http_proxy_sidecar: bool,
     /// When `true`, allow non-structural (proxy-only) backends to run without
     /// failing closed. Comes from config `[defaults] allow_non_structural = true`
     /// and is OR'd with the CLI `--allow-non-structural` flag and env var
     /// `FIRMA_RUN_ALLOW_NON_STRUCTURAL`.
-    pub allow_non_structural: bool,
+    pub(crate) allow_non_structural: bool,
     /// How the sandbox CA trust store is assembled (sole firma-ca vs. appended
     /// to system roots).
-    pub ca_trust_mode: CaTrustMode,
+    pub(crate) ca_trust_mode: CaTrustMode,
 }
 
 impl ResolvedProfile {
@@ -56,7 +56,7 @@ impl ResolvedProfile {
     ///
     /// Returns an error when resolved profile values violate runtime
     /// invariants (invalid ids, lease settings, or mount paths).
-    pub fn validate(&self) -> Result<(), RunError> {
+    fn validate(&self) -> Result<(), RunError> {
         if self.id.trim().is_empty() {
             return Err(RunError::ConfigValidation(
                 "profile id must not be empty".to_string(),
@@ -213,9 +213,9 @@ impl FromStr for SidecarEndpoint {
 /// Mount entry passed to sandbox backends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MountSpec {
-    pub source: PathBuf,
-    pub target: PathBuf,
-    pub read_only: bool,
+    pub(crate) source: PathBuf,
+    pub(crate) target: PathBuf,
+    pub(crate) read_only: bool,
 }
 
 /// Network policy toggles used by backend implementations.
@@ -252,7 +252,7 @@ pub struct CapabilityLeaseConfig {
 
 impl CapabilityLeaseConfig {
     #[must_use]
-    pub fn grace(&self) -> Duration {
+    pub(crate) fn grace(&self) -> Duration {
         Duration::from_secs(self.grace_seconds)
     }
 
@@ -269,25 +269,25 @@ impl CapabilityLeaseConfig {
 /// Per-executable CLI argument policy injected by `firma run`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExecutableLaunchPolicy {
-    pub enforce_wrapper_defaults: bool,
-    pub sandbox_mode: Option<String>,
-    pub approval_policy: Option<String>,
-    pub config_overrides: BTreeMap<String, String>,
+    pub(crate) enforce_wrapper_defaults: bool,
+    pub(crate) sandbox_mode: Option<String>,
+    pub(crate) approval_policy: Option<String>,
+    pub(crate) config_overrides: BTreeMap<String, String>,
 }
 
 /// Runtime command mediation settings for governed local execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandMediatorConfig {
-    pub endpoint: CommandMediatorEndpoint,
-    pub timeout_ms: u64,
-    pub hitl_mode: CommandMediatorHitlMode,
+    pub(crate) endpoint: CommandMediatorEndpoint,
+    pub(crate) timeout_ms: u64,
+    pub(crate) hitl_mode: CommandMediatorHitlMode,
     /// Maximum total wall-clock time `firma-run` will block waiting for a
     /// human to approve a `pending_hitl` token. Applies only when
     /// `hitl_mode = "async_token"`. Fail-closed once exceeded.
     /// Default: 300 000 ms (5 minutes).
-    pub hitl_max_wait_ms: u64,
-    pub enforce_known_executables: bool,
-    pub allowed_executables: BTreeSet<String>,
+    pub(crate) hitl_max_wait_ms: u64,
+    pub(crate) enforce_known_executables: bool,
+    pub(crate) allowed_executables: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -307,10 +307,10 @@ pub enum CommandMediatorHitlMode {
 /// Seccomp policy compilation settings for Linux bwrap backend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SeccompPolicyConfig {
-    pub source_policy_path: PathBuf,
-    pub artifact_dir: PathBuf,
-    pub verify_checksum: bool,
-    pub runtime_mode: SeccompRuntimeMode,
+    pub(crate) source_policy_path: PathBuf,
+    pub(crate) artifact_dir: PathBuf,
+    pub(crate) verify_checksum: bool,
+    pub(crate) runtime_mode: SeccompRuntimeMode,
 }
 
 /// How the sandbox CA trust store is assembled for the agent.
@@ -424,10 +424,10 @@ pub(crate) struct NetworkPolicyPatch {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SeccompPolicyPatch {
-    pub(crate) source_policy_path: PathBuf,
-    pub(crate) artifact_dir: PathBuf,
-    pub(crate) verify_checksum: Option<bool>,
-    pub(crate) runtime_mode: Option<SeccompRuntimeMode>,
+    source_policy_path: PathBuf,
+    artifact_dir: PathBuf,
+    verify_checksum: Option<bool>,
+    runtime_mode: Option<SeccompRuntimeMode>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -476,13 +476,13 @@ pub(crate) struct ExecutableLaunchPolicyPatch {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CommandMediatorPatch {
-    pub(crate) endpoint: Option<String>,
-    pub(crate) timeout_ms: Option<u64>,
-    pub(crate) hitl_mode: Option<CommandMediatorHitlMode>,
-    pub(crate) hitl_max_wait_ms: Option<u64>,
-    pub(crate) enforce_known_executables: Option<bool>,
+    endpoint: Option<String>,
+    timeout_ms: Option<u64>,
+    hitl_mode: Option<CommandMediatorHitlMode>,
+    hitl_max_wait_ms: Option<u64>,
+    enforce_known_executables: Option<bool>,
     #[serde(default)]
-    pub(crate) allowed_executables: Vec<String>,
+    allowed_executables: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

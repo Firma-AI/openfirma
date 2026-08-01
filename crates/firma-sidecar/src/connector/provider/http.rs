@@ -52,9 +52,9 @@ pub struct HttpConnectorConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct RateLimitConfig {
     /// Tokens produced per second.
-    pub rps: NonZeroU32,
+    pub(crate) rps: NonZeroU32,
     /// Bucket capacity.
-    pub burst: NonZeroU32,
+    pub(crate) burst: NonZeroU32,
 }
 
 /// Errors raised while constructing a [`GenericHttpConnector`].
@@ -115,7 +115,7 @@ impl GenericHttpConnector {
     ///
     /// Returns `HttpConnectorBuildError::Client` when the underlying
     /// [`reqwest::Client`] cannot be constructed.
-    pub fn default_for_unconfigured() -> Result<Self, HttpConnectorBuildError> {
+    pub(crate) fn default_for_unconfigured() -> Result<Self, HttpConnectorBuildError> {
         Self::new(&HttpConnectorConfig {
             timeout: DEFAULT_TIMEOUT,
             rate_limit: None,

@@ -25,13 +25,12 @@
 //!   dispatches to the handler (governance or management), and manages the
 //!   pruning task lifecycle.
 
-pub mod endpoint;
+pub(crate) mod endpoint;
 pub mod handler;
 pub mod token_store;
 
-pub use self::endpoint::LocalExecEndpoint;
+pub(crate) use self::endpoint::LocalExecEndpoint;
 pub use self::handler::{
     DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig,
-    LocalExecManagementRequest, LocalExecManagementResponse, ManagementOutcome,
 };
 pub use self::token_store::{ApproveResult, RevokeResult, TokenStore};

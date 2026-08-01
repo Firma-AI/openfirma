@@ -77,6 +77,34 @@ jobs:
         with:
           command: check licenses bans sources
 
+  hawk:
+    name: Hawk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load tool versions
+        shell: bash
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: ${{ env.CARGO_HAWK_RUST_VERSION }}
+          rustflags: ""
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: ${{ env.PROTOC_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Hawk
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/astral-sh/hawk/releases/download/$CARGO_HAWK_VERSION/cargo-hawk-installer.sh" | sh
+      - name: Check public API visibility
+        # Host-only analysis cannot prove platform-specific public APIs are dead.
+        run: cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml -D warnings -A hawk::dead_public
+
   trufflehog:
     name: Secret Scan
     runs-on: ubuntu-latest

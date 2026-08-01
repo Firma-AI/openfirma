@@ -3,6 +3,7 @@ name = "firma-vz-guest-init"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Minimal Linux initramfs entrypoint for OpenFirma macOS VZ guests"

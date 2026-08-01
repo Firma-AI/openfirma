@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, mpsc};
 #[cfg(unix)]
 use std::thread::{self, JoinHandle};
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use crate::backend::{BackendKind, NetworkConfinement};
 use crate::backend::{EnforcementProof, SandboxHandle};
 use crate::capability::refresh::CapabilityRefresher;
@@ -105,6 +105,7 @@ impl EnvOverrides {
         self
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn with_dns_stub_address(mut self, dns_stub_addr: Option<std::net::SocketAddr>) -> Self {
         if let Some(addr) = dns_stub_addr {
             self.0
@@ -139,10 +140,9 @@ pub struct NetworkRuntime {
     // order here is load-bearing.
     #[cfg(unix)]
     _host_bridge: Option<crate::proxy_bridge::HostBridgeHandle>,
-    /// Host-side DNS refusal stub for macOS structural paths that do not use a
-    /// Linux network namespace. Null on Linux structural and non-structural paths.
-    #[cfg(unix)]
-    _host_dns_stub: Option<crate::dns_stub::HostDnsStubHandle>,
+    /// Host-side DNS refusal stub for macOS structural paths.
+    #[cfg(target_os = "macos")]
+    _host_dns_stub: Option<crate::dns_stub::host::HostDnsStubHandle>,
     #[cfg(unix)]
     _adapter: Option<SidecarAdapter>,
     /// Loopback egress guard supervisor. Held so the seccomp notify loop runs
@@ -162,7 +162,7 @@ pub struct NetworkRuntime {
 impl NetworkRuntime {
     /// Returns environment values to merge into wrapped process launch env.
     #[must_use]
-    pub fn env_overrides(&self) -> &EnvOverrides {
+    pub(crate) fn env_overrides(&self) -> &EnvOverrides {
         &self.env_overrides
     }
 
@@ -170,7 +170,7 @@ impl NetworkRuntime {
     /// May differ from the configured profile endpoint when autostart
     /// substituted a UDS path for the per-run sidecar.
     #[must_use]
-    pub fn sidecar_endpoint(&self) -> &SidecarEndpoint {
+    pub(crate) fn sidecar_endpoint(&self) -> &SidecarEndpoint {
         &self.sidecar_endpoint
     }
 }
@@ -379,7 +379,7 @@ pub fn prepare_network_runtime(
 
 /// Builds the [`NetworkRuntime`] for the non-structural path (no enforced
 /// network namespace): the agent reaches the sidecar over a host bridge, plus a
-/// host-side DNS refusal stub on Unix. No adapter or egress guard.
+/// host-side DNS refusal stub on macOS. No adapter or egress guard.
 // On non-Unix targets the body performs no fallible work, so the `Result` looks
 // redundant there; it is required on Unix, where the host bridge/DNS stub setup
 // can fail.
@@ -400,21 +400,27 @@ fn prepare_flat_runtime(
     } = parts;
 
     #[cfg(not(unix))]
-    let _ = (handle, proof, identity);
+    let _ = identity;
+    #[cfg(not(target_os = "macos"))]
+    let _ = (handle, proof);
 
     let env_overrides = EnvOverrides::from(autostart_trust_env);
     #[cfg(unix)]
-    let (host_bridge, host_dns_stub, env_overrides) = {
+    let (host_bridge, env_overrides) = {
         let host_bridge = setup_host_bridge(&effective_endpoint, identity)?;
+        let env_overrides = env_overrides.with_bridge_address(host_bridge.listen_addr());
+        (host_bridge, env_overrides)
+    };
+
+    #[cfg(target_os = "macos")]
+    let (host_dns_stub, env_overrides) = {
         let dns_stub = maybe_start_host_dns_stub(handle, proof)?;
-        let env_overrides = env_overrides
-            .with_bridge_address(host_bridge.listen_addr())
-            .with_dns_stub_address(
-                dns_stub
-                    .as_ref()
-                    .map(crate::dns_stub::HostDnsStubHandle::listen_addr),
-            );
-        (host_bridge, dns_stub, env_overrides)
+        let env_overrides = env_overrides.with_dns_stub_address(
+            dns_stub
+                .as_ref()
+                .map(crate::dns_stub::host::HostDnsStubHandle::listen_addr),
+        );
+        (dns_stub, env_overrides)
     };
 
     // macOS structural modes without a Linux network namespace also need a
@@ -427,7 +433,7 @@ fn prepare_flat_runtime(
         sidecar_endpoint: effective_endpoint,
         #[cfg(unix)]
         _host_bridge: Some(host_bridge),
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         _host_dns_stub: host_dns_stub,
         #[cfg(unix)]
         _adapter: None,
@@ -505,6 +511,7 @@ fn prepare_structural_runtime(
         env_overrides,
         sidecar_endpoint: effective_endpoint,
         _host_bridge: None,
+        #[cfg(target_os = "macos")]
         _host_dns_stub: None,
         _adapter: Some(adapter),
         #[cfg(target_os = "linux")]
@@ -662,11 +669,11 @@ fn setup_host_bridge(
 /// guest resolver. The stub refuses all DNS queries so the agent cannot resolve
 /// external hostnames directly; it must use the proxy bridge, which the Sidecar
 /// controls. This function is a no-op for all other network confinement modes.
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn maybe_start_host_dns_stub(
     handle: &SandboxHandle,
     proof: &EnforcementProof,
-) -> Result<Option<crate::dns_stub::HostDnsStubHandle>, RunError> {
+) -> Result<Option<crate::dns_stub::host::HostDnsStubHandle>, RunError> {
     if handle.backend != BackendKind::Vz {
         return Ok(None);
     }
@@ -676,7 +683,7 @@ fn maybe_start_host_dns_stub(
     ) {
         return Ok(None);
     }
-    let stub = crate::dns_stub::HostDnsStubHandle::start()?;
+    let stub = crate::dns_stub::host::HostDnsStubHandle::start()?;
     let stub_addr = stub.listen_addr();
     tracing::info!(
         %stub_addr,
@@ -1647,6 +1654,7 @@ mod non_structural_env_tests {
     /// refusal stub must be started and its address exposed as
     /// `FIRMA_DNS_STUB_ADDR`.
     #[test]
+    #[cfg(target_os = "macos")]
     fn macos_structural_paths_start_dns_stub_and_expose_env_var() {
         let fake_sidecar = TcpListener::bind("127.0.0.1:0").expect("bind");
         let sidecar_addr = fake_sidecar.local_addr().expect("local_addr");

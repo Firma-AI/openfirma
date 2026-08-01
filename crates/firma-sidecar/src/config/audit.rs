@@ -47,34 +47,34 @@ impl fmt::Display for AuditSink {
 pub struct AuditConfig {
     /// Output sink. Default: `stdout`.
     #[serde(default)]
-    pub sink: AuditSink,
+    pub(crate) sink: AuditSink,
     /// Path for the `file` sink. Ignored by other sinks.
     #[serde(default)]
-    pub file_path: Option<PathBuf>,
+    pub(crate) file_path: Option<PathBuf>,
     /// Downstream audit service URL for `grpc` and `wal` sinks.
     #[serde(default)]
-    pub grpc_url: Option<String>,
+    pub(crate) grpc_url: Option<String>,
     /// Local WAL directory for the `wal` sink.
     #[serde(default)]
-    pub wal_path: Option<PathBuf>,
+    pub(crate) wal_path: Option<PathBuf>,
     /// Maximum WAL size in bytes. Default: 100 MiB.
     #[serde(default = "default_wal_max_bytes")]
-    pub wal_max_bytes: u64,
+    pub(crate) wal_max_bytes: u64,
     /// Path to the ECDSA private key used for event signing.
     /// Mutually exclusive with `signing_key_env`.
     #[serde(default)]
-    pub signing_key_path: Option<PathBuf>,
+    pub(crate) signing_key_path: Option<PathBuf>,
     /// Environment variable containing the ECDSA private key (PEM).
     /// Mutually exclusive with `signing_key_path`.
     #[serde(default)]
-    pub signing_key_env: Option<String>,
+    pub(crate) signing_key_env: Option<String>,
     /// Additional query parameter names to redact in audit logs.
     /// Case-insensitive. Extends the built-in deny-list:
     /// `api_key`, `apikey`, `key`, `token`, `access_token`,
     /// `refresh_token`, `auth`, `password`, `secret`, `signature`,
     /// `sig`, `sas`.
     #[serde(default)]
-    pub redact_query_params: Vec<String>,
+    pub(crate) redact_query_params: Vec<String>,
 }
 
 impl AuditConfig {
@@ -84,7 +84,7 @@ impl AuditConfig {
     ///
     /// Returns a human-readable message identifying the first invalid
     /// field.
-    pub fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         match self.sink {
             AuditSink::File => match &self.file_path {
                 Some(p) if p.as_os_str().is_empty() => {

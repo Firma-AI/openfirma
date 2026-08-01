@@ -19,7 +19,7 @@ pub struct StdoutAuditSink;
 impl StdoutAuditSink {
     /// Constructs a new [`StdoutAuditSink`].
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 

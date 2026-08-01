@@ -22,15 +22,15 @@ use crate::credential::{CredentialInjectionError, CredentialInjector};
 #[derive(Debug, Clone)]
 pub struct VaultSecretEntry {
     /// HTTP header name to inject (e.g. `Authorization`).
-    pub header_name: HeaderName,
+    pub(crate) header_name: HeaderName,
     /// Optional prefix prepended to the raw file content
     /// (e.g. `"Bearer "` to produce `Authorization: Bearer <token>`).
-    pub value_prefix: Option<String>,
+    pub(crate) value_prefix: Option<String>,
     /// Optional transform applied to the raw file content before injection.
-    pub value_transform: Option<CredentialValueTransform>,
+    pub(crate) value_transform: Option<CredentialValueTransform>,
     /// Path to the file containing the secret value, rendered by
     /// Vault Agent.
-    pub secret_path: PathBuf,
+    pub(crate) secret_path: PathBuf,
 }
 
 /// Credential injector that reads Vault Agent–rendered secret files.
@@ -49,13 +49,14 @@ impl VaultCredentialInjector {
     /// Creates a new injector from a pre-built mapping of connector
     /// IDs to secret entry lists.
     #[must_use]
-    pub fn new(entries: HashMap<String, Vec<VaultSecretEntry>>) -> Self {
+    pub(crate) fn new(entries: HashMap<String, Vec<VaultSecretEntry>>) -> Self {
         Self { entries }
     }
 
     /// Creates an empty injector with no configured connectors.
+    #[cfg(test)]
     #[must_use]
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             entries: HashMap::new(),
         }
@@ -63,19 +64,22 @@ impl VaultCredentialInjector {
 
     /// Registers secret entries for a connector ID, replacing any
     /// previous configuration.
-    pub fn insert(&mut self, connector_id: String, secrets: Vec<VaultSecretEntry>) {
+    #[cfg(test)]
+    fn insert(&mut self, connector_id: String, secrets: Vec<VaultSecretEntry>) {
         self.entries.insert(connector_id, secrets);
     }
 
     /// Returns the number of configured connectors.
+    #[cfg(test)]
     #[must_use]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Returns `true` if no connectors are configured.
+    #[cfg(test)]
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }

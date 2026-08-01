@@ -26,6 +26,10 @@ fmt:
 lint:
   cargo clippy --all-features --all-targets -- -D warnings
 
+hawk:
+  # Host-only analysis cannot prove platform-specific public APIs are dead.
+  . ./tool-versions.env; cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml -D warnings -A hawk::dead_public
+
 test:
   cargo nextest run --all-features --all-targets --no-fail-fast
   # nextest runs unit + integration tests; it does not run doctests, so those
@@ -72,8 +76,7 @@ coverage:
   cargo llvm-cov nextest --workspace --all-features --codecov --output-path codecov.json
 
 fuzz-check:
-  nightly="$(< .rust-nightly)"
-  cd fuzz && cargo +"$nightly" check
+  cd fuzz && cargo +"$(< ../.rust-nightly)" check
 
 bench:
   cargo bench --workspace --no-fail-fast

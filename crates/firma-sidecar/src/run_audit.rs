@@ -35,7 +35,7 @@ use crate::audit::{AuditPayload, Decision};
 /// Registered in `docs/markdown/firma_action_class_registry.md` as an
 /// out-of-band, audit-only class. Owned by the Sidecar because the Sidecar
 /// signs the event and therefore owns its meaning.
-pub const NETWORK_LOOPBACK_ACTION_CLASS: &str = "network.loopback";
+const NETWORK_LOOPBACK_ACTION_CLASS: &str = "network.loopback";
 
 /// Maps a `firma run` audit message to a signed-ready [`AuditPayload`].
 ///

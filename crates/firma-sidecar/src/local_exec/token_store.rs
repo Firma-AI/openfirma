@@ -215,7 +215,7 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl InMemoryTokenStore {
     /// Create a new store. `ttl` is the lifetime of each issued token.
     #[must_use]
-    pub fn new(ttl: Duration) -> Self {
+    pub(crate) fn new(ttl: Duration) -> Self {
         Self {
             tokens: Mutex::new(HashMap::new()),
             ttl,
@@ -224,7 +224,7 @@ impl InMemoryTokenStore {
     }
 
     /// Issue a new approval token in [`TokenState::Pending`] state.
-    pub fn issue(
+    fn issue(
         &self,
         fingerprint: String,
         session_id: String,
@@ -256,7 +256,7 @@ impl InMemoryTokenStore {
         clippy::significant_drop_tightening,
         reason = "explicit lock scope keeps token state transitions atomic before returning derived results"
     )]
-    pub fn validate_and_consume(
+    fn validate_and_consume(
         &self,
         token_id: &str,
         fingerprint: &str,
@@ -314,7 +314,7 @@ impl InMemoryTokenStore {
         clippy::significant_drop_tightening,
         reason = "explicit lock scope keeps token state transitions atomic before returning derived results"
     )]
-    pub fn approve(&self, token_id: &str) -> ApproveResult {
+    fn approve(&self, token_id: &str) -> ApproveResult {
         let mut guard = lock_or_recover(&self.tokens);
 
         let Some(token) = guard.get_mut(token_id) else {
@@ -344,7 +344,7 @@ impl InMemoryTokenStore {
         clippy::significant_drop_tightening,
         reason = "explicit lock scope keeps token state transitions atomic before returning derived results"
     )]
-    pub fn revoke(&self, token_id: &str) -> RevokeResult {
+    fn revoke(&self, token_id: &str) -> RevokeResult {
         let mut guard = lock_or_recover(&self.tokens);
 
         let Some(token) = guard.get_mut(token_id) else {
@@ -367,7 +367,7 @@ impl InMemoryTokenStore {
     }
 
     /// Remove records that are past their expiry grace window.
-    pub fn prune_expired(&self) {
+    fn prune_expired(&self) {
         let now = Instant::now();
         let mut guard = lock_or_recover(&self.tokens);
         guard
@@ -376,7 +376,7 @@ impl InMemoryTokenStore {
 
     /// Return the number of live (non-pruned) records. Intended for tests and metrics.
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         lock_or_recover(&self.tokens).len()
     }
 

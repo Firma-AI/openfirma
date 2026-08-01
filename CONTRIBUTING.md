@@ -48,6 +48,7 @@ Before submitting your PR, please run these checks locally:
 
 ```bash
 just check     # fmt + lint + test + build + audit + dependency check
+just hawk      # unnecessary public API visibility (macOS and Linux)
 ```
 
 Running this before you create the PR will help reduce back and forth during review.

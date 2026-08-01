@@ -113,14 +113,14 @@ impl EnforcementPipeline {
     /// Set the enforcement mode. Use [`SidecarMode::Monitor`] for observe-only
     /// operation where DENY decisions are overridden to ALLOW.
     #[must_use]
-    pub fn with_mode(mut self, mode: SidecarMode) -> Self {
+    pub(crate) fn with_mode(mut self, mode: SidecarMode) -> Self {
         self.mode = mode;
         self
     }
 
     /// Install a readiness view for Authority-backed runtime state.
     #[must_use]
-    pub fn with_readiness(mut self, readiness: ReadinessView) -> Self {
+    pub(crate) fn with_readiness(mut self, readiness: ReadinessView) -> Self {
         self.readiness = readiness;
         self
     }
@@ -475,7 +475,7 @@ impl EnforcementPipeline {
 /// active when enforcement ran. Pass `None` when the bundle version is
 /// unknown (e.g. in tests that do not wire a real `ConstraintEnforcer`).
 #[must_use]
-pub fn audit_payload_from_decision(
+pub(crate) fn audit_payload_from_decision(
     decision: &EnforcementDecision,
     request: &RawRequest,
     session_id: &str,

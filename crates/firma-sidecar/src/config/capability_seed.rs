@@ -51,7 +51,7 @@ impl CapabilitySeedConfig {
     ///
     /// Returns a human-readable message identifying the first invalid
     /// path entry.
-    pub fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         for (i, p) in self.paths.iter().enumerate() {
             if p.as_os_str().is_empty() {
                 return Err(format!("paths[{i}] must not be empty"));

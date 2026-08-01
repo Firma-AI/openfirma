@@ -8,6 +8,7 @@ Guidance for coding agents working in this repository.
 just check # Run all local verification checks (CI parity)
 just fmt # dprint check (TOML + Markdown + Rust)
 just lint # cargo clippy --workspace -- -D warnings
+just hawk # unnecessary public API visibility (macOS and Linux)
 just test # cargo nextest run + cargo test --doc
 just build # cargo build --workspace
 ```

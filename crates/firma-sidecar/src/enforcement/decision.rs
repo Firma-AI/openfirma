@@ -66,17 +66,17 @@ pub enum EnforcementStage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DenyIdentity {
     /// Verified token id.
-    pub token_id: String,
+    pub(crate) token_id: String,
     /// Verified agent id.
-    pub agent_id: String,
+    pub(crate) agent_id: String,
     /// Context hash bound to the verified capability.
-    pub context_hash: String,
+    pub(crate) context_hash: String,
 }
 
 impl DenyIdentity {
     /// Builds a [`DenyIdentity`] from verified capability claims.
     #[must_use]
-    pub fn from_claims(claims: &CapabilityClaims) -> Self {
+    pub(crate) fn from_claims(claims: &CapabilityClaims) -> Self {
         Self {
             token_id: claims.token_id.to_string(),
             agent_id: claims.agent_id.to_string(),
@@ -170,7 +170,7 @@ impl EnforcementDecision {
     /// carries agent/token attribution. No-op for `Allow`, `Modify`, and
     /// `Passthrough`.
     #[must_use]
-    pub fn with_identity(mut self, identity: DenyIdentity) -> Self {
+    pub(crate) fn with_identity(mut self, identity: DenyIdentity) -> Self {
         match &mut self {
             Self::Deny { identity: slot, .. }
             | Self::Abort { identity: slot, .. }
@@ -193,11 +193,9 @@ impl EnforcementDecision {
     /// `envelope` are `None` because the local-exec path carries no
     /// capability envelope; the approval token (if any) is surfaced as
     /// the `challenge`.
+    #[cfg(test)]
     #[must_use]
-    pub fn step_up_pending_hitl(
-        approval_token: Option<String>,
-        retry_after_ms: Option<u64>,
-    ) -> Self {
+    fn step_up_pending_hitl(approval_token: Option<String>, retry_after_ms: Option<u64>) -> Self {
         Self::StepUp {
             claims: None,
             envelope: None,
@@ -217,36 +215,42 @@ impl EnforcementDecision {
         matches!(self, Self::Deny { .. })
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn is_abort(&self) -> bool {
+    pub(crate) fn is_abort(&self) -> bool {
         matches!(self, Self::Abort { .. })
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn is_passthrough(&self) -> bool {
+    pub(crate) fn is_passthrough(&self) -> bool {
         matches!(self, Self::Passthrough { .. })
     }
 
     /// `true` for the AARM R4 `MODIFY` decision.
+    #[cfg(test)]
     #[must_use]
-    pub fn is_modify(&self) -> bool {
+    fn is_modify(&self) -> bool {
         matches!(self, Self::Modify { .. })
     }
 
     /// `true` for the AARM R4 `STEP_UP` decision.
+    #[cfg(test)]
     #[must_use]
-    pub fn is_step_up(&self) -> bool {
+    fn is_step_up(&self) -> bool {
         matches!(self, Self::StepUp { .. })
     }
 
     /// `true` for the AARM R4 `DEFER` decision.
+    #[cfg(test)]
     #[must_use]
-    pub fn is_defer(&self) -> bool {
+    fn is_defer(&self) -> bool {
         matches!(self, Self::Defer { .. })
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn deny_reason(&self) -> Option<DenyReason> {
+    pub(crate) fn deny_reason(&self) -> Option<DenyReason> {
         match self {
             Self::Deny { reason, .. } => Some(*reason),
             Self::Allow { .. }
@@ -258,8 +262,9 @@ impl EnforcementDecision {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn stage(&self) -> Option<EnforcementStage> {
+    pub(crate) fn stage(&self) -> Option<EnforcementStage> {
         match self {
             Self::Deny { stage, .. } => Some(*stage),
             Self::Allow { .. }

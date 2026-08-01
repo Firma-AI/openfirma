@@ -18,5 +18,6 @@ pub mod supervisor;
 
 pub use prompt::{AuthorityPromptIo, StdAuthorityPrompt};
 
-pub use selection::{AuthorityCli, AuthoritySelection, resolve};
-pub use supervisor::{AuthoritySupervisor, DEFAULT_STARTUP_TIMEOUT_SECS, SpawnRequest};
+pub use selection::AuthorityCli;
+pub(crate) use selection::{AuthoritySelection, resolve};
+pub use supervisor::{AuthoritySupervisor, SpawnRequest};

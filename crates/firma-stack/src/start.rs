@@ -1,6 +1,6 @@
 //! `start` and `supervise` entry points.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use tracing::{debug, info};
@@ -34,11 +34,9 @@ pub enum StartMode {
 /// via [`crate::stop()`].
 pub struct StackHandle {
     /// PID of the authority component.
-    pub authority_pid: UserProcessId,
+    authority_pid: UserProcessId,
     /// PID of the sidecar component.
-    pub sidecar_pid: UserProcessId,
-    /// Resolved state directory the stack is writing to.
-    pub state_dir: PathBuf,
+    sidecar_pid: UserProcessId,
 }
 
 /// Spawn the stack and wait for readiness without blocking on supervision.
@@ -126,7 +124,6 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     Ok(StackHandle {
         authority_pid: auth.pid,
         sidecar_pid: side.pid,
-        state_dir: state_dir.to_path_buf(),
     })
 }
 

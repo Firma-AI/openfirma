@@ -66,12 +66,6 @@ impl InjectedCredentials {
         &self.headers
     }
 
-    /// Consumes `self` and returns the inner header map.
-    #[must_use]
-    pub fn into_headers(self) -> HashMap<HeaderName, String> {
-        self.headers
-    }
-
     /// Returns the value for a single header key, if present.
     #[must_use]
     pub fn get(&self, key: &HeaderName) -> Option<&String> {
@@ -151,16 +145,6 @@ mod tests {
             Some("val")
         );
         assert!(!creds.is_empty());
-    }
-
-    #[test]
-    fn test_injected_credentials_into_headers() {
-        let headers = HashMap::from([(
-            HeaderName::from_static("authorization"),
-            "Bearer tok".to_string(),
-        )]);
-        let creds = InjectedCredentials::new(headers.clone());
-        assert_eq!(creds.into_headers(), headers);
     }
 
     #[test]

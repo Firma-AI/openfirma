@@ -17,13 +17,13 @@ use firma_core::policy::PolicyBundle;
 /// Overriding is intentional — operators who extend the action registry
 /// can set `schema_path` in the authority config to point to their custom
 /// `.cedarschema` or `.json` file.
-pub(crate) const DEFAULT_SCHEMA: &str = firma_core::cedar::FIRMA_SCHEMA;
+const DEFAULT_SCHEMA: &str = firma_core::cedar::FIRMA_SCHEMA;
 
 /// All mutable policy state kept under a single lock for atomic swaps.
 #[derive(Clone)]
 pub struct PolicyState {
-    pub policy_set: Arc<PolicySet>,
-    pub schema: Arc<Schema>,
+    pub(crate) policy_set: Arc<PolicySet>,
+    pub(crate) schema: Arc<Schema>,
 }
 
 /// Thread-safe Cedar policy store with hot-reload support.
@@ -132,13 +132,13 @@ impl CedarPolicyStore {
     }
 
     /// Get a snapshot of the current policy set and schema for evaluation.
-    pub async fn snapshot(&self) -> PolicyState {
+    pub(crate) async fn snapshot(&self) -> PolicyState {
         self.state.read().await.clone()
     }
 
     /// Get the current policy bundle for distribution to sidecars.
     #[must_use]
-    pub fn bundle(&self) -> PolicyBundle {
+    pub(crate) fn bundle(&self) -> PolicyBundle {
         self.bundle_tx.borrow().clone()
     }
 
@@ -152,7 +152,7 @@ impl CedarPolicyStore {
     /// # Errors
     ///
     /// Returns an error if the OS file watcher cannot be created or registered.
-    pub fn watch(self) -> Result<CedarPolicyStoreWatcher> {
+    pub(crate) fn watch(self) -> Result<CedarPolicyStoreWatcher> {
         use notify::Watcher as _;
 
         let path = self.policy_dir.clone();
@@ -227,7 +227,7 @@ impl CedarPolicyStoreWatcher {
     /// Subscribe to policy bundle updates. Returns the current bundle
     /// immediately, then yields on changes.
     #[must_use]
-    pub fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
+    pub(crate) fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
         self.tx.subscribe()
     }
 

@@ -22,9 +22,9 @@ pub struct PipelineRuntime {
     /// Request enforcement pipeline.
     pub pipeline: Arc<pipeline::EnforcementPipeline>,
     /// Store shared by Stage 1 and the Authority revocation task.
-    pub revocation_store: Arc<dyn RevocationStore + Send + Sync>,
+    pub(crate) revocation_store: Arc<dyn RevocationStore + Send + Sync>,
     /// Policy snapshot shared by Stage 2 and the Authority bundle task.
-    pub swappable_policy: Arc<SwappablePolicyEvaluation>,
+    pub(crate) swappable_policy: Arc<SwappablePolicyEvaluation>,
     /// Writable readiness flag for Authority tasks.
     pub readiness: Arc<ReadinessFlag>,
     /// Hot-swappable Stage 1 capability map, shared with the background

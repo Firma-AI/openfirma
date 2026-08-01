@@ -54,7 +54,7 @@ impl EventBuilder {
     ///
     /// Returns [`EventBuilderError::InvalidKey`] if the PEM payload is
     /// not a valid P-256 secret key.
-    pub fn new(pem: &str) -> Result<Self, EventBuilderError> {
+    pub(crate) fn new(pem: &str) -> Result<Self, EventBuilderError> {
         let signing_key = pem
             .parse::<SigningKey>()
             .map_err(|e| EventBuilderError::InvalidKey(e.to_string()))?;
@@ -80,7 +80,7 @@ impl EventBuilder {
     /// Generates a UUID v7 event ID, captures the current wall-clock
     /// timestamp in nanoseconds, and signs all fields with ECDSA P-256.
     #[must_use]
-    pub fn build(&self, payload: AuditPayload) -> ExecutionEvent {
+    pub(crate) fn build(&self, payload: AuditPayload) -> ExecutionEvent {
         let event_id = Uuid::now_v7().to_string();
         let timestamp = timestamp_nanos();
 

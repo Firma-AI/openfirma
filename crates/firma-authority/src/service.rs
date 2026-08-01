@@ -44,7 +44,7 @@ impl AuthorityServiceImpl {
     /// # Errors
     ///
     /// Returns an error if any file watcher cannot be initialised.
-    pub fn try_new(
+    pub(crate) fn try_new(
         issuance_policy_store: CedarPolicyStore,
         policy_store: CedarPolicyStore,
         revocation_store: RevocationStore,

@@ -46,7 +46,7 @@ impl ConnectorConfig {
     /// Returns a human-readable message identifying the first invalid
     /// field: zero timeout, duplicate host, or invalid rate-limit
     /// parameters.
-    pub fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.default_timeout_ms == 0 {
             return Err("connector.default_timeout_ms must be > 0".into());
         }

@@ -43,7 +43,7 @@ impl PolicyStateReader {
 
     /// Reads all requested policy states for one source file.
     #[must_use]
-    pub fn read(&self, file: &Path, ids: &[String]) -> PolicyStateMap {
+    pub(crate) fn read(&self, file: &Path, ids: &[String]) -> PolicyStateMap {
         self.0(file, ids)
     }
 }

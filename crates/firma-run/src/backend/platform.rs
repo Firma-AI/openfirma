@@ -74,7 +74,7 @@ pub fn userns_restricted() -> Option<String> {
 /// catching `AppArmor` sysctls, per-binary profiles, setuid bwrap restrictions, and
 /// any other mechanism. Always returns `false` on non-Linux.
 #[must_use]
-pub fn nested_userns_restricted() -> bool {
+pub(crate) fn nested_userns_restricted() -> bool {
     #[cfg(not(target_os = "linux"))]
     return false;
 

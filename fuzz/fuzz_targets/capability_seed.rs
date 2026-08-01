@@ -43,5 +43,5 @@ fuzz_target!(|input: FuzzSeed| {
         expiry: Utc::now(),
         context_hash: input.context_hash,
     };
-    let _ = firma_sidecar::startup::seed_into_entry(&file, static_verifier());
+    let _ = firma_sidecar::startup::capability::seed_into_entry(&file, static_verifier());
 });

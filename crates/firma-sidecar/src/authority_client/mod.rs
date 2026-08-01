@@ -3,7 +3,7 @@
 //! Spawns the background streams that keep policy bundles and revocations
 //! current without putting the Authority on the request hot path.
 
-pub mod backoff;
+mod backoff;
 pub mod channel;
 pub mod policy_bundle;
 pub mod readiness;
@@ -31,23 +31,23 @@ use self::revocation::RevocationTask;
 use self::swappable_policy::SwappablePolicyEvaluation;
 
 /// Dependencies required to spawn Authority stream clients.
-pub struct AuthorityDeps {
+pub(crate) struct AuthorityDeps {
     /// Shared tonic channel to the Authority.
-    pub channel: Channel,
+    pub(crate) channel: Channel,
     /// Hot-swappable policy evaluator used by Stage 2.
-    pub swappable_policy: Arc<SwappablePolicyEvaluation>,
+    pub(crate) swappable_policy: Arc<SwappablePolicyEvaluation>,
     /// Revocation store shared with Stage 1.
-    pub revocation_store: Arc<dyn RevocationStore + Send + Sync>,
+    pub(crate) revocation_store: Arc<dyn RevocationStore + Send + Sync>,
     /// Readiness writer shared by stream tasks.
-    pub readiness: Arc<ReadinessFlag>,
+    pub(crate) readiness: Arc<ReadinessFlag>,
     /// Cancellation token used for graceful shutdown.
-    pub cancel: CancellationToken,
+    pub(crate) cancel: CancellationToken,
     /// Authority client tuning.
-    pub config: AuthorityConfig,
+    pub(crate) config: AuthorityConfig,
     /// Credentials presented on each Authority RPC.
-    pub credentials: Option<ResolvedSidecarCredentials>,
+    pub(crate) credentials: Option<ResolvedSidecarCredentials>,
     /// Policy bundle parser implementation.
-    pub bundle_parser: Arc<dyn BundleParser + Send + Sync>,
+    pub(crate) bundle_parser: Arc<dyn BundleParser + Send + Sync>,
 }
 
 /// Join handles for the spawned stream tasks.
@@ -60,7 +60,7 @@ pub struct AuthorityClientHandle {
 
 /// Spawn both Authority stream clients.
 #[must_use]
-pub fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHandle {
+pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHandle {
     let min = Duration::from_millis(deps.config.reconnect_min_backoff_ms);
     let max = Duration::from_secs(deps.config.reconnect_max_backoff_secs);
 

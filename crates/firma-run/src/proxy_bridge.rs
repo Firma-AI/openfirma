@@ -87,7 +87,7 @@ impl HostBridgeHandle {
     ///
     /// Returns [`RunError::Spawn`] if the listener cannot be bound or the
     /// thread cannot be spawned.
-    pub fn start(
+    pub(crate) fn start(
         upstream: std::net::SocketAddr,
         attribution_headers: BTreeMap<String, String>,
     ) -> Result<Self, RunError> {
@@ -125,7 +125,7 @@ impl HostBridgeHandle {
 
     /// TCP address the bridge is listening on.
     #[must_use]
-    pub fn listen_addr(&self) -> std::net::SocketAddr {
+    pub(crate) fn listen_addr(&self) -> std::net::SocketAddr {
         self.listen_addr
     }
 }

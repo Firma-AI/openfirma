@@ -17,15 +17,15 @@ pub struct ExecutionEnvelope {
     /// Typed action parameters describing what the agent wants to do.
     pub intent: ExecutionIntent,
     /// Raw signed token string. Parsing happens in Stage 1 of the enforcement pipeline.
-    pub capability: String,
+    capability: String,
     /// Session and runtime metadata for correlation and audit.
-    pub metadata: ExecutionMetadata,
+    metadata: ExecutionMetadata,
     /// Tamper-evident provenance chain anchor (AARM R2 G2). Populated by
     /// the sidecar for admitted (Allow/Modify) actions as
     /// `hex(SHA256(prev || context_hash || action || resource))`, chaining
     /// this action to the session's prior admitted calls. `None` for
     /// denied/deferred actions which carry no envelope.
-    pub provenance: Option<String>,
+    provenance: Option<String>,
 }
 
 impl ExecutionEnvelope {
@@ -291,19 +291,19 @@ pub struct ExecutionMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionContext {
     /// Agent identity, from envelope metadata.
-    pub agent_id: AgentId,
+    agent_id: AgentId,
     /// Derived action string (e.g., `http:GET`, `tool:execute`).
-    pub action: String,
+    action: String,
     /// Target resource derived from intent (e.g., URL, DB name, tool name).
-    pub resource: String,
+    resource: String,
     /// Session ID, from envelope metadata.
-    pub session_id: SessionId,
+    session_id: SessionId,
     /// Token ID, from parsed capability claims.
-    pub token_id: TokenId,
+    token_id: TokenId,
     /// Allowed actions from capability claims, for scope checks.
-    pub token_actions: Vec<String>,
+    token_actions: Vec<String>,
     /// Allowed resources from capability claims, for scope checks.
-    pub token_resources: Vec<String>,
+    token_resources: Vec<String>,
 }
 
 #[cfg(test)]
