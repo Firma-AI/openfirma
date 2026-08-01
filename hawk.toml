@@ -31,7 +31,7 @@ reason = "VZ host application"
 [[override]]
 lint = "hawk::unnecessary_public"
 crate = "firma_sidecar"
-item = "seed_into_entry"
+item = "startup::capability::seed_into_entry"
 kind = "function"
 level = "expect"
 reason = "used by the separate firma-fuzz workspace"
