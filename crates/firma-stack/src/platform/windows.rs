@@ -64,7 +64,7 @@ impl Platform for WindowsPlatform {
 
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         cmd.stdout(Stdio::from(log)).stderr(Stdio::from(stderr_log));
-        let child = cmd.spawn().map_err(|source| StackError::Spawn {
+        let mut child = cmd.spawn().map_err(|source| StackError::Spawn {
             component: log_path
                 .file_stem()
                 .and_then(|name| name.to_str())
@@ -81,6 +81,8 @@ impl Platform for WindowsPlatform {
             unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, leader_pid.get()) };
         if process_handle.is_null() {
             let err = unsafe { GetLastError() };
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(StackError::Platform(format!(
                 "OpenProcess failed (error {err})"
             )));
@@ -93,12 +95,14 @@ impl Platform for WindowsPlatform {
         };
         unsafe { CloseHandle(process_handle) };
         if assigned == 0 {
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(StackError::Platform(format!(
                 "AssignProcessToJobObject failed (error {assign_err})"
             )));
         }
-        std::mem::forget(child);
         Ok(SpawnedChild {
+            child,
             leader_pid,
             termination_target: TerminationTarget::for_leader(leader_pid),
         })
