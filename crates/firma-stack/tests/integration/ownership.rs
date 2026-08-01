@@ -72,6 +72,45 @@ fn detached_supervisor_child_is_collected_for_long_lived_launcher() {
 }
 
 #[test]
+fn detached_owner_collects_failed_component_and_tears_down_peer() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+
+    let state_dir_for_owner = state_dir.to_path_buf();
+    let (result_tx, result_rx) = mpsc::channel();
+    let owner = std::thread::spawn(move || {
+        let result = firma_stack::test_support::supervise_raw_owned(
+            &state_dir_for_owner,
+            Duration::ZERO,
+            authority,
+            sidecar,
+        );
+        let _ = result_tx.send(result);
+    });
+
+    wait_for_file(&state_dir.join("stack.ready"));
+    firma_stack::test_support::terminate_raw(authority_pid).expect("terminate authority");
+
+    let result = match result_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = firma_stack::test_support::terminate_raw(sidecar_pid);
+            panic!("detached owner did not tear down sidecar: {error}");
+        }
+    };
+    result.expect("detached owner supervision");
+    owner.join().expect("join detached owner");
+
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+    assert!(!state_dir.join("stack.pid").exists());
+    assert!(!state_dir.join("stack.lock").exists());
+}
+
+#[test]
 fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path();
@@ -135,75 +174,6 @@ fn detached_attachment_rejects_supervisor_that_exits_after_ready() {
         ),
         "unexpected attachment timing: {error}"
     );
-}
-
-#[test]
-fn component_exit_tears_down_peer_without_signalling_observer() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let owner = firma_stack::test_support::collect_raw_in_background(authority, sidecar);
-
-    let state_dir_for_supervisor = state_dir.to_path_buf();
-    let (result_tx, result_rx) = mpsc::channel();
-    let supervisor = std::thread::spawn(move || {
-        let result = firma_stack::test_support::supervise_with_timeout(
-            &state_dir_for_supervisor,
-            Duration::ZERO,
-        );
-        let _ = result_tx.send(result);
-    });
-
-    wait_for_pidfile(&state_dir.join("stack.pid"));
-    firma_stack::test_support::terminate_raw(authority_pid).expect("terminate authority");
-
-    let result = match result_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = firma_stack::test_support::terminate_raw(sidecar_pid);
-            join_collector(owner);
-            panic!("detached observer did not tear down sidecar: {error}");
-        }
-    };
-    result.expect("detached observation");
-    supervisor.join().expect("join detached observer");
-    join_collector(owner);
-
-    let current_pid = UserProcessId::new(std::process::id()).expect("current process ID");
-    assert!(
-        current_pid
-            .process_exists()
-            .expect("probe observer process"),
-        "component teardown signalled its own observer"
-    );
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-}
-
-#[test]
-fn detached_observer_does_not_acknowledge_missing_component() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (mut authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (mut sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-
-    firma_stack::test_support::terminate_raw(authority_pid).expect("terminate authority");
-    authority.wait().expect("collect authority");
-
-    let error = firma_stack::test_support::supervise_with_timeout(state_dir, Duration::ZERO)
-        .expect_err("missing authority must prevent attachment");
-
-    assert!(
-        matches!(error, firma_stack::StackError::Platform(_)),
-        "unexpected attachment error: {error}"
-    );
-    insta::assert_snapshot!(error.to_string(), @"platform error: authority exited before detached supervisor attached");
-    assert!(!state_dir.join("stack.ready").exists());
-
-    firma_stack::test_support::terminate_raw(sidecar_pid).expect("terminate sidecar");
-    sidecar.wait().expect("collect sidecar");
-    pidfile::remove(&state_dir.join("stack.pid")).expect("remove supervisor pidfile");
 }
 
 #[cfg(windows)]
@@ -276,16 +246,14 @@ fn wait_for_marker(path: &Path) -> u32 {
     }
 }
 
-fn wait_for_pidfile(path: &Path) {
+fn wait_for_file(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if pidfile::read(path)
-            .expect("read observer pidfile")
-            .is_some()
-        {
-            return;
-        }
-        assert!(Instant::now() < deadline, "observer pidfile not written");
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "{} was not written",
+            path.display()
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }

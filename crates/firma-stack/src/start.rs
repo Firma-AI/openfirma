@@ -11,9 +11,8 @@ use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{
-    ObservedChildren, block_until_observed_exit, block_until_owned_exit,
-    collect_child_in_background, collect_child_until, collect_in_background,
-    collect_target_in_background,
+    block_until_owned_exit, collect_child_in_background, collect_child_until,
+    collect_in_background, collect_target_in_background,
 };
 use firma_runtime_state::{UserProcessId, pidfile};
 
@@ -24,9 +23,9 @@ pub enum StartMode {
     /// `Ctrl-C` to children until any child exits or the user interrupts.
     /// Suitable for `systemd`-style or Docker `CMD` invocation.
     Foreground,
-    /// Fork a hidden `__supervise` child that takes over supervision and
-    /// return immediately. The original process exits after printing a
-    /// one-line summary; the supervisor stays attached to the children.
+    /// Fork a hidden `__supervise` child that spawns and owns the stack, then
+    /// return after it acknowledges readiness. The original process exits
+    /// after printing a one-line summary.
     Detached,
 }
 
@@ -226,19 +225,6 @@ impl RunningStack {
         }
         true
     }
-
-    fn exited_component(&mut self) -> Result<Option<&'static str>> {
-        let Some(owned) = self.owned.as_mut() else {
-            return Ok(None);
-        };
-        if owned.authority.child.try_wait()?.is_some() {
-            return Ok(Some("authority"));
-        }
-        if owned.sidecar.child.try_wait()?.is_some() {
-            return Ok(Some("sidecar"));
-        }
-        Ok(None)
-    }
 }
 
 impl Drop for RunningStack {
@@ -351,79 +337,94 @@ fn spawn_stack_inner(
 /// after children have been spawned, this function tears them down. Runtime
 /// state is retained when hard termination fails so callers can retry cleanup.
 pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<StackHandle> {
+    match mode {
+        StartMode::Foreground => start_foreground(cfg, state_dir),
+        StartMode::Detached => start_detached(cfg, state_dir),
+    }
+}
+
+fn start_foreground(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     let mut stack = spawn_stack(cfg, state_dir)?;
     let handle = stack.handle();
-    match mode {
-        StartMode::Foreground => {
-            info!("entering foreground supervisor loop");
-            let supervision_result = {
-                let owned = stack.owned.as_mut().ok_or_else(|| {
-                    StackError::Platform("stack ownership missing before supervision".into())
-                })?;
-                block_until_owned_exit(&mut owned.authority, &mut owned.sidecar)
-            };
-            info!("foreground supervisor exiting; tearing down stack");
-            // Foreground exit (Ctrl-C, child died): caller is leaving. Tear
-            // children down and remove pid/listen/lock files so the next
-            // `start` does not trip on stale state.
-            let teardown_result = stack.shutdown(Duration::from_secs(10));
-            match supervision_result {
-                Err(error) => return Err(with_rollback(error, teardown_result)),
-                Ok(()) => {
-                    teardown_result?;
-                }
-            }
+    info!("entering foreground supervisor loop");
+    let supervision_result = {
+        let owned = stack.owned.as_mut().ok_or_else(|| {
+            StackError::Platform("stack ownership missing before supervision".into())
+        })?;
+        block_until_owned_exit(&mut owned.authority, &mut owned.sidecar)
+    };
+    info!("foreground supervisor exiting; tearing down stack");
+    let teardown_result = stack.shutdown(Duration::from_secs(10));
+    if let Err(error) = supervision_result {
+        return Err(with_rollback(error, teardown_result));
+    }
+    teardown_result?;
+    Ok(handle)
+}
+
+fn start_detached(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
+    firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
+    info!("forking detached supervisor owner");
+    let mut supervisor = crate::detach::spawn_supervisor(state_dir, cfg)?;
+    let supervisor_pid = UserProcessId::new(supervisor.id()).ok_or_else(|| {
+        StackError::Platform("detached supervisor returned invalid process id".into())
+    })?;
+    if let Err(error) =
+        wait_for_supervisor_attachment(state_dir, &mut supervisor, Duration::from_mins(4))
+    {
+        terminate_detached_supervisor(&mut supervisor);
+        let rollback = rollback_detached_start(
+            state_dir,
+            supervisor_pid,
+            matches!(&error, StackError::Readiness { .. }),
+        );
+        return Err(with_rollback(error, rollback));
+    }
+    let handle = match read_stack_handle(state_dir) {
+        Ok(handle) => handle,
+        Err(error) => {
+            terminate_detached_supervisor(&mut supervisor);
+            let rollback = rollback_detached_start(state_dir, supervisor_pid, false);
+            return Err(with_rollback(error, rollback));
         }
-        StartMode::Detached => {
-            info!("forking detached supervisor");
-            let supervisor = match crate::detach::spawn_supervisor(state_dir) {
-                Ok(supervisor) => supervisor,
-                Err(error) => {
-                    let rollback = stack.shutdown(Duration::from_secs(10));
-                    return Err(with_rollback(error, rollback));
-                }
-            };
-            let mut supervisor = supervisor;
-            if let Err(error) =
-                wait_for_supervisor_attachment(state_dir, &mut supervisor, Duration::from_secs(5))
-            {
-                let _ = supervisor.kill();
-                if !collect_child_until(&mut supervisor, Instant::now() + Duration::from_secs(2)) {
-                    let _ = collect_child_in_background(supervisor);
-                }
-                let rollback = stack.shutdown(Duration::from_secs(10));
-                return Err(with_rollback(error, rollback));
-            }
-            let handoff_error = match stack.exited_component() {
-                Ok(Some(component)) => Some(StackError::Platform(format!(
-                    "{component} exited before detached supervision attached"
-                ))),
-                Ok(None) => None,
-                Err(error) => Some(error),
-            };
-            if let Some(error) = handoff_error {
-                let _ = supervisor.kill();
-                if !collect_child_until(&mut supervisor, Instant::now() + Duration::from_secs(2)) {
-                    let _ = collect_child_in_background(supervisor);
-                }
-                let rollback = stack.shutdown(Duration::from_secs(10));
-                return Err(with_rollback(error, rollback));
-            }
-            if collect_child_in_background(supervisor).is_none() {
-                let error =
-                    StackError::Platform("could not start detached supervisor collector".into());
-                let rollback = stack.shutdown(Duration::from_secs(10));
-                return Err(with_rollback(error, rollback));
-            }
-            if !stack.transfer_to_observer() {
-                let error =
-                    StackError::Platform("could not start detached component collector".into());
-                let rollback = crate::stop::stop(state_dir, Duration::from_secs(10));
-                return Err(with_rollback(error, rollback));
-            }
-        }
+    };
+    if collect_child_in_background(supervisor).is_none() {
+        let error = StackError::Platform("could not start detached supervisor collector".into());
+        let rollback = rollback_detached_start(state_dir, supervisor_pid, false);
+        return Err(with_rollback(error, rollback));
     }
     Ok(handle)
+}
+
+fn rollback_detached_start(
+    state_dir: &Path,
+    supervisor_pid: UserProcessId,
+    force: bool,
+) -> Result<()> {
+    let owns_state = pidfile::read(&state_dir.join("stack.pid"))? == Some(supervisor_pid);
+    if !force && !owns_state {
+        return Ok(());
+    }
+    crate::stop::stop(state_dir, Duration::from_secs(10)).map(|_| ())
+}
+
+fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
+    let target =
+        TerminationTarget::for_leader(firma_runtime_state::ChildExt::process_id(supervisor));
+    let _ = target.signal_hard();
+    let _ = supervisor.kill();
+    let _ = collect_child_until(supervisor, Instant::now() + Duration::from_secs(2));
+}
+
+fn read_stack_handle(state_dir: &Path) -> Result<StackHandle> {
+    let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?
+        .ok_or_else(|| StackError::Platform("authority.pid missing after startup".into()))?;
+    let sidecar_pid = pidfile::read(&state_dir.join("sidecar.pid"))?
+        .ok_or_else(|| StackError::Platform("sidecar.pid missing after startup".into()))?;
+    Ok(StackHandle {
+        authority_pid,
+        sidecar_pid,
+    })
 }
 
 fn remove_startup_state(state_dir: &Path) {
@@ -450,55 +451,45 @@ fn with_rollback<T>(operation: StackError, rollback: Result<T>) -> StackError {
     }
 }
 
-/// Run the detached supervisor loop.
+/// Spawn and own the detached stack, acknowledging readiness to its launcher.
 ///
 /// # Errors
 ///
-/// Returns pidfile or supervision errors.
-pub fn supervise(state_dir: &Path) -> Result<()> {
-    supervise_with_timeout(state_dir, Duration::from_secs(10))
+/// Returns startup, readiness, supervision, termination, or cleanup errors.
+pub fn supervise_owned(cfg: &StackConfig, state_dir: &Path) -> Result<()> {
+    let stack = spawn_stack(cfg, state_dir)?;
+    supervise_running_stack(stack, state_dir, Duration::from_secs(10))
 }
 
-pub(crate) fn supervise_with_timeout(state_dir: &Path, timeout: Duration) -> Result<()> {
+pub(crate) fn supervise_running_stack(
+    mut stack: RunningStack,
+    state_dir: &Path,
+    timeout: Duration,
+) -> Result<()> {
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
         StackError::Platform("current process returned invalid process id".into())
     })?;
-    info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "supervisor attaching");
-    pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)?;
-    let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?
-        .ok_or_else(|| StackError::Platform("authority.pid missing".into()))?;
-    let sidecar_pid = pidfile::read(&state_dir.join("sidecar.pid"))?
-        .ok_or_else(|| StackError::Platform("sidecar.pid missing".into()))?;
-    debug!(
-        authority_pid = %authority_pid,
-        sidecar_pid = %sidecar_pid,
-        "supervisor re-attached to children"
-    );
-    for (name, target) in [
-        (
-            "authority",
-            TerminationTarget::from_stored_id(authority_pid),
-        ),
-        ("sidecar", TerminationTarget::from_stored_id(sidecar_pid)),
-    ] {
-        if !target.exists()? {
-            return Err(StackError::Platform(format!(
-                "{name} exited before detached supervisor attached"
-            )));
-        }
+    let attachment_result = pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)
+        .and_then(|()| pidfile::write(&state_dir.join("stack.ready"), supervisor_pid))
+        .map_err(StackError::from);
+    if let Err(error) = attachment_result {
+        let rollback = stack.shutdown(Duration::from_secs(10));
+        return Err(with_rollback(error, rollback));
     }
-    pidfile::write(&state_dir.join("stack.ready"), supervisor_pid)?;
-    let observe_result = block_until_observed_exit(ObservedChildren {
-        authority_pid,
-        sidecar_pid,
-    });
-    info!("detached supervisor tearing down components");
-    let teardown_result = crate::stop::stop_observed_components(state_dir, timeout);
-    info!("supervisor leaving");
-    match observe_result {
-        Err(error) => Err(with_rollback(error, teardown_result)),
-        Ok(()) => teardown_result.map(|_| ()),
+
+    info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "detached supervisor owns ready stack");
+    let supervision_result = {
+        let owned = stack.owned.as_mut().ok_or_else(|| {
+            StackError::Platform("stack ownership missing before supervision".into())
+        })?;
+        block_until_owned_exit(&mut owned.authority, &mut owned.sidecar)
+    };
+    info!("detached supervisor tearing down owned components");
+    let teardown_result = stack.shutdown(timeout);
+    if let Err(error) = supervision_result {
+        return Err(with_rollback(error, teardown_result));
     }
+    teardown_result.map(|_| ())
 }
 
 pub(crate) fn wait_for_supervisor_attachment(

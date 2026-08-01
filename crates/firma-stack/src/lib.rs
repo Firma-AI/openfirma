@@ -15,7 +15,7 @@ mod supervisor;
 
 pub use config::{StackConfig, resolve_stack_config};
 pub use error::StackError;
-pub use start::{RunningStack, StackHandle, StartMode, spawn_stack, start, supervise};
+pub use start::{RunningStack, StackHandle, StartMode, spawn_stack, start, supervise_owned};
 pub use status::{ComponentStatus, StackStatus, State, status};
 pub use stop::{StopOutcome, stop};
 
@@ -61,19 +61,6 @@ pub mod test_support {
         Ok(child.child)
     }
 
-    /// Collect two owned child processes in the same background loop used by
-    /// detached stack startup.
-    #[must_use]
-    pub fn collect_raw_in_background(
-        authority: std::process::Child,
-        sidecar: std::process::Child,
-    ) -> Option<std::thread::JoinHandle<()>> {
-        crate::supervisor::collect_in_background(
-            owned_component(authority),
-            owned_component(sidecar),
-        )
-    }
-
     /// Collect one owned child in the same background loop used by detached
     /// supervisor startup.
     #[must_use]
@@ -108,18 +95,6 @@ pub mod test_support {
         crate::platform::TerminationTarget::for_leader(pid).signal_hard()
     }
 
-    /// Run detached observation with a caller-selected teardown timeout.
-    ///
-    /// # Errors
-    ///
-    /// Returns pidfile, observation, termination, or cleanup errors.
-    pub fn supervise_with_timeout(
-        state_dir: &std::path::Path,
-        timeout: std::time::Duration,
-    ) -> crate::error::Result<()> {
-        crate::start::supervise_with_timeout(state_dir, timeout)
-    }
-
     /// Wait for a detached supervisor child to confirm attachment.
     ///
     /// # Errors
@@ -131,6 +106,26 @@ pub mod test_support {
         timeout: std::time::Duration,
     ) -> crate::error::Result<()> {
         crate::start::wait_for_supervisor_attachment(state_dir, supervisor, timeout)
+    }
+
+    /// Supervise arbitrary owned children through the production detached
+    /// ownership loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns supervision, termination, or cleanup errors.
+    pub fn supervise_raw_owned(
+        state_dir: &std::path::Path,
+        timeout: std::time::Duration,
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> crate::error::Result<()> {
+        let stack = crate::RunningStack::from_components(
+            owned_component(authority),
+            owned_component(sidecar),
+            state_dir.to_path_buf(),
+        );
+        crate::start::supervise_running_stack(stack, state_dir, timeout)
     }
 
     /// Spawn a raw child and run the production setup-failure cleanup path.

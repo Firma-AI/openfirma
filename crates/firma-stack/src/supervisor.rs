@@ -1,4 +1,4 @@
-//! Foreground ownership and detached observation loops.
+//! Owned-child supervision and collection.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,13 +9,7 @@ use tracing::{debug, info, warn};
 use crate::error::Result;
 use crate::platform::TerminationTarget;
 use crate::spawn::SpawnedComponent;
-use firma_runtime_state::{ChildExt as _, UserProcessId};
-
-#[derive(Clone, Copy)]
-pub struct ObservedChildren {
-    pub authority_pid: UserProcessId,
-    pub sidecar_pid: UserProcessId,
-}
+use firma_runtime_state::ChildExt as _;
 
 pub fn block_until_owned_exit(
     authority: &mut SpawnedComponent,
@@ -39,34 +33,6 @@ pub fn block_until_owned_exit(
         }
         if sidecar.child.try_wait()?.is_some() {
             warn!(pid = %sidecar.leader_pid, "sidecar exited unexpectedly");
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-pub fn block_until_observed_exit(children: ObservedChildren) -> Result<()> {
-    let stop = install_stop_handler();
-    debug!(
-        authority_pid = %children.authority_pid,
-        sidecar_pid = %children.sidecar_pid,
-        "detached supervisor observing children"
-    );
-
-    loop {
-        if stop.load(Ordering::SeqCst) {
-            info!("Ctrl-C received; caller will tear stack down");
-            return Ok(());
-        }
-        if !children.authority_pid.process_exists()? {
-            warn!(
-                pid = %children.authority_pid,
-                "authority exited unexpectedly"
-            );
-            return Ok(());
-        }
-        if !children.sidecar_pid.process_exists()? {
-            warn!(pid = %children.sidecar_pid, "sidecar exited unexpectedly");
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(200));

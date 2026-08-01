@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 
-pub fn spawn_supervisor(state_dir: &Path) -> Result<Child> {
+pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -> Result<Child> {
     firma_runtime_state::pidfile::remove(&state_dir.join("stack.ready"))?;
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
@@ -25,9 +25,14 @@ pub fn spawn_supervisor(state_dir: &Path) -> Result<Child> {
         let mut cmd = Command::new(&exe);
         cmd.args(["__supervise", "--state-dir"])
             .arg(state_dir)
+            .arg("--config")
+            .arg(&config.config_file)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr_log));
+        if let Some(firma_bin) = &config.firma_bin {
+            cmd.arg("--firma-bin").arg(firma_bin);
+        }
 
         #[cfg(unix)]
         {

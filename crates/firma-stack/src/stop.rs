@@ -15,10 +15,10 @@ const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
 /// Result of a [`stop`] call.
 #[derive(Debug, Clone)]
 pub struct StopOutcome {
-    /// `true` if at least one component still had a platform termination
-    /// target after the soft-signal grace window and a hard termination
-    /// (`SIGKILL` / `TerminateProcess`) was requested successfully; `false` when every
-    /// target disappeared within the configured timeout.
+    /// `true` if at least one recorded target survived the soft-signal grace
+    /// window and a hard termination (`SIGKILL` / `TerminateProcess`) was
+    /// requested successfully; `false` when every component target disappeared
+    /// within the configured timeout.
     ///
     /// On Unix, the kernel can report a process group containing only
     /// unreaped zombies as present, resulting in a conservative hard-kill
@@ -67,12 +67,6 @@ pub(crate) fn stop_owned(
     )
 }
 
-pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
-    let authority = read_target(state_dir, "authority.pid")?;
-    let sidecar = read_target(state_dir, "sidecar.pid")?;
-    stop_inner(state_dir, timeout, None, authority, sidecar, || Ok(()))
-}
-
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
@@ -116,11 +110,8 @@ fn stop_inner(
             teardown_error = Some(error);
             break;
         }
-        if targets_absent(
-            [sidecar_target, stack_target, authority_target],
-            &mut teardown_error,
-        ) {
-            info!("all termination targets exited cleanly");
+        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
+            info!("all component targets exited cleanly");
             cleanup(state_dir)?;
             return Ok(StopOutcome { forced: false });
         }
@@ -167,10 +158,7 @@ fn stop_inner(
         {
             teardown_error = Some(error);
         }
-        if targets_absent(
-            [sidecar_target, stack_target, authority_target],
-            &mut teardown_error,
-        ) {
+        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
             break true;
         }
         if Instant::now() >= settlement_deadline {
