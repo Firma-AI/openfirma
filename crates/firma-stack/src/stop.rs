@@ -1,11 +1,9 @@
 //! Fail-closed teardown of a running stack.
 //!
-//! [`stop`] snapshots persisted [`TerminationTarget`] values and delegates the
-//! common state machine to [`stop_inner`]: request graceful shutdown, wait the
-//! caller's grace period, force surviving targets, then wait for bounded
-//! settlement. Runtime state is removed by [`cleanup`] only after every target
-//! is proven absent. [`target_may_exist`] treats probe uncertainty as presence,
-//! preserving both signalling effort and the state needed for a retry.
+//! [`stop`] snapshots persisted [`TerminationTarget`] values and delegates to
+//! [`stop_inner`]. Runtime state is removed by [`cleanup`] only after every
+//! target is proven absent. [`target_may_exist`] treats probe uncertainty as
+//! presence, preserving both signalling effort and retry evidence.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -83,16 +81,6 @@ pub(crate) fn stop_owned(
     )
 }
 
-/// Run [`stop_inner`] from the detached supervisor without targeting itself.
-///
-/// Component authority is reconstructed from runtime state because this
-/// process does not own their direct-child handles.
-pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
-    let authority = read_target(state_dir, "authority.pid")?;
-    let sidecar = read_target(state_dir, "sidecar.pid")?;
-    stop_inner(state_dir, timeout, None, authority, sidecar, || Ok(()))
-}
-
 /// Apply the common graceful-to-forced teardown state machine.
 ///
 /// The Sidecar receives [`TerminationTarget::signal_soft`] before the Authority
@@ -100,8 +88,10 @@ pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> R
 /// signalling failure does not prevent a later forced request. Probe or child
 /// collection errors retain the first failure while teardown continues
 /// conservatively. A forced request is a normal timeout outcome, but
-/// [`cleanup`] remains forbidden until [`targets_absent`] proves every known
-/// target gone within [`HARD_TERMINATION_SETTLEMENT`].
+/// [`cleanup`] remains forbidden until [`targets_absent`] proves every component
+/// target gone within [`HARD_TERMINATION_SETTLEMENT`]. A recorded supervisor is
+/// signalled as part of coordination, while component absence remains the
+/// cleanup gate.
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
@@ -145,11 +135,8 @@ fn stop_inner(
             teardown_error = Some(error);
             break;
         }
-        if targets_absent(
-            [sidecar_target, stack_target, authority_target],
-            &mut teardown_error,
-        ) {
-            info!("all termination targets exited cleanly");
+        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
+            info!("all component targets exited cleanly");
             cleanup(state_dir)?;
             return Ok(StopOutcome { forced: false });
         }
@@ -196,10 +183,7 @@ fn stop_inner(
         {
             teardown_error = Some(error);
         }
-        if targets_absent(
-            [sidecar_target, stack_target, authority_target],
-            &mut teardown_error,
-        ) {
+        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
             break true;
         }
         if Instant::now() >= settlement_deadline {
@@ -221,7 +205,7 @@ fn stop_inner(
     Ok(StopOutcome { forced })
 }
 
-/// Prove that every known target is absent under [`target_may_exist`] policy.
+/// Prove that every component target is absent under [`target_may_exist`] policy.
 fn targets_absent<const N: usize>(
     targets: [Option<TerminationTarget>; N],
     teardown_error: &mut Option<StackError>,
@@ -261,7 +245,7 @@ fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>
 /// Commit successful teardown by removing governed runtime state.
 ///
 /// Callers may invoke this function only after [`targets_absent`] proves that
-/// no recorded target remains. Removal errors are surfaced even though process
+/// no component target remains. Removal errors are surfaced even though process
 /// teardown has completed, preserving an honest result for the operator.
 fn cleanup(state_dir: &Path) -> Result<()> {
     for name in [

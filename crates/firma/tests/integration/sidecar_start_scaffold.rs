@@ -62,12 +62,8 @@ fn start_launches_from_anthropic_scaffold() {
     drop(authority_listener);
     drop(interceptor_listener);
 
-    // Redirect start's output to a file and use `.status()` — never `.output()`.
-    // `--detach` forks a supervisor daemon that outlives this call; on Windows it
-    // inherits the write end of an `.output()` stdout pipe, so `wait_with_output`
-    // blocks forever on an EOF the still-running daemon never sends. `.status()`
-    // only waits for the foreground `start` process to exit. (Matches the
-    // spawn+file pattern in sidecar_readiness_gate / sidecar_startup_contract.)
+    // Preserve launcher diagnostics while the detached supervisor writes to its
+    // own log file and outlives this command.
     std::fs::create_dir_all(&state_dir).expect("state dir");
     let start_stderr = state_dir.join("start.stderr.log");
     let start_status = firma()
@@ -87,8 +83,8 @@ fn start_launches_from_anthropic_scaffold() {
         std::fs::read_to_string(&start_stderr).unwrap_or_default()
     );
 
-    // Detached start returns only after readiness, so the supervisor pidfile
-    // should already be present (or appear momentarily).
+    // Detached start returns only after the owning supervisor acknowledges
+    // component readiness.
     let stack_pid = state_dir.join("stack.pid");
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline && !stack_pid.exists() {
@@ -99,14 +95,36 @@ fn start_launches_from_anthropic_scaffold() {
         "stack did not come up: stack.pid missing"
     );
 
-    let stop = firma()
-        .args(["sidecar", "stop", "--state-dir"])
-        .arg(&state_dir)
-        .output()
-        .expect("run firma sidecar stop");
+    let authority_pid = firma_stack::test_support::pidfile::read(&state_dir.join("authority.pid"))
+        .expect("read authority pidfile")
+        .expect("authority pid");
+    let sidecar_pid = firma_stack::test_support::pidfile::read(&state_dir.join("sidecar.pid"))
+        .expect("read sidecar pidfile")
+        .expect("sidecar pid");
+    firma_stack::test_support::terminate_raw(authority_pid.get()).expect("terminate authority");
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && state_dir.join("stack.lock").exists() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let cleaned_up = !state_dir.join("stack.lock").exists();
+    if !cleaned_up {
+        let _ = firma()
+            .args(["sidecar", "stop", "--state-dir"])
+            .arg(&state_dir)
+            .status();
+    }
     assert!(
-        stop.status.success(),
-        "sidecar stop failed: {}",
-        String::from_utf8_lossy(&stop.stderr)
+        cleaned_up,
+        "owning supervisor did not clean up after authority exit"
     );
+    assert!(
+        !authority_pid.process_exists().expect("probe authority"),
+        "authority still exists after owner teardown"
+    );
+    assert!(
+        !sidecar_pid.process_exists().expect("probe sidecar"),
+        "sidecar peer still exists after authority exit"
+    );
+    assert!(!state_dir.join("stack.pid").exists());
 }

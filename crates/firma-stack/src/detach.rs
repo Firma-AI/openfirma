@@ -1,10 +1,9 @@
 //! Detached supervisor process creation.
 //!
-//! [`spawn_supervisor`] creates the governance process used by
-//! [`crate::start::start`], but successful process creation alone does not
-//! transfer direct-child collection or prove that the supervisor has attached.
-//! The ownership transition therefore remains canonical in
-//! [`crate::start::start`].
+//! [`spawn_supervisor`] creates the process that will call
+//! [`crate::start::supervise_owned`] and become the concrete component owner.
+//! The launcher retains this returned child until the attachment barrier in
+//! [`crate::start::wait_for_supervisor_attachment`] succeeds.
 
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -13,19 +12,19 @@ use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 
-/// Spawn the hidden supervisor without inheriting terminal-bound lifetime.
+/// Spawn the hidden owner with the complete [`crate::config::StackConfig`].
 ///
-/// Log handles and platform creation flags are rebuilt for each
-/// [`spawn_detached`] attempt. A successful return means only that the
-/// returned supervisor child exists; the caller retains its collection handle
-/// and stack rollback authority until the attachment barrier defined by
-/// [`crate::start::wait_for_supervisor_attachment`].
+/// Passing the resolved configuration is an ownership requirement: the
+/// supervisor, rather than the launcher, invokes [`crate::start::spawn_stack`]
+/// and must therefore select the same executable and configuration file. A
+/// successful return grants the launcher only ownership of the supervisor
+/// child, not the components it will create.
 ///
 /// # Errors
 ///
-/// Returns executable discovery, log creation, command construction, or
-/// supervisor spawn errors.
-pub fn spawn_supervisor(state_dir: &Path) -> Result<Child> {
+/// Returns runtime-state reset, executable discovery, log creation, command
+/// construction, or supervisor spawn errors.
+pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -> Result<Child> {
     firma_runtime_state::pidfile::remove(&state_dir.join("stack.ready"))?;
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
@@ -43,9 +42,14 @@ pub fn spawn_supervisor(state_dir: &Path) -> Result<Child> {
         let mut cmd = Command::new(&exe);
         cmd.args(["__supervise", "--state-dir"])
             .arg(state_dir)
+            .arg("--config")
+            .arg(&config.config_file)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr_log));
+        if let Some(firma_bin) = &config.firma_bin {
+            cmd.arg("--firma-bin").arg(firma_bin);
+        }
 
         #[cfg(unix)]
         {

@@ -11,4 +11,12 @@ pub struct Args {
     /// State directory containing stack pid files.
     #[arg(long)]
     pub state_dir: PathBuf,
+
+    /// Unified stack configuration passed by the detached launcher.
+    #[arg(long)]
+    pub config: PathBuf,
+
+    /// Optional binary override used to spawn Authority and Sidecar.
+    #[arg(long)]
+    pub firma_bin: Option<PathBuf>,
 }
