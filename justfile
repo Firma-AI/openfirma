@@ -76,8 +76,7 @@ coverage:
   cargo llvm-cov nextest --workspace --all-features --codecov --output-path codecov.json
 
 fuzz-check:
-  nightly="$(< .rust-nightly)"
-  cd fuzz && cargo +"$nightly" check
+  cd fuzz && cargo +"$(< ../.rust-nightly)" check
 
 bench:
   cargo bench --workspace --no-fail-fast
