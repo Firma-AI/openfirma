@@ -124,7 +124,10 @@ Stop order is intentional: the Sidecar is soft-signalled first so the
 Authority's tonic graceful shutdown is not blocked on long-lived gRPC
 streams. The supervisor and Authority follow. Survivors past
 `--timeout` (default 2 s) are hard-killed; children are reaped via
-`waitpid(WNOHANG)` so zombies are not mistaken for live processes.
+`waitpid(WNOHANG)`. On Unix, an addressable process group is treated as
+alive even when its leader has exited, ensuring orphaned descendants are
+also hard-killed. A group containing only unreaped descendant zombies may
+therefore be reported as requiring the hard-kill fallback.
 
 Exit codes: `0` on success (graceful or hard-kill fallback), `2` on error.
 

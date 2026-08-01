@@ -163,7 +163,10 @@ fn rollback(state_dir: &Path) {
     // original failure that triggered this path.
     for name in ["authority.pid", "sidecar.pid"] {
         if let Ok(Some(pid)) = pidfile::read(&state_dir.join(name))
-            && pid.is_alive()
+            && !matches!(
+                SystemPlatform::termination_target_exists(pid.get()),
+                Ok(false)
+            )
         {
             let _ = SystemPlatform::signal_hard(pid.get());
         }
@@ -241,7 +244,8 @@ fn acquire_lock(state_dir: &Path) -> Result<()> {
         .create_new(true)
         .open(&lock)
     {
-        Ok(_) => Ok(()),
+        Ok(_) if is_stack_stale(state_dir)? => Ok(()),
+        Ok(_) => Err(StackError::AlreadyRunning { path: lock }),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             if is_stack_stale(state_dir)? {
                 std::fs::remove_file(&lock)?;
@@ -254,10 +258,14 @@ fn acquire_lock(state_dir: &Path) -> Result<()> {
 }
 
 fn is_stack_stale(state_dir: &Path) -> Result<bool> {
-    // Stale when no recorded supervisor or component pid is still alive.
-    for name in ["stack.pid", "authority.pid", "sidecar.pid"] {
+    if let Some(pid) = pidfile::read(&state_dir.join("stack.pid"))?
+        && process_exists(pid)?
+    {
+        return Ok(false);
+    }
+    for name in ["authority.pid", "sidecar.pid"] {
         if let Some(pid) = pidfile::read(&state_dir.join(name))?
-            && pid.is_alive()
+            && SystemPlatform::termination_target_exists(pid.get())?
         {
             return Ok(false);
         }
@@ -266,13 +274,26 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
 }
 
 fn reap_stale(state_dir: &Path) -> Result<()> {
-    for name in ["authority.pid", "sidecar.pid", "stack.pid"] {
+    for name in ["authority.pid", "sidecar.pid"] {
         let path = state_dir.join(name);
         if let Some(pid) = pidfile::read(&path)?
-            && !pid.is_alive()
+            && !SystemPlatform::termination_target_exists(pid.get())?
         {
             pidfile::remove(&path)?;
         }
     }
+    let supervisor = state_dir.join("stack.pid");
+    if let Some(pid) = pidfile::read(&supervisor)?
+        && !process_exists(pid)?
+    {
+        pidfile::remove(&supervisor)?;
+    }
     Ok(())
+}
+
+fn process_exists(pid: UserProcessId) -> Result<bool> {
+    if pid.reap_if_exited() {
+        return Ok(false);
+    }
+    pid.process_exists().map_err(StackError::Io)
 }

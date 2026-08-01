@@ -70,14 +70,17 @@ fn drop_terminates_child_within_grace() {
     .expect("supervisor spawned");
 
     let pid = supervisor.pid();
-    assert!(pid.is_alive(), "child should be alive after spawn");
+    assert!(
+        !pid.reap_if_exited() && pid.process_exists().expect("probe child process"),
+        "child should be alive after spawn"
+    );
 
     // The fake sidecar traps SIGTERM. Drop must escalate to SIGKILL after
     // the 5s grace window.
     drop(supervisor);
 
     let deadline = Instant::now() + Duration::from_secs(8);
-    while pid.is_alive() {
+    while !pid.reap_if_exited() && pid.process_exists().expect("probe child process") {
         assert!(
             Instant::now() < deadline,
             "sidecar pid {pid} still alive after Drop + SIGKILL"

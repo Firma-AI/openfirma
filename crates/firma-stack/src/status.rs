@@ -41,10 +41,10 @@ pub struct StackStatus {
 ///
 /// # Errors
 ///
-/// Currently returns no error, but keeps a fallible API for future probes.
+/// Returns an error when a process liveness probe fails.
 pub fn status(state_dir: &Path) -> Result<StackStatus> {
     debug!(state_dir = %state_dir.display(), "probing stack status");
-    let components = vec![probe(state_dir, "authority"), probe(state_dir, "sidecar")];
+    let components = vec![probe(state_dir, "authority")?, probe(state_dir, "sidecar")?];
     for component in &components {
         trace!(
             name = %component.name,
@@ -56,34 +56,34 @@ pub fn status(state_dir: &Path) -> Result<StackStatus> {
     Ok(StackStatus { components })
 }
 
-fn probe(state_dir: &Path, name: &str) -> ComponentStatus {
+fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus> {
     let pidfile_path: PathBuf = state_dir.join(format!("{name}.pid"));
     let pid = pidfile::read(&pidfile_path).ok().flatten();
     let Some(pid) = pid else {
-        return ComponentStatus {
+        return Ok(ComponentStatus {
             name: name.into(),
             pid: None,
             state: State::Stopped,
             listen: None,
             uptime_secs: None,
-        };
+        });
     };
 
-    if !pid.is_alive() {
-        return ComponentStatus {
+    if pid.reap_if_exited() || !pid.process_exists()? {
+        return Ok(ComponentStatus {
             name: name.into(),
             pid: Some(pid),
             state: State::Stopped,
             listen: None,
             uptime_secs: pidfile_uptime(&pidfile_path),
-        };
+        });
     }
 
     let listen = listen_addr_for(state_dir, name);
     let port_open = listen
         .as_ref()
         .is_some_and(|addr| TcpStream::connect_timeout(addr, Duration::from_millis(200)).is_ok());
-    ComponentStatus {
+    Ok(ComponentStatus {
         name: name.into(),
         pid: Some(pid),
         state: if port_open {
@@ -93,7 +93,7 @@ fn probe(state_dir: &Path, name: &str) -> ComponentStatus {
         },
         listen,
         uptime_secs: pidfile_uptime(&pidfile_path),
-    }
+    })
 }
 
 fn listen_addr_for(state_dir: &Path, name: &str) -> Option<SocketAddr> {

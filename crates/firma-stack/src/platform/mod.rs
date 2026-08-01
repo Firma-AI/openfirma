@@ -51,6 +51,17 @@ pub trait Platform {
     /// Returns a platform error if the OS cannot allocate the group.
     fn new_group() -> Result<Group>;
 
+    /// Return whether the platform termination target remains present.
+    ///
+    /// Unix targets probe the process group, which can remain addressable when
+    /// it contains only zombies. Windows targets probe the recorded process
+    /// because the Job Object handle does not survive detached startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns a platform error when target presence cannot be determined.
+    fn termination_target_exists(group_pid: u32) -> Result<bool>;
+
     /// Spawn `cmd` as a member of `group`, redirecting stdout/stderr to `log_path`.
     ///
     /// # Errors

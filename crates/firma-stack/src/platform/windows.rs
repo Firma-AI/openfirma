@@ -22,7 +22,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
 use crate::shutdown_event::windows_shutdown_event_name;
-use firma_runtime_state::ChildExt as _;
+use firma_runtime_state::{ChildExt as _, UserProcessId};
 
 pub struct WindowsPlatform;
 
@@ -45,6 +45,12 @@ impl Platform for WindowsPlatform {
             return Err(StackError::Platform("CreateJobObjectW failed".into()));
         }
         Ok(Group { job })
+    }
+
+    fn termination_target_exists(group_pid: u32) -> Result<bool> {
+        UserProcessId::new(group_pid).map_or(Ok(false), |pid| {
+            pid.process_exists().map_err(StackError::Io)
+        })
     }
 
     fn spawn_in_group(group: &Group, cmd: &mut Command, log_path: &Path) -> Result<SpawnedChild> {
