@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
-use crate::platform::{Platform, SystemPlatform};
+use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{Children, block_until_exit};
@@ -85,7 +85,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let config = FirmaToml::read(&cfg.config_file)?;
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
     let auth = spawn_with_config(&group, state_dir, "authority", &cfg.config_file, exe)?;
-    info!(pid = %auth.pid, "authority spawned");
+    info!(pid = %auth.leader_pid, "authority spawned");
     let auth_addr = config.authority_listen_addr()?;
     std::fs::write(state_dir.join("authority.listen"), format!("{auth_addr}\n"))?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
@@ -94,7 +94,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
 
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
     let side = spawn_with_config(&group, state_dir, "sidecar", &cfg.config_file, exe)?;
-    info!(pid = %side.pid, "sidecar spawned");
+    info!(pid = %side.leader_pid, "sidecar spawned");
     let sidecar = config.sidecar_config()?;
     let side_addr = sidecar.interceptor.listen_addr;
     std::fs::write(state_dir.join("sidecar.listen"), format!("{side_addr}\n"))?;
@@ -122,8 +122,8 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let _ = group;
 
     Ok(StackHandle {
-        authority_pid: auth.pid,
-        sidecar_pid: side.pid,
+        authority_pid: auth.leader_pid,
+        sidecar_pid: side.leader_pid,
     })
 }
 
@@ -162,13 +162,11 @@ fn rollback(state_dir: &Path) {
     // we wrote. Errors during rollback are ignored — they would mask the
     // original failure that triggered this path.
     for name in ["authority.pid", "sidecar.pid"] {
-        if let Ok(Some(pid)) = pidfile::read(&state_dir.join(name))
-            && !matches!(
-                SystemPlatform::termination_target_exists(pid.get()),
-                Ok(false)
-            )
+        if let Ok(Some(id)) = pidfile::read(&state_dir.join(name))
+            && let target = TerminationTarget::from_stored_id(id)
+            && !matches!(target.exists(), Ok(false))
         {
-            let _ = SystemPlatform::signal_hard(pid.get());
+            let _ = target.signal_hard();
         }
     }
     for name in [
@@ -264,8 +262,8 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
         return Ok(false);
     }
     for name in ["authority.pid", "sidecar.pid"] {
-        if let Some(pid) = pidfile::read(&state_dir.join(name))?
-            && SystemPlatform::termination_target_exists(pid.get())?
+        if let Some(id) = pidfile::read(&state_dir.join(name))?
+            && TerminationTarget::from_stored_id(id).exists()?
         {
             return Ok(false);
         }
@@ -276,8 +274,8 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
 fn reap_stale(state_dir: &Path) -> Result<()> {
     for name in ["authority.pid", "sidecar.pid"] {
         let path = state_dir.join(name);
-        if let Some(pid) = pidfile::read(&path)?
-            && !SystemPlatform::termination_target_exists(pid.get())?
+        if let Some(id) = pidfile::read(&path)?
+            && !TerminationTarget::from_stored_id(id).exists()?
         {
             pidfile::remove(&path)?;
         }

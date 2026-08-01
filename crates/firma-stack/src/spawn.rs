@@ -20,7 +20,7 @@ pub struct SpawnRequest<'a> {
 }
 
 pub struct SpawnedComponent {
-    pub pid: UserProcessId,
+    pub leader_pid: UserProcessId,
 }
 
 pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedComponent> {
@@ -40,8 +40,11 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedC
 
     let mut cmd = Command::new(exe);
     cmd.args(req.args);
-    let SpawnedChild { pid } = SystemPlatform::spawn_in_group(group, &mut cmd, &log_path)?;
-    pidfile::write(&pidfile_path, pid)?;
-    debug!(name = req.name, pid = %pid, pidfile = %pidfile_path.display(), "pidfile written");
-    Ok(SpawnedComponent { pid })
+    let SpawnedChild {
+        leader_pid,
+        termination_target,
+    } = SystemPlatform::spawn_in_group(group, &mut cmd, &log_path)?;
+    pidfile::write(&pidfile_path, termination_target.stored_id())?;
+    debug!(name = req.name, pid = %leader_pid, pidfile = %pidfile_path.display(), "pidfile written");
+    Ok(SpawnedComponent { leader_pid })
 }

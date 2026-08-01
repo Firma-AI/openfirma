@@ -10,8 +10,8 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 
 use crate::error::{Result, StackError};
-use crate::platform::{Group, Platform, SpawnedChild};
-use firma_runtime_state::{ChildExt as _, UserProcessId};
+use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
+use firma_runtime_state::ChildExt as _;
 
 pub struct UnixPlatform;
 
@@ -26,14 +26,13 @@ impl Platform for UnixPlatform {
         Ok(Group { pgid: 0 })
     }
 
-    fn termination_target_exists(group_pid: u32) -> Result<bool> {
+    fn termination_target_exists(target: TerminationTarget) -> Result<bool> {
+        let group_pid = target.stored_id();
         // Reap the leader when it is our direct child before probing the group.
         // Otherwise a leader-only group remains visible while its zombie waits
         // to be reaped, causing an unnecessary hard-kill escalation.
-        if let Some(pid) = UserProcessId::new(group_pid) {
-            let _ = pid.reap_if_exited();
-        }
-        match killpg(raw_pid(group_pid)?, None::<Signal>) {
+        let _ = group_pid.reap_if_exited();
+        match killpg(raw_pid(group_pid.get())?, None::<Signal>) {
             Ok(()) | Err(nix::errno::Errno::EPERM) => Ok(true),
             Err(nix::errno::Errno::ESRCH) => Ok(false),
             Err(error) => Err(StackError::Platform(format!(
@@ -66,18 +65,21 @@ impl Platform for UnixPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = child.process_id();
+        let leader_pid = child.process_id();
         std::mem::forget(child);
-        Ok(SpawnedChild { pid })
+        Ok(SpawnedChild {
+            leader_pid,
+            termination_target: TerminationTarget::for_leader(leader_pid),
+        })
     }
 
-    fn signal_soft(group_pid: u32) -> Result<()> {
-        killpg(raw_pid(group_pid)?, Signal::SIGTERM)
+    fn signal_soft(target: TerminationTarget) -> Result<()> {
+        killpg(raw_pid(target.stored_id().get())?, Signal::SIGTERM)
             .map_err(|error| StackError::Platform(format!("killpg(SIGTERM) failed: {error}")))
     }
 
-    fn signal_hard(group_pid: u32) -> Result<()> {
-        killpg(raw_pid(group_pid)?, Signal::SIGKILL)
+    fn signal_hard(target: TerminationTarget) -> Result<()> {
+        killpg(raw_pid(target.stored_id().get())?, Signal::SIGKILL)
             .map_err(|error| StackError::Platform(format!("killpg(SIGKILL) failed: {error}")))
     }
 }

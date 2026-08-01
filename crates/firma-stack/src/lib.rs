@@ -38,8 +38,8 @@ pub mod test_support {
         let log_path = state_dir.join(format!("{name}.log"));
         let pidfile_path = state_dir.join(format!("{name}.pid"));
         let child = SystemPlatform::spawn_in_group(&group, cmd, &log_path)?;
-        firma_runtime_state::pidfile::write(&pidfile_path, child.pid)?;
+        firma_runtime_state::pidfile::write(&pidfile_path, child.termination_target.stored_id())?;
         std::fs::write(state_dir.join(format!("{name}.listen")), "127.0.0.1:0\n")?;
-        Ok(child.pid.get())
+        Ok(child.leader_pid.get())
     }
 }

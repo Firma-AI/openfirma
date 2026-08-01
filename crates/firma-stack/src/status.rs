@@ -10,6 +10,7 @@ use serde::Serialize;
 use tracing::{debug, trace};
 
 use crate::error::Result;
+use crate::platform::TerminationTarget;
 use firma_runtime_state::pidfile;
 
 /// Snapshot of one component's runtime state.
@@ -69,7 +70,7 @@ fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus> {
         });
     };
 
-    if pid.reap_if_exited() || !pid.process_exists()? {
+    if !TerminationTarget::from_stored_id(pid).exists()? {
         return Ok(ComponentStatus {
             name: name.into(),
             pid: Some(pid),

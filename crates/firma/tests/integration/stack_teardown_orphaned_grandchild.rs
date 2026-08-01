@@ -1,9 +1,7 @@
 //! Regression: stack stop tracks Unix process groups after their leaders exit.
 
-#[cfg(unix)]
 struct ProcessGroupCleanup(Option<nix::unistd::Pid>);
 
-#[cfg(unix)]
 impl ProcessGroupCleanup {
     fn new(pid: u32) -> Self {
         Self(i32::try_from(pid).ok().map(nix::unistd::Pid::from_raw))
@@ -14,7 +12,6 @@ impl ProcessGroupCleanup {
     }
 }
 
-#[cfg(unix)]
 impl Drop for ProcessGroupCleanup {
     fn drop(&mut self) {
         if let Some(pid) = self.0 {
@@ -23,7 +20,6 @@ impl Drop for ProcessGroupCleanup {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn unix_pgrp_kills_grandchild_after_leader_exits() {
     use std::fs::OpenOptions;

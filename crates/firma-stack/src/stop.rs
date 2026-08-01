@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
 use crate::error::Result;
-use crate::platform::{Platform, SystemPlatform};
+use crate::platform::TerminationTarget;
 use firma_runtime_state::pidfile;
 
 /// Result of a [`stop`] call.
@@ -30,26 +30,31 @@ pub struct StopOutcome {
 /// Returns pidfile or cleanup errors.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
-    let stack_pid = pidfile::read(&state_dir.join("stack.pid"))?;
-    let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?;
-    let sidecar_pid = pidfile::read(&state_dir.join("sidecar.pid"))?;
-    debug!(?stack_pid, ?authority_pid, ?sidecar_pid, "loaded pidfiles");
+    let stack_target = read_target(state_dir, "stack.pid")?;
+    let authority_target = read_target(state_dir, "authority.pid")?;
+    let sidecar_target = read_target(state_dir, "sidecar.pid")?;
+    debug!(
+        ?stack_target,
+        ?authority_target,
+        ?sidecar_target,
+        "loaded termination targets"
+    );
 
     // Signal everything we know about. Sidecar first so that its outbound
     // gRPC streams to the authority close cleanly; that lets the authority's
     // tonic graceful shutdown finish instead of blocking on long-lived
     // server-streaming RPCs.
-    for pid in [sidecar_pid, stack_pid, authority_pid]
+    for target in [sidecar_target, stack_target, authority_target]
         .into_iter()
         .flatten()
     {
-        if SystemPlatform::termination_target_exists(pid.get())? {
-            debug!(pid = %pid, "sending soft signal");
-            if let Err(e) = SystemPlatform::signal_soft(pid.get()) {
+        if target.exists()? {
+            debug!(id = %target.stored_id(), "sending soft signal");
+            if let Err(e) = target.signal_soft() {
                 // Not fatal: hard-kill will still run after the grace window.
                 // Common when a child crashed before installing its shutdown
                 // listener; log so the failure isn't silent.
-                debug!(pid = %pid, error = %e, "soft signal failed");
+                debug!(id = %target.stored_id(), error = %e, "soft signal failed");
             }
         }
     }
@@ -57,12 +62,12 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        let authority_dead = match authority_pid {
-            Some(pid) => !SystemPlatform::termination_target_exists(pid.get())?,
+        let authority_dead = match authority_target {
+            Some(target) => !target.exists()?,
             None => true,
         };
-        let sidecar_dead = match sidecar_pid {
-            Some(pid) => !SystemPlatform::termination_target_exists(pid.get())?,
+        let sidecar_dead = match sidecar_target {
+            Some(target) => !target.exists()?,
             None => true,
         };
         if authority_dead && sidecar_dead {
@@ -76,19 +81,23 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Hard-kill survivors. This is the expected path for components that
     // hang in their own graceful-shutdown logic; not an error.
     let mut forced = false;
-    for pid in [stack_pid, authority_pid, sidecar_pid]
+    for target in [stack_target, authority_target, sidecar_target]
         .into_iter()
         .flatten()
     {
-        if SystemPlatform::termination_target_exists(pid.get())? {
-            info!(pid = %pid, "soft-signal grace exceeded; hard-killing");
-            let _ = SystemPlatform::signal_hard(pid.get());
+        if target.exists()? {
+            info!(id = %target.stored_id(), "soft-signal grace exceeded; hard-killing");
+            let _ = target.signal_hard();
             forced = true;
         }
     }
     cleanup(state_dir)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
+}
+
+fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>> {
+    Ok(pidfile::read(&state_dir.join(name))?.map(TerminationTarget::from_stored_id))
 }
 
 fn cleanup(state_dir: &Path) -> Result<()> {

@@ -8,7 +8,7 @@ use std::os::unix::fs::OpenOptionsExt as _;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use firma_stack::{StackConfig, StackError};
+use firma_stack::{StackConfig, StackError, State};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
@@ -79,6 +79,15 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
         waitpid(leader, Some(WaitPidFlag::empty())).expect("reap authority leader"),
         WaitStatus::Exited(leader, 0),
     );
+
+    let status = firma_stack::status(state_dir).expect("probe orphaned group");
+    let authority = status
+        .components
+        .iter()
+        .find(|component| component.name == "authority")
+        .expect("authority status");
+    assert_eq!(authority.state, State::Unhealthy);
+
     let config = StackConfig {
         state_dir: Some(state_dir.to_path_buf()),
         config_file: state_dir.join("missing-firma.toml"),
