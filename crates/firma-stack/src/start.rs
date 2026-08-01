@@ -262,12 +262,17 @@ pub fn supervise(state_dir: &Path) -> Result<()> {
         sidecar_pid = %sidecar_pid,
         "supervisor re-attached to children"
     );
-    block_until_observed_exit(ObservedChildren {
+    let observe_result = block_until_observed_exit(ObservedChildren {
         authority_pid,
         sidecar_pid,
-    })?;
+    });
+    info!("detached supervisor tearing down components");
+    let teardown_result = crate::stop::stop_observed_components(state_dir, Duration::from_secs(10));
     info!("supervisor leaving");
-    Ok(())
+    match observe_result {
+        Err(error) => Err(error),
+        Ok(()) => teardown_result.map(|_| ()),
+    }
 }
 
 fn spawn_with_config(
