@@ -185,6 +185,10 @@ impl LocalExecHandler {
     ///
     /// Exposed so the background pruning task can hold an `Arc` to the same
     /// store without cloning the handler.
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+    )]
     #[must_use]
     pub(crate) fn token_store(&self) -> Arc<dyn TokenStore> {
         Arc::clone(&self.token_store)
@@ -220,6 +224,10 @@ impl LocalExecHandler {
     }
 
     /// Process an operator management command (approve or revoke).
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+    )]
     pub(crate) fn decide_management(
         &self,
         request: &LocalExecManagementRequest,
@@ -408,6 +416,10 @@ fn deny(reason: &str) -> LocalExecResponse {
     }
 }
 
+#[cfg_attr(
+    all(windows, not(test)),
+    expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+)]
 fn management_response_from_approve(result: ApproveResult) -> LocalExecManagementResponse {
     let (outcome, reason) = match result {
         ApproveResult::Ok => (ManagementOutcome::Ok, None),
@@ -428,6 +440,10 @@ fn management_response_from_approve(result: ApproveResult) -> LocalExecManagemen
     }
 }
 
+#[cfg_attr(
+    all(windows, not(test)),
+    expect(dead_code, reason = "the local-exec endpoint is Unix-only")
+)]
 fn management_response_from_revoke(result: RevokeResult) -> LocalExecManagementResponse {
     let (outcome, reason) = match result {
         RevokeResult::Ok => (ManagementOutcome::Ok, None),

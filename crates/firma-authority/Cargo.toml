@@ -3,6 +3,7 @@ name = "firma-authority"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 description = "Mini Authority — policy loading, capability issuance, and gRPC streams for Firma OSS"
 

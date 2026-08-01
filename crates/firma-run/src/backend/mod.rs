@@ -68,6 +68,10 @@ pub enum BackendKind {
 
 impl BackendKind {
     /// Default backend for current host platform.
+    #[cfg_attr(
+        all(target_os = "linux", not(test)),
+        expect(dead_code, reason = "Linux resolves automatic backends separately")
+    )]
     #[must_use]
     pub(crate) fn default_for_current_host() -> Self {
         #[cfg(target_os = "linux")]

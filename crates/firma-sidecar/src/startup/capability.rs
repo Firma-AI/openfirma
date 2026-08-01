@@ -72,7 +72,7 @@ pub fn load_capability_map(
 ///
 /// Returns a descriptive error string when any identifier (token, agent, or
 /// session) fails to parse or when the token fails verification.
-fn seed_into_entry(
+pub fn seed_into_entry(
     file: &SeedFile,
     verifier: &dyn TokenVerifier,
 ) -> anyhow::Result<CapabilityEntry> {

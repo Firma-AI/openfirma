@@ -1,0 +1,37 @@
+[[production]]
+package = "firma"
+bin = "firma"
+reason = "shipped application binary"
+
+[[production]]
+package = "firma-demo-fixture"
+bin = "firma-demo-fixture"
+reason = "workspace demo server"
+
+[[production]]
+package = "firma-demo-fixture"
+bin = "firma-demo-fixture-client"
+reason = "workspace demo client"
+
+[[production]]
+package = "firma-demo-tui"
+bin = "firma-demo-tui"
+reason = "workspace demo application"
+
+[[production]]
+package = "firma-vz-guest-init"
+bin = "firma-vz-guest-init"
+reason = "VZ guest application"
+
+[[production]]
+package = "firma-vz-runner"
+bin = "firma-vz-runner"
+reason = "VZ host application"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "firma_sidecar"
+item = "seed_into_entry"
+kind = "function"
+level = "expect"
+reason = "used by the separate firma-fuzz workspace"

@@ -3,6 +3,7 @@ name = "firma-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 description = "Shared types, capability tokens, Cedar wrapper, and error types for Firma OSS"
 

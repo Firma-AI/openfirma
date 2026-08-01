@@ -3,6 +3,7 @@ name = "firma-config-loader"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 description = "Config discovery and schema loading for OpenFirma"
 

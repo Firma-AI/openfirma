@@ -24,6 +24,7 @@ resolver = "3"
 version = "0.1.6"
 edition = "2024"
 license = "GPL-3.0-only"
+publish = false
 repository = "https://github.com/Firma-AI/openfirma"
 rust-version = "1.97"
 
@@ -38,6 +39,9 @@ allow_attributes = "warn"
 
 [workspace.lints.rust]
 unsafe_code = "warn"
+
+[workspace.lints.rustdoc]
+private_intra_doc_links = "allow"
 
 [profile.release]
 lto = "fat"

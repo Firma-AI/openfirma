@@ -3,6 +3,7 @@ name = "firma-runtime-state"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 description = "Runtime state contracts and local liveness primitives shared by OpenFirma crates"
 

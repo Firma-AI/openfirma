@@ -160,7 +160,7 @@ fn is_loopback(ip: IpAddr) -> bool {
 /// (`127.0.0.1` vs `::1`), so pinning a single address would spuriously block
 /// legitimate proxy traffic. The private network namespace is the real
 /// boundary; this guard is defense in depth plus an audit trail on top of it.
-pub(crate) fn classify(addr: SocketAddr, allow_ports: &[u16]) -> Verdict {
+fn classify(addr: SocketAddr, allow_ports: &[u16]) -> Verdict {
     if !is_loopback(addr.ip()) {
         return Verdict::Allow;
     }
@@ -176,7 +176,7 @@ pub(crate) fn classify(addr: SocketAddr, allow_ports: &[u16]) -> Verdict {
 /// Returns `None` for address families we do not govern (e.g. `AF_UNIX`) or for
 /// truncated buffers; the caller treats `None` as "allow" so non-IP connects
 /// are never blocked.
-pub(crate) fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
+fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
     if bytes.len() < 2 {
         return None;
     }
@@ -544,10 +544,10 @@ fn recv_listener_fd(stream: &UnixStream) -> io::Result<OwnedFd> {
 #[derive(Debug, Clone)]
 pub struct AuditChannel {
     /// Sidecar run-audit control socket (`FIRMA_RUN_AUDIT_SOCK`).
-    pub socket_path: PathBuf,
+    pub(crate) socket_path: PathBuf,
     /// Session and agent identity stamped onto each message.
-    pub session_id: String,
-    pub agent_id: AgentId,
+    pub(crate) session_id: String,
+    pub(crate) agent_id: AgentId,
 }
 
 /// Inputs to [`start`].
@@ -555,13 +555,13 @@ pub struct AuditChannel {
 pub struct SupervisorConfig {
     /// Unix socket the in-sandbox installer connects to, to hand over the
     /// listener fd. Must be reachable from inside the sandbox (bind-mounted).
-    pub socket_path: PathBuf,
+    pub(crate) socket_path: PathBuf,
     /// Loopback ports the agent may still reach (proxy bridge, DNS stub).
-    pub allow_ports: Vec<u16>,
+    pub(crate) allow_ports: Vec<u16>,
     /// Optional sink for signed audit reports. When `None` (e.g. an external
     /// Sidecar whose env we do not control), blocks are still enforced but only
     /// logged locally.
-    pub report: Option<AuditChannel>,
+    pub(crate) report: Option<AuditChannel>,
 }
 
 /// Live handle to a running guard supervisor. Dropping it stops the supervisor
@@ -574,7 +574,7 @@ pub struct EgressGuardHandle {
 
 impl EgressGuardHandle {
     #[must_use]
-    pub fn socket_path(&self) -> &Path {
+    pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 }
@@ -599,7 +599,7 @@ impl Drop for EgressGuardHandle {
 ///
 /// Returns a [`RunError`] when the control socket directory cannot be created
 /// or the socket cannot be bound.
-pub fn start(config: SupervisorConfig) -> Result<EgressGuardHandle, RunError> {
+pub(crate) fn start(config: SupervisorConfig) -> Result<EgressGuardHandle, RunError> {
     if let Some(parent) = config.socket_path.parent() {
         firma_fs::create_private_dir_all(parent).map_err(|error| RunError::Backend {
             backend: "egress_guard".to_string(),
