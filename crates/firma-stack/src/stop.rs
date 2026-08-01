@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
+use crate::component::OwnedComponent;
 use crate::error::{Result, StackError};
 use crate::platform::TerminationTarget;
-use crate::spawn::SpawnedComponent;
 use firma_runtime_state::pidfile;
 
 const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
@@ -50,18 +50,18 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
 pub(crate) fn stop_owned(
     state_dir: &Path,
     timeout: Duration,
-    authority: &mut SpawnedComponent,
-    sidecar: &mut SpawnedComponent,
+    authority: &mut OwnedComponent,
+    sidecar: &mut OwnedComponent,
 ) -> Result<StopOutcome> {
     stop_inner(
         state_dir,
         timeout,
         None,
-        Some(authority.termination_target),
-        Some(sidecar.termination_target),
+        Some(authority.termination_target()),
+        Some(sidecar.termination_target()),
         || {
-            let _ = sidecar.child.try_wait()?;
-            let _ = authority.child.try_wait()?;
+            let _ = sidecar.try_wait()?;
+            let _ = authority.try_wait()?;
             Ok(())
         },
     )
