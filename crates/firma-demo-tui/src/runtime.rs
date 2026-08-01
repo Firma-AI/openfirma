@@ -16,7 +16,7 @@ pub struct DemoRuntime {
 }
 
 impl DemoRuntime {
-    pub fn shutdown(self) {
+    pub fn shutdown(mut self) {
         let _ = self.stack.shutdown(Duration::from_secs(10));
     }
 }
