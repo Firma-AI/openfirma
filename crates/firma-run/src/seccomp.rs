@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::fs::File;
 use std::io::{ErrorKind, Write};
@@ -8,23 +8,16 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
+use seccompiler::{
+    BpfProgram, SeccompAction, SeccompFilter, SeccompRule, SyscallTable, TargetArch,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::{ResolvedProfile, SeccompPolicyConfig, SeccompRuntimeMode};
 use crate::error::RunError;
 
-const FILTER_CODE_LD_W_ABS: u16 = 0x20;
-const FILTER_CODE_JMP_JEQ_K: u16 = 0x15;
-const FILTER_CODE_RET_K: u16 = 0x06;
-
-const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
-const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
-const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
-
-const SECCOMP_DATA_NR_OFFSET: u32 = 0;
-const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
-const COMPILER_VERSION: &str = "managed-seccomp-v2";
+const COMPILER_VERSION: &str = "managed-seccomp-v2-seccompiler";
 const POLICY_SCHEMA_VERSION: u32 = 1;
 const EPERM_ERRNO: u32 = 1;
 
@@ -85,28 +78,13 @@ pub struct SeccompArtifactMetadata {
     denied_syscalls: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TargetArch {
-    X86_64,
-    Aarch64,
-}
-
-impl TargetArch {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::X86_64 => "x86_64",
-            Self::Aarch64 => "aarch64",
-        }
-    }
-
-    fn audit_arch_value(self) -> u32 {
-        // Values from linux/audit.h:
-        // AUDIT_ARCH_X86_64 = EM_X86_64 | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE = 0xC000003E
-        // AUDIT_ARCH_AARCH64 = EM_AARCH64 | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE = 0xC00000B7
-        match self {
-            Self::X86_64 => 0xC000_003E,
-            Self::Aarch64 => 0xC000_00B7,
-        }
+/// `seccompiler::TargetArch` has no string representation; the artifact
+/// metadata and artifact directory layout need one.
+fn target_arch_str(target_arch: TargetArch) -> &'static str {
+    match target_arch {
+        TargetArch::x86_64 => "x86_64",
+        TargetArch::aarch64 => "aarch64",
+        TargetArch::riscv64 => "riscv64",
     }
 }
 
@@ -144,35 +122,12 @@ impl SyscallId {
         }
     }
 
-    fn number_for_arch(self, target_arch: TargetArch) -> Option<u32> {
-        match target_arch {
-            TargetArch::X86_64 => match self {
-                Self::Execve => Some(59),
-                Self::Execveat => Some(322),
-                Self::Rename => Some(82),
-                Self::Renameat => Some(264),
-                Self::Renameat2 => Some(316),
-                Self::Rmdir => Some(84),
-                Self::Setgid => Some(106),
-                Self::Setresgid => Some(119),
-                Self::Setresuid => Some(117),
-                Self::Setuid => Some(105),
-                Self::Unlink => Some(87),
-                Self::Unlinkat => Some(263),
-            },
-            TargetArch::Aarch64 => match self {
-                Self::Execve => Some(221),
-                Self::Execveat => Some(281),
-                Self::Rename | Self::Rmdir | Self::Unlink => None,
-                Self::Renameat => Some(38),
-                Self::Renameat2 => Some(276),
-                Self::Setgid => Some(144),
-                Self::Setresgid => Some(149),
-                Self::Setresuid => Some(147),
-                Self::Setuid => Some(146),
-                Self::Unlinkat => Some(35),
-            },
-        }
+    /// Resolves this syscall's arch-specific number via seccompiler's
+    /// generated syscall tables. Returns `None` when the syscall does not
+    /// exist on `target_arch` (e.g. `rename`/`rmdir`/`unlink` on aarch64,
+    /// which only expose the `*at` variants).
+    fn number_for_arch(self, target_arch: TargetArch) -> Option<i64> {
+        SyscallTable::new(target_arch).get_syscall_nr(self.name())
     }
 }
 
@@ -298,7 +253,7 @@ fn compile_and_write_artifact(
         ))
     })?;
 
-    let (bpf_bytes, effective_syscalls) = emit_bpf_program(target_arch, syscalls);
+    let (bpf_bytes, effective_syscalls) = compile_bpf_program(target_arch, syscalls)?;
     let bpf_sha = sha256_hex(&bpf_bytes);
 
     write_atomic(&bpf_path, &bpf_bytes)?;
@@ -310,7 +265,7 @@ fn compile_and_write_artifact(
         sha256: bpf_sha,
         generated_at: Utc::now().to_rfc3339(),
         compiler_version: COMPILER_VERSION.to_string(),
-        target_arch: target_arch.as_str().to_string(),
+        target_arch: target_arch_str(target_arch).to_string(),
         default_action: parsed_policy.parsed.default_action.clone(),
         source_policy_refs: if parsed_policy.parsed.source_policy_refs.is_empty() {
             vec![managed.source_policy_path.display().to_string()]
@@ -372,7 +327,7 @@ fn artifact_relative_dir(policy_id: &str, policy_version: &str, target_arch: Tar
         "{}/{}/{}",
         sanitize_path_segment(policy_id),
         sanitize_path_segment(policy_version),
-        target_arch.as_str()
+        target_arch_str(target_arch)
     )
 }
 
@@ -432,10 +387,10 @@ fn validate_metadata_contract(
             parsed_policy.default_action, metadata.default_action
         )));
     }
-    if metadata.target_arch != target_arch.as_str() {
+    if metadata.target_arch != target_arch_str(target_arch) {
         return Err(RunError::ConfigValidation(format!(
             "seccomp metadata target_arch mismatch: expected '{}', got '{}'",
-            target_arch.as_str(),
+            target_arch_str(target_arch),
             metadata.target_arch
         )));
     }
@@ -712,10 +667,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn current_target_arch() -> Result<TargetArch, RunError> {
     if cfg!(target_arch = "x86_64") {
-        return Ok(TargetArch::X86_64);
+        return Ok(TargetArch::x86_64);
     }
     if cfg!(target_arch = "aarch64") {
-        return Ok(TargetArch::Aarch64);
+        return Ok(TargetArch::aarch64);
     }
     Err(RunError::ConfigValidation(
         "seccomp policy supports only x86_64 and aarch64 targets".to_string(),
@@ -755,52 +710,48 @@ fn map_actions_to_syscalls(actions: &[String]) -> (Vec<SyscallId>, Vec<String>) 
     (syscalls.into_iter().collect(), unsupported)
 }
 
-fn emit_bpf_program(
+/// Compiles the managed deny-list into a raw classic-BPF program via
+/// `seccompiler`, in the exact byte layout the kernel (and `bwrap --seccomp
+/// <fd>`) expects: a flat array of `struct sock_filter` (u16 code, u8 jt,
+/// u8 jf, u32 k, native endian), with no framing.
+fn compile_bpf_program(
     target_arch: TargetArch,
     denied_syscalls: &[SyscallId],
-) -> (Vec<u8>, Vec<String>) {
-    let mut out = Vec::new();
+) -> Result<(Vec<u8>, Vec<String>), RunError> {
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
     let mut effective_syscalls = Vec::new();
-
-    // Verify seccomp_data.arch first.
-    emit_stmt(&mut out, FILTER_CODE_LD_W_ABS, SECCOMP_DATA_ARCH_OFFSET);
-    emit_jump(
-        &mut out,
-        FILTER_CODE_JMP_JEQ_K,
-        target_arch.audit_arch_value(),
-        1,
-        0,
-    );
-    emit_stmt(&mut out, FILTER_CODE_RET_K, SECCOMP_RET_KILL_PROCESS);
-
-    // Load syscall number.
-    emit_stmt(&mut out, FILTER_CODE_LD_W_ABS, SECCOMP_DATA_NR_OFFSET);
 
     for syscall in denied_syscalls {
         let Some(nr) = syscall.number_for_arch(target_arch) else {
             continue;
         };
-        emit_jump(&mut out, FILTER_CODE_JMP_JEQ_K, nr, 0, 1);
-        emit_stmt(&mut out, FILTER_CODE_RET_K, SECCOMP_RET_ERRNO | EPERM_ERRNO);
+        rules.insert(nr, Vec::new());
         effective_syscalls.push(syscall.name().to_string());
     }
 
-    emit_stmt(&mut out, FILTER_CODE_RET_K, SECCOMP_RET_ALLOW);
-    (out, effective_syscalls)
+    let filter = SeccompFilter::new(
+        rules,
+        SeccompAction::Allow,
+        SeccompAction::Errno(EPERM_ERRNO),
+        target_arch,
+    )
+    .map_err(|error| RunError::Internal(format!("failed to build seccomp filter: {error}")))?;
+    let bpf_program: BpfProgram = filter.try_into().map_err(|error| {
+        RunError::Internal(format!("failed to compile seccomp filter to BPF: {error}"))
+    })?;
+
+    Ok((bpf_program_to_bytes(&bpf_program), effective_syscalls))
 }
 
-fn emit_stmt(out: &mut Vec<u8>, code: u16, k: u32) {
-    out.extend_from_slice(&code.to_ne_bytes());
-    out.push(0);
-    out.push(0);
-    out.extend_from_slice(&k.to_ne_bytes());
-}
-
-fn emit_jump(out: &mut Vec<u8>, code: u16, k: u32, jt: u8, jf: u8) {
-    out.extend_from_slice(&code.to_ne_bytes());
-    out.push(jt);
-    out.push(jf);
-    out.extend_from_slice(&k.to_ne_bytes());
+fn bpf_program_to_bytes(program: &BpfProgram) -> Vec<u8> {
+    let mut out = Vec::with_capacity(program.len() * 8);
+    for insn in program {
+        out.extend_from_slice(&insn.code.to_ne_bytes());
+        out.push(insn.jt);
+        out.push(insn.jf);
+        out.extend_from_slice(&insn.k.to_ne_bytes());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -808,6 +759,61 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn syscall_table_matches_previously_hand_maintained_syscall_numbers() {
+        // Regression guard: these are the exact numbers the hand-maintained
+        // `SyscallId::number_for_arch` table used before it was replaced by
+        // `seccompiler::SyscallTable`. If the fork's generated tables ever
+        // disagree with these, the managed seccomp policy would silently
+        // deny/allow the wrong syscalls.
+        let x86_64_expected: &[(&str, i64)] = &[
+            ("execve", 59),
+            ("execveat", 322),
+            ("rename", 82),
+            ("renameat", 264),
+            ("renameat2", 316),
+            ("rmdir", 84),
+            ("setgid", 106),
+            ("setresgid", 119),
+            ("setresuid", 117),
+            ("setuid", 105),
+            ("unlink", 87),
+            ("unlinkat", 263),
+        ];
+        let aarch64_expected: &[(&str, Option<i64>)] = &[
+            ("execve", Some(221)),
+            ("execveat", Some(281)),
+            ("rename", None),
+            ("renameat", Some(38)),
+            ("renameat2", Some(276)),
+            ("rmdir", None),
+            ("setgid", Some(144)),
+            ("setresgid", Some(149)),
+            ("setresuid", Some(147)),
+            ("setuid", Some(146)),
+            ("unlink", None),
+            ("unlinkat", Some(35)),
+        ];
+
+        let x86_64_table = SyscallTable::new(TargetArch::x86_64);
+        for (name, expected_nr) in x86_64_expected {
+            assert_eq!(
+                x86_64_table.get_syscall_nr(name),
+                Some(*expected_nr),
+                "x86_64 {name}"
+            );
+        }
+
+        let aarch64_table = SyscallTable::new(TargetArch::aarch64);
+        for (name, expected_nr) in aarch64_expected {
+            assert_eq!(
+                aarch64_table.get_syscall_nr(name),
+                *expected_nr,
+                "aarch64 {name}"
+            );
+        }
+    }
 
     #[test]
     fn maps_supported_actions_to_expected_syscalls() {
