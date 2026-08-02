@@ -44,10 +44,18 @@ impl StateTransaction {
         let file = open_transaction_file(state_dir)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self { _file: file })),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) if is_lock_contended(&error) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
+}
+
+fn is_lock_contended(error: &std::io::Error) -> bool {
+    let contended = fs2::lock_contended_error();
+    contended.raw_os_error().map_or_else(
+        || error.kind() == contended.kind(),
+        |code| error.raw_os_error() == Some(code),
+    )
 }
 
 /// Unforgeable identity for one successful acquisition of the stack state dir.
