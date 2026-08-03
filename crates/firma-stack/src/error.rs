@@ -56,6 +56,13 @@ pub enum StackError {
         path: PathBuf,
     },
 
+    /// Runtime-state cleanup could not acquire serialization without blocking.
+    #[error("stack runtime state is busy at '{path}'; cleanup deferred")]
+    RuntimeStateBusy {
+        /// Runtime-state directory whose cleanup transaction is held elsewhere.
+        path: PathBuf,
+    },
+
     /// Spawning a child component (authority or sidecar) failed.
     #[error("failed to spawn '{component}': {source}")]
     Spawn {

@@ -129,12 +129,24 @@ Authority's tonic graceful shutdown is not blocked on long-lived gRPC
 streams. The supervisor and Authority follow. Survivors past
 `--timeout` (default 2 s) are hard-killed. Firma then waits up to 2 seconds
 for every termination target to disappear before deleting runtime state.
+Cleanup is generation-fenced: `stack.lock` contains a random identity for the
+current lock acquisition. A delayed stop or supervisor from an older generation
+may still finish collecting its own children, but it cannot delete runtime state
+written by a replacement stack. Startup and stop also serialize state snapshots
+through `.stack-state.lock`; supervisor PIDs remain process identities and are
+not treated as cleanup authority.
 
 Foreground startup retains the component child handles and collects those
 children itself. In detached mode, the hidden supervisor spawns the components,
 retains their child handles, and remains their owning parent until teardown.
 Status and external stop commands use non-destructive probes and never attempt
 to reap another process's child.
+
+On Windows, the owner also retains duplicated handles to the components' Job
+Object. Hard shutdown terminates the Job rather than only its leader, and the
+final handle closing terminates descendants if the owner exits unexpectedly.
+External status and stop processes reconstruct leader-only targets from
+pidfiles; the owning supervisor remains responsible for full-tree cleanup.
 
 The detached command returns success only after the supervisor has spawned both
 components, completed their readiness checks, and acknowledged ownership. If a
@@ -216,7 +228,8 @@ verification, structured search, debugging surprise denies — see
 <state_dir>/
   authority.pid          authority.log          authority.listen
   sidecar.pid            sidecar.log            sidecar.listen
-  stack.pid              stack.lock             supervisor.log
+  stack.pid              stack.lock             .stack-state.lock
+  supervisor.log
   audit.jsonl
   generated-firma-ca/
 ```
@@ -255,6 +268,12 @@ running two supervisors against one set of pidfiles is undefined.
 is the point of `--detach`. The supervisor reparents to PID 1 (Unix)
 or runs as a Job Object (Windows) and survives the shell exiting.
 Stop it with `firma sidecar stop`, not by killing the terminal.
+
+**Detached startup fails with access denied on Windows.** Firma requires the
+supervisor to break away from the launcher's Job Object. If that Job forbids
+breakaway, Firma fails startup rather than claim a detached lifetime it cannot
+guarantee. Run foreground mode or launch Firma from a Job that permits
+`CREATE_BREAKAWAY_FROM_JOB`.
 
 ## What's next
 

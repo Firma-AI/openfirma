@@ -1,9 +1,4 @@
-//! Detached supervisor process creation.
-//!
-//! [`spawn_supervisor`] creates the process that will call
-//! [`crate::start::supervise_owned`] and become the concrete component owner.
-//! The launcher retains this returned child until the attachment barrier in
-//! [`crate::start::wait_for_supervisor_attachment`] succeeds.
+//! Spawn the detached supervisor without transferring component ownership.
 
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -12,18 +7,10 @@ use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 
-/// Spawn the hidden owner with the complete [`crate::config::StackConfig`].
+/// Spawn the supervisor child retained by detached [`crate::start::start`].
 ///
-/// Passing the resolved configuration is an ownership requirement: the
-/// supervisor, rather than the launcher, invokes [`crate::start::spawn_stack`]
-/// and must therefore select the same executable and configuration file. A
-/// successful return grants the launcher only ownership of the supervisor
-/// child, not the components it will create.
-///
-/// # Errors
-///
-/// Returns runtime-state reset, executable discovery, log creation, command
-/// construction, or supervisor spawn errors.
+/// The child creates and owns the actual components; this function grants the
+/// launcher only the child handle needed to validate or roll back handoff.
 pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -> Result<Child> {
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
@@ -53,7 +40,6 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
             // Detach from the controlling terminal so closing the parent shell
             // does not deliver SIGHUP to the supervisor. `setsid` must run in
             // the child between fork and exec.
@@ -65,8 +51,9 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
             // the pre-exec closure. No allocator or locks are used.
             unsafe {
                 cmd.pre_exec(|| {
-                    let _ = nix::unistd::setsid();
-                    Ok(())
+                    nix::unistd::setsid()
+                        .map(|_| ())
+                        .map_err(std::io::Error::from)
                 });
             }
         }
@@ -79,13 +66,12 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
     Ok(child)
 }
 
-/// Spawn a command produced by the supplied builder, detached from the parent.
+/// Spawn a freshly built supervisor command detached from the launcher.
 ///
-/// On Windows the first attempt requests breakaway from the parent's Job
-/// Object. Only an access-denied result permits a retry inside a nested Job;
-/// every other failure is returned as [`StackError::Spawn`]. The nested Job
-/// remains viable because this revision's stack [`crate::platform::Group`] does
-/// not terminate members when its handle closes.
+/// On Windows the breakaway creation flag ensures the supervisor survives the
+/// launcher's Job Object. If that Job does not grant breakaway, startup fails
+/// closed: launching inside it would make detached lifetime depend on an
+/// external owner-loss policy that Firma cannot inspect or control.
 fn spawn_detached<F>(build: &F) -> Result<Child>
 where
     F: Fn() -> Result<Command>,
@@ -97,27 +83,14 @@ where
             CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
         };
 
-        const ERROR_ACCESS_DENIED: i32 = 5;
         let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
 
         let mut cmd = build()?;
         cmd.creation_flags(base | CREATE_BREAKAWAY_FROM_JOB);
-        match cmd.spawn() {
-            Ok(child) => Ok(child),
-            Err(source) if source.raw_os_error() == Some(ERROR_ACCESS_DENIED) => {
-                debug!("breakaway-from-job denied by parent Job Object; retrying nested");
-                let mut cmd = build()?;
-                cmd.creation_flags(base);
-                cmd.spawn().map_err(|source| StackError::Spawn {
-                    component: "supervisor".into(),
-                    source,
-                })
-            }
-            Err(source) => Err(StackError::Spawn {
-                component: "supervisor".into(),
-                source,
-            }),
-        }
+        cmd.spawn().map_err(|source| StackError::Spawn {
+            component: "supervisor (breakaway required)".into(),
+            source,
+        })
     }
 
     #[cfg(unix)]
