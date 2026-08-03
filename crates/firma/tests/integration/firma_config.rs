@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use firma_config_loader::CONFIG_FILE_NAME;
+use super::CONFIG_FILE_NAME;
 
 const REGISTERED_AGENT_ID: &str = "agt_01j0000000e008000000000001";
 

@@ -1,3 +1,11 @@
+//! Deterministic black-box tests for the compiled `firma` CLI.
+//!
+//! Product behavior in this target must be exercised through
+//! `CARGO_BIN_EXE_firma`, not by calling workspace production APIs directly.
+
+const CONFIG_DIR_NAME: &str = ".firma";
+const CONFIG_FILE_NAME: &str = "firma.toml";
+
 mod authority_keygen;
 mod child_process_escape;
 mod cli_help;

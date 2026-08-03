@@ -1357,6 +1357,7 @@ dependencies = [
  "p256",
  "pasetors",
  "pretty_assertions",
+ "proc-macro2",
  "rand 0.9.4",
  "rcgen",
  "regex",
