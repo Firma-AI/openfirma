@@ -227,7 +227,7 @@ jobs:
       - name: Test
         id: test
         continue-on-error: true
-        run: cargo nextest run --workspace --no-fail-fast
+        run: cargo nextest run --profile ci --workspace --no-fail-fast
       # nextest runs unit + integration tests; it does not run doctests, so
       # those run separately via `cargo test --doc`.
       - name: Doctests
@@ -420,7 +420,7 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/bwrap
 
       - name: Generate coverage
-        run: cargo llvm-cov nextest --workspace --all-features --codecov --output-path codecov.json
+        run: cargo llvm-cov nextest --profile ci --workspace --all-features --codecov --output-path codecov.json
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
