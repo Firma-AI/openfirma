@@ -13,8 +13,6 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::time::{Duration, Instant};
 
 use firma_stack::{StackConfig, StackError};
-use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::Pid;
 
 use crate::support::{ProcessGroupCleanup, wait_for_file, wait_for_pidfile};
 
@@ -74,26 +72,17 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
         let cleanup = ProcessGroupCleanup::new(authority_pid);
         wait_for_file(&child_ready_marker);
 
-        let leader = Pid::from_raw(i32::try_from(authority_pid).expect("authority PID fits i32"));
-        assert_eq!(
-            waitpid(leader, Some(WaitPidFlag::empty())).expect("reap authority leader"),
-            WaitStatus::Exited(leader, 0),
-        );
-
-        // Let authority readiness complete only after its leader is reaped.
-        let listener = TcpListener::bind(port).expect("listen for authority readiness");
         let result = startup.join().expect("startup thread");
-        drop(listener);
         (result, cleanup)
     });
 
     let error = result
         .err()
-        .expect("missing sidecar config must fail startup");
-    assert!(
-        matches!(error, StackError::Platform(_)),
-        "unexpected startup error: {error}"
-    );
+        .expect("authority exit must fail startup readiness");
+    let StackError::ReadinessProcessExited { component, .. } = error else {
+        panic!("unexpected startup error: {error}");
+    };
+    assert_eq!(component, "authority");
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let fifo_closed = loop {
