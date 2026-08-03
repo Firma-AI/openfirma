@@ -136,6 +136,33 @@ method = "CONNECT"
 host = "*.ghe.com"
 action_class = "communication.external.send"
 
+# GitHub Copilot service hosts used by the Copilot extension: chat and
+# completion APIs plus plan-scoped (individual/business/enterprise) endpoints
+# and Copilot telemetry. The remaining hosts from GitHub's Copilot allowlist
+# are already covered above: copilot-proxy.githubusercontent.com,
+# copilot-telemetry.githubusercontent.com, and
+# origin-tracker.githubusercontent.com by *.githubusercontent.com, and
+# collector.github.com by *.github.com.
+[[rules]]
+method = "CONNECT"
+host = "*.githubcopilot.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.individual.githubcopilot.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.business.githubcopilot.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.enterprise.githubcopilot.com"
+action_class = "communication.external.send"
+
 # GitHub social sign-in providers.
 [[rules]]
 method = "CONNECT"

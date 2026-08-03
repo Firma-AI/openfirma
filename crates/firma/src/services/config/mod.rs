@@ -1750,15 +1750,24 @@ mod tests {
     }
 
     #[test]
-    fn vscode_mapping_has_core_connect_rules_without_embedded_agent_hosts() {
+    fn vscode_mapping_has_core_connect_rules_and_copilot_hosts() {
         let rules = parse_rules(Mapping::Vscode.static_content()).rules;
         assert!(
             rules.iter().all(|rule| rule.path.is_none()),
             "vscode mapping must stay CONNECT-level in v1"
         );
+        for copilot_host in [
+            "*.githubcopilot.com",
+            "*.individual.githubcopilot.com",
+            "*.business.githubcopilot.com",
+            "*.enterprise.githubcopilot.com",
+        ] {
+            assert!(
+                rules.iter().any(|rule| rule.host == copilot_host),
+                "Copilot host {copilot_host} missing from vscode mapping"
+            );
+        }
         for agent_host in [
-            "api.githubcopilot.com",
-            "api.individual.githubcopilot.com",
             "*.openai.com",
             "chatgpt.com",
             "*.anthropic.com",

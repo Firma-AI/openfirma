@@ -235,7 +235,7 @@ impl Mapping {
             }
             Self::Copilot => "GitHub Copilot CLI hosts (CONNECT only; github MITM-bypassed)",
             Self::Vscode => {
-                "Visual Studio Code hosts (CONNECT only; core services, marketplace, accounts, GitHub)"
+                "Visual Studio Code hosts (CONNECT only; core services, marketplace, accounts, GitHub, Copilot)"
             }
         }
     }
