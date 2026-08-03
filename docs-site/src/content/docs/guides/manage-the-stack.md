@@ -133,6 +133,9 @@ commands, and the detached supervisor use non-destructive probes and never
 attempt to reap a process they do not own. After detached startup, the launcher
 keeps an owner-side collector active for as long as that process remains alive;
 if the launcher exits, normal OS reparenting transfers collection responsibility.
+The command returns success only after the detached supervisor loads both
+component targets and acknowledges attachment; attachment failure rolls the
+owned stack back.
 If either component exits during detached operation, the supervisor tears down
 the other component before it exits; it does not signal its own process group
 from that teardown path.

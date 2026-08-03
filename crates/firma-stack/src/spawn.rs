@@ -7,11 +7,13 @@
 
 use std::path::Path;
 use std::process::{Child, Command};
+use std::time::{Duration, Instant};
 
 use tracing::debug;
 
 use crate::error::Result;
-use crate::platform::{Group, Platform, SystemPlatform, TerminationTarget};
+use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform, TerminationTarget};
+use crate::supervisor::{collect_child_until, collect_target_in_background};
 use firma_runtime_state::{UserProcessId, pidfile};
 
 /// Immutable inputs for one managed component spawn attempt.
@@ -70,11 +72,9 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedC
 
     let mut cmd = Command::new(exe);
     cmd.args(req.args);
-    let mut spawned = SystemPlatform::spawn_in_group(group, &mut cmd, &log_path)?;
+    let spawned = SystemPlatform::spawn_in_group(group, &mut cmd, &log_path)?;
     if let Err(error) = pidfile::write(&pidfile_path, spawned.termination_target.stored_id()) {
-        let _ = spawned.termination_target.signal_hard();
-        let _ = spawned.child.kill();
-        let _ = spawned.child.wait();
+        cleanup_failed_spawn(spawned);
         return Err(error.into());
     }
     let leader_pid = spawned.leader_pid;
@@ -84,4 +84,19 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedC
         leader_pid,
         termination_target: spawned.termination_target,
     })
+}
+
+/// Recover process ownership after post-spawn publication fails.
+///
+/// This function requests process-tree and leader termination, then attempts
+/// bounded direct-child collection. If collection is not yet possible, it
+/// transfers the paired child and [`TerminationTarget`] to
+/// [`collect_target_in_background`] rather than dropping the only collector.
+pub fn cleanup_failed_spawn(mut spawned: SpawnedChild) {
+    let _ = spawned.termination_target.signal_hard();
+    let _ = spawned.child.kill();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    if !collect_child_until(&mut spawned.child, deadline) {
+        let _ = collect_target_in_background(spawned.child, spawned.termination_target);
+    }
 }
