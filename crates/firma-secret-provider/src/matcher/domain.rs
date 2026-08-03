@@ -42,7 +42,9 @@ fn remove_credentials(authority: &Authority) -> Result<Authority, InvalidUri> {
     )
 }
 
-/// Strips parameters and credentials from a URL to avoid leaking secrets.
+/// Removes query parameters and userinfo credentials before including the
+/// input in a diagnostic. Paths, and fragments when no query is present, may
+/// remain visible and must not be treated as secret storage.
 fn redact_input_for_error(url: &str) -> String {
     let url = url.split_once('?').map_or(url, |(base, _params)| base);
     let Some((credentials, domain)) = url.split_once('@') else {

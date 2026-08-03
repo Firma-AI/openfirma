@@ -4,8 +4,8 @@
 //! `Placeholder` dictionary-key type and the persistent `SecretStore`) and
 //! firma-sidecar's HTTP MITM intercept (which mints locally so its
 //! single-pass extraction can substitute the placeholder synchronously, then
-//! pushes the pre-minted placeholder + value to firma-run's broker for
-//! storage — see `secret_gateway_client::push_secret`).
+//! pushes the pre-minted placeholder and value to firma-run's broker for
+//! storage).
 
 use type_safe_id::{StaticType, TypeSafeId};
 

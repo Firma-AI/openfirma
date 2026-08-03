@@ -1,14 +1,20 @@
 use std::{fmt, ops::Deref};
 
+/// Returned by [`NonEmptyStr::new`] when the input is empty (after trimming).
 #[derive(Debug, thiserror::Error)]
 #[error("empty string")]
-pub(super) struct EmptyError;
+pub struct EmptyError;
 
 /// A borrowed string checked to be non-empty.
-pub(super) struct NonEmptyStr<'a>(&'a str);
+pub struct NonEmptyStr<'a>(&'a str);
 
 impl<'a> NonEmptyStr<'a> {
-    pub(super) fn new(value: &'a str) -> Result<Self, EmptyError> {
+    /// Trims `value` and wraps it, failing if nothing is left.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmptyError`] if `value` is empty after trimming.
+    pub fn new(value: &'a str) -> Result<Self, EmptyError> {
         let value = value.trim();
         if value.is_empty() {
             Err(EmptyError)

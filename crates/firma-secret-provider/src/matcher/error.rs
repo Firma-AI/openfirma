@@ -16,7 +16,7 @@ pub enum MatcherError {
     /// The regex failed to compile.
     #[error("invalid regex: {0}")]
     Regex(#[source] regex::Error),
-    /// The regex miss a named capture group.
+    /// The regex is missing a required named capture group.
     #[error("regex matcher must contain a named `{missing}` capture group, found {found}")]
     MissingGroup {
         /// The name of the missing group.
@@ -48,15 +48,15 @@ pub enum MatcherError {
         /// Number of nodes selected within the record.
         matches: usize,
     },
-    /// A document-scoped selector did not select exactly one node.
-    #[error("json matcher {selector} selected {matches} document node(s); expected exactly one")]
+    /// A document-scoped item selector selected more than one node.
+    #[error("json matcher {selector} selected {matches} document node(s); expected at most one")]
     DocumentSelectorMatchCount {
         /// Name of the selector field.
         selector: &'static str,
         /// Number of nodes selected from the document root.
         matches: usize,
     },
-    /// A selected value or name node was not a JSON string.
+    /// A selected value, name, or domain node was not a JSON string.
     #[error("json matcher {selector} selected a non-string node in record {record_index}")]
     NonStringNode {
         /// Name of the selector field.
@@ -69,6 +69,13 @@ pub enum MatcherError {
     EmptyNode {
         /// Name of the selector field.
         selector: &'static str,
+        /// Zero-based index of the record selected by `record_path`.
+        record_index: usize,
+    },
+    /// A `RecordKey`-sourced name had no parent key to derive from (the
+    /// record's own location is the document root).
+    #[error("json matcher name (record_key) has no parent key in record {record_index}")]
+    RecordKeyUnavailable {
         /// Zero-based index of the record selected by `record_path`.
         record_index: usize,
     },
@@ -88,10 +95,12 @@ pub enum MatcherError {
     /// Found Uri has no host.
     #[error("no host uri {0}")]
     NoHostInUri(String),
-    /// No matches found, probable misconfiguration.
+    /// A regex matcher found no captures in the provider output. This may
+    /// indicate a misconfigured matcher or provider output drift.
     #[error("no matches")]
     NoMatches,
-    /// Domain is configured but it didn't match the pattern.
+    /// A configured domain selector produced no domains, or a regex with a
+    /// domain capture matched a record without capturing its domain.
     #[error("no domain matched")]
     NoDomainMatched,
 }

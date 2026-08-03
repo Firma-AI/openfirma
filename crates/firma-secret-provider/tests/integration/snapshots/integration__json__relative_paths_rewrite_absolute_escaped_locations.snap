@@ -1,0 +1,5 @@
+---
+source: crates/firma-secret-provider/tests/integration/json.rs
+expression: output
+---
+{"groups":{"a/b~c":[{"credentials":{"key":"first","v/~":"[placeholder]"}},{"credentials":{"key":"second","v/~":"[placeholder]"}}]},"credentials":{"v/~":"ROOT"}}

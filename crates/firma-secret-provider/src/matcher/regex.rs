@@ -1,9 +1,14 @@
+use std::collections::HashSet;
+
 use either::Either;
 use http::uri::Authority;
 use regex::{Captures, Regex};
 
-use super::{MatcherError, domain::parse_authority, non_empty::NonEmptyStr};
-use crate::Secret;
+use crate::{
+    SecretPlaceholder, SecretString,
+    matcher::{MatcherError, domain::parse_authority},
+    non_empty::NonEmptyStr,
+};
 
 const NAME: &str = "name";
 const VALUE: &str = "value";
@@ -39,15 +44,20 @@ impl CompiledRegexMatcher {
     pub(super) fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(&str, Secret, Option<&Authority>, Option<&str>) -> String,
+        mint: &mut impl FnMut(
+            String,
+            SecretString,
+            HashSet<Authority>,
+            Option<String>,
+        ) -> SecretPlaceholder,
     ) -> Result<Vec<u8>, MatcherError> {
         enum Item<'a> {
             Str(&'a str),
             // Regex matchers are for flat KV stores; item is always absent.
             Mint {
                 name: String,
-                secret: String,
-                domain: Option<Authority>,
+                secret: SecretString,
+                domains: HashSet<Authority>,
             },
         }
 
@@ -71,19 +81,25 @@ impl CompiledRegexMatcher {
                     found: self.groups(Some(&caps)).join(", "),
                 })?
                 .map_err(|_| MatcherError::EmptyGroup(NAME))?;
-            let domain = match caps.name(DOMAIN) {
-                Some(m) => Some(parse_authority(m.as_str())?),
+
+            let domains = match caps.name(DOMAIN) {
+                Some(m) => {
+                    let domain = parse_authority(m.as_str())?;
+                    let mut domains = HashSet::new();
+                    domains.insert(domain);
+                    domains
+                }
                 None if has_domain => {
                     return Err(MatcherError::NoDomainMatched);
                 }
-                None => None,
+                None => HashSet::new(),
             };
 
             items.push(Item::Str(&text[last..value.start()]));
             items.push(Item::Mint {
                 name: name.to_owned(),
-                secret: value.as_str().to_owned(),
-                domain,
+                secret: SecretString::from(value.as_str()),
+                domains,
             });
             last = value.end();
         }
@@ -99,9 +115,10 @@ impl CompiledRegexMatcher {
                 Item::Mint {
                     name,
                     secret,
-                    domain,
+                    domains,
                 } => Either::Right(
-                    mint(&name, Secret::new(&secret), domain.as_ref(), None)
+                    mint(name, secret, domains, None)
+                        .to_string()
                         .into_bytes()
                         .into_iter(),
                 ),

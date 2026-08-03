@@ -1,19 +1,42 @@
-use firma_core::{SecretJsonSelector, SecretJsonSelectorScope};
+use std::{collections::HashSet, hash::Hash};
+
+use firma_core::{SecretJsonSelector, SecretJsonSelectorScope, SecretNameSource};
 use http::uri::Authority;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
-use super::{MatcherError, domain::parse_authority, non_empty::NonEmptyStr};
-use crate::Secret;
+use crate::{
+    SecretPlaceholder, SecretString,
+    matcher::{MatcherError, domain::parse_authority},
+    non_empty::NonEmptyStr,
+};
 
 /// Compiled record-relative `JSONPath` selectors.
 #[derive(Debug)]
 pub(super) struct CompiledJsonMatcher {
     record: JsonPath,
     value: JsonPath,
-    name: JsonPath,
+    name: CompiledName,
     item: Option<CompiledJsonSelector>,
     domain: Option<CompiledJsonSelector>,
+}
+
+/// Compiled form of [`SecretNameSource`].
+#[derive(Debug)]
+enum CompiledName {
+    /// See [`SecretNameSource::Path`].
+    Path(JsonPath),
+    /// See [`SecretNameSource::RecordKey`].
+    RecordKey,
+}
+
+impl CompiledName {
+    fn compile(source: &SecretNameSource) -> Result<Self, MatcherError> {
+        Ok(match source {
+            SecretNameSource::Path { path } => Self::Path(parse_path(path)?),
+            SecretNameSource::RecordKey => Self::RecordKey,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -36,14 +59,14 @@ impl CompiledJsonMatcher {
     pub(super) fn compile(
         record_path: &str,
         value_path: &str,
-        name_path: &str,
+        name: &SecretNameSource,
         item_selector: Option<&SecretJsonSelector>,
         domain_selector: Option<&SecretJsonSelector>,
     ) -> Result<Self, MatcherError> {
         Ok(Self {
             record: parse_path(record_path)?,
             value: parse_path(value_path)?,
-            name: parse_path(name_path)?,
+            name: CompiledName::compile(name)?,
             item: item_selector
                 .map(CompiledJsonSelector::compile)
                 .transpose()?,
@@ -56,7 +79,12 @@ impl CompiledJsonMatcher {
     pub(super) fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut impl FnMut(&str, Secret, Option<&Authority>, Option<&str>) -> String,
+        mint: &mut impl FnMut(
+            String,
+            SecretString,
+            HashSet<Authority>,
+            Option<String>,
+        ) -> SecretPlaceholder,
     ) -> Result<Vec<u8>, MatcherError> {
         let mut root: Value = serde_json::from_slice(output).map_err(MatcherError::Json)?;
 
@@ -93,19 +121,22 @@ impl CompiledJsonMatcher {
         let names = records
             .iter()
             .enumerate()
-            .map(|(record_index, record)| {
-                let (node, _) = one_record_node(&self.name, record, "name_path", record_index)?;
-                let node = node.as_str().ok_or(MatcherError::NonStringNode {
-                    selector: "name_path",
-                    record_index,
-                })?;
-
-                NonEmptyStr::new(node)
-                    .map_err(|_| MatcherError::EmptyNode {
-                        selector: "name_path",
+            .map(|(record_index, record)| match &self.name {
+                CompiledName::Path(path) => {
+                    let (node, _) = one_record_node(path, record, "name", record_index)?;
+                    let node = node.as_str().ok_or(MatcherError::NonStringNode {
+                        selector: "name",
                         record_index,
-                    })
-                    .map(|name| name.to_owned())
+                    })?;
+
+                    NonEmptyStr::new(node)
+                        .map_err(|_| MatcherError::EmptyNode {
+                            selector: "name",
+                            record_index,
+                        })
+                        .map(|name| name.to_owned())
+                }
+                CompiledName::RecordKey => record_key_name(record, record_index),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let items = match &self.item {
@@ -124,9 +155,9 @@ impl CompiledJsonMatcher {
             )?,
         };
         let domains = match &self.domain {
-            None => vec![None; records.len()],
+            None => vec![HashSet::new(); records.len()],
             Some(selector) => {
-                selector.resolve_optional(&root, &records, "domain_selector", |domain, _, _| {
+                selector.resolve_many(&root, &records, "domain_selector", |domain, _, _| {
                     parse_authority(domain)
                 })?
             }
@@ -135,14 +166,9 @@ impl CompiledJsonMatcher {
         for (((value_hit, name), item), domain) in
             value_hits.into_iter().zip(names).zip(items).zip(domains)
         {
-            let placeholder = mint(
-                &name,
-                Secret::new(&value_hit.value),
-                domain.as_ref(),
-                item.as_deref(),
-            );
+            let placeholder = mint(name, SecretString::from(value_hit.value), domain, item);
             if let Some(slot) = root.pointer_mut(&value_hit.pointer) {
-                *slot = Value::String(placeholder);
+                *slot = Value::String(placeholder.to_string());
             }
         }
 
@@ -179,7 +205,7 @@ impl CompiledJsonSelector {
                 .collect(),
             SecretJsonSelectorScope::Document => {
                 let nodes = self.path.query(root);
-                if nodes.len() != 1 {
+                if nodes.len() > 1 {
                     return Err(MatcherError::DocumentSelectorMatchCount {
                         selector: selector_name,
                         matches: nodes.len(),
@@ -194,6 +220,66 @@ impl CompiledJsonSelector {
             }
         }
     }
+
+    /// Resolves one or more domain nodes at each applicable root. Every node
+    /// must be a string that passes `validate`; results are deduplicated into
+    /// a set. Zero matches, non-string nodes, or validation failures reject
+    /// the complete extraction before minting.
+    fn resolve_many<T>(
+        &self,
+        root: &Value,
+        records: &[Record<'_>],
+        selector_name: &'static str,
+        validate: impl Fn(&str, &'static str, usize) -> Result<T, MatcherError>,
+    ) -> Result<Vec<HashSet<T>>, MatcherError>
+    where
+        T: Clone + Eq + Hash,
+    {
+        match self.scope {
+            SecretJsonSelectorScope::Record => records
+                .iter()
+                .enumerate()
+                .map(|(record_index, record)| {
+                    let set = self
+                        .path
+                        .query(record.node)
+                        .iter()
+                        .map(|node| {
+                            node.as_str()
+                                .map(|node| validate(node, selector_name, record_index))
+                                .ok_or(MatcherError::NonStringNode {
+                                    selector: selector_name,
+                                    record_index,
+                                })?
+                        })
+                        .collect::<Result<HashSet<_>, _>>()?;
+                    if set.is_empty() {
+                        return Err(MatcherError::NoDomainMatched);
+                    }
+                    Ok(set)
+                })
+                .collect(),
+            SecretJsonSelectorScope::Document => {
+                let values = self
+                    .path
+                    .query(root)
+                    .iter()
+                    .map(|node| {
+                        node.as_str()
+                            .map(|node| validate(node, selector_name, 0))
+                            .ok_or(MatcherError::NonStringNode {
+                                selector: selector_name,
+                                record_index: 0,
+                            })?
+                    })
+                    .collect::<Result<HashSet<_>, _>>()?;
+                if values.is_empty() {
+                    return Err(MatcherError::NoDomainMatched);
+                }
+                Ok(std::iter::repeat_n(values, records.len()).collect())
+            }
+        }
+    }
 }
 
 fn parse_path(path: &str) -> Result<JsonPath, MatcherError> {
@@ -201,6 +287,25 @@ fn parse_path(path: &str) -> Result<JsonPath, MatcherError> {
         path: path.to_owned(),
         reason,
     })
+}
+
+/// Derives a [`SecretNameSource::RecordKey`] name from a record's own
+/// `record_path`-selected location: the final segment of its JSON Pointer,
+/// unescaped per RFC 6901. Fails if the record has no parent key (e.g.
+/// `record_path` selected the whole document as a single record).
+fn record_key_name(record: &Record<'_>, record_index: usize) -> Result<String, MatcherError> {
+    if record.pointer.is_empty() {
+        return Err(MatcherError::RecordKeyUnavailable { record_index });
+    }
+    let segment = record.pointer.rsplit('/').next().unwrap_or_default();
+    let name = segment.replace("~1", "/").replace("~0", "~");
+
+    NonEmptyStr::new(&name)
+        .map_err(|_| MatcherError::EmptyNode {
+            selector: "name",
+            record_index,
+        })
+        .map(|name| name.to_owned())
 }
 
 fn one_record_node<'a>(
