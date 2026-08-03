@@ -5,7 +5,6 @@ mod cli_parsing;
 mod doctor;
 mod e2e_startup;
 mod firma_config;
-mod live_capability_e2e;
 mod monitor_audit_stream;
 mod monitor_decoupled;
 mod policy_cli;

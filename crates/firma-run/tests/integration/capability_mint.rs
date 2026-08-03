@@ -32,7 +32,10 @@ use firma_protobuf::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision,
     PolicyBundleUpdate, RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
+use firma_sidecar::config::CapabilitySeedConfig;
+use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
+use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
 use firma_run::capability::issue::{IssueParams, mint_and_write};
 use firma_run::capability::refresh::CapabilityRefresher;
 use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
@@ -170,6 +173,76 @@ struct MockServer {
     _dir: tempfile::TempDir,
 }
 
+struct RealAuthority {
+    url: String,
+    pub_key_path: PathBuf,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    handle: tokio::task::JoinHandle<anyhow::Result<()>>,
+    _dir: tempfile::TempDir,
+}
+
+impl RealAuthority {
+    async fn start() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy_dir = dir.path().join("policies");
+        let issuance_policy_dir = dir.path().join("issuance-policies");
+        std::fs::create_dir(&policy_dir).expect("create policy dir");
+        std::fs::create_dir(&issuance_policy_dir).expect("create issuance policy dir");
+        for directory in [&policy_dir, &issuance_policy_dir] {
+            std::fs::write(
+                directory.join("permit-all.cedar"),
+                "permit(principal, action, resource);",
+            )
+            .expect("write policy");
+        }
+
+        let keypair = AsymmetricKeyPair::<V4>::generate().expect("keypair");
+        let key_path = dir.path().join("authority.key");
+        let pub_key_path = dir.path().join("authority.pub");
+        std::fs::write(&key_path, keypair.secret.as_bytes()).expect("write secret key");
+        std::fs::write(&pub_key_path, keypair.public.as_bytes()).expect("write public key");
+
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = Server::try_new(
+            AuthorityConfig {
+                listen_addr: "127.0.0.1:0".to_string(),
+                policy_dir,
+                issuance_policy_dir,
+                schema_path: None,
+                revocation_file: dir.path().join("revocations.txt"),
+                max_ttl_seconds: 3600,
+                key_file: key_path,
+                log_level: "warn".to_string(),
+                bundle_ttl_seconds: 30,
+                tls: AuthorityTlsConfig::default(),
+            },
+            async {
+                let _ = shutdown_rx.await;
+            },
+        )
+        .await
+        .expect("start real Authority");
+        let url = format!("http://127.0.0.1:{}", server.port());
+        let handle = tokio::spawn(server.run());
+
+        Self {
+            url,
+            pub_key_path,
+            shutdown,
+            handle,
+            _dir: dir,
+        }
+    }
+
+    async fn stop(self) {
+        let _ = self.shutdown.send(());
+        self.handle
+            .await
+            .expect("join real Authority")
+            .expect("run real Authority");
+    }
+}
+
 impl Drop for MockServer {
     fn drop(&mut self) {
         if let Some(tx) = self.shutdown.take() {
@@ -275,6 +348,66 @@ fn lease() -> CapabilityLeaseConfig {
         grace_seconds: 30,
         requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
+}
+
+#[tokio::test]
+async fn real_authority_token_mints_compatible_seed() {
+    let authority = RealAuthority::start().await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+    let params = IssueParams {
+        authority_url: authority.url.clone(),
+        authority_pub_key_path: authority.pub_key_path.clone(),
+        authority_ca_cert_path: None,
+        credentials: None,
+        agent_id: *super::helper::agent_id(),
+        session_id: "live-session".to_string(),
+        requested_actions: vec!["communication.external.send".to_string()],
+        resource_scope: "*".to_string(),
+        ttl_seconds: 900,
+    };
+    let mint_path = seed_path.clone();
+
+    let written = tokio::task::spawn_blocking(move || mint_and_write(&params, &mint_path))
+        .await
+        .expect("join capability mint")
+        .expect("mint against real Authority");
+
+    assert_eq!(written, seed_path);
+    let body = std::fs::read_to_string(&seed_path).expect("read minted seed");
+    let seed: CapabilitySeed = toml::from_str(&body).expect("parse minted seed");
+    assert_eq!(seed.agent_id, super::helper::agent_id().to_string());
+    assert_eq!(seed.session_id, "live-session");
+    assert_eq!(
+        seed.action_set,
+        vec!["communication.external.send".to_string()]
+    );
+    assert!(!seed.raw_token.is_empty(), "seed carries the signed token");
+
+    let verifier = build_token_verifier(Some(&authority.pub_key_path))
+        .expect("build verifier from real Authority key");
+    let capability_map = load_capability_map(
+        &CapabilitySeedConfig {
+            paths: vec![seed_path],
+            hot_reload: true,
+        },
+        verifier.as_ref(),
+        &dir.path().join("runtime-capabilities"),
+    )
+    .expect("Sidecar loads seed minted through firma-run");
+    let entry = capability_map
+        .select(
+            "live-session",
+            "communication.external.send",
+            "example.test/request",
+        )
+        .expect("minted capability admits matching request at Stage 1");
+    let claims = verifier
+        .verify(&entry.raw_token)
+        .expect("Sidecar verifies token from real Authority");
+    assert_eq!(claims.session_id.to_string(), "live-session");
+
+    authority.stop().await;
 }
 
 #[test]
