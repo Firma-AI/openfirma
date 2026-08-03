@@ -72,7 +72,6 @@ hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
-proc-macro2 = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 serde_repr = { workspace = true }
