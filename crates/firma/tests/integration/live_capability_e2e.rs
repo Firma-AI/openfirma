@@ -5,7 +5,7 @@
 //! returned token locally, and writes the seed to the deterministic runtime
 //! path (`<FIRMA_STATE_DIR>/capabilities/<sandbox_id>.toml`). The seed is then
 //! loaded through the sidecar's capability map and shown to ALLOW the default
-//! action — the same Stage 1 admission proof used by `seeded_capability_e2e.rs`.
+//! action — the same Stage 1 admission proof used by `sidecar_seed_e2e.rs`.
 //!
 //! ## Why the full `firma run` CLI is not driven here
 //!
@@ -273,7 +273,7 @@ fn live_mint_writes_seed_and_admits_stage1() {
 
     // Build the verifier from the Authority's published public key and load the
     // freshly minted seed through the sidecar's capability map — the same
-    // Stage 1 admission path proven by `seeded_capability_e2e.rs`.
+    // Stage 1 admission path proven by `sidecar_seed_e2e.rs`.
     let verifier =
         build_token_verifier(Some(authority.pub_key_path.as_path())).expect("verifier must build");
     let seed_cfg = CapabilitySeedConfig {
