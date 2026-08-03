@@ -5,10 +5,12 @@
 //! when HTTPS MITM is active. The default Anthropic-only scaffold ships MITM
 //! disabled, so the daemon timed out and never came up. Readiness now gates
 //! the CA-material probe on `HttpsMitmConfig::is_active()`.
-//! On Unix, the teardown half sends `SIGTERM` to the detached supervisor and
-//! verifies that its preinstalled handler owns component cleanup.
-//! On Windows, abruptly terminating the detached supervisor also verifies that
-//! its retained Job Object ownership terminates both production components.
+//! On Unix, the teardown half also sends `SIGTERM` to the detached supervisor
+//! and verifies that its preinstalled handler owns component cleanup.
+//! On Windows, abruptly terminating the supervisor verifies that retained Job
+//! Object ownership terminates both production components.
+//! A second detached start with a missing lock must not claim or terminate the
+//! existing stack.
 
 #![allow(
     clippy::expect_used,
@@ -38,6 +40,46 @@ impl Drop for StackCleanup<'_> {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+fn assert_failed_restart_preserves_stack(cfg_path: &std::path::Path, state_dir: &std::path::Path) {
+    let authority_pid = firma_stack::test_support::pidfile::read(&state_dir.join("authority.pid"))
+        .expect("read authority pidfile")
+        .expect("authority pid");
+    let sidecar_pid = firma_stack::test_support::pidfile::read(&state_dir.join("sidecar.pid"))
+        .expect("read sidecar pidfile")
+        .expect("sidecar pid");
+
+    std::fs::remove_file(state_dir.join("stack.lock")).expect("remove stack lock");
+    let restart_stderr = state_dir.join("restart.stderr.log");
+    let restart_status = firma()
+        .args(["sidecar", "start", "--detach", "--config"])
+        .arg(cfg_path)
+        .args(["--state-dir"])
+        .arg(state_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(
+            File::create(&restart_stderr).expect("create restart log"),
+        ))
+        .status()
+        .expect("run second firma sidecar start");
+    assert!(
+        !restart_status.success(),
+        "second start unexpectedly succeeded"
+    );
+    let restart_diagnostics = std::fs::read_to_string(&restart_stderr).unwrap_or_default();
+    assert!(
+        authority_pid.process_exists().expect("probe authority"),
+        "failed startup rollback terminated the existing authority: {restart_diagnostics}"
+    );
+    assert!(
+        sidecar_pid.process_exists().expect("probe sidecar"),
+        "failed startup rollback terminated the existing sidecar: {restart_diagnostics}"
+    );
+    assert!(
+        !state_dir.join("stack.lock").exists(),
+        "blocked startup published a generation it does not own"
+    );
 }
 
 #[test]
@@ -113,6 +155,8 @@ fn start_launches_from_anthropic_scaffold() {
         "stack did not come up: stack.pid missing"
     );
 
+    assert_failed_restart_preserves_stack(&cfg_path, &state_dir);
+
     assert_owner_teardown(&state_dir, &stack_pid);
 }
 
@@ -137,27 +181,21 @@ fn assert_owner_teardown(state_dir: &Path, stack_pid: &Path) {
         )
         .expect("SIGTERM detached supervisor");
     }
-
     #[cfg(windows)]
     firma_stack::test_support::terminate_raw(supervisor_pid.get())
         .expect("terminate detached supervisor");
 
     let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let teardown_incomplete = authority_pid.process_exists().expect("probe authority")
-            || sidecar_pid.process_exists().expect("probe sidecar")
-            || supervisor_pid.process_exists().expect("probe supervisor");
-        if !teardown_incomplete || Instant::now() >= deadline {
-            break;
-        }
+    while Instant::now() < deadline
+        && (supervisor_pid.process_exists().expect("probe supervisor")
+            || authority_pid.process_exists().expect("probe authority")
+            || sidecar_pid.process_exists().expect("probe sidecar"))
+    {
         std::thread::sleep(Duration::from_millis(100));
     }
-
-    let components_stopped = !authority_pid.process_exists().expect("probe authority")
-        && !sidecar_pid.process_exists().expect("probe sidecar");
     assert!(
-        components_stopped,
-        "component processes survived owning supervisor teardown"
+        !supervisor_pid.process_exists().expect("probe supervisor"),
+        "detached supervisor still exists after termination"
     );
     assert!(
         !authority_pid.process_exists().expect("probe authority"),
@@ -167,24 +205,12 @@ fn assert_owner_teardown(state_dir: &Path, stack_pid: &Path) {
         !sidecar_pid.process_exists().expect("probe sidecar"),
         "sidecar still exists after supervisor teardown"
     );
-    assert!(
-        !supervisor_pid.process_exists().expect("probe supervisor"),
-        "detached supervisor still exists after teardown"
-    );
 
-    #[cfg(unix)]
-    {
-        assert!(!state_dir.join("stack.lock").exists());
-        assert!(!state_dir.join("stack.pid").exists());
-    }
-
-    #[cfg(windows)]
-    {
-        let stop_status = firma()
-            .args(["sidecar", "stop", "--state-dir"])
-            .arg(state_dir)
-            .status()
-            .expect("clean retained state");
-        assert!(stop_status.success(), "could not clean retained state");
-    }
+    let stop_status = firma()
+        .args(["sidecar", "stop", "--state-dir"])
+        .arg(state_dir)
+        .status()
+        .expect("clean retained state");
+    assert!(stop_status.success(), "could not clean retained state");
+    assert!(!state_dir.join("stack.pid").exists());
 }

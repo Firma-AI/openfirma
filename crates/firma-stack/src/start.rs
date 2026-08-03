@@ -951,11 +951,10 @@ fn acquire_lock(
 ) -> Result<StateLease> {
     let lock = state_dir.join("stack.lock");
     loop {
-        let claimed = StateLease::try_claim(state_dir, generation)?;
         if !is_stack_stale(state_dir)? {
             return Err(StackError::AlreadyRunning { path: lock });
         }
-        if let Some(state_lease) = claimed {
+        if let Some(state_lease) = StateLease::try_claim(state_dir, generation)? {
             return Ok(state_lease);
         }
         std::fs::remove_file(&lock)?;
