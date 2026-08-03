@@ -20,7 +20,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::error::{Result, StackError};
-use crate::platform::{Group, Platform, SpawnedChild};
+use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
 use crate::shutdown_event::windows_shutdown_event_name;
 use firma_runtime_state::ChildExt as _;
 
@@ -47,6 +47,10 @@ impl Platform for WindowsPlatform {
         Ok(Group { job })
     }
 
+    fn termination_target_exists(target: TerminationTarget) -> Result<bool> {
+        target.stored_id().process_exists().map_err(StackError::Io)
+    }
+
     fn spawn_in_group(group: &Group, cmd: &mut Command, log_path: &Path) -> Result<SpawnedChild> {
         if let Some(parent) = log_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -68,13 +72,13 @@ impl Platform for WindowsPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = child.process_id();
+        let leader_pid = child.process_id();
         // AssignProcessToJobObject requires PROCESS_SET_QUOTA and PROCESS_TERMINATE
         // on the process handle (per MSDN). Opening with only
         // PROCESS_QUERY_LIMITED_INFORMATION makes the assignment fail with
         // ERROR_ACCESS_DENIED.
         let process_handle =
-            unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid.get()) };
+            unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, leader_pid.get()) };
         if process_handle.is_null() {
             let err = unsafe { GetLastError() };
             return Err(StackError::Platform(format!(
@@ -94,17 +98,20 @@ impl Platform for WindowsPlatform {
             )));
         }
         std::mem::forget(child);
-        Ok(SpawnedChild { pid })
+        Ok(SpawnedChild {
+            leader_pid,
+            termination_target: TerminationTarget::for_leader(leader_pid),
+        })
     }
 
-    fn signal_soft(group_pid: u32) -> Result<()> {
+    fn signal_soft(target: TerminationTarget) -> Result<()> {
         // `GenerateConsoleCtrlEvent` only delivers to processes that share the
         // caller's console. The stop process runs in a different console than the
         // children, and the children are spawned with `CREATE_NO_WINDOW` (no
         // console at all). So we use a per-PID named event that the child
         // creates at startup (see `firma::signal`); opening + signalling it is
         // the cross-console graceful-shutdown signal.
-        let name = windows_shutdown_event_name(group_pid);
+        let name = windows_shutdown_event_name(target.stored_id().get());
         let wide: Vec<u16> = OsStr::new(&name)
             .encode_wide()
             .chain(std::iter::once(0))
@@ -131,8 +138,8 @@ impl Platform for WindowsPlatform {
         Ok(())
     }
 
-    fn signal_hard(group_pid: u32) -> Result<()> {
-        let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, group_pid) };
+    fn signal_hard(target: TerminationTarget) -> Result<()> {
+        let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, target.stored_id().get()) };
         if handle.is_null() {
             return Err(StackError::Platform("OpenProcess(TERMINATE) failed".into()));
         }
@@ -178,7 +185,9 @@ mod tests {
         let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide.as_ptr()) };
         assert!(!event.is_null(), "CreateEventW failed");
 
-        WindowsPlatform::signal_soft(pid.get()).expect("signal_soft");
+        TerminationTarget::for_leader(pid)
+            .signal_soft()
+            .expect("signal_soft");
 
         let waited = unsafe { WaitForSingleObject(event, 5_000) };
         unsafe { CloseHandle(event) };
@@ -195,7 +204,8 @@ mod tests {
     fn signal_soft_errors_when_event_absent() {
         // PID with no matching event — `OpenEventW` must return null.
         let pid = UserProcessId::new(0xDEAD_BEEF).expect("synthetic pid is non-zero");
-        let err = WindowsPlatform::signal_soft(pid.get())
+        let err = TerminationTarget::for_leader(pid)
+            .signal_soft()
             .expect_err("signal_soft must fail with no event");
         let msg = err.to_string();
         assert!(

@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
-use crate::platform::{Platform, SystemPlatform};
+use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{Children, block_until_exit};
@@ -51,8 +51,8 @@ pub struct StackHandle {
 /// # Errors
 ///
 /// Returns state-directory, lock, spawn, or readiness errors. On failure
-/// after children have been spawned, this function tears them down and
-/// removes any pid/listen/lock files it created before returning the error.
+/// after children have been spawned, this function tears them down. Runtime
+/// state is retained when hard termination fails so callers can retry cleanup.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
@@ -85,7 +85,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let config = FirmaToml::read(&cfg.config_file)?;
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
     let auth = spawn_with_config(&group, state_dir, "authority", &cfg.config_file, exe)?;
-    info!(pid = %auth.pid, "authority spawned");
+    info!(pid = %auth.leader_pid, "authority spawned");
     let auth_addr = config.authority_listen_addr()?;
     std::fs::write(state_dir.join("authority.listen"), format!("{auth_addr}\n"))?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
@@ -94,7 +94,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
 
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
     let side = spawn_with_config(&group, state_dir, "sidecar", &cfg.config_file, exe)?;
-    info!(pid = %side.pid, "sidecar spawned");
+    info!(pid = %side.leader_pid, "sidecar spawned");
     let sidecar = config.sidecar_config()?;
     let side_addr = sidecar.interceptor.listen_addr;
     std::fs::write(state_dir.join("sidecar.listen"), format!("{side_addr}\n"))?;
@@ -122,8 +122,8 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let _ = group;
 
     Ok(StackHandle {
-        authority_pid: auth.pid,
-        sidecar_pid: side.pid,
+        authority_pid: auth.leader_pid,
+        sidecar_pid: side.leader_pid,
     })
 }
 
@@ -132,8 +132,8 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
 /// # Errors
 ///
 /// Returns state directory, spawn, readiness, or detach errors. On failure
-/// after children have been spawned, this function tears them down and
-/// removes any pid/listen/lock files it created before returning the error.
+/// after children have been spawned, this function tears them down. Runtime
+/// state is retained when hard termination fails so callers can retry cleanup.
 pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<StackHandle> {
     let handle = spawn_stack(cfg, state_dir)?;
     match mode {
@@ -147,7 +147,7 @@ pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<Sta
             // Foreground exit (Ctrl-C, child died): caller is leaving. Tear
             // children down and remove pid/listen/lock files so the next
             // `start` does not trip on stale state.
-            let _ = crate::stop::stop(state_dir, Duration::from_secs(10));
+            crate::stop::stop(state_dir, Duration::from_secs(10))?;
         }
         StartMode::Detached => {
             info!("forking detached supervisor");
@@ -161,12 +161,29 @@ fn rollback(state_dir: &Path) {
     // Best-effort teardown: kill any spawned children and remove the artifacts
     // we wrote. Errors during rollback are ignored — they would mask the
     // original failure that triggered this path.
+    let mut cleanup_safe = true;
     for name in ["authority.pid", "sidecar.pid"] {
-        if let Ok(Some(pid)) = pidfile::read(&state_dir.join(name))
-            && pid.is_alive()
-        {
-            let _ = SystemPlatform::signal_hard(pid.get());
+        let path = state_dir.join(name);
+        match pidfile::read(&path) {
+            Ok(Some(id)) => {
+                let target = TerminationTarget::from_stored_id(id);
+                if !matches!(target.exists(), Ok(false))
+                    && let Err(error) = target.signal_hard()
+                {
+                    debug!(target = %id, %error, "rollback hard termination failed");
+                    cleanup_safe = false;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                debug!(path = %path.display(), %error, "rollback could not read termination target");
+                cleanup_safe = false;
+            }
         }
+    }
+    if !cleanup_safe {
+        debug!("rollback retained runtime state for a later cleanup attempt");
+        return;
     }
     for name in [
         "authority.pid",
@@ -241,7 +258,8 @@ fn acquire_lock(state_dir: &Path) -> Result<()> {
         .create_new(true)
         .open(&lock)
     {
-        Ok(_) => Ok(()),
+        Ok(_) if is_stack_stale(state_dir)? => Ok(()),
+        Ok(_) => Err(StackError::AlreadyRunning { path: lock }),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             if is_stack_stale(state_dir)? {
                 std::fs::remove_file(&lock)?;
@@ -254,10 +272,14 @@ fn acquire_lock(state_dir: &Path) -> Result<()> {
 }
 
 fn is_stack_stale(state_dir: &Path) -> Result<bool> {
-    // Stale when no recorded supervisor or component pid is still alive.
-    for name in ["stack.pid", "authority.pid", "sidecar.pid"] {
-        if let Some(pid) = pidfile::read(&state_dir.join(name))?
-            && pid.is_alive()
+    if let Some(pid) = pidfile::read(&state_dir.join("stack.pid"))?
+        && process_exists(pid)?
+    {
+        return Ok(false);
+    }
+    for name in ["authority.pid", "sidecar.pid"] {
+        if let Some(id) = pidfile::read(&state_dir.join(name))?
+            && TerminationTarget::from_stored_id(id).exists()?
         {
             return Ok(false);
         }
@@ -266,13 +288,26 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
 }
 
 fn reap_stale(state_dir: &Path) -> Result<()> {
-    for name in ["authority.pid", "sidecar.pid", "stack.pid"] {
+    for name in ["authority.pid", "sidecar.pid"] {
         let path = state_dir.join(name);
-        if let Some(pid) = pidfile::read(&path)?
-            && !pid.is_alive()
+        if let Some(id) = pidfile::read(&path)?
+            && !TerminationTarget::from_stored_id(id).exists()?
         {
             pidfile::remove(&path)?;
         }
     }
+    let supervisor = state_dir.join("stack.pid");
+    if let Some(pid) = pidfile::read(&supervisor)?
+        && !process_exists(pid)?
+    {
+        pidfile::remove(&supervisor)?;
+    }
     Ok(())
+}
+
+fn process_exists(pid: UserProcessId) -> Result<bool> {
+    if pid.reap_if_exited() {
+        return Ok(false);
+    }
+    pid.process_exists().map_err(StackError::Io)
 }

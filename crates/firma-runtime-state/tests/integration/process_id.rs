@@ -1,6 +1,43 @@
 use firma_runtime_state::UserProcessId;
 
 #[test]
+fn current_process_exists() {
+    let pid = UserProcessId::new(std::process::id()).expect("current PID");
+
+    assert!(pid.process_exists().expect("probe current process"));
+}
+
+#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::zombie_processes,
+    reason = "the test explicitly reaps the child through UserProcessId"
+)]
+fn reaping_is_explicit_and_process_probe_is_non_destructive() {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("sh")
+        .args(["-c", "exit 0"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn child");
+    let pid = UserProcessId::new(child.id()).expect("child PID");
+    let mut stdout = child.stdout.take().expect("child stdout");
+    stdout.read_to_end(&mut Vec::new()).expect("wait for EOF");
+
+    assert!(
+        pid.process_exists().expect("probe zombie"),
+        "zombie should exist before reaping"
+    );
+    assert!(pid.reap_if_exited(), "exited child should be reaped");
+    assert!(
+        !pid.process_exists().expect("probe reaped child"),
+        "reaped child should not exist"
+    );
+}
+
+#[test]
 fn rejects_zero() {
     assert_eq!(UserProcessId::new(0), None);
     insta::assert_snapshot!(UserProcessId::try_from(0).unwrap_err().to_string(), @"process id must be non-zero and fit the platform process id type");
