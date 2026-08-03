@@ -206,6 +206,24 @@ jobs:
           command -v cargo-nextest || cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
         shell: bash
 
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y bubblewrap
+
+      - name: Allow bwrap user namespaces via AppArmor profile
+        if: runner.os == 'Linux'
+        run: |
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+              userns,
+              include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
       - name: Test
         id: test
         continue-on-error: true
@@ -384,6 +402,22 @@ jobs:
         run: |
           command -v cargo-nextest || cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
         shell: bash
+
+      - name: Install bubblewrap
+        run: sudo apt-get install -y bubblewrap
+
+      - name: Allow bwrap user namespaces via AppArmor profile
+        run: |
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+              userns,
+              include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
 
       - name: Generate coverage
         run: cargo llvm-cov nextest --workspace --all-features --codecov --output-path codecov.json
