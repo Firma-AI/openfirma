@@ -24,9 +24,8 @@ use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::supervisor::{
-    ReaperLauncher, StopSignal, block_until_owned_exit, block_until_owned_exit_with,
-    collect_child_in_background, collect_child_until, collect_in_background,
-    collect_in_background_with, launch_reaper,
+    ReaperLauncher, StopSignal, block_until_owned_exit_with, collect_child_in_background,
+    collect_child_until, collect_in_background, collect_in_background_with, launch_reaper,
 };
 use firma_runtime_state::{UserProcessId, pidfile};
 
@@ -476,20 +475,22 @@ impl Drop for RunningStack {
 /// state is retained when target disappearance cannot be confirmed so callers
 /// can retry cleanup.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
-    spawn_stack_with_phase(cfg, state_dir, true, StackGeneration::new())
+    spawn_stack_with_phase(cfg, state_dir, true, StackGeneration::new(), None)
 }
 
 /// Spawn a stack while optionally deferring complete-state publication.
 ///
 /// [`StateTransaction`] acquisition precedes the supplied [`StackGeneration`]
 /// claim and remains in the returned [`RunningStack`] when detached attachment
-/// must publish more state. Every error after [`StartupGuard::new`] remains
-/// rollback-protected.
+/// must publish more state. When supplied, one [`StopSignal`] spans readiness
+/// and supervision so termination cannot fall between those phases. Every error
+/// after [`StartupGuard::new`] remains rollback-protected.
 fn spawn_stack_with_phase(
     cfg: &StackConfig,
     state_dir: &Path,
     publish_ready: bool,
     generation: StackGeneration,
+    stop_signal: Option<&StopSignal>,
 ) -> Result<RunningStack> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
@@ -500,7 +501,7 @@ fn spawn_stack_with_phase(
     debug!("reaping stale pidfiles");
     reap_stale(state_dir)?;
 
-    match spawn_stack_inner(cfg, state_dir, &mut startup) {
+    match spawn_stack_inner(cfg, state_dir, &mut startup, stop_signal) {
         Ok(()) => {
             let mut stack = startup.finish()?;
             if publish_ready {
@@ -526,12 +527,15 @@ fn spawn_stack_with_phase(
 /// The Authority must be reachable before the Sidecar is spawned, and the
 /// Sidecar's TCP endpoint must be reachable before any required CA material is
 /// accepted. Each successful [`spawn_with_config`] call transitions
-/// [`StartupGuard`] before the next fallible step. These probes establish
-/// bounded startup readiness only; ongoing health belongs to supervision.
+/// [`StartupGuard`] before the next fallible step. The optional [`StopSignal`]
+/// makes each readiness probe abort into that rollback path. These probes
+/// establish bounded startup evidence only; ongoing health belongs to
+/// supervision.
 fn spawn_stack_inner(
     cfg: &StackConfig,
     state_dir: &Path,
     startup: &mut StartupGuard,
+    stop_signal: Option<&StopSignal>,
 ) -> Result<()> {
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
@@ -555,7 +559,7 @@ fn spawn_stack_inner(
         format!("{auth_addr}\n"),
     )?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
-    wait_for_tcp("authority", auth_addr, Duration::from_mins(1))?;
+    wait_for_tcp("authority", auth_addr, Duration::from_mins(1), stop_signal)?;
     info!(addr = %auth_addr, "authority listening");
 
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
@@ -576,7 +580,7 @@ fn spawn_stack_inner(
         format!("{side_addr}\n"),
     )?;
     debug!(addr = %side_addr, "waiting for sidecar TCP listen");
-    wait_for_tcp("sidecar", side_addr, Duration::from_mins(1))?;
+    wait_for_tcp("sidecar", side_addr, Duration::from_mins(1), stop_signal)?;
     info!(addr = %side_addr, "sidecar listening");
     // CA material is only written when HTTPS MITM is active. A sidecar with
     // MITM inactive (e.g. an Anthropic-only scaffold) never produces it, so
@@ -586,6 +590,7 @@ fn spawn_stack_inner(
         wait_for_ca_material(
             &state_dir.join("generated-firma-ca"),
             Duration::from_mins(1),
+            stop_signal,
         )?;
         debug!("CA material present");
     } else {
@@ -616,13 +621,23 @@ pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<Sta
 }
 
 /// Spawn, supervise, and tear down components in the calling process.
+///
+/// [`StopSignal`] is installed before startup and reused for supervision, so a
+/// termination request during readiness triggers [`StartupGuard`] rollback.
 fn start_foreground(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
-    let mut stack = spawn_stack(cfg, state_dir)?;
+    let stop_signal = StopSignal::install()?;
+    let mut stack = spawn_stack_with_phase(
+        cfg,
+        state_dir,
+        true,
+        StackGeneration::new(),
+        Some(&stop_signal),
+    )?;
     let handle = stack.handle();
     info!("entering foreground supervisor loop");
     let supervision_result = {
         let owned = stack.owned_mut()?;
-        block_until_owned_exit(&mut owned.authority, &mut owned.sidecar)
+        block_until_owned_exit_with(&stop_signal, &mut owned.authority, &mut owned.sidecar)
     };
     info!("foreground supervisor exiting; tearing down stack");
     let teardown_result = stack.shutdown(Duration::from_secs(10));
@@ -723,33 +738,23 @@ fn with_rollback<T>(operation: StackError, rollback: Result<T>) -> StackError {
     }
 }
 
-/// Spawn and own the detached stack, acknowledging readiness to its launcher.
+/// Spawn and own a detached stack for a launcher-assigned generation.
 ///
-/// Standalone callers receive a fresh [`StackGeneration`]. The CLI handoff uses
-/// [`supervise_owned_generation`] to preserve the launcher's generation fence.
-///
-/// # Errors
-///
-/// Returns startup, readiness, supervision, termination, or cleanup errors.
-pub fn supervise_owned(cfg: &StackConfig, state_dir: &Path) -> Result<()> {
-    supervise_owned_generation(cfg, state_dir, StackGeneration::new())
-}
-
-/// Spawn and own a detached stack for a launcher-assigned [`StackGeneration`].
-///
-/// [`StopSignal`] is installed before any readiness publication, then
-/// [`supervise_running_stack_with_signal`] performs the two-phase handoff.
+/// [`StopSignal`] is installed before component readiness and reused by
+/// [`supervise_running_stack_with_signal`] for the two-phase handoff and
+/// supervision.
 ///
 /// # Errors
 ///
 /// Returns startup, readiness, supervision, termination, or cleanup errors.
+#[doc(hidden)]
 pub fn supervise_owned_generation(
     cfg: &StackConfig,
     state_dir: &Path,
     generation: StackGeneration,
 ) -> Result<()> {
     let stop_signal = StopSignal::install()?;
-    let stack = spawn_stack_with_phase(cfg, state_dir, false, generation)?;
+    let stack = spawn_stack_with_phase(cfg, state_dir, false, generation, Some(&stop_signal))?;
     supervise_running_stack_with_signal(stack, state_dir, Duration::from_secs(10), &stop_signal)
 }
 

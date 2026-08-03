@@ -17,10 +17,9 @@ mod supervisor;
 
 pub use config::{StackConfig, resolve_stack_config};
 pub use error::StackError;
-pub use start::{
-    RunningStack, StackHandle, StartMode, spawn_stack, start, supervise_owned,
-    supervise_owned_generation,
-};
+#[doc(hidden)]
+pub use start::supervise_owned_generation;
+pub use start::{RunningStack, StackHandle, StartMode, spawn_stack, start};
 pub use state_lease::StackGeneration;
 pub use status::{ComponentStatus, StackStatus, State, status};
 pub use stop::{StopOutcome, stop};
@@ -220,8 +219,9 @@ pub mod test_support {
         drop(transaction);
         let mut authority = owned_component(crate::component::ComponentRole::Authority, authority);
         let mut sidecar = owned_component(crate::component::ComponentRole::Sidecar, sidecar);
+        let stop = crate::supervisor::StopSignal::install()?;
         let supervision_result =
-            crate::supervisor::block_until_owned_exit(&mut authority, &mut sidecar);
+            crate::supervisor::block_until_owned_exit_with(&stop, &mut authority, &mut sidecar);
         let teardown_result = crate::stop::stop_owned(
             state_dir,
             timeout,

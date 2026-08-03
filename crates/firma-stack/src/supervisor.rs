@@ -48,7 +48,9 @@ struct SignalEpoch {
 /// The first subscription retains a zero baseline so it observes any signal
 /// delivered during handler installation. Later subscriptions start at the
 /// current epoch, preventing a handled request from terminating a replacement
-/// supervisor. All snapshots share [`PROCESS_STOP_EPOCH`].
+/// supervisor. All snapshots share [`PROCESS_STOP_EPOCH`]. Startup readiness
+/// probes and steady-state supervision must share the same snapshot so a request
+/// cannot fall between those lifecycle phases.
 pub struct StopSignal {
     epoch: Arc<SignalEpoch>,
     baseline: u64,
@@ -94,14 +96,6 @@ impl StopSignal {
     pub(crate) fn requested(&self) -> bool {
         self.epoch.current.load(Ordering::Relaxed) != self.baseline
     }
-}
-
-/// Install [`StopSignal`] and supervise both owned components until teardown is needed.
-pub fn block_until_owned_exit(
-    authority: &mut OwnedComponent,
-    sidecar: &mut OwnedComponent,
-) -> Result<()> {
-    block_until_owned_exit_with(&StopSignal::install()?, authority, sidecar)
 }
 
 /// Supervise owned children using a [`StopSignal`] installed before readiness.
