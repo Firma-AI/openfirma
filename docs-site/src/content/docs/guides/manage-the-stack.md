@@ -78,15 +78,17 @@ firma sidecar start --detach
 
 What `start` does, in order:
 
-1. With `--detach`, forks the hidden owning supervisor; without it, the current
-   process remains the owner.
+1. With `--detach`, assigns a random startup generation and forks the hidden
+   owning supervisor; without it, the current process remains the owner.
 2. The owner boots the Authority in its own process group and probes its gRPC
    port until it accepts connections.
 3. The owner boots the Sidecar in its own process group.
 4. The owner probes the Sidecar's listen port and waits for
    `generated-firma-ca/` material when HTTPS MITM is active.
-5. With `--detach`, the supervisor acknowledges readiness and the launcher exits
-   0. Without it, the owner continues blocking in the foreground.
+5. With `--detach`, the supervisor announces readiness, waits for the launcher's
+   acknowledgement, then confirms attachment. The launcher exits 0 only after
+   that two-phase handoff. Without detachment, the owner continues blocking in
+   the foreground.
 
 If readiness fails at any step, `start` attempts to terminate and collect every
 spawned child. It removes pid, listen, and lock files only after confirming
@@ -135,6 +137,10 @@ may still finish collecting its own children, but it cannot delete runtime state
 written by a replacement stack. Startup and stop also serialize state snapshots
 through `.stack-state.lock`; supervisor PIDs remain process identities and are
 not treated as cleanup authority.
+
+Detached rollback carries the generation assigned before the supervisor was
+spawned. If another generation has replaced it, rollback skips both signalling
+and cleanup rather than acting on the replacement's pidfiles.
 
 Foreground startup retains the component child handles and collects those
 children itself. In detached mode, the hidden supervisor spawns the components,

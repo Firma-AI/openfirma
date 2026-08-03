@@ -6,9 +6,9 @@
 //! commits that transition; its [`Drop`] implementation rolls back uncommitted
 //! [`OwnedComponent`] capabilities. [`start`] retains that owner in foreground
 //! mode. In detached mode, [`start_detached`] owns only the supervisor child
-//! while [`supervise_owned`] spawns and owns the components, so no component
-//! capability crosses a process boundary. Failure paths retain runtime state
-//! unless target absence can be proved, allowing [`crate::stop()`] to retry
+//! while [`supervise_owned_generation`] spawns and owns the components, so no
+//! component capability crosses a process boundary. Failure paths retain runtime
+//! state unless target absence can be proved, allowing [`crate::stop()`] to retry
 //! cleanup without losing process authority.
 
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
-use crate::state_lease::{StateLease, StateTransaction};
+use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::supervisor::{
     ReaperLauncher, StopSignal, block_until_owned_exit, block_until_owned_exit_with,
     collect_child_in_background, collect_child_until, collect_in_background,
@@ -43,8 +43,7 @@ pub enum StartMode {
     Detached,
 }
 
-/// Informational handle returned by [`start`] or [`RunningStack::handle`] once
-/// the stack has reached the ready state.
+/// Informational handle returned by [`start`] once the stack is ready.
 ///
 /// The handle does not own the children's lifecycle. [`RunningStack`] holds
 /// in-process ownership; persisted runtime state supports external observation
@@ -130,6 +129,24 @@ enum StartupState {
     },
     /// Ownership was transferred to [`RunningStack`]; rollback is disarmed.
     Finished,
+}
+
+/// Launcher states in the generation-bound detached-supervisor handoff.
+///
+/// [`start_detached`] assigns a [`StackGeneration`] to its direct supervisor
+/// child. The supervisor claims that generation, creates and owns the components,
+/// then publishes [`supervisor_ready_path`] while retaining its startup
+/// [`StateTransaction`]. The launcher validates the direct-child identity and
+/// removes that file as acknowledgement. The supervisor then publishes
+/// [`supervisor_attached_path`] and calls [`RunningStack::mark_ready`]; only
+/// after validating that confirmation does the launcher relinquish collection.
+/// Any launcher rollback uses the assigned generation, so it cannot stop a
+/// replacement stack.
+enum LauncherAttachmentState {
+    /// Waiting for the supervisor to publish component readiness.
+    AwaitingReadiness,
+    /// Readiness was acknowledged; waiting for supervisor confirmation.
+    AwaitingConfirmation,
 }
 
 impl StartupGuard {
@@ -459,24 +476,26 @@ impl Drop for RunningStack {
 /// state is retained when target disappearance cannot be confirmed so callers
 /// can retry cleanup.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
-    spawn_stack_with_phase(cfg, state_dir, true)
+    spawn_stack_with_phase(cfg, state_dir, true, StackGeneration::new())
 }
 
 /// Spawn a stack while optionally deferring complete-state publication.
 ///
-/// [`StateTransaction`] acquisition precedes generation claim and remains in
-/// the returned [`RunningStack`] when detached attachment must publish more
-/// state. Every error after [`StartupGuard::new`] remains rollback-protected.
+/// [`StateTransaction`] acquisition precedes the supplied [`StackGeneration`]
+/// claim and remains in the returned [`RunningStack`] when detached attachment
+/// must publish more state. Every error after [`StartupGuard::new`] remains
+/// rollback-protected.
 fn spawn_stack_with_phase(
     cfg: &StackConfig,
     state_dir: &Path,
     publish_ready: bool,
+    generation: StackGeneration,
 ) -> Result<RunningStack> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
     let transaction = StateTransaction::acquire(state_dir)?;
     debug!("acquiring stack lock");
-    let state_lease = acquire_lock(state_dir, &transaction)?;
+    let state_lease = acquire_lock(state_dir, &transaction, generation)?;
     let mut startup = StartupGuard::new(state_dir, state_lease, transaction);
     debug!("reaping stale pidfiles");
     reap_stale(state_dir)?;
@@ -614,58 +633,42 @@ fn start_foreground(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> 
     Ok(handle)
 }
 
-/// Launch a supervisor that becomes the concrete component owner.
+/// Launch a generation-bound supervisor that becomes the component owner.
 ///
-/// The launcher retains the supervisor child handle until
-/// [`wait_for_supervisor_attachment`] confirms readiness and
-/// [`read_stack_handle`] captures informational component identities. Failure
-/// before handoff terminates and collects that supervisor, then delegates
-/// state-aware component rollback to [`rollback_detached_start`].
+/// The handoff protocol is defined by [`LauncherAttachmentState`]. The launcher
+/// retains the supervisor child handle through both phases and uses
+/// [`rollback_detached_start`] on any failure before collection transfer.
 fn start_detached(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
+    let generation = StackGeneration::new();
     info!("forking detached supervisor owner");
-    let mut supervisor = crate::detach::spawn_supervisor(state_dir, cfg)?;
-    let supervisor_pid = UserProcessId::new(supervisor.id()).ok_or_else(|| {
-        StackError::Platform("detached supervisor returned invalid process id".into())
-    })?;
+    let mut supervisor = crate::detach::spawn_supervisor(state_dir, cfg, generation)?;
     if let Err(error) =
         wait_for_supervisor_attachment(state_dir, &mut supervisor, Duration::from_mins(4))
     {
         terminate_detached_supervisor(&mut supervisor);
-        let rollback = rollback_detached_start(
-            state_dir,
-            supervisor_pid,
-            matches!(&error, StackError::Readiness { .. }),
-        );
+        let rollback = rollback_detached_start(state_dir, generation);
         return Err(with_rollback(error, rollback));
     }
     let handle = match read_stack_handle(state_dir) {
         Ok(handle) => handle,
         Err(error) => {
             terminate_detached_supervisor(&mut supervisor);
-            let rollback = rollback_detached_start(state_dir, supervisor_pid, false);
+            let rollback = rollback_detached_start(state_dir, generation);
             return Err(with_rollback(error, rollback));
         }
     };
     if collect_child_in_background(supervisor).is_none() {
         let error = StackError::Platform("could not start detached supervisor collector".into());
-        let rollback = rollback_detached_start(state_dir, supervisor_pid, false);
+        let rollback = rollback_detached_start(state_dir, generation);
         return Err(with_rollback(error, rollback));
     }
     Ok(handle)
 }
 
-/// Tear down detached startup only when its supervisor still owns runtime state.
-fn rollback_detached_start(
-    state_dir: &Path,
-    supervisor_pid: UserProcessId,
-    force: bool,
-) -> Result<()> {
-    let owns_state = pidfile::read(&state_dir.join("stack.pid"))? == Some(supervisor_pid);
-    if !force && !owns_state {
-        return Ok(());
-    }
-    crate::stop::stop(state_dir, Duration::from_secs(10)).map(|_| ())
+/// Roll back only state matching this launcher's [`StackGeneration`].
+fn rollback_detached_start(state_dir: &Path, generation: StackGeneration) -> Result<()> {
+    crate::stop::stop_generation(state_dir, Duration::from_secs(10), generation).map(|_| ())
 }
 
 /// Terminate and make a bounded collection attempt for the supervisor child.
@@ -722,12 +725,31 @@ fn with_rollback<T>(operation: StackError, rollback: Result<T>) -> StackError {
 
 /// Spawn and own the detached stack, acknowledging readiness to its launcher.
 ///
+/// Standalone callers receive a fresh [`StackGeneration`]. The CLI handoff uses
+/// [`supervise_owned_generation`] to preserve the launcher's generation fence.
+///
 /// # Errors
 ///
 /// Returns startup, readiness, supervision, termination, or cleanup errors.
 pub fn supervise_owned(cfg: &StackConfig, state_dir: &Path) -> Result<()> {
+    supervise_owned_generation(cfg, state_dir, StackGeneration::new())
+}
+
+/// Spawn and own a detached stack for a launcher-assigned [`StackGeneration`].
+///
+/// [`StopSignal`] is installed before any readiness publication, then
+/// [`supervise_running_stack_with_signal`] performs the two-phase handoff.
+///
+/// # Errors
+///
+/// Returns startup, readiness, supervision, termination, or cleanup errors.
+pub fn supervise_owned_generation(
+    cfg: &StackConfig,
+    state_dir: &Path,
+    generation: StackGeneration,
+) -> Result<()> {
     let stop_signal = StopSignal::install()?;
-    let stack = spawn_stack_with_phase(cfg, state_dir, false)?;
+    let stack = spawn_stack_with_phase(cfg, state_dir, false, generation)?;
     supervise_running_stack_with_signal(stack, state_dir, Duration::from_secs(10), &stop_signal)
 }
 
@@ -747,12 +769,11 @@ pub(crate) fn supervise_running_stack(
     supervise_running_stack_with_signal(stack, state_dir, timeout, &stop_signal)
 }
 
-/// Attach and run a stack after its process-wide [`StopSignal`] is installed.
+/// Execute the supervisor side of [`LauncherAttachmentState`] and own teardown.
 ///
-/// Supervisor identity and readiness are written while the startup
-/// [`StateTransaction`] remains held. [`RunningStack::mark_ready`] is the final
-/// publication step; any earlier failure releases serialization only as part of
-/// [`RunningStack::shutdown`] so no observer can act on partial state.
+/// Attachment state is written while the startup [`StateTransaction`] remains
+/// held. Any publication or acknowledgement failure invokes
+/// [`RunningStack::shutdown`] before returning.
 fn supervise_running_stack_with_signal(
     mut stack: RunningStack,
     state_dir: &Path,
@@ -763,9 +784,12 @@ fn supervise_running_stack_with_signal(
         StackError::Platform("current process returned invalid process id".into())
     })?;
     let attachment_result = (|| {
+        let ready_path = supervisor_ready_path(state_dir, supervisor_pid);
         pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)?;
+        pidfile::write(&ready_path, supervisor_pid)?;
+        wait_for_launcher_ack(&ready_path, stop_signal, Duration::from_mins(4))?;
         pidfile::write(
-            &supervisor_ready_path(state_dir, supervisor_pid),
+            &supervisor_attached_path(state_dir, supervisor_pid),
             supervisor_pid,
         )?;
         stack.mark_ready()?;
@@ -790,9 +814,8 @@ fn supervise_running_stack_with_signal(
     teardown_result.map(|_| ())
 }
 
-/// Wait for the detached supervisor to prove attachment before handoff.
+/// Execute the launcher side of [`LauncherAttachmentState`].
 ///
-/// The readiness identity must match the direct child retained by the launcher.
 /// Child exit, identity mismatch, or timeout leaves the launcher responsible for
 /// terminating and collecting the supervisor.
 pub(crate) fn wait_for_supervisor_attachment(
@@ -804,26 +827,47 @@ pub(crate) fn wait_for_supervisor_attachment(
         StackError::Platform("detached supervisor returned invalid process id".into())
     })?;
     let ready_path = supervisor_ready_path(state_dir, expected_pid);
+    let attached_path = supervisor_attached_path(state_dir, expected_pid);
     let deadline = Instant::now() + timeout;
+    let mut attachment = LauncherAttachmentState::AwaitingReadiness;
     loop {
-        if supervisor.try_wait()?.is_some() {
-            return Err(StackError::Platform(
-                "detached supervisor exited before attaching".into(),
-            ));
-        }
-        if let Some(ready_pid) = pidfile::read(&ready_path)? {
+        if matches!(attachment, LauncherAttachmentState::AwaitingReadiness)
+            && let Some(ready_pid) = pidfile::read(&ready_path)?
+        {
             if ready_pid != expected_pid {
                 return Err(StackError::Platform(format!(
                     "detached supervisor readiness belongs to pid {ready_pid}, expected {expected_pid}"
                 )));
             }
             pidfile::remove(&ready_path)?;
+            attachment = LauncherAttachmentState::AwaitingConfirmation;
+        }
+        if matches!(attachment, LauncherAttachmentState::AwaitingConfirmation)
+            && let Some(attached_pid) = pidfile::read(&attached_path)?
+        {
+            if attached_pid != expected_pid {
+                return Err(StackError::Platform(format!(
+                    "detached supervisor attachment belongs to pid {attached_pid}, expected {expected_pid}"
+                )));
+            }
+            pidfile::remove(&attached_path)?;
             if supervisor.try_wait()?.is_some() {
                 return Err(StackError::Platform(
-                    "detached supervisor exited after acknowledging attachment".into(),
+                    "detached supervisor exited after confirming attachment".into(),
                 ));
             }
             return Ok(());
+        }
+        if supervisor.try_wait()?.is_some() {
+            let phase = match attachment {
+                LauncherAttachmentState::AwaitingReadiness => "before announcing readiness",
+                LauncherAttachmentState::AwaitingConfirmation => {
+                    "after readiness but before confirming attachment"
+                }
+            };
+            return Err(StackError::Platform(format!(
+                "detached supervisor exited {phase}"
+            )));
         }
         if Instant::now() >= deadline {
             return Err(StackError::Readiness {
@@ -835,9 +879,42 @@ pub(crate) fn wait_for_supervisor_attachment(
     }
 }
 
-/// Return the readiness path scoped to one detached supervisor identity.
+/// Return the first-phase readiness path scoped to one supervisor identity.
 pub(crate) fn supervisor_ready_path(state_dir: &Path, supervisor_pid: UserProcessId) -> PathBuf {
     state_dir.join(format!("stack.{supervisor_pid}.ready"))
+}
+
+/// Return the second-phase confirmation path for [`LauncherAttachmentState`].
+pub(crate) fn supervisor_attached_path(state_dir: &Path, supervisor_pid: UserProcessId) -> PathBuf {
+    state_dir.join(format!("stack.{supervisor_pid}.attached"))
+}
+
+/// Wait for the launcher acknowledgement defined by [`LauncherAttachmentState`].
+///
+/// # Errors
+///
+/// Returns termination-request or acknowledgement-timeout errors.
+fn wait_for_launcher_ack(
+    ready_path: &Path,
+    stop_signal: &StopSignal,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while ready_path.try_exists()? {
+        if stop_signal.requested() {
+            return Err(StackError::Platform(
+                "termination requested before launcher attachment".into(),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(StackError::Readiness {
+                component: "detached launcher acknowledgement".into(),
+                timeout_secs: timeout.as_secs(),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
 }
 
 /// Translate a [`ComponentRole`] into the private component spawn contract.
@@ -863,14 +940,18 @@ fn spawn_with_config(
     )
 }
 
-/// Claim a fresh [`StateLease`] only after existing process state is stale.
+/// Claim the launcher's [`StackGeneration`] only after existing state is stale.
 ///
 /// The caller's [`StateTransaction`] prevents another mutator from racing stale
 /// state removal with generation publication.
-fn acquire_lock(state_dir: &Path, _transaction: &StateTransaction) -> Result<StateLease> {
+fn acquire_lock(
+    state_dir: &Path,
+    _transaction: &StateTransaction,
+    generation: StackGeneration,
+) -> Result<StateLease> {
     let lock = state_dir.join("stack.lock");
     loop {
-        let claimed = StateLease::try_claim(state_dir)?;
+        let claimed = StateLease::try_claim(state_dir, generation)?;
         if !is_stack_stale(state_dir)? {
             return Err(StackError::AlreadyRunning { path: lock });
         }

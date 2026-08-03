@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::error::{Result, StackError};
 use fs2::FileExt as _;
 
-/// File containing the current [`CleanupGeneration`].
+/// File containing the current [`StackGeneration`].
 const LOCK_FILE: &str = "stack.lock";
 /// Persistent coordination file locked by each [`StateTransaction`].
 const TRANSACTION_FILE: &str = ".stack-state.lock";
@@ -68,18 +68,21 @@ fn is_lock_contended(error: &std::io::Error) -> bool {
     )
 }
 
-/// Unforgeable identity for one successful runtime-state generation claim.
+/// Unforgeable identity shared by one launcher and stack generation.
 ///
 /// Unlike a process ID, this value is not reused by the operating system and
 /// does not imply that any process is alive. It exists only to distinguish one
-/// generation of runtime-state files from its predecessors and successors. A
-/// [`StateLease`] is the capability that carries this identity into cleanup.
+/// startup attempt and its runtime-state files from predecessors and successors.
+/// Detached startup creates the identity before spawning its supervisor, which
+/// lets both processes fence rollback to the same attempt. A [`StateLease`] is
+/// the capability that proves this identity was successfully claimed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CleanupGeneration(uuid::Uuid);
+pub struct StackGeneration(uuid::Uuid);
 
-impl CleanupGeneration {
-    /// Create a fresh identity for a newly acquired stack generation.
-    fn new() -> Self {
+impl StackGeneration {
+    /// Create a fresh identity before a launcher or local startup claims state.
+    #[must_use]
+    pub(crate) fn new() -> Self {
         Self(uuid::Uuid::new_v4())
     }
 
@@ -96,6 +99,26 @@ impl CleanupGeneration {
     }
 }
 
+impl Default for StackGeneration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for StackGeneration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::str::FromStr for StackGeneration {
+    type Err = StackError;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
 /// Capability authorizing cleanup of one generation's runtime-state files.
 ///
 /// A lease permits deletion only while [`Self::is_current`] confirms that its
@@ -104,7 +127,7 @@ impl CleanupGeneration {
 /// [`StateTransaction`] and [`crate::component::OwnedComponent`] respectively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateLease {
-    generation: CleanupGeneration,
+    generation: StackGeneration,
 }
 
 impl StateLease {
@@ -117,10 +140,8 @@ impl StateLease {
     /// # Errors
     ///
     /// Returns an I/O error when the generation cannot be written or published.
-    pub(crate) fn try_claim(state_dir: &Path) -> Result<Option<Self>> {
-        let lease = Self {
-            generation: CleanupGeneration::new(),
-        };
+    pub(crate) fn try_claim(state_dir: &Path, generation: StackGeneration) -> Result<Option<Self>> {
+        let lease = Self { generation };
         let temp = write_generation_temp(state_dir, lease)?;
         match temp.persist_noclobber(state_dir.join(LOCK_FILE)) {
             Ok(_) => Ok(Some(lease)),
@@ -140,7 +161,7 @@ impl StateLease {
     /// Returns an I/O error when the replacement cannot be published.
     pub(crate) fn replace_for_test(state_dir: &Path) -> Result<Self> {
         let lease = Self {
-            generation: CleanupGeneration::new(),
+            generation: StackGeneration::new(),
         };
         let temp = write_generation_temp(state_dir, lease)?;
         temp.persist(state_dir.join(LOCK_FILE))
@@ -161,7 +182,7 @@ impl StateLease {
         match std::fs::read_to_string(state_dir.join(LOCK_FILE)) {
             Ok(value) if value.trim().is_empty() => Ok(None),
             Ok(value) => Ok(Some(Self {
-                generation: CleanupGeneration::parse(&value)?,
+                generation: StackGeneration::parse(&value)?,
             })),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
@@ -176,6 +197,11 @@ impl StateLease {
     /// when ownership cannot be established.
     pub(crate) fn is_current(self, state_dir: &Path) -> Result<bool> {
         Ok(Self::load(state_dir)? == Some(self))
+    }
+
+    /// Return whether this lease belongs to an expected [`StackGeneration`].
+    pub(crate) fn belongs_to(self, generation: StackGeneration) -> bool {
+        self.generation == generation
     }
 }
 

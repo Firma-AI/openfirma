@@ -17,7 +17,11 @@ mod supervisor;
 
 pub use config::{StackConfig, resolve_stack_config};
 pub use error::StackError;
-pub use start::{RunningStack, StackHandle, StartMode, spawn_stack, start, supervise_owned};
+pub use start::{
+    RunningStack, StackHandle, StartMode, spawn_stack, start, supervise_owned,
+    supervise_owned_generation,
+};
+pub use state_lease::StackGeneration;
 pub use status::{ComponentStatus, StackStatus, State, status};
 pub use stop::{StopOutcome, stop};
 
@@ -29,6 +33,7 @@ pub mod test_support {
     pub struct RawStartupTransaction {
         transaction: crate::state_lease::StateTransaction,
         state_lease: crate::state_lease::StateLease,
+        generation: crate::StackGeneration,
     }
 
     /// Test-only capability holding runtime-state serialization without mutation.
@@ -37,6 +42,12 @@ pub mod test_support {
     }
 
     impl RawStartupTransaction {
+        /// Return the launcher identity assigned to this raw startup attempt.
+        #[must_use]
+        pub const fn generation(&self) -> crate::StackGeneration {
+            self.generation
+        }
+
         /// Run generation-fenced startup cleanup while retaining serialization.
         ///
         /// # Errors
@@ -59,13 +70,15 @@ pub mod test_support {
         if state_dir.join("stack.lock").exists() {
             std::fs::remove_file(state_dir.join("stack.lock"))?;
         }
-        let state_lease =
-            crate::state_lease::StateLease::try_claim(state_dir)?.ok_or_else(|| {
+        let generation = crate::StackGeneration::new();
+        let state_lease = crate::state_lease::StateLease::try_claim(state_dir, generation)?
+            .ok_or_else(|| {
                 crate::StackError::Platform("raw startup generation could not be claimed".into())
             })?;
         Ok(RawStartupTransaction {
             transaction,
             state_lease,
+            generation,
         })
     }
 
@@ -321,12 +334,34 @@ pub mod test_support {
         crate::state_lease::StateLease::replace_for_test(state_dir).map(|_| ())
     }
 
+    /// Run generation-scoped stop for a simulated detached rollback.
+    ///
+    /// # Errors
+    ///
+    /// Returns process, transaction, or runtime-state errors.
+    pub fn stop_stack_generation(
+        state_dir: &std::path::Path,
+        timeout: std::time::Duration,
+        generation: crate::StackGeneration,
+    ) -> crate::error::Result<crate::StopOutcome> {
+        crate::stop::stop_generation(state_dir, timeout, generation)
+    }
+
     /// Return the PID-scoped detached readiness path.
     #[must_use]
     pub fn supervisor_ready_path(state_dir: &std::path::Path, owner: u32) -> std::path::PathBuf {
         firma_runtime_state::UserProcessId::new(owner).map_or_else(
             || state_dir.join("invalid-supervisor.ready"),
             |owner| crate::start::supervisor_ready_path(state_dir, owner),
+        )
+    }
+
+    /// Return the PID-scoped detached attachment-confirmation path.
+    #[must_use]
+    pub fn supervisor_attached_path(state_dir: &std::path::Path, owner: u32) -> std::path::PathBuf {
+        firma_runtime_state::UserProcessId::new(owner).map_or_else(
+            || state_dir.join("invalid-supervisor.attached"),
+            |owner| crate::start::supervisor_attached_path(state_dir, owner),
         )
     }
 
@@ -459,14 +494,17 @@ pub mod test_support {
         crate::state_lease::StateTransaction,
     )> {
         let transaction = crate::state_lease::StateTransaction::acquire(state_dir)?;
-        if let Some(state_lease) = crate::state_lease::StateLease::try_claim(state_dir)? {
+        if let Some(state_lease) =
+            crate::state_lease::StateLease::try_claim(state_dir, crate::StackGeneration::new())?
+        {
             return Ok((state_lease, transaction));
         }
         std::fs::remove_file(state_dir.join("stack.lock"))?;
         let state_lease =
-            crate::state_lease::StateLease::try_claim(state_dir)?.ok_or_else(|| {
-                crate::StackError::Platform("test generation lock could not be claimed".into())
-            })?;
+            crate::state_lease::StateLease::try_claim(state_dir, crate::StackGeneration::new())?
+                .ok_or_else(|| {
+                    crate::StackError::Platform("test generation lock could not be claimed".into())
+                })?;
         Ok((state_lease, transaction))
     }
 }

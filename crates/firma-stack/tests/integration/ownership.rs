@@ -282,6 +282,43 @@ fn old_startup_rollback_does_not_remove_replacement_state() {
 }
 
 #[test]
+fn stale_detached_rollback_does_not_signal_replacement_processes() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    let startup = firma_stack::test_support::begin_raw_startup(state_dir)
+        .expect("begin old startup generation");
+    let stale_generation = startup.generation();
+    firma_stack::test_support::force_replace_stack_generation(state_dir)
+        .expect("publish replacement generation");
+    drop(startup);
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+
+    firma_stack::test_support::stop_stack_generation(state_dir, Duration::ZERO, stale_generation)
+        .expect("skip stale rollback");
+
+    assert!(
+        UserProcessId::new(authority_pid)
+            .expect("authority PID")
+            .process_exists()
+            .expect("probe authority")
+    );
+    assert!(
+        UserProcessId::new(sidecar_pid)
+            .expect("sidecar PID")
+            .process_exists()
+            .expect("probe sidecar")
+    );
+    let authority_collector = firma_stack::test_support::collect_raw_child_in_background(authority);
+    let sidecar_collector = firma_stack::test_support::collect_raw_child_in_background(sidecar);
+    firma_stack::stop(state_dir, Duration::ZERO).expect("stop replacement");
+    join_collector(authority_collector);
+    join_collector(sidecar_collector);
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+}
+
+#[test]
 fn stop_waits_for_each_startup_transition_before_snapshot() {
     // Exercise every partial-startup snapshot: no components registered,
     // Authority only, and Authority plus Sidecar.
@@ -562,6 +599,11 @@ fn detached_owner_collects_failed_component_and_tears_down_peer() {
     let owner_ready =
         firma_stack::test_support::supervisor_ready_path(state_dir, std::process::id());
     wait_for_file(&owner_ready);
+    std::fs::remove_file(&owner_ready).expect("acknowledge owner readiness");
+    let owner_attached =
+        firma_stack::test_support::supervisor_attached_path(state_dir, std::process::id());
+    wait_for_file(&owner_attached);
+    std::fs::remove_file(owner_attached).expect("acknowledge owner attachment");
     firma_stack::test_support::terminate_raw(authority_pid).expect("terminate authority");
 
     let result = match result_rx.recv_timeout(Duration::from_secs(5)) {
@@ -604,7 +646,7 @@ fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
         matches!(error, firma_stack::StackError::Platform(_)),
         "unexpected attachment error: {error}"
     );
-    insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited before attaching");
+    insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited before announcing readiness");
     assert!(unrelated_ready.exists(), "unrelated readiness was removed");
 }
 
@@ -628,14 +670,7 @@ fn detached_attachment_rejects_supervisor_that_exits_after_ready() {
         matches!(error, firma_stack::StackError::Platform(_)),
         "unexpected attachment error: {error}"
     );
-    assert!(
-        matches!(
-            error.to_string().as_str(),
-            "platform error: detached supervisor exited before attaching"
-                | "platform error: detached supervisor exited after acknowledging attachment"
-        ),
-        "unexpected attachment timing: {error}"
-    );
+    insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited after readiness but before confirming attachment");
 }
 
 #[cfg(windows)]

@@ -9,9 +9,15 @@ use crate::error::{Result, StackError};
 
 /// Spawn the supervisor child retained by detached [`crate::start::start`].
 ///
-/// The child creates and owns the actual components; this function grants the
-/// launcher only the child handle needed to validate or roll back handoff.
-pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -> Result<Child> {
+/// The launcher-assigned [`crate::StackGeneration`] binds this child to the
+/// state it may publish and later roll back. The child creates and owns the
+/// actual components; the launcher receives only the handle needed to validate
+/// or abort handoff.
+pub fn spawn_supervisor(
+    state_dir: &Path,
+    config: &crate::config::StackConfig,
+    generation: crate::StackGeneration,
+) -> Result<Child> {
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
 
@@ -30,6 +36,8 @@ pub fn spawn_supervisor(state_dir: &Path, config: &crate::config::StackConfig) -
             .arg(state_dir)
             .arg("--config")
             .arg(&config.config_file)
+            .arg("--generation")
+            .arg(generation.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr_log));

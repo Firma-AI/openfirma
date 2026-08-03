@@ -15,7 +15,7 @@ use tracing::{debug, info};
 use crate::component::OwnedComponent;
 use crate::error::{Result, StackError};
 use crate::platform::TerminationTarget;
-use crate::state_lease::{StateLease, StateTransaction};
+use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use firma_runtime_state::pidfile;
 
 /// Maximum interval for proving target absence after forced termination.
@@ -75,11 +75,38 @@ pub struct StopOutcome {
 /// retried. [`StateTransaction`] prevents startup or another stop from changing
 /// the process snapshot before this call finishes teardown and cleanup.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
+    stop_expected_generation(state_dir, timeout, None)
+}
+
+/// Stop only the processes belonging to one launcher-assigned generation.
+///
+/// A generation mismatch is a successful no-op, preventing delayed detached
+/// rollback from terminating a replacement stack.
+pub(crate) fn stop_generation(
+    state_dir: &Path,
+    timeout: Duration,
+    generation: StackGeneration,
+) -> Result<StopOutcome> {
+    stop_expected_generation(state_dir, timeout, Some(generation))
+}
+
+/// Snapshot and stop state only if its [`StateLease`] matches the expected attempt.
+fn stop_expected_generation(
+    state_dir: &Path,
+    timeout: Duration,
+    expected_generation: Option<StackGeneration>,
+) -> Result<StopOutcome> {
     if !state_dir.exists() {
         return Ok(StopOutcome { forced: false });
     }
     let transaction = StateTransaction::acquire(state_dir)?;
     let state_lease = StateLease::load(state_dir)?;
+    if let Some(expected_generation) = expected_generation
+        && !state_lease.is_some_and(|lease| lease.belongs_to(expected_generation))
+    {
+        info!(%expected_generation, ?state_lease, "stack generation changed; skipping stale stop");
+        return Ok(StopOutcome { forced: false });
+    }
     let supervisor = read_target(state_dir, "stack.pid")?;
     let authority = read_target(state_dir, "authority.pid")?;
     let sidecar = read_target(state_dir, "sidecar.pid")?;
@@ -324,6 +351,10 @@ pub(crate) fn cleanup_generation(
     let current_owner = pidfile::read(&state_dir.join("stack.pid"))?;
     if let Some(current_owner) = current_owner {
         pidfile::remove(&crate::start::supervisor_ready_path(
+            state_dir,
+            current_owner,
+        ))?;
+        pidfile::remove(&crate::start::supervisor_attached_path(
             state_dir,
             current_owner,
         ))?;
