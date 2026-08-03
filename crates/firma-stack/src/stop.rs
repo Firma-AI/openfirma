@@ -229,6 +229,7 @@ fn cleanup(state_dir: &Path) -> Result<()> {
         "sidecar.pid",
         "sidecar.listen",
         "stack.pid",
+        "stack.ready",
         "stack.lock",
     ] {
         pidfile::remove(&state_dir.join(name))?;

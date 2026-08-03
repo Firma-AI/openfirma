@@ -67,8 +67,20 @@ pub mod test_support {
     pub fn collect_raw_in_background(
         authority: std::process::Child,
         sidecar: std::process::Child,
-    ) -> std::thread::JoinHandle<()> {
-        crate::supervisor::collect_in_background(authority, sidecar)
+    ) -> Option<std::thread::JoinHandle<()>> {
+        crate::supervisor::collect_in_background(
+            owned_component(authority),
+            owned_component(sidecar),
+        )
+    }
+
+    /// Collect one owned child in the same background loop used by detached
+    /// supervisor startup.
+    #[must_use]
+    pub fn collect_raw_child_in_background(
+        child: std::process::Child,
+    ) -> Option<std::thread::JoinHandle<()>> {
+        crate::supervisor::collect_child_in_background(child)
     }
 
     /// Construct an owned running stack from arbitrary child processes.
@@ -108,30 +120,37 @@ pub mod test_support {
         crate::start::supervise_with_timeout(state_dir, timeout)
     }
 
-    /// Spawn through the production component setup path.
+    /// Wait for a detached supervisor child to confirm attachment.
     ///
     /// # Errors
     ///
-    /// Returns process spawn, group setup, log, or pidfile errors.
-    pub fn spawn_raw_component(
+    /// Returns readiness, child-exit, or runtime-state errors.
+    pub fn wait_for_supervisor_attachment(
+        state_dir: &std::path::Path,
+        supervisor: &mut std::process::Child,
+        timeout: std::time::Duration,
+    ) -> crate::error::Result<()> {
+        crate::start::wait_for_supervisor_attachment(state_dir, supervisor, timeout)
+    }
+
+    /// Spawn a raw child and run the production setup-failure cleanup path.
+    ///
+    /// # Errors
+    ///
+    /// Returns process spawn, group setup, or log errors.
+    pub fn simulate_spawn_setup_failure(
         state_dir: &std::path::Path,
         name: &str,
-        exe: &std::path::Path,
-        args: &[&str],
-    ) -> crate::error::Result<std::process::Child> {
+        cmd: &mut std::process::Command,
+    ) -> crate::error::Result<u32> {
         use crate::platform::{Platform, SystemPlatform};
 
         let group = SystemPlatform::new_group()?;
-        crate::spawn::spawn_component(
-            &group,
-            &crate::spawn::SpawnRequest {
-                name,
-                args,
-                state_dir,
-                exe: Some(exe),
-            },
-        )
-        .map(|component| component.child)
+        let log_path = state_dir.join(format!("{name}.log"));
+        let spawned = SystemPlatform::spawn_in_group(&group, cmd, &log_path)?;
+        let pid = spawned.leader_pid.get();
+        crate::spawn::cleanup_failed_spawn(spawned);
+        Ok(pid)
     }
 
     fn owned_component(child: std::process::Child) -> crate::spawn::SpawnedComponent {

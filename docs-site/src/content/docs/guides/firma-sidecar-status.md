@@ -126,6 +126,11 @@ firma sidecar status --json | jq -e 'all(.[]; .state == "running")'
 running. If an entry cannot be read safely, Firma leaves it untouched and omits
 it from the listing.
 
+On Unix, an exited process that has not yet been collected by its owning parent
+still exists as a zombie. Firma reports that entry as `unhealthy` and retains
+its marker directory until the owner collects it; observational status and
+garbage-collection probes never reap another process's child.
+
 ## What's next
 
 - [Wrap an agent with firma run](../firma-run/) — start a managed per-run
