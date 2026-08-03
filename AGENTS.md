@@ -40,6 +40,18 @@ Workspace lints are strict and enforced in CI:
 Do not use `.unwrap()`, `.expect()`, `panic!()`, or `unsafe`. Prefer
 `Result<T, E>` with `thiserror` for error handling.
 
+## API Stability
+
+Rust APIs in crates whose Cargo metadata resolves to `publish = false` are
+internal implementation details, even when their items are declared `pub` for
+workspace use. Do not report visibility reductions, removals, or signature
+changes in those crates as SemVer-breaking changes. Still update all workspace
+callers and verify the workspace.
+
+Review user-facing compatibility separately. CLI behavior, configuration and
+file formats, network and wire protocols, and documented integration contracts
+may be stable boundaries regardless of a crate's publish setting.
+
 ## Rust Tests
 
 Before adding or moving Rust tests, load and follow the
