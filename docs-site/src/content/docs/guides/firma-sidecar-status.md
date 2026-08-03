@@ -120,6 +120,9 @@ An empty sidecar list exits `0` — vacuously, nothing is unhealthy. Wire the
 firma sidecar status --json | jq -e 'all(.[]; .state == "running")'
 ```
 
+For daemon status, a malformed pidfile is reported as an internal error with
+exit code `2`; it is not treated as evidence that the daemon is stopped.
+
 ## Stale entries
 
 `firma sidecar status` removes stale entries for sidecars that are no longer

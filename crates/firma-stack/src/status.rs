@@ -49,7 +49,7 @@ pub struct StackStatus {
 ///
 /// # Errors
 ///
-/// Returns an error when a process liveness probe fails.
+/// Returns errors propagated by [`probe`].
 pub fn status(state_dir: &Path) -> Result<StackStatus> {
     debug!(state_dir = %state_dir.display(), "probing stack status");
     let components = vec![probe(state_dir, "authority")?, probe(state_dir, "sidecar")?];
@@ -66,13 +66,14 @@ pub fn status(state_dir: &Path) -> Result<StackStatus> {
 
 /// Classify one component without acquiring process ownership.
 ///
-/// Runtime-state parse failures are treated as absent in this revision, while
-/// [`TerminationTarget::exists`] failures are returned because liveness cannot
-/// safely be inferred. Endpoint and timestamp failures degrade only their
+/// Failures from [`pidfile::read`] and [`TerminationTarget::exists`] are
+/// returned because malformed lifecycle evidence or unknown liveness cannot
+/// safely be classified as [`State::Stopped`]. A missing pidfile remains
+/// legitimate absence. Endpoint and timestamp failures degrade only their
 /// corresponding metadata.
 fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus> {
     let pidfile_path: PathBuf = state_dir.join(format!("{name}.pid"));
-    let pid = pidfile::read(&pidfile_path).ok().flatten();
+    let pid = pidfile::read(&pidfile_path)?;
     let Some(pid) = pid else {
         return Ok(ComponentStatus {
             name: name.into(),

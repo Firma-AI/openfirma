@@ -103,3 +103,26 @@ fn missing_valid_status_id_is_an_empty_result() {
     assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[]");
 }
+
+#[test]
+fn malformed_daemon_pidfile_exits_two() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let pidfile = tmp.path().join("sidecar.pid");
+    std::fs::write(&pidfile, "not-a-pid\n").expect("write malformed pidfile");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["sidecar", "status", "--daemon", "--json"])
+        .env("FIRMA_STATE_DIR", tmp.path())
+        .output()
+        .expect("spawn firma");
+
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&*pidfile.to_string_lossy()),
+        "diagnostic omitted pidfile path: {stderr}"
+    );
+    insta::assert_snapshot!(stderr.replace(&*pidfile.to_string_lossy(), "[PIDFILE]"), @"
+    [ERR]  sidecar status: invalid pidfile '[PIDFILE]': expected a non-zero process ID, got 'not-a-pid'
+    ");
+}
