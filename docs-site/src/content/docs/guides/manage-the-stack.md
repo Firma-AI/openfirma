@@ -85,9 +85,10 @@ What `start` does, in order:
 5. With `--detach`: forks a `__supervise` child that re-attaches to the pidfiles, then exits 0.
 6. Without `--detach`: blocks in the foreground until signalled.
 
-If readiness fails at any step, `start` rolls back — every spawned child
-is signalled and pid/listen/lock files are cleaned up. You will not be
-left with half a daemon.
+If readiness fails at any step, `start` attempts to terminate and collect every
+spawned child. It removes pid, listen, and lock files only after confirming
+teardown; if termination or probing fails, it returns an error, retains runtime
+state, and may continue collection in the background so cleanup can be retried.
 
 `start` flags:
 
@@ -129,9 +130,12 @@ for every termination target to disappear before deleting runtime state.
 Foreground startup retains the component child handles and is solely
 responsible for collecting those children. Status commands, external stop
 commands, and the detached supervisor use non-destructive probes and never
-attempt to reap a process they do not own. If either component exits during
-detached operation, the supervisor tears down the other component before it
-exits; it does not signal its own process group from that teardown path.
+attempt to reap a process they do not own. After detached startup, the launcher
+keeps an owner-side collector active for as long as that process remains alive;
+if the launcher exits, normal OS reparenting transfers collection responsibility.
+If either component exits during detached operation, the supervisor tears down
+the other component before it exits; it does not signal its own process group
+from that teardown path.
 
 On Unix, an addressable process group is treated as alive even when its leader
 has exited, ensuring orphaned descendants are also hard-killed. A group
