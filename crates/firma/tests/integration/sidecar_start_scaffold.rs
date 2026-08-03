@@ -18,6 +18,7 @@
 )]
 
 use std::fs::File;
+use std::io::{Read, Seek};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -27,6 +28,45 @@ use super::CONFIG_FILE_NAME;
 
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
+}
+
+fn start_detached(cfg_path: &Path, state_dir: &Path) -> std::process::Output {
+    // A detached supervisor may retain inherited handles after the launcher
+    // exits. File-backed capture lets `status` return without waiting for pipe
+    // EOF, which would otherwise hang indefinitely on Windows.
+    let mut stderr = tempfile::tempfile_in(state_dir).expect("create start stderr log");
+    let status = firma()
+        .args(["sidecar", "start", "--detach", "--config"])
+        .arg(cfg_path)
+        .args(["--state-dir"])
+        .arg(state_dir)
+        .env("FIRMA_SIDECAR_HEALTH_BIND_ADDR", "127.0.0.1:0")
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(
+            stderr.try_clone().expect("clone start stderr log"),
+        ))
+        .status()
+        .expect("run firma sidecar start");
+    stderr.rewind().expect("rewind start stderr log");
+    let mut diagnostics = Vec::new();
+    stderr
+        .read_to_end(&mut diagnostics)
+        .expect("read start stderr log");
+    std::process::Output {
+        status,
+        stdout: Vec::new(),
+        stderr: diagnostics,
+    }
+}
+
+fn daemon_status(state_dir: &Path) -> (std::process::ExitStatus, serde_json::Value) {
+    let output = firma()
+        .args(["sidecar", "status", "--daemon", "--json"])
+        .env("FIRMA_STATE_DIR", state_dir)
+        .output()
+        .expect("run firma sidecar status");
+    let rows = serde_json::from_slice(&output.stdout).expect("status returns JSON");
+    (output.status, rows)
 }
 
 struct StackCleanup<'a>(&'a Path);
@@ -68,6 +108,7 @@ fn assert_failed_restart_preserves_stack(cfg_path: &std::path::Path, state_dir: 
         "second start unexpectedly succeeded"
     );
     let restart_diagnostics = std::fs::read_to_string(&restart_stderr).unwrap_or_default();
+    assert_eq!(restart_status.code(), Some(2));
     assert!(
         authority_pid.process_exists().expect("probe authority"),
         "failed startup rollback terminated the existing authority: {restart_diagnostics}"
@@ -122,26 +163,13 @@ fn start_launches_from_anthropic_scaffold() {
     drop(authority_listener);
     drop(interceptor_listener);
 
-    // Preserve launcher diagnostics while the detached supervisor writes to its
-    // own log file and outlives this command.
     std::fs::create_dir_all(&state_dir).expect("state dir");
     let _cleanup = StackCleanup(&state_dir);
-    let start_stderr = state_dir.join("start.stderr.log");
-    let start_status = firma()
-        .args(["sidecar", "start", "--detach", "--config"])
-        .arg(&cfg_path)
-        .args(["--state-dir"])
-        .arg(&state_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(
-            File::create(&start_stderr).expect("create start log"),
-        ))
-        .status()
-        .expect("run firma sidecar start");
+    let start = start_detached(&cfg_path, &state_dir);
     assert!(
-        start_status.success(),
+        start.status.success(),
         "sidecar start failed (MITM-inactive scaffold must not block on CA material): {}",
-        std::fs::read_to_string(&start_stderr).unwrap_or_default()
+        String::from_utf8_lossy(&start.stderr)
     );
     // Detached start returns only after the owning supervisor acknowledges
     // component readiness.
@@ -155,8 +183,35 @@ fn start_launches_from_anthropic_scaffold() {
         "stack did not come up: stack.pid missing"
     );
 
+    let (status, rows) = daemon_status(&state_dir);
+    assert!(status.success(), "running daemon status was {status}");
+    assert_eq!(rows.as_array().map(Vec::len), Some(1));
+    assert_eq!(rows[0]["sandbox_id"], "daemon");
+    assert_eq!(rows[0]["state"], "running");
+    assert_eq!(rows[0]["listen"], interceptor_addr.to_string());
+
     assert_failed_restart_preserves_stack(&cfg_path, &state_dir);
 
+    let stop = firma()
+        .args(["sidecar", "stop", "--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("stop running daemon");
+    assert!(
+        stop.status.success(),
+        "sidecar stop failed: {}",
+        String::from_utf8_lossy(&stop.stderr)
+    );
+    let (status, rows) = daemon_status(&state_dir);
+    assert_eq!(status.code(), Some(1));
+    assert_eq!(rows[0]["state"], "stopped");
+
+    let restart = start_detached(&cfg_path, &state_dir);
+    assert!(
+        restart.status.success(),
+        "sidecar restart failed: {}",
+        String::from_utf8_lossy(&restart.stderr)
+    );
     assert_owner_teardown(&state_dir, &stack_pid);
 }
 
