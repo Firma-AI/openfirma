@@ -90,7 +90,7 @@ impl StackGeneration {
     fn parse(value: &str) -> Result<Self> {
         uuid::Uuid::parse_str(value.trim())
             .map(Self)
-            .map_err(|error| StackError::Platform(format!("invalid {LOCK_FILE}: {error}")))
+            .map_err(|source| StackError::InvalidStackGeneration { source })
     }
 
     /// Return the canonical text stored in [`LOCK_FILE`].

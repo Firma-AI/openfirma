@@ -220,6 +220,69 @@ fn owned_shutdown_terminates_children_when_state_transaction_is_busy() {
 }
 
 #[test]
+fn external_stop_terminates_targets_but_retains_malformed_generation_state() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    let authority_collector = firma_stack::test_support::collect_raw_child_in_background(authority);
+    let sidecar_collector = firma_stack::test_support::collect_raw_child_in_background(sidecar);
+    std::fs::write(state_dir.join("stack.lock"), "not-a-generation\n")
+        .expect("write malformed generation");
+
+    let error = firma_stack::stop(state_dir, Duration::ZERO)
+        .expect_err("malformed generation must prevent cleanup");
+
+    assert!(matches!(
+        &error,
+        firma_stack::StackError::InvalidStackGeneration { .. }
+    ));
+    insta::assert_snapshot!(error.to_string(), @"invalid stack.lock generation");
+    join_collector(authority_collector);
+    join_collector(sidecar_collector);
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("stack.lock")).expect("read retained generation"),
+        "not-a-generation\n"
+    );
+    assert!(state_dir.join("authority.pid").exists());
+    assert!(state_dir.join("sidecar.pid").exists());
+}
+
+#[test]
+fn generation_scoped_stop_does_not_signal_targets_with_malformed_lock() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    let startup =
+        firma_stack::test_support::begin_raw_startup(state_dir).expect("begin startup generation");
+    let generation = startup.generation();
+    drop(startup);
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    std::fs::write(state_dir.join("stack.lock"), "not-a-generation\n")
+        .expect("write malformed generation");
+
+    let error =
+        firma_stack::test_support::stop_stack_generation(state_dir, Duration::ZERO, generation)
+            .expect_err("malformed generation must reject scoped stop");
+
+    assert!(matches!(
+        error,
+        firma_stack::StackError::InvalidStackGeneration { .. }
+    ));
+    assert_process_present(authority_pid);
+    assert_process_present(sidecar_pid);
+
+    let authority_collector = firma_stack::test_support::collect_raw_child_in_background(authority);
+    let sidecar_collector = firma_stack::test_support::collect_raw_child_in_background(sidecar);
+    std::fs::remove_file(state_dir.join("stack.lock")).expect("remove malformed generation");
+    firma_stack::stop(state_dir, Duration::ZERO).expect("clean up fixtures");
+    join_collector(authority_collector);
+    join_collector(sidecar_collector);
+}
+
+#[test]
 fn old_owner_does_not_remove_new_generation_state() {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path();
@@ -892,6 +955,11 @@ fn wait_for_file(path: &Path) {
 fn assert_process_absent(pid: u32) {
     let pid = UserProcessId::new(pid).expect("fixture PID");
     assert!(!pid.process_exists().expect("probe fixture process"));
+}
+
+fn assert_process_present(pid: u32) {
+    let pid = UserProcessId::new(pid).expect("fixture PID");
+    assert!(pid.process_exists().expect("probe fixture process"));
 }
 
 fn join_collector(collector: Option<std::thread::JoinHandle<()>>) {

@@ -171,6 +171,12 @@ Fix the underlying permission or platform error, or allow the owning parent to
 collect a zombie, then run `firma sidecar stop` again; the persisted termination
 targets remain available for that retry.
 
+If `stack.lock` contains a malformed generation, an explicit `firma sidecar
+stop` still terminates the recorded targets while holding the state transaction,
+but returns an error and retains all runtime state because cleanup ownership
+cannot be established. Generation-scoped startup rollback remains fail closed
+and does not signal targets when the lock cannot be matched.
+
 Exit codes: `0` on success (graceful or hard-kill fallback), `2` on error.
 
 ## Tail decisions and logs with firma monitor
