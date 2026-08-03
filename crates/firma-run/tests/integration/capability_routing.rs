@@ -195,6 +195,61 @@ fn omitted_capability_key_retains_authority_key() {
 }
 
 #[test]
+fn no_autostart_unreachable_authority_fails_loudly() {
+    let state_dir = tempfile::tempdir().expect("tempdir");
+    let runtime_dir = state_dir.path();
+    let url = "http://127.0.0.1:0".to_string();
+    let identity = RunIdentity::new(*super::helper::agent_id(), "no-autostart-agent");
+    let flags = AutostartFlags {
+        no_autostart: true,
+        ..AutostartFlags::default()
+    };
+    let cli = AuthorityCli::Remote(url.clone());
+    let firma_exe = state_dir.path().join("firma");
+    let mut prompt = NoPrompt;
+
+    let result = resolve_authority(
+        ResolveAuthorityRequest {
+            identity: &identity,
+            runtime_dir,
+            flags: &flags,
+            cli: &cli,
+            profile_name: "developer",
+            user_config_path: None,
+            user_config_dir: None,
+            firma_exe: &firma_exe,
+            capability_public_key_path: None,
+            working_dir: state_dir.path(),
+        },
+        &mut prompt,
+    );
+    let Err(error) = result else {
+        panic!("unreachable remote authority must fail");
+    };
+
+    match &error {
+        firma_run::error::RunError::AuthorityUnreachable {
+            url: actual_url,
+            reason,
+        } => {
+            assert_eq!(actual_url, &url);
+            assert!(!reason.is_empty(), "failure reason must not be empty");
+        }
+        other => panic!("expected AuthorityUnreachable, got: {other:?}"),
+    }
+    assert!(
+        error.to_string().starts_with("authority unreachable at"),
+        "unexpected diagnostic: {error}"
+    );
+
+    let capabilities_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(runtime_dir);
+    assert!(
+        !capabilities_dir.exists(),
+        "failed authority resolution must not create a capability directory"
+    );
+}
+
+#[test]
 fn autostart_with_effective_key_attempts_managed_capability_mint() {
     let dir = tempfile::tempdir().expect("tempdir");
     let identity = RunIdentity::new(*super::helper::agent_id(), "generic");

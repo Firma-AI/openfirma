@@ -1,18 +1,11 @@
 //! End-to-end coverage for `firma run`'s live capability minting (FIR-186).
 //!
-//! Two scenarios are exercised against the real new code paths:
-//!
-//! - Test A (`live_mint_writes_seed_and_admits_stage1`): a real Mini Authority
-//!   is booted over plaintext loopback gRPC. `firma_run`'s
-//!   [`mint_and_write`] calls the live `IssueCapability` RPC, verifies the
-//!   returned token locally, and writes the seed to the deterministic runtime
-//!   path (`<FIRMA_STATE_DIR>/capabilities/<sandbox_id>.toml`). The seed is
-//!   then loaded through the sidecar's capability map and shown to ALLOW the
-//!   default action — the same Stage 1 admission proof used by
-//!   `seeded_capability_e2e.rs`.
-//! - Test B (`no_autostart_unreachable_authority_fails_loudly`): the
-//!   `--no-autostart` authority-resolution path is driven against a closed
-//!   port and must fail with the typed [`RunError::AuthorityUnreachable`].
+//! A real Mini Authority is booted over plaintext loopback gRPC. `firma_run`'s
+//! [`mint_and_write`] calls the live `IssueCapability` RPC, verifies the
+//! returned token locally, and writes the seed to the deterministic runtime
+//! path (`<FIRMA_STATE_DIR>/capabilities/<sandbox_id>.toml`). The seed is then
+//! loaded through the sidecar's capability map and shown to ALLOW the default
+//! action — the same Stage 1 admission proof used by `seeded_capability_e2e.rs`.
 //!
 //! ## Why the full `firma run` CLI is not driven here
 //!
@@ -20,11 +13,9 @@
 //! `backend.prepare` + `backend.enforce_network`. On hosts without a
 //! structural sandbox backend (e.g. macOS, where Linux bwrap is unavailable)
 //! the run aborts on the backend before authority resolution, so the full CLI
-//! cannot surface `AuthorityUnreachable` or reach the live mint. These tests
-//! therefore drive the exact public functions that implement the new
-//! behaviour (`mint_and_write`, `resolve_authority`) directly, which keeps the
-//! assertions deterministic and host-independent while still exercising real
-//! gRPC issuance and the real typed error path.
+//! cannot reach the live mint. This test therefore drives `mint_and_write`
+//! directly, keeping the assertion deterministic and host-independent while
+//! still exercising real gRPC issuance.
 
 #![allow(
     clippy::unwrap_used,
@@ -35,8 +26,7 @@
 )]
 
 use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -48,15 +38,6 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn firma_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_firma"))
-}
-
-/// Bind, capture, and immediately release a loopback port so callers can hand
-/// the now-free address to code that expects nothing listening on it.
-fn pick_free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port
 }
 
 /// A booted Mini Authority listening on plaintext loopback gRPC. Holds the
@@ -230,7 +211,7 @@ fn parse_listening_addr(line: &str) -> Option<String> {
     }
 }
 
-/// Test A: live mint → seed written → Stage 1 admits the default action.
+/// Live mint → seed written → Stage 1 admits the default action.
 #[test]
 fn live_mint_writes_seed_and_admits_stage1() {
     let authority = spawn_live_authority();
@@ -330,95 +311,4 @@ fn live_mint_writes_seed_and_admits_stage1() {
             .map(|class| class.as_str().to_string())
             .collect::<Vec<_>>()
     );
-}
-
-/// Fake prompt that must never be reached on the remote authority path.
-struct UnreachablePrompt;
-
-impl firma_run::authority::AuthorityPromptIo for UnreachablePrompt {
-    fn is_tty(&self) -> bool {
-        false
-    }
-
-    fn confirm(&mut self, _prompt: &str) -> std::io::Result<bool> {
-        panic!("prompt must not be invoked for a remote --authority URL");
-    }
-}
-
-/// Test B: `--no-autostart` against an unreachable Authority fails loudly.
-///
-/// Drives `resolve_authority` directly (see module docs for why the full CLI
-/// cannot reach this path on non-structural-backend hosts). The remote URL
-/// points at a closed loopback port, so the `AuthoritySelection::Remote`
-/// branch's `probe_authority_url` must yield `RunError::AuthorityUnreachable`.
-#[test]
-fn no_autostart_unreachable_authority_fails_loudly() {
-    let state_dir = tempfile::tempdir().unwrap();
-    let runtime_dir = state_dir.path();
-
-    let port = pick_free_port();
-    let url = format!("http://127.0.0.1:{port}");
-
-    let identity = firma_run::identity::RunIdentity::new(
-        "agt_01j0000000e008000000000001"
-            .parse()
-            .expect("valid agent ID"),
-        "no-autostart-agent",
-    );
-    let flags = firma_run::routing::AutostartFlags {
-        no_autostart: true,
-        ..Default::default()
-    };
-    let cli = firma_run::authority::AuthorityCli::Remote(url.clone());
-    let firma_exe = firma_bin();
-    let mut prompt = UnreachablePrompt;
-
-    let result = firma_run::routing::resolve_authority(
-        firma_run::routing::ResolveAuthorityRequest {
-            identity: &identity,
-            runtime_dir,
-            flags: &flags,
-            cli: &cli,
-            profile_name: "developer",
-            user_config_path: None,
-            user_config_dir: None,
-            firma_exe: &firma_exe,
-            capability_public_key_path: None,
-            working_dir: state_dir.path(),
-        },
-        &mut prompt,
-    );
-
-    let Err(error) = result else {
-        panic!("unreachable remote authority must fail");
-    };
-    assert!(
-        matches!(
-            error,
-            firma_run::error::RunError::AuthorityUnreachable { .. }
-        ),
-        "expected AuthorityUnreachable, got: {error:?}"
-    );
-    let rendered = error.to_string();
-    assert!(
-        rendered.contains("authority unreachable at"),
-        "Display must mention the unreachable authority; got: {rendered}"
-    );
-    assert!(
-        rendered.contains(&url),
-        "Display must include the offending URL; got: {rendered}"
-    );
-
-    // No fallback occurred: no capability seed file was created anywhere under
-    // the pinned runtime dir.
-    let caps_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(runtime_dir);
-    assert!(
-        !has_any_file(&caps_dir),
-        "no capability file should be created on the failed-authority path"
-    );
-}
-
-/// Whether `dir` exists and contains at least one entry.
-fn has_any_file(dir: &Path) -> bool {
-    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
