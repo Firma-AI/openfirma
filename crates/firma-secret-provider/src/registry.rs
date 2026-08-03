@@ -30,11 +30,11 @@
 //! [`MatchingResolution::Blocked`](crate::spec::MatchingResolution::Blocked)
 //! — fail closed by default, on the assumption that an unrecognized invocation
 //! shape may emit secret material this registry has no way to extract or
-//! redact. See each built-in's function-level doc comment below for the
-//! specific retrieval paths explicitly blocked or implicitly closed off for
-//! that tool, and for the remaining gaps that `args_match` alone can't close
-//! (a subcommand whose *shape* is recognized but whose output doesn't fit
-//! the matcher, e.g. `vault kv get` against a KV v1 mount).
+//! redact. See the comments on each built-in's individual rules below for
+//! the specific retrieval paths explicitly blocked or implicitly closed off
+//! for that tool, and for the remaining gaps that `args_match` alone can't
+//! close (a subcommand whose *shape* is recognized but whose output doesn't
+//! fit the matcher, e.g. `vault kv get` against a KV v1 mount).
 
 use std::collections::BTreeMap;
 
@@ -86,34 +86,48 @@ impl IntegrationRegistry {
     }
 }
 
-// `bws secret list` returns a JSON array of secret records; `bws secret get
-// <id>` returns a single record, unwrapped. Same binary, same flat record
-// shape, but the matcher's record_path depends on which subcommand was
-// invoked.
-//
-// `project list`/`project get` return only project id/name/organizationId —
-// no secret material — so they pass through unredacted rather than needing a
-// matcher.
-//
-// `bws run -- <command>` injects secrets as env vars for a child process and
-// never prints them; `bws secret create`/`edit` echo the secret value back.
-// All three are explicitly blocked below rather than left to the implicit
-// fail-closed default, since they are real, documented retrieval paths.
 fn bws_spec() -> CliIntegrationSpec {
     CliIntegrationSpec {
         binary_name: String::from("bws"),
         provider_id: String::from("bitwarden"),
         credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
         matchers: vec![
+            // Injects secrets as env vars for a child process and never
+            // prints them.
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("run")],
             }),
+            // `secret create`/`edit` echo the secret value back, but there's
+            // no matcher shape for it here.
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("secret"), String::from("create")],
             }),
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("secret"), String::from("edit")],
             }),
+            // `secret delete`/`project create`/`project edit`/`project
+            // delete` are writes with no secret-value output, but are
+            // blocked explicitly rather than left to the implicit
+            // fail-closed default: each is a real, documented subcommand
+            // this registry has no matcher for, and an explicit rule
+            // documents that deliberately rather than leaving it
+            // indistinguishable from a genuinely unrecognized invocation.
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secret"), String::from("delete")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("project"), String::from("create")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("project"), String::from("edit")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("project"), String::from("delete")],
+            }),
+            // `bws secret list` returns a JSON array of secret records;
+            // `bws secret get <id>` returns a single record, unwrapped. Same
+            // binary, same flat record shape, but the matcher's record_path
+            // depends on which subcommand was invoked.
             MatcherRule::SensitiveCommand(ArgsAndMatcher {
                 args_match: vec![String::from("secret"), String::from("list")],
                 matcher: SecretMatcher::Json {
@@ -125,6 +139,10 @@ fn bws_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
+                // Strip both the long and short forms of the output flag
+                // (`bws` declares `-o` as a documented alias for `--output`).
+                strip_arg_flags: vec![String::from("--output"), String::from("-o")],
+                forced_args: vec![String::from("--output"), String::from("json")],
             }),
             MatcherRule::SensitiveCommand(ArgsAndMatcher {
                 args_match: vec![String::from("secret"), String::from("get")],
@@ -137,7 +155,12 @@ fn bws_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
+                strip_arg_flags: vec![String::from("--output"), String::from("-o")],
+                forced_args: vec![String::from("--output"), String::from("json")],
             }),
+            // `project list`/`project get` return only project
+            // id/name/organizationId — no secret material — so they pass
+            // through unredacted rather than needing a matcher.
             MatcherRule::SafeCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("project"), String::from("list")],
             }),
@@ -145,42 +168,51 @@ fn bws_spec() -> CliIntegrationSpec {
                 args_match: non_empty_vec![String::from("project"), String::from("get")],
             }),
         ],
-        strip_arg_flags: vec![String::from("--output")],
-        forced_args: vec![String::from("--output"), String::from("json")],
     }
 }
 
-// `op item get <item> --format json` returns a single item object. Field types
-// 1Password documents as non-secret metadata (ADDRESS, CREDIT_CARD_TYPE, DATE,
-// EMAIL, GENDER, MENU, MONTH_YEAR, PHONE, REFERENCE, URL) are left unchanged.
-// OTP is also left unchanged so the numeric one-time code remains usable.
-// STRING fields are redacted because custom text fields may hold sensitive
-// material such as recovery codes. Fail closed: an unrecognized `type` —
-// including any field type 1Password adds after this list was written — falls
-// through the exclusion and is treated as a secret and redacted, even if it
-// turns out not to need it. Every item URL is normalized, deduplicated, and
-// broadcast as a domain scope for all extracted fields.
-//
-// `whoami`/`account list`/`vault list`/`item list` return account, vault, or
-// item metadata (ids, titles, categories) with no field values, so they pass
-// through unredacted rather than needing a matcher.
-//
-// `op read op://vault/item/field` and `op inject` print the raw secret as
-// plain text, not JSON. Both are explicitly blocked below rather than left
-// to the implicit fail-closed default, since they are real, documented
-// retrieval paths.
 fn op_spec() -> CliIntegrationSpec {
     CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
         credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
         matchers: vec![
+            // Prints the raw secret as plain text, not JSON.
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("read")],
             }),
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("inject")],
             }),
+            // `document get <id>` prints a document's raw file bytes to
+            // stdout (or writes them to disk via `-o/--out-file`) with no
+            // JSON structure either; `document create` uploads a new
+            // document. Both are explicitly blocked rather than left to the
+            // implicit fail-closed default, since they are real, documented
+            // retrieval (or write) paths.
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("document")],
+            }),
+            // `op item get <item> --format json` returns a single item
+            // object. Field types 1Password documents as non-secret
+            // metadata (ADDRESS, CREDIT_CARD_TYPE, DATE, EMAIL, GENDER,
+            // MENU, MONTH_YEAR, PHONE, REFERENCE, URL) are left unchanged.
+            // OTP is also left unchanged so the numeric one-time code
+            // remains usable. STRING fields are redacted because custom
+            // text fields may hold sensitive material such as recovery
+            // codes. Fail closed: an unrecognized `type` — including any
+            // field type 1Password adds after this list was written — falls
+            // through the exclusion and is treated as a secret and
+            // redacted, even if it turns out not to need it.
+            //
+            // Remaining gap `args_match` can't close: `op item get <id>
+            // --fields ...` (and `--otp`, `--share-link`) still match the
+            // `item get` prefix and reach this matcher, but change the
+            // output shape away from the full item object `record_path`
+            // expects — a field-scoped value or bare string instead of
+            // `{"fields": [...]}`. Same category as vault's KV v1 gap: it
+            // surfaces a `MatcherError` at extraction time rather than
+            // being pre-blocked or leaking unredacted.
             MatcherRule::SensitiveCommand(ArgsAndMatcher {
                 args_match: vec![String::from("item"), String::from("get")],
                 matcher: SecretMatcher::Json {
@@ -217,7 +249,13 @@ fn op_spec() -> CliIntegrationSpec {
                         scope: SecretJsonSelectorScope::Document,
                     }),
                 },
+                strip_arg_flags: vec![String::from("--format")],
+                forced_args: vec![String::from("--format"), String::from("json")],
             }),
+            // `whoami`/`account list`/`vault list`/`item list` return
+            // account, vault, or item metadata (ids, titles, categories)
+            // with no field values, so they pass through unredacted rather
+            // than needing a matcher.
             MatcherRule::SafeCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("whoami")],
             }),
@@ -231,35 +269,9 @@ fn op_spec() -> CliIntegrationSpec {
                 args_match: non_empty_vec![String::from("item"), String::from("list")],
             }),
         ],
-        strip_arg_flags: vec![String::from("--format")],
-        forced_args: vec![String::from("--format"), String::from("json")],
     }
 }
 
-// `vault kv get -format=json` on a KV v2 mount returns
-// `{"data":{"data":{<name>: <value>, ...},"metadata":{...}}}`. Unlike
-// `bws`/`op`, the secret's name here is the JSON object key itself — there is
-// no separate name/label field anywhere in the document for a name JSONPath
-// to select — so this uses `SecretNameSource::RecordKey` to derive the name
-// from each record's own location instead. We force JSON output (as `op`
-// does) so the record-key extraction always sees this shape.
-//
-// `kv list`/`list`/`status`/`policy list` return key names, path listings, or
-// cluster/policy metadata — no secret values — so they pass through
-// unredacted rather than needing a matcher.
-//
-// Any non-`kv` `vault read` target (policies, transit keys, auth config,
-// etc.) uses a `read` subcommand, not `kv get`. It is explicitly blocked
-// below rather than left to the implicit fail-closed default, since it is a
-// real, documented retrieval path.
-//
-// Remaining gap `args_match` can't close: `vault kv get` on a KV v1 mount
-// uses the same subcommand as v2 but returns `data` without the nested
-// `data` wrapper, so `record_path` selects no records there; `vault kv get
-// -field=<name> ...` matches the same prefix but prints a bare value with no
-// JSON at all. Both still match `kv get` and reach the matcher, so both
-// surface a `MatcherError` at extraction time rather than being blocked
-// upfront or leaking unredacted.
 fn vault_spec() -> CliIntegrationSpec {
     CliIntegrationSpec {
         binary_name: String::from("vault"),
@@ -270,9 +282,61 @@ fn vault_spec() -> CliIntegrationSpec {
             String::from("VAULT_NAMESPACE"),
         ],
         matchers: vec![
+            // Any non-`kv` `vault read` target (policies, transit keys, auth
+            // config, etc.) uses this subcommand, not `kv get`, so there is
+            // no matcher shape for it here.
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("read")],
             }),
+            // `kv put`/`patch`/`delete`/`destroy`/`rollback`/`undelete` are
+            // writes with no secret-value output; `kv metadata` returns
+            // version and custom-metadata JSON, not secret values. None of
+            // these emit the `data.data` shape the matcher below expects,
+            // so all are explicitly blocked rather than left to the
+            // implicit fail-closed default: each is a real, documented
+            // subcommand this registry has no matcher for, and an explicit
+            // rule documents that deliberately.
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("put")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("patch")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("delete")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("destroy")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("rollback")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("undelete")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("kv"), String::from("metadata")],
+            }),
+            // `vault kv get -format=json` on a KV v2 mount returns
+            // `{"data":{"data":{<name>: <value>, ...},"metadata":{...}}}`.
+            // Unlike `bws`/`op`, the secret's name here is the JSON object
+            // key itself — there is no separate name/label field anywhere
+            // in the document for a name JSONPath to select — so this uses
+            // `SecretNameSource::RecordKey` to derive the name from each
+            // record's own location instead. We force JSON output (as `op`
+            // does) so the record-key extraction always sees this shape.
+            //
+            // Remaining gaps `args_match` can't close: `vault kv get` on a
+            // KV v1 mount uses the same subcommand as v2 but returns `data`
+            // without the nested `data` wrapper, so `record_path` selects
+            // no records there; `vault kv get -field=<name> ...` matches
+            // the same prefix but prints a bare value with no JSON at all;
+            // `vault kv get -output-curl-string ...` matches the same
+            // prefix but prints a `curl` command line containing the live
+            // `VAULT_TOKEN` credential, not JSON. All three still match `kv
+            // get` and reach the matcher, so all surface a `MatcherError`
+            // at extraction time rather than being blocked upfront or
+            // leaking unredacted.
             MatcherRule::SensitiveCommand(ArgsAndMatcher {
                 args_match: vec![String::from("kv"), String::from("get")],
                 matcher: SecretMatcher::Json {
@@ -282,7 +346,15 @@ fn vault_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
+                // Strip any -format/-format= flag and force JSON, regardless
+                // of what the agent requested.
+                strip_arg_flags: vec![String::from("-format"), String::from("--format")],
+                forced_args: vec![String::from("-format"), String::from("json")],
             }),
+            // `kv list`/`list`/`status`/`policy list` return key names,
+            // path listings, or cluster/policy metadata — no secret
+            // values — so they pass through unredacted rather than needing
+            // a matcher.
             MatcherRule::SafeCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("kv"), String::from("list")],
             }),
@@ -296,46 +368,171 @@ fn vault_spec() -> CliIntegrationSpec {
                 args_match: non_empty_vec![String::from("policy"), String::from("list")],
             }),
         ],
-        // Strip any -format/-format= flag and force JSON, regardless of what
-        // the agent requested.
-        strip_arg_flags: vec![String::from("-format"), String::from("--format")],
-        forced_args: vec![String::from("-format"), String::from("json")],
     }
 }
 
-// `doppler secrets download --format env` outputs NAME=VALUE pairs, one per
-// line. We force this format so the regex always has a well-defined input
-// shape.
-//
-// `me`/`projects list`/`environments list`/`configs list` return account or
-// project/environment/config metadata — no secret values — so they pass
-// through unredacted rather than needing a matcher.
-//
-// `doppler run -- <command>` injects secrets as env vars for a child process
-// and never prints them; `doppler secrets get <name>` (with or without
-// `--plain`) either prints a bare value with no `=` for the regex to anchor
-// on, or a table with no forced structured format. Both are explicitly
-// blocked below rather than left to the implicit fail-closed default, since
-// they are real, documented retrieval paths distinct from `secrets
-// download`.
 fn doppler_spec() -> CliIntegrationSpec {
     CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),
         credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
         matchers: vec![
+            // Injects secrets as env vars for a child process and never
+            // prints them.
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("run")],
             }),
+            // `secrets get <name>` (with or without `--plain`) either
+            // prints a bare value with no structure for the matcher to
+            // anchor on, or a table with no forced structured format —
+            // there's no shape here for a matcher to extract from.
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("secrets"), String::from("get")],
             }),
+            // `secrets substitute <template> --output <file>` renders
+            // secret values into an arbitrary template file, writing into a
+            // caller-chosen file rather than stdout.
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secrets"), String::from("substitute")],
+            }),
+            // `secrets set`/`secrets upload`/`secrets delete`/`secrets notes
+            // set` mutate secrets (write real state to Doppler) rather than
+            // just reading them. None of the four are blocked as an
+            // artifact of the implicit fail-closed default — they must be
+            // listed explicitly, because without an explicit block they'd
+            // match the bare `secrets` `SensitiveCommand` rule below (a
+            // single-token `args_match` that matches any `secrets ...`
+            // invocation not already claimed by a more specific rule) and
+            // be routed through Sensitive-command execution: the
+            // subprocess call — and the mutation it performs — happens
+            // before extraction gets a chance to fail closed on the
+            // mismatched output shape.
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secrets"), String::from("set")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secrets"), String::from("upload")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![String::from("secrets"), String::from("delete")],
+            }),
+            MatcherRule::BlockedCommand(ArgsOnly {
+                args_match: non_empty_vec![
+                    String::from("secrets"),
+                    String::from("notes"),
+                    String::from("set")
+                ],
+            }),
+            // `doppler secrets download --format json --no-file` outputs a
+            // flat JSON object of `{name: value, ...}` pairs, the same
+            // shape `vault kv get` extracts via `RecordKey` naming (minus
+            // the `data.data` wrapper). We force this format (json is
+            // already the CLI's own default, but an agent could still
+            // request `env`) so the matcher always sees a structurally
+            // parseable shape — unlike a byte-level regex, this also
+            // handles multi-line secret values (e.g. PEM keys) correctly,
+            // since JSON escapes embedded newlines.
+            //
+            // `--no-file` is forced unconditionally. `secrets download`
+            // accepts an optional positional `<filepath>` argument; without
+            // `--no-file`, the CLI writes the (encrypted, but
+            // agent-decryptable via its own `--passphrase` flag) output to
+            // that file — or a default filename — instead of stdout,
+            // bypassing this matcher entirely. Per the CLI's own source
+            // (`downloadSecrets` in `pkg/cmd/secrets.go`), `--no-file` is
+            // checked first and returns immediately after printing to
+            // stdout, before the positional filepath argument is even
+            // read — so forcing it here makes any file target the agent
+            // supplies inert, regardless of where in argv it appears.
+            //
+            // `--no-file` does not touch the *fallback file*, a separate
+            // side channel: with `--fallback PATH`, the CLI writes an
+            // encrypted copy of every fetched secret to `PATH` after each
+            // successful fetch, independent of whether the primary output
+            // goes to stdout or a file. The encryption passphrase defaults
+            // to one derived from the current config, but `--fallback-
+            // passphrase` lets the agent set it explicitly — turning
+            // `--fallback` into an exfiltration path that bypasses this
+            // matcher entirely, encrypted or not, since the agent chooses
+            // both the destination and the key. `--no-fallback` ("disable
+            // reading and writing the fallback file") is forced
+            // unconditionally to close it, and `--fallback`,
+            // `--fallback-passphrase`, `--fallback-only` (implies
+            // `--fallback-readonly`), `--fallback-readonly`, and `--offline`
+            // (an alias for `--fallback-only`) are all stripped so none of
+            // them can survive alongside the forced flag.
+            //
+            // Ordering matters: `resolve_args` picks the *first* matching
+            // `SensitiveCommand` rule, so this longer, more specific match
+            // must stay listed before bare `secrets` below — otherwise the
+            // shorter matcher, which is always contained in the longer one
+            // (see `args_matches`), would shadow it and route `secrets
+            // download` through the wrong matcher.
             MatcherRule::SensitiveCommand(ArgsAndMatcher {
                 args_match: vec![String::from("secrets"), String::from("download")],
-                matcher: SecretMatcher::Regex {
-                    pattern: String::from(r"(?m)^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.+)$"),
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$.*"),
+                    value_path: String::from("$"),
+                    name: SecretNameSource::RecordKey,
+                    item_selector: None,
+                    domain_selector: None,
                 },
+                strip_arg_flags: vec![
+                    String::from("--format"),
+                    String::from("--fallback"),
+                    String::from("--fallback-passphrase"),
+                    String::from("--fallback-only"),
+                    String::from("--fallback-readonly"),
+                    String::from("--offline"),
+                ],
+                forced_args: vec![
+                    String::from("--format"),
+                    String::from("json"),
+                    String::from("--no-file"),
+                    String::from("--no-fallback"),
+                ],
             }),
+            // Bare `doppler secrets --json` (no subcommand) also emits
+            // every secret in one call, in a different but equally
+            // well-defined shape: per the CLI's own source
+            // (`printer.Secrets` in `pkg/printer/enclave.go`), the JSON
+            // branch always prints `{"<name>": {"computed": <value-or-null>,
+            // "note": ..., "computedVisibility": ..., "computedValueType":
+            // ...}, ...}` — so this is a `SensitiveCommand` too, not
+            // blocked: `record_path: "$.*"` selects each per-secret object,
+            // `value_path: "$.computed"` its value, name from the record's
+            // own key. `--json` is forced (it's a persistent root flag, not
+            // `secrets`-specific — this command has no `--format`); `--raw`
+            // is stripped unconditionally, since passing it adds a second,
+            // un-extracted secret-bearing `raw` field to every record that
+            // this matcher doesn't cover. `--only-names` takes an entirely
+            // different, values-free code path (`printer.SecretsNames`)
+            // whose output shape doesn't match `record_path` either, so it
+            // fails closed via `MatcherError` rather than leaking — same
+            // class of gap as `vault kv get -field=`.
+            //
+            // A restricted secret with no computed value serializes
+            // `"computed": null`; `value_path` requires a string, so one
+            // restricted secret in the batch fails the whole extraction
+            // closed (`MatcherError::NonStringNode`), same as everywhere
+            // else in this registry that a single bad record voids the
+            // batch rather than silently redacting only the good ones.
+            MatcherRule::SensitiveCommand(ArgsAndMatcher {
+                args_match: vec![String::from("secrets")],
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$.*"),
+                    value_path: String::from("$.computed"),
+                    name: SecretNameSource::RecordKey,
+                    item_selector: None,
+                    domain_selector: None,
+                },
+                strip_arg_flags: vec![String::from("--json"), String::from("--raw")],
+                forced_args: vec![String::from("--json")],
+            }),
+            // `me`/`projects list`/`environments list`/`configs list`
+            // return account or project/environment/config metadata — no
+            // secret values — so they pass through unredacted rather than
+            // needing a matcher.
             MatcherRule::SafeCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("me")],
             }),
@@ -349,7 +546,5 @@ fn doppler_spec() -> CliIntegrationSpec {
                 args_match: non_empty_vec![String::from("configs"), String::from("list")],
             }),
         ],
-        strip_arg_flags: vec![String::from("--format")],
-        forced_args: vec![String::from("--format"), String::from("env")],
     }
 }
