@@ -46,12 +46,14 @@ account or repository flows are classified as `communication.external.send`.
 That includes GitHub.com, hosted GitHub Enterprise (`*.ghe.com`), and the
 Google and Apple identity-provider hosts GitHub can use during sign-in.
 
-GitHub Copilot works out of the box: the mapping covers the Copilot service
-hosts (`*.githubcopilot.com` plus the plan-scoped
+GitHub Copilot works out of the box: the mapping covers the hosts from
+GitHub's Copilot allowlist (`*.githubcopilot.com` plus the plan-scoped
 `*.individual.githubcopilot.com`, `*.business.githubcopilot.com`, and
-`*.enterprise.githubcopilot.com`), so Copilot chat, completions, and telemetry
-are classified without extra configuration. For other embedded agents, such as
-OpenAI/Codex or Anthropic/Claude, add the matching extra mapping.
+`*.enterprise.githubcopilot.com`, along with the usage-report and
+voice-feature hosts), so Copilot chat, completions, telemetry, usage
+reporting, and voice features are classified without extra configuration. For
+other embedded agents, such as OpenAI/Codex or Anthropic/Claude, add the
+matching extra mapping.
 
 ## Step 2: Run VS Code
 

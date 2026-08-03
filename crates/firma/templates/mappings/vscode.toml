@@ -138,11 +138,17 @@ action_class = "communication.external.send"
 
 # GitHub Copilot service hosts used by the Copilot extension: chat and
 # completion APIs plus plan-scoped (individual/business/enterprise) endpoints
-# and Copilot telemetry. The remaining hosts from GitHub's Copilot allowlist
-# are already covered above: copilot-proxy.githubusercontent.com,
+# and Copilot telemetry. Other hosts from GitHub's Copilot allowlist are
+# covered by rules above: copilot-proxy.githubusercontent.com,
 # copilot-telemetry.githubusercontent.com, and
-# origin-tracker.githubusercontent.com by *.githubusercontent.com, and
-# collector.github.com by *.github.com.
+# origin-tracker.githubusercontent.com by *.githubusercontent.com;
+# collector.github.com and copilot-reports.github.com by *.github.com.
+#
+# The plan-scoped rules are kept alongside *.githubcopilot.com on purpose:
+# the current glob matcher lets a leading * span multiple labels, so the
+# first rule already matches api.individual.githubcopilot.com, but the
+# matcher's documented contract is single-label wildcards. The explicit
+# plan-scoped rules keep Copilot coverage correct under either semantics.
 [[rules]]
 method = "CONNECT"
 host = "*.githubcopilot.com"
@@ -161,6 +167,38 @@ action_class = "communication.external.send"
 [[rules]]
 method = "CONNECT"
 host = "*.enterprise.githubcopilot.com"
+action_class = "communication.external.send"
+
+# Copilot usage-report downloads (fallback CDN and storage).
+[[rules]]
+method = "CONNECT"
+host = "copilot-reports-*.b01.azurefd.net"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "usagereports*.blob.core.windows.net"
+action_class = "communication.external.send"
+
+# Copilot voice features (Foundry Local model catalog and downloads).
+[[rules]]
+method = "CONNECT"
+host = "ai.azure.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "api.catalog.azureml.ms"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.api.azureml.ms"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "amlwlrt4*.blob.core.windows.net"
 action_class = "communication.external.send"
 
 # GitHub social sign-in providers.
