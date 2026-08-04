@@ -110,6 +110,8 @@ matching the pin and is denied `unpinned_tool` without one. Tool Router
 checks the version only when the request carries one, and hosted MCP calls
 carry none, so on those routes Composio executes whatever version its
 server currently serves while classification still comes from the pinned
+snapshot. A server-side toolkit release can therefore change a slug's
+behavior on the session routes before a maintainer reviews the new
 snapshot; refresh pins promptly when Composio announces toolkit updates.
 
 Pins are per pair, so Notion sitting on a later snapshot date than the other
