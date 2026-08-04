@@ -419,14 +419,43 @@ jobs:
           EOF
           sudo apparmor_parser -r /etc/apparmor.d/bwrap
 
-      - name: Generate coverage
-        run: cargo llvm-cov nextest --profile ci --workspace --all-features --codecov --output-path codecov.json
+      # White-box tests may call production Rust APIs directly. The CLI
+      # integration target is excluded so its coverage remains attributable to
+      # the user-facing black-box boundary.
+      - name: Generate internal white-box coverage
+        run: >-
+          cargo llvm-cov nextest --profile ci --workspace --all-features
+          --codecov --output-path codecov-internal-white-box.json
+          -E 'not binary_id(firma::integration)'
 
-      - name: Upload coverage to Codecov
+      - name: Upload internal white-box coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           use_oidc: true
-          files: codecov.json
+          files: codecov-internal-white-box.json
+          flags: internal-white-box
+          name: internal-white-box
+          disable_search: true
+          fail_ci_if_error: true
+
+      # Retain the instrumented build while preventing the white-box execution
+      # counters from leaking into the CLI black-box report.
+      - name: Reset coverage counters
+        run: cargo llvm-cov clean --profraw-only
+
+      - name: Generate CLI black-box coverage
+        run: >-
+          cargo llvm-cov nextest --profile ci --workspace --all-features
+          --no-clean --codecov --output-path codecov-cli-black-box.json
+          -E 'binary_id(firma::integration)'
+
+      - name: Upload CLI black-box coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true
+          files: codecov-cli-black-box.json
+          flags: cli-black-box
+          name: cli-black-box
           disable_search: true
           fail_ci_if_error: true
 
