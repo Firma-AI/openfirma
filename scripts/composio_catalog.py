@@ -92,6 +92,7 @@ def fetch_catalog(api_key: str, toolkit: str, version: str) -> dict[str, Any]:
     """Fetch every page and retain only reviewable, non-secret metadata."""
     tools: dict[str, dict[str, str]] = {}
     cursor: str | None = None
+    seen_cursors: set[str] = set()
     while True:
         page = _fetch_page(api_key, toolkit, version, cursor)
         items = page.get("items")
@@ -123,10 +124,15 @@ def fetch_catalog(api_key: str, toolkit: str, version: str) -> dict[str, Any]:
                 "version": version,
             }
         next_cursor = page.get("next_cursor")
-        if next_cursor is None:
+        # Both `null` and `""` are used in the wild to mean "no more pages".
+        if next_cursor is None or next_cursor == "":
             break
-        if not isinstance(next_cursor, str) or not next_cursor:
+        if not isinstance(next_cursor, str):
             raise CatalogError("Composio catalog returned an invalid cursor")
+        # A repeated cursor would page forever; stop instead of hanging.
+        if next_cursor in seen_cursors:
+            raise CatalogError("Composio catalog pagination did not terminate")
+        seen_cursors.add(next_cursor)
         cursor = next_cursor
     return {
         "toolkit": toolkit,
@@ -136,12 +142,23 @@ def fetch_catalog(api_key: str, toolkit: str, version: str) -> dict[str, Any]:
 
 
 def refresh_mapping(
-    mapping_path: pathlib.Path, toolkit: str, version: str, slugs: set[str]
+    mapping_path: pathlib.Path,
+    toolkit: str,
+    version: str,
+    slugs: set[str],
+    previous_mapping_path: pathlib.Path | None = None,
 ) -> dict[str, Any]:
-    """Preserve reviewed mappings and make every new slug explicitly unmapped."""
+    """Preserve reviewed mappings and make every new slug explicitly unmapped.
+
+    Pins are version-named files, so a version bump writes a path that does not
+    exist yet and would otherwise start every slug unmapped. Pass
+    `previous_mapping_path` to seed the reviewed decisions from the pin being
+    replaced.
+    """
+    source_path = previous_mapping_path or mapping_path
     existing: dict[str, Any] = {}
-    if mapping_path.exists():
-        existing_value = _read_json(mapping_path)
+    if source_path.exists():
+        existing_value = _read_json(source_path)
         mappings = existing_value.get("mappings")
         if isinstance(mappings, dict):
             existing = mappings
@@ -200,6 +217,15 @@ def _parser() -> argparse.ArgumentParser:
     refresh.add_argument("--version", required=True)
     refresh.add_argument("--snapshot", type=pathlib.Path, required=True)
     refresh.add_argument("--mapping", type=pathlib.Path, required=True)
+    refresh.add_argument(
+        "--previous-mapping",
+        type=pathlib.Path,
+        default=None,
+        help=(
+            "mapping file of the pin being replaced; carries its reviewed "
+            "classifications forward across a toolkit version bump"
+        ),
+    )
     validate = subparsers.add_parser("validate")
     validate.add_argument("--snapshot", type=pathlib.Path, required=True)
     validate.add_argument("--mapping", type=pathlib.Path, required=True)
@@ -217,7 +243,11 @@ def main() -> int:
             snapshot = fetch_catalog(api_key, args.toolkit, args.version)
             slugs = {tool["slug"] for tool in snapshot["tools"]}
             mapping = refresh_mapping(
-                args.mapping, args.toolkit, args.version, slugs
+                args.mapping,
+                args.toolkit,
+                args.version,
+                slugs,
+                args.previous_mapping,
             )
             _write_json(args.snapshot, snapshot)
             _write_json(args.mapping, mapping)

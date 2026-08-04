@@ -127,8 +127,27 @@ python3 scripts/composio_catalog.py refresh \
   --mapping crates/firma-sidecar/config/composio/gmail-20260721_00.mapping.json
 ```
 
-The refresh keeps existing reviewed decisions and leaves every new slug
-unmapped. Classify each one, then validate the pair before rebuilding:
+Refreshing in place, onto the same version, keeps the existing reviewed
+decisions and leaves only new slugs unmapped. A version bump writes a
+new file name, so the reviewed decisions must be carried across explicitly
+with `--previous-mapping`:
+
+```bash
+python3 scripts/composio_catalog.py refresh \
+  --toolkit gmail \
+  --version 20260801_00 \
+  --snapshot crates/firma-sidecar/config/composio/gmail-20260801_00.json \
+  --mapping crates/firma-sidecar/config/composio/gmail-20260801_00.mapping.json \
+  --previous-mapping crates/firma-sidecar/config/composio/gmail-20260721_00.mapping.json
+```
+
+Without that flag every slug in the new pin starts unmapped. Known
+limitation: the script matches on slug only. When Composio changes a tool's
+description while keeping its slug, the carried-forward class is reused and
+no re-review is triggered, so read the descriptions of already-classified
+slugs periodically rather than trusting the diff to surface the change.
+
+Classify each unmapped slug, then validate the pair before rebuilding:
 
 ```bash
 python3 scripts/composio_catalog.py validate \
