@@ -1,41 +1,28 @@
 //! Regression: foreground startup owns rollback before component readiness.
+//!
+//! Process tree during the interrupted readiness check:
+//! ```text
+//! test harness -> foreground launcher -> Authority leader
+//!                                      `-> TERM-ignoring grandchild (holds FIFO)
+//! ```
 
 #![cfg(unix)]
 
 use std::fs::{OpenOptions, Permissions};
 use std::io::{ErrorKind, Read as _};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use firma_runtime_state::pidfile;
 use firma_stack::{StackConfig, StartMode};
 use nix::unistd::Pid;
+
+use crate::support::{ProcessGroupCleanup, wait_for_file, wait_for_pidfile};
 
 const CHILD_ENV: &str = "FIRMA_TEST_FOREGROUND_STARTUP_CHILD";
 const CONFIG_ENV: &str = "FIRMA_TEST_FOREGROUND_STARTUP_CONFIG";
 const STATE_ENV: &str = "FIRMA_TEST_FOREGROUND_STARTUP_STATE";
-
-struct ProcessGroupCleanup(Option<Pid>);
-
-impl ProcessGroupCleanup {
-    fn new(pid: u32) -> Self {
-        Self(i32::try_from(pid).ok().map(Pid::from_raw))
-    }
-
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for ProcessGroupCleanup {
-    fn drop(&mut self) {
-        if let Some(pid) = self.0 {
-            let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
-        }
-    }
-}
 
 #[test]
 fn sigterm_during_foreground_readiness_rolls_back_components() {
@@ -94,18 +81,23 @@ fn sigterm_during_foreground_readiness_rolls_back_components() {
         .spawn()
         .expect("spawn foreground launcher");
 
+    // Wait until both the Authority group and its FIFO-holding grandchild are ready.
     let authority_pid = wait_for_pidfile(&state_dir.join("authority.pid"));
     let mut cleanup = ProcessGroupCleanup::new(authority_pid);
     wait_for_file(&child_ready_marker);
 
+    // Interrupt foreground startup while it is still waiting for Authority readiness.
     nix::sys::signal::kill(
         Pid::from_raw(i32::try_from(launcher.id()).expect("launcher PID fits pid_t")),
         nix::sys::signal::Signal::SIGTERM,
     )
     .expect("signal foreground launcher");
 
+    // The launcher must finish its rollback before reporting a successful test exit.
     let status = wait_for_child(&mut launcher, Duration::from_secs(10));
     assert!(status.success(), "foreground launcher failed: {status}");
+
+    // FIFO EOF proves rollback killed the TERM-ignoring grandchild as well as its leader.
     assert_fifo_closed(&mut liveness_reader);
     cleanup.disarm();
 
@@ -136,25 +128,6 @@ fn run_foreground_child() {
         error.to_string(),
         "platform error: termination requested during stack startup"
     );
-}
-
-fn wait_for_pidfile(path: &Path) -> u32 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(pid) = pidfile::read(path).expect("read authority pidfile") {
-            return pid.get();
-        }
-        assert!(Instant::now() < deadline, "authority pidfile missing");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.exists() {
-        assert!(Instant::now() < deadline, "{} missing", path.display());
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }
 
 fn wait_for_child(child: &mut std::process::Child, timeout: Duration) -> std::process::ExitStatus {

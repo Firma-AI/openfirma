@@ -9,27 +9,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use firma_stack::{StackConfig, StackError, State};
-use nix::unistd::Pid;
 
-struct ProcessGroupCleanup(Option<Pid>);
-
-impl ProcessGroupCleanup {
-    fn new(pid: u32) -> Self {
-        Self(i32::try_from(pid).ok().map(Pid::from_raw))
-    }
-
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for ProcessGroupCleanup {
-    fn drop(&mut self) {
-        if let Some(pid) = self.0 {
-            let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
-        }
-    }
-}
+use crate::support::{ProcessGroupCleanup, wait_for_file};
 
 #[test]
 fn start_recovers_missing_lock_for_orphaned_component_group() {
@@ -65,14 +46,7 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
     let group_pid = leader.id();
     let mut cleanup = ProcessGroupCleanup::new(group_pid);
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !child_ready_marker.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "orphaned grandchild did not become ready"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_file(&child_ready_marker);
 
     assert!(leader.wait().expect("collect authority leader").success());
 
@@ -154,11 +128,7 @@ fn forced_termination_retains_state_until_target_disappears() {
     let mut child =
         firma_stack::test_support::spawn_raw_owned_into_group(state_dir, "authority", &mut command)
             .expect("spawn authority");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !ready.exists() {
-        assert!(Instant::now() < deadline, "authority did not become ready");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_file(&ready);
 
     let error = firma_stack::stop(state_dir, Duration::ZERO).expect_err("zombie target remains");
     assert!(
