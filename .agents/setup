@@ -3,6 +3,9 @@ set -euo pipefail
 
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.dprint/bin:$PATH"
 
+# shellcheck source=../tool-versions.env
+. ./tool-versions.env
+
 if ! command -v rustup >/dev/null 2>&1; then
   echo "Installing rustup..."
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
@@ -30,8 +33,8 @@ rustup toolchain install "${rust_toolchain[0]}" --profile minimal "${rustup_args
 if ! command -v cargo-binstall >/dev/null 2>&1; then
   echo "Installing cargo-binstall..."
   curl -L --proto '=https' --tlsv1.2 -sSf \
-    https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh |
-    bash
+    https://raw.githubusercontent.com/cargo-bins/cargo-binstall/ead08b90bd7b2e6d81963fb9cf0b7239f66d5db4/install-from-binstall-release.sh |
+    BINSTALL_VERSION="$CARGO_BINSTALL_VERSION" bash
 fi
 
 if ! command -v just >/dev/null 2>&1; then
