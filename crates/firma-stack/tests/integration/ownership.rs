@@ -1,7 +1,7 @@
 //! Cross-platform ownership and detached-observation lifecycle coverage.
 
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -78,6 +78,54 @@ impl Drop for ProcessGroupCleanup {
     }
 }
 
+struct HeldStateTransaction {
+    child: Child,
+    release: PathBuf,
+    released: bool,
+}
+
+impl HeldStateTransaction {
+    fn acquire(state_dir: &Path) -> Self {
+        let ready = state_dir.join("transaction.ready");
+        let release = state_dir.join("transaction.release");
+        let child = Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
+            .env(TRANSACTION_STATE_DIR, state_dir)
+            .env(TRANSACTION_READY, &ready)
+            .env(TRANSACTION_RELEASE, &release)
+            .spawn()
+            .expect("spawn transaction holder");
+        wait_for_file(&ready);
+        Self {
+            child,
+            release,
+            released: false,
+        }
+    }
+
+    fn release(mut self) {
+        std::fs::write(&self.release, []).expect("release state transaction");
+        assert!(
+            self.child
+                .wait()
+                .expect("wait for transaction holder")
+                .success(),
+            "transaction holder failed"
+        );
+        self.released = true;
+    }
+}
+
+impl Drop for HeldStateTransaction {
+    fn drop(&mut self) {
+        if !self.released {
+            let _ = std::fs::write(&self.release, []);
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 #[test]
 fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let dir = tempfile::tempdir().expect("state dir");
@@ -150,27 +198,13 @@ fn owned_shutdown_terminates_children_when_state_transaction_is_busy() {
     let mut stack =
         firma_stack::test_support::running_stack_from_raw(state_dir, authority, sidecar)
             .expect("claim stack generation");
-    let transaction_ready = state_dir.join("transaction.ready");
-    let transaction_release = state_dir.join("transaction.release");
-    let mut transaction_holder = Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-        .env(TRANSACTION_STATE_DIR, state_dir)
-        .env(TRANSACTION_READY, &transaction_ready)
-        .env(TRANSACTION_RELEASE, &transaction_release)
-        .spawn()
-        .expect("spawn transaction holder");
-    wait_for_file(&transaction_ready);
+    let transaction = HeldStateTransaction::acquire(state_dir);
 
+    // Child termination precedes runtime-state cleanup. A busy transaction may
+    // retain state, but it must not prevent the owned processes from exiting.
     let started = Instant::now();
     let shutdown = stack.shutdown(Duration::ZERO);
-    std::fs::write(&transaction_release, []).expect("release state transaction");
-    assert!(
-        transaction_holder
-            .wait()
-            .expect("wait for transaction holder")
-            .success(),
-        "transaction holder failed"
-    );
+    transaction.release();
     let error = shutdown.expect_err("busy state cleanup must be reported");
 
     assert!(matches!(
@@ -249,6 +283,8 @@ fn old_startup_rollback_does_not_remove_replacement_state() {
 
 #[test]
 fn stop_waits_for_each_startup_transition_before_snapshot() {
+    // Exercise every partial-startup snapshot: no components registered,
+    // Authority only, and Authority plus Sidecar.
     for component_count in 0..=2 {
         let dir = tempfile::tempdir().expect("state dir");
         let state_dir = dir.path();
@@ -270,6 +306,8 @@ fn stop_waits_for_each_startup_transition_before_snapshot() {
             let _ = result_tx.send(firma_stack::stop(&stop_state_dir, Duration::ZERO));
         });
 
+        // Stop must block on the startup transaction before observing partial
+        // state. Releasing startup lets it snapshot and stop that exact state.
         assert!(matches!(
             result_rx.recv_timeout(Duration::from_millis(200)),
             Err(mpsc::RecvTimeoutError::Timeout)
@@ -293,6 +331,8 @@ fn stop_waits_for_each_startup_transition_before_snapshot() {
 #[test]
 fn generation_publication_is_atomic_for_concurrent_readers() {
     let dir = tempfile::tempdir().expect("state dir");
+    // Repeat the narrow publication race so a truncate-then-write
+    // implementation is likely to expose a partial UUID to a reader.
     for attempt in 0..50 {
         let state_dir = dir.path().join(format!("attempt-{attempt}"));
         std::fs::create_dir(&state_dir).expect("create attempt state dir");
