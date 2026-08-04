@@ -14,6 +14,7 @@
 )]
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
@@ -51,6 +52,23 @@ fn fake_firma_exe(tmp: &std::path::Path) -> PathBuf {
     tmp.join("does-not-exist-firma")
 }
 
+fn reserve_default_authority_addr() -> tokio::net::TcpSocket {
+    let address = "[::1]:50051".parse().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let socket = tokio::net::TcpSocket::new_v6().unwrap();
+        match socket.bind(address) {
+            Ok(()) => return socket,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AddrInUse && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => panic!("reserve default Authority address {address}: {error}"),
+        }
+    }
+}
+
 fn resolve_test_authority(
     tmp: &tempfile::TempDir,
     cfg: &std::path::Path,
@@ -78,6 +96,7 @@ fn resolve_test_authority(
 
 #[test]
 fn prompt_fires_when_no_commit_and_persists_on_yes() {
+    let _default_authority_addr = reserve_default_authority_addr();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
@@ -117,6 +136,7 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
 
 #[test]
 fn prompt_declined_returns_typed_error_and_does_not_persist() {
+    let _default_authority_addr = reserve_default_authority_addr();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
@@ -144,6 +164,7 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
 
 #[test]
 fn no_tty_returns_typed_error_without_calling_confirm() {
+    let _default_authority_addr = reserve_default_authority_addr();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
@@ -168,6 +189,7 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
 
 #[test]
 fn cli_local_skips_prompt_even_without_config() {
+    let _default_authority_addr = reserve_default_authority_addr();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
