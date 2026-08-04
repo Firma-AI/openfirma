@@ -1,6 +1,7 @@
 //! Canonical Action Class Registry v0.1.
 //!
-//! Contains the 15 canonical action classes defined by FEP v0.1 §2.3.5.
+//! Contains the 52 action classes of registry v0.1: the 15 canonical classes
+//! defined by FEP v0.1 §2.3.5 plus 37 in-place provider-surface additions.
 //! Every `intent.action_class` field in an `ExecutionEnvelope` MUST be one
 //! of these identifiers. Unknown protected actions that cannot be
 //! deterministically mapped to a registry entry fail closed with
@@ -40,8 +41,9 @@ pub struct ActionClassDefinition {
 
 /// The v0.1 Canonical Action Class Registry.
 ///
-/// Contains all 15 action classes defined by FEP v0.1 §2.3.5. Immutable
-/// after construction — runtime extension is not permitted by the spec.
+/// Contains all 52 classes: the 15 defined by FEP v0.1 §2.3.5 plus the 37
+/// in-place provider-surface additions. Immutable after construction —
+/// runtime extension is not permitted by the spec.
 #[derive(Debug, Clone)]
 pub struct ActionClassRegistry {
     classes: HashMap<&'static str, ActionClassDefinition>,

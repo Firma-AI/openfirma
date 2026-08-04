@@ -11,7 +11,7 @@ You should already understand [Action classes](../../concepts/action-classes/) (
 
 ## Step 1: Decide what action classes the destination's calls map to
 
-Before you write a single rule, decide which canonical classes the destination's endpoints belong to. The 44-class registry is documented in `docs/markdown/firma_action_class_registry.md` in the repository.
+Before you write a single rule, decide which canonical classes the destination's endpoints belong to. The 52-class registry is documented in `docs/markdown/firma_action_class_registry.md` in the repository.
 
 A useful exercise: list the destination's most common endpoints and what each one *does*, then assign the closest class. For a hypothetical `acme-saas.com` with three endpoints:
 
@@ -133,11 +133,12 @@ The shipped demo uses `false` so the demo can focus on its specific routes. Your
 
 ## Working with the shipped vendor mappings
 
-The repo includes three large vendor files under `crates/firma-sidecar/config/mappings/`:
+The repo includes four vendor files under `crates/firma-sidecar/config/mappings/`:
 
 - `github.toml` — GitHub REST + smart HTTP → 12 classes.
 - `stripe.toml` — 88 Stripe REST endpoints → 14 classes.
 - `gmail.toml` — 41 Gmail REST endpoints → 7 classes.
+- `composio.toml` — Composio execution transports and hosted MCP → 1 class. It is coarse on purpose: the per-tool class comes from the pinned catalogs described in the [Composio guide](../composio/), not from the path.
 
 Add them to `rules_paths`:
 
@@ -147,6 +148,7 @@ rules_paths = [
   "crates/firma-sidecar/config/mappings/github.toml",
   "crates/firma-sidecar/config/mappings/stripe.toml",
   "crates/firma-sidecar/config/mappings/gmail.toml",
+  "crates/firma-sidecar/config/mappings/composio.toml",
   "/path/to/your/extensions.toml",
 ]
 ```

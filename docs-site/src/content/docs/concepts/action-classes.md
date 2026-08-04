@@ -174,8 +174,8 @@ provider: "github"
 | `api.github.com` / `github.com` | `github`   |
 | `api.stripe.com`                | `stripe`   |
 | `gmail.googleapis.com`          | `gmail`    |
-| `app.composio.dev`              | `composio` |
-| `backend.composio.dev`          | `composio` |
+
+Composio governed tool calls also carry `provider: "composio"`, but that tag comes from the Composio decoder, which stamps it on the decoded logical action — not from the host allowlist above. The distinction matters: it covers decoded tool executions and account-lifecycle writes only. Recognized Composio passthrough requests never become logical actions, so their audit envelopes carry `host` and `path` and no `provider` at all.
 
 This split is intentional. Identifying the provider lets policies write rules like "no Stripe transfers above a threshold" without binding the rule to a specific URL path. Not setting it for unknown hosts keeps the namespace honest — the Sidecar refuses to guess.
 

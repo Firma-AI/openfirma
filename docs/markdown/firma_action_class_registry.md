@@ -213,11 +213,12 @@ deferred to a follow-up task.
 Operator-facing mapping files ship under
 `crates/firma-sidecar/config/mappings/`:
 
-| File          | Covers                                       |
-| ------------- | -------------------------------------------- |
-| `github.toml` | GitHub REST + smart HTTP → 12 action classes |
-| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
-| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
+| File            | Covers                                                        |
+| --------------- | ------------------------------------------------------------- |
+| `github.toml`   | GitHub REST + smart HTTP → 12 action classes                  |
+| `stripe.toml`   | 88 Stripe REST endpoints → 14 action classes                  |
+| `gmail.toml`    | 41 Gmail REST endpoints → 7 action classes                    |
+| `composio.toml` | Composio execution transports and hosted MCP → 1 action class |
 
 Enable a shipped file via the sidecar `[enforcement.mapping]` config:
 
@@ -371,7 +372,7 @@ Components that bind to the registry:
   new entries against §2.3.2 naming rules and the authoring guidance in
   this document.
 - `crates/firma-core/firma.cedarschema` — canonical schema embedded in
-  the binary; declares the 15 actions for Cedar type-checking. Identifiers
+  the binary; declares the 52 actions for Cedar type-checking. Identifiers
   MUST be byte-identical to the Sidecar registry.
 
 - `crates/firma-authority/src/cedar_loader.rs` — hardcoded action
@@ -381,7 +382,7 @@ Components that bind to the registry:
   capability `action_set` values MUST draw only from the registry.
 
 A conformance test in the Sidecar crate asserts that
-`ActionClassRegistry::v0_1()` returns exactly the 44 identifiers listed
+`ActionClassRegistry::v0_1()` returns exactly the 52 identifiers listed
 above, in any order. Any drift fails CI.
 
 ## Extending the registry

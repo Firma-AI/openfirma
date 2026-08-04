@@ -20,7 +20,7 @@
 //! - [`decision`] — Unified ALLOW/DENY result type for every enforcement call.
 //! - [`error`] — Internal error types; every variant maps to a DENY decision
 //!   (fail-closed boundary).
-//! - [`registry`] — Canonical Action Class Registry v0.1 (15 action classes).
+//! - [`registry`] — Canonical Action Class Registry v0.1 (52 action classes).
 //! - [`revocation`] — Bloom filter + LRU revocation cache.
 //! - [`session`] — Per-session runtime state store (LRU + persistent backend).
 

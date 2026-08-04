@@ -225,7 +225,7 @@ flowchart TB
 
 Deterministic rule-based mapping from `(method, host, path)` to a
 canonical `action_class` drawn from the v0.1 Action Class Registry
-(15 classes). Strips sensitive headers (`authorization`, `cookie`,
+(52 classes). Strips sensitive headers (`authorization`, `cookie`,
 `set-cookie`, `proxy-authorization`, `x-api-key`) before they enter
 the envelope. No LLM, no heuristic classifier on the hot path.
 
