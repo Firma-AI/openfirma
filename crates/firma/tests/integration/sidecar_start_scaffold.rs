@@ -16,7 +16,7 @@ use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use firma_config_loader::CONFIG_FILE_NAME;
+use super::CONFIG_FILE_NAME;
 
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))

@@ -25,7 +25,7 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use firma_config_loader::CONFIG_FILE_NAME;
+use super::CONFIG_FILE_NAME;
 
 const PRE_READY_PREFIXES: &[&str] = &[
     "config loaded",

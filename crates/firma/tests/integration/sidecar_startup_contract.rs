@@ -20,7 +20,7 @@ use std::io::{BufRead, BufReader};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use firma_config_loader::CONFIG_FILE_NAME;
+use super::CONFIG_FILE_NAME;
 
 const CONTRACT_PREFIXES: &[&str] = &[
     "config loaded",

@@ -1,4 +1,4 @@
-//! Regression: stack stop kills a Unix process group, including grandchildren.
+//! Verifies that stack stop kills a Unix process group, including grandchildren.
 
 #[cfg(unix)]
 #[test]

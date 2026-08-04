@@ -55,16 +55,16 @@ pub struct IssueParams {
 /// Setting `[run.profiles.<name>.capability] requested_actions` in `firma.toml`
 /// narrows this request further — an opt-in extra-restriction knob for running
 /// with fewer permissions than the policy would otherwise allow.
-pub const DEFAULT_REQUESTED_ACTIONS: &[ActionClass] = ActionClass::ALL;
+pub(crate) const DEFAULT_REQUESTED_ACTIONS: &[ActionClass] = ActionClass::ALL;
 
 /// Default resource scope.
-pub const DEFAULT_RESOURCE_SCOPE: &str = "*";
+pub(crate) const DEFAULT_RESOURCE_SCOPE: &str = "*";
 
 /// Default capability TTL in seconds (15 minutes).
 ///
 /// Chosen to be long enough to cover typical agent sessions while
 /// short enough to limit token exposure if a seed file is leaked.
-pub const DEFAULT_TTL_SECONDS: i32 = 900;
+pub(crate) const DEFAULT_TTL_SECONDS: i32 = 900;
 
 /// Upper bound on a single `IssueCapability` request once connected. Prevents a
 /// stalled Authority from hanging the mint (and, for the background refresher,

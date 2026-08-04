@@ -1,7 +1,5 @@
-//! Verifies that a sidecar configured with a tampered capability seed
-//! refuses to start. The seed is issued by the real `firma authority`
-//! CLI, then the TOML `action_set` is modified without re-signing the
-//! embedded PASETO.
+//! Verifies that `firma sidecar` accepts a capability seed issued through
+//! `firma authority`, while refusing a seed whose claims were tampered with.
 
 #![allow(
     clippy::unwrap_used,
@@ -11,8 +9,11 @@
     reason = "test code: panics are acceptable test failures"
 )]
 
+use std::fs::File;
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const FIRMA_BIN: &str = env!("CARGO_BIN_EXE_firma");
@@ -31,11 +32,6 @@ fn issue_seed() -> IssuedSeed {
     std::fs::write(
         policies.join("default.cedar"),
         "permit(principal, action, resource);",
-    )
-    .unwrap();
-    std::fs::write(
-        policies.join("schema.cedarschema"),
-        firma_core::cedar::FIRMA_SCHEMA,
     )
     .unwrap();
 
@@ -102,16 +98,18 @@ bundle_ttl_seconds = 30
     }
 }
 
-fn write_sidecar_config(issued: &IssuedSeed) -> PathBuf {
+fn write_sidecar_config(issued: &IssuedSeed, mapping_host: &str) -> PathBuf {
     let mapping = issued.tmp.path().join("mapping-rules.toml");
     std::fs::write(
         &mapping,
-        r#"[[rules]]
+        format!(
+            r#"[[rules]]
 method       = "GET"
-host         = "example.test"
+host         = "{mapping_host}"
 path         = "*"
 action_class = "communication.external.send"
 "#,
+        ),
     )
     .unwrap();
 
@@ -230,11 +228,128 @@ fn run_sidecar_until_exit(config_path: &Path) -> (i32, String, String) {
     );
 }
 
+struct ChildCleanup(Child);
+
+impl Drop for ChildCleanup {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn run_sidecar_until_ready(config_path: &Path, target: SocketAddr) -> (String, String) {
+    let stderr_path = config_path.with_extension("stderr.log");
+    let stderr_file = File::create(&stderr_path).expect("create Sidecar stderr log");
+    let child = Command::new(FIRMA_BIN)
+        .args(["sidecar", "--config"])
+        .arg(config_path)
+        .args(["--health-bind-addr", "127.0.0.1:0"])
+        .stdout(Stdio::null())
+        .stderr(stderr_file)
+        .spawn()
+        .expect("spawn firma sidecar");
+    let mut child = ChildCleanup(child);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut stderr = String::new();
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+        stderr = File::open(&stderr_path)
+            .map(BufReader::new)
+            .map(|reader| {
+                reader
+                    .lines()
+                    .map_while(Result::ok)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        if stderr.contains("sidecar ready") {
+            break;
+        }
+        if child.0.try_wait().expect("poll firma sidecar").is_some() {
+            break;
+        }
+    }
+
+    assert!(
+        stderr.contains("sidecar ready"),
+        "Sidecar did not accept the issued seed; stderr:\n{stderr}"
+    );
+    let interceptor = stderr
+        .lines()
+        .find(|line| line.contains("interceptor listening"))
+        .and_then(|line| line.split("addr=").nth(1))
+        .and_then(|value| value.split_whitespace().next())
+        .map(|value| value.trim_matches('"').trim_end_matches(','))
+        .and_then(|value| value.parse::<SocketAddr>().ok())
+        .unwrap_or_else(|| panic!("missing interceptor address in stderr:\n{stderr}"));
+
+    let mut proxy = TcpStream::connect(interceptor).expect("connect to Sidecar interceptor");
+    proxy
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set proxy read timeout");
+    write!(
+        proxy,
+        "GET http://{target}/allowed HTTP/1.1\r\n\
+         Host: {target}\r\n\
+         X-Firma-Session-Id: test-session\r\n\
+         Connection: close\r\n\r\n"
+    )
+    .expect("send request through Sidecar");
+    let mut reader = BufReader::new(proxy);
+    let mut response = String::new();
+    let mut content_length = None;
+    loop {
+        let mut line = String::new();
+        assert_ne!(
+            reader.read_line(&mut line).expect("read response header"),
+            0,
+            "Sidecar response ended before its headers"
+        );
+        response.push_str(&line);
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            content_length = Some(value.trim().parse::<usize>().expect("parse Content-Length"));
+        }
+        if line == "\r\n" {
+            break;
+        }
+    }
+    let mut body = vec![0_u8; content_length.expect("Sidecar response has Content-Length")];
+    reader.read_exact(&mut body).expect("read response body");
+    response.push_str(std::str::from_utf8(&body).expect("response body is UTF-8"));
+    (stderr, response)
+}
+
+#[test]
+fn issued_seed_admits_request_to_policy_stage() {
+    let issued = issue_seed();
+    let target = "127.0.0.1:1";
+    let sidecar_toml = write_sidecar_config(&issued, target);
+
+    let (stderr, response) =
+        run_sidecar_until_ready(&sidecar_toml, target.parse().expect("parse request target"));
+
+    assert!(
+        stderr.contains("sidecar ready"),
+        "expected ready contract; stderr:\n{stderr}"
+    );
+    // Standalone Sidecars have no Authority policy stream, so Stage 2 fails
+    // closed as stale. Reaching that reason proves the CLI-issued seed matched
+    // the session, action, and resource at Stage 1.
+    assert!(
+        response.starts_with("HTTP/1.1 403 Forbidden") && response.contains("PolicyBundleStale"),
+        "CLI-issued seed did not admit the request through Stage 1; response:\n{response}\nstderr:\n{stderr}"
+    );
+}
+
 #[test]
 fn tampered_seed_action_set_makes_sidecar_startup_fail() {
     let issued = issue_seed();
     tamper_seed_action_set(&issued.seed_path, "github.repo.write");
-    let sidecar_toml = write_sidecar_config(&issued);
+    let sidecar_toml = write_sidecar_config(&issued, "example.test");
 
     let (code, _stdout, stderr) = run_sidecar_until_exit(&sidecar_toml);
 

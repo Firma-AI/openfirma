@@ -1,11 +1,10 @@
 //! Tests for `firma config`.
 //!
 //! Verifies that the scaffolded unified `firma.toml` is syntactically
-//! valid, round-trips through the strict section loader, and that both
-//! component config types deserialize from their sections. Regression
-//! guard for Windows path serialization: backslash-bearing paths must not
-//! be emitted into TOML basic strings (where `\t`, `\s`, etc. are invalid
-//! escape sequences).
+//! valid and has the external configuration shape expected by users.
+//! Regression guard for Windows path serialization: backslash-bearing paths
+//! must not be emitted into TOML basic strings (where `\t`, `\s`, etc. are
+//! invalid escape sequences).
 
 #![allow(
     clippy::unwrap_used,
@@ -17,8 +16,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use firma_config_loader::CONFIG_FILE_NAME;
 use firma_core::AgentId;
+
+use super::CONFIG_FILE_NAME;
 
 const REGISTERED_AGENT_ID: &str = "agt_01j0000000e008000000000001";
 
@@ -228,24 +228,6 @@ fn assert_unified_config_parses(firma_toml: &Path) {
         .unwrap_or_else(|e| panic!("read {}: {e}", firma_toml.display()));
     toml::from_str::<toml::Value>(&text)
         .unwrap_or_else(|e| panic!("parse {}: {e}\n---\n{text}", firma_toml.display()));
-
-    let abody = firma_config_loader::load_section(firma_toml, "authority")
-        .unwrap_or_else(|e| panic!("[authority] section: {e}"));
-    toml::from_str::<firma_authority::AuthorityConfig>(&abody)
-        .unwrap_or_else(|e| panic!("[authority] deserialize: {e}\n---\n{abody}"));
-
-    let sbody = firma_config_loader::load_section(firma_toml, "sidecar")
-        .unwrap_or_else(|e| panic!("[sidecar] section: {e}"));
-    let sidecar: firma_sidecar::config::SidecarConfig = toml::from_str(&sbody)
-        .unwrap_or_else(|e| panic!("[sidecar] deserialize: {e}\n---\n{sbody}"));
-
-    // A fresh `firma config` must produce a sidecar config that starts
-    // cleanly under standalone `firma sidecar --config` — i.e. it must pass
-    // strict validation, not merely deserialize. Guards against an empty
-    // `https_mitm.intercept_hosts` being treated as fatal.
-    sidecar
-        .validate()
-        .unwrap_or_else(|e| panic!("[sidecar] validate: {e}\n---\n{sbody}"));
 }
 
 #[test]
@@ -802,12 +784,10 @@ fn init_writes_parseable_config() {
     assert_unified_config_parses(&firma_toml);
 }
 
-/// A fresh `firma config` must scaffold a `firma.toml` whose `[sidecar]`
-/// section starts cleanly standalone. Beyond `validate()` (covered by
-/// [`assert_unified_config_parses`]) this pins the scaffold contract for the
-/// interceptor listen address and the authority public-key path.
+/// Pins the externally visible settings required for standalone Sidecar use.
+/// `sidecar_start_scaffold` separately launches the generated configuration.
 #[test]
-fn scaffold_supports_standalone_sidecar_startup() {
+fn scaffold_contains_standalone_sidecar_settings() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     let state_dir = tmp.path().join("state");
@@ -841,13 +821,6 @@ fn scaffold_supports_standalone_sidecar_startup() {
         value["sidecar"].get("preflight").is_none(),
         "scaffold must not emit [sidecar.preflight]:\n{text}"
     );
-
-    // The whole section must pass strict validation.
-    let sbody = firma_config_loader::load_section(&firma_toml, "sidecar").unwrap();
-    let sidecar: firma_sidecar::config::SidecarConfig = toml::from_str(&sbody).unwrap();
-    sidecar
-        .validate()
-        .unwrap_or_else(|e| panic!("standalone sidecar config invalid: {e}\n---\n{sbody}"));
 }
 
 #[test]
