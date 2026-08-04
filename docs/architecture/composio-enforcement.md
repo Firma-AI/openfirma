@@ -108,15 +108,16 @@ A tool outside those snapshots is denied with `unknown_tool`, so a Composio
 release that adds tools cannot widen what an agent may do until a maintainer
 classifies the new slugs.
 
-Version pinning is enforced asymmetrically because the routes carry
-different information. Direct execution requires an explicit `version` field
-matching the pin and is denied `unpinned_tool` without one. Tool Router
-checks the version only when the request carries one, and hosted MCP calls
-carry none, so on those routes Composio executes whatever version its
-server currently serves while classification still comes from the pinned
-snapshot. A server-side toolkit release can therefore change a slug's
-behavior on the session routes before a maintainer reviews the new
-snapshot; refresh pins promptly when Composio announces toolkit updates.
+Version pinning is enforced uniformly: every execution route funnels through
+one gate. A request that omits the toolkit version is denied `unpinned_tool`,
+and one naming a version other than the pin is denied `version_mismatch`, so
+Composio can only ever execute the version the local snapshot classified.
+Direct execution and Tool Router execution carry the version as a top-level
+payload field. Hosted MCP JSON-RPC has no version slot of its own, so
+`tools/call` reads the pin from the tool arguments alongside the account
+selector, and `COMPOSIO_MULTI_EXECUTE_TOOL` reads it from each child entry.
+This is a sharp edge for callers: an MCP client that cannot attach a
+`version` argument cannot reach a governed tool at all.
 
 Pins are per pair, so Notion sitting on a later snapshot date than the other
 three toolkits is expected; each pair is validated independently at startup.

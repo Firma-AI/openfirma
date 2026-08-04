@@ -376,16 +376,10 @@ fn decode_direct(
             "Composio raw proxy execution is unsupported",
         );
     }
-    let Some(version) = string_field(payload, "version") else {
-        return deny(
-            "unpinned_tool",
-            "Composio direct execution requires a pinned toolkit version",
-        );
-    };
     decode_tool(
         request,
         slug,
-        Some(version),
+        string_field(payload, "version"),
         string_field(payload, "user_id"),
         string_field(payload, "connected_account_id"),
         None,
@@ -486,8 +480,12 @@ fn decode_mcp(
     let account = arguments.and_then(|value| {
         string_field(value, "account").or_else(|| string_field(value, "connected_account_id"))
     });
+    // JSON-RPC has no version slot of its own, so the pin travels as a tool
+    // argument the same way the account selector does. Without one the call is
+    // denied `unpinned_tool` rather than executing an unclassified version.
+    let version = arguments.and_then(|value| string_field(value, "version"));
     decode_tool(
-        request, slug, None, None, account, session_id, None, catalogs,
+        request, slug, version, None, account, session_id, None, catalogs,
     )
 }
 
@@ -634,9 +632,17 @@ fn action_for_tool(
             detail: "Composio tool is not in a pinned local catalog",
         });
     };
-    if let Some(version) = version
-        && version != entry.version
-    {
+    // Every execution route funnels through here, so this is the single
+    // version gate. An absent version is denied like a mismatched one: without
+    // it Composio executes whatever its server currently serves, while the
+    // class still comes from the pinned snapshot.
+    let Some(version) = version else {
+        return Err(ProtocolDenial {
+            code: "unpinned_tool",
+            detail: "Composio execution requires a pinned toolkit version",
+        });
+    };
+    if version != entry.version {
         return Err(ProtocolDenial {
             code: "version_mismatch",
             detail: "Composio toolkit version does not match the pinned catalog",
@@ -671,7 +677,7 @@ fn logical_envelope(
     method: HttpMethod,
 ) -> NormalizedEnvelope {
     let mut resource = BTreeMap::from([
-        ("host".to_string(), canonical_host(request.host.as_str())),
+        ("host".to_string(), envelope_host(request.host.as_str())),
         ("path".to_string(), path_only(&request.path).to_string()),
         ("provider".to_string(), "composio".to_string()),
         (
@@ -849,6 +855,17 @@ pub(crate) fn canonical_host(host: &str) -> String {
         _ => normalized.as_str(),
     };
     without_port.trim_end_matches('.').to_string()
+}
+
+/// Canonicalize the host recorded in a governed logical envelope.
+///
+/// The connector rebuilds the outbound URL from this resource value, so unlike
+/// [`canonical_host`] a nonstandard port must survive: dropping it would
+/// dispatch an admitted request to 443 instead of the port it arrived on.
+/// Default ports still collapse, so every spelling of one authority yields a
+/// single envelope host, exactly as generic normalization does.
+fn envelope_host(host: &str) -> String {
+    crate::normalizer::mapping::normalize_host_pattern(host)
 }
 
 fn path_only(path: &str) -> &str {

@@ -259,7 +259,11 @@ fn post_to_read_only_routes_fails_closed() -> anyhow::Result<()> {
         "/api/v3.1/tools/GMAIL_SEND_EMAIL",
         "/api/v3.1/tool_router/session/trs_1/tools",
     ] {
-        let unsupported = request("backend.composio.dev", path, &serde_json::json!({}));
+        let unsupported = request(
+            Authority::from_static("backend.composio.dev"),
+            path,
+            &serde_json::json!({}),
+        );
         let DecodeResult::Deny(denial) = decode(&unsupported, &catalogs()?) else {
             anyhow::bail!("POST {path} must fail closed");
         };
@@ -352,6 +356,80 @@ fn direct_execution_rejects_missing_or_wrong_versions() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Every execution route shares one version gate. Omitting the pin lets
+/// Composio run whatever its server currently serves while classification
+/// still comes from the local snapshot, so an absent version fails closed on
+/// the session, meta, and hosted MCP routes exactly as it does on direct
+/// execution.
+#[test]
+fn execution_routes_without_a_pinned_version_fail_closed() -> anyhow::Result<()> {
+    for (host, path, body) in [
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_1/execute",
+            serde_json::json!({"tool_slug": "GMAIL_SEND_EMAIL", "arguments": {}}),
+        ),
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_1/execute_meta",
+            serde_json::json!({
+                "tool_slug": "COMPOSIO_EXECUTE_TOOL",
+                "arguments": {"tool_slug": "GMAIL_SEND_EMAIL"}
+            }),
+        ),
+        (
+            Authority::from_static("app.composio.dev"),
+            "/tool_router/v3/trs_1/mcp",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "GMAIL_SEND_EMAIL", "arguments": {}}
+            }),
+        ),
+        (
+            Authority::from_static("app.composio.dev"),
+            "/tool_router/v3/trs_1/mcp",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "COMPOSIO_MULTI_EXECUTE_TOOL",
+                    "arguments": {"tools": [{"tool_slug": "GMAIL_SEND_EMAIL"}]}
+                }
+            }),
+        ),
+    ] {
+        let unpinned = request(host, path, &body);
+        let DecodeResult::Deny(denial) = decode(&unpinned, &catalogs()?) else {
+            anyhow::bail!("unpinned execution on {path} must fail closed");
+        };
+        assert_eq!(denial.code, "unpinned_tool");
+    }
+    Ok(())
+}
+
+/// The connector rebuilds the outbound URL from the envelope's host, so a
+/// nonstandard port must survive decoding; collapsing it to the default would
+/// dispatch an admitted request to a port it was never evaluated for.
+#[test]
+fn governed_envelopes_keep_a_nonstandard_port() -> anyhow::Result<()> {
+    let ported = request(
+        Authority::from_static("backend.composio.dev:8443"),
+        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
+        &serde_json::json!({"version": "20251111_00"}),
+    );
+
+    let decoded = actions(decode(&ported, &catalogs()?))?;
+
+    assert_eq!(
+        decoded[0].envelope.intent().resource_display(),
+        "backend.composio.dev:8443/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
+    );
+    Ok(())
+}
+
 #[test]
 fn session_execution_uses_the_pinned_local_slug_allowlist() -> anyhow::Result<()> {
     let request = request(
@@ -359,6 +437,7 @@ fn session_execution_uses_the_pinned_local_slug_allowlist() -> anyhow::Result<()
         "/api/v3.1/tool_router/session/trs_1/execute",
         &serde_json::json!({
             "tool_slug": "GOOGLECALENDAR_CREATE_EVENT",
+            "version": "20260623_00",
             "arguments": {"summary": "private"},
             "account": "calendar-work",
         }),
@@ -387,6 +466,7 @@ fn hosted_mcp_decodes_directly_exposed_provider_tools() -> anyhow::Result<()> {
             "params": {
                 "name": "GMAIL_SEND_EMAIL",
                 "arguments": {
+                    "version": "20251111_00",
                     "account": "mailbox",
                     "recipient": "secret@example.test"
                 }
@@ -417,7 +497,7 @@ fn backend_host_hosted_mcp_decodes_calls_and_passes_session_verbs() -> anyhow::R
             "method": "tools/call",
             "params": {
                 "name": "GOOGLECALENDAR_CREATE_EVENT",
-                "arguments": {"summary": "private"}
+                "arguments": {"version": "20260623_00", "summary": "private"}
             }
         }),
     );
@@ -462,10 +542,12 @@ fn multi_execute_expands_ordered_children_without_arguments() -> anyhow::Result<
                     "tools": [
                         {
                             "tool_slug": "GMAIL_FETCH_EMAILS",
+                            "version": "20251111_00",
                             "arguments": {"query": "secret one"}
                         },
                         {
                             "tool_slug": "GMAIL_SEND_EMAIL",
+                            "version": "20251111_00",
                             "arguments": {"body": "secret two"}
                         }
                     ]
@@ -853,6 +935,7 @@ fn meta_tool_control_and_execution_routes_are_explicit() -> anyhow::Result<()> {
                 "name": "COMPOSIO_EXECUTE_TOOL",
                 "arguments": {
                     "tool_slug": "GMAIL_FETCH_EMAILS",
+                    "version": "20251111_00",
                     "account": "mailbox"
                 }
             }
