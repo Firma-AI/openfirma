@@ -7,7 +7,7 @@ cd "$ROOT"
 # shellcheck source=../../tool-versions.env
 . "$ROOT/tool-versions.env"
 
-if ! cargo binstall --help >/dev/null 2>&1; then
+if [ "$(cargo binstall -V 2>/dev/null || true)" != "$CARGO_BINSTALL_VERSION" ]; then
   curl -L --proto '=https' --tlsv1.2 -sSf \
     https://raw.githubusercontent.com/cargo-bins/cargo-binstall/ead08b90bd7b2e6d81963fb9cf0b7239f66d5db4/install-from-binstall-release.sh |
     BINSTALL_VERSION="$CARGO_BINSTALL_VERSION" bash
