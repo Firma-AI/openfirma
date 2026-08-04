@@ -184,14 +184,97 @@ fn governed_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
 
     let mut listing = request(
         Authority::from_static("backend.composio.dev"),
-        "/api/v3/connected_accounts?cursor=abc",
+        "/api/v3/tools?cursor=abc",
         &serde_json::json!({}),
     );
     listing.method = Method::GET;
+    listing.body = None;
     assert!(matches!(
         decode(&listing, &catalogs()?),
         DecodeResult::Passthrough
     ));
+    Ok(())
+}
+
+/// Reads of `connected_accounts` and `auth_configs` disclose which
+/// integrations exist and how they authenticate, so they reach capability and
+/// Cedar evaluation as `credential.read` instead of passing through with the
+/// discovery routes.
+#[test]
+fn lifecycle_reads_are_governed_as_credential_read() -> anyhow::Result<()> {
+    for (path, slug, account) in [
+        (
+            "/api/v3/connected_accounts",
+            "COMPOSIO_LIST_CONNECTED_ACCOUNT",
+            None,
+        ),
+        (
+            "/api/v3/connected_accounts/ca_123",
+            "COMPOSIO_GET_CONNECTED_ACCOUNT",
+            Some("ca_123"),
+        ),
+        ("/api/v3.1/auth_configs", "COMPOSIO_LIST_AUTH_CONFIG", None),
+        (
+            "/api/v3.1/auth_configs/ac_9",
+            "COMPOSIO_GET_AUTH_CONFIG",
+            None,
+        ),
+    ] {
+        let mut read = request(
+            Authority::from_static("backend.composio.dev"),
+            path,
+            &serde_json::json!({}),
+        );
+        read.method = Method::GET;
+        read.body = None;
+
+        let decoded = actions(decode(&read, &catalogs()?))?;
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].envelope.intent().action_class, "credential.read");
+        assert_eq!(
+            decoded[0].envelope.intent().policy_resource_display(),
+            format!("composio://composio/{slug}")
+        );
+        assert_eq!(decoded[0].context.connected_account_id.as_deref(), account);
+    }
+    Ok(())
+}
+
+/// Governing the credential-adjacent reads must not pull the rest of the
+/// discovery surface out of passthrough.
+#[test]
+fn discovery_and_session_reads_remain_passthrough() -> anyhow::Result<()> {
+    for (host, path) in [
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/tools",
+        ),
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/toolkits",
+        ),
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/tool_router/session/trs_1",
+        ),
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_1/tools",
+        ),
+        (
+            Authority::from_static("app.composio.dev"),
+            "/tool_router/v3/trs_1/mcp",
+        ),
+    ] {
+        let mut read = request(host, path, &serde_json::json!({}));
+        read.method = Method::GET;
+        read.body = None;
+        assert!(
+            matches!(decode(&read, &catalogs()?), DecodeResult::Passthrough),
+            "GET {path} must stay passthrough"
+        );
+    }
     Ok(())
 }
 
@@ -809,12 +892,6 @@ fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Res
             Method::GET,
             Authority::from_static("backend.composio.dev"),
             "/api/v3/tools",
-            true,
-        ),
-        (
-            Method::GET,
-            Authority::from_static("backend.composio.dev"),
-            "/api/v3/connected_accounts",
             true,
         ),
         (

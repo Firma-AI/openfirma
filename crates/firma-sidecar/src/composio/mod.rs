@@ -34,7 +34,14 @@ pub(crate) const PROTECTED_HOSTS: [&str; 2] = [BACKEND_HOST, APP_HOST];
 /// Linking, updating, or removing connected accounts and auth configurations
 /// changes what an agent can reach through Composio, so those writes are
 /// logical actions rather than ungoverned passthrough.
-const LIFECYCLE_ACTION_CLASS: &str = "account.permission.change";
+const LIFECYCLE_WRITE_ACTION_CLASS: &str = "account.permission.change";
+
+/// Canonical class assigned to Composio account-lifecycle reads.
+///
+/// Listing connected accounts or auth configurations discloses which
+/// integrations exist and how they authenticate, so those reads are governed
+/// credential disclosure rather than ungoverned discovery passthrough.
+const LIFECYCLE_READ_ACTION_CLASS: &str = "credential.read";
 
 /// Toolkit segment used by lifecycle policy resources
 /// (`composio://composio/<slug>`).
@@ -123,6 +130,11 @@ pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult
 fn decode_protected(request: &RawRequest, host: &str, catalogs: &ComposioCatalogs) -> DecodeResult {
     if request.method != Method::POST {
         if let Some(result) = decode_lifecycle_write(request, host) {
+            return result;
+        }
+        // Governed before the passthrough recognizer: `connected_accounts` and
+        // `auth_configs` reads are credential disclosure, not discovery.
+        if let Some(result) = decode_lifecycle_read(request, host) {
             return result;
         }
         let path = path_only(&request.path);
@@ -306,6 +318,7 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
             };
             Some(lifecycle_action(
                 request,
+                LIFECYCLE_WRITE_ACTION_CLASS,
                 &format!("COMPOSIO_{verb}_{noun}"),
                 None,
                 account_id,
@@ -325,6 +338,7 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
             };
             Some(lifecycle_action(
                 request,
+                LIFECYCLE_WRITE_ACTION_CLASS,
                 &format!("COMPOSIO_{verb}_SESSION"),
                 Some(session_id),
                 None,
@@ -332,6 +346,7 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
         }
         LifecycleRoute::SessionLink { session_id } => Some(lifecycle_action(
             request,
+            LIFECYCLE_WRITE_ACTION_CLASS,
             "COMPOSIO_LINK_SESSION_ACCOUNT",
             Some(session_id),
             None,
@@ -339,9 +354,42 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
     }
 }
 
-/// Build the single governed logical action for a lifecycle write.
+/// Decode an account-lifecycle read into one governed logical action.
+///
+/// Reads of `connected_accounts` and `auth_configs` disclose which
+/// integrations an agent can reach and how they authenticate, so they are
+/// governed as `credential.read` instead of passing through with the other
+/// discovery routes. Returns `None` for anything else — including Tool Router
+/// session reads and MCP streams, which carry no credential metadata and stay
+/// passthrough.
+fn decode_lifecycle_read(request: &RawRequest, host: &str) -> Option<DecodeResult> {
+    if host != BACKEND_HOST
+        || !matches!(request.method, Method::GET | Method::HEAD | Method::OPTIONS)
+    {
+        return None;
+    }
+    let LifecycleRoute::Family {
+        noun,
+        account_id,
+        is_collection,
+    } = classify_lifecycle_route(path_only(&request.path))?
+    else {
+        return None;
+    };
+    let verb = if is_collection { "LIST" } else { "GET" };
+    Some(lifecycle_action(
+        request,
+        LIFECYCLE_READ_ACTION_CLASS,
+        &format!("COMPOSIO_{verb}_{noun}"),
+        None,
+        account_id,
+    ))
+}
+
+/// Build the single governed logical action for a lifecycle request.
 fn lifecycle_action(
     request: &RawRequest,
+    action_class: &str,
     slug: &str,
     session_id: Option<&str>,
     account: Option<&str>,
@@ -359,7 +407,7 @@ fn lifecycle_action(
         batch_size: None,
     };
     DecodeResult::Actions(vec![ComposioAction {
-        envelope: logical_envelope(request, LIFECYCLE_ACTION_CLASS, &context, method),
+        envelope: logical_envelope(request, action_class, &context, method),
         context,
     }])
 }
@@ -898,17 +946,16 @@ fn is_recognized_non_execution_path(host: &str, path: &str) -> bool {
     if host == APP_HOST {
         return false;
     }
+    // `connected_accounts` and `auth_configs` are deliberately absent: their
+    // reads are governed as `credential.read` by `decode_lifecycle_read` and
+    // their writes by `decode_lifecycle_write`, so any method that reaches
+    // here on those routes is neither and must fail closed.
     let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
     matches!(
         parts.as_slice(),
         ["api", "v3" | "v3.1", "tools"]
             | ["api", "v3" | "v3.1", "tools", _]
-            | [
-                "api",
-                "v3" | "v3.1",
-                "toolkits" | "connected_accounts" | "auth_configs",
-                ..
-            ]
+            | ["api", "v3" | "v3.1", "toolkits", ..]
             | ["api", "v3" | "v3.1", "tool_router", "session"]
             | ["api", "v3" | "v3.1", "tool_router", "session", _]
             | [

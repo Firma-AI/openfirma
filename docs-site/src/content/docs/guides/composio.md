@@ -102,7 +102,7 @@ forbid (
 The context includes toolkit, exact slug, user selector, account selector,
 session identifier, and batch position when those values are present.
 
-## Account lifecycle writes
+## Account lifecycle requests
 
 Linking or removing a connected account changes what an agent can reach, so
 those requests are governed like tool calls instead of passing through.
@@ -119,8 +119,20 @@ composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT
 A capability must grant `account.permission.change` for these requests to
 succeed, and Cedar can deny them like any other action. Grant that class to
 the backend session that runs OAuth flows and withhold it from agent
-runtimes. Read-only lifecycle requests (`GET` listings, MCP session streams)
-still pass through.
+runtimes.
+
+Reads of the same two families are governed too. `GET`, `HEAD`, and `OPTIONS`
+on `connected_accounts` and `auth_configs` disclose which integrations exist
+and how they authenticate, so they decode into one `credential.read` action
+with a synthetic resource such as
+`composio://composio/COMPOSIO_LIST_CONNECTED_ACCOUNT` (`LIST` for the
+collection, `GET` for a single item). Discovery routes (`tools`, `toolkits`),
+Tool Router session reads, and MCP session streams still pass through.
+
+Because these listings are now governed actions, they inherit the
+query-string rule: a paginated read such as
+`GET /api/v3/connected_accounts?cursor=...` is denied `query_string_unsupported`
+rather than dispatched with a filter the policy never evaluated.
 
 ## Atomic batches
 

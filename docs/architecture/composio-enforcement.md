@@ -39,7 +39,15 @@ both `/api/v3` and `/api/v3.1`) decode into one logical
 resource (for example `COMPOSIO_CREATE_CONNECTED_ACCOUNT`,
 `COMPOSIO_LINK_SESSION_ACCOUNT`, or `COMPOSIO_DELETE_SESSION`), so an agent
 cannot expand or reshape its own reachable account surface without
-capability and Cedar evaluation. Session creation (`POST` to the session
+capability and Cedar evaluation. `GET`/`HEAD`/`OPTIONS` on the
+`connected_accounts` and `auth_configs` routes are governed as well, decoding
+into one `credential.read` action with a
+`composio://composio/COMPOSIO_LIST_CONNECTED_ACCOUNT` style resource (`LIST`
+for the collection, `GET` for a single item): those responses disclose which
+integrations exist and how they authenticate, which is credential
+disclosure rather than discovery. As governed actions they also inherit the
+query-string rule below, so a paginated listing is denied instead of
+dispatched with an unevaluated filter. Session creation (`POST` to the session
 collection) and `POST` to an existing `session/{id}` stay recognized
 passthroughs, and tearing down the hosted MCP transport session via `DELETE`
 on the MCP path remains transport-level passthrough. Every recognized route
