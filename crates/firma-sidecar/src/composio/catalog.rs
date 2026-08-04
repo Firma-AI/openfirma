@@ -21,7 +21,7 @@ pub struct CatalogEntry {
 /// Refreshing a toolkit is a maintenance operation, never a hot-path lookup:
 /// regenerate the pair with `scripts/composio_catalog.py`, classify every new
 /// slug, and rebuild.
-const BUILTIN_PAIRS: [(&str, &str); 3] = [
+const BUILTIN_PAIRS: [(&str, &str); 4] = [
     (
         include_str!("../../config/composio/gmail-20260721_00.json"),
         include_str!("../../config/composio/gmail-20260721_00.mapping.json"),
@@ -33,6 +33,10 @@ const BUILTIN_PAIRS: [(&str, &str); 3] = [
     (
         include_str!("../../config/composio/slack-20260721_00.json"),
         include_str!("../../config/composio/slack-20260721_00.mapping.json"),
+    ),
+    (
+        include_str!("../../config/composio/notion-20260730_00.json"),
+        include_str!("../../config/composio/notion-20260730_00.mapping.json"),
     ),
 ];
 

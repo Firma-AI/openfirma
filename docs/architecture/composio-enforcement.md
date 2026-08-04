@@ -98,6 +98,7 @@ loaded at startup:
 | Gmail           | `20260721_00` | 63    |
 | Google Calendar | `20260721_00` | 49    |
 | Slack           | `20260721_00` | 167   |
+| Notion          | `20260730_00` | 56    |
 
 A tool outside those snapshots is denied with `unknown_tool`, so a Composio
 release that adds tools cannot widen what an agent may do until a maintainer
@@ -109,11 +110,10 @@ matching the pin and is denied `unpinned_tool` without one. Tool Router
 checks the version only when the request carries one, and hosted MCP calls
 carry none, so on those routes Composio executes whatever version its
 server currently serves while classification still comes from the pinned
-snapshot. A server-side toolkit release can therefore change a slug's
-behavior on the session routes before a maintainer reviews the new
-snapshot; refresh pins promptly when Composio announces toolkit updates. Notion
-has no reviewed catalog yet, so every Notion tool call is denied at the
-boundary.
+snapshot; refresh pins promptly when Composio announces toolkit updates.
+
+Pins are per pair, so Notion sitting on a later snapshot date than the other
+three toolkits is expected; each pair is validated independently at startup.
 
 Refreshes are maintenance operations, never hot-path network calls:
 

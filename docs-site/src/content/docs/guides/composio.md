@@ -132,9 +132,10 @@ OpenFirma never splits, reorders, or partially forwards the batch.
 ## Catalog pins and unsupported tools
 
 The Sidecar ships reviewed catalogs for Gmail (63 tools), Google Calendar (49),
-and Slack (167), all pinned at toolkit version `20260721_00`. They are compiled
-into the binary, so enforcement never queries Composio on the hot path and a
-tool is governed the same way on every host.
+and Slack (167), pinned at toolkit version `20260721_00`, plus Notion (56)
+pinned at `20260730_00`. They are compiled into the binary, so enforcement never
+queries Composio on the hot path and a tool is governed the same way on every
+host.
 
 Each slug carries a manually assigned canonical class, so policies stay
 transport-independent:
@@ -148,6 +149,8 @@ transport-independent:
 | `SLACK_SEND_MESSAGE`           | `communication.external.send` |
 | `SLACK_INVITE_USER_TO_CHANNEL` | `account.permission.change`   |
 | `SLACK_CREATE_CANVAS`          | `document.write`              |
+| `NOTION_CREATE_NOTION_PAGE`    | `document.write`              |
+| `NOTION_ARCHIVE_NOTION_PAGE`   | `document.delete`             |
 
 Refreshing a toolkit is a maintainer task, not an operator one: see
 [Composio enforcement](https://github.com/Firma-AI/openfirma/blob/main/docs/architecture/composio-enforcement.md)
@@ -161,8 +164,13 @@ admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
 included, so a query-carrying MCP URL fails at the handshake with a clear
 denial instead of breaking only on tool calls. Recognized routes accept only
 read methods (plus `DELETE` for MCP session teardown); anything else fails
-closed. Notion remains unsupported until it has a complete reviewed catalog, so
-every Notion tool call is denied at the boundary.
+closed.
+
+One sharp edge in the Notion mapping: `NOTION_REPLACE_PAGE_CONTENT` overwrites a
+whole page but is classified `document.write`, matching how `filesystem.write`
+covers "create or overwrite". A policy meant to block destructive edits must
+cover `document.write` or name that slug; `document.delete` alone does not
+catch it.
 
 ## Audit safety
 
