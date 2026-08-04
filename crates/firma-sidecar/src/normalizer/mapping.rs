@@ -235,31 +235,62 @@ impl MappingTable {
 
 /// Normalize a host or rule host pattern into its canonical matching form.
 ///
-/// Trims whitespace, lowercases, strips any trailing dot from the name part
-/// (even when a port hides it, as in `host.:8443`), drops a default
-/// `:443`/`:80` port, and re-appends a nonstandard all-digit port. This is
-/// the single normalization shared by runtime request hosts, rule host
-/// patterns, and config validation, so the three can never disagree on what
-/// a spelling means. Wildcards pass through untouched except for the
-/// name-part dot handling (`*.:443` normalizes to `*`, which validation
-/// rejects as a silent catch-all promotion).
+/// Splits the authority into a name and an optional port, per address
+/// family (see [`split_authority`] and [`split_ipv6_authority`]), then
+/// drops a default `:443`/`:80` port and re-appends a nonstandard all-digit
+/// one. This is the single normalization shared by runtime request hosts,
+/// rule host patterns, and config validation, so the three can never
+/// disagree on what a spelling means.
 pub fn normalize_host_pattern(host: &str) -> String {
-    // Trailing dots are stripped both before the port split (`host:443.`)
-    // and from the name part after it (`host.:443`); either position spells
-    // the same authority.
-    let lower = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let trimmed = host.trim();
+    let (name, port) = if trimmed.starts_with('[') {
+        split_ipv6_authority(trimmed)
+    } else {
+        split_authority(trimmed)
+    };
+    match port.as_deref() {
+        Some("443" | "80") | None => name,
+        Some(port) => format!("{name}:{port}"),
+    }
+}
+
+/// Returns `true` for a nonempty all-digit port, the only form accepted as a
+/// port when splitting an authority.
+fn is_valid_port(port: &str) -> bool {
+    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Splits a hostname/IPv4 authority into a lowercased name and an optional
+/// port.
+///
+/// Trailing dots are stripped both before the port split (`host:443.`) and
+/// from the name part after it (`host.:443`); either position spells the
+/// same authority (RFC 4343 case-insensitivity plus the FQDN trailing dot).
+/// Wildcards pass through untouched except for this dot handling (`*.:443`
+/// normalizes to `*`, which validation rejects as a silent catch-all
+/// promotion).
+fn split_authority(host: &str) -> (String, Option<String>) {
+    let lower = host.trim_end_matches('.').to_ascii_lowercase();
     let (name, port) = match lower.rsplit_once(':') {
-        Some((name, port))
-            if !name.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
-        {
-            (name, Some(port))
-        }
+        Some((name, port)) if !name.is_empty() && is_valid_port(port) => (name, Some(port)),
         _ => (lower.as_str(), None),
     };
-    let name = name.trim_end_matches('.');
-    match port {
-        Some("443" | "80") | None => name.to_string(),
-        Some(port) => format!("{name}:{port}"),
+    (
+        name.trim_end_matches('.').to_string(),
+        port.map(str::to_string),
+    )
+}
+
+/// Splits a bracketed IPv6 authority into a lowercased, bracketed name and
+/// an optional port.
+///
+/// The port is split at the closing bracket rather than the last colon,
+/// since an IPv6 address itself contains colons.
+fn split_ipv6_authority(host: &str) -> (String, Option<String>) {
+    let lower = host.to_ascii_lowercase();
+    match lower.split_once("]:") {
+        Some((name, port)) if is_valid_port(port) => (format!("{name}]"), Some(port.to_string())),
+        _ => (lower, None),
     }
 }
 

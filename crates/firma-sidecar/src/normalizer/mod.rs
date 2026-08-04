@@ -690,21 +690,19 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
 /// host — including when a port hides it (`host.:8443`). A default port
 /// (`:443` / `:80`) is also stripped so that `api.openai.com:443`,
 /// `api.openai.com:80`, and `api.openai.com` all match rules written for
-/// the bare host; nonstandard ports are preserved. IPv6 literals (`[::1]`,
-/// `[::1]:443`) are lowercased but otherwise preserved.
+/// the bare host; nonstandard ports are preserved. A bracketed IPv6 literal
+/// (`[::1]`, `[::1]:443`) is lowercased and has its default port stripped the
+/// same way, so `[::1]:443` and `[::1]` both match a rule written for either
+/// spelling.
 ///
 /// This runs on the hot path in [`IntentNormalizer::normalize`] before the
 /// mapping-table lookup so that an attacker cannot evade host-scoped rules by
 /// varying the case, trailing dot, or default port of the `Host` header.
-/// Delegates to the same normalization applied to rule host patterns at load
-/// time, so a request host and a rule host can never disagree in form.
+/// Every spelling rule is owned by [`mapping::normalize_host_pattern`], which
+/// also normalizes rule host patterns at load time, so a request host and a
+/// rule host can never disagree in form.
 fn normalize_host(host: &str) -> String {
-    let trimmed = host.trim();
-    // IPv6 literal: lowercase only; preserve brackets and any port.
-    if trimmed.starts_with('[') {
-        return trimmed.to_ascii_lowercase();
-    }
-    mapping::normalize_host_pattern(trimmed)
+    mapping::normalize_host_pattern(host)
 }
 
 /// Normalize a request path according to the canonicalization rules:
@@ -983,7 +981,8 @@ mod tests {
     #[test]
     fn test_normalize_host_ipv6_preserved() {
         assert_eq!(normalize_host("[::1]"), "[::1]");
-        assert_eq!(normalize_host("[FE80::1]:443"), "[fe80::1]:443");
+        assert_eq!(normalize_host("[FE80::1]:443"), "[fe80::1]");
+        assert_eq!(normalize_host("[FE80::1]:8443"), "[fe80::1]:8443");
     }
 
     fn load_mapping_file(filename: &str) -> MappingRulesFile {
