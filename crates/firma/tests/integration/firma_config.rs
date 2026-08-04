@@ -16,6 +16,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use firma_core::AgentId;
+
 use super::CONFIG_FILE_NAME;
 
 const REGISTERED_AGENT_ID: &str = "agt_01j0000000e008000000000001";
@@ -111,17 +113,9 @@ fn new_local_config_generates_agent_id_and_rerun_preserves_it() {
     let generated = first["sidecar"]["authority"]["agent_id"]
         .as_str()
         .expect("generated agent id");
-    assert!(
-        generated.starts_with("agt_"),
-        "unexpected agent ID: {generated}"
-    );
-    assert_eq!(generated.len(), REGISTERED_AGENT_ID.len());
-    assert!(
-        generated[4..]
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()),
-        "unexpected agent ID: {generated}"
-    );
+    generated
+        .parse::<AgentId>()
+        .expect("generated agent ID must be valid");
 
     run_init(&config_dir, &state_dir);
     let second_body = std::fs::read_to_string(&path).expect("read second config");
