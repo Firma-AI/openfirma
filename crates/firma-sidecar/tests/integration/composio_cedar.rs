@@ -42,7 +42,7 @@ impl PolicyEvaluation for CapturePolicy {
     }
 }
 
-fn envelope() -> NormalizedEnvelope {
+fn intent() -> ExecutionIntent {
     let mut resource = ExecutionIntent::resource_map_from(
         "backend.composio.dev/api/v3.1/tool_router/session/trs_1/execute",
     );
@@ -65,21 +65,29 @@ fn envelope() -> NormalizedEnvelope {
         ("composio_batch_index".to_string(), "1".to_string()),
         ("composio_batch_size".to_string(), "2".to_string()),
     ]);
-    NormalizedEnvelope {
-        intent: ExecutionIntent {
-            action_class: "communication.external.read".to_string(),
-            resource,
-            params: ActionParams::Http(HttpParams {
-                method: HttpMethod::POST,
-                headers: HashMap::new(),
-                body: None,
-                query: HashMap::new(),
-            }),
-            raw_transport: "https".to_string(),
-            raw_action_ref: "POST /api/v3.1/tool_router/session/trs_1/execute".to_string(),
-        },
-        timestamp: Utc::now(),
+    ExecutionIntent {
+        action_class: "communication.external.read".to_string(),
+        resource,
+        params: ActionParams::Http(HttpParams {
+            method: HttpMethod::POST,
+            headers: HashMap::new(),
+            body: None,
+            query: HashMap::new(),
+        }),
+        raw_transport: "https".to_string(),
+        raw_action_ref: "POST /api/v3.1/tool_router/session/trs_1/execute".to_string(),
     }
+}
+
+fn envelope() -> NormalizedEnvelope {
+    NormalizedEnvelope::new(intent(), Utc::now())
+}
+
+/// Builds the reference envelope with one Composio context entry overridden.
+fn envelope_with(key: &str, value: &str) -> NormalizedEnvelope {
+    let mut intent = intent();
+    intent.resource.insert(key.to_string(), value.to_string());
+    NormalizedEnvelope::new(intent, Utc::now())
 }
 
 fn claims() -> anyhow::Result<CapabilityClaims> {
@@ -153,11 +161,7 @@ fn every_composio_field_is_available_to_cedar_with_integer_batch_values() -> any
 #[test]
 fn malformed_batch_context_fails_closed_without_echoing_values() -> anyhow::Result<()> {
     let enforcer = ConstraintEnforcer::new(Arc::new(CapturePolicy::default()));
-    let mut envelope = envelope();
-    envelope.intent.resource.insert(
-        "composio_batch_index".to_string(),
-        "secret-invalid-index".to_string(),
-    );
+    let envelope = envelope_with("composio_batch_index", "secret-invalid-index");
 
     let decision = match enforcer.evaluate(&envelope, &claims()?, &RuntimeSignals::default()) {
         Ok(verdict) => anyhow::bail!("expected fail-closed denial, got {verdict:?}"),
@@ -193,11 +197,7 @@ fn cedar_can_filter_on_every_composio_context_field() -> anyhow::Result<()> {
         ("composio_batch_index", "0"),
         ("composio_batch_size", "3"),
     ] {
-        let mut denied_envelope = envelope();
-        denied_envelope
-            .intent
-            .resource
-            .insert(key.to_string(), value.to_string());
+        let denied_envelope = envelope_with(key, value);
         let denied = enforcer.evaluate(&denied_envelope, &claims()?, &RuntimeSignals::default());
         let Err(EnforcementDecision::Deny { reason, .. }) = denied else {
             anyhow::bail!("field {key} was not denied");

@@ -722,7 +722,7 @@ impl RequestHandler {
     ///
     /// Intended for upgraded protocols (for example WebSocket) where dispatch
     /// switches from request/response to long-lived byte relay.
-    pub(crate) async fn authorize_upgrade(
+    pub async fn authorize_upgrade(
         &self,
         mut request: RawRequest,
         session_id: &str,

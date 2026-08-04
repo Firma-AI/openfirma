@@ -457,11 +457,11 @@ async fn allowed_children_share_one_atomic_dispatch() -> anyhow::Result<()> {
             .all(|child| matches!(child.decision, EnforcementDecision::Allow { .. }))
     );
     assert_eq!(
-        result.children[0].audit_payload.resource,
+        result.children[0].audit_payload.resource(),
         "composio://gmail/GMAIL_FETCH_EMAILS"
     );
     assert_eq!(
-        result.children[1].audit_payload.resource,
+        result.children[1].audit_payload.resource(),
         "composio://gmail/GMAIL_SEND_EMAIL"
     );
     Ok(())
@@ -525,7 +525,7 @@ async fn deny_preserves_blocker_and_aborts_allowed_sibling() -> anyhow::Result<(
     assert!(
         result.children[0]
             .audit_payload
-            .deny_reason
+            .deny_reason()
             .starts_with("BATCH_ATOMICITY:")
     );
     Ok(())
@@ -569,13 +569,13 @@ async fn monitor_retains_would_block_reason_and_dispatches_once() -> anyhow::Res
         }
     ));
     assert_eq!(
-        result.children[1].audit_payload.decision,
+        *result.children[1].audit_payload.decision(),
         firma_sidecar::audit::Decision::Allow
     );
     assert!(
         result.children[1]
             .audit_payload
-            .deny_reason
+            .deny_reason()
             .starts_with("monitor_mode:")
     );
     Ok(())
@@ -603,8 +603,11 @@ async fn monitor_keeps_credential_injection_abort_blocking() -> anyhow::Result<(
                 reason: AbortReason::CredentialInjectionFailed,
                 ..
             }
-        ) && child.audit_payload.decision == firma_sidecar::audit::Decision::Abort
-            && !child.audit_payload.deny_reason.starts_with("monitor_mode:")
+        ) && *child.audit_payload.decision() == firma_sidecar::audit::Decision::Abort
+            && !child
+                .audit_payload
+                .deny_reason()
+                .starts_with("monitor_mode:")
     }));
     Ok(())
 }
@@ -680,8 +683,8 @@ async fn protected_composio_hosts_reject_protocol_upgrades() -> anyhow::Result<(
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("missing Composio upgrade audit"))?;
-        assert_eq!(audit.decision, firma_sidecar::audit::Decision::Deny);
-        assert_eq!(audit.dispatch_status, 0);
+        assert_eq!(*audit.decision(), firma_sidecar::audit::Decision::Deny);
+        assert_eq!(audit.dispatch_status(), 0);
     }
     Ok(())
 }
@@ -721,9 +724,9 @@ async fn monitor_forwards_protocol_denial_with_would_deny_audit() -> anyhow::Res
         .recv()
         .await
         .ok_or_else(|| anyhow::anyhow!("missing protocol denial audit"))?;
-    assert_eq!(audit.decision, firma_sidecar::audit::Decision::Allow);
-    assert!(audit.deny_reason.starts_with("monitor_mode:"));
-    assert!(audit.deny_reason.contains("unknown_tool"));
+    assert_eq!(*audit.decision(), firma_sidecar::audit::Decision::Allow);
+    assert!(audit.deny_reason().starts_with("monitor_mode:"));
+    assert!(audit.deny_reason().contains("unknown_tool"));
     Ok(())
 }
 
@@ -766,10 +769,10 @@ async fn monitor_observes_composio_protocol_upgrade() -> anyhow::Result<()> {
         anyhow::bail!("expected observed Composio upgrade in monitor mode");
     };
     assert_eq!(
-        audit_payload.decision,
+        *audit_payload.decision(),
         firma_sidecar::audit::Decision::Allow
     );
-    assert!(audit_payload.deny_reason.starts_with("monitor_mode:"));
+    assert!(audit_payload.deny_reason().starts_with("monitor_mode:"));
     Ok(())
 }
 
@@ -810,10 +813,10 @@ async fn handler_dispatches_original_batch_once_and_audits_every_child() -> anyh
         .recv()
         .await
         .ok_or_else(|| anyhow::anyhow!("missing second child audit"))?;
-    assert_eq!(first.dispatch_status, 201);
-    assert_eq!(second.dispatch_status, 201);
-    assert_eq!(first.dispatch_latency_us, second.dispatch_latency_us);
-    assert_eq!(first.response_size, second.response_size);
+    assert_eq!(first.dispatch_status(), 201);
+    assert_eq!(second.dispatch_status(), 201);
+    assert_eq!(first.dispatch_latency_us(), second.dispatch_latency_us());
+    assert_eq!(first.response_size(), second.response_size());
     Ok(())
 }
 
@@ -849,8 +852,8 @@ async fn handler_atomic_denial_dispatches_zero_times() -> anyhow::Result<()> {
         .recv()
         .await
         .ok_or_else(|| anyhow::anyhow!("missing second child audit"))?;
-    assert_eq!(first.decision, firma_sidecar::audit::Decision::Abort);
-    assert_eq!(second.decision, firma_sidecar::audit::Decision::Deny);
+    assert_eq!(*first.decision(), firma_sidecar::audit::Decision::Abort);
+    assert_eq!(*second.decision(), firma_sidecar::audit::Decision::Deny);
     Ok(())
 }
 
@@ -883,7 +886,7 @@ async fn handler_monitor_override_still_dispatches_only_once() -> anyhow::Result
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("missing child audit"))?;
-        assert_eq!(audit.decision, firma_sidecar::audit::Decision::Allow);
+        assert_eq!(*audit.decision(), firma_sidecar::audit::Decision::Allow);
     }
     Ok(())
 }
@@ -953,13 +956,11 @@ async fn composio_denial_travels_through_the_mitm_proxy_stack() -> anyhow::Resul
     let proxy_addr = listener.local_addr()?;
     let cancel = CancellationToken::new();
     let interceptor = HttpInterceptor::new(proxy_addr).with_https_mitm(
-        HttpsMitmConfig {
-            enabled: true,
-            intercept_hosts: vec!["backend.composio.dev".to_string()],
-            strict_hosts: vec!["backend.composio.dev".to_string()],
-            bypass_hosts: Vec::new(),
-            ..HttpsMitmConfig::default()
-        },
+        HttpsMitmConfig::default()
+            .with_enabled(true)
+            .with_intercept_hosts(vec!["backend.composio.dev".to_string()])
+            .with_strict_hosts(vec!["backend.composio.dev".to_string()])
+            .with_bypass_hosts(Vec::new()),
         ca_dir.path().to_path_buf(),
     );
     let server = tokio::spawn({
@@ -1021,8 +1022,8 @@ async fn composio_denial_travels_through_the_mitm_proxy_stack() -> anyhow::Resul
     let mut saw_denial = false;
     while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(1), audit_rx.recv()).await
     {
-        if event.decision == firma_sidecar::audit::Decision::Deny
-            && event.deny_reason.contains("unknown_tool")
+        if *event.decision() == firma_sidecar::audit::Decision::Deny
+            && event.deny_reason().contains("unknown_tool")
         {
             saw_denial = true;
             break;
@@ -1122,8 +1123,8 @@ async fn composio_mock_tls_demo_covers_enforcement_outcomes() -> anyhow::Result<
             .ok_or_else(|| anyhow::anyhow!("missing second monitor audit"))?,
     ];
     assert!(monitor_audits.iter().all(|audit| {
-        audit.decision == firma_sidecar::audit::Decision::Allow
-            && (audit.deny_reason.is_empty() || audit.deny_reason.starts_with("monitor_mode:"))
+        *audit.decision() == firma_sidecar::audit::Decision::Allow
+            && (audit.deny_reason().is_empty() || audit.deny_reason().starts_with("monitor_mode:"))
     }));
 
     cancellation.cancel();

@@ -191,7 +191,7 @@ impl ConstraintEnforcer {
         clippy::result_large_err,
         reason = "domain decision carries denial context"
     )]
-    pub(crate) fn evaluate(
+    pub fn evaluate(
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,

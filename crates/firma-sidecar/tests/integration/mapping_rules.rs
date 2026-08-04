@@ -103,7 +103,10 @@ fn trailing_dots_around_ports_cannot_evade_rules() -> anyhow::Result<()> {
                 anyhow::anyhow!("expected classification for {request_host}, got {decision:?}")
             })?;
 
-        assert_eq!(envelope.intent.action_class, "communication.external.read");
+        assert_eq!(
+            envelope.intent().action_class,
+            "communication.external.read"
+        );
     }
     Ok(())
 }

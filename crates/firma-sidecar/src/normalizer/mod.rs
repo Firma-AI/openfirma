@@ -100,6 +100,30 @@ pub struct NormalizedEnvelope {
     pub(crate) timestamp: DateTime<Utc>,
 }
 
+impl NormalizedEnvelope {
+    /// Creates a normalized envelope from an already canonical intent.
+    ///
+    /// The normalizer builds envelopes from raw requests; this constructor
+    /// exists for callers that hold a canonical [`ExecutionIntent`] and the
+    /// observation time it was captured at.
+    #[must_use]
+    pub fn new(intent: ExecutionIntent, timestamp: DateTime<Utc>) -> Self {
+        Self { intent, timestamp }
+    }
+
+    /// Returns the canonical intent carried by this envelope.
+    #[must_use]
+    pub fn intent(&self) -> &ExecutionIntent {
+        &self.intent
+    }
+
+    /// Returns the time the underlying request was observed.
+    #[must_use]
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        self.timestamp
+    }
+}
+
 /// Raw intercepted request — the input to the enforcement pipeline.
 ///
 /// Produced by an [`Interceptor`](crate::interceptor::Interceptor) from

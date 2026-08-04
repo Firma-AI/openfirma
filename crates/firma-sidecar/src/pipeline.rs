@@ -152,7 +152,7 @@ impl EnforcementPipeline {
     /// Set the enforcement mode. Use [`SidecarMode::Monitor`] for observe-only
     /// operation where DENY decisions are overridden to ALLOW.
     #[must_use]
-    pub(crate) fn with_mode(mut self, mode: SidecarMode) -> Self {
+    pub fn with_mode(mut self, mode: SidecarMode) -> Self {
         self.mode = mode;
         self
     }

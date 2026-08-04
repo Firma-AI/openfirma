@@ -102,11 +102,11 @@ fn direct_execution_requires_and_uses_the_pinned_version() -> anyhow::Result<()>
 
     assert_eq!(decoded.len(), 1);
     assert_eq!(
-        decoded[0].envelope.intent.policy_resource_display(),
+        decoded[0].envelope.intent().policy_resource_display(),
         "composio://gmail/GMAIL_FETCH_EMAILS"
     );
     assert_eq!(
-        decoded[0].envelope.intent.resource_display(),
+        decoded[0].envelope.intent().resource_display(),
         "backend.composio.dev/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
     );
     assert_eq!(
@@ -117,7 +117,7 @@ fn direct_execution_requires_and_uses_the_pinned_version() -> anyhow::Result<()>
         decoded[0].context.connected_account_id.as_deref(),
         Some("account-1")
     );
-    let firma_core::ActionParams::Http(params) = &decoded[0].envelope.intent.params else {
+    let firma_core::ActionParams::Http(params) = &decoded[0].envelope.intent().params else {
         anyhow::bail!("expected HTTP logical action");
     };
     assert_eq!(params.body, None);
@@ -143,7 +143,7 @@ fn host_spellings_still_hit_the_protected_hosts() -> anyhow::Result<()> {
         let decoded = actions(decode(&request, &catalogs()?))?;
 
         assert_eq!(
-            decoded[0].envelope.intent.policy_resource_display(),
+            decoded[0].envelope.intent().policy_resource_display(),
             "composio://gmail/GMAIL_FETCH_EMAILS",
             "{host} must decode as a protected Composio host"
         );
@@ -336,7 +336,7 @@ fn session_execution_uses_the_pinned_local_slug_allowlist() -> anyhow::Result<()
 
     let decoded = actions(decode(&request, &catalogs()?))?;
 
-    assert_eq!(decoded[0].envelope.intent.action_class, "calendar.create");
+    assert_eq!(decoded[0].envelope.intent().action_class, "calendar.create");
     assert_eq!(decoded[0].context.session_id.as_deref(), Some("trs_1"));
     assert_eq!(
         decoded[0].context.connected_account_id.as_deref(),
@@ -367,7 +367,7 @@ fn hosted_mcp_decodes_directly_exposed_provider_tools() -> anyhow::Result<()> {
     let decoded = actions(decode(&request, &catalogs()?))?;
 
     assert_eq!(
-        decoded[0].envelope.intent.action_class,
+        decoded[0].envelope.intent().action_class,
         "communication.external.send"
     );
     assert_eq!(decoded[0].context.session_id.as_deref(), Some("trs_mcp"));
@@ -395,7 +395,7 @@ fn backend_host_hosted_mcp_decodes_calls_and_passes_session_verbs() -> anyhow::R
     let decoded = actions(decode(&call, &catalogs()?))?;
 
     assert_eq!(decoded.len(), 1);
-    assert_eq!(decoded[0].envelope.intent.action_class, "calendar.create");
+    assert_eq!(decoded[0].envelope.intent().action_class, "calendar.create");
     assert_eq!(
         decoded[0].context.session_id.as_deref(),
         Some("mcp_session_1")
@@ -665,15 +665,15 @@ fn lifecycle_writes_are_governed_as_account_permission_change() -> anyhow::Resul
         let decoded = actions(decode(&lifecycle, &catalogs()?))?;
         assert_eq!(decoded.len(), 1);
         assert_eq!(
-            decoded[0].envelope.intent.action_class,
+            decoded[0].envelope.intent().action_class,
             "account.permission.change"
         );
         assert_eq!(
-            decoded[0].envelope.intent.policy_resource_display(),
+            decoded[0].envelope.intent().policy_resource_display(),
             format!("composio://composio/{slug}")
         );
         assert_eq!(
-            decoded[0].envelope.intent.raw_action_ref,
+            decoded[0].envelope.intent().raw_action_ref,
             format!("{method} {path}")
         );
         assert_eq!(decoded[0].context.connected_account_id.as_deref(), account);
