@@ -49,6 +49,10 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
 fn authority_exit_aborts_sidecar_readiness() {
     use std::os::unix::fs::PermissionsExt as _;
 
+    // Keep Authority's socket ready while Sidecar's reserved socket is closed.
+    // Authority exits after one second; Sidecar would exit after three. Startup
+    // must therefore report Authority's exit while it is waiting on Sidecar,
+    // rather than waiting for the later Sidecar exit or readiness timeout.
     let dir = tempfile::tempdir().expect("dir");
     let state_dir = dir.path().join("state");
     let config_path = dir.path().join("firma.toml");
