@@ -3,43 +3,17 @@ set -euo pipefail
 
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.dprint/bin:$PATH"
 
-# shellcheck source=../tool-versions.env
-. ./tool-versions.env
-
 if ! command -v rustup >/dev/null 2>&1; then
   echo "Installing rustup..."
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
     sh -s -- -y --profile minimal --default-toolchain none
 fi
 
-mapfile -t rust_toolchain < <(
-  python3 - <<'PY'
-import tomllib
-
-with open("rust-toolchain.toml", "rb") as file:
-    toolchain = tomllib.load(file)["toolchain"]
-
-print(toolchain["channel"])
-print(*toolchain.get("components", []), sep="\n")
-PY
-)
-
-rustup_args=()
-for component in "${rust_toolchain[@]:1}"; do
-  rustup_args+=(--component "$component")
-done
-rustup toolchain install "${rust_toolchain[0]}" --profile minimal "${rustup_args[@]}"
-
-if [ "$(cargo binstall -V 2>/dev/null || true)" != "$CARGO_BINSTALL_VERSION" ]; then
-  echo "Installing cargo-binstall..."
-  curl -L --proto '=https' --tlsv1.2 -sSf \
-    https://raw.githubusercontent.com/cargo-bins/cargo-binstall/ead08b90bd7b2e6d81963fb9cf0b7239f66d5db4/install-from-binstall-release.sh |
-    BINSTALL_VERSION="$CARGO_BINSTALL_VERSION" bash
-fi
+rustup toolchain install --profile minimal
 
 if ! command -v just >/dev/null 2>&1; then
   echo "Installing just..."
-  cargo binstall -y --locked just
+  cargo install --locked just
 fi
 
 just install
