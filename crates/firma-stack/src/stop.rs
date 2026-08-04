@@ -1,6 +1,7 @@
 //! Tear down a running stack.
 
 use std::path::Path;
+use std::process::Child;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
@@ -8,6 +9,8 @@ use tracing::{debug, info};
 use crate::error::{Result, StackError};
 use crate::platform::TerminationTarget;
 use firma_runtime_state::pidfile;
+
+const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
 
 /// Result of a [`stop`] call.
 #[derive(Debug, Clone)]
@@ -31,8 +34,35 @@ pub struct StopOutcome {
 /// state is retained when probing or hard termination fails so cleanup can be
 /// retried.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
+    let supervisor = read_target(state_dir, "stack.pid")?;
+    stop_inner(state_dir, timeout, supervisor, || Ok(()))
+}
+
+pub(crate) fn stop_owned(
+    state_dir: &Path,
+    timeout: Duration,
+    authority: &mut Child,
+    sidecar: &mut Child,
+) -> Result<StopOutcome> {
+    let supervisor = read_target(state_dir, "stack.pid")?;
+    stop_inner(state_dir, timeout, supervisor, || {
+        let _ = sidecar.try_wait()?;
+        let _ = authority.try_wait()?;
+        Ok(())
+    })
+}
+
+pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
+    stop_inner(state_dir, timeout, None, || Ok(()))
+}
+
+fn stop_inner(
+    state_dir: &Path,
+    timeout: Duration,
+    stack_target: Option<TerminationTarget>,
+    mut collect_owned: impl FnMut() -> Result<()>,
+) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
-    let stack_target = read_target(state_dir, "stack.pid")?;
     let authority_target = read_target(state_dir, "authority.pid")?;
     let sidecar_target = read_target(state_dir, "sidecar.pid")?;
     debug!(
@@ -46,7 +76,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // gRPC streams to the authority close cleanly; that lets the authority's
     // tonic graceful shutdown finish instead of blocking on long-lived
     // server-streaming RPCs.
-    let mut teardown_error = None;
+    let mut teardown_error = collect_owned().err();
     for target in [sidecar_target, stack_target, authority_target]
         .into_iter()
         .flatten()
@@ -65,15 +95,15 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
     while teardown_error.is_none() && Instant::now() < deadline {
-        let authority_dead =
-            authority_target.is_none_or(|target| !target_may_exist(target, &mut teardown_error));
-        let sidecar_dead =
-            sidecar_target.is_none_or(|target| !target_may_exist(target, &mut teardown_error));
-        if teardown_error.is_some() {
+        if let Err(error) = collect_owned() {
+            teardown_error = Some(error);
             break;
         }
-        if authority_dead && sidecar_dead {
-            info!("all children exited cleanly");
+        if targets_absent(
+            [sidecar_target, stack_target, authority_target],
+            &mut teardown_error,
+        ) {
+            info!("all termination targets exited cleanly");
             cleanup(state_dir)?;
             return Ok(StopOutcome { forced: false });
         }
@@ -100,12 +130,49 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
             }
         }
     }
+    let settlement_deadline = Instant::now() + HARD_TERMINATION_SETTLEMENT;
+    let targets_disappeared = loop {
+        if let Err(error) = collect_owned()
+            && teardown_error.is_none()
+        {
+            teardown_error = Some(error);
+        }
+        if targets_absent(
+            [sidecar_target, stack_target, authority_target],
+            &mut teardown_error,
+        ) {
+            break true;
+        }
+        if Instant::now() >= settlement_deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    if !targets_disappeared && teardown_error.is_none() {
+        teardown_error = Some(StackError::TerminationTimeout {
+            timeout_secs: HARD_TERMINATION_SETTLEMENT.as_secs(),
+        });
+    }
     if let Some(error) = teardown_error {
+        info!(%error, "teardown incomplete; retaining runtime state");
         return Err(error);
     }
     cleanup(state_dir)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
+}
+
+fn targets_absent<const N: usize>(
+    targets: [Option<TerminationTarget>; N],
+    teardown_error: &mut Option<StackError>,
+) -> bool {
+    let mut all_absent = true;
+    for target in targets.into_iter().flatten() {
+        if target_may_exist(target, teardown_error) {
+            all_absent = false;
+        }
+    }
+    all_absent
 }
 
 fn target_may_exist(target: TerminationTarget, teardown_error: &mut Option<StackError>) -> bool {

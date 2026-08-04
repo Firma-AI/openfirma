@@ -28,10 +28,6 @@ impl Platform for UnixPlatform {
 
     fn termination_target_exists(target: TerminationTarget) -> Result<bool> {
         let group_pid = target.stored_id();
-        // Reap the leader when it is our direct child before probing the group.
-        // Otherwise a leader-only group remains visible while its zombie waits
-        // to be reaped, causing an unnecessary hard-kill escalation.
-        let _ = group_pid.reap_if_exited();
         match killpg(raw_pid(group_pid.get())?, None::<Signal>) {
             Ok(()) | Err(nix::errno::Errno::EPERM) => Ok(true),
             Err(nix::errno::Errno::ESRCH) => Ok(false),
@@ -66,8 +62,8 @@ impl Platform for UnixPlatform {
             source,
         })?;
         let leader_pid = child.process_id();
-        std::mem::forget(child);
         Ok(SpawnedChild {
+            child,
             leader_pid,
             termination_target: TerminationTarget::for_leader(leader_pid),
         })

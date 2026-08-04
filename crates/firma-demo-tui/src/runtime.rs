@@ -3,12 +3,12 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use firma_stack::{StackConfig, spawn_stack};
+use firma_stack::{RunningStack, StackConfig, spawn_stack};
 
 use crate::demo_loader::DemoManifest;
 
 pub struct DemoRuntime {
-    pub state_dir: PathBuf,
+    stack: RunningStack,
     pub audit_log_path: PathBuf,
     pub authority_log_path: PathBuf,
     pub sidecar_log_path: PathBuf,
@@ -16,8 +16,8 @@ pub struct DemoRuntime {
 }
 
 impl DemoRuntime {
-    pub fn shutdown(&self) {
-        let _ = firma_stack::stop(&self.state_dir, Duration::from_secs(10));
+    pub fn shutdown(self) {
+        let _ = self.stack.shutdown(Duration::from_secs(10));
     }
 }
 
@@ -34,14 +34,14 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
         config_file: manifest.config_file.clone(),
         firma_bin: Some(resolve_firma_bin()?),
     };
-    spawn_stack(&cfg, &state_dir).context("firma_stack::spawn_stack")?;
+    let stack = spawn_stack(&cfg, &state_dir).context("firma_stack::spawn_stack")?;
 
     Ok(DemoRuntime {
+        stack,
         audit_log_path: state_dir.join("audit.jsonl"),
         authority_log_path: state_dir.join("authority.log"),
         sidecar_log_path: state_dir.join("sidecar.log"),
         ca_cert_path: state_dir.join("generated-firma-ca/firma-ca.crt"),
-        state_dir,
     })
 }
 

@@ -1,12 +1,12 @@
 //! Cross-platform spawn helpers used by `start`.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command};
 
 use tracing::debug;
 
 use crate::error::Result;
-use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
+use crate::platform::{Group, Platform, SystemPlatform};
 use firma_runtime_state::{UserProcessId, pidfile};
 
 #[derive(Clone, Copy)]
@@ -20,6 +20,7 @@ pub struct SpawnRequest<'a> {
 }
 
 pub struct SpawnedComponent {
+    pub child: Child,
     pub leader_pid: UserProcessId,
 }
 
@@ -40,11 +41,17 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedC
 
     let mut cmd = Command::new(exe);
     cmd.args(req.args);
-    let SpawnedChild {
-        leader_pid,
-        termination_target,
-    } = SystemPlatform::spawn_in_group(group, &mut cmd, &log_path)?;
-    pidfile::write(&pidfile_path, termination_target.stored_id())?;
+    let mut spawned = SystemPlatform::spawn_in_group(group, &mut cmd, &log_path)?;
+    if let Err(error) = pidfile::write(&pidfile_path, spawned.termination_target.stored_id()) {
+        let _ = spawned.termination_target.signal_hard();
+        let _ = spawned.child.kill();
+        let _ = spawned.child.wait();
+        return Err(error.into());
+    }
+    let leader_pid = spawned.leader_pid;
     debug!(name = req.name, pid = %leader_pid, pidfile = %pidfile_path.display(), "pidfile written");
-    Ok(SpawnedComponent { leader_pid })
+    Ok(SpawnedComponent {
+        child: spawned.child,
+        leader_pid,
+    })
 }

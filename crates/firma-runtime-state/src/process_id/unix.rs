@@ -11,23 +11,6 @@ impl UserProcessId {
         (*self).into()
     }
 
-    /// Reap this process if it is an exited direct child.
-    ///
-    /// Returns `true` only when an exited or signaled child was reaped. Returns
-    /// `false` when the process is still running, is not a direct child, or its
-    /// status could not be queried.
-    #[must_use]
-    pub fn reap_if_exited(self) -> bool {
-        matches!(
-            nix::sys::wait::waitpid(
-                self.as_nix_pid(),
-                Some(nix::sys::wait::WaitPidFlag::WNOHANG)
-            ),
-            Ok(nix::sys::wait::WaitStatus::Exited(_, _)
-                | nix::sys::wait::WaitStatus::Signaled(_, _, _))
-        )
-    }
-
     /// Return whether this process ID identifies an existing process.
     ///
     /// This probe is non-destructive. An unreaped zombie therefore counts as
