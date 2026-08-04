@@ -1136,11 +1136,11 @@ mod tests {
 
     #[test]
     fn classify_notification_blocks_unsanctioned_loopback() {
-        let addr = v4_sockaddr([127, 0, 0, 1], 9000);
+        let addr = v4_sockaddr([127, 0, 0, 1], 0);
         let req = notif_pointing_at(&addr);
         match classify_notification(&req, &allow()) {
             NotifOutcome::Block(Some(got)) => {
-                assert_eq!(got, "127.0.0.1:9000".parse().unwrap());
+                assert_eq!(got, "127.0.0.1:0".parse().unwrap());
             }
             NotifOutcome::Allow | NotifOutcome::Block(None) => {
                 panic!("expected Block for unsanctioned loopback");
