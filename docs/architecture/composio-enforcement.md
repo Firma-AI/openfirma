@@ -116,16 +116,24 @@ A tool outside those snapshots is denied with `unknown_tool`, so a Composio
 release that adds tools cannot widen what an agent may do until a maintainer
 classifies the new slugs.
 
-Version pinning is enforced uniformly: every execution route funnels through
-one gate. A request that omits the toolkit version is denied `unpinned_tool`,
-and one naming a version other than the pin is denied `version_mismatch`, so
-Composio can only ever execute the version the local snapshot classified.
-Direct execution and Tool Router execution carry the version as a top-level
-payload field. Hosted MCP JSON-RPC has no version slot of its own, so
-`tools/call` reads the pin from the tool arguments alongside the account
-selector, and `COMPOSIO_MULTI_EXECUTE_TOOL` reads it from each child entry.
-This is a sharp edge for callers: an MCP client that cannot attach a
-`version` argument cannot reach a governed tool at all.
+One gate checks the version for every route, but whether a version is
+_required_ depends on whether the route has somewhere to put one. A stated
+version that differs from the pin is always denied `version_mismatch`.
+
+Direct execution, Tool Router `execute`, and `execute_meta` all carry the
+version as a payload field, and all three deny `unpinned_tool` when it is
+absent. Composio therefore cannot run a version other than the one the local
+snapshot classified on any of them.
+
+Hosted MCP is the one documented exception. JSON-RPC `tools/call` has no
+native version field, and requiring callers to invent one as a tool argument
+would deny every stock MCP client, so that route keeps the pinned-slug
+allowlist as its guarantee: a version a client does choose to attach is
+honored and checked against the pin, and a call without one is admitted and
+classified from the snapshot. A server-side toolkit release can therefore
+change a slug's behavior over hosted MCP before a maintainer reviews the new
+snapshot. This is a deliberate tradeoff, not an oversight; refresh pins
+promptly when Composio announces toolkit updates.
 
 Pins are per pair, so Notion sitting on a later snapshot date than the other
 three toolkits is expected; each pair is validated independently at startup.

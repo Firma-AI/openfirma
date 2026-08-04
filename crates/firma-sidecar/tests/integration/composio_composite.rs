@@ -373,16 +373,8 @@ fn request_and_actions() -> anyhow::Result<(RawRequest, Vec<ComposioAction>)> {
                     "name": "COMPOSIO_MULTI_EXECUTE_TOOL",
                     "arguments": {
                         "tools": [
-                            {
-                                "tool_slug": "GMAIL_FETCH_EMAILS",
-                                "version": "20251111_00",
-                                "arguments": {"secret": "one"}
-                            },
-                            {
-                                "tool_slug": "GMAIL_SEND_EMAIL",
-                                "version": "20251111_00",
-                                "arguments": {"secret": "two"}
-                            }
+                            {"tool_slug": "GMAIL_FETCH_EMAILS", "arguments": {"secret": "one"}},
+                            {"tool_slug": "GMAIL_SEND_EMAIL", "arguments": {"secret": "two"}}
                         ]
                     }
                 }

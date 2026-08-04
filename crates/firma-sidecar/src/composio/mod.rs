@@ -47,6 +47,21 @@ const LIFECYCLE_READ_ACTION_CLASS: &str = "credential.read";
 /// (`composio://composio/<slug>`).
 const LIFECYCLE_TOOLKIT: &str = "composio";
 
+/// Whether an execution route must carry the pinned toolkit version.
+///
+/// Routes with a native `version` field require one, so Composio can only run
+/// the version the local snapshot classified. Hosted MCP JSON-RPC has no such
+/// field; demanding one there would deny every stock MCP client, so the pin is
+/// honored when a client attaches it as a tool argument and the route falls
+/// back to the pinned slug allowlist when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VersionPolicy {
+    /// Deny `unpinned_tool` when the request carries no version.
+    Required,
+    /// Accept an absent version; a present but mismatched one still denies.
+    Optional,
+}
+
 /// Sanitized metadata attached to one decoded logical action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposioContext {
@@ -432,6 +447,7 @@ fn decode_direct(
         string_field(payload, "connected_account_id"),
         None,
         None,
+        VersionPolicy::Required,
         catalogs,
     )
 }
@@ -460,6 +476,7 @@ fn decode_session(
             slug,
             payload.get("arguments").and_then(Value::as_object),
             session_id,
+            VersionPolicy::Required,
             catalogs,
         );
     }
@@ -471,6 +488,7 @@ fn decode_session(
         string_field(payload, "account"),
         session_id,
         None,
+        VersionPolicy::Required,
         catalogs,
     )
 }
@@ -489,6 +507,7 @@ fn decode_meta_route(
         slug,
         payload.get("arguments").and_then(Value::as_object),
         session_id,
+        VersionPolicy::Required,
         catalogs,
     )
 }
@@ -523,17 +542,32 @@ fn decode_mcp(
     let arguments = params.get("arguments").and_then(Value::as_object);
     let session_id = mcp_session_id(path_only(&request.path));
     if slug.starts_with("COMPOSIO_") {
-        return decode_meta(request, slug, arguments, session_id, catalogs);
+        return decode_meta(
+            request,
+            slug,
+            arguments,
+            session_id,
+            VersionPolicy::Optional,
+            catalogs,
+        );
     }
     let account = arguments.and_then(|value| {
         string_field(value, "account").or_else(|| string_field(value, "connected_account_id"))
     });
     // JSON-RPC has no version slot of its own, so the pin travels as a tool
-    // argument the same way the account selector does. Without one the call is
-    // denied `unpinned_tool` rather than executing an unclassified version.
+    // argument the same way the account selector does. It is honored when a
+    // client sends it and cannot be demanded when one does not.
     let version = arguments.and_then(|value| string_field(value, "version"));
     decode_tool(
-        request, slug, version, None, account, session_id, None, catalogs,
+        request,
+        slug,
+        version,
+        None,
+        account,
+        session_id,
+        None,
+        VersionPolicy::Optional,
+        catalogs,
     )
 }
 
@@ -542,10 +576,13 @@ fn decode_meta(
     slug: &str,
     arguments: Option<&Map<String, Value>>,
     session_id: Option<&str>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     match slug {
-        "COMPOSIO_MULTI_EXECUTE_TOOL" => decode_multi(request, arguments, session_id, catalogs),
+        "COMPOSIO_MULTI_EXECUTE_TOOL" => {
+            decode_multi(request, arguments, session_id, policy, catalogs)
+        }
         "COMPOSIO_EXECUTE_TOOL" => {
             let Some(arguments) = arguments else {
                 return deny("malformed_payload", "invalid Composio execution payload");
@@ -562,6 +599,7 @@ fn decode_meta(
                     .or_else(|| string_field(arguments, "connected_account_id")),
                 session_id,
                 None,
+                policy,
                 catalogs,
             )
         }
@@ -578,6 +616,7 @@ fn decode_multi(
     request: &RawRequest,
     arguments: Option<&Map<String, Value>>,
     session_id: Option<&str>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     let Some(tools) = arguments
@@ -629,6 +668,7 @@ fn decode_multi(
             string_field(tool, "account").or_else(|| string_field(tool, "connected_account_id")),
             session_id,
             Some((batch_index, batch_size)),
+            policy,
             catalogs,
         ) {
             Ok(action) => actions.push(action),
@@ -650,10 +690,11 @@ fn decode_tool(
     account: Option<&str>,
     session_id: Option<&str>,
     batch: Option<(u32, u32)>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     match action_for_tool(
-        request, slug, version, user_id, account, session_id, batch, catalogs,
+        request, slug, version, user_id, account, session_id, batch, policy, catalogs,
     ) {
         Ok(action) => DecodeResult::Actions(vec![action]),
         Err(denial) => DecodeResult::Deny(denial),
@@ -672,6 +713,7 @@ fn action_for_tool(
     account: Option<&str>,
     session_id: Option<&str>,
     batch: Option<(u32, u32)>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> Result<ComposioAction, ProtocolDenial> {
     let Some(entry) = catalogs.lookup(slug) else {
@@ -681,20 +723,22 @@ fn action_for_tool(
         });
     };
     // Every execution route funnels through here, so this is the single
-    // version gate. An absent version is denied like a mismatched one: without
-    // it Composio executes whatever its server currently serves, while the
-    // class still comes from the pinned snapshot.
-    let Some(version) = version else {
-        return Err(ProtocolDenial {
-            code: "unpinned_tool",
-            detail: "Composio execution requires a pinned toolkit version",
-        });
-    };
-    if version != entry.version {
-        return Err(ProtocolDenial {
-            code: "version_mismatch",
-            detail: "Composio toolkit version does not match the pinned catalog",
-        });
+    // version gate. A stated version must match the pin on every route; only
+    // whether one is required at all varies, and only for hosted MCP.
+    match version {
+        Some(version) if version != entry.version => {
+            return Err(ProtocolDenial {
+                code: "version_mismatch",
+                detail: "Composio toolkit version does not match the pinned catalog",
+            });
+        }
+        None if policy == VersionPolicy::Required => {
+            return Err(ProtocolDenial {
+                code: "unpinned_tool",
+                detail: "Composio execution requires a pinned toolkit version",
+            });
+        }
+        _ => {}
     }
     let (batch_index, batch_size) =
         batch.map_or((None, None), |(index, size)| (Some(index), Some(size)));

@@ -181,10 +181,12 @@ for the refresh and review loop.
 
 Unknown toolkits, missing slugs, unpinned or mismatched versions, malformed
 execution payloads, custom tools, raw proxy execution, and shell or workbench
-tools fail closed. Every execution route requires the toolkit version: direct
-and Tool Router calls carry it as a payload field, while hosted MCP
-`tools/call` and `COMPOSIO_MULTI_EXECUTE_TOOL` children carry it as a tool
-argument, because JSON-RPC has no version slot of its own. Governed requests carrying a query string are also denied: the query
+tools fail closed. Direct execution, Tool Router `execute`, and `execute_meta`
+each require the toolkit version in the payload and deny `unpinned_tool`
+without one. Hosted MCP is the exception: JSON-RPC has no version field, so a
+`tools/call` without one is admitted and classified from the pinned snapshot,
+while a version a client does attach as a tool argument is still checked
+against the pin. Governed requests carrying a query string are also denied: the query
 never participates in the policy decision, so it must not ride along on an
 admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
 included, so a query-carrying MCP URL fails at the handshake with a clear
