@@ -1,10 +1,13 @@
 use std::process::Command;
 
+use firma_runtime_state::SandboxId;
+
 #[test]
 fn firma_run_rejects_preexisting_reserved_sandbox_id() {
+    let sandbox_id = SandboxId::generate();
     let out = Command::new(env!("CARGO_BIN_EXE_firma"))
         .args(["run", "--", "true"])
-        .env("FIRMA_RUN_SANDBOX_ID", "sbx_01j0000000e008000000000001")
+        .env("FIRMA_RUN_SANDBOX_ID", sandbox_id.to_string())
         .output()
         .expect("spawn firma run");
 

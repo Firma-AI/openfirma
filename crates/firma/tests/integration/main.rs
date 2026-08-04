@@ -3,8 +3,7 @@
 //! Product behavior in this target must be exercised through
 //! `CARGO_BIN_EXE_firma`, not by calling workspace production APIs directly.
 
-const CONFIG_DIR_NAME: &str = ".firma";
-const CONFIG_FILE_NAME: &str = "firma.toml";
+pub use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 
 mod authority_keygen;
 mod cli_help;

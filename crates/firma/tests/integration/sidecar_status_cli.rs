@@ -2,6 +2,8 @@
 
 use std::process::Command;
 
+use firma_runtime_state::SandboxId;
+
 #[test]
 fn empty_runtime_dir_lists_nothing_and_exits_zero() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -86,12 +88,13 @@ fn non_v7_status_id_is_rejected() {
 #[test]
 fn missing_valid_status_id_is_an_empty_result() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    let sandbox_id = SandboxId::generate().to_string();
     let out = Command::new(env!("CARGO_BIN_EXE_firma"))
         .args([
             "sidecar",
             "status",
             "--sandbox-id",
-            "sbx_01j0000000e008000000000001",
+            sandbox_id.as_str(),
             "--json",
         ])
         .env("FIRMA_STATE_DIR", tmp.path())
