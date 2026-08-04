@@ -12,6 +12,12 @@ const CHILD_MARKER: &str = "FIRMA_STACK_TEST_CHILD_MARKER";
 const SUPERVISOR_STATE_DIR: &str = "FIRMA_STACK_TEST_SUPERVISOR_STATE_DIR";
 const SUPERVISOR_ACKNOWLEDGE: &str = "FIRMA_STACK_TEST_SUPERVISOR_ACKNOWLEDGE";
 
+#[derive(Clone, Copy)]
+enum SupervisorExitPhase {
+    BeforeReady,
+    AfterReady,
+}
+
 #[test]
 fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let dir = tempfile::tempdir().expect("state dir");
@@ -75,17 +81,10 @@ fn detached_supervisor_child_is_collected_for_long_lived_launcher() {
 fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path();
-    let mut command = Command::new(std::env::current_exe().expect("test executable"));
-    command
-        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-        .env(SUPERVISOR_STATE_DIR, state_dir);
-    let mut supervisor = firma_stack::test_support::spawn_raw_owned_into_group(
-        state_dir,
-        "supervisor-fixture",
-        &mut command,
-    )
-    .expect("spawn supervisor fixture");
+    let mut supervisor = spawn_exiting_supervisor(state_dir, SupervisorExitPhase::BeforeReady);
 
+    // The fixture exits before the spawned -> ready -> attached handshake can
+    // cross its first publication boundary.
     let error = firma_stack::test_support::wait_for_supervisor_attachment(
         state_dir,
         &mut supervisor,
@@ -104,18 +103,10 @@ fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
 fn detached_attachment_rejects_supervisor_that_exits_after_ready() {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path();
-    let mut command = Command::new(std::env::current_exe().expect("test executable"));
-    command
-        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-        .env(SUPERVISOR_STATE_DIR, state_dir)
-        .env(SUPERVISOR_ACKNOWLEDGE, "1");
-    let mut supervisor = firma_stack::test_support::spawn_raw_owned_into_group(
-        state_dir,
-        "supervisor-fixture",
-        &mut command,
-    )
-    .expect("spawn supervisor fixture");
+    let mut supervisor = spawn_exiting_supervisor(state_dir, SupervisorExitPhase::AfterReady);
 
+    // Readiness is published, but the fixture exits before attachment is
+    // confirmed, exercising the second handshake boundary.
     let error = firma_stack::test_support::wait_for_supervisor_attachment(
         state_dir,
         &mut supervisor,
@@ -143,6 +134,9 @@ fn component_exit_tears_down_peer_without_signalling_observer() {
     let state_dir = dir.path();
     let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
     let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    // The background collector owns the children. The supervisor thread below
+    // is only an observer and must never mistake its own PID for a teardown
+    // target when one component exits.
     let owner = firma_stack::test_support::collect_raw_in_background(authority, sidecar);
 
     let state_dir_for_supervisor = state_dir.to_path_buf();
@@ -263,6 +257,22 @@ fn fixture_command(marker: &Path) -> Command {
         .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
         .env(CHILD_MARKER, marker);
     command
+}
+
+fn spawn_exiting_supervisor(state_dir: &Path, phase: SupervisorExitPhase) -> Child {
+    let mut command = Command::new(std::env::current_exe().expect("test executable"));
+    command
+        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
+        .env(SUPERVISOR_STATE_DIR, state_dir);
+    if matches!(phase, SupervisorExitPhase::AfterReady) {
+        command.env(SUPERVISOR_ACKNOWLEDGE, "1");
+    }
+    firma_stack::test_support::spawn_raw_owned_into_group(
+        state_dir,
+        "supervisor-fixture",
+        &mut command,
+    )
+    .expect("spawn supervisor fixture")
 }
 
 fn wait_for_marker(path: &Path) -> u32 {
