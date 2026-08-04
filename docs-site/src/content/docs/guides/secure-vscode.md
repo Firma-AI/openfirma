@@ -14,16 +14,16 @@ Sidecar.
 
 ## What the vscode profile does
 
-| Concern                | Behavior                                                             |
-| ---------------------- | -------------------------------------------------------------------- |
-| Launch command         | Supports `firma run --profile vscode -- code .`                      |
-| Process lifetime       | Forces `--wait` and `--new-window` through a runtime `code` shim     |
-| VS Code state          | Persists user-data and extensions under `.firma/vscode/`             |
-| Desktop runtime        | Uses a writable per-run `XDG_RUNTIME_DIR` for VS Code IPC            |
-| Chromium inner sandbox | Disabled because `firma run` provides the outer sandbox boundary     |
-| GitHub sign-in         | Prefers VS Code's device-code flow inside the isolated profile        |
-| Mapping                | CONNECT rules for VS Code, marketplace, accounts, and GitHub sign-in |
-| Sandbox CA trust store | system roots + firma-ca (`AppendSystemRoots`)                        |
+| Concern                | Behavior                                                          |
+| ---------------------- | ----------------------------------------------------------------- |
+| Launch command         | Supports `firma run --profile vscode -- code .`                   |
+| Process lifetime       | Forces `--wait` and `--new-window` through a runtime `code` shim  |
+| VS Code state          | Persists user-data and extensions under `.firma/vscode/`          |
+| Desktop runtime        | Uses a writable per-run `XDG_RUNTIME_DIR` for VS Code IPC         |
+| Chromium inner sandbox | Disabled because `firma run` provides the outer sandbox boundary  |
+| GitHub sign-in         | Prefers VS Code's device-code flow inside the isolated profile    |
+| Mapping                | CONNECT rules for VS Code, marketplace, accounts, GitHub, Copilot |
+| Sandbox CA trust store | system roots + firma-ca (`AppendSystemRoots`)                     |
 
 The shim is created inside the per-run runtime directory. It is not installed
 globally, does not replace `/usr/bin/code`, and only affects the current
@@ -44,9 +44,16 @@ This selects the `vscode` mapping. The mapping is CONNECT-level in v1: VS Code
 core services, marketplace hosts, Settings Sync, and Microsoft and GitHub
 account or repository flows are classified as `communication.external.send`.
 That includes GitHub.com, hosted GitHub Enterprise (`*.ghe.com`), and the
-Google and Apple identity-provider hosts GitHub can use during sign-in. Add
-the matching extra mapping when you want an embedded agent, such as Copilot,
-OpenAI/Codex, or Anthropic/Claude.
+Google and Apple identity-provider hosts GitHub can use during sign-in.
+
+GitHub Copilot works out of the box: the mapping covers the hosts from
+GitHub's Copilot allowlist (`*.githubcopilot.com` plus the plan-scoped
+`*.individual.githubcopilot.com`, `*.business.githubcopilot.com`, and
+`*.enterprise.githubcopilot.com`, along with the usage-report and
+voice-feature hosts), so Copilot chat, completions, telemetry, usage
+reporting, and voice features are classified without extra configuration. For
+other embedded agents, such as OpenAI/Codex or Anthropic/Claude, add the
+matching extra mapping.
 
 ## Step 2: Run VS Code
 
