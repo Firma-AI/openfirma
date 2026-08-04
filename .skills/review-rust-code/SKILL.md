@@ -25,7 +25,8 @@ Exactly one of the following forms:
 
 ### 1. Collect the code to review
 
-Use the repository's active VCS as described in `AGENTS.md`.
+Use the repository's active VCS as described in
+[`AGENTS.md`](../../AGENTS.md).
 
 #### Working-tree review
 
@@ -113,11 +114,12 @@ Confirm that:
 - non-obvious contracts and invariants are documented
 - changed behavior has matching tests
 - docs are updated when the change affects architecture, CLI, configuration, or user-visible behavior
-- `docs-site/public/llms.txt` is updated when discovery or integration guidance changed
+- [`docs-site/public/llms.txt`](../../docs-site/public/llms.txt) is updated when discovery or integration guidance changed
 
 Ensure the new code adheres to the policies defined in [`rust-tests-guidelines`](../rust-tests-guidelines/SKILL.md) and [`rust-docs-guidelines`](../rust-docs-guidelines/SKILL.md).
 
 ### 3. Emit the report
 
-Follow the report requirements in the `reviewing-changes` skill, including its
-severity ordering, evidence, impact, and residual-risk guidance.
+Follow the report requirements in the
+[`reviewing-changes`](../reviewing-changes/SKILL.md) skill, including its severity
+ordering, evidence, impact, and residual-risk guidance.

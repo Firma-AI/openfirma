@@ -11,9 +11,10 @@ skill defines what every review must cover and how findings must be reported.
 
 ## Workflow
 
-Every reviewer must load and follow the `reviewing-changes` skill. When the
-current agent reviews directly, load it in the current session. When a fresh
-reviewer is required, instruct that reviewer to load it.
+Every reviewer must load and follow the
+[`reviewing-changes`](../reviewing-changes/SKILL.md) skill. When the current
+agent reviews directly, load it in the current session. When a fresh reviewer
+is required, instruct that reviewer to load it.
 
 First determine whether the current agent participated in producing the
 changes. The current agent is implementation-involved if it:
@@ -77,7 +78,8 @@ the final review.
 
 ## Output
 
-Follow the report requirements in the `reviewing-changes` skill. When the
-current agent is implementation-involved, present the independent review
-findings to the user without addressing or dismissing them until the user
-provides explicit direction.
+Follow the report requirements in the
+[`reviewing-changes`](../reviewing-changes/SKILL.md) skill. When the current
+agent is implementation-involved, present the independent review findings to
+the user without addressing or dismissing them until the user provides explicit
+direction.
