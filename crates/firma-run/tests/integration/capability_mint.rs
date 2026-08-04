@@ -35,10 +35,11 @@ use firma_protobuf::v1::{
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
-use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
 use firma_run::capability::issue::{IssueParams, mint_and_write};
 use firma_run::capability::refresh::CapabilityRefresher;
 use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
+
+use super::helper::RealAuthority;
 
 /// Mock Authority that signs whatever it is asked to issue with a test key.
 struct MockAuthority {
@@ -171,76 +172,6 @@ struct MockServer {
     handle: Option<std::thread::JoinHandle<()>>,
     seen_agent_ids: Arc<Mutex<Vec<String>>>,
     _dir: tempfile::TempDir,
-}
-
-struct RealAuthority {
-    url: String,
-    pub_key_path: PathBuf,
-    shutdown: tokio::sync::oneshot::Sender<()>,
-    handle: tokio::task::JoinHandle<anyhow::Result<()>>,
-    _dir: tempfile::TempDir,
-}
-
-impl RealAuthority {
-    async fn start() -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let policy_dir = dir.path().join("policies");
-        let issuance_policy_dir = dir.path().join("issuance-policies");
-        std::fs::create_dir(&policy_dir).expect("create policy dir");
-        std::fs::create_dir(&issuance_policy_dir).expect("create issuance policy dir");
-        for directory in [&policy_dir, &issuance_policy_dir] {
-            std::fs::write(
-                directory.join("permit-all.cedar"),
-                "permit(principal, action, resource);",
-            )
-            .expect("write policy");
-        }
-
-        let keypair = AsymmetricKeyPair::<V4>::generate().expect("keypair");
-        let key_path = dir.path().join("authority.key");
-        let pub_key_path = dir.path().join("authority.pub");
-        std::fs::write(&key_path, keypair.secret.as_bytes()).expect("write secret key");
-        std::fs::write(&pub_key_path, keypair.public.as_bytes()).expect("write public key");
-
-        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
-        let server = Server::try_new(
-            AuthorityConfig {
-                listen_addr: "127.0.0.1:0".to_string(),
-                policy_dir,
-                issuance_policy_dir,
-                schema_path: None,
-                revocation_file: dir.path().join("revocations.txt"),
-                max_ttl_seconds: 3600,
-                key_file: key_path,
-                log_level: "warn".to_string(),
-                bundle_ttl_seconds: 30,
-                tls: AuthorityTlsConfig::default(),
-            },
-            async {
-                let _ = shutdown_rx.await;
-            },
-        )
-        .await
-        .expect("start real Authority");
-        let url = format!("http://127.0.0.1:{}", server.port());
-        let handle = tokio::spawn(server.run());
-
-        Self {
-            url,
-            pub_key_path,
-            shutdown,
-            handle,
-            _dir: dir,
-        }
-    }
-
-    async fn stop(self) {
-        let _ = self.shutdown.send(());
-        self.handle
-            .await
-            .expect("join real Authority")
-            .expect("run real Authority");
-    }
 }
 
 impl Drop for MockServer {
