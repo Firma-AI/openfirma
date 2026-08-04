@@ -131,20 +131,23 @@ OpenFirma never splits, reorders, or partially forwards the batch.
 
 ## Catalog pins and unsupported tools
 
-The Sidecar ships reviewed catalogs for Gmail (63 tools) and Google Calendar
-(49), both pinned at toolkit version `20260721_00`. They are compiled into the
-binary, so enforcement never queries Composio on the hot path and a tool is
-governed the same way on every host.
+The Sidecar ships reviewed catalogs for Gmail (63 tools), Google Calendar (49),
+and Slack (167), all pinned at toolkit version `20260721_00`. They are compiled
+into the binary, so enforcement never queries Composio on the hot path and a
+tool is governed the same way on every host.
 
 Each slug carries a manually assigned canonical class, so policies stay
 transport-independent:
 
-| Tool                          | Action class                  |
-| ----------------------------- | ----------------------------- |
-| `GMAIL_FETCH_EMAILS`          | `communication.external.read` |
-| `GMAIL_SEND_EMAIL`            | `communication.external.send` |
-| `GOOGLECALENDAR_FIND_EVENT`   | `calendar.read`               |
-| `GOOGLECALENDAR_DELETE_EVENT` | `calendar.delete`             |
+| Tool                           | Action class                  |
+| ------------------------------ | ----------------------------- |
+| `GMAIL_FETCH_EMAILS`           | `communication.external.read` |
+| `GMAIL_SEND_EMAIL`             | `communication.external.send` |
+| `GOOGLECALENDAR_FIND_EVENT`    | `calendar.read`               |
+| `GOOGLECALENDAR_DELETE_EVENT`  | `calendar.delete`             |
+| `SLACK_SEND_MESSAGE`           | `communication.external.send` |
+| `SLACK_INVITE_USER_TO_CHANNEL` | `account.permission.change`   |
+| `SLACK_CREATE_CANVAS`          | `document.write`              |
 
 Refreshing a toolkit is a maintainer task, not an operator one: see
 [Composio enforcement](https://github.com/Firma-AI/openfirma/blob/main/docs/architecture/composio-enforcement.md)
@@ -158,9 +161,8 @@ admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
 included, so a query-carrying MCP URL fails at the handshake with a clear
 denial instead of breaking only on tool calls. Recognized routes accept only
 read methods (plus `DELETE` for MCP session teardown); anything else fails
-closed. Slack and Notion remain unsupported until each has a complete
-reviewed catalog, so every Slack or Notion tool call is denied at the
-boundary.
+closed. Notion remains unsupported until it has a complete reviewed catalog, so
+every Notion tool call is denied at the boundary.
 
 ## Audit safety
 
