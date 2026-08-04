@@ -7,10 +7,6 @@ description: Review Rust changes for correctness, robustness, documentation qual
 
 Review Rust code changes for correctness, robustness, documentation quality, and test coverage.
 
-Load and follow the [`reviewing-changes`](../reviewing-changes/SKILL.md) skill
-for baseline review scope and reporting requirements. The instructions below
-add Rust-specific requirements.
-
 ## Arguments
 
 Exactly one of the following forms:
@@ -120,6 +116,13 @@ Ensure the new code adheres to the policies defined in [`rust-tests-guidelines`]
 
 ### 3. Emit the report
 
-Follow the report requirements in the
-[`reviewing-changes`](../reviewing-changes/SKILL.md) skill, including its severity
-ordering, evidence, impact, and residual-risk guidance.
+Report only actionable findings.
+
+Prioritize:
+
+- bugs and regressions
+- security weaknesses
+- missing tests for changed behavior
+- documentation gaps that would mislead contributors or users
+
+If there are no findings, say so plainly and note any residual risk or untested areas.

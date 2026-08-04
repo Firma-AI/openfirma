@@ -25,7 +25,15 @@ Prioritize actionable issues involving:
 - documentation that would mislead users or contributors.
 
 Apply any more specific repository or language review guidance in addition to
-this baseline. Honor review priorities explicitly requested by the user.
+this baseline. Before reviewing, identify the languages and file types in the
+change and load the specialized guidance that applies to each subset:
+
+- For Rust source or test changes, load and follow
+  [`review-rust-code`](../review-rust-code/SKILL.md).
+
+Apply specialized guidance only to its matching subset of the change. Loading a
+specialized skill does not delegate that review work or require another agent.
+Honor review priorities explicitly requested by the user.
 
 ## Report
 
