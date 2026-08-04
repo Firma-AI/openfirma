@@ -174,8 +174,9 @@ never participates in the policy decision, so it must not ride along on an
 admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
 included, so a query-carrying MCP URL fails at the handshake with a clear
 denial instead of breaking only on tool calls. Recognized routes accept only
-read methods (plus `DELETE` for MCP session teardown); anything else fails
-closed.
+read methods (plus `DELETE` for MCP session teardown and `POST` on the Tool
+Router session routes); anything else fails closed, including a `POST` to a
+discovery route such as `/api/v3/toolkits`.
 
 Three sharp edges are worth knowing before writing policy.
 

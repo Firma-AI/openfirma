@@ -248,6 +248,26 @@ fn non_read_methods_on_recognized_routes_fail_closed() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read routes are recognized for reads only: a `POST` to one is a write the
+/// decoder cannot classify, so it fails closed instead of passing through
+/// unevaluated.
+#[test]
+fn post_to_read_only_routes_fails_closed() -> anyhow::Result<()> {
+    for path in [
+        "/api/v3/toolkits",
+        "/api/v3/tools",
+        "/api/v3.1/tools/GMAIL_SEND_EMAIL",
+        "/api/v3.1/tool_router/session/trs_1/tools",
+    ] {
+        let unsupported = request("backend.composio.dev", path, &serde_json::json!({}));
+        let DecodeResult::Deny(denial) = decode(&unsupported, &catalogs()?) else {
+            anyhow::bail!("POST {path} must fail closed");
+        };
+        assert_eq!(denial.code, "unsupported_route");
+    }
+    Ok(())
+}
+
 /// Tool Router session creation stays a recognized passthrough, and MCP
 /// session teardown keeps its DELETE: the method allowlists must not break
 /// either flow.
@@ -725,12 +745,6 @@ fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Res
             Method::GET,
             Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
-            true,
-        ),
-        (
-            Method::POST,
-            Authority::from_static("backend.composio.dev"),
-            "/api/v3/toolkits",
             true,
         ),
         (

@@ -178,9 +178,8 @@ fn decode_backend(
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     // Lifecycle writes are checked first; execution routes never classify as
-    // lifecycle, and a lifecycle route the write decoder declines (for
-    // example POST to `session/{id}`) falls through to the recognized
-    // passthrough check below.
+    // lifecycle, and a lifecycle route the write decoder declines (POST to
+    // `session/{id}`) falls through to the explicit passthrough arms below.
     if let Some(result) = decode_lifecycle_write(request, BACKEND_HOST) {
         return result;
     }
@@ -206,7 +205,14 @@ fn decode_backend(
             session_id,
             "execute_meta",
         ] => decode_meta_route(request, payload, Some(session_id), catalogs),
-        _ if is_recognized_non_execution_path(BACKEND_HOST, path) => DecodeResult::Passthrough,
+        // Only Tool Router session creation and the ungoverned write to an
+        // existing session are admitted POST passthroughs. The read-route
+        // recognizer is deliberately not reused here: it enumerates GET
+        // shapes, and treating it as a POST allowlist would admit writes to
+        // toolkits, tools, and session sub-collections with no capability
+        // check and no policy evaluation.
+        ["api", "v3" | "v3.1", "tool_router", "session"]
+        | ["api", "v3" | "v3.1", "tool_router", "session", _] => DecodeResult::Passthrough,
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
 }

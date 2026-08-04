@@ -40,13 +40,17 @@ resource (for example `COMPOSIO_CREATE_CONNECTED_ACCOUNT`,
 `COMPOSIO_LINK_SESSION_ACCOUNT`, or `COMPOSIO_DELETE_SESSION`), so an agent
 cannot expand or reshape its own reachable account surface without
 capability and Cedar evaluation. Session creation (`POST` to the session
-collection) stays a recognized passthrough, and tearing down the hosted MCP
-transport session via `DELETE` on the MCP path remains transport-level
-passthrough. Every recognized route carries a method allowlist:
-reads (`GET`/`HEAD`/`OPTIONS`) pass through, MCP session paths additionally
-allow `DELETE` for teardown, lifecycle writes are governed, and any other
-method (for example `TRACE`) fails closed rather than auditing as
-passthrough. A governed request carrying a query string is denied outright:
+collection) and `POST` to an existing `session/{id}` stay recognized
+passthroughs, and tearing down the hosted MCP transport session via `DELETE`
+on the MCP path remains transport-level passthrough. Every recognized route
+carries a method allowlist: reads (`GET`/`HEAD`/`OPTIONS`) pass through, MCP
+session paths additionally allow `DELETE` for teardown, lifecycle writes are
+governed, and any other method fails closed rather than auditing as
+passthrough. `POST` is not a read: apart from the two Tool Router session
+shapes above, a `POST` to a recognized read route (`tools`, `toolkits`, or a
+session sub-collection) is denied, so a write can never reach Composio
+through the discovery surface without capability and policy evaluation.
+A governed request carrying a query string is denied outright:
 the query never participates in the policy decision, so it must not ride
 along on an admitted dispatch. Hosted MCP paths deny query strings on every
 method, discovery included, so a query-carrying MCP URL fails at
