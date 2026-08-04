@@ -133,6 +133,23 @@ provider.
 | `calendar.update` | Calendar | Medium | Update calendars or events         |
 | `calendar.delete` | Calendar | High   | Delete calendars or events         |
 
+### Notion coverage — extended in-place
+
+The registry appends four document-domain classes for Composio's pinned Notion
+catalog. They also classify Slack canvases and Slack Lists, because a document
+surface is a document surface regardless of which provider hosts it.
+
+| Action class            | Domain   | Risk   | Notes                                      |
+| ----------------------- | -------- | ------ | ------------------------------------------ |
+| `document.read`         | Document | Low    | Read pages, blocks, databases, and views   |
+| `document.write`        | Document | Medium | Create or update pages, blocks, and rows   |
+| `document.delete`       | Document | High   | Delete or archive document content         |
+| `document.schema.write` | Document | High   | Mutate database schema, views, and queries |
+
+`document.schema.write` covers structural mutation of a database or a view,
+including deleting a view. `document.delete` covers destruction of content,
+meaning pages and blocks.
+
 ### Out-of-band audit classes (not policy-evaluated)
 
 Some enforcement happens _outside_ the Sidecar's request pipeline and so never
@@ -343,8 +360,8 @@ be classified more specifically (FEP §2.3.6 anti-convenience rule).
 Components that bind to the registry:
 
 - `crates/firma-sidecar/src/enforcement/registry.rs` —
-  `ActionClassRegistry::v0_1()` defines the exact set of 44 names (15 FEP
-  v0.1 + 12 GitHub + 12 Stripe + 5 Gmail) plus their domain and risk level.
+  `ActionClassRegistry::v0_1()` defines the exact set of 52 names (15 FEP
+  v0.1 + 12 GitHub + 12 Stripe + 5 Gmail + 4 Calendar + 4 Notion) plus their domain and risk level.
   Construction MUST fail if the set drifts from this document.
 - `crates/firma-sidecar/src/normalizer.rs` +
   `crates/firma-sidecar/src/normalizer/mapping.rs` — mapping rules validated

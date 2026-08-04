@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use firma_core::ActionClass;
 
+mod action_class_schema;
 mod agent_id;
 mod policy_resource;
 mod resource_entity;

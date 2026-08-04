@@ -33,10 +33,10 @@ Costs:
 
 ## The registry
 
-OpenFirma ships with **48 canonical action classes**. The base 15 come from
+OpenFirma ships with **52 canonical action classes**. The base 15 come from
 **FEP v0.1**, the versioned Firma protocol specification that defines the
 canonical registry and its invariants. The remaining classes extend that base
-for GitHub (12), Stripe (12), Gmail (5), and Google Calendar (4).
+for GitHub (12), Stripe (12), Gmail (5), Google Calendar (4), and Notion (4).
 
 The 15 FEP v0.1 base classes give you a feel for the granularity:
 
@@ -54,18 +54,23 @@ credential.write              payment.purchase
 
 Categories are dotted: `category.subcategory.verb`. The category captures *what kind of capability* (communication, credentials, filesystem, payment, memory, system, and so on). The subcategory and verb capture *the specific action*. A policy can match a single class (`forbid payment.transfer`) or, with Cedar, a set (`action in [filesystem.write, filesystem.delete]`).
 
-The provider-oriented extensions (GitHub, Stripe, Gmail, Google Calendar) cover
-actions that do not map cleanly onto the FEP base, such as GitHub's
-`repo.lifecycle`, Stripe's `payment.refund`, or `calendar.delete`. These have
-their own semantic subtree but follow the same naming rule: still no transport,
-still no service name in the identifier itself. The *provider* lives elsewhere
-— see "Resources" below.
+The provider-oriented extensions (GitHub, Stripe, Gmail, Google Calendar,
+Notion) cover actions that do not map cleanly onto the FEP base, such as
+GitHub's `repo.lifecycle`, Stripe's `payment.refund`, or `calendar.delete`.
+These have their own semantic subtree but follow the same naming rule: still no
+transport, still no service name in the identifier itself. The *provider* lives
+elsewhere — see "Resources" below.
 
 Calendar classes distinguish reading, creating, updating, and deleting events.
 For example, a scheduling assistant may receive `calendar.read` and
 `calendar.create` while `calendar.update` and `calendar.delete` remain denied.
 This prevents a capability for finding availability from silently becoming a
 capability to cancel or rewrite existing meetings.
+
+Document classes separate reading, writing content, destroying content, and
+mutating structure. `document.schema.write` is deliberately distinct from
+`document.write`: rewriting a database schema or deleting a view breaks every
+saved query built on it, which an ordinary content edit does not.
 
 Some classes carry escalation channels a policy author should price in:
 
@@ -78,6 +83,9 @@ Some classes carry escalation channels a policy author should price in:
 - `calendar.create` can email invites with arbitrary description text to
   arbitrary external attendees, so it is an outbound channel even without
   any `communication.external.*` grant.
+- `document.write` can publish to a page or canvas that is already shared
+  outside the workspace, so it is an outbound channel even without any
+  `communication.external.*` grant.
 
 ## How a request becomes a class
 
