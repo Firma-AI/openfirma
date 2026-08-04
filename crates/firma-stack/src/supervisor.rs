@@ -80,3 +80,24 @@ fn install_stop_handler() -> Arc<AtomicBool> {
     });
     stop
 }
+
+pub fn collect_in_background(
+    mut authority: std::process::Child,
+    mut sidecar: std::process::Child,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut authority_collected = false;
+        let mut sidecar_collected = false;
+        while !authority_collected || !sidecar_collected {
+            if !authority_collected {
+                authority_collected = !matches!(authority.try_wait(), Ok(None));
+            }
+            if !sidecar_collected {
+                sidecar_collected = !matches!(sidecar.try_wait(), Ok(None));
+            }
+            if !authority_collected || !sidecar_collected {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    })
+}

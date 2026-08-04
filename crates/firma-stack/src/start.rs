@@ -1,7 +1,7 @@
 //! `start` and `supervise` entry points.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
@@ -10,7 +10,9 @@ use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
-use crate::supervisor::{ObservedChildren, block_until_observed_exit, block_until_owned_exit};
+use crate::supervisor::{
+    ObservedChildren, block_until_observed_exit, block_until_owned_exit, collect_in_background,
+};
 use firma_runtime_state::{UserProcessId, pidfile};
 
 /// Mode in which [`start`] manages the stack after readiness.
@@ -32,6 +34,7 @@ pub enum StartMode {
 /// The handle is informational only: it does not own the children's lifecycle
 /// (pid files on disk are the source of truth). Callers tear the stack down
 /// via [`crate::stop()`].
+#[derive(Clone, Copy)]
 pub struct StackHandle {
     /// PID of the authority component.
     authority_pid: UserProcessId,
@@ -41,11 +44,13 @@ pub struct StackHandle {
 
 /// An in-process stack whose component child handles are owned by the caller.
 ///
-/// Call [`RunningStack::shutdown`] for an orderly teardown. Dropping this value
-/// does not terminate the stack and should be reserved for callers that are
-/// immediately exiting and transferring observation to another process.
+/// Call [`RunningStack::shutdown`] for an orderly teardown. Successful shutdown
+/// disarms the stored termination targets, so repeated calls are no-ops.
+/// Dropping this value does not terminate the stack; it transfers the child
+/// handles to a background collector so later exits cannot remain zombies.
 pub struct RunningStack {
-    owned: OwnedStack,
+    handle: StackHandle,
+    owned: Option<OwnedStack>,
 }
 
 struct OwnedStack {
@@ -54,33 +59,154 @@ struct OwnedStack {
     state_dir: PathBuf,
 }
 
-impl RunningStack {
-    /// Return an informational handle containing the component process IDs.
-    #[must_use]
-    fn handle(&self) -> StackHandle {
-        StackHandle {
-            authority_pid: self.owned.authority.leader_pid,
-            sidecar_pid: self.owned.sidecar.leader_pid,
+struct StartupGuard {
+    authority: Option<crate::spawn::SpawnedComponent>,
+    sidecar: Option<crate::spawn::SpawnedComponent>,
+    state_dir: PathBuf,
+    disarmed: bool,
+}
+
+impl StartupGuard {
+    fn new(state_dir: &Path) -> Self {
+        Self {
+            authority: None,
+            sidecar: None,
+            state_dir: state_dir.to_path_buf(),
+            disarmed: false,
         }
     }
 
-    /// Stop the stack, consuming this process's ownership of its child handles.
+    fn finish(mut self) -> Result<RunningStack> {
+        let authority = self
+            .authority
+            .take()
+            .ok_or_else(|| StackError::Platform("authority child missing after startup".into()))?;
+        let sidecar = self
+            .sidecar
+            .take()
+            .ok_or_else(|| StackError::Platform("sidecar child missing after startup".into()))?;
+        self.disarmed = true;
+        Ok(RunningStack::from_components(
+            authority,
+            sidecar,
+            self.state_dir.clone(),
+        ))
+    }
+}
+
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+
+        debug!(state_dir = %self.state_dir.display(), "startup failed; collecting owned children");
+        for component in [&mut self.sidecar, &mut self.authority]
+            .into_iter()
+            .flatten()
+        {
+            if let Err(error) = component.termination_target.signal_hard() {
+                debug!(
+                    target = %component.termination_target.stored_id(),
+                    %error,
+                    "startup rollback hard termination failed"
+                );
+            }
+            let _ = component.child.kill();
+            let _ = component.child.wait();
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let mut all_absent = true;
+            let mut probe_failed = false;
+            for component in [&self.sidecar, &self.authority].into_iter().flatten() {
+                match component.termination_target.exists() {
+                    Ok(false) => {}
+                    Ok(true) => all_absent = false,
+                    Err(error) => {
+                        debug!(
+                            target = %component.termination_target.stored_id(),
+                            %error,
+                            "startup rollback target probe failed"
+                        );
+                        probe_failed = true;
+                        all_absent = false;
+                    }
+                }
+            }
+            if all_absent {
+                remove_startup_state(&self.state_dir);
+                return;
+            }
+            if probe_failed || Instant::now() >= deadline {
+                debug!("startup rollback retained runtime state for a later cleanup attempt");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+impl RunningStack {
+    pub(crate) fn from_components(
+        authority: crate::spawn::SpawnedComponent,
+        sidecar: crate::spawn::SpawnedComponent,
+        state_dir: PathBuf,
+    ) -> Self {
+        let handle = StackHandle {
+            authority_pid: authority.leader_pid,
+            sidecar_pid: sidecar.leader_pid,
+        };
+        Self {
+            handle,
+            owned: Some(OwnedStack {
+                authority,
+                sidecar,
+                state_dir,
+            }),
+        }
+    }
+
+    /// Return an informational handle containing the component process IDs.
+    #[must_use]
+    fn handle(&self) -> StackHandle {
+        self.handle
+    }
+
+    /// Stop the stack and collect its child processes.
     ///
     /// # Errors
     ///
     /// Returns process-probe, termination, or runtime-state cleanup errors.
-    pub fn shutdown(mut self, timeout: Duration) -> Result<crate::stop::StopOutcome> {
+    pub fn shutdown(&mut self, timeout: Duration) -> Result<crate::stop::StopOutcome> {
+        let Some(owned) = self.owned.as_mut() else {
+            return Ok(crate::stop::StopOutcome { forced: false });
+        };
         let result = crate::stop::stop_owned(
-            &self.owned.state_dir,
+            &owned.state_dir,
             timeout,
-            &mut self.owned.authority.child,
-            &mut self.owned.sidecar.child,
+            &mut owned.authority,
+            &mut owned.sidecar,
         );
         if result.is_ok() {
-            let _ = self.owned.sidecar.child.wait();
-            let _ = self.owned.authority.child.wait();
+            let _ = owned.sidecar.child.wait();
+            let _ = owned.authority.child.wait();
+            self.owned = None;
         }
         result
+    }
+
+    fn transfer_to_observer(&mut self) {
+        if let Some(owned) = self.owned.take() {
+            let _ = collect_in_background(owned.authority.child, owned.sidecar.child);
+        }
+    }
+}
+
+impl Drop for RunningStack {
+    fn drop(&mut self) {
+        self.transfer_to_observer();
     }
 }
 
@@ -97,7 +223,8 @@ impl RunningStack {
 ///
 /// Returns state-directory, lock, spawn, or readiness errors. On failure
 /// after children have been spawned, this function tears them down. Runtime
-/// state is retained when hard termination fails so callers can retry cleanup.
+/// state is retained when target disappearance cannot be confirmed so callers
+/// can retry cleanup.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
@@ -106,8 +233,10 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> 
     debug!("reaping stale pidfiles");
     reap_stale(state_dir)?;
 
-    match spawn_stack_inner(cfg, state_dir) {
-        Ok(stack) => {
+    let mut startup = StartupGuard::new(state_dir);
+    match spawn_stack_inner(cfg, state_dir, &mut startup) {
+        Ok(()) => {
+            let stack = startup.finish()?;
             let handle = stack.handle();
             info!(
                 authority_pid = %handle.authority_pid,
@@ -117,21 +246,26 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> 
             Ok(stack)
         }
         Err(error) => {
-            debug!(%error, "spawn failed; rolling back");
-            rollback(state_dir);
+            debug!(%error, "spawn failed; startup guard will roll back");
             Err(error)
         }
     }
 }
 
-fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
+fn spawn_stack_inner(
+    cfg: &StackConfig,
+    state_dir: &Path,
+    startup: &mut StartupGuard,
+) -> Result<()> {
     let group = SystemPlatform::new_group()?;
     let exe = cfg.firma_bin.as_deref();
     // Parse the unified firma.toml once; the probes below share it.
     let config = FirmaToml::read(&cfg.config_file)?;
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
     let auth = spawn_with_config(&group, state_dir, "authority", &cfg.config_file, exe)?;
-    info!(pid = %auth.leader_pid, "authority spawned");
+    let authority_pid = auth.leader_pid;
+    startup.authority = Some(auth);
+    info!(pid = %authority_pid, "authority spawned");
     let auth_addr = config.authority_listen_addr()?;
     std::fs::write(state_dir.join("authority.listen"), format!("{auth_addr}\n"))?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
@@ -140,7 +274,9 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack
 
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
     let side = spawn_with_config(&group, state_dir, "sidecar", &cfg.config_file, exe)?;
-    info!(pid = %side.leader_pid, "sidecar spawned");
+    let sidecar_pid = side.leader_pid;
+    startup.sidecar = Some(side);
+    info!(pid = %sidecar_pid, "sidecar spawned");
     let sidecar = config.sidecar_config()?;
     let side_addr = sidecar.interceptor.listen_addr;
     std::fs::write(state_dir.join("sidecar.listen"), format!("{side_addr}\n"))?;
@@ -167,13 +303,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack
     // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE — children survive parent exit.
     let _ = group;
 
-    Ok(RunningStack {
-        owned: OwnedStack {
-            authority: auth,
-            sidecar: side,
-            state_dir: state_dir.to_path_buf(),
-        },
-    })
+    Ok(())
 }
 
 /// Start the authority and sidecar stack.
@@ -189,49 +319,33 @@ pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<Sta
     match mode {
         StartMode::Foreground => {
             info!("entering foreground supervisor loop");
-            block_until_owned_exit(&mut stack.owned.authority, &mut stack.owned.sidecar)?;
+            let supervision_result = {
+                let owned = stack.owned.as_mut().ok_or_else(|| {
+                    StackError::Platform("stack ownership missing before supervision".into())
+                })?;
+                block_until_owned_exit(&mut owned.authority, &mut owned.sidecar)
+            };
             info!("foreground supervisor exiting; tearing down stack");
             // Foreground exit (Ctrl-C, child died): caller is leaving. Tear
             // children down and remove pid/listen/lock files so the next
             // `start` does not trip on stale state.
-            stack.shutdown(Duration::from_secs(10))?;
+            let teardown_result = stack.shutdown(Duration::from_secs(10));
+            supervision_result?;
+            teardown_result?;
         }
         StartMode::Detached => {
             info!("forking detached supervisor");
-            crate::detach::spawn_supervisor(state_dir)?;
+            if let Err(error) = crate::detach::spawn_supervisor(state_dir) {
+                let _ = stack.shutdown(Duration::from_secs(10));
+                return Err(error);
+            }
+            stack.transfer_to_observer();
         }
     }
     Ok(handle)
 }
 
-fn rollback(state_dir: &Path) {
-    // Best-effort teardown: kill any spawned children and remove the artifacts
-    // we wrote. Errors during rollback are ignored — they would mask the
-    // original failure that triggered this path.
-    let mut cleanup_safe = true;
-    for name in ["authority.pid", "sidecar.pid"] {
-        let path = state_dir.join(name);
-        match pidfile::read(&path) {
-            Ok(Some(id)) => {
-                let target = TerminationTarget::from_stored_id(id);
-                if !matches!(target.exists(), Ok(false))
-                    && let Err(error) = target.signal_hard()
-                {
-                    debug!(target = %id, %error, "rollback hard termination failed");
-                    cleanup_safe = false;
-                }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                debug!(path = %path.display(), %error, "rollback could not read termination target");
-                cleanup_safe = false;
-            }
-        }
-    }
-    if !cleanup_safe {
-        debug!("rollback retained runtime state for a later cleanup attempt");
-        return;
-    }
+fn remove_startup_state(state_dir: &Path) {
     for name in [
         "authority.pid",
         "authority.listen",
@@ -250,6 +364,10 @@ fn rollback(state_dir: &Path) {
 ///
 /// Returns pidfile or supervision errors.
 pub fn supervise(state_dir: &Path) -> Result<()> {
+    supervise_with_timeout(state_dir, Duration::from_secs(10))
+}
+
+pub(crate) fn supervise_with_timeout(state_dir: &Path, timeout: Duration) -> Result<()> {
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
         StackError::Platform("current process returned invalid process id".into())
     })?;
@@ -269,7 +387,7 @@ pub fn supervise(state_dir: &Path) -> Result<()> {
         sidecar_pid,
     });
     info!("detached supervisor tearing down components");
-    let teardown_result = crate::stop::stop_observed_components(state_dir, Duration::from_secs(10));
+    let teardown_result = crate::stop::stop_observed_components(state_dir, timeout);
     info!("supervisor leaving");
     match observe_result {
         Err(error) => Err(error),

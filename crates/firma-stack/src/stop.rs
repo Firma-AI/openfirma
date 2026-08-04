@@ -1,13 +1,13 @@
 //! Tear down a running stack.
 
 use std::path::Path;
-use std::process::Child;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 use crate::platform::TerminationTarget;
+use crate::spawn::SpawnedComponent;
 use firma_runtime_state::pidfile;
 
 const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
@@ -35,36 +35,53 @@ pub struct StopOutcome {
 /// retried.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     let supervisor = read_target(state_dir, "stack.pid")?;
-    stop_inner(state_dir, timeout, supervisor, || Ok(()))
+    let authority = read_target(state_dir, "authority.pid")?;
+    let sidecar = read_target(state_dir, "sidecar.pid")?;
+    stop_inner(
+        state_dir,
+        timeout,
+        supervisor,
+        authority,
+        sidecar,
+        || Ok(()),
+    )
 }
 
 pub(crate) fn stop_owned(
     state_dir: &Path,
     timeout: Duration,
-    authority: &mut Child,
-    sidecar: &mut Child,
+    authority: &mut SpawnedComponent,
+    sidecar: &mut SpawnedComponent,
 ) -> Result<StopOutcome> {
-    let supervisor = read_target(state_dir, "stack.pid")?;
-    stop_inner(state_dir, timeout, supervisor, || {
-        let _ = sidecar.try_wait()?;
-        let _ = authority.try_wait()?;
-        Ok(())
-    })
+    stop_inner(
+        state_dir,
+        timeout,
+        None,
+        Some(authority.termination_target),
+        Some(sidecar.termination_target),
+        || {
+            let _ = sidecar.child.try_wait()?;
+            let _ = authority.child.try_wait()?;
+            Ok(())
+        },
+    )
 }
 
 pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
-    stop_inner(state_dir, timeout, None, || Ok(()))
+    let authority = read_target(state_dir, "authority.pid")?;
+    let sidecar = read_target(state_dir, "sidecar.pid")?;
+    stop_inner(state_dir, timeout, None, authority, sidecar, || Ok(()))
 }
 
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
     stack_target: Option<TerminationTarget>,
+    authority_target: Option<TerminationTarget>,
+    sidecar_target: Option<TerminationTarget>,
     mut collect_owned: impl FnMut() -> Result<()>,
 ) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
-    let authority_target = read_target(state_dir, "authority.pid")?;
-    let sidecar_target = read_target(state_dir, "sidecar.pid")?;
     debug!(
         ?stack_target,
         ?authority_target,
@@ -112,7 +129,13 @@ fn stop_inner(
 
     // Hard-kill survivors. This is the expected path for components that
     // hang in their own graceful-shutdown logic; not an error.
+    if let Err(error) = collect_owned()
+        && teardown_error.is_none()
+    {
+        teardown_error = Some(error);
+    }
     let mut forced = false;
+    let mut hard_termination_error = None;
     for target in [stack_target, authority_target, sidecar_target]
         .into_iter()
         .flatten()
@@ -122,9 +145,16 @@ fn stop_inner(
             match target.signal_hard() {
                 Ok(()) => forced = true,
                 Err(error) => {
-                    info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
-                    if teardown_error.is_none() {
-                        teardown_error = Some(error);
+                    if let Err(collect_error) = collect_owned()
+                        && teardown_error.is_none()
+                    {
+                        teardown_error = Some(collect_error);
+                    }
+                    if !matches!(target.exists(), Ok(false)) {
+                        info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
+                        if hard_termination_error.is_none() {
+                            hard_termination_error = Some(error);
+                        }
                     }
                 }
             }
@@ -149,9 +179,9 @@ fn stop_inner(
         std::thread::sleep(Duration::from_millis(50));
     };
     if !targets_disappeared && teardown_error.is_none() {
-        teardown_error = Some(StackError::TerminationTimeout {
+        teardown_error = hard_termination_error.or(Some(StackError::TerminationTimeout {
             timeout_secs: HARD_TERMINATION_SETTLEMENT.as_secs(),
-        });
+        }));
     }
     if let Some(error) = teardown_error {
         info!(%error, "teardown incomplete; retaining runtime state");

@@ -6,7 +6,7 @@ use std::process::{Child, Command};
 use tracing::debug;
 
 use crate::error::Result;
-use crate::platform::{Group, Platform, SystemPlatform};
+use crate::platform::{Group, Platform, SystemPlatform, TerminationTarget};
 use firma_runtime_state::{UserProcessId, pidfile};
 
 #[derive(Clone, Copy)]
@@ -22,6 +22,7 @@ pub struct SpawnRequest<'a> {
 pub struct SpawnedComponent {
     pub child: Child,
     pub leader_pid: UserProcessId,
+    pub termination_target: TerminationTarget,
 }
 
 pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedComponent> {
@@ -53,5 +54,6 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedC
     Ok(SpawnedComponent {
         child: spawned.child,
         leader_pid,
+        termination_target: spawned.termination_target,
     })
 }
