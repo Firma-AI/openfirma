@@ -5,10 +5,15 @@ description: Review changes ahead of opening a new PR, modifying an existing one
 
 # Adversarial Review
 
-Use this skill to obtain an independent review of changes without duplicating
-review work.
+Use this skill to decide who should review changes and how review work may be
+delegated without duplication. The [`reviewing-changes`](../reviewing-changes/SKILL.md)
+skill defines what every review must cover and how findings must be reported.
 
 ## Workflow
+
+Every reviewer must load and follow the `reviewing-changes` skill. When the
+current agent reviews directly, load it in the current session. When a fresh
+reviewer is required, instruct that reviewer to load it.
 
 First determine whether the current agent participated in producing the
 changes. The current agent is implementation-involved if it:
@@ -41,10 +46,6 @@ Do not give the reviewer:
 - explanations of why particular implementation choices were made; or
 - suggested findings.
 
-Ask the reviewer to independently inspect the complete change and prioritize
-correctness bugs, security issues, regressions, breaking changes, risky
-assumptions, and missing tests.
-
 Present the reviewer's findings to the user without silently dismissing or
 fixing them. If behavior-changing fixes are made after the review, obtain
 another independent review. A repeat review may be skipped when subsequent
@@ -52,10 +53,10 @@ changes are purely mechanical and cannot affect behavior or meaning.
 
 ### Independent review task
 
-Use this mode when reviewing is the current agent's only role and it did not
-participate in the implementation. The current agent is already the independent
-reviewer. It should perform the review directly and must not launch another
-agent merely to repeat the same review.
+Use this mode when the current agent did not participate in the implementation,
+even if it also has verification, metadata, or other responsibilities. The
+current agent is already the independent reviewer. It should perform the review
+directly and must not launch another agent merely to repeat the same review.
 
 The current agent may delegate a narrowly bounded, materially distinct part of
 the review surface when that improves coverage or enables parallel
@@ -68,22 +69,15 @@ investigation. Examples include:
 - inspecting a dependency or external implementation.
 
 Such delegation is ordinary review decomposition, not an additional adversarial
-review. Each delegated task must have explicit boundaries and must not duplicate
-the current agent's broad review scope. The current agent remains responsible
-for validating delegated findings, resolving contradictions, removing
-duplicates, and producing the final review.
+review. Each delegated task must have explicit boundaries and must not repeat
+the complete end-to-end review. Limited overlap is expected when the current
+agent integrates and validates delegated findings. The current agent remains
+responsible for resolving contradictions, removing duplicates, and producing
+the final review.
 
 ## Output
 
-Return one severity-ordered report containing:
-
-- findings with concrete file and line evidence;
-- the conditions required to trigger each issue;
-- the expected impact;
-- relevant unverified assumptions; and
-- a clear statement when no actionable findings were found.
-
-Do not include process narration or duplicated findings from multiple
-reviewers. When the current agent is implementation-involved, present the
-independent review findings to the user without addressing or dismissing them
-until the user provides explicit direction.
+Follow the report requirements in the `reviewing-changes` skill. When the
+current agent is implementation-involved, present the independent review
+findings to the user without addressing or dismissing them until the user
+provides explicit direction.
