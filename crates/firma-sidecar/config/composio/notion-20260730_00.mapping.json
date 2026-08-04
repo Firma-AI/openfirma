@@ -51,7 +51,7 @@
     "NOTION_SEARCH_NOTION_PAGE": "document.read",
     "NOTION_SEND_FILE_UPLOAD": "document.write",
     "NOTION_UPDATE_BLOCK": "document.write",
-    "NOTION_UPDATE_PAGE": "document.write",
+    "NOTION_UPDATE_PAGE": "document.delete",
     "NOTION_UPDATE_ROW_DATABASE": "document.write",
     "NOTION_UPDATE_SCHEMA_DATABASE": "document.schema.write",
     "NOTION_UPDATE_VIEW": "document.schema.write",

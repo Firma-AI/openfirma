@@ -310,7 +310,7 @@ fn cedar_admits_and_refuses_individual_notion_and_slack_tools() -> anyhow::Resul
     }
 
     for (toolkit, slug) in [
-        ("notion", "NOTION_UPDATE_PAGE"),
+        ("notion", "NOTION_UPDATE_BLOCK"),
         ("slack", "SLACK_EDIT_CANVAS"),
         ("slack", "NOTION_CREATE_NOTION_PAGE"),
     ] {
