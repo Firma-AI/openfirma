@@ -129,10 +129,12 @@ with a synthetic resource such as
 collection, `GET` for a single item). Discovery routes (`tools`, `toolkits`),
 Tool Router session reads, and MCP session streams still pass through.
 
-Because these listings are now governed actions, they inherit the
-query-string rule: a paginated read such as
-`GET /api/v3/connected_accounts?cursor=...` is denied `query_string_unsupported`
-rather than dispatched with a filter the policy never evaluated.
+These reads are the one governed shape allowed to carry a query string, so
+`GET /api/v3/connected_accounts?cursor=...` keeps paginating: a cursor picks a
+page of the same listing rather than changing which action is classified. The
+logical resource stays query-free and the cursor is restored onto the
+dispatched request. Every other governed Composio request still denies a query
+string outright.
 
 ## Atomic batches
 

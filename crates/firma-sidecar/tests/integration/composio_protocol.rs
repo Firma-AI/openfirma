@@ -241,6 +241,48 @@ fn lifecycle_reads_are_governed_as_credential_read() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A cursor selects a page of the same listing rather than changing which
+/// action is classified, so a lifecycle read keeps its query string instead of
+/// failing closed. Lifecycle *writes* must not gain the same exemption.
+#[test]
+fn lifecycle_reads_keep_their_query_but_writes_still_deny() -> anyhow::Result<()> {
+    let mut paginated = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3/connected_accounts?cursor=abc",
+        &serde_json::json!({}),
+    );
+    paginated.method = Method::GET;
+    paginated.body = None;
+
+    let decoded = actions(decode(&paginated, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].envelope.intent().action_class, "credential.read");
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_LIST_CONNECTED_ACCOUNT"
+    );
+    // The logical resource stays query-free; the cursor is restored onto the
+    // dispatch clone, not onto the evaluated resource.
+    assert_eq!(
+        decoded[0].envelope.intent().resource_display(),
+        "backend.composio.dev/api/v3/connected_accounts"
+    );
+
+    let mut write = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3/connected_accounts/ca_123?force=1",
+        &serde_json::json!({}),
+    );
+    write.method = Method::DELETE;
+    write.body = None;
+    let DecodeResult::Deny(denial) = decode(&write, &catalogs()?) else {
+        anyhow::bail!("a lifecycle write with a query string must fail closed");
+    };
+    assert_eq!(denial.code, "query_string_unsupported");
+    Ok(())
+}
+
 /// Governing the credential-adjacent reads must not pull the rest of the
 /// discovery surface out of passthrough.
 #[test]

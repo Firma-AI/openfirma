@@ -132,14 +132,35 @@ pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult
     // A query string never participates in the policy decision, so letting it
     // ride along on an admitted dispatch would smuggle unevaluated input
     // upstream. Read-only passthrough keeps its query (pagination and the
-    // like); governed actions refuse it.
-    if matches!(result, DecodeResult::Actions(_)) && request.path.contains('?') {
+    // like); governed actions refuse it, except account-lifecycle reads, where
+    // a cursor selects a page of the same listing rather than changing which
+    // action is being classified.
+    if matches!(result, DecodeResult::Actions(_))
+        && request.path.contains('?')
+        && !is_lifecycle_read(&result)
+    {
         return deny(
             "query_string_unsupported",
             "Composio governed requests must not carry a query string",
         );
     }
     result
+}
+
+/// Whether a decoded result is entirely account-lifecycle reads.
+///
+/// Both conditions are needed: a catalog tool can also map to `credential.read`
+/// (`GMAIL_LIST_CSE_KEYPAIRS` does), and only the synthetic lifecycle toolkit
+/// distinguishes a route the decoder classified itself from a provider tool.
+fn is_lifecycle_read(result: &DecodeResult) -> bool {
+    let DecodeResult::Actions(actions) = result else {
+        return false;
+    };
+    !actions.is_empty()
+        && actions.iter().all(|action| {
+            action.context.toolkit == LIFECYCLE_TOOLKIT
+                && action.envelope.intent.action_class == LIFECYCLE_READ_ACTION_CLASS
+        })
 }
 
 fn decode_protected(request: &RawRequest, host: &str, catalogs: &ComposioCatalogs) -> DecodeResult {

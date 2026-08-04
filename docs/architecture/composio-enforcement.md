@@ -45,22 +45,25 @@ into one `credential.read` action with a
 `composio://composio/COMPOSIO_LIST_CONNECTED_ACCOUNT` style resource (`LIST`
 for the collection, `GET` for a single item): those responses disclose which
 integrations exist and how they authenticate, which is credential
-disclosure rather than discovery. As governed actions they also inherit the
-query-string rule below, so a paginated listing is denied instead of
-dispatched with an unevaluated filter. Session creation (`POST` to the session
-collection) and `POST` to an existing `session/{id}` stay recognized
-passthroughs, and tearing down the hosted MCP transport session via `DELETE`
-on the MCP path remains transport-level passthrough. Every recognized route
-carries a method allowlist: reads (`GET`/`HEAD`/`OPTIONS`) pass through, MCP
-session paths additionally allow `DELETE` for teardown, lifecycle writes are
-governed, and any other method fails closed rather than auditing as
-passthrough. `POST` is not a read: apart from the two Tool Router session
-shapes above, a `POST` to a recognized read route (`tools`, `toolkits`, or a
-session sub-collection) is denied, so a write can never reach Composio
-through the discovery surface without capability and policy evaluation.
-A governed request carrying a query string is denied outright:
-the query never participates in the policy decision, so it must not ride
-along on an admitted dispatch. Hosted MCP paths deny query strings on every
+disclosure rather than discovery. These reads are the one governed shape that
+keeps a query string: a cursor selects a page of the same listing rather than
+changing which action is classified, so pagination keeps working and the
+cursor is restored onto the dispatch clone. The logical resource stays
+query-free. Session creation (`POST` to the session collection) and `POST` to
+an existing `session/{id}` stay recognized passthroughs, and tearing down the
+hosted MCP transport session via `DELETE` on the MCP path remains
+transport-level passthrough. Every recognized route carries a method
+allowlist: reads (`GET`/`HEAD`/`OPTIONS`) pass through everywhere except the
+two governed lifecycle families above, MCP session paths additionally allow
+`DELETE` for teardown, lifecycle requests are governed, and any other method
+fails closed rather than auditing as passthrough. `POST` is not a read: apart
+from the two Tool Router session shapes above, a `POST` to a recognized read
+route (`tools`, `toolkits`, or a session sub-collection) is denied, so a write
+can never reach Composio through the discovery surface without capability and
+policy evaluation. A governed request carrying a query string is denied
+outright, the lifecycle reads above excepted: the query never participates in
+the policy decision, so it must not ride along on an admitted dispatch. Hosted
+MCP paths deny query strings on every
 method, discovery included, so a query-carrying MCP URL fails at
 `initialize` with a clear denial instead of handshaking and then failing on
 each `tools/call`. Unknown execution routes, JSON-RPC batches, malformed
@@ -75,10 +78,11 @@ Policy and audit use a logical resource:
 composio://<toolkit>/<tool_slug>
 ```
 
-The connector keeps the original HTTPS scheme, host, path, headers, and body.
-OpenFirma never constructs an upstream URL from the logical resource. Internal
-`x-firma-*` headers are stripped before dispatch, and raw tool arguments are
-not copied into resources or ordinary logs.
+The connector keeps the original HTTPS scheme, host, path, headers, body, and
+(where one is allowed at all) query. OpenFirma never constructs an upstream URL
+from the logical resource. Internal `x-firma-*` headers are stripped before
+dispatch, and raw tool arguments are not copied into resources or ordinary
+logs.
 
 ## Atomic multi-tool requests
 

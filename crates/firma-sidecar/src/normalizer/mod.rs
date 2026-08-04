@@ -680,7 +680,11 @@ fn sanitize_query_string(query: &str, sensitive_params: &[&str]) -> String {
     result.join("&")
 }
 
-fn parse_query_string(query: &str) -> HashMap<String, String> {
+/// Split a raw query string into its decoded key/value pairs.
+///
+/// Pairs without an `=` are dropped, matching what the mapping and Cedar
+/// stages evaluate.
+pub(crate) fn parse_query_string(query: &str) -> HashMap<String, String> {
     query
         .split('&')
         .filter_map(|pair| {

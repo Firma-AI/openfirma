@@ -170,6 +170,34 @@ struct HeaderCapturingConnector {
     firma_header_seen: AtomicBool,
 }
 
+/// Records the query the connector was actually handed, so a test can prove a
+/// pagination cursor survived enforcement instead of being silently dropped.
+struct QueryCapturingConnector {
+    query: std::sync::Mutex<HashMap<String, String>>,
+}
+
+#[async_trait]
+impl Connector for QueryCapturingConnector {
+    async fn dispatch(&self, view: &TransportView) -> Result<ConnectorResponse, ConnectorError> {
+        let ActionParams::Http(http) = &view.envelope().intent().params else {
+            return Err(ConnectorError::InvalidRequest(
+                "expected HTTP params".to_string(),
+            ));
+        };
+        match self.query.lock() {
+            Ok(mut recorded) => recorded.clone_from(&http.query),
+            Err(_) => return Err(ConnectorError::InvalidRequest("poisoned".to_string())),
+        }
+        Ok(ConnectorResponse {
+            status: 200,
+            headers: HeaderMap::new(),
+            body: b"ok".to_vec(),
+            dispatch_latency: Duration::from_millis(1),
+            response_size: 2,
+        })
+    }
+}
+
 struct MockTlsConnector {
     address: SocketAddr,
     certificate: CertificateDer<'static>,
@@ -308,8 +336,9 @@ fn claims() -> anyhow::Result<CapabilityClaims> {
         action_set: vec![
             "communication.external.read".to_string(),
             "communication.external.send".to_string(),
+            "credential.read".to_string(),
         ],
-        resource_scope: "composio://gmail/*".to_string(),
+        resource_scope: "composio://*".to_string(),
         issued_at: Utc::now(),
         expiry: Utc::now() + chrono::Duration::hours(1),
         context_hash: "context".to_string(),
@@ -1479,5 +1508,52 @@ async fn composio_mock_tls_demo_covers_enforcement_outcomes() -> anyhow::Result<
     println!(
         "Composio mock TLS demo: allow=forwarded deny=blocked batch=atomic monitor=forwarded upstream_dispatches=2"
     );
+    Ok(())
+}
+
+/// A governed lifecycle read keeps its pagination cursor all the way to the
+/// connector. The logical envelope deliberately carries no query, so without
+/// hydration onto the dispatch clone the connector would rebuild a query-free
+/// URL and silently return page one.
+#[tokio::test]
+async fn paginated_lifecycle_read_dispatches_with_its_cursor() -> anyhow::Result<()> {
+    let request = RawRequest {
+        method: Method::GET,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3/connected_accounts?cursor=abc".to_string(),
+        headers: HeaderMap::new(),
+        body: None,
+        is_https: true,
+    };
+    let connector = Arc::new(QueryCapturingConnector {
+        query: std::sync::Mutex::new(HashMap::new()),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::Allow,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    )
+    .with_composio_catalogs(catalogs()?);
+
+    let response = handler.handle(request, "sess_composite").await;
+
+    assert!(matches!(response, HandledResponse::Ok(_)));
+    let recorded = connector
+        .query
+        .lock()
+        .map_err(|_| anyhow::anyhow!("query mutex poisoned"))?
+        .clone();
+    assert_eq!(recorded.get("cursor").map(String::as_str), Some("abc"));
+    let audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing lifecycle read audit"))?;
+    assert_eq!(audit.dispatch_status(), 200);
     Ok(())
 }
