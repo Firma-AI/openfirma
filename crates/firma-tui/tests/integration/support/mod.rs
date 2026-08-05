@@ -20,6 +20,16 @@ use firma_tui::control::{
 };
 use ratatui::{Terminal, backend::TestBackend};
 
+#[cfg(unix)]
+pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[cfg(windows)]
+// We give Windows more room because the test waits at the real rewrite worker
+// boundary. Once the blocked handler is released, the worker still needs CPU
+// time to resume, rewrite Cedar and publish it as completed. plus a throttled
+// CI runner can exceed one second here without the queue being broken.
+pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub const DEFAULT_POLICY_SOURCE: &str = r#"
 @id("first_policy")
 permit (
@@ -262,8 +272,6 @@ pub fn indexed_audit_row(index: usize) -> AuditRow {
     };
     audit_row(decision, index)
 }
-
-pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub struct BlockingRewriteHandler {
     pub handler: PolicyRewriteHandler,
