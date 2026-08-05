@@ -58,6 +58,63 @@ fn extract_dry_run_file(stdout: &[u8], file_name: &str) -> String {
 }
 
 #[test]
+fn composio_mapping_renders_exact_strict_mitm_hosts_without_bypass() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mapping",
+            "composio",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn firma config");
+    assert!(
+        output.status.success(),
+        "config failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let rendered = extract_dry_run_file(&output.stdout, CONFIG_FILE_NAME);
+    let config: toml::Value = toml::from_str(&rendered).expect("parse rendered firma.toml");
+    let https = &config["sidecar"]["interceptor"]["https_mitm"];
+    let intercepted: Vec<_> = https["intercept_hosts"]
+        .as_array()
+        .expect("intercept_hosts array")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
+    let strict: Vec<_> = https["strict_hosts"]
+        .as_array()
+        .expect("strict_hosts array")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
+    assert_eq!(
+        intercepted,
+        vec!["app.composio.dev", "backend.composio.dev"]
+    );
+    assert_eq!(strict, intercepted);
+    assert!(https.get("bypass_hosts").is_none());
+    assert_eq!(
+        config["sidecar"]["mapping"]["rules_paths"][0].as_str(),
+        Some("mappings/composio.toml")
+    );
+
+    let mapping = extract_dry_run_file(&output.stdout, "mappings/composio.toml");
+    assert!(mapping.contains("/api/v3.1/tools/execute/*"));
+    assert!(mapping.contains("/tool_router/v3/*/mcp"));
+}
+
+#[test]
 fn remote_agent_id_is_persisted() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");

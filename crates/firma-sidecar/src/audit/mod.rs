@@ -170,6 +170,46 @@ pub struct AuditPayload {
     pub(crate) parent_action_id: String,
 }
 
+impl AuditPayload {
+    /// Returns the target resource identifier recorded for the action.
+    #[must_use]
+    pub fn resource(&self) -> &str {
+        &self.resource
+    }
+
+    /// Returns the enforcement outcome recorded for the action.
+    #[must_use]
+    pub fn decision(&self) -> &Decision {
+        &self.decision
+    }
+
+    /// Returns the denial reason, empty on outcomes that carry none.
+    #[must_use]
+    pub fn deny_reason(&self) -> &str {
+        &self.deny_reason
+    }
+
+    /// Returns the connector HTTP status, zero when the call never dispatched.
+    #[must_use]
+    pub fn dispatch_status(&self) -> i32 {
+        self.dispatch_status
+    }
+
+    /// Returns the connector dispatch latency in microseconds, zero when the
+    /// call never dispatched.
+    #[must_use]
+    pub fn dispatch_latency_us(&self) -> i64 {
+        self.dispatch_latency_us
+    }
+
+    /// Returns the target response body size in bytes, zero when the call
+    /// never dispatched or returned no body.
+    #[must_use]
+    pub fn response_size(&self) -> i64 {
+        self.response_size
+    }
+}
+
 /// Domain-level audit event produced by the enforcement pipeline.
 ///
 /// Converted into the proto wire type via `From<ExecutionEvent>`.

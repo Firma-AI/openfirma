@@ -336,7 +336,11 @@ rather than a silent semantic divergence.
 (`1`) with an empty `token_id`. In monitor mode, `DENY`, `MODIFY`, `STEP_UP`,
 and `DEFER` are all overridden to `PASSTHROUGH` so the call goes through,
 with the original reason preserved in the audit record prefixed with
-`monitor_mode:`.
+`monitor_mode:`. Composio protocol-level denials (malformed payloads,
+unknown tools, protocol upgrades on the protected hosts) receive the same
+override, so monitor mode never blocks on policy or protocol grounds.
+Operational aborts (connector failures, credential-injection errors) still
+block in both modes.
 
 Monitor mode is gated behind the `FIRMA_ALLOW_MONITOR_MODE=1` environment
 variable. A config that sets `mode = "monitor"` without that opt-in downgrades

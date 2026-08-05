@@ -1,0 +1,349 @@
+{
+  "toolkit": "googlecalendar",
+  "tools": [
+    {
+      "description": "Deletes an access control rule from a Google Calendar. Use when you need to remove sharing permissions for a user, group, or domain.",
+      "name": "Delete ACL Rule",
+      "slug": "GOOGLECALENDAR_ACL_DELETE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves a specific access control rule for a calendar. Use when you need to check permissions for a specific user, group, or domain.",
+      "name": "Get ACL Rule",
+      "slug": "GOOGLECALENDAR_ACL_GET",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Creates an access control rule for a calendar. Use when you need to grant sharing permissions to a user, group, or domain.",
+      "name": "Create ACL Rule",
+      "slug": "GOOGLECALENDAR_ACL_INSERT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves the list of access control rules (ACLs) for a specified calendar, providing the necessary 'rule_id' values required for updating specific ACL rules.",
+      "name": "List ACL Rules",
+      "slug": "GOOGLECALENDAR_ACL_LIST",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Updates an existing access control rule for a calendar using patch semantics (partial update). This allows modifying specific fields without affecting other properties. IMPORTANT: The ACL rule must already exist on the calendar. This action cannot create new rules. If you receive a 404 Not Found error, the rule does not exist - use ACL insert to create it first, or use ACL list to verify available rules. Each patch request consumes three quota units. For domain-type ACL rules, if PATCH fails with 500 error, this action will automatically fallback to UPDATE method.",
+      "name": "Patch ACL Rule",
+      "slug": "GOOGLECALENDAR_ACL_PATCH",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Updates an access control rule for the specified calendar.",
+      "name": "Update ACL Rule",
+      "slug": "GOOGLECALENDAR_ACL_UPDATE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to watch for changes to ACL resources. Use when you need to set up real-time notifications for access control list modifications on a calendar.",
+      "name": "Watch ACL Changes",
+      "slug": "GOOGLECALENDAR_ACL_WATCH",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Execute up to 1000 event mutations (create/patch/delete) in one Google Calendar HTTP batch request with per-item status/results. Use this to materially reduce round-trips for bulk operations like migrations, cleanup, or large-scale updates.",
+      "name": "Batch Events",
+      "slug": "GOOGLECALENDAR_BATCH_EVENTS",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Deletes a secondary calendar that you own or have delete permissions on. Deletion is permanent and irreversible — verify the correct calendar_id before calling. You cannot delete your primary calendar or calendars you only have read/write access to. Use calendarList.list to find calendars with owner accessRole. For primary calendars, use calendars.clear instead. Parallel calls may trigger userRateLimitExceeded; sequence bulk deletions.",
+      "name": "Delete Calendar",
+      "slug": "GOOGLECALENDAR_CALENDARS_DELETE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Full PUT-style update that overwrites all calendar metadata fields; unspecified optional fields are cleared. Use GOOGLECALENDAR_PATCH_CALENDAR to update only a subset of fields. Mutates the underlying calendar resource (title, description, timeZone, etc.); use GOOGLECALENDAR_CALENDAR_LIST_UPDATE to change per-user display properties like color.",
+      "name": "Update Calendar",
+      "slug": "GOOGLECALENDAR_CALENDARS_UPDATE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to remove a calendar from the user's calendar list. Use when you need to unsubscribe from or hide a calendar from the user's list.",
+      "name": "Remove Calendar from List",
+      "slug": "GOOGLECALENDAR_CALENDAR_LIST_DELETE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves metadata for a SINGLE specific calendar from the user's calendar list by its calendar ID. This action requires a calendarId parameter and returns details about that one calendar only. NOTE: This does NOT list all calendars. To list all calendars in the user's calendar list, use GOOGLECALENDAR_CALENDAR_LIST_LIST instead.",
+      "name": "Get Single Calendar by ID",
+      "slug": "GOOGLECALENDAR_CALENDAR_LIST_GET",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Inserts an existing calendar into the user's calendar list, making it visible in the UI. Calendars (e.g., newly created ones) won't appear in the list or UI until explicitly inserted.",
+      "name": "Insert Calendar into List",
+      "slug": "GOOGLECALENDAR_CALENDAR_LIST_INSERT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Updates an existing calendar on the user's calendar list using patch semantics. This method allows partial updates, modifying only the specified fields.",
+      "name": "Patch Calendar List Entry",
+      "slug": "GOOGLECALENDAR_CALENDAR_LIST_PATCH",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Updates a calendar list entry's display/subscription settings (color, visibility, reminders, selection) for the authenticated user — does not modify the underlying calendar resource (title, timezone, etc.). To modify the calendar itself, use GOOGLECALENDAR_CALENDARS_UPDATE.",
+      "name": "Update Calendar List Entry",
+      "slug": "GOOGLECALENDAR_CALENDAR_LIST_UPDATE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Watch for changes to CalendarList resources using push notifications. Use this to receive real-time updates when calendar list entries are modified.",
+      "name": "Watch Calendar List",
+      "slug": "GOOGLECALENDAR_CALENDAR_LIST_WATCH",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to stop watching resources through a notification channel. Use when you need to discontinue push notifications for a specific channel subscription.",
+      "name": "Stop Channel",
+      "slug": "GOOGLECALENDAR_CHANNELS_STOP",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Clears a primary calendar by deleting all events from it. The calendar itself is preserved; only its events are removed. Primary calendars cannot be deleted entirely.",
+      "name": "Clear Calendar",
+      "slug": "GOOGLECALENDAR_CLEAR_CALENDAR",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Returns the color definitions for calendars and events. Use when you need to retrieve the available color palette for styling calendars or events.",
+      "name": "Get Color Definitions",
+      "slug": "GOOGLECALENDAR_COLORS_GET",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Creates a new secondary Google Calendar with the specified title and optional settings. Use this action when you need to create a new calendar for organizing events separately from the primary calendar. The authenticated user becomes the owner of the newly created calendar. Optional parameters include description, location, and timezone.",
+      "name": "Create a new calendar",
+      "slug": "GOOGLECALENDAR_CREATE_CALENDAR",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Create a Google Calendar event using start_datetime plus duration fields. The organizer is added as an attendee unless exclude_organizer is True. By default adds Google Meet link (works for Workspace, gracefully falls back for personal Gmail). Attendees can be email strings (required) or objects with email and optional fields. No conflict checking is performed; use GOOGLECALENDAR_FREE_BUSY_QUERY to detect overlaps before creating. Returns event id and htmlLink nested under data.response_data. Example: { \"start_datetime\": \"2025-01-16T13:00:00\", \"timezone\": \"America/New_York\", \"event_duration_hour\": 1, \"event_duration_minutes\": 30, \"summary\": \"Client sync\", \"attendees\": [\"required@example.com\", {\"email\": \"optional@example.com\", \"optional\": true}] }",
+      "name": "Create Event",
+      "slug": "GOOGLECALENDAR_CREATE_EVENT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Deletes a specified event by `event_id` from a Google Calendar (`calendar_id`); idempotent — a 404 for an already-deleted event is a no-op. Bulk deletions may trigger `rateLimitExceeded` or `userRateLimitExceeded`; cap concurrency to 5–10 requests and apply exponential backoff.",
+      "name": "Delete event",
+      "slug": "GOOGLECALENDAR_DELETE_EVENT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Creates a new, empty Google Calendar with the specified title (summary). Newly created calendars default to UTC timezone; use GOOGLECALENDAR_PATCH_CALENDAR afterward to set the desired timeZone if needed.",
+      "name": "Create a calendar",
+      "slug": "GOOGLECALENDAR_DUPLICATE_CALENDAR",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves a SINGLE event by its unique event_id (REQUIRED). This action does NOT list or search events - it fetches ONE specific event when you already know its ID. If you want to list events within a time range, search for events, or filter by criteria like time_min/time_max, use GOOGLECALENDAR_EVENTS_LIST instead.",
+      "name": "Get Event",
+      "slug": "GOOGLECALENDAR_EVENTS_GET",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to import an event as a private copy to a calendar. Use when you need to add an existing event to a calendar using its iCalUID. Only events with eventType='default' can be imported.",
+      "name": "Import Event",
+      "slug": "GOOGLECALENDAR_EVENTS_IMPORT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Returns instances of the specified recurring event. Use timeMin/timeMax to constrain the window; omitting bounds can return large result sets and is quota-heavy. On high-volume calls, 403 rateLimitExceeded or 429 too_many_requests may occur; apply exponential backoff (1s, 2s, 4s) before retrying.",
+      "name": "Get Event Instances",
+      "slug": "GOOGLECALENDAR_EVENTS_INSTANCES",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Returns events on the specified calendar. TIMEZONE WARNING: When using timeMin/timeMax with UTC timestamps (ending in 'Z'), the time window is interpreted in UTC regardless of the calendar's timezone. For example, querying '2026-01-19T00:00:00Z' to '2026-01-20T00:00:00Z' on a calendar in America/Los_Angeles (UTC-8) covers 2026-01-18 4pm to 2026-01-19 4pm local time, potentially missing events on the intended local date. To query for a specific local date, use timestamps with the appropriate timezone offset in timeMin/timeMax (e.g., '2026-01-19T00:00:00-08:00' for PST).",
+      "name": "List Events",
+      "slug": "GOOGLECALENDAR_EVENTS_LIST",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Return a unified event list across all calendars in the user's calendar list for a given time range. Use when you need a single view of all events across multiple calendars. An inverted or incorrect time range silently returns empty results rather than an error. An empty `items` list means no events matched the filters—adjust `time_min`, `time_max`, or `q` before concluding no events exist.",
+      "name": "List Events from All Calendars",
+      "slug": "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Moves an event to another calendar, i.e., changes an event's organizer.",
+      "name": "Move Event",
+      "slug": "GOOGLECALENDAR_EVENTS_MOVE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Watch for changes to Events resources. Watch channels expire; persist the channel `id` per `calendarId` to re-establish watches after expiration or restarts.",
+      "name": "Watch Events",
+      "slug": "GOOGLECALENDAR_EVENTS_WATCH",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Finds events in a specified Google Calendar using text query, time ranges (event start/end, last modification), and event types. Ensure `timeMin` is not chronologically after `timeMax` if both are provided. Results may span multiple pages; always follow `nextPageToken` until absent to avoid silently missing events. Validate the correct match from results by checking summary, start.dateTime, and organizer.email before using event_id for mutations. An empty `items` array means no events matched — widen filters rather than treating it as an error.",
+      "name": "Find event",
+      "slug": "GOOGLECALENDAR_FIND_EVENT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Finds both free and busy time slots in Google Calendars for specified calendars within a defined time range. If `time_min` is not provided, defaults to the current timestamp in the specified timezone. If `time_max` is not provided, defaults to 23:59:59 of the day specified in `time_min` (if provided), otherwise defaults to 23:59:59 of the current day in the specified timezone. Returns busy intervals and calculates free slots by finding gaps between busy periods; `time_min` must precede `time_max` if both are provided. This action retrieves free and busy time slots for the specified calendars over a given time period. It analyzes the busy intervals from the calendars and provides calculated free slots based on the gaps in the busy periods. Returned free slots are unfiltered by duration; callers must filter intervals to those fully containing the required meeting length. No event metadata (titles, descriptions, links) is returned; use GOOGLECALENDAR_EVENTS_LIST for event details.",
+      "name": "Find free slots",
+      "slug": "GOOGLECALENDAR_FIND_FREE_SLOTS",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "DEPRECATED: Use GOOGLECALENDAR_FIND_FREE_SLOTS instead (though this tool provides wider secondary/shared calendar coverage). Returns opaque busy intervals only—no event titles or details; use GOOGLECALENDAR_EVENTS_LIST when event details are needed.",
+      "name": "Query Free/Busy Information (Deprecated)",
+      "slug": "GOOGLECALENDAR_FREE_BUSY_QUERY",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves a specific Google Calendar, identified by `calendar_id`, to which the authenticated user has access. Response includes `timeZone` (IANA format, e.g., 'America/Los_Angeles') — use it directly when constructing `timeMin`/`timeMax` in other tools to avoid DST errors. An empty `defaultReminders` list is valid (no defaults configured). Insufficient `accessRole` may omit fields like `defaultReminders` and `colorId`.",
+      "name": "Get Google Calendar",
+      "slug": "GOOGLECALENDAR_GET_CALENDAR",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "DEPRECATED: Use CalendarListGet instead. Tool to retrieve the authenticated user's primary calendar profile. Use when you need to get information about the user's main calendar, including timezone, settings, and preferences.",
+      "name": "Get Calendar Profile (Deprecated)",
+      "slug": "GOOGLECALENDAR_GET_CALENDAR_PROFILE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Gets the current date and time, allowing for a specific timezone offset. Call this tool first before computing relative dates (e.g., 'tomorrow', 'next Monday') to avoid off-by-one-day errors across timezones.",
+      "name": "Get current date and time",
+      "slug": "GOOGLECALENDAR_GET_CURRENT_DATE_TIME",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Lists all buildings for a Google Workspace customer account with full details including addresses, coordinates, and floor names. Use this action when you need to retrieve the complete list of physical building locations configured in Google Workspace Calendar resources. This is useful for workspace administrators managing conference room and resource scheduling across multiple office buildings. Requires Google Workspace administrator privileges with Directory API access.",
+      "name": "List Buildings",
+      "slug": "GOOGLECALENDAR_LIST_BUILDINGS",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves calendars from the user's Google Calendar list, with options for pagination and filtering. Loop through all pages using nextPageToken until absent to avoid missing calendars. Use the primary flag and accessRole field from the response to identify calendars — display names are not valid calendar_id values. Read access (listing) does not imply write OAuth scopes.",
+      "name": "List Google Calendars",
+      "slug": "GOOGLECALENDAR_LIST_CALENDARS",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Retrieves calendar resources (such as conference rooms) from a Google Workspace domain using the Admin SDK Directory API. Use this action when you need to list available meeting rooms, conference spaces, or other bookable calendar resources in an organization. The action supports filtering by resource category, capacity, building location, and other criteria. IMPORTANT: This requires Admin SDK Directory API access and appropriate admin permissions - it is NOT available for personal Gmail accounts, only Google Workspace domains.",
+      "name": "List Calendar Resources",
+      "slug": "GOOGLECALENDAR_LIST_CALENDAR_RESOURCES",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "DEPRECATED: Use GOOGLECALENDAR_SETTINGS_LIST instead. Tool to return all user settings for the authenticated user. Use when you need to retrieve calendar settings.",
+      "name": "List Calendar Settings (Deprecated)",
+      "slug": "GOOGLECALENDAR_LIST_SETTINGS",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Partially updates (PATCHes) an existing Google Calendar, modifying only the fields provided. At least one of summary, description, location, or timezone must be provided. Empty strings for `description` or `location` clear them.",
+      "name": "Patch Calendar",
+      "slug": "GOOGLECALENDAR_PATCH_CALENDAR",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Update specified fields of an existing event in a Google Calendar using patch semantics (array fields like `attendees` are fully replaced if provided); ensure the `calendar_id` and `event_id` are valid and the user has write access to the calendar.",
+      "name": "Patch Event",
+      "slug": "GOOGLECALENDAR_PATCH_EVENT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Parses natural language text to quickly create a basic Google Calendar event with its title, date, and time, suitable for simple scheduling; does not support direct attendee addition or recurring events, and `calendar_id` must be valid if not 'primary'.",
+      "name": "Quick Add Event",
+      "slug": "GOOGLECALENDAR_QUICK_ADD",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Removes an attendee from a specified event in a Google Calendar; the calendar and event must exist. Concurrent calls on the same event can overwrite attendee lists — apply changes sequentially per event.",
+      "name": "Remove attendee from event",
+      "slug": "GOOGLECALENDAR_REMOVE_ATTENDEE",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Tool to return a single user setting for the authenticated user. Use when you need to retrieve a specific calendar setting value.",
+      "name": "Get Calendar Setting",
+      "slug": "GOOGLECALENDAR_SETTINGS_GET",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Returns all user settings for the authenticated user. Results include multiple settings keyed by id (e.g., `timeZone`); locate a specific setting by its `id` field. `timeZone` values are IANA identifiers (e.g., `America/New_York`) — use directly in datetime and event logic; align with `timeZone` from GOOGLECALENDAR_GET_CALENDAR for consistent notification times.",
+      "name": "List Settings",
+      "slug": "GOOGLECALENDAR_SETTINGS_LIST",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Watch for changes to Settings resources.",
+      "name": "Watch Settings",
+      "slug": "GOOGLECALENDAR_SETTINGS_WATCH",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "DEPRECATED: Use GOOGLECALENDAR_EVENTS_LIST instead. EventsList already handles syncToken with automatic param stripping. Synchronizes Google Calendar events, performing a full sync if no `sync_token` is provided or if a 410 GONE error (due to an expired token) necessitates it, otherwise performs an incremental sync for events changed since the `sync_token` was issued.",
+      "name": "Sync Events (Deprecated)",
+      "slug": "GOOGLECALENDAR_SYNC_EVENTS",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    },
+    {
+      "description": "Updates an existing event in Google Calendar. REQUIRES event_id - you MUST first search for the event using GOOGLECALENDAR_FIND_EVENT or GOOGLECALENDAR_EVENTS_LIST to obtain the event_id. This is a full PUT replacement: omitted fields (including attendees, reminders, recurrence, conferencing) are cleared. Always provide the complete desired event state. Use GOOGLECALENDAR_PATCH_EVENT instead for partial edits.",
+      "name": "Update Google event",
+      "slug": "GOOGLECALENDAR_UPDATE_EVENT",
+      "toolkit": "googlecalendar",
+      "version": "20260721_00"
+    }
+  ],
+  "version": "20260721_00"
+}

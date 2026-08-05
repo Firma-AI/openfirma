@@ -119,6 +119,11 @@ impl MappingRule {
 impl MappingTable {
     /// Load and validate mapping rules from a parsed config.
     ///
+    /// Host patterns are normalized like runtime request hosts (lowercased,
+    /// trailing dot stripped): request hosts arrive in that form, so an
+    /// unnormalized pattern such as `API.GitHub.COM.` could never match
+    /// anything and would sit in the table as a dead rule.
+    ///
     /// # Errors
     /// Returns an error if the rules are structurally invalid or
     /// ambiguous.
@@ -132,13 +137,15 @@ impl MappingTable {
 
         // Duplicate (method, host, path) tuple detection. Two rules
         // with the same triple across merged mapping files produces
-        // ambiguous classification — fail-closed at startup.
+        // ambiguous classification — fail-closed at startup. Hosts are
+        // compared in normalized form so case or trailing-dot variants of
+        // the same rule cannot slip past the check.
         let mut seen: std::collections::HashSet<(Option<Method>, String, String)> =
             std::collections::HashSet::new();
         for (i, rule_cfg) in file.rules.iter().enumerate() {
             let key = (
                 rule_cfg.method.clone(),
-                rule_cfg.host.clone(),
+                normalize_host_pattern(&rule_cfg.host),
                 rule_cfg.path.clone().unwrap_or_default(),
             );
             if !seen.insert(key) {
@@ -159,15 +166,16 @@ impl MappingTable {
                 });
             }
 
+            let host_pattern = normalize_host_pattern(&rule_cfg.host);
             let specificity = MappingRule::compute_specificity(
                 rule_cfg.method.as_ref(),
-                &rule_cfg.host,
+                &host_pattern,
                 rule_cfg.path.as_ref(),
             );
 
             rules.push(MappingRule {
                 method: rule_cfg.method.clone(),
-                host_pattern: rule_cfg.host.clone(),
+                host_pattern,
                 path_pattern: rule_cfg.path.clone(),
                 action_class: rule_cfg.action_class.clone(),
                 specificity,
@@ -225,12 +233,44 @@ impl MappingTable {
     }
 }
 
-/// Simple glob matching supporting `*` as a single-segment wildcard.
+/// Normalize a host or rule host pattern into its canonical matching form.
 ///
-/// - `*` matches any sequence of non-separator characters
-/// - `*.example.com` matches `api.example.com` but not `deep.api.example.com`
+/// Trims whitespace, lowercases, strips any trailing dot from the name part
+/// (even when a port hides it, as in `host.:8443`), drops a default
+/// `:443`/`:80` port, and re-appends a nonstandard all-digit port. This is
+/// the single normalization shared by runtime request hosts, rule host
+/// patterns, and config validation, so the three can never disagree on what
+/// a spelling means. Wildcards pass through untouched except for the
+/// name-part dot handling (`*.:443` normalizes to `*`, which validation
+/// rejects as a silent catch-all promotion).
+pub fn normalize_host_pattern(host: &str) -> String {
+    // Trailing dots are stripped both before the port split (`host:443.`)
+    // and from the name part after it (`host.:443`); either position spells
+    // the same authority.
+    let lower = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let (name, port) = match lower.rsplit_once(':') {
+        Some((name, port))
+            if !name.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            (name, Some(port))
+        }
+        _ => (lower.as_str(), None),
+    };
+    let name = name.trim_end_matches('.');
+    match port {
+        Some("443" | "80") | None => name.to_string(),
+        Some(port) => format!("{name}:{port}"),
+    }
+}
+
+/// Simple glob matching where `*` matches any sequence of characters.
+///
+/// The wildcard crosses separators: `*.example.com` matches both
+/// `api.example.com` and `deep.api.example.com`, and a bare `*` matches
+/// everything.
+///
 /// - `/v1/*/completions` matches `/v1/chat/completions`
-fn glob_match(pattern: &str, value: &str) -> bool {
+pub fn glob_match(pattern: &str, value: &str) -> bool {
     if pattern == "*" {
         return true;
     }

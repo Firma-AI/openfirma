@@ -131,6 +131,7 @@ export default defineConfig({
             { label: 'Issue capability tokens', slug: 'guides/issue-capability-tokens' },
             { label: 'Wrap an agent with firma run', slug: 'guides/firma-run' },
             { label: 'Enable HTTPS MITM', slug: 'guides/https-mitm' },
+            { label: 'Govern Composio tool execution', slug: 'guides/composio' },
             { label: 'Extend the action-class mapping', slug: 'guides/extend-mapping' },
             { label: 'Inject credentials', slug: 'guides/inject-credentials' },
             { label: 'Read & verify the audit log', slug: 'guides/audit-log' },

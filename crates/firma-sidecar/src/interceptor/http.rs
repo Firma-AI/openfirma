@@ -136,7 +136,7 @@ pub struct HttpInterceptor {
 impl HttpInterceptor {
     /// Create a new [`HttpInterceptor`] that listens on the specified address.
     #[must_use]
-    pub(crate) fn new(address: SocketAddr) -> Self {
+    pub fn new(address: SocketAddr) -> Self {
         // Startup always injects explicit config via `with_https_mitm`; keep
         // the raw constructor conservative to avoid surprising side effects in
         // tests and local helper usage.
@@ -157,7 +157,7 @@ impl HttpInterceptor {
 
     /// Attach HTTPS MITM configuration to this interceptor.
     #[must_use]
-    pub(crate) fn with_https_mitm(mut self, config: HttpsMitmConfig, ca_dir: PathBuf) -> Self {
+    pub fn with_https_mitm(mut self, config: HttpsMitmConfig, ca_dir: PathBuf) -> Self {
         self.https_mitm_config = config;
         self.ca_dir = ca_dir;
         self
@@ -211,7 +211,7 @@ impl HttpInterceptor {
     ///
     /// Returns [`InterceptorError`] if TLS MITM runtime initialization fails
     /// or the server loop encounters an unrecoverable error.
-    pub(crate) async fn run_with_listener(
+    pub async fn run_with_listener(
         mut self,
         listener: TcpListener,
         handler: Arc<RequestHandler>,

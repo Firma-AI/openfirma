@@ -136,6 +136,69 @@ fn resolve_effective_mode(
     }
 }
 
+/// Return whether any mapping rule host would match a protected Composio
+/// host at runtime.
+///
+/// Rule hosts speak the normalizer's glob language (a `*` may appear
+/// anywhere, including a bare catch-all) and may be uppercase or carry a
+/// port or trailing dot. Each host is therefore canonicalized exactly like
+/// the decoder canonicalizes request hosts, then matched with the same glob
+/// the mapping table applies at runtime, so a rule that would classify
+/// Composio traffic can never evade this check through its spelling. A
+/// catch-all `*` rule counts: it does govern Composio traffic.
+#[must_use]
+pub fn mapping_references_composio_hosts(rules: &config::MappingRulesFile) -> bool {
+    rules.rules.iter().any(|rule| {
+        let pattern = canonical_rule_host_pattern(&rule.host);
+        crate::composio::PROTECTED_HOSTS
+            .iter()
+            .any(|host| crate::normalizer::mapping::glob_match(&pattern, host))
+    })
+}
+
+/// Canonicalize a mapping-rule host pattern for the coverage check.
+///
+/// On top of the decoder's canonicalization (lowercase, trailing dot,
+/// numeric port), a rule may glob the port (`backend.composio.dev:8*`) and
+/// still match Composio traffic on a nonstandard port at runtime, so a port
+/// segment made of digits and wildcards is stripped as well before the host
+/// part is matched against the protected names.
+fn canonical_rule_host_pattern(host: &str) -> String {
+    let canonical = crate::composio::canonical_host(host);
+    match canonical.rsplit_once(':') {
+        Some((name, port))
+            if !name.is_empty()
+                && !port.is_empty()
+                && port.bytes().all(|b| b.is_ascii_digit() || b == b'*') =>
+        {
+            name.to_string()
+        }
+        _ => canonical,
+    }
+}
+
+/// Warn when mapping rules opt into Composio governance but the HTTPS MITM
+/// configuration cannot decode traffic to the protected Composio hosts.
+///
+/// The pinned catalogs load unconditionally, yet the decoder only sees
+/// requests the proxy terminates. A deployment whose mapping rules would
+/// match the Composio hosts (including through wildcards and catch-alls)
+/// intends to govern that traffic, so every coverage gap is surfaced at
+/// startup instead of silently degrading to opaque tunnels. Deployments
+/// whose rules cannot match those hosts stay quiet.
+fn warn_on_composio_mitm_gaps(config: &config::SidecarConfig, rules: &config::MappingRulesFile) {
+    if config.interceptor.mode != config::InterceptorMode::HttpProxy
+        || !mapping_references_composio_hosts(rules)
+    {
+        return;
+    }
+    for warning in
+        crate::startup::interceptor::composio_mitm_coverage_warnings(&config.interceptor.https_mitm)
+    {
+        tracing::warn!("{warning}");
+    }
+}
+
 /// Build the enforcement pipeline plus stream-client shared state.
 ///
 /// # Errors
@@ -144,6 +207,7 @@ fn resolve_effective_mode(
 pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<PipelineRuntime> {
     let merged_file = load_mapping_rules(config)?;
     let mapping_rules_loaded = merged_file.rule_count();
+    warn_on_composio_mitm_gaps(config, &merged_file);
 
     let registry = pipeline::ActionClassRegistry::v0_1();
     let table = pipeline::MappingTable::from_config(

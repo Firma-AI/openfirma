@@ -188,8 +188,51 @@ impl MappingRuleConfig {
     ///
     /// Returns a message describing the first invalid field.
     pub fn validate(&self) -> Result<(), String> {
-        if self.host.trim().is_empty() {
+        let host = self.host.trim();
+        if host.is_empty() {
             return Err("host must not be empty".into());
+        }
+        // Load-time normalization strips trailing dots and default ports,
+        // which would silently promote a degenerate pattern like `*.` or
+        // `*:443` into the bare catch-all, or erase one like `:443`
+        // entirely. Validate against the same normalization the mapping
+        // table applies so no spelling can slip between the two.
+        let normalized = crate::normalizer::mapping::normalize_host_pattern(host);
+        if normalized.is_empty() || normalized.starts_with(':') {
+            return Err(format!(
+                "host pattern '{host}' normalizes to a host with an empty name and can never match"
+            ));
+        }
+        if normalized == "*" && host != "*" {
+            return Err(format!(
+                "host pattern '{host}' would normalize to the bare catch-all '*'; write '*' explicitly if that is intended"
+            ));
+        }
+        // A port-scoped promotion is just as silent: `*.:8443` normalizes to
+        // `*:8443` and would match every host on that port. The only
+        // accepted spellings for a wildcard name are a literal `*`, alone or
+        // with a port.
+        let normalized_name = match normalized.rsplit_once(':') {
+            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                name
+            }
+            _ => normalized.as_str(),
+        };
+        // Judge the written name literally, trimming only the trailing dots
+        // of the whole spelling so a dotted port (`*:8443.`) still splits;
+        // trimming the name part itself would hide exactly the promotion
+        // this check rejects (`*.:8443`).
+        let written = host.trim_end_matches('.');
+        let written_name = match written.rsplit_once(':') {
+            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                name
+            }
+            _ => written,
+        };
+        if normalized_name == "*" && written_name != "*" {
+            return Err(format!(
+                "host pattern '{host}' would normalize its name to the catch-all '*'; write the '*' explicitly if that is intended"
+            ));
         }
         if self.action_class.trim().is_empty() {
             return Err("action_class must not be empty".into());

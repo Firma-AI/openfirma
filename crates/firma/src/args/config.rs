@@ -169,6 +169,8 @@ pub enum Mapping {
     Cargo,
     /// GitHub Copilot CLI hosts — CONNECT-only, github hosts MITM-bypassed.
     Copilot,
+    /// Composio Tool Router, direct execution, and hosted MCP.
+    Composio,
     /// GitHub REST API — requires MITM for per-endpoint classification.
     Github,
     /// Gmail REST API — requires MITM for per-endpoint classification.
@@ -191,6 +193,7 @@ impl Mapping {
         Self::Anthropic,
         Self::Cargo,
         Self::Copilot,
+        Self::Composio,
         Self::Github,
         Self::Gmail,
         Self::Npm,
@@ -212,6 +215,7 @@ impl Mapping {
             Self::Cargo => "cargo",
             Self::Stripe => "stripe",
             Self::Copilot => "copilot",
+            Self::Composio => "composio",
             Self::Vscode => "vscode",
         }
     }
@@ -234,6 +238,9 @@ impl Mapping {
                 "api.stripe.com — Stripe REST API (MITM optional — check SDK cert pinning first)"
             }
             Self::Copilot => "GitHub Copilot CLI hosts (CONNECT only; github MITM-bypassed)",
+            Self::Composio => {
+                "app.composio.dev, backend.composio.dev — governed execution (strict MITM)"
+            }
             Self::Vscode => {
                 "Visual Studio Code hosts (CONNECT only; core services, marketplace, accounts, GitHub, Copilot)"
             }
@@ -245,6 +252,7 @@ impl Mapping {
         match self {
             Self::Github => &["api.github.com"],
             Self::Gmail => &["gmail.googleapis.com"],
+            Self::Composio => &["app.composio.dev", "backend.composio.dev"],
             _ => &[],
         }
     }
@@ -270,6 +278,7 @@ impl Mapping {
             Self::Cargo => include_str!("../../templates/mappings/cargo-registry.toml"),
             Self::Stripe => include_str!("../../templates/mappings/stripe.toml"),
             Self::Copilot => include_str!("../../templates/mappings/copilot.toml"),
+            Self::Composio => include_str!("../../templates/mappings/composio.toml"),
             Self::Vscode => include_str!("../../templates/mappings/vscode.toml"),
         }
     }

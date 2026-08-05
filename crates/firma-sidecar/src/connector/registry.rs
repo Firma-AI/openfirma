@@ -38,7 +38,7 @@ impl ConnectorRegistry {
     /// host that has not been registered via
     /// [`register_host`](Self::register_host).
     #[must_use]
-    pub(crate) fn new(default: Arc<dyn Connector>) -> Self {
+    pub fn new(default: Arc<dyn Connector>) -> Self {
         Self {
             hosts: HashMap::new(),
             default,

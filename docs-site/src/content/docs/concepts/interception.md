@@ -122,6 +122,19 @@ Hosts not in any list use the configured default (typically CONNECT-only).
 
 For the operator-side workflow — generating the CA, trusting it on the agent host, choosing what to MITM — see [Enable HTTPS MITM](../../guides/https-mitm/).
 
+### Composio requires strict MITM
+
+Composio tool governance depends on the method, path, and JSON body of hosted
+MCP and direct execution requests. Configure both `app.composio.dev` and
+`backend.composio.dev` in `intercept_hosts` and `strict_hosts`. Do not put
+either host in `bypass_hosts`: CONNECT-only traffic hides the tool slug and
+arguments, so OpenFirma cannot evaluate the logical action.
+
+The Composio decoder runs after TLS termination and before generic transport
+mapping. Unsupported execution shapes fail closed instead of falling back to a
+coarse host-level allow. See [Govern Composio tool
+execution](../../guides/composio/) for the full integration.
+
 ## The CA: the most security-sensitive piece
 
 When you enable MITM, the Sidecar mints a CA on first run (under `[ca].dir`). That CA's private key is the most sensitive secret in your OpenFirma deployment: anyone who possesses it can sign certificates that the agent host will trust. Two operational rules:

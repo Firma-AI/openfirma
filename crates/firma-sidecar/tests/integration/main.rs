@@ -1,5 +1,11 @@
 mod capability_reload;
+mod composio_catalog;
+mod composio_cedar;
+mod composio_composite;
+mod composio_mitm_coverage;
+mod composio_protocol;
 mod http_connector;
+mod mapping_rules;
 mod resource_host_rules;
 mod revocation_token_id;
 mod sandbox_identity;

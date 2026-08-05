@@ -487,6 +487,34 @@ impl HttpsMitmConfig {
         self.enabled && !self.intercept_hosts.is_empty()
     }
 
+    /// Sets whether TLS MITM interception is enabled.
+    #[must_use]
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Replaces the host patterns that should be intercepted.
+    #[must_use]
+    pub fn with_intercept_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.intercept_hosts = hosts;
+        self
+    }
+
+    /// Replaces the host patterns that bypass interception.
+    #[must_use]
+    pub fn with_bypass_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.bypass_hosts = hosts;
+        self
+    }
+
+    /// Replaces the host patterns whose interception failures are hard denials.
+    #[must_use]
+    pub fn with_strict_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.strict_hosts = hosts;
+        self
+    }
+
     fn validate(&self) -> Result<(), String> {
         validate_host_patterns(
             "interceptor.https_mitm.intercept_hosts",

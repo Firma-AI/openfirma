@@ -1,0 +1,76 @@
+# Composio execution transport mapping.
+#
+# Both hosts must use strict HTTPS MITM. The focused Composio decoder runs
+# before this coarse mapping, expands supported execution payloads into
+# logical actions, and fails closed on unsupported or ambiguous protocols.
+# These rules keep the transport protected if generic normalization is reached.
+
+[[rules]]
+method = "CONNECT"
+host = "app.composio.dev"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "backend.composio.dev"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "app.composio.dev"
+path = "/tool_router/v3/*/mcp"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "app.composio.dev"
+path = "/tool_router/v3.1/*/mcp"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3/tools/execute/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3.1/tools/execute/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3/tool_router/session/*/execute"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3.1/tool_router/session/*/execute"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3/tool_router/session/*/execute_meta"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3.1/tool_router/session/*/execute_meta"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3/mcp/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "backend.composio.dev"
+path = "/api/v3.1/mcp/*"
+action_class = "communication.external.send"

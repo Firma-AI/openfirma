@@ -33,7 +33,10 @@ Costs:
 
 ## The registry
 
-OpenFirma ships with **44 canonical action classes**. The base 15 come from **FEP v0.1**, the versioned Firma protocol specification that defines the canonical registry and its invariants. The remaining classes extend that base for GitHub (12), Stripe (12), and Gmail (5).
+OpenFirma ships with **48 canonical action classes**. The base 15 come from
+**FEP v0.1**, the versioned Firma protocol specification that defines the
+canonical registry and its invariants. The remaining classes extend that base
+for GitHub (12), Stripe (12), Gmail (5), and Google Calendar (4).
 
 The 15 FEP v0.1 base classes give you a feel for the granularity:
 
@@ -51,7 +54,30 @@ credential.write              payment.purchase
 
 Categories are dotted: `category.subcategory.verb`. The category captures *what kind of capability* (communication, credentials, filesystem, payment, memory, system, and so on). The subcategory and verb capture *the specific action*. A policy can match a single class (`forbid payment.transfer`) or, with Cedar, a set (`action in [filesystem.write, filesystem.delete]`).
 
-The provider-specific extensions (GitHub, Stripe, Gmail) cover endpoints that don't map cleanly onto the FEP base — for example, GitHub's `repo.lifecycle` or Stripe's `payment.refund`. These have their own subtree but follow the same naming rule: still no transport, still no service name in the identifier itself. The *provider* lives elsewhere — see "Resources" below.
+The provider-oriented extensions (GitHub, Stripe, Gmail, Google Calendar) cover
+actions that do not map cleanly onto the FEP base, such as GitHub's
+`repo.lifecycle`, Stripe's `payment.refund`, or `calendar.delete`. These have
+their own semantic subtree but follow the same naming rule: still no transport,
+still no service name in the identifier itself. The *provider* lives elsewhere
+— see "Resources" below.
+
+Calendar classes distinguish reading, creating, updating, and deleting events.
+For example, a scheduling assistant may receive `calendar.read` and
+`calendar.create` while `calendar.update` and `calendar.delete` remain denied.
+This prevents a capability for finding availability from silently becoming a
+capability to cancel or rewrite existing meetings.
+
+Some classes carry escalation channels a policy author should price in:
+
+- `communication.external.filter` covers mail-filter management, and a Gmail
+  filter can forward matching inbound mail to an external address. Granting
+  the class permits setting up that forwarding even when
+  `communication.external.send` is denied. Tools that emit messages
+  themselves (for example a vacation auto-responder with an arbitrary body)
+  are classified `communication.external.send`, not `filter`.
+- `calendar.create` can email invites with arbitrary description text to
+  arbitrary external attendees, so it is an outbound channel even without
+  any `communication.external.*` grant.
 
 ## How a request becomes a class
 
@@ -73,13 +99,19 @@ action_class = "communication.external.send"
 
 `path` may be exact, may contain `*` wildcards, and `host` may use leading wildcards (`*.anthropic.com`). The lookup is deterministic: the first matching rule wins, and tie-breaking is left-to-right specificity.
 
-OpenFirma ships three default mapping files under `crates/firma-sidecar/config/mappings/`:
+OpenFirma ships four provider mapping files under
+`crates/firma-sidecar/config/mappings/`:
 
-| File          | Covers                                       |
-| ------------- | -------------------------------------------- |
-| `github.toml` | GitHub REST + smart HTTP → 12 action classes |
-| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
-| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
+| File            | Covers                                                      |
+| --------------- | ----------------------------------------------------------- |
+| `github.toml`   | GitHub REST + smart HTTP → 12 action classes                |
+| `stripe.toml`   | 88 Stripe REST endpoints → 14 action classes                |
+| `gmail.toml`    | 41 Gmail REST endpoints → 7 action classes                  |
+| `composio.toml` | Composio execution transports and hosted MCP → 1 host class |
+
+`composio.toml` is coarse on purpose: every Composio tool shares the same
+handful of URLs, so the per-tool class comes from the pinned catalogs the
+[Composio guide](../../guides/composio/) describes, not from the path.
 
 You compose them, plus any project-specific rules, in `firma.toml`:
 
@@ -134,6 +166,8 @@ provider: "github"
 | `api.github.com` / `github.com` | `github`   |
 | `api.stripe.com`                | `stripe`   |
 | `gmail.googleapis.com`          | `gmail`    |
+| `app.composio.dev`              | `composio` |
+| `backend.composio.dev`          | `composio` |
 
 This split is intentional. Identifying the provider lets policies write rules like "no Stripe transfers above a threshold" without binding the rule to a specific URL path. Not setting it for unknown hosts keeps the namespace honest — the Sidecar refuses to guess.
 

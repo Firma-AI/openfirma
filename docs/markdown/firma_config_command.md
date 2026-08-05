@@ -92,6 +92,7 @@ preserved unless `--force` is set.
 | `pypi`      | pypi.org, files.pythonhosted.org — PyPI                                      |
 | `cargo`     | crates.io, static.crates.io — Rust package registry                          |
 | `stripe`    | api.stripe.com — Stripe REST API                                             |
+| `composio`  | app.composio.dev, backend.composio.dev — governed tool execution with MITM   |
 
 ## Scaffolded layout
 

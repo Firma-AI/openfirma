@@ -9,12 +9,51 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{self, InterceptorMode};
+use crate::composio::PROTECTED_HOSTS;
+use crate::config::{self, HttpsMitmConfig, InterceptorMode};
 use crate::handler::RequestHandler;
+use crate::interceptor::https_mitm::{host_matches_any, normalize_patterns};
 use crate::interceptor::{self, Interceptor as _};
 
 fn is_loopback_addr(addr: std::net::SocketAddr) -> bool {
     addr.ip().is_loopback()
+}
+
+/// Report HTTPS MITM configuration gaps that would blind Composio governance.
+///
+/// The pinned Composio catalogs are always compiled in, but the decoder only
+/// sees traffic the proxy actually terminates. Each returned string describes
+/// one gap: MITM inactive, a protected host bypassed, not intercepted, or
+/// intercepted without strict mode (where a TLS failure falls back to an
+/// opaque tunnel). An empty result means both protected hosts are covered.
+#[must_use]
+pub fn composio_mitm_coverage_warnings(mitm: &HttpsMitmConfig) -> Vec<String> {
+    if !mitm.is_active() {
+        return vec![format!(
+            "HTTPS MITM is inactive; Composio traffic to {} will tunnel opaquely and cannot be governed",
+            PROTECTED_HOSTS.join(" and "),
+        )];
+    }
+    let intercept = normalize_patterns(&mitm.intercept_hosts);
+    let bypass = normalize_patterns(&mitm.bypass_hosts);
+    let strict = normalize_patterns(&mitm.strict_hosts);
+    let mut warnings = Vec::new();
+    for host in PROTECTED_HOSTS {
+        if host_matches_any(host, &bypass) {
+            warnings.push(format!(
+                "{host} is listed in interceptor.https_mitm.bypass_hosts; bypassed Composio traffic cannot be decoded or governed"
+            ));
+        } else if !host_matches_any(host, &intercept) {
+            warnings.push(format!(
+                "{host} is not matched by interceptor.https_mitm.intercept_hosts; Composio tool calls will pass through as opaque tunnels"
+            ));
+        } else if !host_matches_any(host, &strict) {
+            warnings.push(format!(
+                "{host} is intercepted but not in interceptor.https_mitm.strict_hosts; a TLS failure would fall back to an opaque tunnel"
+            ));
+        }
+    }
+    warnings
 }
 
 pub struct SpawnedInterceptor {

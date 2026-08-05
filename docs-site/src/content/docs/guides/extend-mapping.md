@@ -56,11 +56,22 @@ action_class = "payment.transfer"
 Field-by-field:
 
 - **`method`** — uppercase HTTP verb. For HTTPS-tunneled traffic where you only have CONNECT-level visibility, use `"CONNECT"` here (see [HTTPS MITM](../https-mitm/) for the difference).
-- **`host`** — exact match unless prefixed with `*.` for a single-label wildcard (`*.acme-saas.com` matches `api.acme-saas.com` and `auth.acme-saas.com` but *not* `api.dev.acme-saas.com`).
-- **`path`** — exact match, with `*` as a wildcard for any single segment, and trailing `*` for "anything from here".
+- **`host`** — exact match unless it contains `*`, which matches any sequence
+  of characters *including dots*: `*.acme-saas.com` matches
+  `api.acme-saas.com`, `auth.acme-saas.com`, **and** `api.dev.acme-saas.com`.
+  There is no single-label form; if you need to exclude deeper subdomains,
+  write exact hosts. Hosts are normalized at load time (lowercased, trailing
+  dots stripped on either side of the port, default `:443`/`:80` port
+  removed, nonstandard ports kept) to match how request hosts arrive, and
+  two rules whose hosts differ only in that spelling count as duplicates and
+  fail startup. Degenerate patterns that would silently normalize into a
+  catch-all (such as `*.` or `*:443`) or into an empty name (such as
+  `:443`) are rejected at startup; write `*` explicitly if you mean it.
+- **`path`** — exact match unless it contains `*`, which likewise crosses
+  `/` separators; a trailing `*` means "anything from here".
 - **`action_class`** — must match an identifier from the action-class registry.
 
-For wildcards, prefer specificity. `path = "*"` matches everything; `path = "/api/v1/*"` matches just under v1; `path = "/api/v1/users/*/notify"` matches a precise shape.
+For wildcards, prefer specificity. `path = "*"` matches everything; `path = "/api/v1/*"` matches anything under v1 at any depth; `path = "/api/v1/users/*/notify"` matches that shape with any middle section.
 
 ## Step 3: Merge the file into the Sidecar config
 

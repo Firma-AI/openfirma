@@ -19,7 +19,7 @@
 //! `DENY: UNCLASSIFIED_INTENT` and no Connector dispatch occurs (fail-closed).
 //! Conforms to the FEP \[I-N1\] enforcement invariant.
 
-mod mapping;
+pub(crate) mod mapping;
 
 use std::collections::{BTreeMap, HashMap};
 use std::str;
@@ -98,6 +98,30 @@ const DEFAULT_SENSITIVE_QUERY_PARAMS: &[&str] = &[
 pub struct NormalizedEnvelope {
     pub(crate) intent: ExecutionIntent,
     pub(crate) timestamp: DateTime<Utc>,
+}
+
+impl NormalizedEnvelope {
+    /// Creates a normalized envelope from an already canonical intent.
+    ///
+    /// The normalizer builds envelopes from raw requests; this constructor
+    /// exists for callers that hold a canonical [`ExecutionIntent`] and the
+    /// observation time it was captured at.
+    #[must_use]
+    pub fn new(intent: ExecutionIntent, timestamp: DateTime<Utc>) -> Self {
+        Self { intent, timestamp }
+    }
+
+    /// Returns the canonical intent carried by this envelope.
+    #[must_use]
+    pub fn intent(&self) -> &ExecutionIntent {
+        &self.intent
+    }
+
+    /// Returns the time the underlying request was observed.
+    #[must_use]
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        self.timestamp
+    }
 }
 
 /// Raw intercepted request — the input to the enforcement pipeline.
@@ -663,26 +687,24 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
 ///
 /// DNS names are ASCII case-insensitive (RFC 4343) and a trailing dot
 /// denotes a fully-qualified name with no semantic difference to the bare
-/// host. A default port (`:443` / `:80`) is also stripped so that
-/// `api.openai.com:443`, `api.openai.com:80`, and `api.openai.com` all match
-/// rules written for the bare host. IPv6 literals (`[::1]`, `[::1]:443`) are
-/// lowercased but otherwise preserved.
+/// host — including when a port hides it (`host.:8443`). A default port
+/// (`:443` / `:80`) is also stripped so that `api.openai.com:443`,
+/// `api.openai.com:80`, and `api.openai.com` all match rules written for
+/// the bare host; nonstandard ports are preserved. IPv6 literals (`[::1]`,
+/// `[::1]:443`) are lowercased but otherwise preserved.
 ///
 /// This runs on the hot path in [`IntentNormalizer::normalize`] before the
 /// mapping-table lookup so that an attacker cannot evade host-scoped rules by
 /// varying the case, trailing dot, or default port of the `Host` header.
+/// Delegates to the same normalization applied to rule host patterns at load
+/// time, so a request host and a rule host can never disagree in form.
 fn normalize_host(host: &str) -> String {
     let trimmed = host.trim();
     // IPv6 literal: lowercase only; preserve brackets and any port.
     if trimmed.starts_with('[') {
         return trimmed.to_ascii_lowercase();
     }
-    let lower = trimmed.trim_end_matches('.').to_ascii_lowercase();
-    let without_default_port = lower
-        .strip_suffix(":443")
-        .or_else(|| lower.strip_suffix(":80"))
-        .unwrap_or(&lower);
-    without_default_port.to_string()
+    mapping::normalize_host_pattern(trimmed)
 }
 
 /// Normalize a request path according to the canonicalization rules:
