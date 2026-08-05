@@ -13,7 +13,9 @@ rustup toolchain install --profile minimal
 
 if ! command -v just >/dev/null 2>&1; then
   echo "Installing just..."
-  cargo install --locked just
+  mkdir -p "$HOME/.local/bin"
+  curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh |
+    bash -s -- --to "$HOME/.local/bin"
 fi
 
 just install
