@@ -30,7 +30,7 @@ The decoder recognizes:
 
 Recognized read-only discovery requests (tool listings, toolkit metadata,
 session reads, MCP session streams and teardown) can pass without tool-action
-evaluation. Account-lifecycle writes are governed, not passed through:
+evaluation. Account-lifecycle requests are governed, not passed through:
 `POST`/`PATCH`/`PUT`/`DELETE` on the `connected_accounts` and `auth_configs`
 routes, writes to the Tool Router session `link` route, and
 `PATCH`/`PUT`/`DELETE` on a Tool Router `session/{id}` resource (all under
@@ -178,7 +178,30 @@ judgement calls worth knowing when authoring policies:
 - `GOOGLECALENDAR_BATCH_EVENTS` multiplexes create, update, and delete in
   one call. It is pinned to `calendar.delete`, the highest-risk operation it
   can perform, so a capability that excludes deletes can never reach it —
-  but a delete-only grant does let it create or update events.
+  but a delete-only grant does let it create or update events. The decoder
+  does not split it per operation the way it splits
+  `COMPOSIO_MULTI_EXECUTE_TOOL`, because the batch shape is provider-specific
+  and its children are not individually addressable tools.
+- Slack's canvas-specific read, list, and delete tools are deprecated
+  upstream in favor of generic file tools. Those replacements —
+  `SLACK_RETRIEVE_DETAILED_INFORMATION_ABOUT_A_FILE`,
+  `SLACK_LIST_FILES_WITH_FILTERS_IN_SLACK`, and `SLACK_DELETE_FILE` — stay
+  under `communication.external.*` because they act on Slack files in
+  general, not canvases, and raising them to `document.*` would
+  over-classify routine attachment access. A policy meant to block canvas
+  access entirely must name those three as well; Composio exposes no
+  canvas-only equivalent, and the Sidecar cannot tell a canvas from an
+  attachment without inspecting the file at runtime.
+- `GMAIL_CREATE_PROMPT_POST` and `GMAIL_UPDATE_USER_ATTRIBUTES_VALUES` are
+  Sanity CMS tools that Composio files under the `gmail` toolkit. Their
+  descriptions mention the Sanity Content Agent and SAML value precedence,
+  nothing Gmail-specific. They keep conservative classes and a
+  `composio://gmail/...` resource, so the surprising toolkit is an upstream
+  data-quality artifact rather than a classification gap.
+- The Notion catalog has no `account.permission.change` entry. None of its
+  56 tools manages sharing or permissions directly; Notion permissions
+  inherit from the parent page. The absence reflects the toolkit surface,
+  not an unreviewed area.
 
 ## Cedar policy
 

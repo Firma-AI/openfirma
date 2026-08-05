@@ -10,6 +10,12 @@ tool action.
 
 ## Configure the mapping
 
+Composio governance is not opt-in: the pinned catalogs and the protocol
+decoder load with every Sidecar, whether or not the `composio` mapping pack is
+installed. Installing the pack adds the HTTPS interception hosts and the
+startup coverage warning below; removing it does not turn Composio decoding
+off.
+
 Add the built-in mapping to an existing project:
 
 ```bash
@@ -22,10 +28,15 @@ The generated configuration enables strict HTTPS interception for
 
 The Sidecar cross-checks this at startup: when the mapping rules reference
 the Composio hosts but the HTTPS MITM configuration leaves them bypassed,
-unintercepted, or non-strict, it logs one warning per gap so a
-misconfiguration cannot silently downgrade governance to opaque tunnels.
-Wildcard and catch-all rule hosts count as referencing the Composio hosts,
-because such rules do govern that traffic at runtime.
+unintercepted, or non-strict, it logs a warning per affected host so a
+misconfiguration cannot silently downgrade governance to opaque tunnels. When
+HTTPS MITM is off altogether, that becomes a single combined warning naming
+both hosts. Wildcard and catch-all rule hosts count as referencing the
+Composio hosts, because such rules do govern that traffic at runtime.
+
+The check only runs in the HTTP-proxy interceptor mode. Under any other
+`interceptor.mode` it is silently skipped, so verify interception coverage
+by hand there.
 
 Continue to run your chosen command:
 
@@ -166,11 +177,26 @@ denial instead of breaking only on tool calls. Recognized routes accept only
 read methods (plus `DELETE` for MCP session teardown); anything else fails
 closed.
 
-One sharp edge in the Notion mapping: `NOTION_REPLACE_PAGE_CONTENT` overwrites a
-whole page but is classified `document.write`, matching how `filesystem.write`
-covers "create or overwrite". A policy meant to block destructive edits must
-cover `document.write` or name that slug; `document.delete` alone does not
-catch it.
+Three sharp edges are worth knowing before writing policy.
+
+`NOTION_REPLACE_PAGE_CONTENT` overwrites a whole page but is classified
+`document.write`, matching how `filesystem.write` covers "create or
+overwrite". A policy meant to block destructive edits must cover
+`document.write` or name that slug; `document.delete` alone does not catch it.
+
+`GOOGLECALENDAR_BATCH_EVENTS` performs a mixed batch of create, update, and
+delete operations in one call. It is classified at the highest applicable
+tier, `calendar.delete`, rather than split per operation, so granting that
+class for this slug also permits event creation and modification in the same
+call.
+
+Slack's canvas-specific read, list, and delete tools are deprecated upstream in
+favor of generic file tools. Those replacements —
+`SLACK_RETRIEVE_DETAILED_INFORMATION_ABOUT_A_FILE`,
+`SLACK_LIST_FILES_WITH_FILTERS_IN_SLACK`, and `SLACK_DELETE_FILE` — stay under
+`communication.external.*` because they act on Slack files in general, not
+canvases. A policy meant to block canvas access entirely must name those three
+as well; Composio exposes no canvas-only equivalent of them.
 
 ## Audit safety
 
