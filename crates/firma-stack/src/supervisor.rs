@@ -18,6 +18,14 @@ use crate::error::Result;
 use crate::platform::TerminationTarget;
 use firma_runtime_state::{ChildExt as _, UserProcessId};
 
+/// Operation that starts a thread owning one component-reaper job.
+///
+/// Keeping thread creation separate from [`collect_in_background_with`] lets
+/// [`crate::start::RunningStack`] retain the operation until it relinquishes
+/// its [`OwnedComponent`] capabilities.
+pub type ReaperLauncher =
+    fn(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>;
+
 /// Persisted component identities available to a detached observer.
 ///
 /// This value grants no child-collection or process-termination authority.
@@ -182,11 +190,16 @@ impl ReaperStartError {
 pub fn collect_in_background(
     components: Vec<OwnedComponent>,
 ) -> std::result::Result<std::thread::JoinHandle<()>, ReaperStartError> {
-    collect_in_background_with(components, |job| {
-        std::thread::Builder::new()
-            .name("firma-component-reaper".into())
-            .spawn(job)
-    })
+    collect_in_background_with(components, launch_reaper)
+}
+
+/// Start a named thread that owns one component-reaper job.
+pub fn launch_reaper(
+    job: Box<dyn FnOnce() + Send>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("firma-component-reaper".into())
+        .spawn(job)
 }
 
 /// Start a component reaper through the supplied thread-spawn operation.
