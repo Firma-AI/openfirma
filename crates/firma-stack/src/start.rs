@@ -24,8 +24,9 @@ use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{
-    ObservedChildren, block_until_observed_exit, block_until_owned_exit,
+    ObservedChildren, ReaperLauncher, block_until_observed_exit, block_until_owned_exit,
     collect_child_in_background, collect_child_until, collect_in_background,
+    collect_in_background_with, launch_reaper,
 };
 use firma_runtime_state::{UserProcessId, pidfile};
 
@@ -78,6 +79,7 @@ struct OwnedStack {
     authority: OwnedComponent,
     sidecar: OwnedComponent,
     state_dir: PathBuf,
+    reaper_launcher: ReaperLauncher,
 }
 
 /// Ownership states for an in-process stack.
@@ -291,6 +293,16 @@ impl RunningStack {
         sidecar: OwnedComponent,
         state_dir: PathBuf,
     ) -> Self {
+        Self::from_components_with_reaper_launcher(authority, sidecar, state_dir, launch_reaper)
+    }
+
+    /// Construct the sole running owner with a caller-supplied reaper launcher.
+    pub(crate) fn from_components_with_reaper_launcher(
+        authority: OwnedComponent,
+        sidecar: OwnedComponent,
+        state_dir: PathBuf,
+        reaper_launcher: ReaperLauncher,
+    ) -> Self {
         let handle = StackHandle {
             authority_pid: authority.leader_pid(),
             sidecar_pid: sidecar.leader_pid(),
@@ -301,6 +313,7 @@ impl RunningStack {
                 authority,
                 sidecar,
                 state_dir,
+                reaper_launcher,
             }),
         }
     }
@@ -358,7 +371,10 @@ impl RunningStack {
     fn transfer_to_observer(&mut self) -> bool {
         let state = std::mem::replace(&mut self.state, RunningStackState::Stopped);
         if let RunningStackState::Owned(owned) = state {
-            return match collect_in_background(vec![owned.authority, owned.sidecar]) {
+            return match collect_in_background_with(
+                vec![owned.authority, owned.sidecar],
+                owned.reaper_launcher,
+            ) {
                 Ok(_) => true,
                 Err(error) => {
                     debug!(error = %error.source(), "could not transfer components to background reaper");

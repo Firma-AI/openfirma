@@ -18,6 +18,29 @@ enum SupervisorExitPhase {
     AfterReady,
 }
 
+#[cfg(unix)]
+struct ProcessGroupCleanup(Option<nix::unistd::Pid>);
+
+#[cfg(unix)]
+impl ProcessGroupCleanup {
+    fn new(pid: u32) -> Self {
+        Self(i32::try_from(pid).ok().map(nix::unistd::Pid::from_raw))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupCleanup {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
+        }
+    }
+}
+
 #[test]
 fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let dir = tempfile::tempdir().expect("state dir");
@@ -40,6 +63,28 @@ fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
         .expect("repeated owned shutdown");
 
     assert!(!repeated.forced);
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+    assert!(!state_dir.join("stack.lock").exists());
+}
+
+/// Successful shutdown consumes process ownership, so dropping the stopped
+/// handle must not attempt to transfer those capabilities to a reaper.
+#[test]
+fn owned_shutdown_disarms_reaper_transfer() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
+
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    let mut stack = firma_stack::test_support::running_stack_from_raw_with_forbidden_reaper(
+        state_dir, authority, sidecar,
+    );
+
+    stack.shutdown(Duration::ZERO).expect("owned shutdown");
+    drop(stack);
+
     assert_process_absent(authority_pid);
     assert_process_absent(sidecar_pid);
     assert!(!state_dir.join("stack.lock").exists());
@@ -105,6 +150,107 @@ fn reaper_start_failure_terminates_and_collects_owned_children() {
 
     assert_process_absent(authority_pid);
     assert_process_absent(sidecar_pid);
+}
+
+/// Dropping the in-process owner exercises the production transfer boundary:
+/// if its reaper cannot start, both children are synchronously terminated and
+/// collected while runtime state remains available for external cleanup.
+#[test]
+fn dropping_owner_falls_back_when_reaper_cannot_start() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    let stack = firma_stack::test_support::running_stack_from_raw_with_reaper_start_failure(
+        state_dir, authority, sidecar,
+    );
+
+    drop(stack);
+
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+    assert!(state_dir.join("stack.lock").exists());
+    assert!(state_dir.join("authority.pid").exists());
+    assert!(state_dir.join("sidecar.pid").exists());
+
+    firma_stack::stop(state_dir, Duration::ZERO).expect("clean retained runtime state");
+    assert!(!state_dir.join("stack.lock").exists());
+    assert!(!state_dir.join("authority.pid").exists());
+    assert!(!state_dir.join("sidecar.pid").exists());
+}
+
+/// On Unix, failed ownership transfer must retain the process-group capability,
+/// not merely the direct-child handle, so synchronous fallback also terminates
+/// a descendant that ignores graceful termination.
+#[cfg(unix)]
+#[test]
+fn failed_reaper_transfer_terminates_owned_process_group() {
+    use std::fs::OpenOptions;
+    use std::io::{ErrorKind, Read as _};
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
+    let liveness_fifo = state_dir.join("descendant.liveness");
+    let ready_marker = state_dir.join("descendant.ready");
+    nix::unistd::mkfifo(
+        &liveness_fifo,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .expect("create liveness FIFO");
+    let mut liveness_reader = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(&liveness_fifo)
+        .expect("open liveness FIFO");
+
+    let mut authority_command = Command::new("sh");
+    authority_command
+        .args([
+            "-c",
+            "trap 'wait \"$descendant\"; exit 0' TERM; \
+             sh -c \"$DESCENDANT_SCRIPT\" & descendant=$!; wait \"$descendant\"",
+        ])
+        .env(
+            "DESCENDANT_SCRIPT",
+            "trap '' TERM; exec 3>\"$LIVENESS_FIFO\"; \
+             printf ready > \"$READY_MARKER\"; while :; do sleep 1; done",
+        )
+        .env("LIVENESS_FIFO", &liveness_fifo)
+        .env("READY_MARKER", &ready_marker);
+    let authority = firma_stack::test_support::spawn_raw_owned_into_group(
+        state_dir,
+        "authority",
+        &mut authority_command,
+    )
+    .expect("spawn authority process group");
+    let mut cleanup = ProcessGroupCleanup::new(authority.id());
+    wait_for_file(&ready_marker);
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    let stack = firma_stack::test_support::running_stack_from_raw_with_reaper_start_failure(
+        state_dir, authority, sidecar,
+    );
+
+    drop(stack);
+
+    assert_process_absent(sidecar_pid);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let fifo_closed = loop {
+        match liveness_reader.read(&mut [0_u8; 1]) {
+            Ok(0) => break true,
+            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            _ => break false,
+        }
+    };
+    assert!(fifo_closed, "descendant still holds its liveness FIFO");
+    cleanup.disarm();
+
+    firma_stack::stop(state_dir, Duration::ZERO).expect("clean retained runtime state");
 }
 
 #[test]
@@ -327,6 +473,15 @@ fn wait_for_marker(path: &Path) -> u32 {
         if let Ok(contents) = std::fs::read_to_string(path) {
             return contents.trim().parse().expect("fixture PID");
         }
+        assert!(Instant::now() < deadline, "fixture did not become ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_file(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() {
         assert!(Instant::now() < deadline, "fixture did not become ready");
         std::thread::sleep(Duration::from_millis(10));
     }

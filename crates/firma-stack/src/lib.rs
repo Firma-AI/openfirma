@@ -151,6 +151,36 @@ pub mod test_support {
         )
     }
 
+    /// Construct an owned running stack whose component reaper cannot start.
+    #[must_use]
+    pub fn running_stack_from_raw_with_reaper_start_failure(
+        state_dir: &std::path::Path,
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> crate::RunningStack {
+        crate::RunningStack::from_components_with_reaper_launcher(
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            state_dir.to_path_buf(),
+            fail_reaper_start,
+        )
+    }
+
+    /// Construct an owned running stack that must never launch a component reaper.
+    #[must_use]
+    pub fn running_stack_from_raw_with_forbidden_reaper(
+        state_dir: &std::path::Path,
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> crate::RunningStack {
+        crate::RunningStack::from_components_with_reaper_launcher(
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            state_dir.to_path_buf(),
+            forbid_reaper_start,
+        )
+    }
+
     /// Forcefully terminate a raw process using the stack platform abstraction.
     ///
     /// # Errors
@@ -220,5 +250,21 @@ pub mod test_support {
             leader_pid,
             crate::platform::TerminationTarget::for_leader(leader_pid),
         )
+    }
+
+    fn fail_reaper_start(
+        _: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        Err(std::io::Error::other("injected reaper start failure"))
+    }
+
+    #[expect(
+        clippy::panic,
+        reason = "this test-only launcher is a negative assertion"
+    )]
+    fn forbid_reaper_start(
+        _: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        panic!("component reaper must not start after owned shutdown")
     }
 }
