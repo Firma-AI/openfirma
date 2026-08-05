@@ -133,19 +133,43 @@ impl ReaperStartError {
     /// Hard-terminate and synchronously collect the recovered components.
     ///
     /// This is the fail-closed fallback for callers, such as [`Drop`]
-    /// implementations, that cannot return ownership to their own caller. Each
-    /// [`OwnedComponent`] remains represented until its direct child receives a
-    /// bounded collection attempt.
-    pub fn terminate_and_collect(self, timeout: Duration) {
+    /// implementations, that cannot return ownership to their own caller. It
+    /// deliberately waits without a deadline: after reaper creation fails,
+    /// returning early would discard the only handles capable of reaping the
+    /// direct children. Every [`OwnedComponent`] remains represented until its
+    /// direct child is collected or reports an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first child collection error after attempting to terminate
+    /// and collect every recovered component.
+    pub fn terminate_and_collect(self) -> std::io::Result<()> {
         let mut components = self.into_components();
         for component in &mut components {
-            let _ = component.termination_target().signal_hard();
-            let _ = component.kill_leader();
+            if let Err(error) = component.termination_target().signal_hard() {
+                warn!(role = component.role().name(), %error, "fallback process-tree termination failed");
+            }
+            if let Err(error) = component.kill_leader() {
+                debug!(role = component.role().name(), %error, "fallback leader termination failed");
+            }
         }
-        let deadline = std::time::Instant::now() + timeout;
+
+        let mut collection_error = None;
         for component in &mut components {
-            let _ = collect_child_until(component.child_mut(), deadline);
+            if let Err(error) = component.wait() {
+                if child_was_collected_externally(&error) {
+                    continue;
+                }
+                warn!(role = component.role().name(), %error, "fallback child collection failed");
+                if collection_error.is_none() {
+                    collection_error = Some(error);
+                }
+            }
         }
+        if let Some(error) = collection_error {
+            return Err(error);
+        }
+        Ok(())
     }
 }
 

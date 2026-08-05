@@ -274,7 +274,9 @@ fn rollback_startup_components(mut components: Vec<OwnedComponent>, state_dir: &
             debug!("startup rollback retained runtime state for a later cleanup attempt");
             if let Err(error) = collect_in_background(components) {
                 debug!(error = %error.source(), "could not start rollback component reaper");
-                error.terminate_and_collect(Duration::from_secs(2));
+                if let Err(error) = error.terminate_and_collect() {
+                    debug!(%error, "could not synchronously collect rollback components");
+                }
             }
             return;
         }
@@ -360,7 +362,9 @@ impl RunningStack {
                 Ok(_) => true,
                 Err(error) => {
                     debug!(error = %error.source(), "could not transfer components to background reaper");
-                    error.terminate_and_collect(Duration::from_secs(2));
+                    if let Err(error) = error.terminate_and_collect() {
+                        debug!(%error, "could not synchronously collect transferred components");
+                    }
                     false
                 }
             };
