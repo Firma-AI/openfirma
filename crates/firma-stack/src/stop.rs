@@ -62,6 +62,148 @@ struct StopTargets<'a> {
     sidecar: Option<&'a TerminationTarget>,
 }
 
+/// Sans-I/O policy for one graceful-to-forced teardown attempt.
+///
+/// [`TeardownPolicy`] receives normalized observations from [`stop_inner`] and
+/// retains only the decisions that must remain stable across operating systems:
+/// probe uncertainty is possible presence, the first teardown error wins, and
+/// cleanup is authorized only after every target is proven absent. Process
+/// collection, signalling, deadlines, and state removal remain with the caller.
+pub(crate) struct TeardownPolicy<E> {
+    first_teardown_error: Option<E>,
+    first_hard_error: Option<E>,
+    forced: bool,
+}
+
+/// Normalized result of probing one teardown target.
+pub(crate) enum Presence<E> {
+    /// The target is proven absent.
+    Absent,
+    /// The target remains present.
+    Present,
+    /// Presence is unknown and teardown must fail closed with the supplied error.
+    Unknown(E),
+}
+
+/// Result of requesting forced termination from one target.
+pub(crate) enum HardObservation<E> {
+    /// The target accepted the forced request.
+    Accepted,
+    /// Delivery failed and the follow-up probe either did or did not prove absence.
+    Failed {
+        error: E,
+        confirmed_absent_afterward: bool,
+    },
+}
+
+/// Next action after a graceful-phase observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GraceDecision {
+    /// Every target is absent, so teardown may proceed to cleanup.
+    Complete,
+    /// Continue collecting and probing until the graceful deadline.
+    Poll,
+    /// Enter forced teardown because the deadline elapsed or an observation failed.
+    Escalate,
+}
+
+/// Next action after a forced-settlement observation.
+pub(crate) enum SettlementDecision<E> {
+    /// Continue collecting and probing until the settlement deadline.
+    Poll,
+    /// Every target is absent and cleanup is authorized.
+    Complete { forced: bool },
+    /// Teardown could not prove safe cleanup.
+    Fail(E),
+}
+
+impl<E> TeardownPolicy<E> {
+    /// Begin teardown without any observations or accepted forced requests.
+    pub(crate) const fn new() -> Self {
+        Self {
+            first_teardown_error: None,
+            first_hard_error: None,
+            forced: false,
+        }
+    }
+
+    /// Retain the first direct-child collection failure.
+    pub(crate) fn observe_collection(&mut self, result: std::result::Result<(), E>) {
+        if let Err(error) = result
+            && self.first_teardown_error.is_none()
+        {
+            self.first_teardown_error = Some(error);
+        }
+    }
+
+    /// Classify whether a target may remain and retain probe uncertainty.
+    pub(crate) fn target_may_exist(&mut self, presence: Presence<E>) -> bool {
+        match presence {
+            Presence::Absent => false,
+            Presence::Present => true,
+            Presence::Unknown(error) => {
+                if self.first_teardown_error.is_none() {
+                    self.first_teardown_error = Some(error);
+                }
+                true
+            }
+        }
+    }
+
+    /// Decide whether graceful teardown may complete or must escalate.
+    pub(crate) fn decide_grace(&self, all_absent: bool, deadline_elapsed: bool) -> GraceDecision {
+        if self.first_teardown_error.is_some() || deadline_elapsed {
+            GraceDecision::Escalate
+        } else if all_absent {
+            GraceDecision::Complete
+        } else {
+            GraceDecision::Poll
+        }
+    }
+
+    /// Retain accepted forced termination and unsuppressed delivery failures.
+    pub(crate) fn observe_hard(&mut self, observation: HardObservation<E>) {
+        match observation {
+            HardObservation::Accepted => self.forced = true,
+            HardObservation::Failed {
+                error,
+                confirmed_absent_afterward,
+            } => {
+                if !confirmed_absent_afterward && self.first_hard_error.is_none() {
+                    self.first_hard_error = Some(error);
+                }
+            }
+        }
+    }
+
+    /// Decide whether forced teardown may complete, must keep polling, or failed.
+    pub(crate) fn decide_settlement(
+        &mut self,
+        all_absent: bool,
+        deadline_elapsed: bool,
+        timeout_error: impl FnOnce() -> E,
+    ) -> SettlementDecision<E> {
+        if all_absent {
+            return match self.first_teardown_error.take() {
+                Some(error) => SettlementDecision::Fail(error),
+                None => SettlementDecision::Complete {
+                    forced: self.forced,
+                },
+            };
+        }
+        if !deadline_elapsed {
+            return SettlementDecision::Poll;
+        }
+        if let Some(error) = self.first_teardown_error.take() {
+            return SettlementDecision::Fail(error);
+        }
+        if let Some(error) = self.first_hard_error.take() {
+            return SettlementDecision::Fail(error);
+        }
+        SettlementDecision::Fail(timeout_error())
+    }
+}
+
 /// Result of a [`stop`] call.
 #[derive(Debug, Clone)]
 pub struct StopOutcome {
@@ -213,12 +355,13 @@ fn stop_inner(
     // gRPC streams to the authority close cleanly; that lets the authority's
     // tonic graceful shutdown finish instead of blocking on long-lived
     // server-streaming RPCs.
-    let mut teardown_error = collect_owned().err();
+    let mut policy = TeardownPolicy::new();
+    policy.observe_collection(collect_owned());
     for target in [targets.sidecar, targets.stack, targets.authority]
         .into_iter()
         .flatten()
     {
-        if target_may_exist(target, &mut teardown_error) {
+        if target_may_exist(target, &mut policy) {
             debug!(id = %target.stored_id(), "sending soft signal");
             if let Err(e) = target.signal_soft() {
                 // Not fatal: hard-kill will still run after the grace window.
@@ -231,95 +374,92 @@ fn stop_inner(
 
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
-    while teardown_error.is_none() && Instant::now() < deadline {
-        if let Err(error) = collect_owned() {
-            teardown_error = Some(error);
+    loop {
+        if policy.decide_grace(false, Instant::now() >= deadline) == GraceDecision::Escalate {
             break;
         }
-        if targets_absent(
-            [targets.sidecar, targets.stack, targets.authority],
-            &mut teardown_error,
-        ) {
-            info!("all component targets exited cleanly");
-            cleanup(state_dir, state_lease, cleanup_lock)?;
-            return Ok(StopOutcome { forced: false });
+        policy.observe_collection(collect_owned());
+        if policy.decide_grace(false, false) == GraceDecision::Escalate {
+            break;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        let all_absent = targets_absent(
+            [targets.sidecar, targets.stack, targets.authority],
+            &mut policy,
+        );
+        match policy.decide_grace(all_absent, false) {
+            GraceDecision::Complete => {
+                info!("all component targets exited cleanly");
+                cleanup(state_dir, state_lease, cleanup_lock)?;
+                return Ok(StopOutcome { forced: false });
+            }
+            GraceDecision::Poll => std::thread::sleep(Duration::from_millis(50)),
+            GraceDecision::Escalate => {
+                // Preserve the final grace interval after probe uncertainty.
+                std::thread::sleep(Duration::from_millis(50));
+                break;
+            }
+        }
     }
 
     // Hard-kill survivors. This is the expected path for components that
     // hang in their own graceful-shutdown logic; not an error.
-    if let Err(error) = collect_owned()
-        && teardown_error.is_none()
-    {
-        teardown_error = Some(error);
-    }
-    let mut forced = false;
-    let mut hard_termination_error = None;
+    policy.observe_collection(collect_owned());
     for target in [targets.stack, targets.authority, targets.sidecar]
         .into_iter()
         .flatten()
     {
-        if target_may_exist(target, &mut teardown_error) {
+        if target_may_exist(target, &mut policy) {
             info!(id = %target.stored_id(), "soft-signal grace exceeded; hard-killing");
             match target.signal_hard() {
-                Ok(()) => forced = true,
+                Ok(()) => policy.observe_hard(HardObservation::Accepted),
                 Err(error) => {
-                    if let Err(collect_error) = collect_owned()
-                        && teardown_error.is_none()
-                    {
-                        teardown_error = Some(collect_error);
-                    }
-                    if !matches!(target.exists(), Ok(false)) {
+                    policy.observe_collection(collect_owned());
+                    let confirmed_absent_afterward = matches!(target.exists(), Ok(false));
+                    if !confirmed_absent_afterward {
                         info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
-                        if hard_termination_error.is_none() {
-                            hard_termination_error = Some(error);
-                        }
                     }
+                    policy.observe_hard(HardObservation::Failed {
+                        error,
+                        confirmed_absent_afterward,
+                    });
                 }
             }
         }
     }
     let settlement_deadline = Instant::now() + HARD_TERMINATION_SETTLEMENT;
-    let targets_disappeared = loop {
-        if let Err(error) = collect_owned()
-            && teardown_error.is_none()
-        {
-            teardown_error = Some(error);
-        }
-        if targets_absent(
+    loop {
+        policy.observe_collection(collect_owned());
+        let all_absent = targets_absent(
             [targets.sidecar, targets.stack, targets.authority],
-            &mut teardown_error,
-        ) {
-            break true;
+            &mut policy,
+        );
+        match policy.decide_settlement(all_absent, Instant::now() >= settlement_deadline, || {
+            StackError::TerminationTimeout {
+                timeout_secs: HARD_TERMINATION_SETTLEMENT.as_secs(),
+            }
+        }) {
+            SettlementDecision::Poll => std::thread::sleep(Duration::from_millis(50)),
+            SettlementDecision::Complete { forced } => {
+                cleanup(state_dir, state_lease, cleanup_lock)?;
+                info!(forced, "stop complete");
+                return Ok(StopOutcome { forced });
+            }
+            SettlementDecision::Fail(error) => {
+                info!(%error, "teardown incomplete; retaining runtime state");
+                return Err(error);
+            }
         }
-        if Instant::now() >= settlement_deadline {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    if !targets_disappeared && teardown_error.is_none() {
-        teardown_error = hard_termination_error.or(Some(StackError::TerminationTimeout {
-            timeout_secs: HARD_TERMINATION_SETTLEMENT.as_secs(),
-        }));
     }
-    if let Some(error) = teardown_error {
-        info!(%error, "teardown incomplete; retaining runtime state");
-        return Err(error);
-    }
-    cleanup(state_dir, state_lease, cleanup_lock)?;
-    info!(forced, "stop complete");
-    Ok(StopOutcome { forced })
 }
 
 /// Prove that every recorded target is absent under [`target_may_exist`] policy.
 fn targets_absent<const N: usize>(
     targets: [Option<&TerminationTarget>; N],
-    teardown_error: &mut Option<StackError>,
+    policy: &mut TeardownPolicy<StackError>,
 ) -> bool {
     let mut all_absent = true;
     for target in targets.into_iter().flatten() {
-        if target_may_exist(target, teardown_error) {
+        if target_may_exist(target, policy) {
             all_absent = false;
         }
     }
@@ -331,17 +471,16 @@ fn targets_absent<const N: usize>(
 /// Failure of [`TerminationTarget::exists`] records the first teardown error
 /// and returns possible presence, ensuring the caller still attempts signals
 /// and cannot authorize [`cleanup`].
-fn target_may_exist(target: &TerminationTarget, teardown_error: &mut Option<StackError>) -> bool {
-    match target.exists() {
-        Ok(exists) => exists,
+fn target_may_exist(target: &TerminationTarget, policy: &mut TeardownPolicy<StackError>) -> bool {
+    let presence = match target.exists() {
+        Ok(false) => Presence::Absent,
+        Ok(true) => Presence::Present,
         Err(error) => {
             info!(id = %target.stored_id(), %error, "termination-target probe failed; signalling conservatively");
-            if teardown_error.is_none() {
-                *teardown_error = Some(error);
-            }
-            true
+            Presence::Unknown(error)
         }
-    }
+    };
+    policy.target_may_exist(presence)
 }
 
 /// Reconstruct a [`TerminationTarget`] without reinterpreting its stored identity.

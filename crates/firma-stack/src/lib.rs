@@ -28,6 +28,135 @@ pub use stop::{StopOutcome, stop};
 pub mod test_support {
     pub use firma_runtime_state::pidfile;
 
+    /// Sans-I/O access to teardown policy for integration coverage.
+    pub mod teardown_policy {
+        /// Tagged target-presence observation supplied to [`Harness`].
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Presence {
+            /// The target is proven absent.
+            Absent,
+            /// The target remains present.
+            Present,
+            /// Presence is unknown and carries a stable test error tag.
+            Unknown(u8),
+        }
+
+        /// Tagged forced-termination observation supplied to [`Harness`].
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum HardObservation {
+            /// The target accepted the forced request.
+            Accepted,
+            /// Delivery failed and the target was subsequently proven absent.
+            FailedThenAbsent(u8),
+            /// Delivery failed without proof that the target disappeared.
+            FailedStillPresent(u8),
+        }
+
+        /// Next graceful-phase action selected by [`Harness`].
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum GraceDecision {
+            /// Teardown may clean runtime state.
+            Complete,
+            /// Teardown must continue polling.
+            Poll,
+            /// Teardown must enter forced termination.
+            Escalate,
+        }
+
+        /// Next forced-settlement action selected by [`Harness`].
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum SettlementDecision {
+            /// Teardown must continue polling.
+            Poll,
+            /// Teardown may clean runtime state and reports whether a forced
+            /// request was accepted.
+            Complete { forced: bool },
+            /// Teardown failed with the retained test error tag.
+            Fail(u8),
+        }
+
+        /// Deterministic driver for the production teardown policy.
+        pub struct Harness(crate::stop::TeardownPolicy<u8>);
+
+        impl Harness {
+            /// Error tag emitted when settlement expires without an earlier error.
+            pub const TIMEOUT_ERROR: u8 = u8::MAX;
+
+            /// Begin teardown without any prior observations.
+            #[must_use]
+            pub const fn new() -> Self {
+                Self(crate::stop::TeardownPolicy::new())
+            }
+
+            /// Record one direct-child collection result.
+            pub fn observe_collection(&mut self, result: Result<(), u8>) {
+                self.0.observe_collection(result);
+            }
+
+            /// Classify target presence under the production fail-closed policy.
+            pub fn target_may_exist(&mut self, presence: Presence) -> bool {
+                self.0.target_may_exist(match presence {
+                    Presence::Absent => crate::stop::Presence::Absent,
+                    Presence::Present => crate::stop::Presence::Present,
+                    Presence::Unknown(error) => crate::stop::Presence::Unknown(error),
+                })
+            }
+
+            /// Select the next graceful-phase action.
+            #[must_use]
+            pub fn decide_grace(&self, all_absent: bool, deadline_elapsed: bool) -> GraceDecision {
+                match self.0.decide_grace(all_absent, deadline_elapsed) {
+                    crate::stop::GraceDecision::Complete => GraceDecision::Complete,
+                    crate::stop::GraceDecision::Poll => GraceDecision::Poll,
+                    crate::stop::GraceDecision::Escalate => GraceDecision::Escalate,
+                }
+            }
+
+            /// Record one forced-termination result.
+            pub fn observe_hard(&mut self, observation: HardObservation) {
+                self.0.observe_hard(match observation {
+                    HardObservation::Accepted => crate::stop::HardObservation::Accepted,
+                    HardObservation::FailedThenAbsent(error) => {
+                        crate::stop::HardObservation::Failed {
+                            error,
+                            confirmed_absent_afterward: true,
+                        }
+                    }
+                    HardObservation::FailedStillPresent(error) => {
+                        crate::stop::HardObservation::Failed {
+                            error,
+                            confirmed_absent_afterward: false,
+                        }
+                    }
+                });
+            }
+
+            /// Select the next forced-settlement action.
+            pub fn decide_settlement(
+                &mut self,
+                all_absent: bool,
+                deadline_elapsed: bool,
+            ) -> SettlementDecision {
+                match self
+                    .0
+                    .decide_settlement(all_absent, deadline_elapsed, || Self::TIMEOUT_ERROR)
+                {
+                    crate::stop::SettlementDecision::Poll => SettlementDecision::Poll,
+                    crate::stop::SettlementDecision::Complete { forced } => {
+                        SettlementDecision::Complete { forced }
+                    }
+                    crate::stop::SettlementDecision::Fail(error) => SettlementDecision::Fail(error),
+                }
+            }
+        }
+
+        impl Default for Harness {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    }
+
     /// Test-only capability holding startup's exclusive runtime-state transaction.
     pub struct RawStartupTransaction {
         transaction: crate::state_lease::StateTransaction,
