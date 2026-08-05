@@ -151,6 +151,31 @@ pub mod test_support {
         )
     }
 
+    /// Supervise arbitrary owned children through the foreground lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns supervision, termination, or cleanup errors.
+    pub fn supervise_raw_owned_until_exit(
+        state_dir: &std::path::Path,
+        timeout: std::time::Duration,
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> crate::error::Result<()> {
+        let mut authority = owned_component(crate::component::ComponentRole::Authority, authority);
+        let mut sidecar = owned_component(crate::component::ComponentRole::Sidecar, sidecar);
+        let supervision_result =
+            crate::supervisor::block_until_owned_exit(&mut authority, &mut sidecar);
+        let teardown_result =
+            crate::stop::stop_owned(state_dir, timeout, &mut authority, &mut sidecar);
+        if teardown_result.is_ok() {
+            let _ = sidecar.wait();
+            let _ = authority.wait();
+        }
+        supervision_result?;
+        teardown_result.map(|_| ())
+    }
+
     /// Construct an owned running stack whose component reaper cannot start.
     #[must_use]
     pub fn running_stack_from_raw_with_reaper_start_failure(
