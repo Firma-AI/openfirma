@@ -159,7 +159,7 @@ impl EnforcementPipeline {
 
     /// Return whether the pipeline runs in observe-only monitor mode.
     #[must_use]
-    pub fn is_monitor(&self) -> bool {
+    pub(crate) fn is_monitor(&self) -> bool {
         self.mode == SidecarMode::Monitor
     }
 

@@ -44,7 +44,7 @@ const LIFECYCLE_TOOLKIT: &str = "composio";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposioContext {
     /// Pinned toolkit identifier.
-    pub toolkit: String,
+    toolkit: String,
     /// Pinned tool slug.
     pub tool_slug: String,
     /// Composio user selector or `PAi` assistant value.
