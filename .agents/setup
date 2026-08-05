@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.dprint/bin:$PATH"
+
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "Installing rustup..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --default-toolchain none
+fi
+
+rustup toolchain install --profile minimal
+
+if ! command -v just >/dev/null 2>&1; then
+  echo "Installing just..."
+  mkdir -p "$HOME/.local/bin"
+  curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh |
+    bash -s -- --to "$HOME/.local/bin"
+fi
+
+just install
+
+# The dprint installer does not update shell profiles on Linux.
+if [ -x "$HOME/.dprint/bin/dprint" ]; then
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn "$HOME/.dprint/bin/dprint" "$HOME/.local/bin/dprint"
+fi
