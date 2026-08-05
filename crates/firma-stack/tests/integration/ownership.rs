@@ -18,6 +18,36 @@ enum SupervisorExitPhase {
     AfterReady,
 }
 
+#[derive(Clone, Copy)]
+enum ComponentExitRole {
+    Authority,
+    Sidecar,
+}
+
+struct ProcessCleanup(Vec<u32>);
+
+impl ProcessCleanup {
+    fn new(pid: u32) -> Self {
+        Self(vec![pid])
+    }
+
+    fn push(&mut self, pid: u32) {
+        self.0.push(pid);
+    }
+
+    fn disarm(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl Drop for ProcessCleanup {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            let _ = firma_stack::test_support::terminate_raw(*pid);
+        }
+    }
+}
+
 #[cfg(unix)]
 struct ProcessGroupCleanup(Option<nix::unistd::Pid>);
 
@@ -88,6 +118,20 @@ fn owned_shutdown_disarms_reaper_transfer() {
     assert_process_absent(authority_pid);
     assert_process_absent(sidecar_pid);
     assert!(!state_dir.join("stack.lock").exists());
+}
+
+/// An Authority exit ends foreground supervision and tears down the Sidecar
+/// without separating either component's process capabilities.
+#[test]
+fn authority_exit_tears_down_owned_foreground_stack() {
+    assert_component_exit_tears_down_foreground_stack(ComponentExitRole::Authority);
+}
+
+/// A Sidecar exit ends foreground supervision and tears down the Authority
+/// without separating either component's process capabilities.
+#[test]
+fn sidecar_exit_tears_down_owned_foreground_stack() {
+    assert_component_exit_tears_down_foreground_stack(ComponentExitRole::Sidecar);
 }
 
 #[test]
@@ -441,6 +485,43 @@ fn spawn_fixture(state_dir: &Path, name: &str) -> (Child, u32) {
     let pid = wait_for_marker(&marker);
     assert_eq!(pid, child.id());
     (child, pid)
+}
+
+fn assert_component_exit_tears_down_foreground_stack(exit_role: ComponentExitRole) {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let mut cleanup = ProcessCleanup::new(authority_pid);
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+    cleanup.push(sidecar_pid);
+    let terminated_pid = match exit_role {
+        ComponentExitRole::Authority => authority_pid,
+        ComponentExitRole::Sidecar => sidecar_pid,
+    };
+
+    let state_dir_for_supervisor = state_dir.to_path_buf();
+    let (result_tx, result_rx) = mpsc::channel();
+    let supervisor = std::thread::spawn(move || {
+        let result = firma_stack::test_support::supervise_raw_owned_until_exit(
+            &state_dir_for_supervisor,
+            Duration::ZERO,
+            authority,
+            sidecar,
+        );
+        let _ = result_tx.send(result);
+    });
+    firma_stack::test_support::terminate_raw(terminated_pid).expect("terminate selected component");
+
+    result_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("foreground supervisor did not finish within 10 seconds")
+        .expect("supervise owned components");
+    drop(supervisor);
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+    assert!(!state_dir.join("stack.lock").exists());
+    cleanup.disarm();
 }
 
 fn fixture_command(marker: &Path) -> Command {
