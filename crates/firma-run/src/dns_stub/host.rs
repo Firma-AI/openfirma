@@ -111,31 +111,31 @@ impl Drop for HostDnsStubHandle {
 
 /// Binds a UDP and TCP loopback listener on the *same* ephemeral port.
 ///
-/// A UDP ephemeral port is not guaranteed to be TCP-bindable: on Windows the
-/// kernel can hand out a UDP dynamic port that falls in a TCP excluded/reserved
-/// range (Hyper-V/WSL), so binding TCP to it fails with `WSAEACCES`
-/// (`os error 10013`). Retry with fresh ports until both bind on the same one.
+/// TCP chooses the candidate port because Windows can assign a UDP dynamic port
+/// from a TCP excluded/reserved range (Hyper-V/WSL), causing the subsequent TCP
+/// bind to fail with `WSAEACCES` (`os error 10013`). TCP and UDP exclusions are
+/// independent, so retry if UDP cannot bind the TCP-selected port.
 fn bind_stub_pair() -> Result<(UdpSocket, TcpListener, SocketAddr), RunError> {
     const MAX_ATTEMPTS: u32 = 20;
     let mut last_error = String::new();
     for _ in 0..MAX_ATTEMPTS {
-        let udp = match UdpSocket::bind("127.0.0.1:0") {
-            Ok(socket) => socket,
+        let tcp = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
             Err(error) => {
-                last_error = format!("UDP bind: {error}");
+                last_error = format!("TCP bind: {error}");
                 continue;
             }
         };
-        let listen_addr = match udp.local_addr() {
+        let listen_addr = match tcp.local_addr() {
             Ok(addr) => addr,
             Err(error) => {
                 last_error = format!("read listen addr: {error}");
                 continue;
             }
         };
-        match TcpListener::bind(listen_addr) {
-            Ok(tcp) => return Ok((udp, tcp, listen_addr)),
-            Err(error) => last_error = format!("TCP bind on {listen_addr}: {error}"),
+        match UdpSocket::bind(listen_addr) {
+            Ok(udp) => return Ok((udp, tcp, listen_addr)),
+            Err(error) => last_error = format!("UDP bind on {listen_addr}: {error}"),
         }
     }
     Err(RunError::Spawn(format!(
