@@ -91,6 +91,22 @@ fn reaper_start_failure_returns_owned_children_alive() {
     }
 }
 
+/// Reaper creation failure falls back to synchronously terminating and
+/// collecting every child rather than dropping the only reaping handles.
+#[test]
+fn reaper_start_failure_terminates_and_collects_owned_children() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
+    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
+
+    firma_stack::test_support::terminate_raw_children_after_reaper_failure(authority, sidecar)
+        .expect("terminate and collect children after reaper failure");
+
+    assert_process_absent(authority_pid);
+    assert_process_absent(sidecar_pid);
+}
+
 #[test]
 fn detached_supervisor_child_is_collected_for_long_lived_launcher() {
     let dir = tempfile::tempdir().expect("state dir");

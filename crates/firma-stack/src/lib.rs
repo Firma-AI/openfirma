@@ -76,7 +76,7 @@ pub mod test_support {
         match crate::supervisor::collect_in_background(components) {
             Ok(handle) => Some(handle),
             Err(error) => {
-                error.terminate_and_collect(std::time::Duration::from_secs(2));
+                let _ = error.terminate_and_collect();
                 None
             }
         }
@@ -110,6 +110,30 @@ pub mod test_support {
                 .into_iter()
                 .map(|component| component.into_parts().0)
                 .collect(),
+        }
+    }
+
+    /// Simulate reaper creation failure and run the production fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first child collection error after attempting to terminate
+    /// and collect both children.
+    pub fn terminate_raw_children_after_reaper_failure(
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> std::io::Result<()> {
+        let components = vec![
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+        ];
+        match crate::supervisor::collect_in_background_with(components, |_| {
+            Err(std::io::Error::other("injected reaper start failure"))
+        }) {
+            Ok(_) => Err(std::io::Error::other(
+                "injected reaper start failure unexpectedly succeeded",
+            )),
+            Err(error) => error.terminate_and_collect(),
         }
     }
 
