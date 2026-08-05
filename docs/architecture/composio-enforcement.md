@@ -22,9 +22,12 @@ logical actions are admitted.
 
 The decoder recognizes:
 
-- hosted MCP JSON-RPC `tools/call`, under either protected host;
-- `POST /api/v3/tools/execute/{tool_slug}`;
-- `POST /api/v3.1/tool_router/session/{session_id}/execute`;
+- hosted MCP JSON-RPC `tools/call`, under either protected host, on both the
+  `/tool_router/{v3,v3.1}/{session_id}/mcp` and `/api/{v3,v3.1}/mcp/{session_id}`
+  path shapes;
+- `POST /api/{v3,v3.1}/tools/execute/{tool_slug}`;
+- `POST /api/{v3,v3.1}/tool_router/session/{session_id}/execute`;
+- `POST /api/{v3,v3.1}/tool_router/session/{session_id}/execute_meta`;
 - supported Composio execution meta-tools;
 - `COMPOSIO_MULTI_EXECUTE_TOOL`, with one logical action per child.
 
@@ -63,10 +66,9 @@ can never reach Composio through the discovery surface without capability and
 policy evaluation. A governed request carrying a query string is denied
 outright, the lifecycle reads above excepted: the query never participates in
 the policy decision, so it must not ride along on an admitted dispatch. Hosted
-MCP paths deny query strings on every
-method, discovery included, so a query-carrying MCP URL fails at
-`initialize` with a clear denial instead of handshaking and then failing on
-each `tools/call`. Unknown execution routes, JSON-RPC batches, malformed
+MCP paths deny query strings on every method, discovery included, so a
+query-carrying MCP URL fails at `initialize` with a clear denial instead of
+handshaking and then failing on each `tools/call`. Unknown execution routes, JSON-RPC batches, malformed
 payloads, unknown toolkits, unpinned slugs, custom tools, raw proxy
 execution, and remote shell or workbench execution fail closed.
 
