@@ -1,4 +1,15 @@
-//! `start` and `supervise` entry points.
+//! Stack startup, ownership, and supervision transitions.
+//!
+//! [`spawn_stack`] acquires the runtime-state directory, delegates ordered
+//! component creation to [`spawn_stack_inner`], and returns the sole
+//! [`RunningStack`] owner after readiness succeeds. [`StartupGuard`] owns every
+//! partial startup until [`StartupGuard::finish`] commits that transition; its
+//! [`Drop`] implementation rolls back any uncommitted components. [`start`]
+//! then either supervises that owner in the foreground or creates the detached
+//! supervisor before relinquishing direct-child collection. [`supervise`]
+//! governs the detached lifetime from persisted [`TerminationTarget`] values.
+//! All failure paths retain runtime state unless target absence can be proved,
+//! allowing [`crate::stop()`] to retry cleanup without losing process authority.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -31,9 +42,9 @@ pub enum StartMode {
 /// Informational handle returned by [`start`] or [`RunningStack::handle`] once
 /// the stack has reached the ready state.
 ///
-/// The handle is informational only: it does not own the children's lifecycle
-/// (pid files on disk are the source of truth). Callers tear the stack down
-/// via [`crate::stop()`].
+/// The handle does not own the children's lifecycle. [`RunningStack`] holds
+/// in-process ownership; persisted runtime state supports external observation
+/// through [`crate::status()`] and retryable teardown through [`crate::stop()`].
 #[derive(Clone, Copy)]
 pub struct StackHandle {
     /// PID of the authority component.
@@ -53,12 +64,29 @@ pub struct RunningStack {
     owned: Option<OwnedStack>,
 }
 
+/// The direct-child handles and process-tree authority held by a
+/// [`RunningStack`].
+///
+/// Each [`crate::spawn::SpawnedComponent`] couples a child handle, which is
+/// required to collect the leader, with its [`TerminationTarget`], which is
+/// required to govern the full platform-specific termination scope. Keeping
+/// both components in one value makes ownership exclusive until
+/// [`RunningStack::shutdown`] consumes it or
+/// [`RunningStack::transfer_to_observer`] transfers collection responsibility.
 struct OwnedStack {
     authority: crate::spawn::SpawnedComponent,
     sidecar: crate::spawn::SpawnedComponent,
     state_dir: PathBuf,
 }
 
+/// Rollback owner for an incomplete [`spawn_stack_inner`] transaction.
+///
+/// A spawned component is recorded here before startup performs another
+/// fallible operation. Unless [`StartupGuard::finish`] commits both components
+/// to a [`RunningStack`], [`Drop`] requests hard termination, collects every
+/// recorded direct child, and removes startup state only after every
+/// [`TerminationTarget`] is proven absent. Probe or termination uncertainty
+/// deliberately preserves that state for a later [`crate::stop()`] attempt.
 struct StartupGuard {
     authority: Option<crate::spawn::SpawnedComponent>,
     sidecar: Option<crate::spawn::SpawnedComponent>,
@@ -67,6 +95,7 @@ struct StartupGuard {
 }
 
 impl StartupGuard {
+    /// Begin an armed startup transaction with no component ownership.
     fn new(state_dir: &Path) -> Self {
         Self {
             authority: None,
@@ -76,6 +105,12 @@ impl StartupGuard {
         }
     }
 
+    /// Commit complete startup ownership to a [`RunningStack`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StackError::Platform`] and leaves rollback armed if either
+    /// component is missing.
     fn finish(mut self) -> Result<RunningStack> {
         let authority = self
             .authority
@@ -95,6 +130,10 @@ impl StartupGuard {
 }
 
 impl Drop for StartupGuard {
+    /// Roll back every component still owned by this guard.
+    ///
+    /// Destruction cannot report errors, so failures are logged and runtime
+    /// state is retained as described by [`StartupGuard`].
     fn drop(&mut self) {
         if self.disarmed {
             return;
@@ -149,6 +188,7 @@ impl Drop for StartupGuard {
 }
 
 impl RunningStack {
+    /// Establish the sole running owner from two ready component capabilities.
     pub(crate) fn from_components(
         authority: crate::spawn::SpawnedComponent,
         sidecar: crate::spawn::SpawnedComponent,
@@ -197,6 +237,11 @@ impl RunningStack {
         result
     }
 
+    /// Relinquish synchronous ownership without terminating the stack.
+    ///
+    /// The child handles move to [`collect_in_background`] so their eventual
+    /// exits are collected. Process governance remains with persisted
+    /// [`TerminationTarget`] values and, in detached mode, [`supervise`].
     fn transfer_to_observer(&mut self) {
         if let Some(owned) = self.owned.take() {
             let _ = collect_in_background(owned.authority.child, owned.sidecar.child);
@@ -252,6 +297,13 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> 
     }
 }
 
+/// Perform the ordered, rollback-protected component startup sequence.
+///
+/// The Authority must be reachable before the Sidecar is spawned, and the
+/// Sidecar's TCP endpoint must be reachable before any required CA material is
+/// accepted. Each successful [`spawn_with_config`] call is recorded in
+/// [`StartupGuard`] before the next fallible step. The probes establish bounded
+/// startup readiness only; ongoing health belongs to supervision.
 fn spawn_stack_inner(
     cfg: &StackConfig,
     state_dir: &Path,
@@ -308,6 +360,13 @@ fn spawn_stack_inner(
 
 /// Start the authority and sidecar stack.
 ///
+/// In [`StartMode::Foreground`], this function retains [`RunningStack`]
+/// ownership through supervision and teardown. In [`StartMode::Detached`], it
+/// retains ownership until [`crate::detach::spawn_supervisor`] succeeds, then
+/// transfers direct-child collection through
+/// [`RunningStack::transfer_to_observer`]. A detached supervisor spawn failure
+/// therefore leaves the caller able to run [`RunningStack::shutdown`].
+///
 /// # Errors
 ///
 /// Returns state directory, spawn, readiness, or detach errors. On failure
@@ -345,6 +404,10 @@ pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<Sta
     Ok(handle)
 }
 
+/// Remove rollback-owned runtime state after [`StartupGuard`] proves absence.
+///
+/// Unlike normal [`crate::stop()`] cleanup, this best-effort destructor path
+/// cannot return removal errors.
 fn remove_startup_state(state_dir: &Path) {
     for name in [
         "authority.pid",
@@ -367,6 +430,13 @@ pub fn supervise(state_dir: &Path) -> Result<()> {
     supervise_with_timeout(state_dir, Duration::from_secs(10))
 }
 
+/// Observe a detached stack and govern its final teardown.
+///
+/// The supervisor publishes its own [`UserProcessId`], reconstructs component
+/// [`TerminationTarget`] identities from runtime state, and asks
+/// [`block_until_observed_exit`] to detect a stop request or component loss.
+/// Teardown is attempted regardless of how observation ends; an observation
+/// error takes precedence when both phases fail.
 pub(crate) fn supervise_with_timeout(state_dir: &Path, timeout: Duration) -> Result<()> {
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
         StackError::Platform("current process returned invalid process id".into())
@@ -395,6 +465,10 @@ pub(crate) fn supervise_with_timeout(state_dir: &Path, timeout: Duration) -> Res
     }
 }
 
+/// Map one known component identity to a unified-config [`SpawnRequest`].
+///
+/// Rejecting any identity other than the Authority or Sidecar keeps command
+/// selection and runtime-state naming within the closed stack lifecycle.
 fn spawn_with_config(
     group: &crate::platform::Group,
     state_dir: &Path,
@@ -421,6 +495,12 @@ fn spawn_with_config(
     )
 }
 
+/// Claim startup authority unless live runtime state proves another owner.
+///
+/// The lock file alone is insufficient evidence: a newly created or existing
+/// lock is rejected while [`is_stack_stale`] finds a live supervisor or
+/// component [`TerminationTarget`]. Probe errors fail closed rather than
+/// authorizing stale-state removal.
 fn acquire_lock(state_dir: &Path) -> Result<()> {
     let lock = state_dir.join("stack.lock");
     match std::fs::OpenOptions::new()
@@ -441,6 +521,7 @@ fn acquire_lock(state_dir: &Path) -> Result<()> {
     }
 }
 
+/// Return whether no persisted supervisor or component target remains live.
 fn is_stack_stale(state_dir: &Path) -> Result<bool> {
     if let Some(pid) = pidfile::read(&state_dir.join("stack.pid"))?
         && process_exists(pid)?
@@ -457,6 +538,7 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Remove target files only after their persisted identities prove absent.
 fn reap_stale(state_dir: &Path) -> Result<()> {
     for name in ["authority.pid", "sidecar.pid"] {
         let path = state_dir.join(name);

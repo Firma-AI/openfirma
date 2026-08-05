@@ -1,4 +1,9 @@
-//! Component readiness probes.
+//! Bounded evidence used by the startup sequence.
+//!
+//! These probes establish only the conditions needed for
+//! [`crate::start::spawn_stack`] to commit startup. They do not provide ongoing
+//! health supervision, validate service identity, or assume ownership of
+//! rollback; startup retains that responsibility.
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
@@ -10,6 +15,15 @@ use firma_sidecar::config::SidecarConfig;
 
 use crate::error::{Result, StackError};
 
+/// Wait until a TCP connection can be established for one component.
+///
+/// Success proves only that the configured address accepted a connection at
+/// probe time. Ongoing liveness belongs to stack supervision.
+///
+/// # Errors
+///
+/// Returns [`StackError::Readiness`] if no connection succeeds before the
+/// supplied deadline.
 pub fn wait_for_tcp(component: &str, addr: SocketAddr, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -26,6 +40,16 @@ pub fn wait_for_tcp(component: &str, addr: SocketAddr, timeout: Duration) -> Res
     }
 }
 
+/// Wait until both Sidecar CA-material paths exist.
+///
+/// This probe establishes publication, not certificate or key validity. Its
+/// caller enables it only when the Sidecar configuration reports active HTTPS
+/// interception.
+///
+/// # Errors
+///
+/// Returns [`StackError::Readiness`] if both paths are not present before the
+/// supplied deadline.
 pub fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<()> {
     let cert = ca_dir.join("firma-ca.crt");
     let key = ca_dir.join("firma-ca.key");
@@ -90,11 +114,11 @@ impl FirmaToml {
     }
 
     /// Deserialize the `[sidecar]` section into firma-sidecar's own
-    /// [`SidecarConfig`], sharing the sidecar's schema, defaults, and
-    /// `HttpsMitmConfig::is_active` semantics rather than mirroring them.
+    /// [`SidecarConfig`], sharing the Sidecar's schema and defaults rather than
+    /// mirroring them.
     ///
-    /// Callers read `interceptor.listen_addr` for the TCP readiness probe and
-    /// `interceptor.https_mitm.is_active()` to gate the CA-material probe.
+    /// Callers use its interceptor address for [`wait_for_tcp`] and its HTTPS
+    /// MITM activation semantics to gate [`wait_for_ca_material`].
     ///
     /// # Errors
     ///

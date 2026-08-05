@@ -1,4 +1,9 @@
-//! Cross-platform spawn helpers used by `start`.
+//! Cross-platform component creation for [`mod@crate::start`].
+//!
+//! [`spawn_component`] is the commit boundary between an untracked child and a
+//! governed stack component: it does not return until the process-tree
+//! [`TerminationTarget`] has been persisted. Until then, this module retains
+//! both termination and direct-child collection responsibility.
 
 use std::path::Path;
 use std::process::{Child, Command};
@@ -9,22 +14,45 @@ use crate::error::Result;
 use crate::platform::{Group, Platform, SystemPlatform, TerminationTarget};
 use firma_runtime_state::{UserProcessId, pidfile};
 
+/// Immutable inputs for one managed component spawn attempt.
 #[derive(Clone, Copy)]
 pub struct SpawnRequest<'a> {
+    /// Logical identity used for runtime-state and log file names.
     pub name: &'a str,
+    /// Command-line arguments passed to the selected executable.
     pub args: &'a [&'a str],
+    /// Directory in which governed runtime state is published.
     pub state_dir: &'a Path,
-    /// Override for the binary to invoke. When `None`, `current_exe()`
-    /// is used.
+    /// Executable override; [`std::env::current_exe`] is used when absent.
     pub exe: Option<&'a Path>,
 }
 
+/// Coupled ownership of one component's direct child and termination scope.
+///
+/// [`child`](Self::child) must remain available to collect the leader, while
+/// [`termination_target`](Self::termination_target) governs the complete
+/// platform scope. [`leader_pid`](Self::leader_pid) is informational and must
+/// not substitute for the [`TerminationTarget`] when descendants may exist.
 pub struct SpawnedComponent {
+    /// Direct-child handle required for exit collection.
     pub child: Child,
+    /// Original component leader identity for diagnostics.
     pub leader_pid: UserProcessId,
+    /// Platform authority for probing and terminating the component scope.
     pub termination_target: TerminationTarget,
 }
 
+/// Spawn and publish one governed component.
+///
+/// The returned [`SpawnedComponent`] is committed only after [`pidfile::write`]
+/// records its [`TerminationTarget`]. If publication fails, this function
+/// requests process-tree termination and collects the direct child before
+/// returning, preventing an ungoverned process from escaping startup rollback.
+///
+/// # Errors
+///
+/// Returns executable discovery, log creation, platform spawn, group
+/// assignment, or runtime-state publication errors.
 pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedComponent> {
     let exe: std::path::PathBuf = match req.exe {
         Some(path) => path.to_path_buf(),

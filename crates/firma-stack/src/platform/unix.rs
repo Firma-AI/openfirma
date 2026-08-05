@@ -15,6 +15,10 @@ use firma_runtime_state::ChildExt as _;
 
 pub struct UnixPlatform;
 
+/// Convert a runtime process identity to the Unix type required by group APIs.
+///
+/// Rejecting values outside the platform range prevents signalling a truncated
+/// or unintended [`Pid`].
 fn raw_pid(pid: u32) -> Result<Pid> {
     let raw = i32::try_from(pid)
         .map_err(|_| StackError::Platform(format!("pid {pid} does not fit platform pid_t")))?;
