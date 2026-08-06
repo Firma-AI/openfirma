@@ -84,10 +84,7 @@ pub async fn issue_capability(
     let agent_id = req.agent_id.to_string();
     let context_hash =
         compute_context_hash(&agent_id, &granted, req.resource_scope, &bundle_version);
-    let action_set = granted
-        .into_iter()
-        .map(|action| action.as_str().to_string())
-        .collect();
+    let action_set = granted.into_iter().collect();
 
     let claims = CapabilityClaims {
         token_id,

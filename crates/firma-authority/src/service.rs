@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
+use firma_core::AgentId;
 use firma_core::FirmaEntityUid;
 use firma_core::policy::PolicyBundle;
 use firma_core::session::SessionId;
 use firma_core::token::CapabilityClaims;
 use firma_core::token::paseto::PasetoV4Signer;
-use firma_core::{ActionClass, AgentId};
 use firma_protobuf::v1::RevocationEvent;
 use firma_protobuf::v1::authority_service_server::AuthorityService;
 use firma_protobuf::v1::{
@@ -304,7 +304,7 @@ pub(crate) enum CedarDecision {
     /// At least one requested action is authorized. Carries the granted subset
     /// (`requested ∩ Cedar-permitted`), which becomes the token `action_set`.
     Allow {
-        granted: BTreeSet<ActionClass>,
+        granted: BTreeSet<String>,
     },
     Deny {
         reason: String,
@@ -373,7 +373,7 @@ fn policy_deny_message(action: &str, diagnostics: &cedar_policy::Diagnostics) ->
 }
 
 fn evaluation_failure(
-    action: ActionClass,
+    action: &str,
     diagnostics: &cedar_policy::Diagnostics,
 ) -> Option<CedarDecision> {
     let error = diagnostics.errors().next()?;
@@ -442,21 +442,16 @@ pub(crate) fn evaluate_cedar_policy(
             return CedarDecision::invalid_request(format!("invalid resource entity store: {e}"));
         }
     };
-    let requested = match actions
-        .iter()
-        .map(|action| action.parse::<ActionClass>())
-        .collect::<Result<BTreeSet<_>, _>>()
-    {
-        Ok(requested) => requested,
-        Err(e) => return CedarDecision::invalid_request(format!("invalid action: {e}")),
-    };
+    // The active Cedar schema, including any configured `schema_path`
+    // extension, is authoritative for action validity.
+    let requested = actions.iter().cloned().collect::<BTreeSet<_>>();
     let authorizer = Authorizer::new();
     let timestamp_ms = Utc::now().timestamp_millis();
 
     let mut granted = BTreeSet::new();
     for action in requested {
         let action_entity: cedar_policy::EntityUid =
-            match FirmaEntityUid::Action(action.as_str().to_string()).try_into() {
+            match FirmaEntityUid::Action(action.clone()).try_into() {
                 Ok(uid) => uid,
                 Err(e) => {
                     return CedarDecision::invalid_request(format!("invalid action: {e}"));
@@ -483,7 +478,7 @@ pub(crate) fn evaluate_cedar_policy(
             match Context::from_json_value(context_json, Some((schema, &action_entity))) {
                 Ok(c) => c,
                 Err(err) => {
-                    return CedarDecision::context_build(action.as_str(), &err.to_string());
+                    return CedarDecision::context_build(&action, &err.to_string());
                 }
             };
 
@@ -502,14 +497,14 @@ pub(crate) fn evaluate_cedar_policy(
 
         let response = authorizer.is_authorized(&request, policy_set, &entities);
 
-        if let Some(failure) = evaluation_failure(action, response.diagnostics()) {
+        if let Some(failure) = evaluation_failure(&action, response.diagnostics()) {
             return failure;
         }
 
         if response.decision() == cedar_policy::Decision::Deny {
             tracing::debug!(
                 action = %action,
-                reason = %policy_deny_message(action.as_str(), response.diagnostics()),
+                reason = %policy_deny_message(&action, response.diagnostics()),
                 "dropping unauthorized action while narrowing issuance"
             );
             continue;
@@ -585,7 +580,7 @@ fn entry_to_proto(entry: &crate::revocation::RevocationEntry) -> RevocationEvent
 /// state that governed the evaluation.
 pub(crate) fn compute_context_hash(
     agent_id: &str,
-    actions: &BTreeSet<ActionClass>,
+    actions: &BTreeSet<String>,
     resource: &str,
     bundle_version: &str,
 ) -> String {
@@ -593,7 +588,7 @@ pub(crate) fn compute_context_hash(
     hasher.update(agent_id.as_bytes());
     hasher.update(b"|");
     for action in actions {
-        hasher.update(action.as_str().as_bytes());
+        hasher.update(action.as_bytes());
         hasher.update(b",");
     }
     hasher.update(b"|");
@@ -624,11 +619,8 @@ mod tests {
         id.parse().unwrap()
     }
 
-    fn action_set(actions: &[&str]) -> BTreeSet<ActionClass> {
-        actions
-            .iter()
-            .map(|action| action.parse().unwrap())
-            .collect()
+    fn action_set(actions: &[&str]) -> BTreeSet<String> {
+        actions.iter().map(|action| (*action).to_string()).collect()
     }
 
     #[test]
@@ -935,10 +927,7 @@ mod tests {
         assert!(matches!(
             result,
             CedarDecision::Allow { granted }
-                if granted == actions
-                    .iter()
-                    .map(|action| action.parse().unwrap())
-                    .collect()
+                if granted == actions.iter().cloned().collect()
         ));
     }
 
