@@ -53,7 +53,7 @@ requested_ttl:      3600
 
 The Authority does three things in order:
 
-1. **Issuance policy evaluation and narrowing.** The Authority runs each requested action class through a separate Cedar **issuance policy bundle** and **grants the authorized subset** — the intersection of what was requested and what the policy permits. Unauthorized classes are dropped, not fatal; the resulting `action_set` is exactly what the policy allows. Only if *every* requested class is denied does issuance fail closed. This is where decisions like "this agent is not allowed to ever request `payment.transfer`" live. See [Policies](../policies/) for the issuance vs runtime split.
+1. **Issuance policy evaluation and narrowing.** The Authority treats requested action classes as a mathematical set, evaluates each unique class in canonical order against a separate Cedar **issuance policy bundle**, and **grants the authorized subset** — the intersection of what was requested and what the policy permits. Unauthorized classes are dropped, not fatal; the resulting `action_set` is sorted and duplicate-free. Only if *every* requested class is denied does issuance fail closed. This is where decisions like "this agent is not allowed to ever request `payment.transfer`" live. See [Policies](../policies/) for the issuance vs runtime split.
 2. **TTL clamping.** The requested TTL is clamped to the Authority's `max_ttl_seconds` config (default 3600 in the demo). You cannot mint long-lived tokens by asking for them.
 3. **Signing.** If at least one class is authorized, the Authority assembles a `CapabilityClaims` over the granted subset, signs it with its Ed25519 key, and returns the PASETO token + the parsed claims.
 

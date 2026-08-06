@@ -101,7 +101,11 @@ async fn issue_capability_e2e() {
 
     let request = IssueCapabilityRequest {
         agent_id: "agt_01j0000000e008000000000001".to_string(),
-        requested_actions: vec!["filesystem.read".to_string()],
+        requested_actions: vec![
+            "filesystem.read".to_string(),
+            "communication.external.send".to_string(),
+            "filesystem.read".to_string(),
+        ],
         resource_scope: "*".to_string(),
         session_id: "test_session".to_string(),
         requested_ttl_seconds: 300,
@@ -114,7 +118,29 @@ async fn issue_capability_e2e() {
     assert!(inner.granted);
     let token = inner.token.expect("token missing");
     assert_eq!(token.agent_id, "agt_01j0000000e008000000000001");
+    assert_eq!(
+        token.action_set,
+        ["communication.external.send", "filesystem.read"]
+    );
     assert!(!token.signature.is_empty());
+
+    let canonical_response = client
+        .issue_capability(IssueCapabilityRequest {
+            agent_id: "agt_01j0000000e008000000000001".to_string(),
+            requested_actions: vec![
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
+            resource_scope: "*".to_string(),
+            session_id: "test_session".to_string(),
+            requested_ttl_seconds: 300,
+            credentials: None,
+        })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+    let canonical_token = canonical_response.token.expect("token missing");
+    assert_eq!(token.context_hash, canonical_token.context_hash);
 
     server.stop();
 }

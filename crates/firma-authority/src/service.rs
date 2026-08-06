@@ -1,14 +1,15 @@
+use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
-use firma_core::AgentId;
 use firma_core::FirmaEntityUid;
 use firma_core::policy::PolicyBundle;
 use firma_core::session::SessionId;
 use firma_core::token::CapabilityClaims;
 use firma_core::token::paseto::PasetoV4Signer;
+use firma_core::{ActionClass, AgentId};
 use firma_protobuf::v1::RevocationEvent;
 use firma_protobuf::v1::authority_service_server::AuthorityService;
 use firma_protobuf::v1::{
@@ -303,7 +304,7 @@ pub(crate) enum CedarDecision {
     /// At least one requested action is authorized. Carries the granted subset
     /// (`requested ∩ Cedar-permitted`), which becomes the token `action_set`.
     Allow {
-        granted: Vec<String>,
+        granted: BTreeSet<ActionClass>,
     },
     Deny {
         reason: String,
@@ -427,13 +428,21 @@ pub(crate) fn evaluate_cedar_policy(
             return CedarDecision::invalid_request(format!("invalid resource entity store: {e}"));
         }
     };
+    let requested = match actions
+        .iter()
+        .map(|action| action.parse::<ActionClass>())
+        .collect::<Result<BTreeSet<_>, _>>()
+    {
+        Ok(requested) => requested,
+        Err(e) => return CedarDecision::invalid_request(format!("invalid action: {e}")),
+    };
     let authorizer = Authorizer::new();
     let timestamp_ms = Utc::now().timestamp_millis();
 
-    let mut granted: Vec<String> = Vec::with_capacity(actions.len());
-    for action in actions {
+    let mut granted = BTreeSet::new();
+    for action in requested {
         let action_entity: cedar_policy::EntityUid =
-            match FirmaEntityUid::Action(action.clone()).try_into() {
+            match FirmaEntityUid::Action(action.as_str().to_string()).try_into() {
                 Ok(uid) => uid,
                 Err(e) => {
                     return CedarDecision::invalid_request(format!("invalid action: {e}"));
@@ -460,7 +469,7 @@ pub(crate) fn evaluate_cedar_policy(
             match Context::from_json_value(context_json, Some((schema, &action_entity))) {
                 Ok(c) => c,
                 Err(err) => {
-                    return CedarDecision::context_build(action, &err.to_string());
+                    return CedarDecision::context_build(action.as_str(), &err.to_string());
                 }
             };
 
@@ -482,12 +491,12 @@ pub(crate) fn evaluate_cedar_policy(
         if response.decision() == cedar_policy::Decision::Deny {
             tracing::debug!(
                 action = %action,
-                reason = %policy_deny_message(action, response.diagnostics()),
+                reason = %policy_deny_message(action.as_str(), response.diagnostics()),
                 "dropping unauthorized action while narrowing issuance"
             );
             continue;
         }
-        granted.push(action.clone());
+        granted.insert(action);
     }
 
     if granted.is_empty() {
@@ -553,23 +562,20 @@ fn entry_to_proto(entry: &crate::revocation::RevocationEntry) -> RevocationEvent
 
 /// Compute the context hash for a capability token.
 ///
-/// SHA-256 of `agent_id | sorted_actions | resource | bundle_version`.
+/// SHA-256 of `agent_id | canonical_actions | resource | bundle_version`.
 /// Binds the issued token to both the principal's identity and the policy
 /// state that governed the evaluation.
 pub(crate) fn compute_context_hash(
     agent_id: &str,
-    actions: &[String],
+    actions: &BTreeSet<ActionClass>,
     resource: &str,
     bundle_version: &str,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(agent_id.as_bytes());
     hasher.update(b"|");
-    // Sort actions for a deterministic hash regardless of request order.
-    let mut sorted = actions.to_vec();
-    sorted.sort_unstable();
-    for action in &sorted {
-        hasher.update(action.as_bytes());
+    for action in actions {
+        hasher.update(action.as_str().as_bytes());
         hasher.update(b",");
     }
     hasher.update(b"|");
@@ -598,6 +604,13 @@ mod tests {
 
     fn session(id: &str) -> SessionId {
         id.parse().unwrap()
+    }
+
+    fn action_set(actions: &[&str]) -> BTreeSet<ActionClass> {
+        actions
+            .iter()
+            .map(|action| action.parse().unwrap())
+            .collect()
     }
 
     #[test]
@@ -683,7 +696,7 @@ mod tests {
             "api.example.com",
         );
         assert!(
-            matches!(result, CedarDecision::Allow { granted } if granted == ["filesystem.read"])
+            matches!(result, CedarDecision::Allow { granted } if granted == action_set(&["filesystem.read"]))
         );
     }
 
@@ -759,7 +772,7 @@ mod tests {
         assert!(matches!(
             result,
             CedarDecision::Allow { granted }
-                if granted == ["communication.external.send", "filesystem.read"]
+                if granted == action_set(&["communication.external.send", "filesystem.read"])
         ));
     }
 
@@ -779,7 +792,7 @@ mod tests {
             "api.example.com",
         );
         assert!(
-            matches!(result, CedarDecision::Allow { granted } if granted == ["filesystem.read"])
+            matches!(result, CedarDecision::Allow { granted } if granted == action_set(&["filesystem.read"]))
         );
     }
 
@@ -815,7 +828,8 @@ mod tests {
         );
         assert!(matches!(
             result,
-            CedarDecision::Allow { granted } if granted == ["communication.external.send"]
+            CedarDecision::Allow { granted }
+                if granted == action_set(&["communication.external.send"])
         ));
     }
 
@@ -886,7 +900,14 @@ mod tests {
             &actions,
             "api.example.com",
         );
-        assert!(matches!(result, CedarDecision::Allow { granted } if granted == actions));
+        assert!(matches!(
+            result,
+            CedarDecision::Allow { granted }
+                if granted == actions
+                    .iter()
+                    .map(|action| action.parse().unwrap())
+                    .collect()
+        ));
     }
 
     #[test]
@@ -900,19 +921,13 @@ mod tests {
     fn context_hash_deterministic() {
         let h1 = compute_context_hash(
             "agent_1",
-            &[
-                "filesystem.read".to_string(),
-                "communication.external.send".to_string(),
-            ],
+            &action_set(&["filesystem.read", "communication.external.send"]),
             "api.example.com",
             "bundle_v1",
         );
         let h2 = compute_context_hash(
             "agent_1",
-            &[
-                "filesystem.read".to_string(),
-                "communication.external.send".to_string(),
-            ],
+            &action_set(&["filesystem.read", "communication.external.send"]),
             "api.example.com",
             "bundle_v1",
         );
@@ -921,22 +936,15 @@ mod tests {
 
     #[test]
     fn context_hash_action_order_independent() {
-        // Actions sorted before hashing — different order must produce same hash.
         let h1 = compute_context_hash(
             "agent_1",
-            &[
-                "filesystem.read".to_string(),
-                "communication.external.send".to_string(),
-            ],
+            &action_set(&["filesystem.read", "communication.external.send"]),
             "api.example.com",
             "v1",
         );
         let h2 = compute_context_hash(
             "agent_1",
-            &[
-                "communication.external.send".to_string(),
-                "filesystem.read".to_string(),
-            ],
+            &action_set(&["communication.external.send", "filesystem.read"]),
             "api.example.com",
             "v1",
         );
@@ -947,13 +955,13 @@ mod tests {
     fn context_hash_changes_with_agent() {
         let h1 = compute_context_hash(
             "agent_a",
-            &["filesystem.read".to_string()],
+            &action_set(&["filesystem.read"]),
             "resource",
             "bundle_v1",
         );
         let h2 = compute_context_hash(
             "agent_b",
-            &["filesystem.read".to_string()],
+            &action_set(&["filesystem.read"]),
             "resource",
             "bundle_v1",
         );
@@ -964,13 +972,13 @@ mod tests {
     fn context_hash_changes_with_bundle_version() {
         let h1 = compute_context_hash(
             "agent_1",
-            &["filesystem.read".to_string()],
+            &action_set(&["filesystem.read"]),
             "resource",
             "bundle_v1",
         );
         let h2 = compute_context_hash(
             "agent_1",
-            &["filesystem.read".to_string()],
+            &action_set(&["filesystem.read"]),
             "resource",
             "bundle_v2",
         );

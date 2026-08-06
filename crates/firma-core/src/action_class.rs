@@ -17,7 +17,7 @@ macro_rules! action_classes {
     ($($variant:ident => $name:literal),+ $(,)?) => {
         /// A canonical action class. Convert to its wire identifier with
         /// [`ActionClass::as_str`]; parse from one with `str::parse`.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum ActionClass {
             $(
                 #[doc = concat!("`", $name, "`")]
