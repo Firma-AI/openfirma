@@ -24,6 +24,10 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Self {
+        Self::start_with_schema(None).await
+    }
+
+    async fn start_with_schema(schema: Option<&str>) -> Self {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let policy_dir = temp_dir.path().join("policies");
         std::fs::create_dir(&policy_dir).expect("failed to create policy dir");
@@ -48,11 +52,17 @@ impl TestServer {
         let kp = AsymmetricKeyPair::<V4>::generate().expect("failed to generate key");
         std::fs::write(&key_file, kp.secret.as_bytes()).expect("failed to write key");
 
+        let schema_path = schema.map(|schema| {
+            let path = temp_dir.path().join("schema.cedarschema");
+            std::fs::write(&path, schema).expect("failed to write custom schema");
+            path
+        });
+
         let config = AuthorityConfig {
             listen_addr: "127.0.0.1:0".to_string(),
             policy_dir: policy_dir.clone(),
             issuance_policy_dir: issuance_policy_dir.clone(),
-            schema_path: None,
+            schema_path,
             revocation_file: revocation_file.clone(),
             key_file,
             max_ttl_seconds: 3600,
@@ -90,6 +100,24 @@ impl TestServer {
     }
 }
 
+fn schema_with_action(action: &str) -> String {
+    let schema = firma_core::cedar::FIRMA_SCHEMA;
+    let namespace_end = schema.rfind("\n}").expect("schema has a closing namespace");
+    let custom_action = format!(
+        "\n    action \"{action}\" appliesTo {{\n\
+             principal: [Agent],\n\
+             resource: [Resource],\n\
+             context: EnforcementContext\n\
+         }};\n"
+    );
+    format!(
+        "{}{}{}",
+        &schema[..namespace_end],
+        custom_action,
+        &schema[namespace_end..]
+    )
+}
+
 #[tokio::test]
 async fn issue_capability_e2e() {
     let server = TestServer::start().await;
@@ -101,7 +129,11 @@ async fn issue_capability_e2e() {
 
     let request = IssueCapabilityRequest {
         agent_id: "agt_01j0000000e008000000000001".to_string(),
-        requested_actions: vec!["filesystem.read".to_string()],
+        requested_actions: vec![
+            "filesystem.read".to_string(),
+            "communication.external.send".to_string(),
+            "filesystem.read".to_string(),
+        ],
         resource_scope: "*".to_string(),
         session_id: "test_session".to_string(),
         requested_ttl_seconds: 300,
@@ -114,8 +146,88 @@ async fn issue_capability_e2e() {
     assert!(inner.granted);
     let token = inner.token.expect("token missing");
     assert_eq!(token.agent_id, "agt_01j0000000e008000000000001");
+    assert_eq!(
+        token.action_set,
+        ["communication.external.send", "filesystem.read"]
+    );
     assert!(!token.signature.is_empty());
 
+    let canonical_response = client
+        .issue_capability(IssueCapabilityRequest {
+            agent_id: "agt_01j0000000e008000000000001".to_string(),
+            requested_actions: vec![
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
+            resource_scope: "*".to_string(),
+            session_id: "test_session".to_string(),
+            requested_ttl_seconds: 300,
+            credentials: None,
+        })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+    let canonical_token = canonical_response.token.expect("token missing");
+    assert_eq!(token.context_hash, canonical_token.context_hash);
+
+    server.stop();
+}
+
+#[tokio::test]
+async fn custom_schema_action_is_issued() {
+    let custom_action = "custom.workflow.approve";
+    assert!(custom_action.parse::<firma_core::ActionClass>().is_err());
+    let schema = schema_with_action(custom_action);
+    let server = TestServer::start_with_schema(Some(&schema)).await;
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect to server");
+
+    let response = client
+        .issue_capability(IssueCapabilityRequest {
+            agent_id: "agt_01j0000000e008000000000001".to_string(),
+            requested_actions: vec![custom_action.to_string()],
+            resource_scope: "*".to_string(),
+            session_id: "custom_schema_session".to_string(),
+            requested_ttl_seconds: 300,
+            credentials: None,
+        })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+
+    assert!(response.granted);
+    let token = response.token.expect("token missing");
+    assert_eq!(token.action_set, [custom_action]);
+    server.stop();
+}
+
+#[tokio::test]
+async fn action_absent_from_active_schema_aborts_partial_grant() {
+    let server = TestServer::start().await;
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect to server");
+
+    let response = client
+        .issue_capability(IssueCapabilityRequest {
+            agent_id: "agt_01j0000000e008000000000001".to_string(),
+            requested_actions: vec![
+                "communication.external.send".to_string(),
+                "custom.workflow.approve".to_string(),
+            ],
+            resource_scope: "*".to_string(),
+            session_id: "unknown_action_session".to_string(),
+            requested_ttl_seconds: 300,
+            credentials: None,
+        })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+
+    assert!(!response.granted);
+    assert!(response.token.is_none());
+    assert_eq!(response.deny_reason, "CONTEXT_BUILD_FAILED");
     server.stop();
 }
 

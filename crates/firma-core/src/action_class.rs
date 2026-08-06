@@ -38,6 +38,18 @@ macro_rules! action_classes {
             }
         }
 
+        impl Ord for ActionClass {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.as_str().cmp(other.as_str())
+            }
+        }
+
+        impl PartialOrd for ActionClass {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
         impl FromStr for ActionClass {
             type Err = UnknownActionClass;
 
