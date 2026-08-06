@@ -348,6 +348,13 @@ impl CedarDecision {
             message: format!("failed to build Cedar context for '{action}': {reason}"),
         }
     }
+
+    fn evaluation_failed() -> Self {
+        Self::Deny {
+            reason: "INVALID_REQUEST".to_string(),
+            message: "Cedar policy evaluation failed".to_string(),
+        }
+    }
 }
 
 /// Human-readable reason a single action was denied, used when logging the
@@ -357,18 +364,25 @@ fn policy_deny_message(action: &str, diagnostics: &cedar_policy::Diagnostics) ->
         .reason()
         .map(std::string::ToString::to_string)
         .collect();
-    let errors: Vec<String> = diagnostics
-        .errors()
-        .map(std::string::ToString::to_string)
-        .collect();
 
-    if !errors.is_empty() {
-        format!("policy errors for '{action}': {}", errors.join("; "))
-    } else if !reasons.is_empty() {
-        format!("denied '{action}' by policies: {}", reasons.join(", "))
-    } else {
+    if reasons.is_empty() {
         format!("denied '{action}' by default (no matching permit policy)")
+    } else {
+        format!("denied '{action}' by policies: {}", reasons.join(", "))
     }
+}
+
+fn evaluation_failure(
+    action: ActionClass,
+    diagnostics: &cedar_policy::Diagnostics,
+) -> Option<CedarDecision> {
+    let error = diagnostics.errors().next()?;
+    tracing::error!(
+        action = %action,
+        error = %error,
+        "Cedar policy evaluation failed during capability issuance"
+    );
+    Some(CedarDecision::evaluation_failed())
 }
 
 /// Evaluate Cedar policies for a capability issuance request.
@@ -382,7 +396,9 @@ fn policy_deny_message(action: &str, diagnostics: &cedar_policy::Diagnostics) ->
 /// not fatal: this lets a run request the full action-class set and receive a
 /// token narrowed to whatever the policy authorizes. If the intersection is
 /// empty the whole issuance fails closed. Structural/malformed requests (invalid
-/// action UID, context-build failure) still hard-fail the entire request.
+/// action UID, context-build failure, or Cedar evaluation error) still hard-fail
+/// the entire request. Evaluation diagnostics are logged internally but are not
+/// returned on the wire.
 ///
 /// Context at issuance time carries `session_id`, `timestamp_ms`, and
 /// `risk_score` (V1 placeholder = 0). `params` is empty (`"{}"`) because no
@@ -411,10 +427,8 @@ pub(crate) fn evaluate_cedar_policy(
             return CedarDecision::invalid_request(format!("invalid agent_id: {e}"));
         }
     };
-    // Build the resource as a full entity so issuance-time policies can read
-    // `resource.host` / `resource.path` / `resource.id` — evaluated identically
-    // to Sidecar enforcement. A bare UID with an empty store makes every
-    // `resource.<attr>` access error and skips the guarded condition.
+    // Use the same attributed resource entity as Sidecar enforcement so
+    // issuance-time `resource.<attr>` policies evaluate identically.
     let resource_entity = match FirmaEntityUid::resource_entity(resource) {
         Ok(entity) => entity,
         Err(e) => {
@@ -487,6 +501,10 @@ pub(crate) fn evaluate_cedar_policy(
         };
 
         let response = authorizer.is_authorized(&request, policy_set, &entities);
+
+        if let Some(failure) = evaluation_failure(action, response.diagnostics()) {
+            return failure;
+        }
 
         if response.decision() == cedar_policy::Decision::Deny {
             tracing::debug!(
@@ -649,6 +667,14 @@ mod tests {
     /// default-denies (no matching permit) and is dropped while narrowing.
     fn permit_only(action: &str) -> PolicySet {
         format!("permit(principal, action == Firma::Action::\"{action}\", resource);")
+            .parse()
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    }
+
+    fn permit_then_evaluation_error() -> PolicySet {
+        "permit(principal, action == Firma::Action::\"communication.external.send\", resource);\n\
+         permit(principal, action == Firma::Action::\"filesystem.read\", resource) \
+         when { context.timestamp_ms * context.timestamp_ms > 0 };"
             .parse()
             .unwrap_or_else(|e| panic!("{e:?}"))
     }
@@ -850,22 +876,28 @@ mod tests {
 
     #[test]
     fn evaluate_structural_failure_aborts_partial_grant() {
-        // First action is authorized and would narrow into `granted`; the second
-        // is structurally invalid (not declared in schema). A structural failure
-        // must hard-fail the whole request rather than return the partial grant.
+        // Both actions are canonical and reach Cedar evaluation. The first is
+        // permitted, while the second overflows a well-typed integer expression
+        // and produces an authorizer diagnostic error.
+        let policies = permit_then_evaluation_error();
         let schema = firma_schema();
+        firma_core::validate_policies(&policies, &schema, None).unwrap();
         let result = evaluate_cedar_policy(
-            &permit_all(),
+            &policies,
             &schema,
             &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
-            &["filesystem.read".to_string(), "unknown.action".to_string()],
+            &[
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
             "api.example.com",
         );
-        assert!(
-            matches!(result, CedarDecision::Deny { .. }),
-            "structural failure after an authorized action must abort, not grant the subset"
-        );
+        assert!(matches!(
+            result,
+            CedarDecision::Deny { reason, message }
+                if reason == "INVALID_REQUEST" && message == "Cedar policy evaluation failed"
+        ));
     }
 
     #[test]
@@ -918,20 +950,17 @@ mod tests {
     }
 
     #[test]
-    fn context_hash_deterministic() {
-        let h1 = compute_context_hash(
+    fn context_hash_matches_historical_sorted_string_vector() {
+        let hash = compute_context_hash(
             "agent_1",
             &action_set(&["filesystem.read", "communication.external.send"]),
             "api.example.com",
             "bundle_v1",
         );
-        let h2 = compute_context_hash(
-            "agent_1",
-            &action_set(&["filesystem.read", "communication.external.send"]),
-            "api.example.com",
-            "bundle_v1",
+        assert_eq!(
+            hash,
+            "510fbbb70e418563a9e83d2cbcfb92560202493e7d8f12b486120d92ffca72cf"
         );
-        assert_eq!(h1, h2);
     }
 
     #[test]

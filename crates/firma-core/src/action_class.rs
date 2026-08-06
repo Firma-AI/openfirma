@@ -17,7 +17,7 @@ macro_rules! action_classes {
     ($($variant:ident => $name:literal),+ $(,)?) => {
         /// A canonical action class. Convert to its wire identifier with
         /// [`ActionClass::as_str`]; parse from one with `str::parse`.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum ActionClass {
             $(
                 #[doc = concat!("`", $name, "`")]
@@ -35,6 +35,18 @@ macro_rules! action_classes {
                 match self {
                     $(ActionClass::$variant => $name),+
                 }
+            }
+        }
+
+        impl Ord for ActionClass {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.as_str().cmp(other.as_str())
+            }
+        }
+
+        impl PartialOrd for ActionClass {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
             }
         }
 
