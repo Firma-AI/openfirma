@@ -1,11 +1,11 @@
 //! Foreground ownership and detached observation loops.
 //!
-//! Owned supervision uses [`SpawnedComponent`] child handles to detect and
-//! collect leader exits. Observed supervision has only persisted
-//! [`UserProcessId`] values and can establish liveness but cannot collect those
-//! processes. Both loops return when a stop request or either component exit
-//! makes coordinated teardown necessary; returning successfully does not itself
-//! stop the remaining component. That responsibility stays with their caller.
+//! Owned supervision uses [`OwnedComponent`] capabilities to detect and collect
+//! leader exits. Observed supervision has only persisted [`UserProcessId`]
+//! values and can establish liveness but cannot collect those processes. Both
+//! loops return when a stop request or either component exit makes coordinated
+//! teardown necessary; returning successfully does not stop the peer. That
+//! responsibility remains with their caller.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,10 +13,18 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
+use crate::component::OwnedComponent;
 use crate::error::Result;
 use crate::platform::TerminationTarget;
-use crate::spawn::SpawnedComponent;
 use firma_runtime_state::{ChildExt as _, UserProcessId};
+
+/// Operation that starts a thread owning one component-reaper job.
+///
+/// Keeping thread creation separate from [`collect_in_background_with`] lets
+/// [`crate::start::RunningStack`] retain the operation until it relinquishes
+/// its [`OwnedComponent`] capabilities.
+pub type ReaperLauncher =
+    fn(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>;
 
 /// Persisted component identities available to a detached observer.
 ///
@@ -29,17 +37,17 @@ pub struct ObservedChildren {
 
 /// Wait until owned foreground supervision should begin coordinated teardown.
 ///
-/// A direct-child exit is collected through [`SpawnedComponent::child`]. Stop
-/// requests and exits both return [`Ok`]; process probing or collection failures
-/// are returned while component teardown remains the caller's responsibility.
+/// A direct-child exit is collected through [`OwnedComponent::try_wait`]. Stop
+/// requests and exits both return [`Ok`]; collection failures are returned
+/// while component teardown remains the caller's responsibility.
 pub fn block_until_owned_exit(
-    authority: &mut SpawnedComponent,
-    sidecar: &mut SpawnedComponent,
+    authority: &mut OwnedComponent,
+    sidecar: &mut OwnedComponent,
 ) -> Result<()> {
     let stop = install_stop_handler();
     debug!(
-        authority_pid = %authority.leader_pid,
-        sidecar_pid = %sidecar.leader_pid,
+        authority_pid = %authority.leader_pid(),
+        sidecar_pid = %sidecar.leader_pid(),
         "foreground supervisor watching owned children"
     );
 
@@ -48,12 +56,12 @@ pub fn block_until_owned_exit(
             info!("Ctrl-C received; caller will tear stack down");
             return Ok(());
         }
-        if authority.child.try_wait()?.is_some() {
-            warn!(pid = %authority.leader_pid, "authority exited unexpectedly");
+        if authority.try_wait()?.is_some() {
+            warn!(pid = %authority.leader_pid(), "authority exited unexpectedly");
             return Ok(());
         }
-        if sidecar.child.try_wait()?.is_some() {
-            warn!(pid = %sidecar.leader_pid, "sidecar exited unexpectedly");
+        if sidecar.try_wait()?.is_some() {
+            warn!(pid = %sidecar.leader_pid(), "sidecar exited unexpectedly");
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -107,22 +115,127 @@ fn install_stop_handler() -> Arc<AtomicBool> {
     stop
 }
 
-/// Transfer direct-child collection to an unjoined background thread.
+/// Failure to transfer component ownership into a background reaper.
 ///
-/// The collector owns both [`SpawnedComponent`] capabilities until their
-/// leaders are collected. It does not supervise health or stop a peer when one
-/// component exits; detached process governance belongs to
-/// [`crate::start::supervise`]. If the collector cannot be created,
-/// [`spawn_collector`] terminates and synchronously collects the capabilities
-/// it still owns before this function returns [`None`].
-pub fn collect_in_background(
-    authority: SpawnedComponent,
-    sidecar: SpawnedComponent,
-) -> Option<std::thread::JoinHandle<()>> {
-    spawn_collector(vec![authority.into(), sidecar.into()])
+/// The owned components remain available through [`Self::into_components`],
+/// allowing the caller to retry, terminate them synchronously, or retain them.
+pub struct ReaperStartError {
+    source: std::io::Error,
+    components: Arc<std::sync::Mutex<Option<Vec<OwnedComponent>>>>,
 }
 
-/// Transfer collection of one direct child to the background fallback.
+impl ReaperStartError {
+    /// Return the operating-system error that prevented thread creation.
+    pub const fn source(&self) -> &std::io::Error {
+        &self.source
+    }
+
+    /// Recover every process capability offered to the failed reaper.
+    pub fn into_components(self) -> Vec<OwnedComponent> {
+        match self.components.lock() {
+            Ok(mut components) => components.take().unwrap_or_default(),
+            Err(components) => components.into_inner().take().unwrap_or_default(),
+        }
+    }
+
+    /// Hard-terminate and synchronously collect the recovered components.
+    ///
+    /// This is the fail-closed fallback for callers, such as [`Drop`]
+    /// implementations, that cannot return ownership to their own caller. It
+    /// deliberately waits without a deadline: after reaper creation fails,
+    /// returning early would discard the only handles capable of reaping the
+    /// direct children. Every [`OwnedComponent`] remains represented until its
+    /// direct child is collected or reports an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first child collection error after attempting to terminate
+    /// and collect every recovered component.
+    pub fn terminate_and_collect(self) -> std::io::Result<()> {
+        let mut components = self.into_components();
+        for component in &mut components {
+            if let Err(error) = component.termination_target().signal_hard() {
+                warn!(role = component.role().name(), %error, "fallback process-tree termination failed");
+            }
+            if let Err(error) = component.kill_leader() {
+                debug!(role = component.role().name(), %error, "fallback leader termination failed");
+            }
+        }
+
+        let mut collection_error = None;
+        for component in &mut components {
+            if let Err(error) = component.wait() {
+                if child_was_collected_externally(&error) {
+                    continue;
+                }
+                warn!(role = component.role().name(), %error, "fallback child collection failed");
+                if collection_error.is_none() {
+                    collection_error = Some(error);
+                }
+            }
+        }
+        if let Some(error) = collection_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+/// Transfer component ownership to a named background reaper.
+///
+/// The reaper retains each [`OwnedComponent`] until its leader is collected; it
+/// does not supervise health or terminate peers. On thread-creation failure, no
+/// process capability is dropped: [`ReaperStartError`] carries the complete
+/// input collection back to the caller.
+pub fn collect_in_background(
+    components: Vec<OwnedComponent>,
+) -> std::result::Result<std::thread::JoinHandle<()>, ReaperStartError> {
+    collect_in_background_with(components, launch_reaper)
+}
+
+/// Start a named thread that owns one component-reaper job.
+pub fn launch_reaper(
+    job: Box<dyn FnOnce() + Send>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("firma-component-reaper".into())
+        .spawn(job)
+}
+
+/// Start a component reaper through the supplied thread-spawn operation.
+///
+/// This seam keeps ownership recovery testable without exhausting real process
+/// resources. Production callers use [`collect_in_background`].
+pub fn collect_in_background_with(
+    components: Vec<OwnedComponent>,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>,
+) -> std::result::Result<std::thread::JoinHandle<()>, ReaperStartError> {
+    let components = Arc::new(std::sync::Mutex::new(Some(components)));
+    let worker_components = Arc::clone(&components);
+    spawn(Box::new(move || {
+            let mut components = match worker_components.lock() {
+                Ok(mut components) => components.take().unwrap_or_default(),
+                Err(components) => components.into_inner().take().unwrap_or_default(),
+            };
+            while !components.is_empty() {
+                components.retain_mut(|component| match component.try_wait() {
+                    Ok(None) => true,
+                    Ok(Some(_)) => false,
+                    Err(error) if child_was_collected_externally(&error) => false,
+                    Err(error) => {
+                        debug!(role = component.role().name(), %error, "component collection probe failed; retrying");
+                        true
+                    }
+                });
+                if !components.is_empty() {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }))
+        .map_err(|source| ReaperStartError { source, components })
+}
+
+/// Transfer collection of one direct child to the legacy background fallback.
 ///
 /// The target derived from the child leader is appropriate only when no wider
 /// platform [`TerminationTarget`] is available.
@@ -133,7 +246,7 @@ pub fn collect_child_in_background(
     collect_target_in_background(child, target)
 }
 
-/// Transfer a paired child and [`TerminationTarget`] to the background fallback.
+/// Transfer a paired child and [`TerminationTarget`] to the legacy fallback.
 pub fn collect_target_in_background(
     child: std::process::Child,
     target: TerminationTarget,
@@ -167,27 +280,25 @@ pub fn collect_child_until(child: &mut std::process::Child, deadline: std::time:
     }
 }
 
-/// Child collection authority paired with its process-tree termination scope.
+/// Legacy collection authority paired with its process-tree termination scope.
 struct CollectedChild {
     child: std::process::Child,
     target: TerminationTarget,
 }
 
-impl From<SpawnedComponent> for CollectedChild {
-    fn from(component: SpawnedComponent) -> Self {
-        Self {
-            child: component.child,
-            target: component.termination_target,
-        }
+impl From<OwnedComponent> for CollectedChild {
+    fn from(component: OwnedComponent) -> Self {
+        let (child, target) = component.into_parts();
+        Self { child, target }
     }
 }
 
-/// Start the collector that assumes ownership of every supplied capability.
+/// Start the fallback collector that assumes ownership of supplied capabilities.
 ///
-/// Thread-creation failure cannot return those moved values to the caller, so
-/// this function terminates and makes a bounded collection attempt before
-/// returning [`None`]. Once created, the worker retains every handle until the
-/// corresponding child is collected.
+/// Thread-creation failure cannot return these already separated capabilities,
+/// so this function terminates and makes a bounded collection attempt before
+/// returning [`None`]. New lifecycle code should prefer
+/// [`collect_in_background`], whose [`ReaperStartError`] preserves ownership.
 fn spawn_collector(children: Vec<CollectedChild>) -> Option<std::thread::JoinHandle<()>> {
     let children = Arc::new(std::sync::Mutex::new(children));
     let worker_children = Arc::clone(&children);
