@@ -7,6 +7,7 @@ pub mod start;
 pub mod status;
 pub mod stop;
 
+mod component;
 mod detach;
 mod platform;
 mod readiness;
@@ -68,10 +69,17 @@ pub mod test_support {
         authority: std::process::Child,
         sidecar: std::process::Child,
     ) -> Option<std::thread::JoinHandle<()>> {
-        crate::supervisor::collect_in_background(
-            owned_component(authority),
-            owned_component(sidecar),
-        )
+        let components = vec![
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+        ];
+        match crate::supervisor::collect_in_background(components) {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                let _ = error.terminate_and_collect();
+                None
+            }
+        }
     }
 
     /// Collect one owned child in the same background loop used by detached
@@ -83,6 +91,52 @@ pub mod test_support {
         crate::supervisor::collect_child_in_background(child)
     }
 
+    /// Simulate component-reaper thread creation failure and recover both children.
+    #[must_use]
+    pub fn recover_raw_children_after_reaper_failure(
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> Vec<std::process::Child> {
+        let components = vec![
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+        ];
+        match crate::supervisor::collect_in_background_with(components, |_| {
+            Err(std::io::Error::other("injected reaper start failure"))
+        }) {
+            Ok(_) => Vec::new(),
+            Err(error) => error
+                .into_components()
+                .into_iter()
+                .map(|component| component.into_parts().0)
+                .collect(),
+        }
+    }
+
+    /// Simulate reaper creation failure and run the production fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first child collection error after attempting to terminate
+    /// and collect both children.
+    pub fn terminate_raw_children_after_reaper_failure(
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> std::io::Result<()> {
+        let components = vec![
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+        ];
+        match crate::supervisor::collect_in_background_with(components, |_| {
+            Err(std::io::Error::other("injected reaper start failure"))
+        }) {
+            Ok(_) => Err(std::io::Error::other(
+                "injected reaper start failure unexpectedly succeeded",
+            )),
+            Err(error) => error.terminate_and_collect(),
+        }
+    }
+
     /// Construct an owned running stack from arbitrary child processes.
     #[must_use]
     pub fn running_stack_from_raw(
@@ -91,9 +145,64 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> crate::RunningStack {
         crate::RunningStack::from_components(
-            owned_component(authority),
-            owned_component(sidecar),
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
             state_dir.to_path_buf(),
+        )
+    }
+
+    /// Supervise arbitrary owned children through the foreground lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns supervision, termination, or cleanup errors.
+    pub fn supervise_raw_owned_until_exit(
+        state_dir: &std::path::Path,
+        timeout: std::time::Duration,
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> crate::error::Result<()> {
+        let mut authority = owned_component(crate::component::ComponentRole::Authority, authority);
+        let mut sidecar = owned_component(crate::component::ComponentRole::Sidecar, sidecar);
+        let supervision_result =
+            crate::supervisor::block_until_owned_exit(&mut authority, &mut sidecar);
+        let teardown_result =
+            crate::stop::stop_owned(state_dir, timeout, &mut authority, &mut sidecar);
+        if teardown_result.is_ok() {
+            let _ = sidecar.wait();
+            let _ = authority.wait();
+        }
+        supervision_result?;
+        teardown_result.map(|_| ())
+    }
+
+    /// Construct an owned running stack whose component reaper cannot start.
+    #[must_use]
+    pub fn running_stack_from_raw_with_reaper_start_failure(
+        state_dir: &std::path::Path,
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> crate::RunningStack {
+        crate::RunningStack::from_components_with_reaper_launcher(
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            state_dir.to_path_buf(),
+            fail_reaper_start,
+        )
+    }
+
+    /// Construct an owned running stack that must never launch a component reaper.
+    #[must_use]
+    pub fn running_stack_from_raw_with_forbidden_reaper(
+        state_dir: &std::path::Path,
+        authority: std::process::Child,
+        sidecar: std::process::Child,
+    ) -> crate::RunningStack {
+        crate::RunningStack::from_components_with_reaper_launcher(
+            owned_component(crate::component::ComponentRole::Authority, authority),
+            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            state_dir.to_path_buf(),
+            forbid_reaper_start,
         )
     }
 
@@ -153,14 +262,34 @@ pub mod test_support {
         Ok(pid)
     }
 
-    fn owned_component(child: std::process::Child) -> crate::spawn::SpawnedComponent {
+    fn owned_component(
+        role: crate::component::ComponentRole,
+        child: std::process::Child,
+    ) -> crate::component::OwnedComponent {
         use firma_runtime_state::ChildExt as _;
 
         let leader_pid = child.process_id();
-        crate::spawn::SpawnedComponent {
+        crate::component::OwnedComponent::from_child(
+            role,
             child,
             leader_pid,
-            termination_target: crate::platform::TerminationTarget::for_leader(leader_pid),
-        }
+            crate::platform::TerminationTarget::for_leader(leader_pid),
+        )
+    }
+
+    fn fail_reaper_start(
+        _: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        Err(std::io::Error::other("injected reaper start failure"))
+    }
+
+    #[expect(
+        clippy::panic,
+        reason = "this test-only launcher is a negative assertion"
+    )]
+    fn forbid_reaper_start(
+        _: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        panic!("component reaper must not start after owned shutdown")
     }
 }
