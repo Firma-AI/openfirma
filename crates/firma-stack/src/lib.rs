@@ -195,8 +195,10 @@ pub mod test_support {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
         Ok(crate::RunningStack::from_components(
-            owned_component(crate::component::ComponentName::new("authority"), authority),
-            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            vec![
+                owned_component(crate::component::ComponentName::new("authority"), authority),
+                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            ],
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -246,8 +248,10 @@ pub mod test_support {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
         Ok(crate::RunningStack::from_components_with_reaper_launcher(
-            owned_component(crate::component::ComponentName::new("authority"), authority),
-            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            vec![
+                owned_component(crate::component::ComponentName::new("authority"), authority),
+                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            ],
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -264,8 +268,10 @@ pub mod test_support {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
         Ok(crate::RunningStack::from_components_with_reaper_launcher(
-            owned_component(crate::component::ComponentName::new("authority"), authority),
-            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            vec![
+                owned_component(crate::component::ComponentName::new("authority"), authority),
+                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            ],
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -303,8 +309,7 @@ pub mod test_support {
             sidecar_command,
         )?;
         Ok(crate::RunningStack::from_components_with_reaper_launcher(
-            authority,
-            sidecar,
+            vec![authority, sidecar],
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -403,8 +408,10 @@ pub mod test_support {
     ) -> crate::error::Result<()> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         let stack = crate::RunningStack::from_components(
-            owned_component(crate::component::ComponentName::new("authority"), authority),
-            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            vec![
+                owned_component(crate::component::ComponentName::new("authority"), authority),
+                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            ],
             state_dir.to_path_buf(),
             state_lease,
             Some(transaction),
