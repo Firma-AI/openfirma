@@ -1,4 +1,8 @@
 //! Regression: startup rollback tracks Unix process groups after leaders exit.
+//!
+//! Timeline: Authority forks a TERM-ignoring grandchild, its leader exits and is
+//! reaped, readiness is released, then sidecar startup fails and rollback must
+//! kill the orphaned group member.
 
 #![cfg(unix)]
 
@@ -6,33 +10,13 @@ use std::fs::{OpenOptions, Permissions};
 use std::io::{ErrorKind, Read as _};
 use std::net::TcpListener;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
-use firma_runtime_state::pidfile;
 use firma_stack::{StackConfig, StackError};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
-struct ProcessGroupCleanup(Option<Pid>);
-
-impl ProcessGroupCleanup {
-    fn new(pid: u32) -> Self {
-        Self(i32::try_from(pid).ok().map(Pid::from_raw))
-    }
-
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for ProcessGroupCleanup {
-    fn drop(&mut self) {
-        if let Some(pid) = self.0 {
-            let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
-        }
-    }
-}
+use crate::support::{ProcessGroupCleanup, wait_for_file, wait_for_pidfile};
 
 #[test]
 fn startup_rollback_kills_grandchild_after_leader_exits() {
@@ -133,31 +117,5 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
         "stack.lock",
     ] {
         assert!(!state_dir.join(name).exists(), "rollback left {name}");
-    }
-}
-
-fn wait_for_pidfile(path: &Path) -> u32 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(pid) = pidfile::read(path).expect("read authority pidfile") {
-            return pid.get();
-        }
-        assert!(
-            Instant::now() < deadline,
-            "authority pidfile was not written"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "{} was not written",
-            path.display()
-        );
-        std::thread::sleep(Duration::from_millis(10));
     }
 }

@@ -63,6 +63,14 @@ pub enum StackError {
         path: PathBuf,
     },
 
+    /// The persisted [`crate::StackGeneration`] is present but malformed.
+    #[error("invalid stack.lock generation")]
+    InvalidStackGeneration {
+        /// UUID parser failure retained for diagnostics.
+        #[source]
+        source: uuid::Error,
+    },
+
     /// Spawning a child component (authority or sidecar) failed.
     #[error("failed to spawn '{component}': {source}")]
     Spawn {

@@ -15,7 +15,7 @@ use tracing::{debug, info};
 use crate::component::OwnedComponent;
 use crate::error::{Result, StackError};
 use crate::platform::TerminationTarget;
-use crate::state_lease::{StateLease, StateTransaction};
+use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use firma_runtime_state::pidfile;
 
 /// Maximum interval for proving target absence after forced termination.
@@ -28,14 +28,24 @@ const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
 /// Policy for acquiring state serialization after process termination.
 ///
 /// Process termination must not be postponed by state contention. This value
-/// therefore distinguishes an external stop that already holds a transaction
-/// from an owned supervisor that may only attempt cleanup after teardown.
-#[derive(Clone, Copy)]
+/// therefore distinguishes an external stop that already holds a transaction,
+/// an owned supervisor that may only attempt cleanup after teardown, and
+/// malformed state that must be retained after its targets are stopped.
 enum CleanupLock<'a> {
     /// Reuse a [`StateTransaction`] held across an external [`stop`] call.
     Held(&'a StateTransaction),
     /// Use [`StateTransaction::try_acquire`] after owned process termination.
     Try,
+    /// Terminate snapshotted targets but never remove malformed generation state.
+    ///
+    /// This permits operator-requested teardown without letting an unparseable
+    /// generation accidentally authorize deletion.
+    Retain {
+        /// Keep [`StateTransaction`] serialization held through target termination.
+        _transaction: &'a StateTransaction,
+        /// Report the [`StackError::InvalidStackGeneration`] after teardown.
+        error: StackError,
+    },
 }
 
 /// Borrowed [`TerminationTarget`] snapshot for one teardown attempt.
@@ -71,15 +81,60 @@ pub struct StopOutcome {
 /// # Errors
 ///
 /// Returns pidfile, process-probe, termination, or cleanup errors. Runtime
-/// state is retained when probing or hard termination fails so cleanup can be
-/// retried. [`StateTransaction`] prevents startup or another stop from changing
-/// the process snapshot before this call finishes teardown and cleanup.
+/// state is retained when probing or hard termination fails, or when the
+/// generation is malformed, so cleanup can be retried. Malformed generation
+/// state does not prevent process teardown; its
+/// [`StackError::InvalidStackGeneration`] is returned afterward.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
+    stop_expected_generation(state_dir, timeout, None)
+}
+
+/// Stop only the processes belonging to one launcher-assigned generation.
+///
+/// A generation mismatch is a successful no-op, preventing delayed detached
+/// rollback from terminating a replacement stack. A malformed generation fails
+/// before process teardown because the launcher cannot attribute those targets.
+pub(crate) fn stop_generation(
+    state_dir: &Path,
+    timeout: Duration,
+    generation: StackGeneration,
+) -> Result<StopOutcome> {
+    stop_expected_generation(state_dir, timeout, Some(generation))
+}
+
+/// Snapshot and stop state under the expected [`StackGeneration`] policy.
+///
+/// Explicit [`stop`] records malformed-generation failure in
+/// [`CleanupLock::Retain`] and still tears down known targets. Generation-bound
+/// rollback instead fails before signalling because ownership cannot be proven.
+fn stop_expected_generation(
+    state_dir: &Path,
+    timeout: Duration,
+    expected_generation: Option<StackGeneration>,
+) -> Result<StopOutcome> {
     if !state_dir.exists() {
         return Ok(StopOutcome { forced: false });
     }
     let transaction = StateTransaction::acquire(state_dir)?;
-    let state_lease = StateLease::load(state_dir)?;
+    let (state_lease, cleanup_lock) = match StateLease::load(state_dir) {
+        Ok(state_lease) => (state_lease, CleanupLock::Held(&transaction)),
+        Err(error @ StackError::InvalidStackGeneration { .. }) if expected_generation.is_none() => {
+            (
+                None,
+                CleanupLock::Retain {
+                    _transaction: &transaction,
+                    error,
+                },
+            )
+        }
+        Err(error) => return Err(error),
+    };
+    if let Some(expected_generation) = expected_generation
+        && !state_lease.is_some_and(|lease| lease.belongs_to(expected_generation))
+    {
+        info!(%expected_generation, ?state_lease, "stack generation changed; skipping stale stop");
+        return Ok(StopOutcome { forced: false });
+    }
     let supervisor = read_target(state_dir, "stack.pid")?;
     let authority = read_target(state_dir, "authority.pid")?;
     let sidecar = read_target(state_dir, "sidecar.pid")?;
@@ -92,7 +147,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
             sidecar: sidecar.as_ref(),
         },
         state_lease,
-        CleanupLock::Held(&transaction),
+        cleanup_lock,
         || Ok(()),
     )
 }
@@ -327,6 +382,10 @@ pub(crate) fn cleanup_generation(
             state_dir,
             current_owner,
         ))?;
+        pidfile::remove(&crate::start::supervisor_attached_path(
+            state_dir,
+            current_owner,
+        ))?;
     }
     for name in [
         "authority.pid",
@@ -341,11 +400,11 @@ pub(crate) fn cleanup_generation(
     Ok(())
 }
 
-/// Serialize final cleanup against startup and concurrent [`stop`] snapshots.
+/// Apply the cleanup policy selected before process teardown.
 ///
-/// [`CleanupLock::Try`] reports contention instead of waiting because owned
-/// process teardown has already completed and must not deadlock with another
-/// mutator holding the [`StateTransaction`].
+/// [`CleanupLock::Try`] reports contention instead of waiting. The
+/// [`CleanupLock::Retain`] path returns its saved generation error only after
+/// target absence is proven and deliberately leaves all state intact.
 fn cleanup(
     state_dir: &Path,
     state_lease: Option<StateLease>,
@@ -361,5 +420,9 @@ fn cleanup(
             })?;
             cleanup_generation(state_dir, state_lease, &transaction)
         }
+        CleanupLock::Retain {
+            _transaction: _,
+            error,
+        } => Err(error),
     }
 }

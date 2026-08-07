@@ -1,9 +1,9 @@
-//! Bounded evidence used by the startup sequence.
+//! Bounded startup evidence for managed components.
 //!
-//! These probes establish only the conditions needed for
-//! [`crate::start::spawn_stack`] to commit startup. They do not provide ongoing
-//! health supervision, validate service identity, or assume ownership of
-//! rollback; startup retains that responsibility.
+//! These probes establish only that startup reached its publication boundary;
+//! they do not confer process ownership or promise ongoing health. When supplied,
+//! [`StopSignal`] makes each wait cooperatively abortable so startup ownership
+//! can roll back promptly after termination.
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
@@ -14,19 +14,26 @@ use firma_config_loader::FirmaConfig;
 use firma_sidecar::config::SidecarConfig;
 
 use crate::error::{Result, StackError};
+use crate::supervisor::StopSignal;
 
-/// Wait until a TCP connection can be established for one component.
+/// Wait until a component accepts a TCP connection or startup must abort.
 ///
-/// Success proves only that the configured address accepted a connection at
-/// probe time. Ongoing liveness belongs to stack supervision.
+/// A supplied [`StopSignal`] takes precedence over another retry. Callers that
+/// do not own process-level signal handling may omit it and remain timeout-bound.
 ///
 /// # Errors
 ///
-/// Returns [`StackError::Readiness`] if no connection succeeds before the
-/// supplied deadline.
-pub fn wait_for_tcp(component: &str, addr: SocketAddr, timeout: Duration) -> Result<()> {
+/// Returns a termination or [`StackError::Readiness`] error while leaving
+/// process rollback to the caller's ownership guard.
+pub fn wait_for_tcp(
+    component: &str,
+    addr: SocketAddr,
+    timeout: Duration,
+    stop_signal: Option<&StopSignal>,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
+        check_startup_stop(stop_signal)?;
         if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
             return Ok(());
         }
@@ -40,21 +47,24 @@ pub fn wait_for_tcp(component: &str, addr: SocketAddr, timeout: Duration) -> Res
     }
 }
 
-/// Wait until both Sidecar CA-material paths exist.
+/// Wait until both files constituting generated CA material are present.
 ///
-/// This probe establishes publication, not certificate or key validity. Its
-/// caller enables it only when the Sidecar configuration reports active HTTPS
-/// interception.
+/// File presence is the Sidecar's startup publication evidence, not a promise
+/// that its process remains live. A supplied [`StopSignal`] aborts the wait.
 ///
 /// # Errors
 ///
-/// Returns [`StackError::Readiness`] if both paths are not present before the
-/// supplied deadline.
-pub fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<()> {
+/// Returns a termination, filesystem, or [`StackError::Readiness`] error.
+pub fn wait_for_ca_material(
+    ca_dir: &Path,
+    timeout: Duration,
+    stop_signal: Option<&StopSignal>,
+) -> Result<()> {
     let cert = ca_dir.join("firma-ca.crt");
     let key = ca_dir.join("firma-ca.key");
     let deadline = Instant::now() + timeout;
     loop {
+        check_startup_stop(stop_signal)?;
         if cert.exists() && key.exists() {
             return Ok(());
         }
@@ -68,20 +78,29 @@ pub fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<()> {
     }
 }
 
-/// A parsed unified `firma.toml`, read once so the probes below share a single
-/// read instead of each re-reading the file. Thin wrapper over
-/// [`FirmaConfig`]; each accessor deserializes the relevant `[section]` into
-/// the owning crate's own config type, so the stack shares those wire schemas
-/// and defaults instead of mirroring them.
+/// Convert a process termination request into a rollback-triggering startup error.
+fn check_startup_stop(stop_signal: Option<&StopSignal>) -> Result<()> {
+    if stop_signal.is_some_and(StopSignal::requested) {
+        return Err(StackError::Platform(
+            "termination requested during stack startup".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// One parsed unified Firma configuration shared by startup probes.
+///
+/// This thin wrapper over [`FirmaConfig`] ensures each accessor deserializes the
+/// owning crate's configuration type instead of mirroring schemas or defaults.
 #[derive(Debug)]
 pub struct FirmaToml {
     config: FirmaConfig,
 }
 
 impl FirmaToml {
-    /// Read `firma.toml` and parse its TOML syntax, wrapping it for the probe
-    /// accessors below. The `[section]` schemas are validated lazily by each
-    /// accessor, not here.
+    /// Parse the unified configuration once for the probe accessors.
+    ///
+    /// Component section schemas are validated lazily by their owning accessor.
     ///
     /// # Errors
     ///
@@ -93,8 +112,10 @@ impl FirmaToml {
         Ok(Self { config })
     }
 
-    /// Deserialize the `[authority]` section into firma-authority's own
-    /// [`AuthorityConfig`] and resolve its `listen_addr`.
+    /// Deserialize Authority configuration and resolve its listen address.
+    ///
+    /// Using [`AuthorityConfig`] keeps readiness aligned with the Authority's
+    /// own schema and defaults.
     ///
     /// # Errors
     ///
@@ -113,12 +134,11 @@ impl FirmaToml {
         })
     }
 
-    /// Deserialize the `[sidecar]` section into firma-sidecar's own
-    /// [`SidecarConfig`], sharing the Sidecar's schema and defaults rather than
-    /// mirroring them.
+    /// Deserialize Sidecar configuration through [`SidecarConfig`].
     ///
-    /// Callers use its interceptor address for [`wait_for_tcp`] and its HTTPS
-    /// MITM activation semantics to gate [`wait_for_ca_material`].
+    /// Callers use the resulting listen address for [`wait_for_tcp`] and
+    /// [`firma_sidecar::config::HttpsMitmConfig::is_active`] to decide whether
+    /// [`wait_for_ca_material`] is required.
     ///
     /// # Errors
     ///
@@ -250,13 +270,13 @@ intercept_hosts = [\"api.anthropic.com\"]
         std::fs::write(dir.path().join("firma-ca.crt"), b"cert").expect("write cert");
         std::fs::write(dir.path().join("firma-ca.key"), b"key").expect("write key");
 
-        wait_for_ca_material(dir.path(), Duration::from_secs(1)).expect("material present");
+        wait_for_ca_material(dir.path(), Duration::from_secs(1), None).expect("material present");
     }
 
     #[test]
     fn wait_for_ca_material_times_out_when_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let err = wait_for_ca_material(dir.path(), Duration::from_millis(0))
+        let err = wait_for_ca_material(dir.path(), Duration::from_millis(0), None)
             .expect_err("absent material must time out");
         assert!(matches!(err, StackError::Readiness { .. }));
     }
