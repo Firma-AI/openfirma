@@ -65,6 +65,7 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+firma-stack = { workspace = true, features = ["test-support"] }
 fs-err = { workspace = true }
 guppy = "0.17"
 http-body-util = { workspace = true }

@@ -799,6 +799,7 @@ pub fn supervise_owned_generation(
 }
 
 /// Supervise an already-owned stack after installing [`StopSignal`].
+#[cfg(feature = "test-support")]
 pub(crate) fn supervise_running_stack(
     mut stack: RunningStack,
     state_dir: &Path,
