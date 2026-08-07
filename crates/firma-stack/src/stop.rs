@@ -138,7 +138,7 @@ pub struct StopOutcome {
 /// state does not prevent process teardown; its
 /// [`StackError::InvalidStackGeneration`] is returned afterward.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
-    stop_expected_generation(state_dir, timeout, None)
+    stop_expected_generation(state_dir, timeout, crate::plan::component_names(), None)
 }
 
 /// Stop only the processes belonging to one launcher-assigned generation.
@@ -151,7 +151,12 @@ pub(crate) fn stop_generation(
     timeout: Duration,
     generation: StackGeneration,
 ) -> Result<StopOutcome> {
-    stop_expected_generation(state_dir, timeout, Some(generation))
+    stop_expected_generation(
+        state_dir,
+        timeout,
+        crate::plan::component_names(),
+        Some(generation),
+    )
 }
 
 /// Snapshot and stop state under the expected [`StackGeneration`] policy.
@@ -162,6 +167,7 @@ pub(crate) fn stop_generation(
 fn stop_expected_generation(
     state_dir: &Path,
     timeout: Duration,
+    component_names: &[&str],
     expected_generation: Option<StackGeneration>,
 ) -> Result<StopOutcome> {
     if !state_dir.exists() {
@@ -188,17 +194,17 @@ fn stop_expected_generation(
         return Ok(StopOutcome { forced: false });
     }
     let supervisor = read_target(state_dir, "stack.pid")?;
-    // Enumerating persisted components generically is a later stage (P6); the
-    // known component pidfiles are read here in startup order.
-    let authority = read_target(state_dir, "authority.pid")?;
-    let sidecar = read_target(state_dir, "sidecar.pid")?;
-    let components = [authority.as_ref(), sidecar.as_ref()]
-        .into_iter()
-        .flatten()
-        .collect();
+    // Read the caller-supplied component pidfiles in startup order. The set of
+    // component names is firma-specific data supplied by the caller.
+    let component_targets = component_names
+        .iter()
+        .map(|name| read_target(state_dir, &format!("{name}.pid")))
+        .collect::<Result<Vec<_>>>()?;
+    let components = component_targets.iter().flatten().collect();
     stop_inner(
         state_dir,
         timeout,
+        component_names,
         &StopTargets {
             supervisor: supervisor.as_ref(),
             components,
@@ -225,6 +231,11 @@ pub(crate) fn stop_owned(
     components: &mut [OwnedComponent],
     state_lease: StateLease,
 ) -> Result<StopOutcome> {
+    let owned_names: Vec<String> = components
+        .iter()
+        .map(|component| component.name().as_str().to_string())
+        .collect();
+    let component_names: Vec<&str> = owned_names.iter().map(String::as_str).collect();
     let (mut children, targets): (Vec<&mut std::process::Child>, Vec<&TerminationTarget>) =
         components
             .iter_mut()
@@ -233,6 +244,7 @@ pub(crate) fn stop_owned(
     stop_inner(
         state_dir,
         timeout,
+        &component_names,
         &StopTargets {
             supervisor: None,
             components: targets,
@@ -260,6 +272,7 @@ pub(crate) fn stop_owned(
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
+    component_names: &[&str],
     targets: &StopTargets<'_>,
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
@@ -303,7 +316,7 @@ fn stop_inner(
         }
         if targets_absent(targets.teardown_order(), &mut teardown_error) {
             info!("all component targets exited cleanly");
-            cleanup(state_dir, state_lease, cleanup_lock)?;
+            cleanup(state_dir, component_names, state_lease, cleanup_lock)?;
             return Ok(StopOutcome { forced: false });
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -358,7 +371,7 @@ fn stop_inner(
         info!(%error, "teardown incomplete; retaining runtime state");
         return Err(error);
     }
-    cleanup(state_dir, state_lease, cleanup_lock)?;
+    cleanup(state_dir, component_names, state_lease, cleanup_lock)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
 }
@@ -411,6 +424,7 @@ fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>
 /// skips cleanup and returns success.
 pub(crate) fn cleanup_generation(
     state_dir: &Path,
+    component_names: &[&str],
     state_lease: Option<StateLease>,
     _transaction: &StateTransaction,
 ) -> Result<()> {
@@ -436,10 +450,9 @@ pub(crate) fn cleanup_generation(
             current_owner,
         ))?;
     }
-    // Derive each component's runtime-state files from its name (startup
-    // order; the known set until persisted-component enumeration lands in P6),
-    // then remove the supervisor's files.
-    for component in ["authority", "sidecar"] {
+    // Derive each component's runtime-state files from its caller-supplied name
+    // (startup order), then remove the supervisor's files.
+    for component in component_names {
         pidfile::remove(&state_dir.join(format!("{component}.pid")))?;
         pidfile::remove(&state_dir.join(format!("{component}.listen")))?;
     }
@@ -455,18 +468,21 @@ pub(crate) fn cleanup_generation(
 /// target absence is proven and deliberately leaves all state intact.
 fn cleanup(
     state_dir: &Path,
+    component_names: &[&str],
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
 ) -> Result<()> {
     match cleanup_lock {
-        CleanupLock::Held(transaction) => cleanup_generation(state_dir, state_lease, transaction),
+        CleanupLock::Held(transaction) => {
+            cleanup_generation(state_dir, component_names, state_lease, transaction)
+        }
         CleanupLock::Try => {
             let transaction = StateTransaction::try_acquire(state_dir)?.ok_or_else(|| {
                 StackError::RuntimeStateBusy {
                     path: state_dir.to_path_buf(),
                 }
             })?;
-            cleanup_generation(state_dir, state_lease, &transaction)
+            cleanup_generation(state_dir, component_names, state_lease, &transaction)
         }
         CleanupLock::Retain {
             _transaction: _,
