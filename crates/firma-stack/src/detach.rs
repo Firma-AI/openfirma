@@ -17,14 +17,16 @@ use crate::error::{Result, StackError};
 ///
 /// Log handles and platform creation flags are rebuilt for each
 /// [`spawn_detached`] attempt. A successful return means only that the
-/// supervisor process exists; the caller still owns stack rollback until the
-/// handoff defined by [`crate::start::start`].
+/// returned supervisor child exists; the caller retains its collection handle
+/// and stack rollback authority until the attachment barrier defined by
+/// [`crate::start::wait_for_supervisor_attachment`].
 ///
 /// # Errors
 ///
 /// Returns executable discovery, log creation, command construction, or
 /// supervisor spawn errors.
-pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
+pub fn spawn_supervisor(state_dir: &Path) -> Result<Child> {
+    firma_runtime_state::pidfile::remove(&state_dir.join("stack.ready"))?;
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
 
@@ -71,7 +73,7 @@ pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
 
     let child = spawn_detached(&build)?;
     info!(pid = child.id(), "supervisor spawned");
-    Ok(())
+    Ok(child)
 }
 
 /// Spawn a command produced by the supplied builder, detached from the parent.
