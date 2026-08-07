@@ -25,6 +25,45 @@ use firma_runtime_state::pidfile;
 /// succeeded.
 const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
 
+/// First-error-wins accumulator for teardown: the earliest recorded error is
+/// retained and later ones are dropped, matching fail-closed precedence.
+#[derive(Default)]
+struct FirstError(Option<StackError>);
+
+impl FirstError {
+    fn record(&mut self, error: StackError) {
+        if self.0.is_none() {
+            self.0 = Some(error);
+        }
+    }
+
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+
+    fn into_inner(self) -> Option<StackError> {
+        self.0
+    }
+}
+
+/// Resolve the final teardown error by precedence:
+/// recorded teardown error > (only if targets remain) hard-termination error > timeout.
+/// Confirmed absence of all targets suppresses the hard-termination error.
+fn resolve(
+    first_teardown: Option<StackError>,
+    first_hard: Option<StackError>,
+    targets_disappeared: bool,
+    timeout: impl FnOnce() -> StackError,
+) -> Option<StackError> {
+    if let Some(error) = first_teardown {
+        return Some(error);
+    }
+    if targets_disappeared {
+        return None;
+    }
+    Some(first_hard.unwrap_or_else(timeout))
+}
+
 /// Policy for acquiring state serialization after process termination.
 ///
 /// Process termination must not be postponed by state contention. This value
@@ -213,7 +252,10 @@ fn stop_inner(
     // gRPC streams to the authority close cleanly; that lets the authority's
     // tonic graceful shutdown finish instead of blocking on long-lived
     // server-streaming RPCs.
-    let mut teardown_error = collect_owned().err();
+    let mut teardown_error = FirstError::default();
+    if let Err(error) = collect_owned() {
+        teardown_error.record(error);
+    }
     for target in [targets.sidecar, targets.stack, targets.authority]
         .into_iter()
         .flatten()
@@ -231,9 +273,9 @@ fn stop_inner(
 
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
-    while teardown_error.is_none() && Instant::now() < deadline {
+    while !teardown_error.is_set() && Instant::now() < deadline {
         if let Err(error) = collect_owned() {
-            teardown_error = Some(error);
+            teardown_error.record(error);
             break;
         }
         if targets_absent(
@@ -249,13 +291,11 @@ fn stop_inner(
 
     // Hard-kill survivors. This is the expected path for components that
     // hang in their own graceful-shutdown logic; not an error.
-    if let Err(error) = collect_owned()
-        && teardown_error.is_none()
-    {
-        teardown_error = Some(error);
+    if let Err(error) = collect_owned() {
+        teardown_error.record(error);
     }
     let mut forced = false;
-    let mut hard_termination_error = None;
+    let mut hard_termination_error = FirstError::default();
     for target in [targets.stack, targets.authority, targets.sidecar]
         .into_iter()
         .flatten()
@@ -265,16 +305,12 @@ fn stop_inner(
             match target.signal_hard() {
                 Ok(()) => forced = true,
                 Err(error) => {
-                    if let Err(collect_error) = collect_owned()
-                        && teardown_error.is_none()
-                    {
-                        teardown_error = Some(collect_error);
+                    if let Err(collect_error) = collect_owned() {
+                        teardown_error.record(collect_error);
                     }
                     if !matches!(target.exists(), Ok(false)) {
                         info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
-                        if hard_termination_error.is_none() {
-                            hard_termination_error = Some(error);
-                        }
+                        hard_termination_error.record(error);
                     }
                 }
             }
@@ -282,10 +318,8 @@ fn stop_inner(
     }
     let settlement_deadline = Instant::now() + HARD_TERMINATION_SETTLEMENT;
     let targets_disappeared = loop {
-        if let Err(error) = collect_owned()
-            && teardown_error.is_none()
-        {
-            teardown_error = Some(error);
+        if let Err(error) = collect_owned() {
+            teardown_error.record(error);
         }
         if targets_absent(
             [targets.sidecar, targets.stack, targets.authority],
@@ -298,12 +332,15 @@ fn stop_inner(
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    if !targets_disappeared && teardown_error.is_none() {
-        teardown_error = hard_termination_error.or(Some(StackError::TerminationTimeout {
+    let final_error = resolve(
+        teardown_error.into_inner(),
+        hard_termination_error.into_inner(),
+        targets_disappeared,
+        || StackError::TerminationTimeout {
             timeout_secs: HARD_TERMINATION_SETTLEMENT.as_secs(),
-        }));
-    }
-    if let Some(error) = teardown_error {
+        },
+    );
+    if let Some(error) = final_error {
         info!(%error, "teardown incomplete; retaining runtime state");
         return Err(error);
     }
@@ -315,7 +352,7 @@ fn stop_inner(
 /// Prove that every recorded target is absent under [`target_may_exist`] policy.
 fn targets_absent<const N: usize>(
     targets: [Option<&TerminationTarget>; N],
-    teardown_error: &mut Option<StackError>,
+    teardown_error: &mut FirstError,
 ) -> bool {
     let mut all_absent = true;
     for target in targets.into_iter().flatten() {
@@ -331,14 +368,12 @@ fn targets_absent<const N: usize>(
 /// Failure of [`TerminationTarget::exists`] records the first teardown error
 /// and returns possible presence, ensuring the caller still attempts signals
 /// and cannot authorize [`cleanup`].
-fn target_may_exist(target: &TerminationTarget, teardown_error: &mut Option<StackError>) -> bool {
+fn target_may_exist(target: &TerminationTarget, teardown_error: &mut FirstError) -> bool {
     match target.exists() {
         Ok(exists) => exists,
         Err(error) => {
             info!(id = %target.stored_id(), %error, "termination-target probe failed; signalling conservatively");
-            if teardown_error.is_none() {
-                *teardown_error = Some(error);
-            }
+            teardown_error.record(error);
             true
         }
     }
@@ -424,5 +459,64 @@ fn cleanup(
             _transaction: _,
             error,
         } => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn timeout() -> StackError {
+        StackError::TerminationTimeout { timeout_secs: 2 }
+    }
+
+    #[test]
+    fn recorded_teardown_error_wins_over_hard_and_timeout() {
+        for targets_disappeared in [true, false] {
+            let resolved = resolve(
+                Some(StackError::Platform("teardown".into())),
+                Some(StackError::Platform("hard".into())),
+                targets_disappeared,
+                timeout,
+            );
+            assert!(matches!(
+                resolved,
+                Some(StackError::Platform(message)) if message == "teardown"
+            ));
+        }
+    }
+
+    #[test]
+    fn disappeared_targets_suppress_hard_error() {
+        let resolved = resolve(
+            None,
+            Some(StackError::Platform("hard".into())),
+            true,
+            timeout,
+        );
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn surviving_targets_surface_hard_error() {
+        let resolved = resolve(
+            None,
+            Some(StackError::Platform("hard".into())),
+            false,
+            timeout,
+        );
+        assert!(matches!(
+            resolved,
+            Some(StackError::Platform(message)) if message == "hard"
+        ));
+    }
+
+    #[test]
+    fn surviving_targets_without_hard_error_time_out() {
+        let resolved = resolve(None, None, false, timeout);
+        assert!(matches!(
+            resolved,
+            Some(StackError::TerminationTimeout { timeout_secs: 2 })
+        ));
     }
 }
