@@ -1741,6 +1741,7 @@ dependencies = [
  "firma-fs",
  "firma-runtime-state",
  "firma-sidecar",
+ "firma-stack",
  "fs2",
  "insta",
  "nix 0.31.3",

@@ -178,10 +178,10 @@ fn failed_second_start_does_not_claim_or_terminate_existing_stack() {
     assert!(start.status.success(), "initial start failed: {start:?}");
 
     let state_dir = &scaffold.state_dir;
-    let authority_pid = firma_stack::test_support::pidfile::read(&state_dir.join("authority.pid"))
+    let authority_pid = firma_runtime_state::pidfile::read(&state_dir.join("authority.pid"))
         .expect("read authority pidfile")
         .expect("authority pid");
-    let sidecar_pid = firma_stack::test_support::pidfile::read(&state_dir.join("sidecar.pid"))
+    let sidecar_pid = firma_runtime_state::pidfile::read(&state_dir.join("sidecar.pid"))
         .expect("read sidecar pidfile")
         .expect("sidecar pid");
 
@@ -299,13 +299,13 @@ fn supervisor_owner_teardown_terminates_components() {
 
     let state_dir = &scaffold.state_dir;
     let stack_pid = scaffold.stack_pid_path();
-    let authority_pid = firma_stack::test_support::pidfile::read(&state_dir.join("authority.pid"))
+    let authority_pid = firma_runtime_state::pidfile::read(&state_dir.join("authority.pid"))
         .expect("read authority pidfile")
         .expect("authority pid");
-    let sidecar_pid = firma_stack::test_support::pidfile::read(&state_dir.join("sidecar.pid"))
+    let sidecar_pid = firma_runtime_state::pidfile::read(&state_dir.join("sidecar.pid"))
         .expect("read sidecar pidfile")
         .expect("sidecar pid");
-    let supervisor_pid = firma_stack::test_support::pidfile::read(&stack_pid)
+    let supervisor_pid = firma_runtime_state::pidfile::read(&stack_pid)
         .expect("read supervisor pidfile")
         .expect("supervisor pid");
 

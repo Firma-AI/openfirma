@@ -10,6 +10,9 @@ description = "Process supervision and observability primitives for the firma st
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 ctrlc = { workspace = true }
 firma-authority = { workspace = true }
@@ -26,6 +29,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+firma-stack = { path = ".", features = ["test-support"] }
 insta = { workspace = true }
 serial_test = { workspace = true }
 

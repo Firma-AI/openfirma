@@ -159,6 +159,7 @@ impl StateLease {
     /// # Errors
     ///
     /// Returns an I/O error when the replacement cannot be published.
+    #[cfg(feature = "test-support")]
     pub(crate) fn replace_for_test(state_dir: &Path) -> Result<Self> {
         let lease = Self {
             generation: StackGeneration::new(),

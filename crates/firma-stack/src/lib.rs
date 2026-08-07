@@ -24,10 +24,9 @@ pub use state_lease::StackGeneration;
 pub use status::{ComponentStatus, StackStatus, State, status};
 pub use stop::{StopOutcome, stop};
 
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod test_support {
-    pub use firma_runtime_state::pidfile;
-
     /// Test-only capability holding startup's exclusive runtime-state transaction.
     pub struct RawStartupTransaction {
         transaction: crate::state_lease::StateTransaction,
