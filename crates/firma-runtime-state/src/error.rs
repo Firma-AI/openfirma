@@ -8,6 +8,15 @@ use thiserror::Error;
 /// Error type returned by runtime filesystem state operations.
 #[derive(Debug, Error)]
 pub enum RuntimeStateError {
+    /// A pidfile is present but does not contain a valid non-zero process ID.
+    #[error("invalid pidfile '{path}': expected a non-zero process ID, got '{value}'")]
+    PidfileParse {
+        /// Path of the malformed pidfile.
+        path: PathBuf,
+        /// Trimmed malformed value read from the file.
+        value: String,
+    },
+
     /// A sidecar marker file (`metadata.toml`) is present but not valid TOML.
     #[error("failed to parse sidecar marker '{path}': {source}")]
     MarkerParse {

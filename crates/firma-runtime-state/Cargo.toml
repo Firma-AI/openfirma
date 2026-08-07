@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 insta = { workspace = true }
 serde = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
@@ -27,4 +28,3 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
-tempfile = { workspace = true }

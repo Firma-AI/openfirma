@@ -1,20 +1,34 @@
 //! Pid-file read, write, remove, and metadata helpers.
 
+use std::io::Write as _;
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{Result, RuntimeStateError};
 use crate::process_id::UserProcessId;
 
-/// Write a pid file.
+/// Write a pid file, publishing it by rename.
+///
+/// The pid is written to a flushed temporary file in the same directory and
+/// then renamed over `path`. On Unix the rename is atomic and the parent
+/// directory is flushed afterwards, so a concurrent reader observes either the
+/// previous file or the complete new one, and the replacement survives a crash.
+/// On Windows the rename goes through `MoveFileEx` with replace semantics, which
+/// still avoids a truncate/append window but is not guaranteed to be atomic
+/// against a reader holding the destination open.
 ///
 /// # Errors
 ///
 /// Returns filesystem errors.
 pub fn write(path: &Path, pid: UserProcessId) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, format!("{pid}\n"))?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    writeln!(temp, "{pid}")?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
+    // Flush the directory entry so the rename is durable across a crash.
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -22,10 +36,22 @@ pub fn write(path: &Path, pid: UserProcessId) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns filesystem errors other than not-found.
+/// Returns filesystem errors other than not-found, or an error when the file
+/// does not contain a valid non-zero process ID.
 pub fn read(path: &Path) -> Result<Option<UserProcessId>> {
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text.trim().parse().ok().and_then(UserProcessId::new)),
+        Ok(text) => {
+            let value = text.trim();
+            let pid = value
+                .parse()
+                .ok()
+                .and_then(UserProcessId::new)
+                .ok_or_else(|| RuntimeStateError::PidfileParse {
+                    path: path.to_path_buf(),
+                    value: value.to_string(),
+                })?;
+            Ok(Some(pid))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }

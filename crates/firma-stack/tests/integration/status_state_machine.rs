@@ -1,6 +1,6 @@
 //! Status cases that do not require a running stack.
 
-use firma_stack::{State, status};
+use firma_stack::{StackError, State, status};
 use tempfile::tempdir;
 
 #[test]
@@ -31,4 +31,22 @@ fn dead_pid_yields_stopped() {
         .expect("sidecar");
     assert_eq!(authority.state, State::Stopped);
     assert_eq!(sidecar.state, State::Stopped);
+}
+
+#[test]
+fn malformed_pidfile_is_reported() {
+    let dir = tempdir().expect("dir");
+    let path = dir.path().join("sidecar.pid");
+    std::fs::write(&path, "not-a-pid\n").expect("write sidecar pidfile");
+
+    let error = status(dir.path()).expect_err("malformed status state must fail");
+    let StackError::RuntimeState(firma_runtime_state::RuntimeStateError::PidfileParse {
+        path: error_path,
+        value,
+    }) = &error
+    else {
+        panic!("expected pidfile parse error, got {error:?}");
+    };
+    assert_eq!(error_path, &path);
+    assert_eq!(value, "not-a-pid");
 }
