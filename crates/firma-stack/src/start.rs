@@ -30,6 +30,13 @@ use crate::supervisor::{
 };
 use firma_runtime_state::{UserProcessId, pidfile};
 
+/// Resolve a component's listen address from the parsed unified `firma.toml`.
+///
+/// Resolution is deferred to each component's turn in the startup plan so that a
+/// component's own configuration error surfaces only after earlier components
+/// have spawned and become ready.
+type AddrResolver = dyn Fn(&FirmaToml) -> Result<std::net::SocketAddr>;
+
 /// Identity of the local policy authority component.
 const AUTHORITY_NAME: &str = "authority";
 /// Identity of the local enforcement sidecar component.
@@ -53,12 +60,10 @@ pub enum StartMode {
 /// The handle does not own the children's lifecycle. [`RunningStack`] holds
 /// in-process ownership; persisted runtime state supports external observation
 /// through [`crate::status()`] and retryable teardown through [`crate::stop()`].
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct StackHandle {
-    /// PID of the authority component.
-    authority_pid: UserProcessId,
-    /// PID of the sidecar component.
-    sidecar_pid: UserProcessId,
+    /// Ordered component identities paired with their leader PIDs.
+    component_pids: Vec<(String, UserProcessId)>,
 }
 
 /// An in-process stack whose component child handles are owned by the caller.
@@ -80,8 +85,7 @@ pub struct RunningStack {
 /// the optional [`StateTransaction`] prevents partial state observation until
 /// [`RunningStack::mark_ready`] publishes complete startup.
 struct OwnedStack {
-    authority: OwnedComponent,
-    sidecar: OwnedComponent,
+    components: Vec<OwnedComponent>,
     state_dir: PathBuf,
     reaper_launcher: ReaperLauncher,
     state_lease: StateLease,
@@ -104,9 +108,9 @@ enum RunningStackState {
 /// Rollback guard for the ordered component-startup state machine.
 ///
 /// Every spawned [`OwnedComponent`] is recorded before startup performs another
-/// fallible operation. Unless [`StartupGuard::finish`] commits
-/// [`StartupState::ComponentsStarted`] to a [`RunningStack`], [`Drop`] delegates
-/// rollback to [`rollback_startup_components`]. The guard retains the
+/// fallible operation. Unless [`StartupGuard::finish`] commits the
+/// [`StartupState::Building`] components to a [`RunningStack`], [`Drop`]
+/// delegates rollback to [`rollback_startup_components`]. The guard retains the
 /// [`StateTransaction`] and [`StateLease`] needed to remove only its generation;
 /// target or collection uncertainty preserves state for [`crate::stop()`].
 struct StartupGuard {
@@ -116,22 +120,17 @@ struct StartupGuard {
     transaction: Option<StateTransaction>,
 }
 
-/// Valid process-ownership phases while the Authority and Sidecar are starting.
+/// Valid process-ownership phases while the components are starting.
 ///
-/// The enum makes invalid startup phases, such as recording the second
-/// component before ownership of the first or retaining children after
-/// ownership transfer, unrepresentable. [`ComponentName`] assignment remains in
-/// the crate-internal spawn path, so transitions cannot relabel capabilities.
+/// The enum makes invalid startup phases, such as retaining children after
+/// ownership transfer, unrepresentable. Components are recorded in spawn order
+/// so rollback, readiness polling, and finish observe them identically.
+/// [`ComponentName`] assignment remains in the crate-internal spawn path, so
+/// transitions cannot relabel capabilities.
 enum StartupState {
-    /// The generation is claimed, but no component has been spawned.
-    Empty,
-    /// The Authority was spawned and remains exclusively owned by the guard.
-    AuthorityStarted { authority: OwnedComponent },
-    /// Both components were spawned and remain exclusively owned by the guard.
-    ComponentsStarted {
-        authority: OwnedComponent,
-        sidecar: OwnedComponent,
-    },
+    /// The generation is claimed; the ordered components spawned so far remain
+    /// exclusively owned by the guard.
+    Building(Vec<OwnedComponent>),
     /// Ownership was transferred to [`RunningStack`]; rollback is disarmed.
     Finished,
 }
@@ -155,72 +154,50 @@ enum LauncherAttachmentState {
 }
 
 impl StartupGuard {
-    /// Begin an armed [`StartupState::Empty`] transaction after generation claim.
+    /// Begin an armed, empty [`StartupState::Building`] after generation claim.
     fn new(state_dir: &Path, state_lease: StateLease, transaction: StateTransaction) -> Self {
         Self {
-            state: StartupState::Empty,
+            state: StartupState::Building(Vec::new()),
             state_dir: state_dir.to_path_buf(),
             state_lease,
             transaction: Some(transaction),
         }
     }
 
-    /// Record Authority ownership as [`StartupState::AuthorityStarted`].
+    /// Append one owned component in spawn order to [`StartupState::Building`].
     ///
     /// # Errors
     ///
-    /// Returns an error without changing state if Authority ownership was
-    /// already recorded or startup has finished.
-    fn record_authority(&mut self, authority: OwnedComponent) -> Result<()> {
-        match std::mem::replace(&mut self.state, StartupState::Finished) {
-            StartupState::Empty => {
-                self.state = StartupState::AuthorityStarted { authority };
+    /// Returns an error without changing state if startup has already finished.
+    fn record(&mut self, component: OwnedComponent) -> Result<()> {
+        match &mut self.state {
+            StartupState::Building(components) => {
+                components.push(component);
                 Ok(())
             }
-            state => {
-                self.state = state;
-                Err(StackError::Platform(
-                    "authority child recorded outside empty startup state".into(),
-                ))
-            }
-        }
-    }
-
-    /// Add Sidecar ownership as [`StartupState::ComponentsStarted`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error without changing state if no Authority is owned or the
-    /// Sidecar was already recorded.
-    fn record_sidecar(&mut self, sidecar: OwnedComponent) -> Result<()> {
-        match std::mem::replace(&mut self.state, StartupState::Finished) {
-            StartupState::AuthorityStarted { authority } => {
-                self.state = StartupState::ComponentsStarted { authority, sidecar };
-                Ok(())
-            }
-            state => {
-                self.state = state;
-                Err(StackError::Platform(
-                    "sidecar child recorded before authority ownership".into(),
-                ))
-            }
+            StartupState::Finished => Err(StackError::Platform(
+                "component child recorded after startup finished".into(),
+            )),
         }
     }
 
     /// Collect and report the first exited component currently owned by startup.
     ///
-    /// Polling occurs through the guard so readiness never borrows a process ID
-    /// without the corresponding [`OwnedComponent`] collection capability.
+    /// Components are polled in spawn order so readiness observes the same
+    /// ordering as startup. Polling occurs through the guard so readiness never
+    /// borrows a process ID without the corresponding [`OwnedComponent`]
+    /// collection capability.
     fn exited_component(&mut self) -> Result<Option<(String, ExitStatus)>> {
         match &mut self.state {
-            StartupState::AuthorityStarted { authority } => Self::poll_exit(authority),
-            StartupState::ComponentsStarted { authority, sidecar } => {
-                if let Some(exit) = Self::poll_exit(authority)? {
-                    return Ok(Some(exit));
+            StartupState::Building(components) => {
+                for component in components {
+                    if let Some(exit) = Self::poll_exit(component)? {
+                        return Ok(Some(exit));
+                    }
                 }
-                Self::poll_exit(sidecar)
+                Ok(None)
             }
-            StartupState::Empty | StartupState::Finished => Err(StackError::Platform(
+            StartupState::Finished => Err(StackError::Platform(
                 "component readiness checked without owned startup processes".into(),
             )),
         }
@@ -238,25 +215,19 @@ impl StartupGuard {
     ///
     /// # Errors
     ///
-    /// Returns an error and leaves rollback armed unless both components are
-    /// present in startup order.
+    /// Returns an error and leaves rollback armed if startup has already
+    /// finished.
     fn finish(mut self) -> Result<RunningStack> {
         match std::mem::replace(&mut self.state, StartupState::Finished) {
-            StartupState::ComponentsStarted { authority, sidecar } => {
-                Ok(RunningStack::from_components(
-                    authority,
-                    sidecar,
-                    self.state_dir.clone(),
-                    self.state_lease,
-                    self.transaction.take(),
-                ))
-            }
-            state => {
-                self.state = state;
-                Err(StackError::Platform(
-                    "both component children must be owned before startup finishes".into(),
-                ))
-            }
+            StartupState::Building(components) => Ok(RunningStack::from_components(
+                components,
+                self.state_dir.clone(),
+                self.state_lease,
+                self.transaction.take(),
+            )),
+            StartupState::Finished => Err(StackError::Platform(
+                "startup ownership already transferred".into(),
+            )),
         }
     }
 }
@@ -269,17 +240,13 @@ impl Drop for StartupGuard {
     /// retryable runtime state when rollback cannot prove completion.
     fn drop(&mut self) {
         let state = std::mem::replace(&mut self.state, StartupState::Finished);
-        let components = match state {
-            StartupState::Empty => {
-                remove_startup_state(&self.state_dir, self.state_lease, self.transaction.as_ref());
-                return;
-            }
-            StartupState::AuthorityStarted { authority } => vec![authority],
-            StartupState::ComponentsStarted { authority, sidecar } => {
-                vec![authority, sidecar]
-            }
-            StartupState::Finished => return,
+        let StartupState::Building(components) = state else {
+            return;
         };
+        if components.is_empty() {
+            remove_startup_state(&self.state_dir, self.state_lease, self.transaction.as_ref());
+            return;
+        }
         rollback_startup_components(
             components,
             &self.state_dir,
@@ -364,15 +331,13 @@ impl RunningStack {
     /// The startup [`StateTransaction`] remains held until
     /// [`RunningStack::mark_ready`] commits complete-state publication.
     pub(crate) fn from_components(
-        authority: OwnedComponent,
-        sidecar: OwnedComponent,
+        components: Vec<OwnedComponent>,
         state_dir: PathBuf,
         state_lease: StateLease,
         startup_transaction: Option<StateTransaction>,
     ) -> Self {
         Self::from_components_with_reaper_launcher(
-            authority,
-            sidecar,
+            components,
             state_dir,
             state_lease,
             startup_transaction,
@@ -382,22 +347,27 @@ impl RunningStack {
 
     /// Construct the sole running owner with a caller-supplied reaper launcher.
     pub(crate) fn from_components_with_reaper_launcher(
-        authority: OwnedComponent,
-        sidecar: OwnedComponent,
+        components: Vec<OwnedComponent>,
         state_dir: PathBuf,
         state_lease: StateLease,
         startup_transaction: Option<StateTransaction>,
         reaper_launcher: ReaperLauncher,
     ) -> Self {
         let handle = StackHandle {
-            authority_pid: authority.leader_pid(),
-            sidecar_pid: sidecar.leader_pid(),
+            component_pids: components
+                .iter()
+                .map(|component| {
+                    (
+                        component.name().as_str().to_string(),
+                        component.leader_pid(),
+                    )
+                })
+                .collect(),
         };
         Self {
             handle,
             state: RunningStackState::Owned(Box::new(OwnedStack {
-                authority,
-                sidecar,
+                components,
                 state_dir,
                 reaper_launcher,
                 state_lease,
@@ -433,7 +403,7 @@ impl RunningStack {
     /// Return an informational handle containing the component process IDs.
     #[must_use]
     fn handle(&self) -> StackHandle {
-        self.handle
+        self.handle.clone()
     }
 
     /// Stop the stack and collect its child processes.
@@ -448,16 +418,25 @@ impl RunningStack {
         // A detached attachment failure may tear down before publishing ready.
         // Release startup serialization before the owned stop reacquires it.
         owned.startup_transaction = None;
-        let result = crate::stop::stop_owned(
-            &owned.state_dir,
-            timeout,
-            &mut owned.authority,
-            &mut owned.sidecar,
-            owned.state_lease,
-        );
+        // Teardown N-generalization is a follow-up (P5b); this bridge preserves
+        // the exact current two-component teardown by extracting the authority
+        // and sidecar from the ordered Vec in the same argument order that
+        // `stop_owned` expects. An unexpected count fails closed.
+        let state_dir = &owned.state_dir;
+        let state_lease = owned.state_lease;
+        let result = match owned.components.as_mut_slice() {
+            [authority, sidecar] => {
+                crate::stop::stop_owned(state_dir, timeout, authority, sidecar, state_lease)
+            }
+            other => Err(StackError::Platform(format!(
+                "expected 2 owned components, found {}",
+                other.len()
+            ))),
+        };
         if result.is_ok() {
-            let _ = owned.sidecar.wait();
-            let _ = owned.authority.wait();
+            for component in owned.components.iter_mut().rev() {
+                let _ = component.wait();
+            }
             self.state = RunningStackState::Stopped;
         }
         result
@@ -468,10 +447,7 @@ impl RunningStack {
         let state = std::mem::replace(&mut self.state, RunningStackState::Stopped);
         if let RunningStackState::Owned(owned) = state {
             let owned = *owned;
-            return match collect_in_background_with(
-                vec![owned.authority, owned.sidecar],
-                owned.reaper_launcher,
-            ) {
+            return match collect_in_background_with(owned.components, owned.reaper_launcher) {
                 Ok(_) => true,
                 Err(error) => {
                     debug!(error = %error.source(), "could not transfer components to background reaper");
@@ -542,11 +518,7 @@ fn spawn_stack_with_phase(
                 stack.mark_ready()?;
             }
             let handle = stack.handle();
-            info!(
-                authority_pid = %handle.authority_pid,
-                sidecar_pid = %handle.sidecar_pid,
-                "firma stack ready"
-            );
+            info!(components = ?handle.component_pids, "firma stack ready");
             Ok(stack)
         }
         Err(error) => {
@@ -558,12 +530,14 @@ fn spawn_stack_with_phase(
 
 /// Perform the ordered, rollback-protected component startup sequence.
 ///
-/// The Authority must remain owned and live before the Sidecar is spawned; both
-/// components must remain live through every applicable readiness probe. Each
-/// successful [`spawn_with_config`] call transitions [`StartupGuard`] before the
-/// next fallible step, and probe callbacks use [`StartupGuard::exited_component`]
-/// rather than unowned process identities. These probes establish bounded
-/// startup evidence only; ongoing health belongs to supervision.
+/// The plan is built up front from the unified `firma.toml` and spawned in
+/// order: each component must remain owned and live before the next is spawned,
+/// and live through every applicable readiness probe. Each successful
+/// [`spawn_with_config`] call records the component in [`StartupGuard`] before
+/// the next fallible step, and probe callbacks use
+/// [`StartupGuard::exited_component`] rather than unowned process identities.
+/// These probes establish bounded startup evidence only; ongoing health belongs
+/// to supervision.
 fn spawn_stack_inner(
     cfg: &StackConfig,
     state_dir: &Path,
@@ -573,63 +547,44 @@ fn spawn_stack_inner(
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
     let exe = cfg.firma_bin.as_deref();
-    // Parse the unified firma.toml once; the probes below share it.
+    // Parse the unified firma.toml once; the probes below share it. The ordered
+    // startup plan is built up front in the fixed authority-then-sidecar order.
+    // Each entry resolves its listen address from the parsed config lazily, when
+    // that component's turn arrives, so a component's own configuration error
+    // surfaces only after the earlier components have spawned and become ready --
+    // preserving the exact failure ordering of the original open-coded sequence.
+    // Extracting this plan behind a config-driven closure is a later stage.
     let config = FirmaToml::read(&cfg.config_file)?;
-    debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
-    let auth = spawn_with_config(
-        &group,
-        state_dir,
-        ComponentName::new(AUTHORITY_NAME),
-        &cfg.config_file,
-        exe,
-    )?;
-    let authority_pid = auth.leader_pid();
-    startup.record_authority(auth)?;
-    info!(pid = %authority_pid, "authority spawned");
-    let auth_addr = config.authority_listen_addr()?;
-    std::fs::write(
-        state_dir.join(ComponentName::new(AUTHORITY_NAME).listen_file_name()),
-        format!("{auth_addr}\n"),
-    )?;
-    debug!(addr = %auth_addr, "waiting for authority TCP listen");
-    wait_for_tcp(
-        "authority",
-        auth_addr,
-        Duration::from_mins(1),
-        stop_signal,
-        || startup.exited_component(),
-    )?;
-    info!(addr = %auth_addr, "authority listening");
+    let plan: [(ComponentName, &AddrResolver); 2] = [
+        (ComponentName::new(AUTHORITY_NAME), &|config: &FirmaToml| {
+            config.authority_listen_addr()
+        }),
+        (ComponentName::new(SIDECAR_NAME), &|config: &FirmaToml| {
+            Ok(config.sidecar_config()?.interceptor.listen_addr)
+        }),
+    ];
 
-    debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
-    let side = spawn_with_config(
-        &group,
-        state_dir,
-        ComponentName::new(SIDECAR_NAME),
-        &cfg.config_file,
-        exe,
-    )?;
-    let sidecar_pid = side.leader_pid();
-    startup.record_sidecar(side)?;
-    info!(pid = %sidecar_pid, "sidecar spawned");
-    let sidecar = config.sidecar_config()?;
-    let side_addr = sidecar.interceptor.listen_addr;
-    std::fs::write(
-        state_dir.join(ComponentName::new(SIDECAR_NAME).listen_file_name()),
-        format!("{side_addr}\n"),
-    )?;
-    debug!(addr = %side_addr, "waiting for sidecar TCP listen");
-    wait_for_tcp(
-        "sidecar",
-        side_addr,
-        Duration::from_mins(1),
-        stop_signal,
-        || startup.exited_component(),
-    )?;
-    // A connectable sidecar already implies CA readiness: the sidecar generates
-    // its CA material before opening the interceptor port, so readiness is a
-    // single signal with no separate CA-material probe.
-    info!(addr = %side_addr, "sidecar listening");
+    for (name, resolve_addr) in plan {
+        debug!(config = %cfg.config_file.display(), exe = ?exe, component = %name.as_str(), "spawning component");
+        let component = spawn_with_config(&group, state_dir, name.clone(), &cfg.config_file, exe)?;
+        let pid = component.leader_pid();
+        startup.record(component)?;
+        info!(component = %name.as_str(), pid = %pid, "component spawned");
+        let addr = resolve_addr(&config)?;
+        std::fs::write(state_dir.join(name.listen_file_name()), format!("{addr}\n"))?;
+        debug!(component = %name.as_str(), addr = %addr, "waiting for component TCP listen");
+        wait_for_tcp(
+            name.as_str(),
+            addr,
+            Duration::from_mins(1),
+            stop_signal,
+            || startup.exited_component(),
+        )?;
+        // A connectable sidecar already implies CA readiness: the sidecar
+        // generates its CA material before opening the interceptor port, so
+        // readiness is a single signal with no separate CA-material probe.
+        info!(component = %name.as_str(), addr = %addr, "component listening");
+    }
 
     // The Group goes out of scope at the end of this function. On Unix that is
     // a no-op because children sit in their own process groups. On Windows,
@@ -671,7 +626,7 @@ fn start_foreground(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> 
     info!("entering foreground supervisor loop");
     let supervision_result = {
         let owned = stack.owned_mut()?;
-        block_until_owned_exit_with(&stop_signal, &mut owned.authority, &mut owned.sidecar)
+        block_until_two_owned_exit(&stop_signal, &mut owned.components)
     };
     info!("foreground supervisor exiting; tearing down stack");
     let teardown_result = stack.shutdown(Duration::from_secs(10));
@@ -715,6 +670,22 @@ fn start_detached(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     Ok(handle)
 }
 
+/// Bridge the ordered component Vec into the two-component supervision loop.
+///
+/// Teardown and supervision N-generalization is a follow-up (P5b); this bridge
+/// preserves the exact current two-component supervision by extracting the
+/// authority and sidecar from the ordered Vec in the argument order that
+/// [`block_until_owned_exit_with`] expects. An unexpected count fails closed.
+fn block_until_two_owned_exit(stop: &StopSignal, components: &mut [OwnedComponent]) -> Result<()> {
+    match components {
+        [authority, sidecar] => block_until_owned_exit_with(stop, authority, sidecar),
+        other => Err(StackError::Platform(format!(
+            "expected 2 owned components, found {}",
+            other.len()
+        ))),
+    }
+}
+
 /// Roll back only state matching this launcher's [`StackGeneration`].
 fn rollback_detached_start(state_dir: &Path, generation: StackGeneration) -> Result<()> {
     crate::stop::stop_generation(state_dir, Duration::from_secs(10), generation).map(|_| ())
@@ -733,13 +704,17 @@ fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
 ///
 /// This does not grant component collection, termination, or cleanup authority.
 fn read_stack_handle(state_dir: &Path) -> Result<StackHandle> {
+    // Enumerating which pidfiles to read from persisted state is a later stage;
+    // for now the two known component pidfiles are read in startup order.
     let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?
         .ok_or_else(|| StackError::Platform("authority.pid missing after startup".into()))?;
     let sidecar_pid = pidfile::read(&state_dir.join("sidecar.pid"))?
         .ok_or_else(|| StackError::Platform("sidecar.pid missing after startup".into()))?;
     Ok(StackHandle {
-        authority_pid,
-        sidecar_pid,
+        component_pids: vec![
+            (AUTHORITY_NAME.to_string(), authority_pid),
+            (SIDECAR_NAME.to_string(), sidecar_pid),
+        ],
     })
 }
 
@@ -844,7 +819,7 @@ fn supervise_running_stack_with_signal(
     info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "detached supervisor owns ready stack");
     let supervision_result = {
         let owned = stack.owned_mut()?;
-        block_until_owned_exit_with(stop_signal, &mut owned.authority, &mut owned.sidecar)
+        block_until_two_owned_exit(stop_signal, &mut owned.components)
     };
     info!("detached supervisor tearing down owned components");
     let teardown_result = stack.shutdown(timeout);
