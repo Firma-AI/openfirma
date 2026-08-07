@@ -25,7 +25,10 @@ firma-grpc-interceptor-proto = { workspace = true }
 firma-http = { workspace = true }
 firma-protobuf = { workspace = true }
 firma-runtime-state = { workspace = true }
+firma-secret-provider = { workspace = true }
+form_urlencoded = { workspace = true }
 governor = { workspace = true }
+headers = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -33,10 +36,12 @@ http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 lru = { workspace = true }
+mime = { workspace = true }
 nix = { workspace = true }
 notify = { workspace = true }
 p256 = { workspace = true }
 prost-types = { workspace = true }
+quick-xml = { workspace = true }
 rand = { workspace = true }
 rcgen = { workspace = true }
 reqwest = { workspace = true }

@@ -8,7 +8,7 @@
 //! back out of its own synthesized startup config and runs extraction
 //! itself against MITM'd response bodies.
 
-mod gateway;
+pub mod gateway;
 mod matcher;
 pub mod non_empty;
 mod placeholder;
@@ -19,5 +19,5 @@ pub use gateway::{GatewayRequest, PlaceholderResult, PushRequest, PushResponse, 
 pub use matcher::{CompiledMatcher, MatcherError};
 pub use placeholder::SecretPlaceholder;
 pub use registry::IntegrationRegistry;
-pub use secrecy::SecretString;
+pub use secrecy::{ExposeSecret, SecretString};
 pub use spec::{IntegrationSpec, MatcherRule, MatchingResolution};

@@ -1,4 +1,6 @@
 mod compile;
+mod endpoint;
+mod gateway_client;
 mod http_spec;
 mod json;
 mod metadata;
