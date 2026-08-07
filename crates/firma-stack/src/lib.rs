@@ -147,8 +147,8 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> Vec<std::process::Child> {
         let components = vec![
-            owned_component(crate::component::ComponentRole::Authority, authority),
-            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            owned_component(crate::component::ComponentName::new("authority"), authority),
+            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
         ];
         match crate::supervisor::collect_in_background_with(components, |_| {
             Err(std::io::Error::other("injected reaper start failure"))
@@ -173,8 +173,8 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> std::io::Result<()> {
         let components = vec![
-            owned_component(crate::component::ComponentRole::Authority, authority),
-            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            owned_component(crate::component::ComponentName::new("authority"), authority),
+            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
         ];
         match crate::supervisor::collect_in_background_with(components, |_| {
             Err(std::io::Error::other("injected reaper start failure"))
@@ -195,8 +195,8 @@ pub mod test_support {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
         Ok(crate::RunningStack::from_components(
-            owned_component(crate::component::ComponentRole::Authority, authority),
-            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            owned_component(crate::component::ComponentName::new("authority"), authority),
+            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -216,8 +216,9 @@ pub mod test_support {
     ) -> crate::error::Result<()> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
-        let mut authority = owned_component(crate::component::ComponentRole::Authority, authority);
-        let mut sidecar = owned_component(crate::component::ComponentRole::Sidecar, sidecar);
+        let mut authority =
+            owned_component(crate::component::ComponentName::new("authority"), authority);
+        let mut sidecar = owned_component(crate::component::ComponentName::new("sidecar"), sidecar);
         let stop = crate::supervisor::StopSignal::install()?;
         let supervision_result =
             crate::supervisor::block_until_owned_exit_with(&stop, &mut authority, &mut sidecar);
@@ -245,8 +246,8 @@ pub mod test_support {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
         Ok(crate::RunningStack::from_components_with_reaper_launcher(
-            owned_component(crate::component::ComponentRole::Authority, authority),
-            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            owned_component(crate::component::ComponentName::new("authority"), authority),
+            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -263,8 +264,8 @@ pub mod test_support {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
         Ok(crate::RunningStack::from_components_with_reaper_launcher(
-            owned_component(crate::component::ComponentRole::Authority, authority),
-            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            owned_component(crate::component::ComponentName::new("authority"), authority),
+            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -292,13 +293,13 @@ pub mod test_support {
         let authority = spawn_test_component(
             &group,
             state_dir,
-            crate::component::ComponentRole::Authority,
+            crate::component::ComponentName::new("authority"),
             authority_command,
         )?;
         let sidecar = spawn_test_component(
             &group,
             state_dir,
-            crate::component::ComponentRole::Sidecar,
+            crate::component::ComponentName::new("sidecar"),
             sidecar_command,
         )?;
         Ok(crate::RunningStack::from_components_with_reaper_launcher(
@@ -402,8 +403,8 @@ pub mod test_support {
     ) -> crate::error::Result<()> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         let stack = crate::RunningStack::from_components(
-            owned_component(crate::component::ComponentRole::Authority, authority),
-            owned_component(crate::component::ComponentRole::Sidecar, sidecar),
+            owned_component(crate::component::ComponentName::new("authority"), authority),
+            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
             state_dir.to_path_buf(),
             state_lease,
             Some(transaction),
@@ -432,14 +433,14 @@ pub mod test_support {
     }
 
     fn owned_component(
-        role: crate::component::ComponentRole,
+        name: crate::component::ComponentName,
         child: std::process::Child,
     ) -> crate::component::OwnedComponent {
         use firma_runtime_state::ChildExt as _;
 
         let leader_pid = child.process_id();
         crate::component::OwnedComponent::from_child(
-            role,
+            name,
             child,
             leader_pid,
             crate::platform::TerminationTarget::for_leader(leader_pid),
@@ -450,7 +451,7 @@ pub mod test_support {
     fn spawn_test_component(
         group: &crate::platform::Group,
         state_dir: &std::path::Path,
-        role: crate::component::ComponentRole,
+        name: crate::component::ComponentName,
         command: &mut std::process::Command,
     ) -> crate::error::Result<crate::component::OwnedComponent> {
         use crate::platform::{Platform, SystemPlatform};
@@ -458,15 +459,15 @@ pub mod test_support {
         let spawned = SystemPlatform::spawn_in_group(
             group,
             command,
-            &state_dir.join(format!("{}.log", role.name())),
+            &state_dir.join(format!("{}.log", name.as_str())),
         )?;
         firma_runtime_state::pidfile::write(
-            &state_dir.join(role.pidfile_name()),
+            &state_dir.join(name.pidfile_name()),
             spawned.termination_target.stored_id(),
         )?;
-        std::fs::write(state_dir.join(role.listen_file_name()), "127.0.0.1:0\n")?;
+        std::fs::write(state_dir.join(name.listen_file_name()), "127.0.0.1:0\n")?;
         Ok(crate::component::OwnedComponent::from_spawned(
-            role, spawned,
+            name, spawned,
         ))
     }
 

@@ -15,7 +15,6 @@ use firma_authority::AuthorityConfig;
 use firma_config_loader::FirmaConfig;
 use firma_sidecar::config::SidecarConfig;
 
-use crate::component::ComponentRole;
 use crate::error::{Result, StackError};
 use crate::supervisor::StopSignal;
 
@@ -35,7 +34,7 @@ pub fn wait_for_tcp(
     addr: SocketAddr,
     timeout: Duration,
     stop_signal: Option<&StopSignal>,
-    mut process_status: impl FnMut() -> Result<Option<(ComponentRole, ExitStatus)>>,
+    mut process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>>,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -61,12 +60,12 @@ pub fn wait_for_tcp(
 fn check_startup(
     _component: &str,
     stop_signal: Option<&StopSignal>,
-    process_status: &mut impl FnMut() -> Result<Option<(ComponentRole, ExitStatus)>>,
+    process_status: &mut impl FnMut() -> Result<Option<(String, ExitStatus)>>,
 ) -> Result<()> {
     check_startup_stop(stop_signal)?;
-    if let Some((role, status)) = process_status()? {
+    if let Some((name, status)) = process_status()? {
         return Err(StackError::ReadinessProcessExited {
-            component: role.name().to_string(),
+            component: name,
             status,
         });
     }
