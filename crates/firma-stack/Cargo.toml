@@ -11,30 +11,22 @@ description = "Process supervision and observability primitives for the firma st
 workspace = true
 
 [features]
-test-support = []
+test-support = ["firma-process-orchestrator/test-support"]
 
 [dependencies]
-ctrlc = { workspace = true }
 firma-authority = { workspace = true }
 firma-config-loader = { workspace = true }
-firma-fs = { workspace = true }
-firma-runtime-state = { workspace = true }
+firma-process-orchestrator = { workspace = true }
 firma-sidecar = { workspace = true }
-fs2 = { workspace = true }
-serde = { workspace = true }
-tempfile = { workspace = true }
-thiserror = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
+firma-runtime-state = { workspace = true }
 firma-stack = { path = ".", features = ["test-support"] }
 insta = { workspace = true }
 serial_test = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(unix)'.dev-dependencies]
 nix = { workspace = true }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }

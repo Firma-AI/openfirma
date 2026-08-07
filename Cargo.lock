@@ -1566,6 +1566,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "firma-process-orchestrator"
+version = "0.1.6"
+dependencies = [
+ "ctrlc",
+ "firma-fs",
+ "firma-process-orchestrator",
+ "firma-runtime-state",
+ "fs2",
+ "insta",
+ "nix 0.31.3",
+ "serde",
+ "serial_test",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+ "uuid",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "firma-protobuf"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1735,24 +1756,18 @@ dependencies = [
 name = "firma-stack"
 version = "0.1.6"
 dependencies = [
- "ctrlc",
  "firma-authority",
  "firma-config-loader",
- "firma-fs",
+ "firma-process-orchestrator",
  "firma-runtime-state",
  "firma-sidecar",
  "firma-stack",
- "fs2",
  "insta",
  "nix 0.31.3",
- "serde",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
- "toml",
  "tracing",
  "uuid",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -14,12 +14,11 @@ use std::path::{Path, PathBuf};
 
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
+use firma_process_orchestrator::{ComponentName, ComponentSpec, Result, StackError};
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
 
-use crate::component::{ComponentName, ComponentSpec};
 use crate::config::StackConfig;
-use crate::error::{Result, StackError};
 
 /// Resolve the unified config for the stack.
 ///
