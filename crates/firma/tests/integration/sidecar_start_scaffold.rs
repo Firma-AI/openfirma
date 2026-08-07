@@ -5,6 +5,8 @@
 //! when HTTPS MITM is active. The default Anthropic-only scaffold ships MITM
 //! disabled, so the daemon timed out and never came up. Readiness now gates
 //! the CA-material probe on `HttpsMitmConfig::is_active()`.
+//! On Unix, the teardown half sends `SIGTERM` to the detached supervisor and
+//! verifies that its preinstalled handler owns component cleanup.
 //! On Windows, abruptly terminating the detached supervisor also verifies that
 //! its retained Job Object ownership terminates both production components.
 
@@ -114,20 +116,27 @@ fn start_launches_from_anthropic_scaffold() {
     assert_owner_teardown(&state_dir, &stack_pid);
 }
 
-fn assert_owner_teardown(state_dir: &Path, _stack_pid: &Path) {
+fn assert_owner_teardown(state_dir: &Path, stack_pid: &Path) {
     let authority_pid = firma_stack::test_support::pidfile::read(&state_dir.join("authority.pid"))
         .expect("read authority pidfile")
         .expect("authority pid");
     let sidecar_pid = firma_stack::test_support::pidfile::read(&state_dir.join("sidecar.pid"))
         .expect("read sidecar pidfile")
         .expect("sidecar pid");
-    #[cfg(windows)]
-    let supervisor_pid = firma_stack::test_support::pidfile::read(_stack_pid)
+    let supervisor_pid = firma_stack::test_support::pidfile::read(stack_pid)
         .expect("read supervisor pidfile")
         .expect("supervisor pid");
 
-    #[cfg(not(windows))]
-    firma_stack::test_support::terminate_raw(authority_pid.get()).expect("terminate authority");
+    #[cfg(unix)]
+    {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(
+                i32::try_from(supervisor_pid.get()).expect("supervisor PID fits pid_t"),
+            ),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .expect("SIGTERM detached supervisor");
+    }
 
     #[cfg(windows)]
     firma_stack::test_support::terminate_raw(supervisor_pid.get())
@@ -135,13 +144,9 @@ fn assert_owner_teardown(state_dir: &Path, _stack_pid: &Path) {
 
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let components_running = authority_pid.process_exists().expect("probe authority")
-            || sidecar_pid.process_exists().expect("probe sidecar");
-        #[cfg(windows)]
-        let teardown_incomplete =
-            components_running || supervisor_pid.process_exists().expect("probe supervisor");
-        #[cfg(not(windows))]
-        let teardown_incomplete = components_running;
+        let teardown_incomplete = authority_pid.process_exists().expect("probe authority")
+            || sidecar_pid.process_exists().expect("probe sidecar")
+            || supervisor_pid.process_exists().expect("probe supervisor");
         if !teardown_incomplete || Instant::now() >= deadline {
             break;
         }
@@ -162,8 +167,12 @@ fn assert_owner_teardown(state_dir: &Path, _stack_pid: &Path) {
         !sidecar_pid.process_exists().expect("probe sidecar"),
         "sidecar still exists after supervisor teardown"
     );
+    assert!(
+        !supervisor_pid.process_exists().expect("probe supervisor"),
+        "detached supervisor still exists after teardown"
+    );
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
         assert!(!state_dir.join("stack.lock").exists());
         assert!(!state_dir.join("stack.pid").exists());
@@ -171,10 +180,6 @@ fn assert_owner_teardown(state_dir: &Path, _stack_pid: &Path) {
 
     #[cfg(windows)]
     {
-        assert!(
-            !supervisor_pid.process_exists().expect("probe supervisor"),
-            "detached supervisor still exists after forced termination"
-        );
         let stop_status = firma()
             .args(["sidecar", "stop", "--state-dir"])
             .arg(state_dir)

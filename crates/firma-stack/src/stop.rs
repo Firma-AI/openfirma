@@ -1,9 +1,11 @@
 //! Fail-closed teardown of a running stack.
 //!
-//! [`stop`] snapshots persisted [`TerminationTarget`] values and delegates to
-//! [`stop_inner`]. Runtime state is removed by [`cleanup`] only after every
-//! target is proven absent. [`target_may_exist`] treats probe uncertainty as
-//! presence, preserving both signalling effort and retry evidence.
+//! [`stop`] takes a process-target snapshot under [`StateTransaction`], then
+//! delegates to [`stop_inner`]. Runtime state is removed by [`cleanup`] only
+//! after every target is proven absent and [`cleanup_generation`] confirms the
+//! original [`StateLease`] still owns the directory. [`target_may_exist`] treats
+//! probe uncertainty as presence, preserving signalling effort and retry
+//! evidence.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -13,6 +15,7 @@ use tracing::{debug, info};
 use crate::component::OwnedComponent;
 use crate::error::{Result, StackError};
 use crate::platform::TerminationTarget;
+use crate::state_lease::{StateLease, StateTransaction};
 use firma_runtime_state::pidfile;
 
 /// Maximum interval for proving target absence after forced termination.
@@ -21,6 +24,33 @@ use firma_runtime_state::pidfile;
 /// [`stop`]. Its expiration retains runtime state rather than claiming cleanup
 /// succeeded.
 const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
+
+/// Policy for acquiring state serialization after process termination.
+///
+/// Process termination must not be postponed by state contention. This value
+/// therefore distinguishes an external stop that already holds a transaction
+/// from an owned supervisor that may only attempt cleanup after teardown.
+#[derive(Clone, Copy)]
+enum CleanupLock<'a> {
+    /// Reuse a [`StateTransaction`] held across an external [`stop`] call.
+    Held(&'a StateTransaction),
+    /// Use [`StateTransaction::try_acquire`] after owned process termination.
+    Try,
+}
+
+/// Borrowed [`TerminationTarget`] snapshot for one teardown attempt.
+///
+/// Keeping the targets in one value preserves a consistent signal, probe, and
+/// cleanup-gating set throughout [`stop_inner`].
+#[derive(Clone, Copy)]
+struct StopTargets<'a> {
+    /// Optional detached supervisor target.
+    stack: Option<&'a TerminationTarget>,
+    /// Authority process-scope target.
+    authority: Option<&'a TerminationTarget>,
+    /// Sidecar process-scope target.
+    sidecar: Option<&'a TerminationTarget>,
+}
 
 /// Result of a [`stop`] call.
 #[derive(Debug, Clone)]
@@ -42,42 +72,55 @@ pub struct StopOutcome {
 ///
 /// Returns pidfile, process-probe, termination, or cleanup errors. Runtime
 /// state is retained when probing or hard termination fails so cleanup can be
-/// retried.
+/// retried. [`StateTransaction`] prevents startup or another stop from changing
+/// the process snapshot before this call finishes teardown and cleanup.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
+    if !state_dir.exists() {
+        return Ok(StopOutcome { forced: false });
+    }
+    let transaction = StateTransaction::acquire(state_dir)?;
+    let state_lease = StateLease::load(state_dir)?;
     let supervisor = read_target(state_dir, "stack.pid")?;
     let authority = read_target(state_dir, "authority.pid")?;
     let sidecar = read_target(state_dir, "sidecar.pid")?;
     stop_inner(
         state_dir,
         timeout,
-        supervisor.as_ref(),
-        authority.as_ref(),
-        sidecar.as_ref(),
-        None,
+        StopTargets {
+            stack: supervisor.as_ref(),
+            authority: authority.as_ref(),
+            sidecar: sidecar.as_ref(),
+        },
+        state_lease,
+        CleanupLock::Held(&transaction),
         || Ok(()),
     )
 }
 
 /// Run [`stop_inner`] while retaining direct-child collection authority.
 ///
-/// No supervisor target is included because the current process owns both
-/// [`OwnedComponent`] values and performs their collection during teardown.
+/// The current process owns both [`OwnedComponent`] values, so no supervisor
+/// target is needed. [`CleanupLock::Try`] ensures transaction contention cannot
+/// delay process termination; cleanup failure leaves state for a later [`stop`].
 pub(crate) fn stop_owned(
     state_dir: &Path,
     timeout: Duration,
     authority: &mut OwnedComponent,
     sidecar: &mut OwnedComponent,
-    state_owner: Option<firma_runtime_state::UserProcessId>,
+    state_lease: StateLease,
 ) -> Result<StopOutcome> {
     let (authority_child, authority_target) = authority.child_and_target();
     let (sidecar_child, sidecar_target) = sidecar.child_and_target();
     stop_inner(
         state_dir,
         timeout,
-        None,
-        Some(authority_target),
-        Some(sidecar_target),
-        state_owner,
+        StopTargets {
+            stack: None,
+            authority: Some(authority_target),
+            sidecar: Some(sidecar_target),
+        },
+        Some(state_lease),
+        CleanupLock::Try,
         || {
             let _ = sidecar_child.try_wait()?;
             let _ = authority_child.try_wait()?;
@@ -92,25 +135,22 @@ pub(crate) fn stop_owned(
 /// so its long-lived RPC streams can close before Authority shutdown. Soft
 /// signalling failure does not prevent a later forced request. Probe or child
 /// collection errors retain the first failure while teardown continues
-/// conservatively. A forced request is a normal timeout outcome, but
-/// [`cleanup`] remains forbidden until [`targets_absent`] proves every component
-/// target gone within [`HARD_TERMINATION_SETTLEMENT`]. A recorded supervisor is
-/// signalled as part of coordination, while component absence remains the
-/// cleanup gate.
+/// conservatively. A forced request is a normal timeout outcome, but [`cleanup`]
+/// remains forbidden until [`targets_absent`] proves every recorded target gone
+/// within [`HARD_TERMINATION_SETTLEMENT`].
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
-    stack_target: Option<&TerminationTarget>,
-    authority_target: Option<&TerminationTarget>,
-    sidecar_target: Option<&TerminationTarget>,
-    state_owner: Option<firma_runtime_state::UserProcessId>,
+    targets: StopTargets<'_>,
+    state_lease: Option<StateLease>,
+    cleanup_lock: CleanupLock<'_>,
     mut collect_owned: impl FnMut() -> Result<()>,
 ) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
     debug!(
-        ?stack_target,
-        ?authority_target,
-        ?sidecar_target,
+        stack_target = ?targets.stack,
+        authority_target = ?targets.authority,
+        sidecar_target = ?targets.sidecar,
         "loaded termination targets"
     );
 
@@ -119,7 +159,7 @@ fn stop_inner(
     // tonic graceful shutdown finish instead of blocking on long-lived
     // server-streaming RPCs.
     let mut teardown_error = collect_owned().err();
-    for target in [sidecar_target, stack_target, authority_target]
+    for target in [targets.sidecar, targets.stack, targets.authority]
         .into_iter()
         .flatten()
     {
@@ -141,9 +181,12 @@ fn stop_inner(
             teardown_error = Some(error);
             break;
         }
-        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
+        if targets_absent(
+            [targets.sidecar, targets.stack, targets.authority],
+            &mut teardown_error,
+        ) {
             info!("all component targets exited cleanly");
-            cleanup(state_dir, state_owner)?;
+            cleanup(state_dir, state_lease, cleanup_lock)?;
             return Ok(StopOutcome { forced: false });
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -158,7 +201,7 @@ fn stop_inner(
     }
     let mut forced = false;
     let mut hard_termination_error = None;
-    for target in [stack_target, authority_target, sidecar_target]
+    for target in [targets.stack, targets.authority, targets.sidecar]
         .into_iter()
         .flatten()
     {
@@ -189,7 +232,10 @@ fn stop_inner(
         {
             teardown_error = Some(error);
         }
-        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
+        if targets_absent(
+            [targets.sidecar, targets.stack, targets.authority],
+            &mut teardown_error,
+        ) {
             break true;
         }
         if Instant::now() >= settlement_deadline {
@@ -206,12 +252,12 @@ fn stop_inner(
         info!(%error, "teardown incomplete; retaining runtime state");
         return Err(error);
     }
-    cleanup(state_dir, state_owner)?;
+    cleanup(state_dir, state_lease, cleanup_lock)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
 }
 
-/// Prove that every component target is absent under [`target_may_exist`] policy.
+/// Prove that every recorded target is absent under [`target_may_exist`] policy.
 fn targets_absent<const N: usize>(
     targets: [Option<&TerminationTarget>; N],
     teardown_error: &mut Option<StackError>,
@@ -243,29 +289,39 @@ fn target_may_exist(target: &TerminationTarget, teardown_error: &mut Option<Stac
     }
 }
 
-/// Reconstruct a [`TerminationTarget`] without reinterpreting its stored ID.
+/// Reconstruct a [`TerminationTarget`] without reinterpreting its stored identity.
 fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>> {
     Ok(pidfile::read(&state_dir.join(name))?.map(TerminationTarget::from_stored_id))
 }
 
-/// Commit successful teardown by removing state owned by this stop attempt.
+/// Remove runtime state only while the supplied generation still owns it.
 ///
-/// Callers may invoke this function only after [`targets_absent`] proves that
-/// no component target remains. When an expected supervisor identity is
-/// supplied, a mismatch preserves the replacement owner's state and returns
-/// successfully because process teardown has already completed. Matching
-/// readiness is removed through [`crate::start::supervisor_ready_path`].
-fn cleanup(
+/// The [`StateTransaction`] proves that no startup or concurrent [`stop`] can
+/// mutate the directory between [`StateLease::is_current`] and final state
+/// removal. Legacy state without a lease remains removable only while
+/// [`StateLease::load`] confirms no generation has replaced it.
+///
+/// # Errors
+///
+/// Returns runtime-state read or removal errors. A generation mismatch safely
+/// skips cleanup and returns success.
+pub(crate) fn cleanup_generation(
     state_dir: &Path,
-    state_owner: Option<firma_runtime_state::UserProcessId>,
+    state_lease: Option<StateLease>,
+    _transaction: &StateTransaction,
 ) -> Result<()> {
-    let current_owner = pidfile::read(&state_dir.join("stack.pid"))?;
-    if let Some(expected_owner) = state_owner
-        && current_owner != Some(expected_owner)
-    {
-        info!(%expected_owner, ?current_owner, "runtime state now belongs to another supervisor; skipping cleanup");
+    let lease_is_current = match state_lease {
+        Some(state_lease) => state_lease.is_current(state_dir)?,
+        None => StateLease::load(state_dir)?.is_none(),
+    };
+    if !lease_is_current {
+        info!(
+            ?state_lease,
+            "runtime state now belongs to another generation; skipping cleanup"
+        );
         return Ok(());
     }
+    let current_owner = pidfile::read(&state_dir.join("stack.pid"))?;
     if let Some(current_owner) = current_owner {
         pidfile::remove(&crate::start::supervisor_ready_path(
             state_dir,
@@ -283,4 +339,27 @@ fn cleanup(
         pidfile::remove(&state_dir.join(name))?;
     }
     Ok(())
+}
+
+/// Serialize final cleanup against startup and concurrent [`stop`] snapshots.
+///
+/// [`CleanupLock::Try`] reports contention instead of waiting because owned
+/// process teardown has already completed and must not deadlock with another
+/// mutator holding the [`StateTransaction`].
+fn cleanup(
+    state_dir: &Path,
+    state_lease: Option<StateLease>,
+    cleanup_lock: CleanupLock<'_>,
+) -> Result<()> {
+    match cleanup_lock {
+        CleanupLock::Held(transaction) => cleanup_generation(state_dir, state_lease, transaction),
+        CleanupLock::Try => {
+            let transaction = StateTransaction::try_acquire(state_dir)?.ok_or_else(|| {
+                StackError::RuntimeStateBusy {
+                    path: state_dir.to_path_buf(),
+                }
+            })?;
+            cleanup_generation(state_dir, state_lease, &transaction)
+        }
+    }
 }
