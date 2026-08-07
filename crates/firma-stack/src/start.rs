@@ -418,21 +418,10 @@ impl RunningStack {
         // A detached attachment failure may tear down before publishing ready.
         // Release startup serialization before the owned stop reacquires it.
         owned.startup_transaction = None;
-        // Teardown N-generalization is a follow-up (P5b); this bridge preserves
-        // the exact current two-component teardown by extracting the authority
-        // and sidecar from the ordered Vec in the same argument order that
-        // `stop_owned` expects. An unexpected count fails closed.
         let state_dir = &owned.state_dir;
         let state_lease = owned.state_lease;
-        let result = match owned.components.as_mut_slice() {
-            [authority, sidecar] => {
-                crate::stop::stop_owned(state_dir, timeout, authority, sidecar, state_lease)
-            }
-            other => Err(StackError::Platform(format!(
-                "expected 2 owned components, found {}",
-                other.len()
-            ))),
-        };
+        let result =
+            crate::stop::stop_owned(state_dir, timeout, &mut owned.components, state_lease);
         if result.is_ok() {
             for component in owned.components.iter_mut().rev() {
                 let _ = component.wait();
@@ -626,7 +615,7 @@ fn start_foreground(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> 
     info!("entering foreground supervisor loop");
     let supervision_result = {
         let owned = stack.owned_mut()?;
-        block_until_two_owned_exit(&stop_signal, &mut owned.components)
+        block_until_owned_exit_with(&stop_signal, &mut owned.components)
     };
     info!("foreground supervisor exiting; tearing down stack");
     let teardown_result = stack.shutdown(Duration::from_secs(10));
@@ -668,22 +657,6 @@ fn start_detached(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
         return Err(with_rollback(error, rollback));
     }
     Ok(handle)
-}
-
-/// Bridge the ordered component Vec into the two-component supervision loop.
-///
-/// Teardown and supervision N-generalization is a follow-up (P5b); this bridge
-/// preserves the exact current two-component supervision by extracting the
-/// authority and sidecar from the ordered Vec in the argument order that
-/// [`block_until_owned_exit_with`] expects. An unexpected count fails closed.
-fn block_until_two_owned_exit(stop: &StopSignal, components: &mut [OwnedComponent]) -> Result<()> {
-    match components {
-        [authority, sidecar] => block_until_owned_exit_with(stop, authority, sidecar),
-        other => Err(StackError::Platform(format!(
-            "expected 2 owned components, found {}",
-            other.len()
-        ))),
-    }
 }
 
 /// Roll back only state matching this launcher's [`StackGeneration`].
@@ -819,7 +792,7 @@ fn supervise_running_stack_with_signal(
     info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "detached supervisor owns ready stack");
     let supervision_result = {
         let owned = stack.owned_mut()?;
-        block_until_two_owned_exit(stop_signal, &mut owned.components)
+        block_until_owned_exit_with(stop_signal, &mut owned.components)
     };
     info!("detached supervisor tearing down owned components");
     let teardown_result = stack.shutdown(timeout);

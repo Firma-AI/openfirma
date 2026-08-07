@@ -90,15 +90,28 @@ enum CleanupLock<'a> {
 /// Borrowed [`TerminationTarget`] snapshot for one teardown attempt.
 ///
 /// Keeping the targets in one value preserves a consistent signal, probe, and
-/// cleanup-gating set throughout [`stop_inner`].
-#[derive(Clone, Copy)]
+/// cleanup-gating set throughout [`stop_inner`]. `components` is held in
+/// **startup order**; [`Self::teardown_order`] yields the reverse plus the
+/// optional supervisor.
 struct StopTargets<'a> {
-    /// Optional detached supervisor target.
-    stack: Option<&'a TerminationTarget>,
-    /// Authority process-scope target.
-    authority: Option<&'a TerminationTarget>,
-    /// Sidecar process-scope target.
-    sidecar: Option<&'a TerminationTarget>,
+    /// Optional detached supervisor target, torn down last.
+    supervisor: Option<&'a TerminationTarget>,
+    /// Component process-scope targets, in startup order.
+    components: Vec<&'a TerminationTarget>,
+}
+
+impl<'a> StopTargets<'a> {
+    /// Yield targets in the single uniform teardown order used by every phase.
+    ///
+    /// The order is the reverse of startup: components in reverse of their
+    /// startup order, then the supervisor last. Dependents are torn down before
+    /// their dependencies (the sidecar client drains before the authority
+    /// server it talks to), and the supervisor that manages the components is
+    /// stopped last. The same iterator drives the soft-signal loop, the
+    /// hard-kill loop, and both target-absence checks so no phase can diverge.
+    fn teardown_order(&self) -> impl Iterator<Item = &'a TerminationTarget> {
+        self.components.iter().rev().copied().chain(self.supervisor)
+    }
 }
 
 /// Result of a [`stop`] call.
@@ -175,15 +188,20 @@ fn stop_expected_generation(
         return Ok(StopOutcome { forced: false });
     }
     let supervisor = read_target(state_dir, "stack.pid")?;
+    // Enumerating persisted components generically is a later stage (P6); the
+    // known component pidfiles are read here in startup order.
     let authority = read_target(state_dir, "authority.pid")?;
     let sidecar = read_target(state_dir, "sidecar.pid")?;
+    let components = [authority.as_ref(), sidecar.as_ref()]
+        .into_iter()
+        .flatten()
+        .collect();
     stop_inner(
         state_dir,
         timeout,
-        StopTargets {
-            stack: supervisor.as_ref(),
-            authority: authority.as_ref(),
-            sidecar: sidecar.as_ref(),
+        &StopTargets {
+            supervisor: supervisor.as_ref(),
+            components,
         },
         state_lease,
         cleanup_lock,
@@ -193,31 +211,38 @@ fn stop_expected_generation(
 
 /// Run [`stop_inner`] while retaining direct-child collection authority.
 ///
-/// The current process owns both [`OwnedComponent`] values, so no supervisor
-/// target is needed. [`CleanupLock::Try`] ensures transaction contention cannot
-/// delay process termination; cleanup failure leaves state for a later [`stop`].
+/// The current process owns every [`OwnedComponent`], so no supervisor target
+/// is needed. [`CleanupLock::Try`] ensures transaction contention cannot delay
+/// process termination; cleanup failure leaves state for a later [`stop`].
+///
+/// `components` is in startup order. Each [`OwnedComponent::child_and_target`]
+/// yields a disjoint `&mut Child` and `&TerminationTarget` that share the
+/// component's lifetime; splitting the collected pairs lets `stop_inner` probe
+/// the targets while `collect_owned` reaps every child, all without `unsafe`.
 pub(crate) fn stop_owned(
     state_dir: &Path,
     timeout: Duration,
-    authority: &mut OwnedComponent,
-    sidecar: &mut OwnedComponent,
+    components: &mut [OwnedComponent],
     state_lease: StateLease,
 ) -> Result<StopOutcome> {
-    let (authority_child, authority_target) = authority.child_and_target();
-    let (sidecar_child, sidecar_target) = sidecar.child_and_target();
+    let (mut children, targets): (Vec<&mut std::process::Child>, Vec<&TerminationTarget>) =
+        components
+            .iter_mut()
+            .map(OwnedComponent::child_and_target)
+            .unzip();
     stop_inner(
         state_dir,
         timeout,
-        StopTargets {
-            stack: None,
-            authority: Some(authority_target),
-            sidecar: Some(sidecar_target),
+        &StopTargets {
+            supervisor: None,
+            components: targets,
         },
         Some(state_lease),
         CleanupLock::Try,
         || {
-            let _ = sidecar_child.try_wait()?;
-            let _ = authority_child.try_wait()?;
+            for child in &mut children {
+                let _ = child.try_wait()?;
+            }
             Ok(())
         },
     )
@@ -235,31 +260,29 @@ pub(crate) fn stop_owned(
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
-    targets: StopTargets<'_>,
+    targets: &StopTargets<'_>,
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
     mut collect_owned: impl FnMut() -> Result<()>,
 ) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
     debug!(
-        stack_target = ?targets.stack,
-        authority_target = ?targets.authority,
-        sidecar_target = ?targets.sidecar,
+        supervisor_target = ?targets.supervisor,
+        component_targets = ?targets.components,
         "loaded termination targets"
     );
 
-    // Signal everything we know about. Sidecar first so that its outbound
-    // gRPC streams to the authority close cleanly; that lets the authority's
-    // tonic graceful shutdown finish instead of blocking on long-lived
-    // server-streaming RPCs.
+    // Signal everything we know about in the uniform teardown order (reverse of
+    // startup, supervisor last; see `StopTargets::teardown_order`). The sidecar
+    // is a component that starts after the authority, so it is signalled first:
+    // its outbound gRPC streams to the authority close cleanly, letting the
+    // authority's tonic graceful shutdown finish instead of blocking on
+    // long-lived server-streaming RPCs.
     let mut teardown_error = FirstError::default();
     if let Err(error) = collect_owned() {
         teardown_error.record(error);
     }
-    for target in [targets.sidecar, targets.stack, targets.authority]
-        .into_iter()
-        .flatten()
-    {
+    for target in targets.teardown_order() {
         if target_may_exist(target, &mut teardown_error) {
             debug!(id = %target.stored_id(), "sending soft signal");
             if let Err(e) = target.signal_soft() {
@@ -278,10 +301,7 @@ fn stop_inner(
             teardown_error.record(error);
             break;
         }
-        if targets_absent(
-            [targets.sidecar, targets.stack, targets.authority],
-            &mut teardown_error,
-        ) {
+        if targets_absent(targets.teardown_order(), &mut teardown_error) {
             info!("all component targets exited cleanly");
             cleanup(state_dir, state_lease, cleanup_lock)?;
             return Ok(StopOutcome { forced: false });
@@ -296,10 +316,7 @@ fn stop_inner(
     }
     let mut forced = false;
     let mut hard_termination_error = FirstError::default();
-    for target in [targets.stack, targets.authority, targets.sidecar]
-        .into_iter()
-        .flatten()
-    {
+    for target in targets.teardown_order() {
         if target_may_exist(target, &mut teardown_error) {
             info!(id = %target.stored_id(), "soft-signal grace exceeded; hard-killing");
             match target.signal_hard() {
@@ -321,10 +338,7 @@ fn stop_inner(
         if let Err(error) = collect_owned() {
             teardown_error.record(error);
         }
-        if targets_absent(
-            [targets.sidecar, targets.stack, targets.authority],
-            &mut teardown_error,
-        ) {
+        if targets_absent(targets.teardown_order(), &mut teardown_error) {
             break true;
         }
         if Instant::now() >= settlement_deadline {
@@ -350,12 +364,12 @@ fn stop_inner(
 }
 
 /// Prove that every recorded target is absent under [`target_may_exist`] policy.
-fn targets_absent<const N: usize>(
-    targets: [Option<&TerminationTarget>; N],
+fn targets_absent<'a>(
+    targets: impl Iterator<Item = &'a TerminationTarget>,
     teardown_error: &mut FirstError,
 ) -> bool {
     let mut all_absent = true;
-    for target in targets.into_iter().flatten() {
+    for target in targets {
         if target_may_exist(target, teardown_error) {
             all_absent = false;
         }
@@ -422,16 +436,15 @@ pub(crate) fn cleanup_generation(
             current_owner,
         ))?;
     }
-    for name in [
-        "authority.pid",
-        "authority.listen",
-        "sidecar.pid",
-        "sidecar.listen",
-        "stack.pid",
-        "stack.lock",
-    ] {
-        pidfile::remove(&state_dir.join(name))?;
+    // Derive each component's runtime-state files from its name (startup
+    // order; the known set until persisted-component enumeration lands in P6),
+    // then remove the supervisor's files.
+    for component in ["authority", "sidecar"] {
+        pidfile::remove(&state_dir.join(format!("{component}.pid")))?;
+        pidfile::remove(&state_dir.join(format!("{component}.listen")))?;
     }
+    pidfile::remove(&state_dir.join("stack.pid"))?;
+    pidfile::remove(&state_dir.join("stack.lock"))?;
     Ok(())
 }
 

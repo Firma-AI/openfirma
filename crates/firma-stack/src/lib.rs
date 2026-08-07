@@ -218,22 +218,21 @@ pub mod test_support {
     ) -> crate::error::Result<()> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
-        let mut authority =
-            owned_component(crate::component::ComponentName::new("authority"), authority);
-        let mut sidecar = owned_component(crate::component::ComponentName::new("sidecar"), sidecar);
+        // Components in startup order: authority (server) then sidecar (client).
+        let mut components = vec![
+            owned_component(crate::component::ComponentName::new("authority"), authority),
+            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+        ];
         let stop = crate::supervisor::StopSignal::install()?;
         let supervision_result =
-            crate::supervisor::block_until_owned_exit_with(&stop, &mut authority, &mut sidecar);
-        let teardown_result = crate::stop::stop_owned(
-            state_dir,
-            timeout,
-            &mut authority,
-            &mut sidecar,
-            state_lease,
-        );
+            crate::supervisor::block_until_owned_exit_with(&stop, &mut components);
+        let teardown_result =
+            crate::stop::stop_owned(state_dir, timeout, &mut components, state_lease);
         if teardown_result.is_ok() {
-            let _ = sidecar.wait();
-            let _ = authority.wait();
+            // Collect in reverse of startup, consistent with owned teardown.
+            for component in components.iter_mut().rev() {
+                let _ = component.wait();
+            }
         }
         supervision_result?;
         teardown_result.map(|_| ())
