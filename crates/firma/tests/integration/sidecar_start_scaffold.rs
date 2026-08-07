@@ -249,6 +249,48 @@ fn stopped_stack_reports_stopped_and_can_restart() {
 }
 
 #[test]
+fn concurrent_starts_publish_exactly_one_stack() {
+    let scaffold = Scaffold::new();
+    let _cleanup = scaffold.cleanup();
+    let barrier = std::sync::Barrier::new(3);
+
+    let outputs = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            barrier.wait();
+            scaffold.start()
+        });
+        let second = scope.spawn(|| {
+            barrier.wait();
+            scaffold.start()
+        });
+        // The test thread is the third participant, releasing both launcher
+        // threads from the same in-process barrier before either spawns `firma`.
+        barrier.wait();
+        [
+            first.join().expect("first start thread"),
+            second.join().expect("second start thread"),
+        ]
+    });
+
+    let successes = outputs
+        .iter()
+        .filter(|output| output.status.success())
+        .count();
+    assert_eq!(successes, 1, "concurrent start outputs: {outputs:#?}");
+    let failure = outputs
+        .iter()
+        .find(|output| !output.status.success())
+        .expect("one start must lose the race");
+    assert_eq!(failure.status.code(), Some(2));
+
+    let (status, rows) = daemon_status(&scaffold.state_dir);
+    assert!(status.success(), "winning stack status was {status}");
+    assert_eq!(rows.as_array().map(Vec::len), Some(1));
+    assert_eq!(rows[0]["state"], "running");
+    assert_eq!(rows[0]["listen"], scaffold.interceptor_addr.to_string());
+}
+
+#[test]
 fn supervisor_owner_teardown_terminates_components() {
     let scaffold = Scaffold::new();
     let _cleanup = scaffold.cleanup();
