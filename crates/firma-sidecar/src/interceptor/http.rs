@@ -205,30 +205,73 @@ impl Interceptor for HttpInterceptor {
 }
 
 impl HttpInterceptor {
+    /// Build the HTTPS MITM runtime (generating CA material) when active.
+    ///
+    /// The runtime is built only when interception is effectively active
+    /// (enabled with at least one intercept host). An enabled-but-empty host
+    /// list is treated as disabled, so CA material is not loaded at all.
+    ///
+    /// Callers that bind a listening socket should invoke this before binding:
+    /// building the runtime is where CA generation happens, so a connectable
+    /// port then implies CA readiness and a CA failure surfaces synchronously
+    /// instead of leaving a dead bound port.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InterceptorError::ServerError`] if TLS MITM runtime
+    /// initialization (including CA material generation) fails.
+    pub(crate) fn build_mitm_runtime(
+        &self,
+    ) -> Result<Option<Arc<HttpsMitmRuntime>>, InterceptorError> {
+        if self.https_mitm_config.is_active() {
+            let runtime = HttpsMitmRuntime::new(self.https_mitm_config.clone(), &self.ca_dir)
+                .map_err(InterceptorError::ServerError)?;
+            Ok(Some(Arc::new(runtime)))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Run the interceptor loop using an already bound listener.
+    ///
+    /// Builds the MITM runtime (generating CA material when active) before
+    /// entering the accept loop. Callers that must guarantee CA readiness
+    /// before the port becomes connectable should instead build the runtime
+    /// with [`HttpInterceptor::build_mitm_runtime`] before binding and pass it
+    /// to [`HttpInterceptor::run_with_listener_and_runtime`].
     ///
     /// # Errors
     ///
     /// Returns [`InterceptorError`] if TLS MITM runtime initialization fails
     /// or the server loop encounters an unrecoverable error.
     pub async fn run_with_listener(
-        mut self,
+        self,
         listener: TcpListener,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), InterceptorError> {
-        // Build the MITM runtime only when interception is effectively active
-        // (enabled with at least one intercept host). An enabled-but-empty
-        // host list is treated as disabled, so we skip loading CA material
-        // entirely.
-        let mitm_runtime = if self.https_mitm_config.is_active() {
-            let runtime = HttpsMitmRuntime::new(self.https_mitm_config.clone(), &self.ca_dir)
-                .map_err(InterceptorError::ServerError)?;
-            Some(Arc::new(runtime))
-        } else {
-            None
-        };
+        let mitm_runtime = self.build_mitm_runtime()?;
+        self.run_with_listener_and_runtime(listener, handler, cancel, mitm_runtime)
+            .await
+    }
 
+    /// Run the interceptor loop with a pre-built MITM runtime.
+    ///
+    /// Unlike [`HttpInterceptor::run_with_listener`], this accepts an
+    /// already-built `mitm_runtime`, letting callers generate CA material
+    /// before binding the listener so a connectable port implies readiness.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InterceptorError`] if the server loop encounters an
+    /// unrecoverable error.
+    pub(crate) async fn run_with_listener_and_runtime(
+        mut self,
+        listener: TcpListener,
+        handler: Arc<RequestHandler>,
+        cancel: CancellationToken,
+        mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
+    ) -> Result<(), InterceptorError> {
         self.handler = Some(handler);
         let handler =
             Arc::clone(self.handler.as_ref().ok_or_else(|| {

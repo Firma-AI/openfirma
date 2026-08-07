@@ -83,8 +83,10 @@ What `start` does, in order:
 2. The owner boots the Authority in its own process group and probes its gRPC
    port until it accepts connections.
 3. The owner boots the Sidecar in its own process group.
-4. The owner probes the Sidecar's listen port and waits for
-   `generated-firma-ca/` material when HTTPS MITM is active.
+4. The owner probes the Sidecar's listen port. When HTTPS MITM is active, the
+   Sidecar generates its `generated-firma-ca/` material before opening that
+   port, so a connectable port already implies CA readiness; readiness is a
+   single signal.
 5. With `--detach`, the supervisor announces readiness, waits for the launcher's
    acknowledgement, then confirms attachment. The launcher exits 0 only after
    that two-phase handoff. Without detachment, the owner continues blocking in
