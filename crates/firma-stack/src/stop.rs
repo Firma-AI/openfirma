@@ -1,11 +1,9 @@
 //! Fail-closed teardown of a running stack.
 //!
-//! [`stop`] snapshots persisted [`TerminationTarget`] values and delegates the
-//! common state machine to [`stop_inner`]: request graceful shutdown, wait the
-//! caller's grace period, force surviving targets, then wait for bounded
-//! settlement. Runtime state is removed by [`cleanup`] only after every target
-//! is proven absent. [`target_may_exist`] treats probe uncertainty as presence,
-//! preserving both signalling effort and the state needed for a retry.
+//! [`stop`] snapshots persisted [`TerminationTarget`] values and delegates to
+//! [`stop_inner`]. Runtime state is removed by [`cleanup`] only after every
+//! target is proven absent. [`target_may_exist`] treats probe uncertainty as
+//! presence, preserving both signalling effort and retry evidence.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -55,6 +53,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         supervisor,
         authority,
         sidecar,
+        None,
         || Ok(()),
     )
 }
@@ -68,6 +67,7 @@ pub(crate) fn stop_owned(
     timeout: Duration,
     authority: &mut OwnedComponent,
     sidecar: &mut OwnedComponent,
+    state_owner: Option<firma_runtime_state::UserProcessId>,
 ) -> Result<StopOutcome> {
     stop_inner(
         state_dir,
@@ -75,22 +75,13 @@ pub(crate) fn stop_owned(
         None,
         Some(authority.termination_target()),
         Some(sidecar.termination_target()),
+        state_owner,
         || {
             let _ = sidecar.try_wait()?;
             let _ = authority.try_wait()?;
             Ok(())
         },
     )
-}
-
-/// Run [`stop_inner`] from the detached supervisor without targeting itself.
-///
-/// Component authority is reconstructed from runtime state because this
-/// process does not own their direct-child handles.
-pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
-    let authority = read_target(state_dir, "authority.pid")?;
-    let sidecar = read_target(state_dir, "sidecar.pid")?;
-    stop_inner(state_dir, timeout, None, authority, sidecar, || Ok(()))
 }
 
 /// Apply the common graceful-to-forced teardown state machine.
@@ -100,14 +91,17 @@ pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> R
 /// signalling failure does not prevent a later forced request. Probe or child
 /// collection errors retain the first failure while teardown continues
 /// conservatively. A forced request is a normal timeout outcome, but
-/// [`cleanup`] remains forbidden until [`targets_absent`] proves every known
-/// target gone within [`HARD_TERMINATION_SETTLEMENT`].
+/// [`cleanup`] remains forbidden until [`targets_absent`] proves every component
+/// target gone within [`HARD_TERMINATION_SETTLEMENT`]. A recorded supervisor is
+/// signalled as part of coordination, while component absence remains the
+/// cleanup gate.
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
     stack_target: Option<TerminationTarget>,
     authority_target: Option<TerminationTarget>,
     sidecar_target: Option<TerminationTarget>,
+    state_owner: Option<firma_runtime_state::UserProcessId>,
     mut collect_owned: impl FnMut() -> Result<()>,
 ) -> Result<StopOutcome> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
@@ -145,12 +139,9 @@ fn stop_inner(
             teardown_error = Some(error);
             break;
         }
-        if targets_absent(
-            [sidecar_target, stack_target, authority_target],
-            &mut teardown_error,
-        ) {
-            info!("all termination targets exited cleanly");
-            cleanup(state_dir)?;
+        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
+            info!("all component targets exited cleanly");
+            cleanup(state_dir, state_owner)?;
             return Ok(StopOutcome { forced: false });
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -196,10 +187,7 @@ fn stop_inner(
         {
             teardown_error = Some(error);
         }
-        if targets_absent(
-            [sidecar_target, stack_target, authority_target],
-            &mut teardown_error,
-        ) {
+        if targets_absent([sidecar_target, authority_target], &mut teardown_error) {
             break true;
         }
         if Instant::now() >= settlement_deadline {
@@ -216,12 +204,12 @@ fn stop_inner(
         info!(%error, "teardown incomplete; retaining runtime state");
         return Err(error);
     }
-    cleanup(state_dir)?;
+    cleanup(state_dir, state_owner)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
 }
 
-/// Prove that every known target is absent under [`target_may_exist`] policy.
+/// Prove that every component target is absent under [`target_may_exist`] policy.
 fn targets_absent<const N: usize>(
     targets: [Option<TerminationTarget>; N],
     teardown_error: &mut Option<StackError>,
@@ -258,19 +246,36 @@ fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>
     Ok(pidfile::read(&state_dir.join(name))?.map(TerminationTarget::from_stored_id))
 }
 
-/// Commit successful teardown by removing governed runtime state.
+/// Commit successful teardown by removing state owned by this stop attempt.
 ///
 /// Callers may invoke this function only after [`targets_absent`] proves that
-/// no recorded target remains. Removal errors are surfaced even though process
-/// teardown has completed, preserving an honest result for the operator.
-fn cleanup(state_dir: &Path) -> Result<()> {
+/// no component target remains. When an expected supervisor identity is
+/// supplied, a mismatch preserves the replacement owner's state and returns
+/// successfully because process teardown has already completed. Matching
+/// readiness is removed through [`crate::start::supervisor_ready_path`].
+fn cleanup(
+    state_dir: &Path,
+    state_owner: Option<firma_runtime_state::UserProcessId>,
+) -> Result<()> {
+    let current_owner = pidfile::read(&state_dir.join("stack.pid"))?;
+    if let Some(expected_owner) = state_owner
+        && current_owner != Some(expected_owner)
+    {
+        info!(%expected_owner, ?current_owner, "runtime state now belongs to another supervisor; skipping cleanup");
+        return Ok(());
+    }
+    if let Some(current_owner) = current_owner {
+        pidfile::remove(&crate::start::supervisor_ready_path(
+            state_dir,
+            current_owner,
+        ))?;
+    }
     for name in [
         "authority.pid",
         "authority.listen",
         "sidecar.pid",
         "sidecar.listen",
         "stack.pid",
-        "stack.ready",
         "stack.lock",
     ] {
         pidfile::remove(&state_dir.join(name))?;

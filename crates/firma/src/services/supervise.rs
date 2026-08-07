@@ -7,9 +7,18 @@ use tracing::{error, info};
 use crate::args::supervise::Args;
 
 pub fn run(args: Args) -> ExitCode {
-    let Args { state_dir } = args;
+    let Args {
+        state_dir,
+        config,
+        firma_bin,
+    } = args;
     info!(state_dir = %state_dir.display(), "supervisor process starting");
-    match firma_stack::supervise(&state_dir) {
+    let config = firma_stack::StackConfig {
+        state_dir: Some(state_dir.clone()),
+        config_file: config,
+        firma_bin,
+    };
+    match firma_stack::supervise_owned(&config, &state_dir) {
         Ok(()) => {
             info!("supervisor exited cleanly");
             ExitCode::SUCCESS

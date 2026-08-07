@@ -1,11 +1,10 @@
-//! Foreground ownership and detached observation loops.
+//! Owned-child supervision and collection.
 //!
-//! Owned supervision uses [`OwnedComponent`] capabilities to detect and collect
-//! leader exits. Observed supervision has only persisted [`UserProcessId`]
-//! values and can establish liveness but cannot collect those processes. Both
-//! loops return when a stop request or either component exit makes coordinated
-//! teardown necessary; returning successfully does not stop the peer. That
-//! responsibility remains with their caller.
+//! Supervision uses [`OwnedComponent`] capabilities to detect and collect
+//! leader exits. [`block_until_owned_exit`] returns when a stop request or
+//! either component exit makes coordinated teardown necessary; returning
+//! successfully does not stop the peer. Component teardown remains with the
+//! caller that owns the capabilities.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +15,7 @@ use tracing::{debug, info, warn};
 use crate::component::OwnedComponent;
 use crate::error::Result;
 use crate::platform::TerminationTarget;
-use firma_runtime_state::{ChildExt as _, UserProcessId};
+use firma_runtime_state::ChildExt as _;
 
 /// Operation that starts a thread owning one component-reaper job.
 ///
@@ -26,20 +25,11 @@ use firma_runtime_state::{ChildExt as _, UserProcessId};
 pub type ReaperLauncher =
     fn(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>;
 
-/// Persisted component identities available to a detached observer.
-///
-/// This value grants no child-collection or process-termination authority.
-#[derive(Clone, Copy)]
-pub struct ObservedChildren {
-    pub authority_pid: UserProcessId,
-    pub sidecar_pid: UserProcessId,
-}
-
-/// Wait until owned foreground supervision should begin coordinated teardown.
+/// Wait until owned supervision should begin coordinated teardown.
 ///
 /// A direct-child exit is collected through [`OwnedComponent::try_wait`]. Stop
 /// requests and exits both return [`Ok`]; collection failures are returned
-/// while component teardown remains the caller's responsibility.
+/// while teardown remains the caller's responsibility.
 pub fn block_until_owned_exit(
     authority: &mut OwnedComponent,
     sidecar: &mut OwnedComponent,
@@ -68,40 +58,7 @@ pub fn block_until_owned_exit(
     }
 }
 
-/// Wait until observed detached supervision should begin coordinated teardown.
-///
-/// Unlike [`block_until_owned_exit`], this function can only probe persisted
-/// identities in [`ObservedChildren`]. It cannot collect a child or infer the
-/// full platform termination scope from those identities.
-pub fn block_until_observed_exit(children: ObservedChildren) -> Result<()> {
-    let stop = install_stop_handler();
-    debug!(
-        authority_pid = %children.authority_pid,
-        sidecar_pid = %children.sidecar_pid,
-        "detached supervisor observing children"
-    );
-
-    loop {
-        if stop.load(Ordering::SeqCst) {
-            info!("Ctrl-C received; caller will tear stack down");
-            return Ok(());
-        }
-        if !children.authority_pid.process_exists()? {
-            warn!(
-                pid = %children.authority_pid,
-                "authority exited unexpectedly"
-            );
-            return Ok(());
-        }
-        if !children.sidecar_pid.process_exists()? {
-            warn!(pid = %children.sidecar_pid, "sidecar exited unexpectedly");
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-/// Install a process-local request flag for both supervision loops.
+/// Install a process-local request flag for owned supervision.
 ///
 /// The handler only requests loop termination; it never signals components.
 /// Handler installation is best-effort because another crate may already own

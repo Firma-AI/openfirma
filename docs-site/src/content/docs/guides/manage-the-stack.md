@@ -72,18 +72,21 @@ for the full flag table.
 # --config defaults to the discovered firma.toml.
 firma sidecar start
 
-# Detached. Forks a supervisor process after readiness probes pass.
+# Detached. The hidden supervisor owns startup and the component children.
 firma sidecar start --detach
 ```
 
 What `start` does, in order:
 
-1. Boots the Authority in its own process group.
-2. Probes the Authority's gRPC port until it accepts connections.
-3. Boots the Sidecar in its own process group.
-4. Probes the Sidecar's listen port and waits for `generated-firma-ca/` material.
-5. With `--detach`: forks a `__supervise` child that re-attaches to the pidfiles, then exits 0.
-6. Without `--detach`: blocks in the foreground until signalled.
+1. With `--detach`, forks the hidden owning supervisor; without it, the current
+   process remains the owner.
+2. The owner boots the Authority in its own process group and probes its gRPC
+   port until it accepts connections.
+3. The owner boots the Sidecar in its own process group.
+4. The owner probes the Sidecar's listen port and waits for
+   `generated-firma-ca/` material when HTTPS MITM is active.
+5. With `--detach`, the supervisor acknowledges readiness and the launcher exits
+   0. Without it, the owner continues blocking in the foreground.
 
 If readiness fails at any step, `start` attempts to terminate and collect every
 spawned child. It removes pid, listen, and lock files only after confirming
@@ -127,23 +130,21 @@ streams. The supervisor and Authority follow. Survivors past
 `--timeout` (default 2 s) are hard-killed. Firma then waits up to 2 seconds
 for every termination target to disappear before deleting runtime state.
 
-Foreground startup retains the component child handles and is solely
-responsible for collecting those children. Status commands, external stop
-commands, and the detached supervisor use non-destructive probes and never
-attempt to reap a process they do not own. After detached startup, the launcher
-keeps an owner-side collector active for as long as that process remains alive;
-if the launcher exits, normal OS reparenting transfers collection responsibility.
-The command returns success only after the detached supervisor loads both
-component targets and acknowledges attachment; attachment failure rolls the
-owned stack back.
-If either component exits during detached operation, the supervisor tears down
-the other component before it exits; it does not signal its own process group
-from that teardown path.
+Foreground startup retains the component child handles and collects those
+children itself. In detached mode, the hidden supervisor spawns the components,
+retains their child handles, and remains their owning parent until teardown.
+Status and external stop commands use non-destructive probes and never attempt
+to reap another process's child.
 
-On Unix, an addressable process group is treated as alive even when its leader
-has exited, ensuring orphaned descendants are also hard-killed. A group
-containing only unreaped zombies remains conservatively present to a
-non-owner observer.
+The detached command returns success only after the supervisor has spawned both
+components, completed their readiness checks, and acknowledged ownership. If a
+component exits, the supervisor collects it and tears down the other component
+before exiting. Attachment failure rolls the owned stack back.
+
+On Unix, an addressable component process group is treated as alive even when
+its leader has exited, ensuring orphaned descendants are also hard-killed. A
+group containing only unreaped zombies remains conservatively present to a
+non-owner status or stop process; owner supervision collects its own leaders.
 
 If a process-group probe or hard termination fails, or a target remains present
 after the post-termination settlement window, `firma` still attempts every
