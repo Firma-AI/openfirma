@@ -54,41 +54,6 @@ pub fn wait_for_tcp(
     }
 }
 
-/// Wait until a live Sidecar has published both generated CA files.
-///
-/// File presence is startup evidence, not liveness. The process-status callback
-/// is therefore checked both before and after the files appear, under the same
-/// ownership contract as [`wait_for_tcp`].
-///
-/// # Errors
-///
-/// Returns termination, filesystem, collection,
-/// [`StackError::ReadinessProcessExited`], or [`StackError::Readiness`] errors.
-pub fn wait_for_ca_material(
-    ca_dir: &Path,
-    timeout: Duration,
-    stop_signal: Option<&StopSignal>,
-    mut process_status: impl FnMut() -> Result<Option<(ComponentRole, ExitStatus)>>,
-) -> Result<()> {
-    let cert = ca_dir.join("firma-ca.crt");
-    let key = ca_dir.join("firma-ca.key");
-    let deadline = Instant::now() + timeout;
-    loop {
-        check_startup("sidecar", stop_signal, &mut process_status)?;
-        if cert.exists() && key.exists() {
-            check_startup("sidecar", stop_signal, &mut process_status)?;
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(StackError::Readiness {
-                component: "sidecar (CA material)".into(),
-                timeout_secs: timeout.as_secs(),
-            });
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// Reject termination or observed component exit before accepting readiness.
 ///
 /// [`StopSignal`] is checked first so an explicit shutdown request consistently
@@ -166,9 +131,10 @@ impl FirmaToml {
 
     /// Deserialize Sidecar configuration through [`SidecarConfig`].
     ///
-    /// Callers use the resulting listen address for [`wait_for_tcp`] and
-    /// [`firma_sidecar::config::HttpsMitmConfig::is_active`] to decide whether
-    /// [`wait_for_ca_material`] is required.
+    /// Callers use the resulting listen address for [`wait_for_tcp`]. The
+    /// sidecar generates its CA material before opening the interceptor port,
+    /// so a connectable port already implies CA readiness and no separate CA
+    /// probe is needed.
     ///
     /// # Errors
     ///
@@ -222,7 +188,7 @@ intercept_hosts = [\"api.anthropic.com\"]
         );
         assert!(
             sidecar.interceptor.https_mitm.is_active(),
-            "enabled mitm with a host must gate the CA-material probe on"
+            "enabled mitm with a host must report active"
         );
     }
 
@@ -286,29 +252,11 @@ intercept_hosts = [\"api.anthropic.com\"]
 
     #[test]
     fn sidecar_config_reports_inactive_mitm() {
-        // Enabled but with no intercept hosts: nothing to intercept, so the
-        // CA-material probe must NOT be gated on (the scaffold default).
+        // Enabled but with no intercept hosts: nothing to intercept, so MITM is
+        // inactive (the scaffold default).
         let (_dir, parsed) =
             read("[sidecar.interceptor.https_mitm]\nenabled = true\nintercept_hosts = []\n");
         let sidecar = parsed.expect("parses").sidecar_config().expect("sidecar");
         assert!(!sidecar.interceptor.https_mitm.is_active());
-    }
-
-    #[test]
-    fn wait_for_ca_material_returns_once_both_files_exist() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("firma-ca.crt"), b"cert").expect("write cert");
-        std::fs::write(dir.path().join("firma-ca.key"), b"key").expect("write key");
-
-        wait_for_ca_material(dir.path(), Duration::from_secs(1), None, || Ok(None))
-            .expect("material present");
-    }
-
-    #[test]
-    fn wait_for_ca_material_times_out_when_absent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let err = wait_for_ca_material(dir.path(), Duration::from_millis(0), None, || Ok(None))
-            .expect_err("absent material must time out");
-        assert!(matches!(err, StackError::Readiness { .. }));
     }
 }

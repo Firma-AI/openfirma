@@ -78,7 +78,7 @@ impl OwnedComponent {
     /// This constructor is used by test scaffolding that starts processes
     /// outside the production spawn path.
     #[cfg(feature = "test-support")]
-    pub fn from_child(
+    pub(crate) fn from_child(
         role: ComponentRole,
         child: Child,
         leader_pid: UserProcessId,

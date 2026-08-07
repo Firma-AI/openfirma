@@ -21,7 +21,7 @@ use crate::component::{ComponentRole, OwnedComponent};
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
-use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
+use crate::readiness::{FirmaToml, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::supervisor::{
@@ -490,9 +490,10 @@ impl Drop for RunningStack {
 /// Spawn the stack and wait for readiness without blocking on supervision.
 ///
 /// Returns ownership of the component child handles once both components are
-/// listening and the sidecar CA material is on disk. The caller must eventually
-/// call [`RunningStack::shutdown`] to tear the stack down and collect its
-/// children.
+/// listening. The sidecar opens its interceptor port only after generating its
+/// CA material, so a connectable sidecar implies CA readiness. The caller must
+/// eventually call [`RunningStack::shutdown`] to tear the stack down and collect
+/// its children.
 ///
 /// Used by `firma-demo-tui` and as the first step of [`start`].
 ///
@@ -620,22 +621,10 @@ fn spawn_stack_inner(
         stop_signal,
         || startup.exited_component(),
     )?;
+    // A connectable sidecar already implies CA readiness: the sidecar generates
+    // its CA material before opening the interceptor port, so readiness is a
+    // single signal with no separate CA-material probe.
     info!(addr = %side_addr, "sidecar listening");
-    // CA material is only written when HTTPS MITM is active. A sidecar with
-    // MITM inactive (e.g. an Anthropic-only scaffold) never produces it, so
-    // gating readiness on it would spuriously time out daemon startup.
-    if sidecar.interceptor.https_mitm.is_active() {
-        debug!("waiting for sidecar CA material");
-        wait_for_ca_material(
-            &state_dir.join("generated-firma-ca"),
-            Duration::from_mins(1),
-            stop_signal,
-            || startup.exited_component(),
-        )?;
-        debug!("CA material present");
-    } else {
-        debug!("sidecar HTTPS MITM inactive; skipping CA material readiness probe");
-    }
 
     // The Group goes out of scope at the end of this function. On Unix that is
     // a no-op because children sit in their own process groups. On Windows,

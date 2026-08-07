@@ -91,19 +91,24 @@ pub fn spawn_interceptor(
 
     match ic.mode {
         InterceptorMode::HttpProxy => {
-            let std_listener = std::net::TcpListener::bind(ic.listen_addr)?;
-            std_listener.set_nonblocking(true)?;
-            let bound_addr = std_listener.local_addr()?;
-            let listener = tokio::net::TcpListener::from_std(std_listener)?;
             let interceptor = interceptor::http::HttpInterceptor::new(ic.listen_addr)
                 .with_https_mitm(ic.https_mitm.clone(), config.ca.dir.clone())
                 .with_max_request_body_bytes(ic.max_request_body_bytes)
                 .with_total_body_budget_bytes(ic.total_body_budget_bytes)
                 .with_connect_relay(ic.connect_relay.clone());
+            // Generate CA material (when HTTPS MITM is active) *before* binding
+            // the listener, so a connectable port implies full readiness. A CA
+            // failure surfaces synchronously here (the sidecar exits non-zero)
+            // rather than leaving a dead bound port to time out.
+            let mitm_runtime = interceptor.build_mitm_runtime()?;
+            let std_listener = std::net::TcpListener::bind(ic.listen_addr)?;
+            std_listener.set_nonblocking(true)?;
+            let bound_addr = std_listener.local_addr()?;
+            let listener = tokio::net::TcpListener::from_std(std_listener)?;
             tracing::debug!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
             let handle = tokio::spawn(async move {
                 if let Err(e) = interceptor
-                    .run_with_listener(listener, handler, cancel)
+                    .run_with_listener_and_runtime(listener, handler, cancel, mitm_runtime)
                     .await
                 {
                     tracing::error!(error = %e, "HTTP proxy interceptor failed");
