@@ -100,7 +100,7 @@ impl StopSignal {
 
 /// Supervise owned children using a [`StopSignal`] installed before readiness.
 ///
-/// Return preserves both [`OwnedComponent`] values for the caller's teardown;
+/// Return preserves every [`OwnedComponent`] for the caller's teardown; an
 /// observed child exit never transfers or silently drops process authority.
 ///
 /// # Errors
@@ -108,12 +108,10 @@ impl StopSignal {
 /// Returns the first direct-child collection probe error.
 pub fn block_until_owned_exit_with(
     stop: &StopSignal,
-    authority: &mut OwnedComponent,
-    sidecar: &mut OwnedComponent,
+    components: &mut [OwnedComponent],
 ) -> Result<()> {
     debug!(
-        authority_pid = %authority.leader_pid(),
-        sidecar_pid = %sidecar.leader_pid(),
+        component_count = components.len(),
         "foreground supervisor watching owned children"
     );
 
@@ -122,13 +120,15 @@ pub fn block_until_owned_exit_with(
             info!("termination signal received; caller will tear stack down");
             return Ok(());
         }
-        if authority.try_wait()?.is_some() {
-            warn!(pid = %authority.leader_pid(), "authority exited unexpectedly");
-            return Ok(());
-        }
-        if sidecar.try_wait()?.is_some() {
-            warn!(pid = %sidecar.leader_pid(), "sidecar exited unexpectedly");
-            return Ok(());
+        for component in &mut *components {
+            if component.try_wait()?.is_some() {
+                warn!(
+                    name = component.name().as_str(),
+                    pid = %component.leader_pid(),
+                    "component exited unexpectedly"
+                );
+                return Ok(());
+            }
         }
         std::thread::sleep(Duration::from_millis(200));
     }
