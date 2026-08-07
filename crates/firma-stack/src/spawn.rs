@@ -11,20 +11,20 @@ use std::time::{Duration, Instant};
 
 use tracing::debug;
 
-use crate::component::{ComponentRole, OwnedComponent};
+use crate::component::{ComponentName, OwnedComponent};
 use crate::error::Result;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
 use crate::supervisor::{collect_child_until, collect_target_in_background};
 use firma_runtime_state::pidfile;
 
 /// Immutable inputs required to spawn one managed stack component.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct SpawnRequest<'a> {
-    /// Stack role assigned to the new process.
-    pub role: ComponentRole,
+    /// Identity assigned to the new process.
+    pub name: ComponentName,
     /// Command-line arguments passed to the component executable.
     pub args: &'a [&'a str],
-    /// Directory in which role-specific runtime state is recorded.
+    /// Directory in which per-component runtime state is recorded.
     pub state_dir: &'a Path,
     /// Executable override; [`std::env::current_exe`] is used when absent.
     pub exe: Option<&'a Path>,
@@ -46,9 +46,9 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<OwnedCom
         Some(path) => path.to_path_buf(),
         None => std::env::current_exe()?,
     };
-    let name = req.role.name();
+    let name = req.name.as_str();
     let log_path = req.state_dir.join(format!("{name}.log"));
-    let pidfile_path = req.state_dir.join(req.role.pidfile_name());
+    let pidfile_path = req.state_dir.join(req.name.pidfile_name());
     debug!(
         name,
         exe = %exe.display(),
@@ -66,7 +66,7 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<OwnedCom
     }
     let leader_pid = spawned.leader_pid;
     debug!(name, pid = %leader_pid, pidfile = %pidfile_path.display(), "pidfile written");
-    Ok(OwnedComponent::from_spawned(req.role, spawned))
+    Ok(OwnedComponent::from_spawned(req.name.clone(), spawned))
 }
 
 /// Recover process ownership after post-spawn publication fails.

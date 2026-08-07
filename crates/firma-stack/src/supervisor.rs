@@ -173,10 +173,10 @@ impl ReaperStartError {
         let mut components = self.into_components();
         for component in &mut components {
             if let Err(error) = component.termination_target().signal_hard() {
-                warn!(role = component.role().name(), %error, "fallback process-tree termination failed");
+                warn!(role = component.name().as_str(), %error, "fallback process-tree termination failed");
             }
             if let Err(error) = component.kill_leader() {
-                debug!(role = component.role().name(), %error, "fallback leader termination failed");
+                debug!(role = component.name().as_str(), %error, "fallback leader termination failed");
             }
         }
 
@@ -186,7 +186,7 @@ impl ReaperStartError {
                 if child_was_collected_externally(&error) {
                     continue;
                 }
-                warn!(role = component.role().name(), %error, "fallback child collection failed");
+                warn!(role = component.name().as_str(), %error, "fallback child collection failed");
                 if collection_error.is_none() {
                     collection_error = Some(error);
                 }
@@ -239,7 +239,7 @@ pub fn collect_in_background_with(
                     Ok(Some(_)) => false,
                     Err(error) if child_was_collected_externally(&error) => false,
                     Err(error) => {
-                        debug!(role = component.role().name(), %error, "component collection probe failed; retrying");
+                        debug!(role = component.name().as_str(), %error, "component collection probe failed; retrying");
                         true
                     }
                 });

@@ -3,7 +3,7 @@
 //! [`OwnedComponent`] is the canonical in-process capability: it keeps the
 //! direct-child handle required for collection inseparable from the
 //! [`TerminationTarget`] required to govern the complete platform scope.
-//! [`ComponentRole`] supplies stable command and runtime-state identity but
+//! [`ComponentName`] supplies stable command and runtime-state identity but
 //! grants no process authority by itself.
 
 use std::process::{Child, ExitStatus};
@@ -11,41 +11,34 @@ use std::process::{Child, ExitStatus};
 use crate::platform::{SpawnedChild, TerminationTarget};
 use firma_runtime_state::UserProcessId;
 
-/// Identifies a managed process by its role in the local Firma stack.
+/// Opaque identity of a managed process in the local Firma stack.
 ///
-/// The role determines command selection and runtime-state file names; it does
-/// not itself grant authority to signal or collect a process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ComponentRole {
-    /// The local policy authority process.
-    Authority,
-    /// The local enforcement sidecar process.
-    Sidecar,
-}
+/// The name determines command selection and runtime-state file names; it does
+/// not itself grant authority to signal or collect a process. This machinery is
+/// agnostic to which components exist: the concrete names are supplied by the
+/// caller at spawn time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentName(String);
 
-impl ComponentRole {
-    /// Return the role name used in commands, logs, and diagnostics.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Authority => "authority",
-            Self::Sidecar => "sidecar",
-        }
+impl ComponentName {
+    /// Create a component identity from its stable name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
     }
 
-    /// Return the runtime-state file that stores this role's termination target.
-    pub const fn pidfile_name(self) -> &'static str {
-        match self {
-            Self::Authority => "authority.pid",
-            Self::Sidecar => "sidecar.pid",
-        }
+    /// Return the name used in commands, logs, and diagnostics.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 
-    /// Return the runtime-state file that stores this role's listen address.
-    pub const fn listen_file_name(self) -> &'static str {
-        match self {
-            Self::Authority => "authority.listen",
-            Self::Sidecar => "sidecar.listen",
-        }
+    /// Return the runtime-state file that stores this component's termination target.
+    pub fn pidfile_name(&self) -> String {
+        format!("{}.pid", self.0)
+    }
+
+    /// Return the runtime-state file that stores this component's listen address.
+    pub fn listen_file_name(&self) -> String {
+        format!("{}.listen", self.0)
     }
 }
 
@@ -56,45 +49,45 @@ impl ComponentRole {
 /// accidentally separating those responsibilities before an explicit
 /// [`OwnedComponent::into_parts`] transfer.
 pub struct OwnedComponent {
-    role: ComponentRole,
+    name: ComponentName,
     child: Child,
     leader_pid: UserProcessId,
     termination_target: TerminationTarget,
 }
 
 impl OwnedComponent {
-    /// Bind a newly spawned platform child to its stack role.
-    pub fn from_spawned(role: ComponentRole, spawned: SpawnedChild) -> Self {
+    /// Bind a newly spawned platform child to its component identity.
+    pub fn from_spawned(name: ComponentName, spawned: SpawnedChild) -> Self {
         Self {
-            role,
+            name,
             child: spawned.child,
             leader_pid: spawned.leader_pid,
             termination_target: spawned.termination_target,
         }
     }
 
-    /// Bind an existing child and termination target to a stack role.
+    /// Bind an existing child and termination target to a component identity.
     ///
     /// This constructor is used by test scaffolding that starts processes
     /// outside the production spawn path.
     #[cfg(feature = "test-support")]
     pub(crate) fn from_child(
-        role: ComponentRole,
+        name: ComponentName,
         child: Child,
         leader_pid: UserProcessId,
         termination_target: TerminationTarget,
     ) -> Self {
         Self {
-            role,
+            name,
             child,
             leader_pid,
             termination_target,
         }
     }
 
-    /// Return the component's immutable stack role.
-    pub const fn role(&self) -> ComponentRole {
-        self.role
+    /// Return the component's immutable identity.
+    pub const fn name(&self) -> &ComponentName {
+        &self.name
     }
 
     /// Return the original leader process ID for status and diagnostics.

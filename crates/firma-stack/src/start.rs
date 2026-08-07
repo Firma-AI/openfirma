@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
-use crate::component::{ComponentRole, OwnedComponent};
+use crate::component::{ComponentName, OwnedComponent};
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
@@ -29,6 +29,11 @@ use crate::supervisor::{
     collect_child_until, collect_in_background, collect_in_background_with, launch_reaper,
 };
 use firma_runtime_state::{UserProcessId, pidfile};
+
+/// Identity of the local policy authority component.
+const AUTHORITY_NAME: &str = "authority";
+/// Identity of the local enforcement sidecar component.
+const SIDECAR_NAME: &str = "sidecar";
 
 /// Mode in which [`start`] manages the stack after readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,7 +120,7 @@ struct StartupGuard {
 ///
 /// The enum makes invalid startup phases, such as recording the second
 /// component before ownership of the first or retaining children after
-/// ownership transfer, unrepresentable. [`ComponentRole`] assignment remains in
+/// ownership transfer, unrepresentable. [`ComponentName`] assignment remains in
 /// the crate-internal spawn path, so transitions cannot relabel capabilities.
 enum StartupState {
     /// The generation is claimed, but no component has been spawned.
@@ -206,7 +211,7 @@ impl StartupGuard {
     ///
     /// Polling occurs through the guard so readiness never borrows a process ID
     /// without the corresponding [`OwnedComponent`] collection capability.
-    fn exited_component(&mut self) -> Result<Option<(ComponentRole, ExitStatus)>> {
+    fn exited_component(&mut self) -> Result<Option<(String, ExitStatus)>> {
         match &mut self.state {
             StartupState::AuthorityStarted { authority } => Self::poll_exit(authority),
             StartupState::ComponentsStarted { authority, sidecar } => {
@@ -222,11 +227,11 @@ impl StartupGuard {
     }
 
     /// Poll one owned leader while preserving its broader termination capability.
-    fn poll_exit(component: &mut OwnedComponent) -> Result<Option<(ComponentRole, ExitStatus)>> {
+    fn poll_exit(component: &mut OwnedComponent) -> Result<Option<(String, ExitStatus)>> {
         Ok(component
             .try_wait()
             .map_err(StackError::Io)?
-            .map(|status| (component.role(), status)))
+            .map(|status| (component.name().as_str().to_string(), status)))
     }
 
     /// Transfer complete ownership and state capabilities into a [`RunningStack`].
@@ -574,7 +579,7 @@ fn spawn_stack_inner(
     let auth = spawn_with_config(
         &group,
         state_dir,
-        ComponentRole::Authority,
+        ComponentName::new(AUTHORITY_NAME),
         &cfg.config_file,
         exe,
     )?;
@@ -583,7 +588,7 @@ fn spawn_stack_inner(
     info!(pid = %authority_pid, "authority spawned");
     let auth_addr = config.authority_listen_addr()?;
     std::fs::write(
-        state_dir.join(ComponentRole::Authority.listen_file_name()),
+        state_dir.join(ComponentName::new(AUTHORITY_NAME).listen_file_name()),
         format!("{auth_addr}\n"),
     )?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
@@ -600,7 +605,7 @@ fn spawn_stack_inner(
     let side = spawn_with_config(
         &group,
         state_dir,
-        ComponentRole::Sidecar,
+        ComponentName::new(SIDECAR_NAME),
         &cfg.config_file,
         exe,
     )?;
@@ -610,7 +615,7 @@ fn spawn_stack_inner(
     let sidecar = config.sidecar_config()?;
     let side_addr = sidecar.interceptor.listen_addr;
     std::fs::write(
-        state_dir.join(ComponentRole::Sidecar.listen_file_name()),
+        state_dir.join(ComponentName::new(SIDECAR_NAME).listen_file_name()),
         format!("{side_addr}\n"),
     )?;
     debug!(addr = %side_addr, "waiting for sidecar TCP listen");
@@ -952,22 +957,23 @@ fn wait_for_launcher_ack(
     Ok(())
 }
 
-/// Translate a [`ComponentRole`] into the private component spawn contract.
+/// Translate a [`ComponentName`] into the private component spawn contract.
 fn spawn_with_config(
     group: &crate::platform::Group,
     state_dir: &Path,
-    role: ComponentRole,
+    name: ComponentName,
     cfg_path: &Path,
     exe: Option<&Path>,
 ) -> Result<OwnedComponent> {
     let cfg_str = cfg_path
         .to_str()
         .ok_or_else(|| StackError::Platform("non-utf8 config path".into()))?;
-    let subcmd = vec![role.name(), "--config", cfg_str];
+    let subcommand = name.as_str().to_string();
+    let subcmd = vec![subcommand.as_str(), "--config", cfg_str];
     spawn_component(
         group,
         &SpawnRequest {
-            role,
+            name,
             args: &subcmd,
             state_dir,
             exe,
