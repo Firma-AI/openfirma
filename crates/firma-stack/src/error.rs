@@ -91,6 +91,15 @@ pub enum StackError {
         timeout_secs: u64,
     },
 
+    /// A component exited while startup was waiting for it to become ready.
+    #[error("'{component}' exited before becoming ready: {status}")]
+    ReadinessProcessExited {
+        /// Logical component name.
+        component: String,
+        /// Exit status collected from the component leader.
+        status: std::process::ExitStatus,
+    },
+
     /// One or more process targets remained present after forced termination.
     #[error("termination targets remained present after {timeout_secs}s")]
     TerminationTimeout {

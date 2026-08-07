@@ -12,6 +12,7 @@
 //! cleanup without losing process authority.
 
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
@@ -199,6 +200,33 @@ impl StartupGuard {
                 ))
             }
         }
+    }
+
+    /// Collect and report the first exited component currently owned by startup.
+    ///
+    /// Polling occurs through the guard so readiness never borrows a process ID
+    /// without the corresponding [`OwnedComponent`] collection capability.
+    fn exited_component(&mut self) -> Result<Option<(ComponentRole, ExitStatus)>> {
+        match &mut self.state {
+            StartupState::AuthorityStarted { authority } => Self::poll_exit(authority),
+            StartupState::ComponentsStarted { authority, sidecar } => {
+                if let Some(exit) = Self::poll_exit(authority)? {
+                    return Ok(Some(exit));
+                }
+                Self::poll_exit(sidecar)
+            }
+            StartupState::Empty | StartupState::Finished => Err(StackError::Platform(
+                "component readiness checked without owned startup processes".into(),
+            )),
+        }
+    }
+
+    /// Poll one owned leader while preserving its broader termination capability.
+    fn poll_exit(component: &mut OwnedComponent) -> Result<Option<(ComponentRole, ExitStatus)>> {
+        Ok(component
+            .try_wait()
+            .map_err(StackError::Io)?
+            .map(|status| (component.role(), status)))
     }
 
     /// Transfer complete ownership and state capabilities into a [`RunningStack`].
@@ -524,13 +552,12 @@ fn spawn_stack_with_phase(
 
 /// Perform the ordered, rollback-protected component startup sequence.
 ///
-/// The Authority must be reachable before the Sidecar is spawned, and the
-/// Sidecar's TCP endpoint must be reachable before any required CA material is
-/// accepted. Each successful [`spawn_with_config`] call transitions
-/// [`StartupGuard`] before the next fallible step. The optional [`StopSignal`]
-/// makes each readiness probe abort into that rollback path. These probes
-/// establish bounded startup evidence only; ongoing health belongs to
-/// supervision.
+/// The Authority must remain owned and live before the Sidecar is spawned; both
+/// components must remain live through every applicable readiness probe. Each
+/// successful [`spawn_with_config`] call transitions [`StartupGuard`] before the
+/// next fallible step, and probe callbacks use [`StartupGuard::exited_component`]
+/// rather than unowned process identities. These probes establish bounded
+/// startup evidence only; ongoing health belongs to supervision.
 fn spawn_stack_inner(
     cfg: &StackConfig,
     state_dir: &Path,
@@ -559,7 +586,13 @@ fn spawn_stack_inner(
         format!("{auth_addr}\n"),
     )?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
-    wait_for_tcp("authority", auth_addr, Duration::from_mins(1), stop_signal)?;
+    wait_for_tcp(
+        "authority",
+        auth_addr,
+        Duration::from_mins(1),
+        stop_signal,
+        || startup.exited_component(),
+    )?;
     info!(addr = %auth_addr, "authority listening");
 
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
@@ -580,7 +613,13 @@ fn spawn_stack_inner(
         format!("{side_addr}\n"),
     )?;
     debug!(addr = %side_addr, "waiting for sidecar TCP listen");
-    wait_for_tcp("sidecar", side_addr, Duration::from_mins(1), stop_signal)?;
+    wait_for_tcp(
+        "sidecar",
+        side_addr,
+        Duration::from_mins(1),
+        stop_signal,
+        || startup.exited_component(),
+    )?;
     info!(addr = %side_addr, "sidecar listening");
     // CA material is only written when HTTPS MITM is active. A sidecar with
     // MITM inactive (e.g. an Anthropic-only scaffold) never produces it, so
@@ -591,6 +630,7 @@ fn spawn_stack_inner(
             &state_dir.join("generated-firma-ca"),
             Duration::from_mins(1),
             stop_signal,
+            || startup.exited_component(),
         )?;
         debug!("CA material present");
     } else {

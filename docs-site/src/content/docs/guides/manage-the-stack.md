@@ -94,6 +94,8 @@ If readiness fails at any step, `start` attempts to terminate and collect every
 spawned child. It removes pid, listen, and lock files only after confirming
 teardown; if termination or probing fails, it returns an error, retains runtime
 state, and may continue collection in the background so cleanup can be retried.
+Readiness polling also watches each owned component leader and fails immediately
+if it exits instead of waiting for the probe timeout.
 
 `start` flags:
 

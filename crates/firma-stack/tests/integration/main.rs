@@ -3,6 +3,7 @@
 mod config_parse;
 mod foreground_startup_signal;
 mod ownership;
+mod readiness_process_exit;
 mod stale_process_group;
 mod startup_rollback_orphaned_grandchild;
 mod status_state_machine;
