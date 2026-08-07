@@ -19,13 +19,16 @@ use std::process::{Child, Command};
 use crate::error::Result;
 use firma_runtime_state::UserProcessId;
 
-/// Setup-time platform resource used to attach managed children to a group.
+/// Setup-time platform resource used to attach managed children to one scope.
 ///
-/// Dropping this value releases only grouping resources. Durable probing and
-/// signalling authority is represented by each [`TerminationTarget`].
+/// On Windows, [`Platform::arm_group_termination`] makes owner loss terminate
+/// that scope. Each resulting [`TerminationTarget`] retains the Job Object, so
+/// dropping this setup handle after startup does not abandon the group.
 pub struct Group {
+    /// Unix process-group identity established before the first spawn.
     #[cfg(unix)]
     pub pgid: i32,
+    /// Owned Windows Job Object used to establish component membership.
     #[cfg(windows)]
     pub job: *mut std::ffi::c_void,
 }
@@ -58,47 +61,102 @@ impl Drop for Group {
 /// [`leader_pid`](Self::leader_pid) and [`TerminationTarget::stored_id`] have
 /// the same numeric identity.
 pub struct SpawnedChild {
+    /// Direct-child collection capability.
     pub child: Child,
+    /// Stable leader identity used for status and diagnostics.
     pub leader_pid: UserProcessId,
+    /// Authority over the complete platform termination scope.
     pub termination_target: TerminationTarget,
 }
 
-/// Persistable handle for the full scope that must be terminated.
+/// Authority to probe and signal the full process scope Firma must govern.
 ///
-/// The stored identifier names a process group on Unix and the component
-/// process on Windows. It initially has the same numeric value as the leader
-/// PID, but callers must choose the type that matches the intended operation.
-#[derive(Debug, Clone, Copy)]
+/// On Unix, the stored identity names the process group and is sufficient to
+/// reconstruct equivalent authority. An in-process Windows target retains a
+/// Job Object handle covering descendants; dropping the last owned handle
+/// triggers the owner-loss policy armed by [`Platform::arm_group_termination`].
+/// Persisted Windows state can record only the leader process identity, so a
+/// target reconstructed by [`Self::from_stored_id`] is necessarily leader-only.
+/// This asymmetry is why the capability is not copyable and why
+/// [`crate::component::OwnedComponent`] keeps it attached to child collection.
+#[derive(Debug)]
 pub struct TerminationTarget {
     id: UserProcessId,
+    #[cfg(windows)]
+    job: Option<*mut std::ffi::c_void>,
+}
+
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "an owned Windows Job Object handle may be transferred to the collector thread"
+)]
+unsafe impl Send for TerminationTarget {}
+
+#[cfg(windows)]
+impl Drop for TerminationTarget {
+    fn drop(&mut self) {
+        if let Some(job) = self.job.take() {
+            self::windows::close_job_object(job);
+        }
+    }
 }
 
 impl TerminationTarget {
-    /// Derive a fresh platform target from a newly spawned leader.
+    /// Derive a leader-only target from a newly spawned process.
+    ///
+    /// Platform spawn paths should return their complete scope through
+    /// [`SpawnedChild::termination_target`] instead.
     pub fn for_leader(leader_pid: UserProcessId) -> Self {
-        Self { id: leader_pid }
+        Self {
+            id: leader_pid,
+            #[cfg(windows)]
+            job: None,
+        }
     }
 
-    /// Reconstruct platform termination authority from persisted identity.
+    /// Reconstruct the strongest authority available from persisted identity.
+    ///
+    /// See [`TerminationTarget`] for the platform asymmetry this entails.
     pub fn from_stored_id(id: UserProcessId) -> Self {
-        Self { id }
+        Self {
+            id,
+            #[cfg(windows)]
+            job: None,
+        }
+    }
+
+    #[cfg(windows)]
+    /// Construct an owned target retaining a component's Windows Job Object.
+    pub(crate) fn for_job(leader_pid: UserProcessId, job: *mut std::ffi::c_void) -> Self {
+        Self {
+            id: leader_pid,
+            job: Some(job),
+        }
+    }
+
+    #[cfg(windows)]
+    /// Return the retained Job Object handle when this target owns one.
+    pub(crate) const fn job(&self) -> Option<*mut std::ffi::c_void> {
+        self.job
     }
 
     /// Return the identity suitable for runtime-state persistence.
     ///
     /// This value identifies the [`TerminationTarget`]; callers must not infer
-    /// that it is always an ordinary process ID.
-    pub fn stored_id(self) -> UserProcessId {
+    /// that it is always an ordinary process ID or preserves Windows Job
+    /// Object authority across processes.
+    pub const fn stored_id(&self) -> UserProcessId {
         self.id
     }
 
-    /// Determine whether any process remains in this target's platform scope.
+    /// Determine whether any process remains in this target's available scope.
     ///
     /// # Errors
     ///
     /// Returns a platform error when absence cannot be established. Lifecycle
     /// callers must treat that uncertainty as possible presence.
-    pub fn exists(self) -> Result<bool> {
+    pub fn exists(&self) -> Result<bool> {
         SystemPlatform::termination_target_exists(self)
     }
 
@@ -107,7 +165,7 @@ impl TerminationTarget {
     /// # Errors
     ///
     /// Returns a platform error when the request cannot be delivered.
-    pub fn signal_soft(self) -> Result<()> {
+    pub fn signal_soft(&self) -> Result<()> {
         SystemPlatform::signal_soft(self)
     }
 
@@ -121,7 +179,7 @@ impl TerminationTarget {
     ///
     /// Returns the platform signalling error while target presence or absence
     /// remains unconfirmed.
-    pub fn signal_hard(self) -> Result<()> {
+    pub fn signal_hard(&self) -> Result<()> {
         match SystemPlatform::signal_hard(self) {
             Ok(()) => Ok(()),
             Err(signal_error) => match self.exists() {
@@ -146,21 +204,33 @@ pub trait Platform {
     /// Returns a platform error if the OS cannot allocate the group.
     fn new_group() -> Result<Group>;
 
-    /// Return whether the platform termination target remains present.
+    /// Arm owner-loss termination for a production [`Group`].
+    ///
+    /// Unix process groups need no retained kernel handle. Windows configures
+    /// its Job Object before assigning the first production component.
+    ///
+    /// # Errors
+    ///
+    /// Returns a platform error when owner-loss termination cannot be enabled.
+    fn arm_group_termination(group: &Group) -> Result<()>;
+
+    /// Return whether a [`TerminationTarget`] remains present.
     ///
     /// Unix targets probe the process group, which can remain addressable when
-    /// it contains only zombies. Windows targets probe the recorded process
-    /// because the Job Object handle does not survive detached startup.
+    /// it contains only zombies. Owned Windows targets query their retained Job
+    /// Object; targets reconstructed by [`TerminationTarget::from_stored_id`]
+    /// probe the recorded leader.
     ///
     /// # Errors
     ///
     /// Returns a platform error when target presence cannot be determined.
-    fn termination_target_exists(target: TerminationTarget) -> Result<bool>;
+    fn termination_target_exists(target: &TerminationTarget) -> Result<bool>;
 
     /// Spawn a command as a member of a [`Group`].
     ///
     /// The returned [`SpawnedChild`] must not execute outside the intended
-    /// termination scope after this function succeeds.
+    /// termination scope after this function succeeds. Implementations must
+    /// therefore establish membership before component code can escape.
     ///
     /// # Errors
     ///
@@ -172,14 +242,14 @@ pub trait Platform {
     /// # Errors
     ///
     /// Returns a platform error if the signal cannot be delivered.
-    fn signal_soft(target: TerminationTarget) -> Result<()>;
+    fn signal_soft(target: &TerminationTarget) -> Result<()>;
 
     /// Forcefully terminate a [`TerminationTarget`].
     ///
     /// # Errors
     ///
     /// Returns a platform error if termination cannot be requested.
-    fn signal_hard(target: TerminationTarget) -> Result<()>;
+    fn signal_hard(target: &TerminationTarget) -> Result<()>;
 }
 
 #[cfg(unix)]

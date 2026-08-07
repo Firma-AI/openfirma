@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 use firma_runtime_state::{UserProcessId, pidfile};
 
 const CHILD_MARKER: &str = "FIRMA_STACK_TEST_CHILD_MARKER";
+#[cfg(windows)]
+const JOB_FIXTURE_STAGE: &str = "FIRMA_STACK_TEST_JOB_FIXTURE_STAGE";
+#[cfg(windows)]
+const JOB_DESCENDANT_MARKER: &str = "FIRMA_STACK_TEST_JOB_DESCENDANT_MARKER";
 const SUPERVISOR_STATE_DIR: &str = "FIRMA_STACK_TEST_SUPERVISOR_STATE_DIR";
 const SUPERVISOR_ACKNOWLEDGE: &str = "FIRMA_STACK_TEST_SUPERVISOR_ACKNOWLEDGE";
 
@@ -462,9 +466,75 @@ fn windows_pidfile_setup_failure_collects_spawned_child() {
     assert_process_absent(pid);
 }
 
+/// Failed reaper transfer must retain the production Job Object capability so
+/// fallback teardown reaches descendants, not only the two direct children.
+#[cfg(windows)]
+#[test]
+fn failed_reaper_transfer_terminates_owned_job_descendant() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path();
+    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
+    let descendant_marker = state_dir.join("job-descendant.pid");
+    let sidecar_marker = state_dir.join("sidecar.ready");
+
+    let mut authority_command = Command::new(std::env::current_exe().expect("test executable"));
+    authority_command
+        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
+        .env(JOB_FIXTURE_STAGE, "leader")
+        .env(JOB_DESCENDANT_MARKER, &descendant_marker);
+    let mut sidecar_command = fixture_command(&sidecar_marker);
+    let stack = firma_stack::test_support::running_stack_from_commands_with_reaper_start_failure(
+        state_dir,
+        &mut authority_command,
+        &mut sidecar_command,
+    )
+    .expect("spawn owned Job components");
+    wait_for_file(&descendant_marker);
+    let descendant_pid = std::fs::read_to_string(&descendant_marker)
+        .expect("read descendant PID")
+        .trim()
+        .parse()
+        .expect("parse descendant PID");
+
+    drop(stack);
+
+    let descendant_pid = UserProcessId::new(descendant_pid).expect("descendant PID");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while descendant_pid
+        .process_exists()
+        .expect("probe descendant process")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "descendant survived failed reaper transfer"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    firma_stack::stop(state_dir, Duration::ZERO).expect("clean retained runtime state");
+}
+
 #[test]
 #[ignore = "spawned as a process-lifecycle fixture"]
 fn owned_child_fixture() {
+    #[cfg(windows)]
+    match std::env::var(JOB_FIXTURE_STAGE).as_deref() {
+        Ok("descendant") => loop {
+            std::thread::sleep(Duration::from_mins(1));
+        },
+        Ok("leader") => {
+            let marker = std::env::var_os(JOB_DESCENDANT_MARKER).expect("descendant marker");
+            let descendant = Command::new(std::env::current_exe().expect("test executable"))
+                .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
+                .env(JOB_FIXTURE_STAGE, "descendant")
+                .spawn()
+                .expect("spawn Job descendant");
+            std::fs::write(marker, descendant.id().to_string()).expect("write descendant PID");
+            loop {
+                std::thread::sleep(Duration::from_mins(1));
+            }
+        }
+        _ => {}
+    }
     if let Some(state_dir) = std::env::var_os(SUPERVISOR_STATE_DIR) {
         let pid = UserProcessId::new(std::process::id()).expect("supervisor fixture PID");
         pidfile::write(&Path::new(&state_dir).join("stack.pid"), pid)

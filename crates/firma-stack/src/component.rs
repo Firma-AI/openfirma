@@ -101,9 +101,9 @@ impl OwnedComponent {
         self.leader_pid
     }
 
-    /// Return the copyable [`TerminationTarget`] for the component scope.
-    pub const fn termination_target(&self) -> TerminationTarget {
-        self.termination_target
+    /// Borrow the [`TerminationTarget`] without relinquishing component ownership.
+    pub const fn termination_target(&self) -> &TerminationTarget {
+        &self.termination_target
     }
 
     /// Probe and collect the leader if it exited, retaining this capability.
@@ -127,6 +127,14 @@ impl OwnedComponent {
     /// Borrow the child handle for bounded collection loops.
     pub fn child_mut(&mut self) -> &mut Child {
         &mut self.child
+    }
+
+    /// Borrow collection and [`TerminationTarget`] capabilities together.
+    ///
+    /// This preserves their common [`OwnedComponent`] lifetime while allowing
+    /// teardown to collect the child between process-scope probes.
+    pub fn child_and_target(&mut self) -> (&mut Child, &TerminationTarget) {
+        (&mut self.child, &self.termination_target)
     }
 
     /// Relinquish ownership into separate collection and termination capabilities.

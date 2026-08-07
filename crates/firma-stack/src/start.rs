@@ -379,6 +379,7 @@ impl RunningStack {
     fn transfer_to_observer(&mut self) -> bool {
         let state = std::mem::replace(&mut self.state, RunningStackState::Stopped);
         if let RunningStackState::Owned(owned) = state {
+            let owned = *owned;
             return match collect_in_background_with(
                 vec![owned.authority, owned.sidecar],
                 owned.reaper_launcher,
@@ -458,6 +459,7 @@ fn spawn_stack_inner(
     startup: &mut StartupGuard,
 ) -> Result<()> {
     let group = SystemPlatform::new_group()?;
+    SystemPlatform::arm_group_termination(&group)?;
     let exe = cfg.firma_bin.as_deref();
     // Parse the unified firma.toml once; the probes below share it.
     let config = FirmaToml::read(&cfg.config_file)?;

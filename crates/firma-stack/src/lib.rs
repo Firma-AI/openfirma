@@ -186,6 +186,41 @@ pub mod test_support {
         )
     }
 
+    /// Spawn an owned stack through the production Windows Job Object path.
+    ///
+    /// # Errors
+    ///
+    /// Returns process-group creation, spawn, or runtime-state publication errors.
+    #[cfg(windows)]
+    pub fn running_stack_from_commands_with_reaper_start_failure(
+        state_dir: &std::path::Path,
+        authority_command: &mut std::process::Command,
+        sidecar_command: &mut std::process::Command,
+    ) -> crate::error::Result<crate::RunningStack> {
+        use crate::platform::{Platform, SystemPlatform};
+
+        let group = SystemPlatform::new_group()?;
+        SystemPlatform::arm_group_termination(&group)?;
+        let authority = spawn_test_component(
+            &group,
+            state_dir,
+            crate::component::ComponentRole::Authority,
+            authority_command,
+        )?;
+        let sidecar = spawn_test_component(
+            &group,
+            state_dir,
+            crate::component::ComponentRole::Sidecar,
+            sidecar_command,
+        )?;
+        Ok(crate::RunningStack::from_components_with_reaper_launcher(
+            authority,
+            sidecar,
+            state_dir.to_path_buf(),
+            fail_reaper_start,
+        ))
+    }
+
     /// Bind a raw running stack's cleanup to one supervisor identity.
     pub fn set_running_stack_owner(stack: &mut crate::RunningStack, owner: u32) {
         if let Some(owner) = firma_runtime_state::UserProcessId::new(owner) {
@@ -279,6 +314,30 @@ pub mod test_support {
             leader_pid,
             crate::platform::TerminationTarget::for_leader(leader_pid),
         )
+    }
+
+    #[cfg(windows)]
+    fn spawn_test_component(
+        group: &crate::platform::Group,
+        state_dir: &std::path::Path,
+        role: crate::component::ComponentRole,
+        command: &mut std::process::Command,
+    ) -> crate::error::Result<crate::component::OwnedComponent> {
+        use crate::platform::{Platform, SystemPlatform};
+
+        let spawned = SystemPlatform::spawn_in_group(
+            group,
+            command,
+            &state_dir.join(format!("{}.log", role.name())),
+        )?;
+        firma_runtime_state::pidfile::write(
+            &state_dir.join(role.pidfile_name()),
+            spawned.termination_target.stored_id(),
+        )?;
+        std::fs::write(state_dir.join(role.listen_file_name()), "127.0.0.1:0\n")?;
+        Ok(crate::component::OwnedComponent::from_spawned(
+            role, spawned,
+        ))
     }
 
     fn fail_reaper_start(
