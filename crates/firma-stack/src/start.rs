@@ -88,7 +88,7 @@ struct OwnedStack {
 /// harmless rather than duplicating authority.
 enum RunningStackState {
     /// This process may supervise, terminate, collect, and clean up the stack.
-    Owned(OwnedStack),
+    Owned(Box<OwnedStack>),
     /// Process authority has been consumed by shutdown or transferred away.
     Stopped,
 }
@@ -306,13 +306,13 @@ impl RunningStack {
         };
         Self {
             handle,
-            state: RunningStackState::Owned(OwnedStack {
+            state: RunningStackState::Owned(Box::new(OwnedStack {
                 authority,
                 sidecar,
                 state_dir,
                 reaper_launcher,
                 state_owner: None,
-            }),
+            })),
         }
     }
 
