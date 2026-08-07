@@ -1,4 +1,11 @@
-//! Stack status: pid liveness, port probe, and uptime.
+//! Observational stack status from runtime state and bounded probes.
+//!
+//! [`probe`] classifies a component as [`State::Running`] only when its
+//! persisted [`TerminationTarget`] is live and its recorded TCP endpoint
+//! accepts a connection. A live target without a reachable endpoint is
+//! [`State::Unhealthy`]; missing or stale target state is [`State::Stopped`].
+//! Listen-address and uptime metadata are best-effort and never grant lifecycle
+//! authority.
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -22,12 +29,12 @@ pub struct ComponentStatus {
     pub pid: Option<UserProcessId>,
     /// Coarse-grained state. See [`State`].
     pub state: State,
-    /// Listen address read from `<state_dir>/<name>.listen` (written at
-    /// spawn time), if the file exists and parses as `SocketAddr`.
+    /// Listen address read from `<state_dir>/<name>.listen` (written at spawn
+    /// time), if the file exists and parses as a [`SocketAddr`].
     pub listen: Option<SocketAddr>,
     /// Seconds since the pidfile was written, used as a proxy for process
-    /// uptime. `None` when the pidfile is missing or its mtime is in the
-    /// future relative to system time.
+    /// uptime. Absent when the pidfile is missing or its mtime is in the future
+    /// relative to system time.
     pub uptime_secs: Option<u64>,
 }
 
@@ -57,6 +64,12 @@ pub fn status(state_dir: &Path) -> Result<StackStatus> {
     Ok(StackStatus { components })
 }
 
+/// Classify one component without acquiring process ownership.
+///
+/// Runtime-state parse failures are treated as absent in this revision, while
+/// [`TerminationTarget::exists`] failures are returned because liveness cannot
+/// safely be inferred. Endpoint and timestamp failures degrade only their
+/// corresponding metadata.
 fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus> {
     let pidfile_path: PathBuf = state_dir.join(format!("{name}.pid"));
     let pid = pidfile::read(&pidfile_path).ok().flatten();
@@ -97,11 +110,13 @@ fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus> {
     })
 }
 
+/// Read the recorded endpoint as optional status metadata.
 fn listen_addr_for(state_dir: &Path, name: &str) -> Option<SocketAddr> {
     let text = std::fs::read_to_string(state_dir.join(format!("{name}.listen"))).ok()?;
     text.trim().parse().ok()
 }
 
+/// Approximate uptime from pidfile age rather than process creation time.
 fn pidfile_uptime(path: &Path) -> Option<u64> {
     let mtime = pidfile::mtime(path).ok().flatten()?;
     SystemTime::now()

@@ -1,4 +1,10 @@
-//! Spawn the detached supervisor process.
+//! Detached supervisor process creation.
+//!
+//! [`spawn_supervisor`] creates the governance process used by
+//! [`crate::start::start`], but successful process creation alone does not
+//! transfer direct-child collection or prove that the supervisor has attached.
+//! The ownership transition therefore remains canonical in
+//! [`crate::start::start`].
 
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -7,6 +13,17 @@ use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 
+/// Spawn the hidden supervisor without inheriting terminal-bound lifetime.
+///
+/// Log handles and platform creation flags are rebuilt for each
+/// [`spawn_detached`] attempt. A successful return means only that the
+/// supervisor process exists; the caller still owns stack rollback until the
+/// handoff defined by [`crate::start::start`].
+///
+/// # Errors
+///
+/// Returns executable discovery, log creation, command construction, or
+/// supervisor spawn errors.
 pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
@@ -57,17 +74,13 @@ pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Spawn the supervisor command produced by `build`, detached from the parent.
+/// Spawn a command produced by the supplied builder, detached from the parent.
 ///
-/// On Windows the supervisor is first launched with
-/// `CREATE_BREAKAWAY_FROM_JOB` so it survives the parent's Job Object being
-/// torn down. When the parent runs inside a Job Object that does not grant
-/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` — common under `cargo run`, Windows
-/// Terminal, and CI runners — `CreateProcess` rejects that flag with
-/// `ERROR_ACCESS_DENIED` (os error 5). In that case we retry without the
-/// breakaway flag: on Windows 8+ the supervisor is then placed in a nested
-/// Job Object, which still outlives the parent because the stack's Job Object
-/// is created without `KILL_ON_JOB_CLOSE`.
+/// On Windows the first attempt requests breakaway from the parent's Job
+/// Object. Only an access-denied result permits a retry inside a nested Job;
+/// every other failure is returned as [`StackError::Spawn`]. The nested Job
+/// remains viable because this revision's stack [`crate::platform::Group`] does
+/// not terminate members when its handle closes.
 fn spawn_detached<F>(build: &F) -> Result<Child>
 where
     F: Fn() -> Result<Command>,

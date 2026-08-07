@@ -1,4 +1,11 @@
-//! Tear down a running stack.
+//! Fail-closed teardown of a running stack.
+//!
+//! [`stop`] snapshots persisted [`TerminationTarget`] values and delegates the
+//! common state machine to [`stop_inner`]: request graceful shutdown, wait the
+//! caller's grace period, force surviving targets, then wait for bounded
+//! settlement. Runtime state is removed by [`cleanup`] only after every target
+//! is proven absent. [`target_may_exist`] treats probe uncertainty as presence,
+//! preserving both signalling effort and the state needed for a retry.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -10,15 +17,20 @@ use crate::platform::TerminationTarget;
 use crate::spawn::SpawnedComponent;
 use firma_runtime_state::pidfile;
 
+/// Maximum interval for proving target absence after forced termination.
+///
+/// This settlement interval is distinct from the graceful timeout supplied to
+/// [`stop`]. Its expiration retains runtime state rather than claiming cleanup
+/// succeeded.
 const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
 
 /// Result of a [`stop`] call.
 #[derive(Debug, Clone)]
 pub struct StopOutcome {
-    /// `true` if at least one component still had a platform termination
-    /// target after the soft-signal grace window and a hard termination
-    /// (`SIGKILL` / `TerminateProcess`) was requested successfully; `false` when every
-    /// target disappeared within the configured timeout.
+    /// Whether at least one recorded [`TerminationTarget`] survived the
+    /// graceful interval and accepted [`TerminationTarget::signal_hard`].
+    /// A positive result reports that a forced request was made; it does not by
+    /// itself prove that the target had disappeared at that instant.
     ///
     /// On Unix, the kernel can report a process group containing only
     /// unreaped zombies as present, resulting in a conservative hard-kill
@@ -47,6 +59,10 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     )
 }
 
+/// Run [`stop_inner`] while retaining direct-child collection authority.
+///
+/// No supervisor target is included because the current process owns both
+/// [`SpawnedComponent`] values and performs their collection during teardown.
 pub(crate) fn stop_owned(
     state_dir: &Path,
     timeout: Duration,
@@ -67,12 +83,25 @@ pub(crate) fn stop_owned(
     )
 }
 
+/// Run [`stop_inner`] from the detached supervisor without targeting itself.
+///
+/// Component authority is reconstructed from runtime state because this
+/// process does not own their direct-child handles.
 pub(crate) fn stop_observed_components(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     let authority = read_target(state_dir, "authority.pid")?;
     let sidecar = read_target(state_dir, "sidecar.pid")?;
     stop_inner(state_dir, timeout, None, authority, sidecar, || Ok(()))
 }
 
+/// Apply the common graceful-to-forced teardown state machine.
+///
+/// The Sidecar receives [`TerminationTarget::signal_soft`] before the Authority
+/// so its long-lived RPC streams can close before Authority shutdown. Soft
+/// signalling failure does not prevent a later forced request. Probe or child
+/// collection errors retain the first failure while teardown continues
+/// conservatively. A forced request is a normal timeout outcome, but
+/// [`cleanup`] remains forbidden until [`targets_absent`] proves every known
+/// target gone within [`HARD_TERMINATION_SETTLEMENT`].
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
@@ -192,6 +221,7 @@ fn stop_inner(
     Ok(StopOutcome { forced })
 }
 
+/// Prove that every known target is absent under [`target_may_exist`] policy.
 fn targets_absent<const N: usize>(
     targets: [Option<TerminationTarget>; N],
     teardown_error: &mut Option<StackError>,
@@ -205,6 +235,11 @@ fn targets_absent<const N: usize>(
     all_absent
 }
 
+/// Conservatively classify target presence for teardown decisions.
+///
+/// Failure of [`TerminationTarget::exists`] records the first teardown error
+/// and returns possible presence, ensuring the caller still attempts signals
+/// and cannot authorize [`cleanup`].
 fn target_may_exist(target: TerminationTarget, teardown_error: &mut Option<StackError>) -> bool {
     match target.exists() {
         Ok(exists) => exists,
@@ -218,10 +253,16 @@ fn target_may_exist(target: TerminationTarget, teardown_error: &mut Option<Stack
     }
 }
 
+/// Reconstruct a [`TerminationTarget`] without reinterpreting its stored ID.
 fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>> {
     Ok(pidfile::read(&state_dir.join(name))?.map(TerminationTarget::from_stored_id))
 }
 
+/// Commit successful teardown by removing governed runtime state.
+///
+/// Callers may invoke this function only after [`targets_absent`] proves that
+/// no recorded target remains. Removal errors are surfaced even though process
+/// teardown has completed, preserving an honest result for the operator.
 fn cleanup(state_dir: &Path) -> Result<()> {
     for name in [
         "authority.pid",

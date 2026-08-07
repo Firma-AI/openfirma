@@ -24,8 +24,20 @@ use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
 use crate::shutdown_event::windows_shutdown_event_name;
 use firma_runtime_state::ChildExt as _;
 
+/// Windows implementation of the process-authority [`Platform`] contract.
+///
+/// [`Group`] uses a Job Object only to establish membership in this revision;
+/// durable cross-process signalling is reconstructed through
+/// [`TerminationTarget`]. Graceful shutdown follows
+/// [`windows_shutdown_event_name`] because stack children do not share the
+/// caller's console.
 pub struct WindowsPlatform;
 
+/// Release the Job Object resource owned by a [`Group`].
+///
+/// The Job Object is deliberately not configured to terminate members when its
+/// handle closes, so releasing setup-time grouping authority does not end a
+/// ready or detached stack.
 pub fn close_job_object(handle: HANDLE) {
     if !handle.is_null() {
         let _ = unsafe { CloseHandle(handle) };

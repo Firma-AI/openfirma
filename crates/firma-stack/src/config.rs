@@ -10,26 +10,26 @@ use crate::error::{Result, StackError};
 
 /// Configuration needed to boot the authority and sidecar as one unit.
 ///
-/// `config_file` is the single resolved `firma.toml`; both children are
-/// spawned with `--config <config_file>` so the parent and children
-/// always read the exact same file.
+/// [`StackConfig::config_file`] is the single resolved `firma.toml`; both
+/// children receive that path through `--config` so the parent and children
+/// always read the same file.
 #[derive(Debug, Clone)]
 pub struct StackConfig {
-    /// Optional override for the runtime state directory. When `None`,
-    /// the caller resolves it via [`firma_runtime_state::resolve_state_dir`].
+    /// Optional runtime-state directory override. When absent, the caller uses
+    /// [`firma_runtime_state::resolve_state_dir`].
     pub state_dir: Option<PathBuf>,
     /// The single unified `firma.toml` shared by both components.
     pub config_file: PathBuf,
-    /// Optional path to the `firma` binary used to spawn children. When
-    /// `None`, defaults to `std::env::current_exe()`. Callers whose own
-    /// binary is not `firma` (e.g. `firma-demo-tui`) must set this.
+    /// Optional path to the `firma` binary used to spawn children.
+    /// [`std::env::current_exe`] is used when absent; callers whose executable
+    /// is not `firma` must provide the binary explicitly.
     pub firma_bin: Option<PathBuf>,
 }
 
 /// Resolve the unified config for the stack.
 ///
-/// `cli_override` is the explicit `--config` flag (if any); otherwise the
-/// `firma-config-loader` discovery precedence is used.
+/// An explicit `--config` path takes precedence; otherwise
+/// `firma-config-loader` discovery is used.
 ///
 /// # Errors
 ///
