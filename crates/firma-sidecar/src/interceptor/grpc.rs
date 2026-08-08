@@ -167,11 +167,14 @@ impl Interceptor for GrpcInterceptor {
 impl GrpcInterceptor {
     /// Run the interceptor using an already bound listener.
     ///
+    /// The supplied listener is authoritative; its local address may differ
+    /// from the address used to construct this interceptor.
+    ///
     /// # Errors
     ///
     /// Returns [`InterceptorError`] if the server encounters an unrecoverable
     /// error.
-    async fn run_with_listener(
+    pub async fn run_with_listener(
         mut self,
         listener: TcpListener,
         handler: Arc<RequestHandler>,
