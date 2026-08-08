@@ -79,6 +79,7 @@ struct Scaffold {
     _tmp: tempfile::TempDir,
     cfg_path: std::path::PathBuf,
     state_dir: std::path::PathBuf,
+    authority_addr: std::net::SocketAddr,
     interceptor_addr: std::net::SocketAddr,
 }
 
@@ -121,6 +122,7 @@ impl Scaffold {
             _tmp: tmp,
             cfg_path,
             state_dir,
+            authority_addr,
             interceptor_addr,
         }
     }
@@ -136,6 +138,75 @@ impl Scaffold {
     fn stack_pid_path(&self) -> std::path::PathBuf {
         self.state_dir.join("stack.pid")
     }
+
+    fn start_failure_diagnostics(&self, output: &std::process::Output) -> StartDiagnostics {
+        StartDiagnostics {
+            launcher_stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            supervisor_log: read_log(&self.state_dir.join("supervisor.log")),
+            authority_log: read_log(&self.state_dir.join("authority.log")),
+            sidecar_log: read_log(&self.state_dir.join("sidecar.log")),
+        }
+    }
+
+    fn format_start_failure(&self, output: &std::process::Output) -> String {
+        let diagnostics = self.start_failure_diagnostics(output);
+        let state_files = [
+            "stack.lock",
+            "stack.pid",
+            "authority.pid",
+            "authority.listen",
+            "sidecar.pid",
+            "sidecar.listen",
+        ]
+        .map(|name| {
+            let state = if self.state_dir.join(name).exists() {
+                "present"
+            } else {
+                "missing"
+            };
+            format!("{name}={state}")
+        })
+        .join(", ");
+
+        format!(
+            "exit status: {}\nconfig path: {}\nstate dir: {}\nconfigured addresses: authority={}, interceptor={}, health=127.0.0.1:0\nstate files: {state_files}\n{diagnostics}",
+            output.status,
+            self.cfg_path.display(),
+            self.state_dir.display(),
+            self.authority_addr,
+            self.interceptor_addr,
+        )
+    }
+}
+
+struct StartDiagnostics {
+    launcher_stderr: String,
+    supervisor_log: Option<String>,
+    authority_log: Option<String>,
+    sidecar_log: Option<String>,
+}
+
+impl std::fmt::Display for StartDiagnostics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "launcher stderr:\n{}", self.launcher_stderr)?;
+        for (name, contents) in [
+            ("supervisor.log", self.supervisor_log.as_deref()),
+            ("authority.log", self.authority_log.as_deref()),
+            ("sidecar.log", self.sidecar_log.as_deref()),
+        ] {
+            match contents {
+                Some(contents) => writeln!(f, "{name}:\n{contents}")?,
+                None => writeln!(f, "{name}: <unavailable>")?,
+            }
+        }
+        Ok(())
+    }
+}
+
+fn read_log(path: &Path) -> Option<String> {
+    std::fs::read(path)
+        .ok()
+        .map(|contents| String::from_utf8_lossy(&contents).into_owned())
 }
 
 fn assert_stack_pid_published(stack_pid: &Path) {
@@ -157,8 +228,8 @@ fn scaffold_start_reaches_readiness_and_reports_running_json_status() {
     let start = scaffold.start();
     assert!(
         start.status.success(),
-        "sidecar start failed (MITM-inactive scaffold must not block on CA material): {}",
-        String::from_utf8_lossy(&start.stderr)
+        "sidecar start failed (MITM-inactive scaffold must not block on CA material):\n{}",
+        scaffold.format_start_failure(&start)
     );
     assert_stack_pid_published(&scaffold.stack_pid_path());
 
@@ -175,7 +246,11 @@ fn failed_second_start_does_not_claim_or_terminate_existing_stack() {
     let scaffold = Scaffold::new();
     let _cleanup = scaffold.cleanup();
     let start = scaffold.start();
-    assert!(start.status.success(), "initial start failed: {start:?}");
+    assert!(
+        start.status.success(),
+        "initial start failed:\n{}",
+        scaffold.format_start_failure(&start)
+    );
 
     let state_dir = &scaffold.state_dir;
     let authority_pid = firma_runtime_state::pidfile::read(&state_dir.join("authority.pid"))
@@ -223,7 +298,11 @@ fn stopped_stack_reports_stopped_and_can_restart() {
     let scaffold = Scaffold::new();
     let _cleanup = scaffold.cleanup();
     let start = scaffold.start();
-    assert!(start.status.success(), "initial start failed: {start:?}");
+    assert!(
+        start.status.success(),
+        "initial start failed:\n{}",
+        scaffold.format_start_failure(&start)
+    );
 
     let stop = firma()
         .args(["sidecar", "stop", "--state-dir"])
@@ -242,8 +321,8 @@ fn stopped_stack_reports_stopped_and_can_restart() {
     let restart = scaffold.start();
     assert!(
         restart.status.success(),
-        "sidecar restart failed: {}",
-        String::from_utf8_lossy(&restart.stderr)
+        "sidecar restart failed:\n{}",
+        scaffold.format_start_failure(&restart)
     );
     assert_stack_pid_published(&scaffold.stack_pid_path());
 }
@@ -276,7 +355,22 @@ fn concurrent_starts_publish_exactly_one_stack() {
         .iter()
         .filter(|output| output.status.success())
         .count();
-    assert_eq!(successes, 1, "concurrent start outputs: {outputs:#?}");
+    let output_diagnostics = outputs
+        .iter()
+        .enumerate()
+        .map(|(index, output)| {
+            format!(
+                "start {}:\n{}",
+                index + 1,
+                scaffold.format_start_failure(output)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_eq!(
+        successes, 1,
+        "concurrent starts did not produce exactly one winner:\n{output_diagnostics}"
+    );
     let failure = outputs
         .iter()
         .find(|output| !output.status.success())
@@ -295,7 +389,11 @@ fn supervisor_owner_teardown_terminates_components() {
     let scaffold = Scaffold::new();
     let _cleanup = scaffold.cleanup();
     let start = scaffold.start();
-    assert!(start.status.success(), "initial start failed: {start:?}");
+    assert!(
+        start.status.success(),
+        "initial start failed:\n{}",
+        scaffold.format_start_failure(&start)
+    );
 
     let state_dir = &scaffold.state_dir;
     let stack_pid = scaffold.stack_pid_path();
