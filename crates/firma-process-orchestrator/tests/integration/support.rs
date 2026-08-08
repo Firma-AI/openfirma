@@ -5,7 +5,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
-    ComponentSpec, RunningStack, StackTopology, spawn_stack_from_plan,
+    ComponentSpec, LifecycleTimeouts, RunningStack, StackTopology, spawn_stack_from_plan,
 };
 
 pub fn spawn_managed_component(
@@ -25,6 +25,7 @@ pub fn spawn_managed_component(
             }])
         },
         state_dir,
+        LifecycleTimeouts::default(),
     )
     .expect("spawn managed component");
     drop(readiness_listener);

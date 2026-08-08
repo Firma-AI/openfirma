@@ -11,7 +11,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
@@ -36,6 +36,7 @@ use crate::collect::{collect_child_in_background, collect_child_until};
 use crate::error::OrchestratorError;
 use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
 use crate::shutdown_event::windows_shutdown_event_name;
+use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
 use firma_runtime_state::ChildExt as _;
 
 /// Windows implementation of the process-authority [`Platform`] contract.
@@ -355,7 +356,7 @@ fn resume_suspended_process(
 /// Preserve direct-child collection responsibility after a Windows spawn failure.
 fn cleanup_failed_child(mut child: Child) {
     let _ = child.kill();
-    if !collect_child_until(&mut child, Instant::now() + Duration::from_secs(2)) {
+    if !collect_child_until(&mut child, Instant::now() + CHILD_COLLECTION_TIMEOUT) {
         let _ = collect_child_in_background(child);
     }
 }
@@ -366,6 +367,8 @@ mod tests {
         clippy::expect_used,
         reason = "Windows platform tests use expect to fail fast on setup failures"
     )]
+
+    use std::time::Duration;
 
     use firma_runtime_state::UserProcessId;
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;

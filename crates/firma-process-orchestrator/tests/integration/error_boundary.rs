@@ -1,4 +1,6 @@
-use firma_process_orchestrator::{StackTopology, StartError, spawn_stack_from_plan};
+use firma_process_orchestrator::{
+    LifecycleTimeouts, StackTopology, StartError, spawn_stack_from_plan,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 struct PlanFailure;
@@ -15,6 +17,7 @@ fn plan_failure_after_lock_acquisition_retains_caller_type() {
             Err::<Vec<_>, _>(PlanFailure)
         },
         state_dir.path(),
+        LifecycleTimeouts::default(),
     );
     let Err(error) = result else {
         panic!("plan must fail");

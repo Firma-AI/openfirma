@@ -25,6 +25,7 @@ use firma_runtime_state::pidfile;
 /// `stop`. Its expiration retains runtime state rather than claiming cleanup
 /// succeeded.
 const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
+const TARGET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// First-error-wins accumulator for teardown: the earliest recorded error is
 /// retained and later ones are dropped, matching fail-closed precedence.
@@ -317,7 +318,7 @@ fn stop_inner(
             cleanup(state_dir, topology, state_lease, cleanup_lock)?;
             return Ok(StopOutcome { forced: false });
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(TARGET_POLL_INTERVAL);
     }
 
     // Hard-kill survivors. This is the expected path for components that
@@ -355,7 +356,7 @@ fn stop_inner(
         if Instant::now() >= settlement_deadline {
             break false;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(TARGET_POLL_INTERVAL);
     };
     let final_error = resolve(
         teardown_error.into_inner(),

@@ -14,6 +14,7 @@ pub mod shutdown_event;
 pub mod start;
 pub mod status;
 pub mod stop;
+mod timeouts;
 mod topology;
 
 mod collect;
@@ -34,4 +35,5 @@ pub use start::{
 pub use state_lease::StackGeneration;
 pub use status::{ComponentStatus, StackStatus, State, status_components};
 pub use stop::{StopOutcome, stop_components};
+pub use timeouts::LifecycleTimeouts;
 pub use topology::StackTopology;

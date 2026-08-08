@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 use crate::error::OrchestratorError;
 use crate::supervisor::StopSignal;
 
+const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(200);
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Wait until a live, owned component accepts a TCP connection.
 ///
 /// The process-status callback must inspect the same [`crate::component::OwnedComponent`]
@@ -34,7 +37,7 @@ pub fn wait_for_tcp(
     let deadline = Instant::now() + timeout;
     loop {
         check_startup(component, stop_signal, &mut process_status)?;
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+        if TcpStream::connect_timeout(&addr, CONNECT_ATTEMPT_TIMEOUT).is_ok() {
             check_startup(component, stop_signal, &mut process_status)?;
             return Ok(());
         }
@@ -44,7 +47,7 @@ pub fn wait_for_tcp(
                 timeout_secs: timeout.as_secs(),
             });
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(READINESS_POLL_INTERVAL);
     }
 }
 

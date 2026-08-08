@@ -21,6 +21,8 @@ use crate::error::OrchestratorError;
 use crate::platform::TerminationTarget;
 use firma_runtime_state::pidfile;
 
+const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(200);
+
 /// Snapshot of one component's runtime state.
 #[derive(Debug, Clone, Serialize)]
 pub struct ComponentStatus {
@@ -107,7 +109,7 @@ fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus, OrchestratorEr
     let listen = listen_addr_for(state_dir, name);
     let port_open = listen
         .as_ref()
-        .is_some_and(|addr| TcpStream::connect_timeout(addr, Duration::from_millis(200)).is_ok());
+        .is_some_and(|addr| TcpStream::connect_timeout(addr, CONNECT_ATTEMPT_TIMEOUT).is_ok());
     Ok(ComponentStatus {
         name: name.into(),
         pid: Some(pid),
