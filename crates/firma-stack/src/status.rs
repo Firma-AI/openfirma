@@ -7,7 +7,7 @@ use std::path::Path;
 
 use firma_process_orchestrator::{StackStatus, status_components};
 
-use crate::error::Result;
+use crate::error::StackError;
 use crate::plan;
 
 /// Return current stack status.
@@ -15,6 +15,6 @@ use crate::plan;
 /// # Errors
 ///
 /// Returns errors propagated by the underlying component probes.
-pub fn status(state_dir: &Path) -> Result<StackStatus> {
-    status_components(state_dir, plan::component_names())
+pub fn status(state_dir: &Path) -> Result<StackStatus, StackError> {
+    Ok(status_components(state_dir, plan::component_names())?)
 }

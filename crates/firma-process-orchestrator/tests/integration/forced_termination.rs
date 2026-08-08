@@ -7,7 +7,7 @@ use std::io::Read as _;
 use std::process::Command;
 use std::time::Duration;
 
-use firma_process_orchestrator::{StackError, State};
+use firma_process_orchestrator::{OrchestratorError, State};
 
 use crate::support::wait_for_file;
 
@@ -40,7 +40,10 @@ fn forced_termination_retains_state_until_target_disappears() {
     )
     .expect_err("zombie target remains");
     assert!(
-        matches!(error, StackError::TerminationTimeout { timeout_secs: 2 }),
+        matches!(
+            error,
+            OrchestratorError::TerminationTimeout { timeout_secs: 2 }
+        ),
         "unexpected stop error: {error}"
     );
     insta::assert_snapshot!(error.to_string(), @"termination targets remained present after 2s");

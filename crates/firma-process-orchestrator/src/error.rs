@@ -5,42 +5,13 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Error type returned by every public operation in this crate.
+/// Error type returned by process orchestration operations in this crate.
 ///
 /// All variants carry enough context to be rendered as a single-line
 /// operator-facing message. Callers should generally print
 /// `format!("{err}")` and exit non-zero rather than introspect variants.
 #[derive(Debug, Error)]
-pub enum StackError {
-    /// Reading the stack config file from disk failed.
-    #[error("failed to read stack config '{path}': {source}")]
-    ConfigRead {
-        /// Path of the config file that could not be opened.
-        path: PathBuf,
-        /// Underlying I/O error.
-        #[source]
-        source: io::Error,
-    },
-
-    /// The stack config file is present but not valid TOML.
-    #[error("failed to parse stack config '{path}': {source}")]
-    ConfigParse {
-        /// Path of the offending config file.
-        path: PathBuf,
-        /// Underlying TOML parser error (boxed to keep `StackError` small).
-        #[source]
-        source: Box<toml::de::Error>,
-    },
-
-    /// A required field is absent from the stack config.
-    #[error("stack config '{path}' is missing required field '{field}'")]
-    ConfigMissing {
-        /// Path of the config file that lacks the field.
-        path: PathBuf,
-        /// Name of the missing field.
-        field: &'static str,
-    },
-
+pub enum OrchestratorError {
     /// Creating or securing the state directory failed.
     #[error(transparent)]
     StateDir(firma_fs::CreatePrivateDirError),
@@ -126,5 +97,13 @@ pub enum StackError {
     Platform(String),
 }
 
-/// Convenience alias used throughout the crate for `Result<T, StackError>`.
-pub type Result<T> = std::result::Result<T, StackError>;
+/// Distinguishes caller-owned plan resolution failures from orchestration failures.
+#[derive(Debug, Error)]
+pub enum StartError<E> {
+    /// The caller's plan resolver failed after the stack lock was acquired.
+    #[error(transparent)]
+    Plan(E),
+    /// Generic process orchestration failed.
+    #[error(transparent)]
+    Orchestrator(#[from] OrchestratorError),
+}

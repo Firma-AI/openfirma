@@ -16,7 +16,7 @@ mod windows;
 use std::path::Path;
 use std::process::{Child, Command};
 
-use crate::error::Result;
+use crate::error::OrchestratorError;
 use firma_runtime_state::UserProcessId;
 
 /// Setup-time platform resource used to attach managed children to one scope.
@@ -156,7 +156,7 @@ impl TerminationTarget {
     ///
     /// Returns a platform error when absence cannot be established. Lifecycle
     /// callers must treat that uncertainty as possible presence.
-    pub fn exists(&self) -> Result<bool> {
+    pub fn exists(&self) -> Result<bool, OrchestratorError> {
         SystemPlatform::termination_target_exists(self)
     }
 
@@ -165,7 +165,7 @@ impl TerminationTarget {
     /// # Errors
     ///
     /// Returns a platform error when the request cannot be delivered.
-    pub fn signal_soft(&self) -> Result<()> {
+    pub fn signal_soft(&self) -> Result<(), OrchestratorError> {
         SystemPlatform::signal_soft(self)
     }
 
@@ -179,7 +179,7 @@ impl TerminationTarget {
     ///
     /// Returns the platform signalling error while target presence or absence
     /// remains unconfirmed.
-    pub fn signal_hard(&self) -> Result<()> {
+    pub fn signal_hard(&self) -> Result<(), OrchestratorError> {
         match SystemPlatform::signal_hard(self) {
             Ok(()) => Ok(()),
             Err(signal_error) => match self.exists() {
@@ -202,7 +202,7 @@ pub trait Platform {
     /// # Errors
     ///
     /// Returns a platform error if the OS cannot allocate the group.
-    fn new_group() -> Result<Group>;
+    fn new_group() -> Result<Group, OrchestratorError>;
 
     /// Arm owner-loss termination for a production [`Group`].
     ///
@@ -212,7 +212,7 @@ pub trait Platform {
     /// # Errors
     ///
     /// Returns a platform error when owner-loss termination cannot be enabled.
-    fn arm_group_termination(group: &Group) -> Result<()>;
+    fn arm_group_termination(group: &Group) -> Result<(), OrchestratorError>;
 
     /// Return whether a [`TerminationTarget`] remains present.
     ///
@@ -224,7 +224,7 @@ pub trait Platform {
     /// # Errors
     ///
     /// Returns a platform error when target presence cannot be determined.
-    fn termination_target_exists(target: &TerminationTarget) -> Result<bool>;
+    fn termination_target_exists(target: &TerminationTarget) -> Result<bool, OrchestratorError>;
 
     /// Spawn a command as a member of a [`Group`].
     ///
@@ -235,21 +235,25 @@ pub trait Platform {
     /// # Errors
     ///
     /// Returns spawn, log, or group-assignment errors.
-    fn spawn_in_group(group: &Group, cmd: &mut Command, log_path: &Path) -> Result<SpawnedChild>;
+    fn spawn_in_group(
+        group: &Group,
+        cmd: &mut Command,
+        log_path: &Path,
+    ) -> Result<SpawnedChild, OrchestratorError>;
 
     /// Deliver a graceful shutdown request to a [`TerminationTarget`].
     ///
     /// # Errors
     ///
     /// Returns a platform error if the signal cannot be delivered.
-    fn signal_soft(target: &TerminationTarget) -> Result<()>;
+    fn signal_soft(target: &TerminationTarget) -> Result<(), OrchestratorError>;
 
     /// Forcefully terminate a [`TerminationTarget`].
     ///
     /// # Errors
     ///
     /// Returns a platform error if termination cannot be requested.
-    fn signal_hard(target: &TerminationTarget) -> Result<()>;
+    fn signal_hard(target: &TerminationTarget) -> Result<(), OrchestratorError>;
 
     /// Return whether a child-collection error means another wait already
     /// reaped the child.
@@ -269,7 +273,7 @@ pub trait Platform {
     /// # Errors
     ///
     /// Returns a spawn error when the detached child cannot be created.
-    fn spawn_detached(cmd: &mut Command) -> Result<Child>;
+    fn spawn_detached(cmd: &mut Command) -> Result<Child, OrchestratorError>;
 }
 
 #[cfg(unix)]

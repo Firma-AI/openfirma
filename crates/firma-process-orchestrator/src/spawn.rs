@@ -13,7 +13,7 @@ use tracing::debug;
 
 use crate::collect::{collect_child_until, collect_target_in_background};
 use crate::component::{ComponentName, OwnedComponent};
-use crate::error::Result;
+use crate::error::OrchestratorError;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
 use firma_runtime_state::pidfile;
 
@@ -41,7 +41,10 @@ pub struct SpawnRequest<'a> {
 ///
 /// Returns executable discovery, process spawn, or pidfile errors. A process
 /// whose pidfile cannot be written is terminated and collected before return.
-pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<OwnedComponent> {
+pub fn spawn_component(
+    group: &Group,
+    req: &SpawnRequest<'_>,
+) -> Result<OwnedComponent, OrchestratorError> {
     let exe: std::path::PathBuf = match req.exe {
         Some(path) => path.to_path_buf(),
         None => std::env::current_exe()?,

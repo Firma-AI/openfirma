@@ -212,7 +212,7 @@ fn owned_shutdown_terminates_children_when_state_transaction_is_busy() {
 
     assert!(matches!(
         error,
-        firma_process_orchestrator::StackError::RuntimeStateBusy { .. }
+        firma_process_orchestrator::OrchestratorError::RuntimeStateBusy { .. }
     ));
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_process_absent(authority_pid);
@@ -244,7 +244,7 @@ fn external_stop_terminates_targets_but_retains_malformed_generation_state() {
 
     assert!(matches!(
         &error,
-        firma_process_orchestrator::StackError::InvalidStackGeneration { .. }
+        firma_process_orchestrator::OrchestratorError::InvalidStackGeneration { .. }
     ));
     insta::assert_snapshot!(error.to_string(), @"invalid stack.lock generation");
     join_collector(authority_collector);
@@ -281,7 +281,7 @@ fn generation_scoped_stop_does_not_signal_targets_with_malformed_lock() {
 
     assert!(matches!(
         error,
-        firma_process_orchestrator::StackError::InvalidStackGeneration { .. }
+        firma_process_orchestrator::OrchestratorError::InvalidStackGeneration { .. }
     ));
     assert_process_present(authority_pid);
     assert_process_present(sidecar_pid);
@@ -778,7 +778,10 @@ fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
     .expect_err("supervisor exited before readiness");
 
     assert!(
-        matches!(error, firma_process_orchestrator::StackError::Platform(_)),
+        matches!(
+            error,
+            firma_process_orchestrator::OrchestratorError::Platform(_)
+        ),
         "unexpected attachment error: {error}"
     );
     insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited before announcing readiness");
@@ -802,7 +805,10 @@ fn detached_attachment_rejects_supervisor_that_exits_after_ready() {
     .expect_err("supervisor exited after readiness");
 
     assert!(
-        matches!(error, firma_process_orchestrator::StackError::Platform(_)),
+        matches!(
+            error,
+            firma_process_orchestrator::OrchestratorError::Platform(_)
+        ),
         "unexpected attachment error: {error}"
     );
     insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited after readiness but before confirming attachment");

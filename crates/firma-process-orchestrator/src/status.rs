@@ -16,7 +16,7 @@ use firma_runtime_state::UserProcessId;
 use serde::Serialize;
 use tracing::{debug, trace};
 
-use crate::error::Result;
+use crate::error::OrchestratorError;
 use crate::platform::TerminationTarget;
 use firma_runtime_state::pidfile;
 
@@ -53,12 +53,15 @@ pub struct StackStatus {
 /// # Errors
 ///
 /// Returns errors propagated by [`probe`].
-pub fn status_components(state_dir: &Path, names: &[&str]) -> Result<StackStatus> {
+pub fn status_components(
+    state_dir: &Path,
+    names: &[&str],
+) -> Result<StackStatus, OrchestratorError> {
     debug!(state_dir = %state_dir.display(), "probing stack status");
     let components = names
         .iter()
         .map(|name| probe(state_dir, name))
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OrchestratorError>>()?;
     for component in &components {
         trace!(
             name = %component.name,
@@ -77,7 +80,7 @@ pub fn status_components(state_dir: &Path, names: &[&str]) -> Result<StackStatus
 /// safely be classified as [`State::Stopped`]. A missing pidfile remains
 /// legitimate absence. Endpoint and timestamp failures degrade only their
 /// corresponding metadata.
-fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus> {
+fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus, OrchestratorError> {
     let pidfile_path: PathBuf = state_dir.join(format!("{name}.pid"));
     let pid = pidfile::read(&pidfile_path)?;
     let Some(pid) = pid else {

@@ -14,11 +14,12 @@ use std::path::{Path, PathBuf};
 
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
-use firma_process_orchestrator::{ComponentName, ComponentSpec, Result, StackError};
+use firma_process_orchestrator::{ComponentName, ComponentSpec};
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
 
 use crate::config::StackConfig;
+use crate::error::StackError;
 
 /// Resolve the unified config for the stack.
 ///
@@ -27,17 +28,14 @@ use crate::config::StackConfig;
 ///
 /// # Errors
 ///
-/// Returns [`StackError::ConfigRead`] when no `firma.toml` can be resolved.
-pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> {
+/// Returns [`StackError::ConfigResolution`] when a selected configuration cannot be
+/// resolved, or [`StackError::ConfigNotFound`] when discovery finds no `firma.toml`.
+pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig, StackError> {
     let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(cli_override)
-        .map_err(|error| StackError::ConfigRead {
-            path: error.path.clone(),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string()),
-        })?
-        .ok_or_else(|| StackError::ConfigRead {
+        .map_err(|source| StackError::ConfigResolution { source })?
+        .ok_or_else(|| StackError::ConfigNotFound {
             path: cli_override.map_or_else(|| PathBuf::from(CONFIG_FILE_NAME), Path::to_path_buf),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, "no firma.toml found"),
         })?;
     debug!(config = %resolved.config_file().display(), "resolved unified firma.toml");
     Ok(StackConfig {
@@ -70,14 +68,14 @@ pub fn component_names() -> &'static [&'static str] {
 ///
 /// # Errors
 ///
-/// Returns [`StackError::Platform`] when the config path is not UTF-8, when the
+/// Returns a configuration error when the config path is not UTF-8, when the
 /// file cannot be read or parsed, or when either component section is missing
 /// or holds an invalid listen address.
-pub fn build_plan(cfg: &StackConfig) -> Result<Vec<ComponentSpec>> {
+pub fn build_plan(cfg: &StackConfig) -> Result<Vec<ComponentSpec>, StackError> {
     let cfg_path = cfg
         .config_file
         .to_str()
-        .ok_or_else(|| StackError::Platform("non-utf8 config path".into()))?;
+        .ok_or(StackError::NonUtf8ConfigPath)?;
     let config = FirmaToml::read(&cfg.config_file)?;
     let auth_addr = config.authority_listen_addr()?;
     let side_addr = config.sidecar_config()?.interceptor.listen_addr;
@@ -119,11 +117,11 @@ impl FirmaToml {
     ///
     /// # Errors
     ///
-    /// Returns [`StackError::Platform`] when the file cannot be read or is not
+    /// Returns [`StackError::ConfigValidation`] when the file cannot be read or is not
     /// valid TOML.
-    pub fn read(config_path: &Path) -> Result<Self> {
-        let config =
-            FirmaConfig::load(config_path).map_err(|e| StackError::Platform(format!("{e:#}")))?;
+    pub fn read(config_path: &Path) -> Result<Self, StackError> {
+        let config = FirmaConfig::load(config_path)
+            .map_err(|source| StackError::ConfigValidation { source })?;
         Ok(Self { config })
     }
 
@@ -134,19 +132,20 @@ impl FirmaToml {
     ///
     /// # Errors
     ///
-    /// Returns [`StackError::Platform`] when the `[authority]` section is
+    /// Returns a configuration error when the `[authority]` section is
     /// missing, does not deserialize, or holds an invalid socket address.
-    pub fn authority_listen_addr(&self) -> Result<SocketAddr> {
+    pub fn authority_listen_addr(&self) -> Result<SocketAddr, StackError> {
         let authority: AuthorityConfig = self
             .config
             .section("authority")
-            .map_err(|e| StackError::Platform(format!("{e:#}")))?;
-        authority.listen_addr.parse::<SocketAddr>().map_err(|e| {
-            StackError::Platform(format!(
-                "invalid authority listen_addr '{}': {e}",
-                authority.listen_addr
-            ))
-        })
+            .map_err(|source| StackError::ConfigValidation { source })?;
+        authority
+            .listen_addr
+            .parse::<SocketAddr>()
+            .map_err(|source| StackError::InvalidAuthorityListenAddr {
+                address: authority.listen_addr,
+                source,
+            })
     }
 
     /// Deserialize Sidecar configuration through [`SidecarConfig`].
@@ -158,12 +157,12 @@ impl FirmaToml {
     ///
     /// # Errors
     ///
-    /// Returns [`StackError::Platform`] when the `[sidecar]` section is missing
+    /// Returns [`StackError::ConfigValidation`] when the `[sidecar]` section is missing
     /// or does not deserialize.
-    pub fn sidecar_config(&self) -> Result<SidecarConfig> {
+    pub fn sidecar_config(&self) -> Result<SidecarConfig, StackError> {
         self.config
             .section("sidecar")
-            .map_err(|e| StackError::Platform(format!("{e:#}")))
+            .map_err(|source| StackError::ConfigValidation { source })
     }
 }
 
@@ -189,7 +188,7 @@ mod tests {
     }
 
     /// Write `body` to a `firma.toml` under a fresh temp dir and parse it.
-    fn read(body: &str) -> (tempfile::TempDir, Result<FirmaToml>) {
+    fn read(body: &str) -> (tempfile::TempDir, Result<FirmaToml, StackError>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("firma.toml");
         std::fs::write(&path, body).expect("write config");

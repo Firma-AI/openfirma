@@ -5,7 +5,8 @@ use std::process::{Child, Command, Stdio};
 
 use tracing::{debug, info};
 
-use crate::error::Result;
+use crate::StackGeneration;
+use crate::error::OrchestratorError;
 use crate::platform::{Platform, SystemPlatform};
 
 /// Spawn the supervisor child retained by detached [`crate::start::start_from_plan`].
@@ -22,8 +23,8 @@ pub fn spawn_supervisor(
     state_dir: &Path,
     config_file: &Path,
     firma_bin: Option<&Path>,
-    generation: crate::StackGeneration,
-) -> Result<Child> {
+    generation: StackGeneration,
+) -> Result<Child, OrchestratorError> {
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
 

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
 use crate::component::OwnedComponent;
-use crate::error::{Result, StackError};
+use crate::error::OrchestratorError;
 use crate::platform::TerminationTarget;
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use firma_runtime_state::pidfile;
@@ -28,10 +28,10 @@ const HARD_TERMINATION_SETTLEMENT: Duration = Duration::from_secs(2);
 /// First-error-wins accumulator for teardown: the earliest recorded error is
 /// retained and later ones are dropped, matching fail-closed precedence.
 #[derive(Default)]
-struct FirstError(Option<StackError>);
+struct FirstError(Option<OrchestratorError>);
 
 impl FirstError {
-    fn record(&mut self, error: StackError) {
+    fn record(&mut self, error: OrchestratorError) {
         if self.0.is_none() {
             self.0 = Some(error);
         }
@@ -41,7 +41,7 @@ impl FirstError {
         self.0.is_some()
     }
 
-    fn into_inner(self) -> Option<StackError> {
+    fn into_inner(self) -> Option<OrchestratorError> {
         self.0
     }
 }
@@ -50,11 +50,11 @@ impl FirstError {
 /// recorded teardown error > (only if targets remain) hard-termination error > timeout.
 /// Confirmed absence of all targets suppresses the hard-termination error.
 fn resolve(
-    first_teardown: Option<StackError>,
-    first_hard: Option<StackError>,
+    first_teardown: Option<OrchestratorError>,
+    first_hard: Option<OrchestratorError>,
     targets_disappeared: bool,
-    timeout: impl FnOnce() -> StackError,
-) -> Option<StackError> {
+    timeout: impl FnOnce() -> OrchestratorError,
+) -> Option<OrchestratorError> {
     if let Some(error) = first_teardown {
         return Some(error);
     }
@@ -82,8 +82,8 @@ enum CleanupLock<'a> {
     Retain {
         /// Keep [`StateTransaction`] serialization held through target termination.
         _transaction: &'a StateTransaction,
-        /// Report the [`StackError::InvalidStackGeneration`] after teardown.
-        error: StackError,
+        /// Report the [`OrchestratorError::InvalidStackGeneration`] after teardown.
+        error: OrchestratorError,
     },
 }
 
@@ -139,12 +139,12 @@ pub struct StopOutcome {
 /// state is retained when probing or hard termination fails, or when the
 /// generation is malformed, so cleanup can be retried. Malformed generation
 /// state does not prevent process teardown; its
-/// [`StackError::InvalidStackGeneration`] is returned afterward.
+/// [`OrchestratorError::InvalidStackGeneration`] is returned afterward.
 pub fn stop_components(
     state_dir: &Path,
     timeout: Duration,
     component_names: &[&str],
-) -> Result<StopOutcome> {
+) -> Result<StopOutcome, OrchestratorError> {
     stop_expected_generation(state_dir, timeout, component_names, None)
 }
 
@@ -158,7 +158,7 @@ pub(crate) fn stop_generation(
     timeout: Duration,
     component_names: &[&str],
     generation: StackGeneration,
-) -> Result<StopOutcome> {
+) -> Result<StopOutcome, OrchestratorError> {
     stop_expected_generation(state_dir, timeout, component_names, Some(generation))
 }
 
@@ -172,14 +172,16 @@ fn stop_expected_generation(
     timeout: Duration,
     component_names: &[&str],
     expected_generation: Option<StackGeneration>,
-) -> Result<StopOutcome> {
+) -> Result<StopOutcome, OrchestratorError> {
     if !state_dir.exists() {
         return Ok(StopOutcome { forced: false });
     }
     let transaction = StateTransaction::acquire(state_dir)?;
     let (state_lease, cleanup_lock) = match StateLease::load(state_dir) {
         Ok(state_lease) => (state_lease, CleanupLock::Held(&transaction)),
-        Err(error @ StackError::InvalidStackGeneration { .. }) if expected_generation.is_none() => {
+        Err(error @ OrchestratorError::InvalidStackGeneration { .. })
+            if expected_generation.is_none() =>
+        {
             (
                 None,
                 CleanupLock::Retain {
@@ -202,7 +204,7 @@ fn stop_expected_generation(
     let component_targets = component_names
         .iter()
         .map(|name| read_target(state_dir, &format!("{name}.pid")))
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OrchestratorError>>()?;
     let components = component_targets.iter().flatten().collect();
     stop_inner(
         state_dir,
@@ -233,7 +235,7 @@ pub(crate) fn stop_owned(
     timeout: Duration,
     components: &mut [OwnedComponent],
     state_lease: StateLease,
-) -> Result<StopOutcome> {
+) -> Result<StopOutcome, OrchestratorError> {
     let owned_names: Vec<String> = components
         .iter()
         .map(|component| component.name().as_str().to_string())
@@ -279,8 +281,8 @@ fn stop_inner(
     targets: &StopTargets<'_>,
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
-    mut collect_owned: impl FnMut() -> Result<()>,
-) -> Result<StopOutcome> {
+    mut collect_owned: impl FnMut() -> Result<(), OrchestratorError>,
+) -> Result<StopOutcome, OrchestratorError> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
     debug!(
         supervisor_target = ?targets.supervisor,
@@ -366,7 +368,7 @@ fn stop_inner(
         teardown_error.into_inner(),
         hard_termination_error.into_inner(),
         targets_disappeared,
-        || StackError::TerminationTimeout {
+        || OrchestratorError::TerminationTimeout {
             timeout_secs: HARD_TERMINATION_SETTLEMENT.as_secs(),
         },
     );
@@ -410,7 +412,10 @@ fn target_may_exist(target: &TerminationTarget, teardown_error: &mut FirstError)
 }
 
 /// Reconstruct a [`TerminationTarget`] without reinterpreting its stored identity.
-fn read_target(state_dir: &Path, name: &str) -> Result<Option<TerminationTarget>> {
+fn read_target(
+    state_dir: &Path,
+    name: &str,
+) -> Result<Option<TerminationTarget>, OrchestratorError> {
     Ok(pidfile::read(&state_dir.join(name))?.map(TerminationTarget::from_stored_id))
 }
 
@@ -430,7 +435,7 @@ pub(crate) fn cleanup_generation(
     component_names: &[&str],
     state_lease: Option<StateLease>,
     _transaction: &StateTransaction,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     let lease_is_current = match state_lease {
         Some(state_lease) => state_lease.is_current(state_dir)?,
         None => StateLease::load(state_dir)?.is_none(),
@@ -474,14 +479,14 @@ fn cleanup(
     component_names: &[&str],
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     match cleanup_lock {
         CleanupLock::Held(transaction) => {
             cleanup_generation(state_dir, component_names, state_lease, transaction)
         }
         CleanupLock::Try => {
             let transaction = StateTransaction::try_acquire(state_dir)?.ok_or_else(|| {
-                StackError::RuntimeStateBusy {
+                OrchestratorError::RuntimeStateBusy {
                     path: state_dir.to_path_buf(),
                 }
             })?;
@@ -498,22 +503,22 @@ fn cleanup(
 mod tests {
     use super::*;
 
-    fn timeout() -> StackError {
-        StackError::TerminationTimeout { timeout_secs: 2 }
+    fn timeout() -> OrchestratorError {
+        OrchestratorError::TerminationTimeout { timeout_secs: 2 }
     }
 
     #[test]
     fn recorded_teardown_error_wins_over_hard_and_timeout() {
         for targets_disappeared in [true, false] {
             let resolved = resolve(
-                Some(StackError::Platform("teardown".into())),
-                Some(StackError::Platform("hard".into())),
+                Some(OrchestratorError::Platform("teardown".into())),
+                Some(OrchestratorError::Platform("hard".into())),
                 targets_disappeared,
                 timeout,
             );
             assert!(matches!(
                 resolved,
-                Some(StackError::Platform(message)) if message == "teardown"
+                Some(OrchestratorError::Platform(message)) if message == "teardown"
             ));
         }
     }
@@ -522,7 +527,7 @@ mod tests {
     fn disappeared_targets_suppress_hard_error() {
         let resolved = resolve(
             None,
-            Some(StackError::Platform("hard".into())),
+            Some(OrchestratorError::Platform("hard".into())),
             true,
             timeout,
         );
@@ -533,13 +538,13 @@ mod tests {
     fn surviving_targets_surface_hard_error() {
         let resolved = resolve(
             None,
-            Some(StackError::Platform("hard".into())),
+            Some(OrchestratorError::Platform("hard".into())),
             false,
             timeout,
         );
         assert!(matches!(
             resolved,
-            Some(StackError::Platform(message)) if message == "hard"
+            Some(OrchestratorError::Platform(message)) if message == "hard"
         ));
     }
 
@@ -548,7 +553,7 @@ mod tests {
         let resolved = resolve(None, None, false, timeout);
         assert!(matches!(
             resolved,
-            Some(StackError::TerminationTimeout { timeout_secs: 2 })
+            Some(OrchestratorError::TerminationTimeout { timeout_secs: 2 })
         ));
     }
 }

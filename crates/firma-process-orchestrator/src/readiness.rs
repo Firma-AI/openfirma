@@ -10,7 +10,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
-use crate::error::{Result, StackError};
+use crate::error::OrchestratorError;
 use crate::supervisor::StopSignal;
 
 /// Wait until a live, owned component accepts a TCP connection.
@@ -22,15 +22,15 @@ use crate::supervisor::StopSignal;
 ///
 /// # Errors
 ///
-/// Returns termination, collection, [`StackError::ReadinessProcessExited`], or
-/// [`StackError::Readiness`] errors while leaving rollback to the owner.
+/// Returns termination, collection, [`OrchestratorError::ReadinessProcessExited`], or
+/// [`OrchestratorError::Readiness`] errors while leaving rollback to the owner.
 pub fn wait_for_tcp(
     component: &str,
     addr: SocketAddr,
     timeout: Duration,
     stop_signal: Option<&StopSignal>,
-    mut process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>>,
-) -> Result<()> {
+    mut process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
+) -> Result<(), OrchestratorError> {
     let deadline = Instant::now() + timeout;
     loop {
         check_startup(component, stop_signal, &mut process_status)?;
@@ -39,7 +39,7 @@ pub fn wait_for_tcp(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(StackError::Readiness {
+            return Err(OrchestratorError::Readiness {
                 component: component.to_string(),
                 timeout_secs: timeout.as_secs(),
             });
@@ -55,11 +55,11 @@ pub fn wait_for_tcp(
 fn check_startup(
     _component: &str,
     stop_signal: Option<&StopSignal>,
-    process_status: &mut impl FnMut() -> Result<Option<(String, ExitStatus)>>,
-) -> Result<()> {
+    process_status: &mut impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
+) -> Result<(), OrchestratorError> {
     check_startup_stop(stop_signal)?;
     if let Some((name, status)) = process_status()? {
-        return Err(StackError::ReadinessProcessExited {
+        return Err(OrchestratorError::ReadinessProcessExited {
             component: name,
             status,
         });
@@ -68,9 +68,9 @@ fn check_startup(
 }
 
 /// Convert a process termination request into a rollback-triggering startup error.
-fn check_startup_stop(stop_signal: Option<&StopSignal>) -> Result<()> {
+fn check_startup_stop(stop_signal: Option<&StopSignal>) -> Result<(), OrchestratorError> {
     if stop_signal.is_some_and(StopSignal::requested) {
-        return Err(StackError::Platform(
+        return Err(OrchestratorError::Platform(
             "termination requested during stack startup".into(),
         ));
     }

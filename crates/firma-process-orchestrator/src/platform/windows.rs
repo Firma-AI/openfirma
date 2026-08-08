@@ -33,7 +33,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::collect::{collect_child_in_background, collect_child_until};
-use crate::error::{Result, StackError};
+use crate::error::OrchestratorError;
 use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
 use crate::shutdown_event::windows_shutdown_event_name;
 use firma_runtime_state::ChildExt as _;
@@ -61,15 +61,17 @@ pub fn close_job_object(handle: HANDLE) {
 }
 
 impl Platform for WindowsPlatform {
-    fn new_group() -> Result<Group> {
+    fn new_group() -> Result<Group, OrchestratorError> {
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if job.is_null() {
-            return Err(StackError::Platform("CreateJobObjectW failed".into()));
+            return Err(OrchestratorError::Platform(
+                "CreateJobObjectW failed".into(),
+            ));
         }
         Ok(Group { job })
     }
 
-    fn arm_group_termination(group: &Group) -> Result<()> {
+    fn arm_group_termination(group: &Group) -> Result<(), OrchestratorError> {
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         let configured = unsafe {
@@ -82,14 +84,14 @@ impl Platform for WindowsPlatform {
         };
         if configured == 0 {
             let error = unsafe { GetLastError() };
-            return Err(StackError::Platform(format!(
+            return Err(OrchestratorError::Platform(format!(
                 "SetInformationJobObject failed (error {error})"
             )));
         }
         Ok(())
     }
 
-    fn termination_target_exists(target: &TerminationTarget) -> Result<bool> {
+    fn termination_target_exists(target: &TerminationTarget) -> Result<bool, OrchestratorError> {
         if let Some(job) = target.job() {
             let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
                 unsafe { std::mem::zeroed() };
@@ -104,16 +106,23 @@ impl Platform for WindowsPlatform {
             };
             if queried == 0 {
                 let error = unsafe { GetLastError() };
-                return Err(StackError::Platform(format!(
+                return Err(OrchestratorError::Platform(format!(
                     "QueryInformationJobObject failed (error {error})"
                 )));
             }
             return Ok(accounting.ActiveProcesses != 0);
         }
-        target.stored_id().process_exists().map_err(StackError::Io)
+        target
+            .stored_id()
+            .process_exists()
+            .map_err(OrchestratorError::Io)
     }
 
-    fn spawn_in_group(group: &Group, cmd: &mut Command, log_path: &Path) -> Result<SpawnedChild> {
+    fn spawn_in_group(
+        group: &Group,
+        cmd: &mut Command,
+        log_path: &Path,
+    ) -> Result<SpawnedChild, OrchestratorError> {
         if let Some(parent) = log_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -128,7 +137,7 @@ impl Platform for WindowsPlatform {
         // descendant-escape window between CreateProcess and assignment.
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
         cmd.stdout(Stdio::from(log)).stderr(Stdio::from(stderr_log));
-        let child = cmd.spawn().map_err(|source| StackError::Spawn {
+        let child = cmd.spawn().map_err(|source| OrchestratorError::Spawn {
             component: log_path
                 .file_stem()
                 .and_then(|name| name.to_str())
@@ -146,7 +155,7 @@ impl Platform for WindowsPlatform {
         if process_handle.is_null() {
             let err = unsafe { GetLastError() };
             cleanup_failed_child(child);
-            return Err(StackError::Platform(format!(
+            return Err(OrchestratorError::Platform(format!(
                 "OpenProcess failed (error {err})"
             )));
         }
@@ -159,7 +168,7 @@ impl Platform for WindowsPlatform {
         unsafe { CloseHandle(process_handle) };
         if assigned == 0 {
             cleanup_failed_child(child);
-            return Err(StackError::Platform(format!(
+            return Err(OrchestratorError::Platform(format!(
                 "AssignProcessToJobObject failed (error {assign_err})"
             )));
         }
@@ -182,7 +191,7 @@ impl Platform for WindowsPlatform {
         })
     }
 
-    fn signal_soft(target: &TerminationTarget) -> Result<()> {
+    fn signal_soft(target: &TerminationTarget) -> Result<(), OrchestratorError> {
         // `GenerateConsoleCtrlEvent` only delivers to processes that share the
         // caller's console. The stop process runs in a different console than the
         // children, and the children are spawned with `CREATE_NO_WINDOW` (no
@@ -197,7 +206,7 @@ impl Platform for WindowsPlatform {
         let handle = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, wide.as_ptr()) };
         if handle.is_null() {
             let err = unsafe { GetLastError() };
-            return Err(StackError::Platform(format!(
+            return Err(OrchestratorError::Platform(format!(
                 "OpenEventW({name}) failed (error {err})"
             )));
         }
@@ -209,18 +218,18 @@ impl Platform for WindowsPlatform {
         };
         unsafe { CloseHandle(handle) };
         if ok == 0 {
-            return Err(StackError::Platform(format!(
+            return Err(OrchestratorError::Platform(format!(
                 "SetEvent({name}) failed (error {set_err})"
             )));
         }
         Ok(())
     }
 
-    fn signal_hard(target: &TerminationTarget) -> Result<()> {
+    fn signal_hard(target: &TerminationTarget) -> Result<(), OrchestratorError> {
         if let Some(job) = target.job() {
             if unsafe { TerminateJobObject(job, 1) } == 0 {
                 let error = unsafe { GetLastError() };
-                return Err(StackError::Platform(format!(
+                return Err(OrchestratorError::Platform(format!(
                     "TerminateJobObject failed (error {error})"
                 )));
             }
@@ -228,12 +237,16 @@ impl Platform for WindowsPlatform {
         }
         let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, target.stored_id().get()) };
         if handle.is_null() {
-            return Err(StackError::Platform("OpenProcess(TERMINATE) failed".into()));
+            return Err(OrchestratorError::Platform(
+                "OpenProcess(TERMINATE) failed".into(),
+            ));
         }
         let ok = unsafe { TerminateProcess(handle, 1) };
         unsafe { CloseHandle(handle) };
         if ok == 0 {
-            return Err(StackError::Platform("TerminateProcess failed".into()));
+            return Err(OrchestratorError::Platform(
+                "TerminateProcess failed".into(),
+            ));
         }
         Ok(())
     }
@@ -242,13 +255,13 @@ impl Platform for WindowsPlatform {
         false
     }
 
-    fn spawn_detached(cmd: &mut Command) -> Result<Child> {
+    fn spawn_detached(cmd: &mut Command) -> Result<Child, OrchestratorError> {
         // The breakaway creation flag ensures the supervisor survives the
         // launcher's Job Object. If that Job does not grant breakaway, startup
         // fails closed: launching inside it would make detached lifetime depend
         // on an external owner-loss policy that Firma cannot inspect or control.
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
-        cmd.spawn().map_err(|source| StackError::Spawn {
+        cmd.spawn().map_err(|source| OrchestratorError::Spawn {
             component: "supervisor (breakaway required)".into(),
             source,
         })
@@ -262,7 +275,7 @@ impl Platform for WindowsPlatform {
 fn duplicate_job_target(
     job: HANDLE,
     leader_pid: firma_runtime_state::UserProcessId,
-) -> Result<TerminationTarget> {
+) -> Result<TerminationTarget, OrchestratorError> {
     let process = unsafe { GetCurrentProcess() };
     let mut duplicate = std::ptr::null_mut();
     let duplicated = unsafe {
@@ -278,7 +291,7 @@ fn duplicate_job_target(
     };
     if duplicated == 0 {
         let error = unsafe { GetLastError() };
-        return Err(StackError::Platform(format!(
+        return Err(OrchestratorError::Platform(format!(
             "DuplicateHandle(job) failed (error {error})"
         )));
     }
@@ -289,11 +302,13 @@ fn duplicate_job_target(
 ///
 /// Failure leaves the caller responsible for terminating the already-assigned
 /// [`TerminationTarget`] before collecting the suspended child.
-fn resume_suspended_process(leader_pid: firma_runtime_state::UserProcessId) -> Result<()> {
+fn resume_suspended_process(
+    leader_pid: firma_runtime_state::UserProcessId,
+) -> Result<(), OrchestratorError> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
         let error = unsafe { GetLastError() };
-        return Err(StackError::Platform(format!(
+        return Err(OrchestratorError::Platform(format!(
             "CreateToolhelp32Snapshot(threads) failed (error {error})"
         )));
     }
@@ -307,7 +322,7 @@ fn resume_suspended_process(leader_pid: firma_runtime_state::UserProcessId) -> R
             if thread.is_null() {
                 let error = unsafe { GetLastError() };
                 unsafe { CloseHandle(snapshot) };
-                return Err(StackError::Platform(format!(
+                return Err(OrchestratorError::Platform(format!(
                     "OpenThread(SUSPEND_RESUME) failed (error {error})"
                 )));
             }
@@ -316,7 +331,7 @@ fn resume_suspended_process(leader_pid: firma_runtime_state::UserProcessId) -> R
             if previous_suspend_count == u32::MAX {
                 let error = unsafe { GetLastError() };
                 unsafe { CloseHandle(snapshot) };
-                return Err(StackError::Platform(format!(
+                return Err(OrchestratorError::Platform(format!(
                     "ResumeThread failed (error {error})"
                 )));
             }
@@ -327,7 +342,7 @@ fn resume_suspended_process(leader_pid: firma_runtime_state::UserProcessId) -> R
     }
     unsafe { CloseHandle(snapshot) };
     if !found {
-        return Err(StackError::Platform(format!(
+        return Err(OrchestratorError::Platform(format!(
             "suspended process {} had no resumable primary thread",
             leader_pid.get()
         )));

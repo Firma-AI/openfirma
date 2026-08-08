@@ -31,7 +31,10 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
         panic!("an exited authority must fail startup");
     };
 
-    let StackError::ReadinessProcessExited { component, status } = &error else {
+    let StackError::Orchestrator(
+        firma_process_orchestrator::OrchestratorError::ReadinessProcessExited { component, status },
+    ) = &error
+    else {
         panic!("expected readiness process exit, got {error:?}");
     };
     assert_eq!(component, "authority");
@@ -100,7 +103,10 @@ fn authority_exit_aborts_sidecar_readiness() {
     };
     drop(authority_listener);
 
-    let StackError::ReadinessProcessExited { component, status } = error else {
+    let StackError::Orchestrator(
+        firma_process_orchestrator::OrchestratorError::ReadinessProcessExited { component, status },
+    ) = error
+    else {
         panic!("expected readiness process exit, got {error:?}");
     };
     assert_eq!(component, "authority");

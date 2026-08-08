@@ -20,11 +20,12 @@ use tracing::{debug, info};
 
 use crate::collect::{collect_child_in_background, collect_child_until};
 use crate::component::{ComponentName, ComponentSpec, OwnedComponent};
-use crate::error::{Result, StackError};
+use crate::error::{OrchestratorError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::wait_for_tcp;
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
+use crate::stop::StopOutcome;
 use crate::supervisor::{
     ReaperLauncher, StopSignal, block_until_owned_exit_with, collect_in_background,
     collect_in_background_with, launch_reaper,
@@ -166,13 +167,13 @@ impl StartupGuard {
     /// # Errors
     ///
     /// Returns an error without changing state if startup has already finished.
-    fn record(&mut self, component: OwnedComponent) -> Result<()> {
+    fn record(&mut self, component: OwnedComponent) -> Result<(), OrchestratorError> {
         match &mut self.state {
             StartupState::Building(components) => {
                 components.push(component);
                 Ok(())
             }
-            StartupState::Finished => Err(StackError::Platform(
+            StartupState::Finished => Err(OrchestratorError::Platform(
                 "component child recorded after startup finished".into(),
             )),
         }
@@ -184,7 +185,7 @@ impl StartupGuard {
     /// ordering as startup. Polling occurs through the guard so readiness never
     /// borrows a process ID without the corresponding [`OwnedComponent`]
     /// collection capability.
-    fn exited_component(&mut self) -> Result<Option<(String, ExitStatus)>> {
+    fn exited_component(&mut self) -> Result<Option<(String, ExitStatus)>, OrchestratorError> {
         match &mut self.state {
             StartupState::Building(components) => {
                 for component in components {
@@ -194,17 +195,19 @@ impl StartupGuard {
                 }
                 Ok(None)
             }
-            StartupState::Finished => Err(StackError::Platform(
+            StartupState::Finished => Err(OrchestratorError::Platform(
                 "component readiness checked without owned startup processes".into(),
             )),
         }
     }
 
     /// Poll one owned leader while preserving its broader termination capability.
-    fn poll_exit(component: &mut OwnedComponent) -> Result<Option<(String, ExitStatus)>> {
+    fn poll_exit(
+        component: &mut OwnedComponent,
+    ) -> Result<Option<(String, ExitStatus)>, OrchestratorError> {
         Ok(component
             .try_wait()
-            .map_err(StackError::Io)?
+            .map_err(OrchestratorError::Io)?
             .map(|status| (component.name().as_str().to_string(), status)))
     }
 
@@ -214,7 +217,7 @@ impl StartupGuard {
     ///
     /// Returns an error and leaves rollback armed if startup has already
     /// finished.
-    fn finish(mut self) -> Result<RunningStack> {
+    fn finish(mut self) -> Result<RunningStack, OrchestratorError> {
         match std::mem::replace(&mut self.state, StartupState::Finished) {
             StartupState::Building(components) => Ok(RunningStack::from_components(
                 components,
@@ -222,7 +225,7 @@ impl StartupGuard {
                 self.state_lease,
                 self.transaction.take(),
             )),
-            StartupState::Finished => Err(StackError::Platform(
+            StartupState::Finished => Err(OrchestratorError::Platform(
                 "startup ownership already transferred".into(),
             )),
         }
@@ -385,11 +388,11 @@ impl RunningStack {
     ///
     /// # Errors
     ///
-    /// Returns [`StackError::Platform`] after ownership has been consumed.
-    fn owned_mut(&mut self) -> Result<&mut OwnedStack> {
+    /// Returns [`OrchestratorError::Platform`] after ownership has been consumed.
+    fn owned_mut(&mut self) -> Result<&mut OwnedStack, OrchestratorError> {
         match &mut self.state {
             RunningStackState::Owned(owned) => Ok(owned),
-            RunningStackState::Stopped => Err(StackError::Platform(
+            RunningStackState::Stopped => Err(OrchestratorError::Platform(
                 "stack process ownership is no longer available".into(),
             )),
         }
@@ -399,7 +402,7 @@ impl RunningStack {
     ///
     /// Process and cleanup capabilities remain in [`OwnedStack`]; this transition
     /// only allows other processes to snapshot the now-complete runtime state.
-    fn mark_ready(&mut self) -> Result<()> {
+    fn mark_ready(&mut self) -> Result<(), OrchestratorError> {
         let owned = self.owned_mut()?;
         owned.startup_transaction = None;
         Ok(())
@@ -416,9 +419,9 @@ impl RunningStack {
     /// # Errors
     ///
     /// Returns process-probe, termination, or runtime-state cleanup errors.
-    pub fn shutdown(&mut self, timeout: Duration) -> Result<crate::stop::StopOutcome> {
+    pub fn shutdown(&mut self, timeout: Duration) -> Result<StopOutcome, OrchestratorError> {
         let RunningStackState::Owned(owned) = &mut self.state else {
-            return Ok(crate::stop::StopOutcome { forced: false });
+            return Ok(StopOutcome { forced: false });
         };
         // A detached attachment failure may tear down before publishing ready.
         // Release startup serialization before the owned stop reacquires it.
@@ -481,12 +484,12 @@ impl Drop for RunningStack {
 /// On failure after children have been spawned, this function tears them down.
 /// Runtime state is retained when target disappearance cannot be confirmed so
 /// callers can retry cleanup.
-pub fn spawn_stack_from_plan(
+pub fn spawn_stack_from_plan<E>(
     component_names: &[&str],
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>>,
+    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     exe: Option<&Path>,
     state_dir: &Path,
-) -> Result<RunningStack> {
+) -> Result<RunningStack, StartError<E>> {
     spawn_stack_from_plan_with_phase(
         component_names,
         build_plan,
@@ -507,17 +510,17 @@ pub fn spawn_stack_from_plan(
 /// When supplied, one [`StopSignal`] spans readiness and supervision so
 /// termination cannot fall between those phases. Every error after
 /// [`StartupGuard::new`] remains rollback-protected.
-fn spawn_stack_from_plan_with_phase(
+fn spawn_stack_from_plan_with_phase<E>(
     component_names: &[&str],
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>>,
+    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     exe: Option<&Path>,
     state_dir: &Path,
     publish_ready: bool,
     generation: StackGeneration,
     stop_signal: Option<&StopSignal>,
-) -> Result<RunningStack> {
+) -> Result<RunningStack, StartError<E>> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
-    firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
+    firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
     let transaction = StateTransaction::acquire(state_dir)?;
     debug!("acquiring stack lock");
     let state_lease = acquire_lock(state_dir, &transaction, generation, component_names)?;
@@ -531,7 +534,7 @@ fn spawn_stack_from_plan_with_phase(
 
     // The plan is resolved after the lock is claimed so that an already-running
     // stack is reported before any (possibly failing) plan resolution runs.
-    let plan = build_plan()?;
+    let plan = build_plan().map_err(StartError::Plan)?;
     match spawn_stack_inner(plan, exe, state_dir, &mut startup, stop_signal) {
         Ok(()) => {
             let mut stack = startup.finish()?;
@@ -544,7 +547,7 @@ fn spawn_stack_from_plan_with_phase(
         }
         Err(error) => {
             debug!(%error, "spawn failed; startup guard will roll back");
-            Err(error)
+            Err(StartError::Orchestrator(error))
         }
     }
 }
@@ -565,7 +568,7 @@ fn spawn_stack_inner(
     state_dir: &Path,
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
 
@@ -621,17 +624,21 @@ fn spawn_stack_inner(
 /// On failure after children have been spawned, this function tears them down.
 /// Runtime state is retained when hard termination fails so callers can retry
 /// cleanup.
-pub fn start_from_plan(
+pub fn start_from_plan<E>(
     component_names: &[&str],
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>>,
+    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     exe: Option<&Path>,
     config_file: &Path,
     state_dir: &Path,
     mode: StartMode,
-) -> Result<StackHandle> {
+) -> Result<StackHandle, StartError<E>> {
     match mode {
         StartMode::Foreground => start_foreground(component_names, build_plan, exe, state_dir),
-        StartMode::Detached => start_detached(component_names, exe, config_file, state_dir),
+        StartMode::Detached => {
+            let _ = build_plan;
+            start_detached(component_names, exe, config_file, state_dir)
+                .map_err(StartError::Orchestrator)
+        }
     }
 }
 
@@ -639,12 +646,12 @@ pub fn start_from_plan(
 ///
 /// [`StopSignal`] is installed before startup and reused for supervision, so a
 /// termination request during readiness triggers [`StartupGuard`] rollback.
-fn start_foreground(
+fn start_foreground<E>(
     component_names: &[&str],
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>>,
+    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     exe: Option<&Path>,
     state_dir: &Path,
-) -> Result<StackHandle> {
+) -> Result<StackHandle, StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let mut stack = spawn_stack_from_plan_with_phase(
         component_names,
@@ -664,7 +671,10 @@ fn start_foreground(
     info!("foreground supervisor exiting; tearing down stack");
     let teardown_result = stack.shutdown(Duration::from_secs(10));
     if let Err(error) = supervision_result {
-        return Err(with_rollback(error, teardown_result));
+        return Err(StartError::Orchestrator(with_rollback(
+            error,
+            teardown_result,
+        )));
     }
     teardown_result?;
     Ok(handle)
@@ -684,8 +694,8 @@ fn start_detached(
     exe: Option<&Path>,
     config_file: &Path,
     state_dir: &Path,
-) -> Result<StackHandle> {
-    firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
+) -> Result<StackHandle, OrchestratorError> {
+    firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
     let generation = StackGeneration::new();
     info!("forking detached supervisor owner");
     let mut supervisor = crate::detach::spawn_supervisor(state_dir, config_file, exe, generation)?;
@@ -705,7 +715,8 @@ fn start_detached(
         }
     };
     if collect_child_in_background(supervisor).is_none() {
-        let error = StackError::Platform("could not start detached supervisor collector".into());
+        let error =
+            OrchestratorError::Platform("could not start detached supervisor collector".into());
         let rollback = rollback_detached_start(state_dir, component_names, generation);
         return Err(with_rollback(error, rollback));
     }
@@ -717,7 +728,7 @@ fn rollback_detached_start(
     state_dir: &Path,
     component_names: &[&str],
     generation: StackGeneration,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     crate::stop::stop_generation(
         state_dir,
         Duration::from_secs(10),
@@ -740,11 +751,12 @@ fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
 ///
 /// The caller supplies the component names in startup order; this does not grant
 /// component collection, termination, or cleanup authority.
-fn read_stack_handle(state_dir: &Path, names: &[&str]) -> Result<StackHandle> {
+fn read_stack_handle(state_dir: &Path, names: &[&str]) -> Result<StackHandle, OrchestratorError> {
     let mut component_pids = Vec::with_capacity(names.len());
     for name in names {
-        let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?
-            .ok_or_else(|| StackError::Platform(format!("{name}.pid missing after startup")))?;
+        let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {
+            OrchestratorError::Platform(format!("{name}.pid missing after startup"))
+        })?;
         component_pids.push(((*name).to_string(), pid));
     }
     Ok(StackHandle { component_pids })
@@ -772,10 +784,13 @@ fn remove_startup_state(
 }
 
 /// Preserve the initiating failure together with any required rollback failure.
-fn with_rollback<T>(operation: StackError, rollback: Result<T>) -> StackError {
+fn with_rollback<T>(
+    operation: OrchestratorError,
+    rollback: Result<T, OrchestratorError>,
+) -> OrchestratorError {
     match rollback {
         Ok(_) => operation,
-        Err(rollback) => StackError::Rollback {
+        Err(rollback) => OrchestratorError::Rollback {
             operation: Box::new(operation),
             rollback: Box::new(rollback),
         },
@@ -792,13 +807,13 @@ fn with_rollback<T>(operation: StackError, rollback: Result<T>) -> StackError {
 ///
 /// Returns startup, readiness, supervision, termination, or cleanup errors.
 #[doc(hidden)]
-pub fn supervise_owned_generation_from_plan(
+pub fn supervise_owned_generation_from_plan<E>(
     component_names: &[&str],
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>>,
+    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     exe: Option<&Path>,
     state_dir: &Path,
     generation: StackGeneration,
-) -> Result<()> {
+) -> Result<(), StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let stack = spawn_stack_from_plan_with_phase(
         component_names,
@@ -810,6 +825,7 @@ pub fn supervise_owned_generation_from_plan(
         Some(&stop_signal),
     )?;
     supervise_running_stack_with_signal(stack, state_dir, Duration::from_secs(10), &stop_signal)
+        .map_err(StartError::Orchestrator)
 }
 
 /// Supervise an already-owned stack after installing [`StopSignal`].
@@ -818,7 +834,7 @@ pub(crate) fn supervise_running_stack(
     mut stack: RunningStack,
     state_dir: &Path,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     let stop_signal = match StopSignal::install() {
         Ok(stop_signal) => stop_signal,
         Err(error) => {
@@ -839,9 +855,9 @@ fn supervise_running_stack_with_signal(
     state_dir: &Path,
     timeout: Duration,
     stop_signal: &StopSignal,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
-        StackError::Platform("current process returned invalid process id".into())
+        OrchestratorError::Platform("current process returned invalid process id".into())
     })?;
     let attachment_result = (|| {
         let ready_path = supervisor_ready_path(state_dir, supervisor_pid);
@@ -882,9 +898,9 @@ pub(crate) fn wait_for_supervisor_attachment(
     state_dir: &Path,
     supervisor: &mut std::process::Child,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     let expected_pid = UserProcessId::new(supervisor.id()).ok_or_else(|| {
-        StackError::Platform("detached supervisor returned invalid process id".into())
+        OrchestratorError::Platform("detached supervisor returned invalid process id".into())
     })?;
     let ready_path = supervisor_ready_path(state_dir, expected_pid);
     let attached_path = supervisor_attached_path(state_dir, expected_pid);
@@ -895,7 +911,7 @@ pub(crate) fn wait_for_supervisor_attachment(
             && let Some(ready_pid) = pidfile::read(&ready_path)?
         {
             if ready_pid != expected_pid {
-                return Err(StackError::Platform(format!(
+                return Err(OrchestratorError::Platform(format!(
                     "detached supervisor readiness belongs to pid {ready_pid}, expected {expected_pid}"
                 )));
             }
@@ -906,13 +922,13 @@ pub(crate) fn wait_for_supervisor_attachment(
             && let Some(attached_pid) = pidfile::read(&attached_path)?
         {
             if attached_pid != expected_pid {
-                return Err(StackError::Platform(format!(
+                return Err(OrchestratorError::Platform(format!(
                     "detached supervisor attachment belongs to pid {attached_pid}, expected {expected_pid}"
                 )));
             }
             pidfile::remove(&attached_path)?;
             if supervisor.try_wait()?.is_some() {
-                return Err(StackError::Platform(
+                return Err(OrchestratorError::Platform(
                     "detached supervisor exited after confirming attachment".into(),
                 ));
             }
@@ -925,12 +941,12 @@ pub(crate) fn wait_for_supervisor_attachment(
                     "after readiness but before confirming attachment"
                 }
             };
-            return Err(StackError::Platform(format!(
+            return Err(OrchestratorError::Platform(format!(
                 "detached supervisor exited {phase}"
             )));
         }
         if Instant::now() >= deadline {
-            return Err(StackError::Readiness {
+            return Err(OrchestratorError::Readiness {
                 component: "detached supervisor".into(),
                 timeout_secs: timeout.as_secs(),
             });
@@ -958,16 +974,16 @@ fn wait_for_launcher_ack(
     ready_path: &Path,
     stop_signal: &StopSignal,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     let deadline = Instant::now() + timeout;
     while ready_path.try_exists()? {
         if stop_signal.requested() {
-            return Err(StackError::Platform(
+            return Err(OrchestratorError::Platform(
                 "termination requested before launcher attachment".into(),
             ));
         }
         if Instant::now() >= deadline {
-            return Err(StackError::Readiness {
+            return Err(OrchestratorError::Readiness {
                 component: "detached launcher acknowledgement".into(),
                 timeout_secs: timeout.as_secs(),
             });
@@ -984,7 +1000,7 @@ fn spawn_into_group(
     name: ComponentName,
     args: &[&str],
     exe: Option<&Path>,
-) -> Result<OwnedComponent> {
+) -> Result<OwnedComponent, OrchestratorError> {
     spawn_component(
         group,
         &SpawnRequest {
@@ -1005,11 +1021,11 @@ fn acquire_lock(
     _transaction: &StateTransaction,
     generation: StackGeneration,
     component_names: &[&str],
-) -> Result<StateLease> {
+) -> Result<StateLease, OrchestratorError> {
     let lock = state_dir.join("stack.lock");
     loop {
         if !is_stack_stale(state_dir, component_names)? {
-            return Err(StackError::AlreadyRunning { path: lock });
+            return Err(OrchestratorError::AlreadyRunning { path: lock });
         }
         if let Some(state_lease) = StateLease::try_claim(state_dir, generation)? {
             return Ok(state_lease);
@@ -1019,7 +1035,7 @@ fn acquire_lock(
 }
 
 /// Prove that no persisted supervisor or component target remains live.
-fn is_stack_stale(state_dir: &Path, component_names: &[&str]) -> Result<bool> {
+fn is_stack_stale(state_dir: &Path, component_names: &[&str]) -> Result<bool, OrchestratorError> {
     if let Some(pid) = pidfile::read(&state_dir.join("stack.pid"))?
         && process_exists(pid)?
     {
@@ -1036,7 +1052,7 @@ fn is_stack_stale(state_dir: &Path, component_names: &[&str]) -> Result<bool> {
 }
 
 /// Remove process records only after their targets are proven absent.
-fn reap_stale(state_dir: &Path, component_names: &[&str]) -> Result<()> {
+fn reap_stale(state_dir: &Path, component_names: &[&str]) -> Result<(), OrchestratorError> {
     for name in component_names {
         let path = state_dir.join(format!("{name}.pid"));
         if let Some(id) = pidfile::read(&path)?
@@ -1055,6 +1071,6 @@ fn reap_stale(state_dir: &Path, component_names: &[&str]) -> Result<()> {
 }
 
 /// Map a supervisor liveness probe into the stack error contract.
-fn process_exists(pid: UserProcessId) -> Result<bool> {
-    pid.process_exists().map_err(StackError::Io)
+fn process_exists(pid: UserProcessId) -> Result<bool, OrchestratorError> {
+    pid.process_exists().map_err(OrchestratorError::Io)
 }

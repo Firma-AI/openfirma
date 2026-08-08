@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use firma_process_orchestrator::{StopOutcome, stop_components};
 
-use crate::error::Result;
+use crate::error::StackError;
 use crate::plan;
 
 /// Stop a running stack.
@@ -18,6 +18,10 @@ use crate::plan;
 /// Returns pidfile, process-probe, termination, or cleanup errors. Runtime
 /// state is retained when probing or hard termination fails, or when the
 /// generation is malformed, so cleanup can be retried.
-pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
-    stop_components(state_dir, timeout, plan::component_names())
+pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome, StackError> {
+    Ok(stop_components(
+        state_dir,
+        timeout,
+        plan::component_names(),
+    )?)
 }

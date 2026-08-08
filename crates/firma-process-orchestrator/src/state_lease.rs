@@ -9,7 +9,7 @@
 use std::io::Write as _;
 use std::path::Path;
 
-use crate::error::{Result, StackError};
+use crate::error::OrchestratorError;
 use fs2::FileExt as _;
 
 /// File containing the current [`StackGeneration`].
@@ -35,7 +35,7 @@ impl StateTransaction {
     ///
     /// Returns an I/O error when the coordination file cannot be opened or
     /// exclusively locked.
-    pub(crate) fn acquire(state_dir: &Path) -> Result<Self> {
+    pub(crate) fn acquire(state_dir: &Path) -> Result<Self, OrchestratorError> {
         let file = open_transaction_file(state_dir)?;
         file.lock_exclusive()?;
         Ok(Self { _file: file })
@@ -49,7 +49,7 @@ impl StateTransaction {
     ///
     /// Returns an I/O error when the coordination file cannot be opened or the
     /// lock attempt fails for a reason other than contention.
-    pub(crate) fn try_acquire(state_dir: &Path) -> Result<Option<Self>> {
+    pub(crate) fn try_acquire(state_dir: &Path) -> Result<Option<Self>, OrchestratorError> {
         let file = open_transaction_file(state_dir)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self { _file: file })),
@@ -87,10 +87,10 @@ impl StackGeneration {
     }
 
     /// Parse an identity persisted in [`LOCK_FILE`].
-    fn parse(value: &str) -> Result<Self> {
+    fn parse(value: &str) -> Result<Self, OrchestratorError> {
         uuid::Uuid::parse_str(value.trim())
             .map(Self)
-            .map_err(|source| StackError::InvalidStackGeneration { source })
+            .map_err(|source| OrchestratorError::InvalidStackGeneration { source })
     }
 
     /// Return the canonical text stored in [`LOCK_FILE`].
@@ -112,9 +112,9 @@ impl std::fmt::Display for StackGeneration {
 }
 
 impl std::str::FromStr for StackGeneration {
-    type Err = StackError;
+    type Err = OrchestratorError;
 
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::parse(value)
     }
 }
@@ -140,7 +140,10 @@ impl StateLease {
     /// # Errors
     ///
     /// Returns an I/O error when the generation cannot be written or published.
-    pub(crate) fn try_claim(state_dir: &Path, generation: StackGeneration) -> Result<Option<Self>> {
+    pub(crate) fn try_claim(
+        state_dir: &Path,
+        generation: StackGeneration,
+    ) -> Result<Option<Self>, OrchestratorError> {
         let lease = Self { generation };
         let temp = write_generation_temp(state_dir, lease)?;
         match temp.persist_noclobber(state_dir.join(LOCK_FILE)) {
@@ -160,7 +163,7 @@ impl StateLease {
     ///
     /// Returns an I/O error when the replacement cannot be published.
     #[cfg(feature = "test-support")]
-    pub(crate) fn replace_for_test(state_dir: &Path) -> Result<Self> {
+    pub(crate) fn replace_for_test(state_dir: &Path) -> Result<Self, OrchestratorError> {
         let lease = Self {
             generation: StackGeneration::new(),
         };
@@ -179,7 +182,7 @@ impl StateLease {
     /// # Errors
     ///
     /// Returns an I/O error other than absence, or an error for malformed state.
-    pub(crate) fn load(state_dir: &Path) -> Result<Option<Self>> {
+    pub(crate) fn load(state_dir: &Path) -> Result<Option<Self>, OrchestratorError> {
         match std::fs::read_to_string(state_dir.join(LOCK_FILE)) {
             Ok(value) if value.trim().is_empty() => Ok(None),
             Ok(value) => Ok(Some(Self {
@@ -196,7 +199,7 @@ impl StateLease {
     ///
     /// Returns runtime-state read or parse errors instead of authorizing cleanup
     /// when ownership cannot be established.
-    pub(crate) fn is_current(self, state_dir: &Path) -> Result<bool> {
+    pub(crate) fn is_current(self, state_dir: &Path) -> Result<bool, OrchestratorError> {
         Ok(Self::load(state_dir)? == Some(self))
     }
 
@@ -207,7 +210,10 @@ impl StateLease {
 }
 
 /// Write and flush a complete generation beside [`LOCK_FILE`] for atomic publication.
-fn write_generation_temp(state_dir: &Path, lease: StateLease) -> Result<tempfile::NamedTempFile> {
+fn write_generation_temp(
+    state_dir: &Path,
+    lease: StateLease,
+) -> Result<tempfile::NamedTempFile, OrchestratorError> {
     let mut temp = tempfile::NamedTempFile::new_in(state_dir)?;
     writeln!(temp, "{}", lease.generation.as_hyphenated())?;
     temp.as_file().sync_all()?;
@@ -215,7 +221,7 @@ fn write_generation_temp(state_dir: &Path, lease: StateLease) -> Result<tempfile
 }
 
 /// Open [`TRANSACTION_FILE`] for a [`StateTransaction`] lock attempt.
-fn open_transaction_file(state_dir: &Path) -> Result<std::fs::File> {
+fn open_transaction_file(state_dir: &Path) -> Result<std::fs::File, OrchestratorError> {
     Ok(std::fs::OpenOptions::new()
         .read(true)
         .write(true)
