@@ -602,6 +602,7 @@ fn spawn_stack_inner(
 /// Start a caller-described stack in the foreground.
 ///
 /// The plan is resolved only after the topology's runtime-state lock is claimed.
+/// `teardown_timeout` bounds graceful component shutdown before forced termination.
 ///
 /// # Errors
 ///
@@ -613,6 +614,7 @@ pub fn start_foreground_from_plan<E>(
     topology: &StackTopology,
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
+    teardown_timeout: Duration,
 ) -> Result<StackHandle, StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let mut stack = spawn_stack_from_plan_with_phase(
@@ -630,7 +632,7 @@ pub fn start_foreground_from_plan<E>(
         block_until_owned_exit_with(&stop_signal, &mut owned.components)
     };
     info!("foreground supervisor exiting; tearing down stack");
-    let teardown_result = stack.shutdown(Duration::from_secs(10));
+    let teardown_result = stack.shutdown(teardown_timeout);
     if let Err(error) = supervision_result {
         return Err(StartError::Orchestrator(with_rollback(
             error,
@@ -646,9 +648,11 @@ pub fn start_foreground_from_plan<E>(
 /// The handoff protocol is defined by [`LauncherAttachmentState`]. The launcher
 /// retains the supervisor child handle through both phases and uses
 /// [`rollback_detached_start`] on any failure before collection transfer. The
-/// The caller constructs the complete supervisor command from the allocated
+/// caller constructs the complete supervisor command from the allocated
 /// generation. The orchestrator adds detached-process settings and log
 /// redirection, but assigns no command-line protocol to the child.
+/// `teardown_timeout` applies when rolling back a failed handoff; callers must
+/// separately pass the same policy to the supervisor process they construct.
 ///
 /// # Errors
 ///
@@ -657,6 +661,7 @@ pub fn start_foreground_from_plan<E>(
 pub fn start_detached(
     topology: &StackTopology,
     state_dir: &Path,
+    teardown_timeout: Duration,
     build_supervisor: impl FnOnce(StackGeneration) -> Command,
 ) -> Result<StackHandle, OrchestratorError> {
     firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
@@ -668,21 +673,22 @@ pub fn start_detached(
         wait_for_supervisor_attachment(state_dir, &mut supervisor, Duration::from_mins(4))
     {
         terminate_detached_supervisor(&mut supervisor);
-        let rollback = rollback_detached_start(state_dir, topology, generation);
+        let rollback = rollback_detached_start(state_dir, topology, generation, teardown_timeout);
         return Err(with_rollback(error, rollback));
     }
     let handle = match read_stack_handle(state_dir, topology) {
         Ok(handle) => handle,
         Err(error) => {
             terminate_detached_supervisor(&mut supervisor);
-            let rollback = rollback_detached_start(state_dir, topology, generation);
+            let rollback =
+                rollback_detached_start(state_dir, topology, generation, teardown_timeout);
             return Err(with_rollback(error, rollback));
         }
     };
     if collect_child_in_background(supervisor).is_none() {
         let error =
             OrchestratorError::Platform("could not start detached supervisor collector".into());
-        let rollback = rollback_detached_start(state_dir, topology, generation);
+        let rollback = rollback_detached_start(state_dir, topology, generation, teardown_timeout);
         return Err(with_rollback(error, rollback));
     }
     Ok(handle)
@@ -693,9 +699,9 @@ fn rollback_detached_start(
     state_dir: &Path,
     topology: &StackTopology,
     generation: StackGeneration,
+    teardown_timeout: Duration,
 ) -> Result<(), OrchestratorError> {
-    crate::stop::stop_generation(state_dir, Duration::from_secs(10), topology, generation)
-        .map(|_| ())
+    crate::stop::stop_generation(state_dir, teardown_timeout, topology, generation).map(|_| ())
 }
 
 /// Terminate and make a bounded collection attempt for the supervisor child.
@@ -764,7 +770,8 @@ fn with_rollback<T>(
 ///
 /// [`StopSignal`] is installed before component readiness and reused by
 /// [`supervise_running_stack_with_signal`] for the two-phase handoff and
-/// supervision.
+/// supervision. `teardown_timeout` bounds graceful component shutdown before
+/// forced termination.
 ///
 /// # Errors
 ///
@@ -775,6 +782,7 @@ pub fn supervise_owned_generation_from_plan<E>(
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
     generation: StackGeneration,
+    teardown_timeout: Duration,
 ) -> Result<(), StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let stack = spawn_stack_from_plan_with_phase(
@@ -785,7 +793,7 @@ pub fn supervise_owned_generation_from_plan<E>(
         generation,
         Some(&stop_signal),
     )?;
-    supervise_running_stack_with_signal(stack, state_dir, Duration::from_secs(10), &stop_signal)
+    supervise_running_stack_with_signal(stack, state_dir, teardown_timeout, &stop_signal)
         .map_err(StartError::Orchestrator)
 }
 
@@ -799,7 +807,7 @@ pub(crate) fn supervise_running_stack(
     let stop_signal = match StopSignal::install() {
         Ok(stop_signal) => stop_signal,
         Err(error) => {
-            let rollback = stack.shutdown(Duration::from_secs(10));
+            let rollback = stack.shutdown(timeout);
             return Err(with_rollback(error, rollback));
         }
     };
@@ -834,7 +842,7 @@ fn supervise_running_stack_with_signal(
     })();
     if let Err(error) = attachment_result {
         let _ = stack.mark_ready();
-        let rollback = stack.shutdown(Duration::from_secs(10));
+        let rollback = stack.shutdown(timeout);
         return Err(with_rollback(error, rollback));
     }
 

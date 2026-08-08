@@ -8,6 +8,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use firma_process_orchestrator::{
     RunningStack, StackGeneration, StackHandle, spawn_stack_from_plan, start_detached,
@@ -17,6 +18,8 @@ use firma_process_orchestrator::{
 use crate::config::StackConfig;
 use crate::error::StackError;
 use crate::plan;
+
+const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Mode in which [`start`] manages the stack after readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,14 +62,17 @@ pub fn start(
 ) -> Result<StackHandle, StackError> {
     let topology = plan::topology()?;
     match mode {
-        StartMode::Foreground => {
-            start_foreground_from_plan(&topology, || plan::build_plan(cfg), state_dir)
-                .map_err(Into::into)
-        }
+        StartMode::Foreground => start_foreground_from_plan(
+            &topology,
+            || plan::build_plan(cfg),
+            state_dir,
+            TEARDOWN_TIMEOUT,
+        )
+        .map_err(Into::into),
         StartMode::Detached => {
             let executable = std::env::current_exe()
                 .map_err(|source| StackError::CurrentExecutable { source })?;
-            start_detached(&topology, state_dir, |generation| {
+            start_detached(&topology, state_dir, TEARDOWN_TIMEOUT, |generation| {
                 let mut command = Command::new(executable);
                 command
                     .args(["__supervise", "--state-dir"])
@@ -102,6 +108,12 @@ pub fn supervise_owned_generation(
     generation: StackGeneration,
 ) -> Result<(), StackError> {
     let topology = plan::topology()?;
-    supervise_owned_generation_from_plan(&topology, || plan::build_plan(cfg), state_dir, generation)
-        .map_err(Into::into)
+    supervise_owned_generation_from_plan(
+        &topology,
+        || plan::build_plan(cfg),
+        state_dir,
+        generation,
+        TEARDOWN_TIMEOUT,
+    )
+    .map_err(Into::into)
 }
