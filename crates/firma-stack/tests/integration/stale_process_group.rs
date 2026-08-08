@@ -5,6 +5,7 @@
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Read as _};
 use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -40,11 +41,15 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
     command
         .env("CHILD_READY_MARKER", &child_ready_marker)
         .env("LIVENESS_FIFO", &liveness_fifo);
-    let mut leader =
-        firma_stack::test_support::spawn_raw_owned_into_group(state_dir, "authority", &mut command)
-            .expect("spawn authority group");
+    command.process_group(0);
+    let mut leader = command.spawn().expect("spawn authority group");
     let group_pid = leader.id();
     let mut cleanup = ProcessGroupCleanup::new(group_pid);
+
+    let persisted_group = firma_runtime_state::UserProcessId::new(group_pid)
+        .expect("spawned process has a nonzero pid");
+    firma_runtime_state::pidfile::write(&state_dir.join("authority.pid"), persisted_group)
+        .expect("persist authority process group");
 
     wait_for_file(&child_ready_marker);
 

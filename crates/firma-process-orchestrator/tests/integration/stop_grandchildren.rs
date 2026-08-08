@@ -1,11 +1,9 @@
 //! Verifies that stack stop kills a Unix process group, including grandchildren.
 
 #[cfg(unix)]
-use crate::topology;
-
-#[cfg(unix)]
 #[test]
 fn unix_pgrp_kills_grandchild() {
+    use firma_process_orchestrator::StackTopology;
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -37,12 +35,8 @@ fn unix_pgrp_kills_grandchild() {
     .env("CHILD_READY_MARKER", &child_ready_marker)
     .env("PARENT_READY_MARKER", &parent_ready_marker)
     .env("TERMINATED_MARKER", &terminated_marker);
-    firma_process_orchestrator::test_support::spawn_raw_into_group(
-        state_dir,
-        "authority",
-        &mut cmd,
-    )
-    .expect("spawn");
+    let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
+    let stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
 
     // Poll the marker contents rather than its existence: shell redirection
     // creates the file before `printf` writes the readiness payload.
@@ -58,8 +52,9 @@ fn unix_pgrp_kills_grandchild() {
 
     // Stop even when readiness timed out so a failed fixture cannot leak its
     // process group into subsequent tests.
+    drop(stack);
     let stop_result =
-        firma_process_orchestrator::stop_components(state_dir, Duration::from_secs(5), &topology());
+        firma_process_orchestrator::stop_components(state_dir, Duration::from_secs(5), &topology);
 
     assert!(ready, "grandchild never became ready");
     let outcome = stop_result.expect("stop");

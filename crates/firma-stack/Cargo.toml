@@ -10,9 +10,6 @@ description = "Firma authority and sidecar stack lifecycle"
 [lints]
 workspace = true
 
-[features]
-test-support = ["firma-process-orchestrator/test-support"]
-
 [dependencies]
 anyhow = { workspace = true }
 firma-authority = { workspace = true }
@@ -24,7 +21,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 firma-runtime-state = { workspace = true }
-firma-stack = { path = ".", features = ["test-support"] }
 insta = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

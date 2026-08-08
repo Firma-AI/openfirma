@@ -1761,7 +1761,6 @@ dependencies = [
  "firma-process-orchestrator",
  "firma-runtime-state",
  "firma-sidecar",
- "firma-stack",
  "insta",
  "nix 0.31.3",
  "serial_test",

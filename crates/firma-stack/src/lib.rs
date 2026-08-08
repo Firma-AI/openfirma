@@ -25,7 +25,3 @@ pub use stop::stop;
 pub use firma_process_orchestrator::{RunningStack, StackHandle, StackStatus, State, StopOutcome};
 #[doc(hidden)]
 pub use firma_process_orchestrator::{StackGeneration, shutdown_event};
-
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-pub use firma_process_orchestrator::test_support;

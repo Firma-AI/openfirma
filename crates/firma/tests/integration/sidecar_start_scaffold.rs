@@ -23,6 +23,22 @@ fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
 }
 
+#[cfg(windows)]
+fn hard_terminate_process(pid: u32) -> std::io::Result<()> {
+    let output = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "taskkill failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
 fn start_detached(cfg_path: &Path, state_dir: &Path) -> std::process::Output {
     // A detached supervisor may retain inherited handles after the launcher
     // exits. File-backed capture lets `status` return without waiting for pipe
@@ -418,8 +434,7 @@ fn supervisor_owner_teardown_terminates_components() {
         .expect("SIGTERM detached supervisor");
     }
     #[cfg(windows)]
-    firma_stack::test_support::terminate_raw(supervisor_pid.get())
-        .expect("terminate detached supervisor");
+    hard_terminate_process(supervisor_pid.get()).expect("terminate detached supervisor");
 
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline

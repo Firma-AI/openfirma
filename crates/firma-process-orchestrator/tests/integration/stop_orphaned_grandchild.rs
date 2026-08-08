@@ -1,7 +1,5 @@
 //! Verifies that stack stop tracks process groups after their leaders exit.
 
-use crate::topology;
-
 struct ProcessGroupCleanup(Option<nix::unistd::Pid>);
 
 impl ProcessGroupCleanup {
@@ -24,6 +22,7 @@ impl Drop for ProcessGroupCleanup {
 
 #[test]
 fn unix_pgrp_kills_grandchild_after_leader_exits() {
+    use firma_process_orchestrator::StackTopology;
     use std::fs::OpenOptions;
     use std::io::{ErrorKind, Read as _};
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -65,12 +64,12 @@ fn unix_pgrp_kills_grandchild_after_leader_exits() {
     .env("CHILD_READY_MARKER", &child_ready_marker)
     .env("PARENT_READY_MARKER", &parent_ready_marker)
     .env("LEADER_EXITED_MARKER", &leader_exited_marker);
-    let group_pid = firma_process_orchestrator::test_support::spawn_raw_into_group(
-        state_dir,
-        "authority",
-        &mut cmd,
-    )
-    .expect("spawn");
+    let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
+    let stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
+    let group_pid = firma_runtime_state::pidfile::read(&state_dir.join("authority.pid"))
+        .expect("read authority pidfile")
+        .expect("authority pid")
+        .get();
     let mut cleanup = ProcessGroupCleanup::new(group_pid);
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -83,10 +82,11 @@ fn unix_pgrp_kills_grandchild_after_leader_exits() {
         std::thread::sleep(Duration::from_millis(50));
     };
 
+    drop(stack);
     let stop_result = firma_process_orchestrator::stop_components(
         state_dir,
         Duration::from_millis(100),
-        &topology(),
+        &topology,
     );
 
     assert!(ready, "grandchild never became ready");

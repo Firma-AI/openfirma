@@ -5,11 +5,11 @@
 use std::fs::OpenOptions;
 use std::io::Read as _;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use firma_process_orchestrator::{OrchestratorError, State};
+use firma_process_orchestrator::{OrchestratorError, StackTopology, State};
 
-use crate::{support::wait_for_file, topology};
+use crate::support::{spawn_managed_component, wait_for_file};
 
 #[test]
 fn forced_termination_retains_state_until_target_disappears() {
@@ -25,15 +25,11 @@ fn forced_termination_retains_state_until_target_disappears() {
             "trap '' TERM; printf ready > \"$AUTHORITY_READY\"; while :; do sleep 1; done",
         ])
         .env("AUTHORITY_READY", &ready);
-    let mut child = firma_process_orchestrator::test_support::spawn_raw_owned_into_group(
-        state_dir,
-        "authority",
-        &mut command,
-    )
-    .expect("spawn authority");
+    let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
+    let stack = spawn_managed_component(state_dir, &topology, command);
     wait_for_file(&ready);
 
-    let error = firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+    let error = firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology)
         .expect_err("zombie target remains");
     assert!(
         matches!(
@@ -46,10 +42,26 @@ fn forced_termination_retains_state_until_target_disappears() {
     assert!(state_dir.join("authority.pid").exists());
     assert!(state_dir.join("stack.lock").exists());
 
-    child.wait().expect("collect authority");
-    let outcome =
-        firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-            .expect("retry stop");
+    drop(stack);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = firma_process_orchestrator::status_components(state_dir, &topology)
+            .expect("probe terminated authority");
+        let authority = status
+            .components
+            .iter()
+            .find(|component| component.name == "authority");
+        if authority.is_none_or(|component| component.state == State::Stopped) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "observer did not reap terminated authority"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let outcome = firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology)
+        .expect("retry stop");
     assert!(!outcome.forced);
     assert!(!state_dir.join("authority.pid").exists());
     assert!(!state_dir.join("stack.lock").exists());
@@ -70,12 +82,8 @@ fn status_probe_does_not_collect_owned_leader() {
     command
         .args(["-c", "exec 3>\"$EXIT_FIFO\"; exit 0"])
         .env("EXIT_FIFO", &exit_fifo);
-    let mut child = firma_process_orchestrator::test_support::spawn_raw_owned_into_group(
-        state_dir,
-        "authority",
-        &mut command,
-    )
-    .expect("spawn authority");
+    let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
+    let mut stack = spawn_managed_component(state_dir, &topology, command);
 
     let mut exit_reader = OpenOptions::new()
         .read(true)
@@ -85,7 +93,7 @@ fn status_probe_does_not_collect_owned_leader() {
         .read_to_end(&mut Vec::new())
         .expect("wait for authority exit");
 
-    let status = firma_process_orchestrator::status_components(state_dir, &topology())
+    let status = firma_process_orchestrator::status_components(state_dir, &topology)
         .expect("probe stack status");
     let authority = status
         .components
@@ -93,11 +101,8 @@ fn status_probe_does_not_collect_owned_leader() {
         .find(|component| component.name == "authority")
         .expect("authority status");
     assert_eq!(authority.state, State::Unhealthy);
-    assert!(
-        child
-            .wait()
-            .expect("collect authority after probe")
-            .success(),
-        "authority did not exit successfully"
-    );
+    let outcome = stack
+        .shutdown(Duration::from_secs(1))
+        .expect("collect authority after probe");
+    assert!(!outcome.forced, "exited authority required forced shutdown");
 }
