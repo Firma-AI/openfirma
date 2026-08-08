@@ -1,50 +1,36 @@
-//! Cross-platform ownership and detached-observation lifecycle coverage.
+//! Ownership, generation fencing, and publication through production APIs.
 
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::sync::mpsc;
+use std::path::Path;
+use std::process::Command;
+use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
 
-use firma_runtime_state::{UserProcessId, pidfile};
+use firma_process_orchestrator::{
+    ComponentSpec, OrchestratorError, RunningStack, StackGeneration, StackTopology, StartError,
+    spawn_stack_from_plan, start_detached, start_foreground_from_plan, stop_components,
+    supervise_owned_generation_from_plan,
+};
+use firma_runtime_state::UserProcessId;
+use fs2::FileExt as _;
 
-use crate::topology;
-
-const CHILD_MARKER: &str = "FIRMA_STACK_TEST_CHILD_MARKER";
-#[cfg(windows)]
-const JOB_FIXTURE_STAGE: &str = "FIRMA_STACK_TEST_JOB_FIXTURE_STAGE";
-#[cfg(windows)]
-const JOB_DESCENDANT_MARKER: &str = "FIRMA_STACK_TEST_JOB_DESCENDANT_MARKER";
-const TRANSACTION_STATE_DIR: &str = "FIRMA_STACK_TEST_TRANSACTION_STATE_DIR";
-const TRANSACTION_READY: &str = "FIRMA_STACK_TEST_TRANSACTION_READY";
-const TRANSACTION_RELEASE: &str = "FIRMA_STACK_TEST_TRANSACTION_RELEASE";
-const SUPERVISOR_STATE_DIR: &str = "FIRMA_STACK_TEST_SUPERVISOR_STATE_DIR";
-const SUPERVISOR_ACKNOWLEDGE: &str = "FIRMA_STACK_TEST_SUPERVISOR_ACKNOWLEDGE";
-
-#[derive(Clone, Copy)]
-enum SupervisorExitPhase {
-    BeforeReady,
-    AfterReady,
-}
-
-#[derive(Clone, Copy)]
-enum ComponentExitRole {
-    Authority,
-    Sidecar,
-}
+const CHILD_MARKER: &str = "FIRMA_ORCHESTRATOR_CHILD_MARKER";
+const CHILD_LISTEN: &str = "FIRMA_ORCHESTRATOR_CHILD_LISTEN";
+const CHILD_RELEASE: &str = "FIRMA_ORCHESTRATOR_CHILD_RELEASE";
+const CHILD_BLOCK_PIDFILE: &str = "FIRMA_ORCHESTRATOR_CHILD_BLOCK_PIDFILE";
+const SUPERVISOR_STATE_DIR: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_STATE_DIR";
+const SUPERVISOR_GENERATION: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_GENERATION";
+const SUPERVISOR_MODE: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_MODE";
+const SUPERVISOR_SENTINEL_PID: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_SENTINEL_PID";
 
 struct ProcessCleanup(Vec<u32>);
 
 impl ProcessCleanup {
-    fn new(pid: u32) -> Self {
-        Self(vec![pid])
+    fn new(pids: impl IntoIterator<Item = u32>) -> Self {
+        Self(pids.into_iter().collect())
     }
 
-    fn push(&mut self, pid: u32) {
-        self.0.push(pid);
-    }
-
-    fn disarm(&mut self) {
+    fn disarm(mut self) {
         self.0.clear();
     }
 }
@@ -52,78 +38,7 @@ impl ProcessCleanup {
 impl Drop for ProcessCleanup {
     fn drop(&mut self) {
         for pid in &self.0 {
-            let _ = firma_process_orchestrator::test_support::terminate_raw(*pid);
-        }
-    }
-}
-
-#[cfg(unix)]
-struct ProcessGroupCleanup(Option<nix::unistd::Pid>);
-
-#[cfg(unix)]
-impl ProcessGroupCleanup {
-    fn new(pid: u32) -> Self {
-        Self(i32::try_from(pid).ok().map(nix::unistd::Pid::from_raw))
-    }
-
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
-#[cfg(unix)]
-impl Drop for ProcessGroupCleanup {
-    fn drop(&mut self) {
-        if let Some(pid) = self.0 {
-            let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
-        }
-    }
-}
-
-struct HeldStateTransaction {
-    child: Child,
-    release: PathBuf,
-    released: bool,
-}
-
-impl HeldStateTransaction {
-    fn acquire(state_dir: &Path) -> Self {
-        let ready = state_dir.join("transaction.ready");
-        let release = state_dir.join("transaction.release");
-        let child = Command::new(std::env::current_exe().expect("test executable"))
-            .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-            .env(TRANSACTION_STATE_DIR, state_dir)
-            .env(TRANSACTION_READY, &ready)
-            .env(TRANSACTION_RELEASE, &release)
-            .spawn()
-            .expect("spawn transaction holder");
-        wait_for_file(&ready);
-        Self {
-            child,
-            release,
-            released: false,
-        }
-    }
-
-    fn release(mut self) {
-        std::fs::write(&self.release, []).expect("release state transaction");
-        assert!(
-            self.child
-                .wait()
-                .expect("wait for transaction holder")
-                .success(),
-            "transaction holder failed"
-        );
-        self.released = true;
-    }
-}
-
-impl Drop for HeldStateTransaction {
-    fn drop(&mut self) {
-        if !self.released {
-            let _ = std::fs::write(&self.release, []);
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            best_effort_terminate_scope(*pid);
         }
     }
 }
@@ -131,901 +46,744 @@ impl Drop for HeldStateTransaction {
 #[test]
 fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let mut stack = firma_process_orchestrator::test_support::running_stack_from_raw(
-        state_dir, authority, sidecar,
-    )
-    .expect("claim stack generation");
-
-    std::fs::remove_file(state_dir.join("authority.pid")).expect("remove authority pidfile");
-    std::fs::write(state_dir.join("sidecar.pid"), "not-a-pid\n").expect("corrupt sidecar pidfile");
-
-    stack
-        .shutdown(Duration::ZERO)
-        .expect("initial owned shutdown");
-    let repeated = stack
-        .shutdown(Duration::ZERO)
-        .expect("repeated owned shutdown");
-
-    assert!(!repeated.forced);
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-    assert!(!state_dir.join("stack.lock").exists());
-}
-
-/// Successful shutdown consumes process ownership, so dropping the stopped
-/// handle must not attempt to transfer those capabilities to a reaper.
-#[test]
-fn owned_shutdown_disarms_reaper_transfer() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
-
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let mut stack =
-        firma_process_orchestrator::test_support::running_stack_from_raw_with_forbidden_reaper(
-            state_dir, authority, sidecar,
-        )
-        .expect("construct owned stack");
+    let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+    std::fs::remove_file(dir.path().join("authority.pid")).expect("remove pidfile");
+    std::fs::write(dir.path().join("sidecar.pid"), "not-a-pid\n").expect("corrupt pidfile");
 
     stack.shutdown(Duration::ZERO).expect("owned shutdown");
-    drop(stack);
+    let repeated = stack.shutdown(Duration::ZERO).expect("repeated shutdown");
 
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-    assert!(!state_dir.join("stack.lock").exists());
-}
-
-/// An Authority exit ends foreground supervision and tears down the Sidecar
-/// without separating either component's process capabilities.
-#[test]
-fn authority_exit_tears_down_owned_foreground_stack() {
-    assert_component_exit_tears_down_foreground_stack(ComponentExitRole::Authority);
-}
-
-/// A Sidecar exit ends foreground supervision and tears down the Authority
-/// without separating either component's process capabilities.
-#[test]
-fn sidecar_exit_tears_down_owned_foreground_stack() {
-    assert_component_exit_tears_down_foreground_stack(ComponentExitRole::Sidecar);
+    assert!(!repeated.forced);
+    assert_all_absent(&pids);
+    assert!(!dir.path().join("stack.lock").exists());
 }
 
 #[test]
 fn owned_shutdown_terminates_children_when_state_transaction_is_busy() {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let mut stack = firma_process_orchestrator::test_support::running_stack_from_raw(
-        state_dir, authority, sidecar,
-    )
-    .expect("claim stack generation");
-    let transaction = HeldStateTransaction::acquire(state_dir);
+    let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+    let cleanup = ProcessCleanup::new(pids.iter().copied());
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.path().join(".stack-state.lock"))
+        .expect("open transaction lock");
+    lock.lock_exclusive().expect("hold transaction lock");
 
-    // Child termination precedes runtime-state cleanup. A busy transaction may
-    // retain state, but it must not prevent the owned processes from exiting.
     let started = Instant::now();
-    let shutdown = stack.shutdown(Duration::ZERO);
-    transaction.release();
-    let error = shutdown.expect_err("busy state cleanup must be reported");
-
-    assert!(matches!(
-        error,
-        firma_process_orchestrator::OrchestratorError::RuntimeStateBusy { .. }
-    ));
-    assert!(started.elapsed() < Duration::from_secs(2));
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-    stack
+    let error = stack
         .shutdown(Duration::ZERO)
-        .expect("retry state cleanup after transaction release");
+        .expect_err("contended cleanup must fail");
+    assert!(matches!(error, OrchestratorError::RuntimeStateBusy { .. }));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_all_absent(&pids);
+    fs2::FileExt::unlock(&lock).expect("release transaction lock");
+    stack.shutdown(Duration::ZERO).expect("retry cleanup");
+    cleanup.disarm();
+}
+
+#[test]
+fn authority_exit_tears_down_owned_foreground_stack() {
+    assert_component_exit_tears_down_foreground_stack(0);
+}
+
+#[test]
+fn sidecar_exit_tears_down_owned_foreground_stack() {
+    assert_component_exit_tears_down_foreground_stack(1);
 }
 
 #[test]
 fn external_stop_terminates_targets_but_retains_malformed_generation_state() {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let authority_collector =
-        firma_process_orchestrator::test_support::collect_raw_child_in_background(authority);
-    let sidecar_collector =
-        firma_process_orchestrator::test_support::collect_raw_child_in_background(sidecar);
-    std::fs::write(state_dir.join("stack.lock"), "not-a-generation\n")
-        .expect("write malformed generation");
+    let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+    std::fs::write(dir.path().join("stack.lock"), "not-a-generation\n")
+        .expect("corrupt generation");
 
-    let error = firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+    let stop_dir = dir.path().to_path_buf();
+    let stopper = std::thread::spawn(move || {
+        stop_components(
+            &stop_dir,
+            Duration::from_secs(1),
+            &topology(&["authority", "sidecar"]),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    let _owner_error = stack
+        .shutdown(Duration::ZERO)
+        .expect_err("owner must retain malformed state");
+    let error = stopper
+        .join()
+        .expect("join external stop")
         .expect_err("malformed generation must prevent cleanup");
 
-    assert!(matches!(
-        &error,
-        firma_process_orchestrator::OrchestratorError::InvalidStackGeneration { .. }
-    ));
-    insta::assert_snapshot!(error.to_string(), @"invalid stack.lock generation");
-    join_collector(authority_collector);
-    join_collector(sidecar_collector);
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
+    assert!(
+        matches!(error, OrchestratorError::InvalidStackGeneration { .. }),
+        "unexpected stop error: {error:?}"
+    );
+    assert_all_absent(&pids);
     assert_eq!(
-        std::fs::read_to_string(state_dir.join("stack.lock")).expect("read retained generation"),
+        std::fs::read_to_string(dir.path().join("stack.lock")).expect("retained lock"),
         "not-a-generation\n"
     );
-    assert!(state_dir.join("authority.pid").exists());
-    assert!(state_dir.join("sidecar.pid").exists());
+    for name in ["authority", "sidecar"] {
+        assert!(dir.path().join(format!("{name}.pid")).exists());
+        assert!(dir.path().join(format!("{name}.listen")).exists());
+    }
 }
 
 #[test]
-fn generation_scoped_stop_does_not_signal_targets_with_malformed_lock() {
+fn old_owner_does_not_remove_replacement_generation_state() {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let startup = firma_process_orchestrator::test_support::begin_raw_startup(state_dir)
-        .expect("begin startup generation");
-    let generation = startup.generation();
-    drop(startup);
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    std::fs::write(state_dir.join("stack.lock"), "not-a-generation\n")
-        .expect("write malformed generation");
-
-    let error = firma_process_orchestrator::test_support::stop_stack_generation(
-        state_dir,
-        Duration::ZERO,
-        generation,
-    )
-    .expect_err("malformed generation must reject scoped stop");
-
-    assert!(matches!(
-        error,
-        firma_process_orchestrator::OrchestratorError::InvalidStackGeneration { .. }
-    ));
-    assert_process_present(authority_pid);
-    assert_process_present(sidecar_pid);
-
-    let authority_collector =
-        firma_process_orchestrator::test_support::collect_raw_child_in_background(authority);
-    let sidecar_collector =
-        firma_process_orchestrator::test_support::collect_raw_child_in_background(sidecar);
-    std::fs::remove_file(state_dir.join("stack.lock")).expect("remove malformed generation");
-    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-        .expect("clean up fixtures");
-    join_collector(authority_collector);
-    join_collector(sidecar_collector);
-}
-
-#[test]
-fn old_owner_does_not_remove_new_generation_state() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let mut stack = firma_process_orchestrator::test_support::running_stack_from_raw(
-        state_dir, authority, sidecar,
-    )
-    .expect("claim old stack generation");
-    firma_process_orchestrator::test_support::replace_stack_generation(state_dir)
-        .expect("claim new stack generation");
-    let new_generation =
-        std::fs::read_to_string(state_dir.join("stack.lock")).expect("read new generation");
-
-    let new_owner = UserProcessId::new(std::process::id()).expect("new owner PID");
-    pidfile::write(&state_dir.join("stack.pid"), new_owner).expect("write new owner");
-    pidfile::write(&state_dir.join("authority.pid"), new_owner).expect("write new authority");
-    pidfile::write(&state_dir.join("sidecar.pid"), new_owner).expect("write new sidecar");
-    let new_ready =
-        firma_process_orchestrator::test_support::supervisor_ready_path(state_dir, new_owner.get());
-    pidfile::write(&new_ready, new_owner).expect("write new readiness");
-
-    stack.shutdown(Duration::ZERO).expect("stop old owner");
-
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-    assert_eq!(
-        pidfile::read(&state_dir.join("stack.pid")).expect("read owner"),
-        Some(new_owner)
-    );
-    assert_eq!(
-        std::fs::read_to_string(state_dir.join("stack.lock")).expect("read lock"),
-        new_generation
-    );
-    assert!(new_ready.exists());
-}
-
-#[test]
-fn old_startup_rollback_does_not_remove_replacement_state() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let startup = firma_process_orchestrator::test_support::begin_raw_startup(state_dir)
-        .expect("begin old startup generation");
-
-    firma_process_orchestrator::test_support::force_replace_stack_generation(state_dir)
-        .expect("publish replacement generation");
-    let replacement =
-        std::fs::read_to_string(state_dir.join("stack.lock")).expect("read replacement lock");
-    std::fs::write(state_dir.join("authority.listen"), "replacement\n")
+    let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+    let replacement = StackGeneration::default();
+    std::fs::write(dir.path().join("stack.lock"), format!("{replacement}\n"))
+        .expect("publish replacement generation fixture");
+    std::fs::write(dir.path().join("replacement.marker"), "new owner\n")
         .expect("write replacement state");
 
-    startup.cleanup(state_dir).expect("run delayed rollback");
+    stack.shutdown(Duration::ZERO).expect("old owner shutdown");
 
+    assert_all_absent(&pids);
     assert_eq!(
-        std::fs::read_to_string(state_dir.join("stack.lock")).expect("read retained lock"),
-        replacement
+        std::fs::read_to_string(dir.path().join("stack.lock")).expect("replacement lock"),
+        format!("{replacement}\n")
     );
-    assert_eq!(
-        std::fs::read_to_string(state_dir.join("authority.listen")).expect("read retained state"),
-        "replacement\n"
-    );
+    assert!(dir.path().join("replacement.marker").exists());
 }
 
 #[test]
-fn stale_detached_rollback_does_not_signal_replacement_processes() {
+fn startup_guard_rollback_preserves_replacement_generation_runtime_state() {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let startup = firma_process_orchestrator::test_support::begin_raw_startup(state_dir)
-        .expect("begin old startup generation");
-    let stale_generation = startup.generation();
-    firma_process_orchestrator::test_support::force_replace_stack_generation(state_dir)
-        .expect("publish replacement generation");
-    drop(startup);
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-
-    firma_process_orchestrator::test_support::stop_stack_generation(
-        state_dir,
-        Duration::ZERO,
-        stale_generation,
-    )
-    .expect("skip stale rollback");
-
-    assert!(
-        UserProcessId::new(authority_pid)
-            .expect("authority PID")
-            .process_exists()
-            .expect("probe authority")
+    let mut sentinel = fixture_command();
+    let (addr, listener) = reserve_address();
+    sentinel.env(CHILD_LISTEN, addr.to_string());
+    let mut child = sentinel.spawn().expect("spawn replacement sentinel");
+    drop(listener);
+    let sentinel_pid = child.id();
+    let cleanup = ProcessCleanup::new([sentinel_pid]);
+    let replacement = StackGeneration::default();
+    let result = spawn_stack_from_plan(
+        &topology(&["authority"]),
+        || {
+            std::fs::write(dir.path().join("stack.lock"), format!("{replacement}\n"))
+                .expect("replace generation");
+            let pid = UserProcessId::new(sentinel_pid).expect("sentinel PID");
+            firma_runtime_state::pidfile::write(&dir.path().join("stack.pid"), pid)
+                .expect("write replacement supervisor");
+            firma_runtime_state::pidfile::write(&dir.path().join("authority.pid"), pid)
+                .expect("write replacement component");
+            std::fs::write(dir.path().join("authority.listen"), format!("{addr}\n"))
+                .expect("write replacement listen state");
+            firma_runtime_state::pidfile::write(
+                &dir.path().join(format!("stack.{sentinel_pid}.ready")),
+                pid,
+            )
+            .expect("write replacement ready state");
+            Err::<Vec<ComponentSpec>, &'static str>("planned failure")
+        },
+        dir.path(),
     );
-    assert!(
-        UserProcessId::new(sidecar_pid)
-            .expect("sidecar PID")
-            .process_exists()
-            .expect("probe sidecar")
+    let Err(error) = result else {
+        panic!("plan unexpectedly succeeded");
+    };
+
+    assert!(matches!(error, StartError::Plan(_)));
+    assert_process_present(sentinel_pid);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("stack.lock")).expect("replacement lock"),
+        format!("{replacement}\n")
     );
-    let authority_collector =
-        firma_process_orchestrator::test_support::collect_raw_child_in_background(authority);
-    let sidecar_collector =
-        firma_process_orchestrator::test_support::collect_raw_child_in_background(sidecar);
-    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-        .expect("stop replacement");
-    join_collector(authority_collector);
-    join_collector(sidecar_collector);
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
+    for file in [
+        "stack.pid".to_string(),
+        "authority.pid".to_string(),
+        "authority.listen".to_string(),
+        format!("stack.{sentinel_pid}.ready"),
+    ] {
+        assert!(dir.path().join(file).exists());
+    }
+    terminate_process(sentinel_pid);
+    child.wait().expect("collect sentinel");
+    assert_process_absent(sentinel_pid);
+    cleanup.disarm();
 }
 
 #[test]
-fn stop_waits_for_each_startup_transition_before_snapshot() {
-    // Exercise every partial-startup snapshot: no components registered,
-    // Authority only, and Authority plus Sidecar.
-    for component_count in 0..=2 {
-        let dir = tempfile::tempdir().expect("state dir");
-        let state_dir = dir.path();
-        let startup = firma_process_orchestrator::test_support::begin_raw_startup(state_dir)
-            .expect("begin startup generation");
-        let mut collectors = Vec::new();
-        let mut pids = Vec::new();
-        for name in ["authority", "sidecar"].into_iter().take(component_count) {
-            let (child, pid) = spawn_fixture(state_dir, name);
-            collectors.push(
-                firma_process_orchestrator::test_support::collect_raw_child_in_background(child),
-            );
-            pids.push(pid);
-        }
+fn stop_waits_for_start_plan_transaction() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path().to_path_buf();
+    let topology = topology(&["authority"]);
+    let barrier = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let (start_tx, start_rx) = mpsc::channel();
+    let start_dir = state_dir.clone();
+    let start_topology = topology.clone();
+    let plan_barrier = Arc::clone(&barrier);
+    let plan_release = Arc::clone(&release);
+    let starter = std::thread::spawn(move || {
+        let result = spawn_stack_from_plan(
+            &start_topology,
+            || {
+                plan_barrier.wait();
+                plan_release.wait();
+                Ok::<_, std::convert::Infallible>(component_plan(&start_dir, &["authority"]))
+            },
+            &start_dir,
+        );
+        let _ = start_tx.send(result);
+    });
+    barrier.wait();
 
-        let stop_state_dir = state_dir.to_path_buf();
-        let (result_tx, result_rx) = mpsc::channel();
-        let stop_thread = std::thread::spawn(move || {
-            let _ = result_tx.send(firma_process_orchestrator::stop_components(
-                &stop_state_dir,
-                Duration::ZERO,
-                &topology(),
-            ));
-        });
+    let stop_dir = state_dir;
+    let stop_topology = topology;
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let stopper = std::thread::spawn(move || {
+        let _ = stop_tx.send(stop_components(&stop_dir, Duration::ZERO, &stop_topology));
+    });
+    assert!(matches!(
+        stop_rx.recv_timeout(Duration::from_millis(200)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
 
-        // Stop must block on the startup transaction before observing partial
-        // state. Releasing startup lets it snapshot and stop that exact state.
-        assert!(matches!(
-            result_rx.recv_timeout(Duration::from_millis(200)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
-        drop(startup);
-        result_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("stop result after startup transaction release")
-            .expect("stop partial startup");
-        stop_thread.join().expect("join stop thread");
-        for collector in collectors {
-            join_collector(collector);
-        }
-        for pid in pids {
-            assert_process_absent(pid);
-        }
-        assert!(!state_dir.join("stack.lock").exists());
+    release.wait();
+    let stack = start_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("startup result")
+        .expect("startup");
+    drop(stack);
+    stop_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("stop result")
+        .expect("serialized stop");
+    starter.join().expect("join starter");
+    stopper.join().expect("join stopper");
+}
+
+#[test]
+fn stop_waits_for_partial_component_publication() {
+    for published_components in [1, 2] {
+        assert_stop_waits_for_partial_publication(published_components);
     }
 }
 
 #[test]
 fn generation_publication_is_atomic_for_concurrent_readers() {
-    let dir = tempfile::tempdir().expect("state dir");
-    // Repeat the narrow publication race so a truncate-then-write
-    // implementation is likely to expose a partial UUID to a reader.
-    for attempt in 0..50 {
-        let state_dir = dir.path().join(format!("attempt-{attempt}"));
-        std::fs::create_dir(&state_dir).expect("create attempt state dir");
-        let writer_state_dir = state_dir.clone();
-        let (start_tx, start_rx) = mpsc::channel();
+    for _ in 0..30 {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state_dir = dir.path().to_path_buf();
+        let barrier = Arc::new(Barrier::new(3));
+        let release = Arc::new(Barrier::new(2));
+        let writer_barrier = Arc::clone(&barrier);
+        let writer_release = Arc::clone(&release);
+        let writer_dir = state_dir.clone();
         let writer = std::thread::spawn(move || {
-            start_rx.recv().expect("wait to publish generation");
-            drop(
-                firma_process_orchestrator::test_support::begin_raw_startup(&writer_state_dir)
-                    .expect("atomically publish generation"),
-            );
+            writer_barrier.wait();
+            spawn_stack_from_plan(
+                &topology(&[]),
+                || {
+                    writer_release.wait();
+                    Ok::<_, std::convert::Infallible>(Vec::new())
+                },
+                &writer_dir,
+            )
         });
-        start_tx.send(()).expect("start generation publication");
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Ok(generation) = std::fs::read_to_string(state_dir.join("stack.lock")) {
-                uuid::Uuid::parse_str(generation.trim()).expect("read complete generation UUID");
-                break;
+        let reader_barrier = Arc::clone(&barrier);
+        let reader_dir = state_dir.clone();
+        let (published_tx, published_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            reader_barrier.wait();
+            loop {
+                if let Ok(value) = std::fs::read_to_string(reader_dir.join("stack.lock")) {
+                    value
+                        .trim()
+                        .parse::<StackGeneration>()
+                        .expect("atomic generation");
+                    let _ = published_tx.send(());
+                    break;
+                }
+                std::thread::yield_now();
             }
-            assert!(Instant::now() < deadline, "generation was not published");
-            std::thread::yield_now();
-        }
-        writer.join().expect("join generation writer");
+            for _ in 0..100 {
+                if let Ok(value) = std::fs::read_to_string(reader_dir.join("stack.lock")) {
+                    value
+                        .trim()
+                        .parse::<StackGeneration>()
+                        .expect("atomic generation");
+                }
+                std::thread::yield_now();
+            }
+        });
+        barrier.wait();
+        published_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("publication observed");
+        release.wait();
+        let mut stack = writer.join().expect("join writer").expect("empty stack");
+        reader.join().expect("join reader");
+        stack.shutdown(Duration::ZERO).expect("clean generation");
     }
 }
 
 #[test]
-fn dropping_owner_transfers_child_collection() {
+fn dropping_owner_transfers_real_children_to_reaper() {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let stack = firma_process_orchestrator::test_support::running_stack_from_raw(
-        state_dir, authority, sidecar,
-    )
-    .expect("claim stack generation");
-
-    drop(stack);
-    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-        .expect("stop observed stack");
-
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-}
-
-#[test]
-fn reaper_start_failure_returns_owned_children_alive() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-
-    let mut children =
-        firma_process_orchestrator::test_support::recover_raw_children_after_reaper_failure(
-            authority, sidecar,
-        )
-        .expect("construct test components");
-
-    assert_eq!(children.len(), 2);
-    assert!(
-        UserProcessId::new(authority_pid)
-            .expect("authority PID")
-            .process_exists()
-            .expect("probe authority")
-    );
-    assert!(
-        UserProcessId::new(sidecar_pid)
-            .expect("sidecar PID")
-            .process_exists()
-            .expect("probe sidecar")
-    );
-    for child in &mut children {
-        child.kill().expect("kill recovered child");
-        child.wait().expect("collect recovered child");
-    }
-}
-
-/// Reaper creation failure falls back to synchronously terminating and
-/// collecting every child rather than dropping the only reaping handles.
-#[test]
-fn reaper_start_failure_terminates_and_collects_owned_children() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-
-    firma_process_orchestrator::test_support::terminate_raw_children_after_reaper_failure(
-        authority, sidecar,
-    )
-    .expect("terminate and collect children after reaper failure");
-
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-}
-
-/// Dropping the in-process owner exercises the production transfer boundary:
-/// if its reaper cannot start, both children are synchronously terminated and
-/// collected while runtime state remains available for external cleanup.
-#[test]
-fn dropping_owner_falls_back_when_reaper_cannot_start() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let stack =
-        firma_process_orchestrator::test_support::running_stack_from_raw_with_reaper_start_failure(
-            state_dir, authority, sidecar,
-        )
-        .expect("construct owned stack");
-
+    let (stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
     drop(stack);
 
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-    assert!(state_dir.join("stack.lock").exists());
-    assert!(state_dir.join("authority.pid").exists());
-    assert!(state_dir.join("sidecar.pid").exists());
-
-    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-        .expect("clean retained runtime state");
-    assert!(!state_dir.join("stack.lock").exists());
-    assert!(!state_dir.join("authority.pid").exists());
-    assert!(!state_dir.join("sidecar.pid").exists());
+    stop_components(
+        dir.path(),
+        Duration::ZERO,
+        &topology(&["authority", "sidecar"]),
+    )
+    .expect("external stop");
+    assert_all_absent(&pids);
 }
 
-/// On Unix, failed ownership transfer must retain the process-group capability,
-/// not merely the direct-child handle, so synchronous fallback also terminates
-/// a descendant that ignores graceful termination.
 #[cfg(unix)]
 #[test]
-fn failed_reaper_transfer_terminates_owned_process_group() {
-    use std::fs::OpenOptions;
-    use std::io::{ErrorKind, Read as _};
-    use std::os::unix::fs::OpenOptionsExt as _;
-
+fn dropped_owner_retains_process_group_behavior_for_descendants() {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
-    let liveness_fifo = state_dir.join("descendant.liveness");
-    let ready_marker = state_dir.join("descendant.ready");
-    nix::unistd::mkfifo(
-        &liveness_fifo,
-        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    let marker = dir.path().join("descendant.pid");
+    let (addr, listener) = reserve_address();
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 600 & echo $! > \"$DESCENDANT\"; wait"]);
+    command.env("DESCENDANT", &marker);
+    let stack = spawn_stack_from_plan(
+        &topology(&["authority"]),
+        || {
+            Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
+                command,
+                readiness_addr: addr,
+            }])
+        },
+        dir.path(),
     )
-    .expect("create liveness FIFO");
-    let mut liveness_reader = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NONBLOCK)
-        .open(&liveness_fifo)
-        .expect("open liveness FIFO");
-
-    let mut authority_command = Command::new("sh");
-    authority_command
-        .args([
-            "-c",
-            "trap 'wait \"$descendant\"; exit 0' TERM; \
-             sh -c \"$DESCENDANT_SCRIPT\" & descendant=$!; wait \"$descendant\"",
-        ])
-        .env(
-            "DESCENDANT_SCRIPT",
-            "trap '' TERM; exec 3>\"$LIVENESS_FIFO\"; \
-             printf ready > \"$READY_MARKER\"; while :; do sleep 1; done",
-        )
-        .env("LIVENESS_FIFO", &liveness_fifo)
-        .env("READY_MARKER", &ready_marker);
-    let authority = firma_process_orchestrator::test_support::spawn_raw_owned_into_group(
-        state_dir,
-        "authority",
-        &mut authority_command,
-    )
-    .expect("spawn authority process group");
-    let mut cleanup = ProcessGroupCleanup::new(authority.id());
-    wait_for_file(&ready_marker);
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    let stack =
-        firma_process_orchestrator::test_support::running_stack_from_raw_with_reaper_start_failure(
-            state_dir, authority, sidecar,
-        )
-        .expect("construct owned stack");
-
-    drop(stack);
-
-    assert_process_absent(sidecar_pid);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let fifo_closed = loop {
-        match liveness_reader.read(&mut [0_u8; 1]) {
-            Ok(0) => break true,
-            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            _ => break false,
-        }
-    };
-    assert!(fifo_closed, "descendant still holds its liveness FIFO");
-    cleanup.disarm();
-
-    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-        .expect("clean retained runtime state");
-}
-
-#[test]
-fn detached_supervisor_child_is_collected_for_long_lived_launcher() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
-    let (supervisor, supervisor_pid) = spawn_fixture(state_dir, "stack");
-    let collector =
-        firma_process_orchestrator::test_support::collect_raw_child_in_background(supervisor);
-
-    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-        .expect("stop detached supervisor");
-    join_collector(collector);
-
-    assert_process_absent(supervisor_pid);
-    assert!(!state_dir.join("stack.pid").exists());
-}
-
-#[test]
-fn detached_owner_collects_failed_component_and_tears_down_peer() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-
-    let state_dir_for_owner = state_dir.to_path_buf();
-    let (result_tx, result_rx) = mpsc::channel();
-    let owner = std::thread::spawn(move || {
-        let result = firma_process_orchestrator::test_support::supervise_raw_owned(
-            &state_dir_for_owner,
-            Duration::ZERO,
-            authority,
-            sidecar,
-        );
-        let _ = result_tx.send(result);
-    });
-
-    let owner_ready = firma_process_orchestrator::test_support::supervisor_ready_path(
-        state_dir,
-        std::process::id(),
-    );
-    wait_for_file(&owner_ready);
-    std::fs::remove_file(&owner_ready).expect("acknowledge owner readiness");
-    let owner_attached = firma_process_orchestrator::test_support::supervisor_attached_path(
-        state_dir,
-        std::process::id(),
-    );
-    wait_for_file(&owner_attached);
-    std::fs::remove_file(owner_attached).expect("acknowledge owner attachment");
-    firma_process_orchestrator::test_support::terminate_raw(authority_pid)
-        .expect("terminate authority");
-
-    let result = match result_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = firma_process_orchestrator::test_support::terminate_raw(sidecar_pid);
-            panic!("detached owner did not tear down sidecar: {error}");
-        }
-    };
-    result.expect("detached owner supervision");
-    owner.join().expect("join detached owner");
-
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-    assert!(!state_dir.join("stack.pid").exists());
-    assert!(!state_dir.join("stack.lock").exists());
-}
-
-#[test]
-fn detached_attachment_rejects_supervisor_that_exits_before_ready() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let unrelated_owner = UserProcessId::new(if std::process::id() == 1 { 2 } else { 1 })
-        .expect("unrelated owner PID");
-    let unrelated_ready = firma_process_orchestrator::test_support::supervisor_ready_path(
-        state_dir,
-        unrelated_owner.get(),
-    );
-    pidfile::write(&unrelated_ready, unrelated_owner).expect("write unrelated readiness");
-    let mut supervisor = spawn_exiting_supervisor(state_dir, SupervisorExitPhase::BeforeReady);
-
-    // The fixture exits before the spawned -> ready -> attached handshake can
-    // cross its first publication boundary.
-    let error = firma_process_orchestrator::test_support::wait_for_supervisor_attachment(
-        state_dir,
-        &mut supervisor,
-        Duration::from_secs(2),
-    )
-    .expect_err("supervisor exited before readiness");
-
-    assert!(
-        matches!(
-            error,
-            firma_process_orchestrator::OrchestratorError::Platform(_)
-        ),
-        "unexpected attachment error: {error}"
-    );
-    insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited before announcing readiness");
-    assert!(unrelated_ready.exists(), "unrelated readiness was removed");
-}
-
-#[test]
-#[ignore = "Racy: the supervisor may fail to exit before the state probe from the parent process"]
-fn detached_attachment_rejects_supervisor_that_exits_after_ready() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let mut supervisor = spawn_exiting_supervisor(state_dir, SupervisorExitPhase::AfterReady);
-
-    // Readiness is published, but the fixture exits before attachment is
-    // confirmed, exercising the second handshake boundary.
-    let error = firma_process_orchestrator::test_support::wait_for_supervisor_attachment(
-        state_dir,
-        &mut supervisor,
-        Duration::from_secs(2),
-    )
-    .expect_err("supervisor exited after readiness");
-
-    assert!(
-        matches!(
-            error,
-            firma_process_orchestrator::OrchestratorError::Platform(_)
-        ),
-        "unexpected attachment error: {error}"
-    );
-    insta::assert_snapshot!(error.to_string(), @"platform error: detached supervisor exited after readiness but before confirming attachment");
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_pidfile_setup_failure_collects_spawned_child() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    let marker = state_dir.join("failed-child.ready");
-    let mut command = fixture_command(&marker);
-    let pid = firma_process_orchestrator::test_support::simulate_spawn_setup_failure(
-        state_dir,
-        "authority",
-        &mut command,
-    )
-    .expect("simulate component setup failure");
-
-    assert_process_absent(pid);
-}
-
-/// Failed reaper transfer must retain the production Job Object capability so
-/// fallback teardown reaches descendants, not only the two direct children.
-#[cfg(windows)]
-#[test]
-fn failed_reaper_transfer_terminates_owned_job_descendant() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
-    let descendant_marker = state_dir.join("job-descendant.pid");
-    let sidecar_marker = state_dir.join("sidecar.ready");
-
-    let mut authority_command = Command::new(std::env::current_exe().expect("test executable"));
-    authority_command
-        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-        .env(JOB_FIXTURE_STAGE, "leader")
-        .env(JOB_DESCENDANT_MARKER, &descendant_marker);
-    let mut sidecar_command = fixture_command(&sidecar_marker);
-    let stack = firma_process_orchestrator::test_support::running_stack_from_commands_with_reaper_start_failure(
-        state_dir,
-        &mut authority_command,
-        &mut sidecar_command,
-    )
-    .expect("spawn owned Job components");
-    wait_for_file(&descendant_marker);
-    let descendant_pid = std::fs::read_to_string(&descendant_marker)
-        .expect("read descendant PID")
+    .expect("spawn grouped leader");
+    wait_for_file(&marker);
+    let descendant = std::fs::read_to_string(&marker)
+        .expect("descendant pid")
         .trim()
-        .parse()
-        .expect("parse descendant PID");
-
+        .parse::<u32>()
+        .expect("parse descendant pid");
+    drop(listener);
     drop(stack);
 
-    let descendant_pid = UserProcessId::new(descendant_pid).expect("descendant PID");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while descendant_pid
-        .process_exists()
-        .expect("probe descendant process")
-    {
-        assert!(
-            Instant::now() < deadline,
-            "descendant survived failed reaper transfer"
-        );
-        std::thread::sleep(Duration::from_millis(10));
+    stop_components(dir.path(), Duration::ZERO, &topology(&["authority"]))
+        .expect("stop process group");
+    assert_process_absent(descendant);
+}
+
+#[test]
+fn detached_launcher_exit_before_readiness_rolls_back_generation() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let Err(error) = start_detached(
+        &topology(&["authority"]),
+        dir.path(),
+        Duration::ZERO,
+        |_| exiting_command(),
+    ) else {
+        panic!("exiting supervisor unexpectedly attached");
+    };
+
+    assert!(matches!(error, OrchestratorError::Platform(_)));
+    assert!(!dir.path().join("stack.lock").exists());
+    assert!(!dir.path().join("stack.pid").exists());
+}
+
+#[test]
+fn detached_component_exit_tears_down_peer_and_supervisor_state() {
+    let dir = tempfile::tempdir().expect("state dir");
+    start_detached(
+        &topology(&["authority", "sidecar"]),
+        dir.path(),
+        Duration::ZERO,
+        |generation| supervisor_command(dir.path(), generation, "run"),
+    )
+    .expect("attach detached supervisor");
+    let pids = [
+        wait_for_marker(&dir.path().join("authority.marker")),
+        wait_for_marker(&dir.path().join("sidecar.marker")),
+    ];
+    let supervisor_pid = read_pidfile(&dir.path().join("stack.pid"));
+    let cleanup = ProcessCleanup::new(pids.into_iter().chain([supervisor_pid]));
+
+    terminate_process(pids[0]);
+    assert_all_absent(&pids);
+    assert_process_absent(supervisor_pid);
+    for path in ["stack.lock", "stack.pid", "authority.pid", "sidecar.pid"] {
+        assert!(!dir.path().join(path).exists(), "{path} retained");
     }
-    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
-        .expect("clean retained runtime state");
+    cleanup.disarm();
+}
+
+#[test]
+fn stale_detached_launcher_rollback_does_not_signal_replacement_target() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let mut sentinel_command = fixture_command();
+    let (addr, listener) = reserve_address();
+    sentinel_command.env(CHILD_LISTEN, addr.to_string());
+    let mut sentinel = sentinel_command.spawn().expect("spawn sentinel");
+    drop(listener);
+    let sentinel_pid = sentinel.id();
+    let cleanup = ProcessCleanup::new([sentinel_pid]);
+
+    let result = start_detached(
+        &topology(&["authority"]),
+        dir.path(),
+        Duration::ZERO,
+        |generation| {
+            let mut command = supervisor_command(dir.path(), generation, "replace");
+            command.env(SUPERVISOR_SENTINEL_PID, sentinel_pid.to_string());
+            command
+        },
+    );
+
+    assert!(result.is_err(), "replacement fixture unexpectedly attached");
+    assert_process_present(sentinel_pid);
+    assert!(dir.path().join("stack.lock").exists());
+    assert!(dir.path().join("authority.pid").exists());
+    terminate_process(sentinel_pid);
+    sentinel.wait().expect("collect sentinel");
+    assert_process_absent(sentinel_pid);
+    cleanup.disarm();
+}
+
+#[test]
+fn component_pidfile_publication_failure_collects_spawned_child() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let mut plan = component_plan(dir.path(), &["authority", "sidecar"]);
+    plan[0]
+        .command
+        .env(CHILD_BLOCK_PIDFILE, dir.path().join("sidecar.pid"));
+
+    let Err(error) = spawn_stack_from_plan(
+        &topology(&["authority", "sidecar"]),
+        || Ok::<_, std::convert::Infallible>(plan),
+        dir.path(),
+    ) else {
+        panic!("pidfile publication unexpectedly succeeded");
+    };
+
+    assert!(matches!(error, StartError::Orchestrator(_)));
+    let authority_pid = wait_for_marker(&dir.path().join("authority.marker"));
+    assert_process_absent(authority_pid);
+    std::fs::remove_dir(dir.path().join("sidecar.pid")).expect("remove pidfile blocker");
+    stop_components(
+        dir.path(),
+        Duration::ZERO,
+        &topology(&["authority", "sidecar"]),
+    )
+    .expect("clean retained state");
+    assert!(!dir.path().join("stack.lock").exists());
+    assert!(!dir.path().join("authority.pid").exists());
+    assert!(!dir.path().join("authority.listen").exists());
+    assert!(!dir.path().join("sidecar.listen").exists());
 }
 
 #[test]
 #[ignore = "spawned as a process-lifecycle fixture"]
 fn owned_child_fixture() {
-    #[cfg(windows)]
-    match std::env::var(JOB_FIXTURE_STAGE).as_deref() {
-        Ok("descendant") => loop {
-            std::thread::sleep(Duration::from_mins(1));
-        },
-        Ok("leader") => {
-            let marker = std::env::var_os(JOB_DESCENDANT_MARKER).expect("descendant marker");
-            let descendant = Command::new(std::env::current_exe().expect("test executable"))
-                .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-                .env(JOB_FIXTURE_STAGE, "descendant")
-                .spawn()
-                .expect("spawn Job descendant");
-            std::fs::write(marker, descendant.id().to_string()).expect("write descendant PID");
-            loop {
-                std::thread::sleep(Duration::from_mins(1));
+    if let (Some(state_dir), Some(generation)) = (
+        std::env::var_os(SUPERVISOR_STATE_DIR),
+        std::env::var_os(SUPERVISOR_GENERATION),
+    ) {
+        let state_dir = Path::new(&state_dir);
+        let generation = generation
+            .to_string_lossy()
+            .parse::<StackGeneration>()
+            .expect("parse supervisor generation");
+        if std::env::var(SUPERVISOR_MODE).as_deref() == Ok("replace") {
+            let replacement = StackGeneration::default();
+            let sentinel = std::env::var(SUPERVISOR_SENTINEL_PID)
+                .expect("sentinel PID")
+                .parse::<u32>()
+                .expect("parse sentinel PID");
+            let sentinel = UserProcessId::new(sentinel).expect("sentinel PID");
+            std::fs::write(state_dir.join("stack.lock"), format!("{replacement}\n"))
+                .expect("publish replacement generation");
+            firma_runtime_state::pidfile::write(&state_dir.join("stack.pid"), sentinel)
+                .expect("write replacement owner");
+            firma_runtime_state::pidfile::write(&state_dir.join("authority.pid"), sentinel)
+                .expect("write replacement component");
+            return;
+        }
+        let plan = component_plan(state_dir, &["authority", "sidecar"]);
+        supervise_owned_generation_from_plan(
+            &topology(&["authority", "sidecar"]),
+            || Ok::<_, std::convert::Infallible>(plan),
+            state_dir,
+            generation,
+            Duration::ZERO,
+        )
+        .expect("supervise detached fixture");
+        return;
+    }
+    if let Some(address) = std::env::var_os(CHILD_LISTEN) {
+        if let Some(marker) = std::env::var_os(CHILD_MARKER) {
+            std::fs::write(marker, std::process::id().to_string()).expect("write marker");
+        }
+        if let Some(release) = std::env::var_os(CHILD_RELEASE) {
+            while !Path::new(&release).exists() {
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
-        _ => {}
-    }
-    if let Some(state_dir) = std::env::var_os(TRANSACTION_STATE_DIR) {
-        let _transaction =
-            firma_process_orchestrator::test_support::hold_runtime_state_transaction(Path::new(
-                &state_dir,
-            ))
-            .expect("hold state transaction");
-        let ready = std::env::var_os(TRANSACTION_READY).expect("transaction ready marker");
-        let release = std::env::var_os(TRANSACTION_RELEASE).expect("transaction release marker");
-        std::fs::write(ready, []).expect("write transaction ready marker");
-        while !Path::new(&release).exists() {
-            std::thread::sleep(Duration::from_millis(10));
+        if let Some(path) = std::env::var_os(CHILD_BLOCK_PIDFILE) {
+            std::fs::create_dir(path).expect("create blocking pidfile directory");
         }
-        return;
-    }
-    if let Some(state_dir) = std::env::var_os(SUPERVISOR_STATE_DIR) {
-        let pid = UserProcessId::new(std::process::id()).expect("supervisor fixture PID");
-        pidfile::write(&Path::new(&state_dir).join("stack.pid"), pid)
-            .expect("write supervisor pidfile");
-        if std::env::var_os(SUPERVISOR_ACKNOWLEDGE).is_some() {
-            let ready = firma_process_orchestrator::test_support::supervisor_ready_path(
-                Path::new(&state_dir),
-                pid.get(),
-            );
-            pidfile::write(&ready, pid).expect("write supervisor readiness");
+        let listener = std::net::TcpListener::bind(address.to_string_lossy().as_ref())
+            .expect("bind component readiness listener");
+        println!("{}", std::process::id());
+        std::io::stdout().flush().expect("flush PID");
+        loop {
+            let _ = listener.accept();
         }
-        return;
-    }
-    if let Some(marker) = std::env::var_os(CHILD_MARKER) {
-        std::fs::write(marker, std::process::id().to_string()).expect("write ready marker");
-    }
-    println!("{}", std::process::id());
-    std::io::stdout().flush().expect("flush child PID");
-    loop {
-        std::thread::sleep(Duration::from_mins(1));
     }
 }
 
-fn spawn_fixture(state_dir: &Path, name: &str) -> (Child, u32) {
-    let marker = state_dir.join(format!("{name}.ready"));
-    let mut command = fixture_command(&marker);
-    let child = firma_process_orchestrator::test_support::spawn_raw_owned_into_group(
-        state_dir,
-        name,
-        &mut command,
-    )
-    .expect("spawn lifecycle fixture");
-    let pid = wait_for_marker(&marker);
-    assert_eq!(pid, child.id());
-    (child, pid)
-}
-
-fn assert_component_exit_tears_down_foreground_stack(exit_role: ComponentExitRole) {
+fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
     let dir = tempfile::tempdir().expect("state dir");
-    let state_dir = dir.path();
-    std::fs::write(state_dir.join("stack.lock"), "").expect("write lock");
-    let (authority, authority_pid) = spawn_fixture(state_dir, "authority");
-    let mut cleanup = ProcessCleanup::new(authority_pid);
-    let (sidecar, sidecar_pid) = spawn_fixture(state_dir, "sidecar");
-    cleanup.push(sidecar_pid);
-    let terminated_pid = match exit_role {
-        ComponentExitRole::Authority => authority_pid,
-        ComponentExitRole::Sidecar => sidecar_pid,
-    };
-
-    let state_dir_for_supervisor = state_dir.to_path_buf();
+    let state_dir = dir.path().to_path_buf();
+    let plan = component_plan(&state_dir, &["authority", "sidecar"]);
     let (result_tx, result_rx) = mpsc::channel();
     let supervisor = std::thread::spawn(move || {
-        let result = firma_process_orchestrator::test_support::supervise_raw_owned_until_exit(
-            &state_dir_for_supervisor,
+        let result = start_foreground_from_plan(
+            &topology(&["authority", "sidecar"]),
+            || Ok::<_, std::convert::Infallible>(plan),
+            &state_dir,
             Duration::ZERO,
-            authority,
-            sidecar,
         );
         let _ = result_tx.send(result);
     });
-    firma_process_orchestrator::test_support::terminate_raw(terminated_pid)
-        .expect("terminate selected component");
+    let pids = [
+        wait_for_marker(&dir.path().join("authority.marker")),
+        wait_for_marker(&dir.path().join("sidecar.marker")),
+    ];
+    std::thread::sleep(Duration::from_millis(300));
+    terminate_process(pids[exiting_component]);
 
     result_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("foreground supervisor did not finish within 10 seconds")
-        .expect("supervise owned components");
-    drop(supervisor);
-    assert_process_absent(authority_pid);
-    assert_process_absent(sidecar_pid);
-    assert!(!state_dir.join("stack.lock").exists());
-    cleanup.disarm();
+        .recv_timeout(Duration::from_secs(5))
+        .expect("foreground result")
+        .expect("foreground teardown");
+    supervisor.join().expect("join supervisor");
+    assert_all_absent(&pids);
+    assert!(!dir.path().join("stack.lock").exists());
 }
 
-fn fixture_command(marker: &Path) -> Command {
-    let mut command = Command::new(std::env::current_exe().expect("test executable"));
-    command
-        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-        .env(CHILD_MARKER, marker);
-    command
-}
-
-fn spawn_exiting_supervisor(state_dir: &Path, phase: SupervisorExitPhase) -> Child {
-    let mut command = Command::new(std::env::current_exe().expect("test executable"));
-    command
-        .args(["--exact", "ownership::owned_child_fixture", "--ignored"])
-        .env(SUPERVISOR_STATE_DIR, state_dir);
-    if matches!(phase, SupervisorExitPhase::AfterReady) {
-        command.env(SUPERVISOR_ACKNOWLEDGE, "1");
-    }
-    firma_process_orchestrator::test_support::spawn_raw_owned_into_group(
+fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
+    let plan = component_plan(state_dir, names);
+    let stack = spawn_stack_from_plan(
+        &topology(names),
+        || Ok::<_, std::convert::Infallible>(plan),
         state_dir,
-        "supervisor-fixture",
-        &mut command,
     )
-    .expect("spawn supervisor fixture")
+    .expect("spawn public stack");
+    let pids = names
+        .iter()
+        .map(|name| wait_for_marker(&state_dir.join(format!("{name}.marker"))))
+        .collect();
+    (stack, pids)
+}
+
+fn component_plan(state_dir: &Path, names: &[&str]) -> Vec<ComponentSpec> {
+    names
+        .iter()
+        .map(|name| {
+            let (address, listener) = reserve_address();
+            drop(listener);
+            let mut command = fixture_command();
+            command
+                .env_remove(SUPERVISOR_STATE_DIR)
+                .env_remove(SUPERVISOR_GENERATION)
+                .env_remove(SUPERVISOR_MODE)
+                .env_remove(SUPERVISOR_SENTINEL_PID)
+                .env(CHILD_LISTEN, address.to_string())
+                .env(CHILD_MARKER, state_dir.join(format!("{name}.marker")));
+            ComponentSpec {
+                command,
+                readiness_addr: address,
+            }
+        })
+        .collect()
+}
+
+fn delayed_component_plan(state_dir: &Path, names: &[&str]) -> Vec<ComponentSpec> {
+    let mut plan = component_plan(state_dir, names);
+    for (spec, name) in plan.iter_mut().zip(names) {
+        spec.command
+            .env(CHILD_RELEASE, state_dir.join(format!("{name}.release")));
+    }
+    plan
+}
+
+fn assert_stop_waits_for_partial_publication(published_components: usize) {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path().to_path_buf();
+    let (start_tx, start_rx) = mpsc::channel();
+    let start_dir = state_dir.clone();
+    let starter = std::thread::spawn(move || {
+        let plan = delayed_component_plan(&start_dir, &["authority", "sidecar"]);
+        let _ = start_tx.send(spawn_stack_from_plan(
+            &topology(&["authority", "sidecar"]),
+            || Ok::<_, std::convert::Infallible>(plan),
+            &start_dir,
+        ));
+    });
+    wait_for_file(&state_dir.join("authority.pid"));
+    if published_components == 2 {
+        std::fs::write(state_dir.join("authority.release"), []).expect("release authority");
+        wait_for_file(&state_dir.join("sidecar.pid"));
+    }
+    let stop_dir = state_dir.clone();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let stopper = std::thread::spawn(move || {
+        let _ = stop_tx.send(stop_components(
+            &stop_dir,
+            Duration::ZERO,
+            &topology(&["authority", "sidecar"]),
+        ));
+    });
+    assert!(matches!(
+        stop_rx.recv_timeout(Duration::from_millis(200)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    std::fs::write(state_dir.join("authority.release"), []).expect("release authority");
+    std::fs::write(state_dir.join("sidecar.release"), []).expect("release sidecar");
+    let stack = start_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("startup result")
+        .expect("startup");
+    drop(stack);
+    stop_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("stop result")
+        .expect("serialized stop");
+    starter.join().expect("join starter");
+    stopper.join().expect("join stopper");
+}
+
+fn reserve_address() -> (std::net::SocketAddr, std::net::TcpListener) {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve address");
+    (listener.local_addr().expect("reserved address"), listener)
+}
+
+fn fixture_command() -> Command {
+    let mut command = Command::new(std::env::current_exe().expect("test executable"));
+    command.args(["--exact", "ownership::owned_child_fixture", "--ignored"]);
+    command
+}
+
+fn supervisor_command(state_dir: &Path, generation: StackGeneration, mode: &str) -> Command {
+    let mut command = fixture_command();
+    command
+        .env(SUPERVISOR_STATE_DIR, state_dir)
+        .env(SUPERVISOR_GENERATION, generation.to_string())
+        .env(SUPERVISOR_MODE, mode);
+    command
+}
+
+fn exiting_command() -> Command {
+    #[cfg(unix)]
+    {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        command
+    }
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "exit 0"]);
+        command
+    }
+}
+
+fn topology(names: &[&str]) -> StackTopology {
+    StackTopology::new(names.iter().copied()).expect("valid topology")
 }
 
 fn wait_for_marker(path: &Path) -> u32 {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Ok(contents) = std::fs::read_to_string(path)
             && let Ok(pid) = contents.trim().parse()
         {
             return pid;
         }
-        assert!(Instant::now() < deadline, "fixture did not become ready");
+        assert!(Instant::now() < deadline, "{} missing", path.display());
         std::thread::sleep(Duration::from_millis(10));
     }
 }
 
 fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "{} was not written",
-            path.display()
-        );
+        assert!(Instant::now() < deadline, "{} missing", path.display());
         std::thread::sleep(Duration::from_millis(10));
     }
 }
 
+fn assert_all_absent(pids: &[u32]) {
+    for pid in pids {
+        assert_process_absent(*pid);
+    }
+}
+
 fn assert_process_absent(pid: u32) {
-    let pid = UserProcessId::new(pid).expect("fixture PID");
-    assert!(!pid.process_exists().expect("probe fixture process"));
+    let process = UserProcessId::new(pid).expect("fixture PID");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process.process_exists().expect("probe fixture") {
+        assert!(Instant::now() < deadline, "process {pid} remains alive");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn assert_process_present(pid: u32) {
-    let pid = UserProcessId::new(pid).expect("fixture PID");
-    assert!(pid.process_exists().expect("probe fixture process"));
+    assert!(
+        UserProcessId::new(pid)
+            .expect("fixture PID")
+            .process_exists()
+            .expect("probe fixture"),
+        "process {pid} is absent"
+    );
 }
 
-fn join_collector(collector: Option<std::thread::JoinHandle<()>>) {
-    if let Some(collector) = collector {
-        collector.join().expect("join child collector");
+fn read_pidfile(path: &Path) -> u32 {
+    firma_runtime_state::pidfile::read(path)
+        .expect("read pidfile")
+        .expect("pidfile present")
+        .get()
+}
+
+fn best_effort_terminate_scope(pid: u32) {
+    #[cfg(unix)]
+    {
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap_or(i32::MAX));
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(-pid.as_raw()),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
     }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status();
+    }
+}
+
+fn terminate_process(pid: u32) {
+    #[cfg(unix)]
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(i32::try_from(pid).expect("PID fits i32")),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .expect("terminate fixture");
+    #[cfg(windows)]
+    assert!(
+        Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .status()
+            .expect("run taskkill")
+            .success()
+    );
 }

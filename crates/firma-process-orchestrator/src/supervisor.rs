@@ -16,14 +16,6 @@ use crate::component::OwnedComponent;
 use crate::error::OrchestratorError;
 use crate::platform::{Platform, SystemPlatform};
 
-/// Operation that starts a thread owning one component-reaper job.
-///
-/// Keeping thread creation separate from [`collect_in_background_with`] lets
-/// [`crate::start::RunningStack`] retain the operation until it relinquishes
-/// its [`OwnedComponent`] capabilities.
-pub type ReaperLauncher =
-    fn(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>;
-
 /// Process-wide result of installing the termination handler exactly once.
 ///
 /// Caching both success and failure prevents later supervisors from claiming
@@ -204,29 +196,11 @@ impl ReaperStartError {
 pub fn collect_in_background(
     components: Vec<OwnedComponent>,
 ) -> Result<std::thread::JoinHandle<()>, ReaperStartError> {
-    collect_in_background_with(components, launch_reaper)
-}
-
-/// Start a named thread that owns one component-reaper job.
-pub fn launch_reaper(
-    job: Box<dyn FnOnce() + Send>,
-) -> std::io::Result<std::thread::JoinHandle<()>> {
-    std::thread::Builder::new()
-        .name("component-reaper".into())
-        .spawn(job)
-}
-
-/// Start a component reaper through the supplied thread-spawn operation.
-///
-/// This seam keeps ownership recovery testable without exhausting real process
-/// resources. Production callers use [`collect_in_background`].
-pub fn collect_in_background_with(
-    components: Vec<OwnedComponent>,
-    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>,
-) -> Result<std::thread::JoinHandle<()>, ReaperStartError> {
     let components = Arc::new(std::sync::Mutex::new(Some(components)));
     let worker_components = Arc::clone(&components);
-    spawn(Box::new(move || {
+    std::thread::Builder::new()
+        .name("component-reaper".into())
+        .spawn(move || {
             let mut components = match worker_components.lock() {
                 Ok(mut components) => components.take().unwrap_or_default(),
                 Err(components) => components.into_inner().take().unwrap_or_default(),
@@ -245,7 +219,7 @@ pub fn collect_in_background_with(
                     std::thread::sleep(Duration::from_millis(200));
                 }
             }
-        }))
+        })
         .map_err(|source| ReaperStartError { source, components })
 }
 

@@ -153,26 +153,6 @@ impl StateLease {
         }
     }
 
-    /// Atomically replace the current generation for race-test scaffolding.
-    ///
-    /// Production generation changes always use [`Self::try_claim`] after stale
-    /// state is removed; this operation exists only to reproduce a delayed old
-    /// owner observing replacement state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an I/O error when the replacement cannot be published.
-    #[cfg(feature = "test-support")]
-    pub(crate) fn replace_for_test(state_dir: &Path) -> Result<Self, OrchestratorError> {
-        let lease = Self {
-            generation: StackGeneration::new(),
-        };
-        let temp = write_generation_temp(state_dir, lease)?;
-        temp.persist(state_dir.join(LOCK_FILE))
-            .map_err(|error| error.error)?;
-        Ok(lease)
-    }
-
     /// Load the generation currently recorded in a runtime-state directory.
     ///
     /// An absent result represents a missing [`LOCK_FILE`] or an empty file
