@@ -4,7 +4,7 @@
 
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
@@ -85,5 +85,32 @@ impl Platform for UnixPlatform {
     fn signal_hard(target: &TerminationTarget) -> Result<()> {
         killpg(raw_pid(target.stored_id().get())?, Signal::SIGKILL)
             .map_err(|error| StackError::Platform(format!("killpg(SIGKILL) failed: {error}")))
+    }
+
+    fn child_already_reaped(error: &std::io::Error) -> bool {
+        error.raw_os_error() == Some(nix::libc::ECHILD)
+    }
+
+    fn spawn_detached(cmd: &mut Command) -> Result<Child> {
+        // Detach from the controlling terminal so closing the parent shell
+        // does not deliver SIGHUP to the supervisor. `setsid` must run in
+        // the child between fork and exec.
+        #[expect(
+            unsafe_code,
+            reason = "CommandExt::pre_exec is required here to call setsid in the fork/exec window"
+        )]
+        // SAFETY: `setsid` is async-signal-safe and is the only syscall in
+        // the pre-exec closure. No allocator or locks are used.
+        unsafe {
+            cmd.pre_exec(|| {
+                nix::unistd::setsid()
+                    .map(|_| ())
+                    .map_err(std::io::Error::from)
+            });
+        }
+        cmd.spawn().map_err(|source| StackError::Spawn {
+            component: "supervisor".into(),
+            source,
+        })
     }
 }

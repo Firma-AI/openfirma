@@ -250,6 +250,26 @@ pub trait Platform {
     ///
     /// Returns a platform error if termination cannot be requested.
     fn signal_hard(target: &TerminationTarget) -> Result<()>;
+
+    /// Return whether a child-collection error means another wait already
+    /// reaped the child.
+    ///
+    /// Unix reports this condition through `ECHILD`; Windows child handles
+    /// never surface it, so collection callers can treat the child as gone on
+    /// Unix and retry elsewhere.
+    fn child_already_reaped(error: &std::io::Error) -> bool;
+
+    /// Spawn a command detached from the launcher's controlling terminal or
+    /// job so it survives the launcher.
+    ///
+    /// Unix uses `setsid` to leave the launcher's session; Windows uses
+    /// detached and breakaway creation flags so the child escapes the
+    /// launcher's console and Job Object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a spawn error when the detached child cannot be created.
+    fn spawn_detached(cmd: &mut Command) -> Result<Child>;
 }
 
 #[cfg(unix)]

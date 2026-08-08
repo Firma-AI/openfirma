@@ -15,6 +15,7 @@ pub mod start;
 pub mod status;
 pub mod stop;
 
+mod collect;
 mod component;
 mod detach;
 mod platform;
@@ -158,7 +159,7 @@ pub mod test_support {
     pub fn collect_raw_child_in_background(
         child: std::process::Child,
     ) -> Option<std::thread::JoinHandle<()>> {
-        crate::supervisor::collect_child_in_background(child)
+        crate::collect::collect_child_in_background(child)
     }
 
     /// Simulate component-reaper thread creation failure and recover both children.

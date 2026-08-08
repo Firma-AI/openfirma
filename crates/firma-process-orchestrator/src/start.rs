@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
+use crate::collect::{collect_child_in_background, collect_child_until};
 use crate::component::{ComponentName, ComponentSpec, OwnedComponent};
 use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
@@ -25,8 +26,8 @@ use crate::readiness::wait_for_tcp;
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::supervisor::{
-    ReaperLauncher, StopSignal, block_until_owned_exit_with, collect_child_in_background,
-    collect_child_until, collect_in_background, collect_in_background_with, launch_reaper,
+    ReaperLauncher, StopSignal, block_until_owned_exit_with, collect_in_background,
+    collect_in_background_with, launch_reaper,
 };
 use firma_runtime_state::{UserProcessId, pidfile};
 
@@ -538,7 +539,7 @@ fn spawn_stack_from_plan_with_phase(
                 stack.mark_ready()?;
             }
             let handle = stack.handle();
-            info!(components = ?handle.component_pids, "firma stack ready");
+            info!(components = ?handle.component_pids, "stack ready");
             Ok(stack)
         }
         Err(error) => {
