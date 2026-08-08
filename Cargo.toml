@@ -9,6 +9,7 @@ members = [
   "crates/firma-fs",
   "crates/firma-grpc-interceptor-proto",
   "crates/firma-http",
+  "crates/firma-process-orchestrator",
   "crates/firma-run",
   "crates/firma-runtime-state",
   "crates/firma-secret-provider",
@@ -79,6 +80,7 @@ firma-core = { path = "crates/firma-core", version = "0.1.5" }
 firma-fs = { path = "crates/firma-fs", version = "0.1.5" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.1.5" }
 firma-http = { path = "crates/firma-http", version = "0.1.5" }
+firma-process-orchestrator = { path = "crates/firma-process-orchestrator", version = "0.1.5" }
 firma-protobuf = "0.2"
 firma-run = { path = "crates/firma-run", version = "0.1.5" }
 firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.5" }

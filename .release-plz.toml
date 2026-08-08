@@ -94,6 +94,7 @@ changelog_include = [
   "firma-fs",
   "firma-grpc-interceptor-proto",
   "firma-http",
+  "firma-process-orchestrator",
   "firma-run",
   "firma-runtime-state",
   "firma-secret-provider",

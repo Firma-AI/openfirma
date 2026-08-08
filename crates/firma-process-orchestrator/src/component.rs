@@ -27,17 +27,17 @@ impl ComponentName {
     }
 
     /// Return the name used in commands, logs, and diagnostics.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Return the runtime-state file that stores this component's termination target.
-    pub fn pidfile_name(&self) -> String {
+    pub(crate) fn pidfile_name(&self) -> String {
         format!("{}.pid", self.0)
     }
 
     /// Return the runtime-state file that stores this component's listen address.
-    pub fn listen_file_name(&self) -> String {
+    pub(crate) fn listen_file_name(&self) -> String {
         format!("{}.listen", self.0)
     }
 }

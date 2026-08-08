@@ -1,4 +1,4 @@
-//! Error surface for `firma-stack`.
+//! Error surface for `firma-process-orchestrator`.
 
 use std::io;
 use std::path::PathBuf;

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct StackConfig {
     /// Optional runtime-state directory override. When absent, the caller uses
-    /// [`firma_runtime_state::resolve_state_dir`].
+    /// `firma_runtime_state::resolve_state_dir`.
     pub state_dir: Option<PathBuf>,
     /// The single unified `firma.toml` shared by both components.
     pub config_file: PathBuf,

@@ -20,7 +20,7 @@ const TRANSACTION_FILE: &str = ".stack-state.lock";
 /// Exclusive cross-process authority to mutate stack runtime state.
 ///
 /// Startup holds this capability from generation claim through complete-state
-/// publication or rollback. [`crate::stop::stop`] holds one while taking its
+/// publication or rollback. [`crate::stop::stop_components`] holds one while taking its
 /// process snapshot, and cleanup reacquires one before deleting state. The
 /// operating system releases the advisory lock if its process exits, preventing
 /// a crashed mutator from permanently blocking recovery.
