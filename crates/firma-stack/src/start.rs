@@ -14,7 +14,7 @@ use firma_process_orchestrator::{
 };
 
 use crate::config::StackConfig;
-use crate::error::Result;
+use crate::error::StackError;
 use crate::plan;
 
 /// Spawn the authority and sidecar stack and wait for readiness.
@@ -29,13 +29,14 @@ use crate::plan;
 /// # Errors
 ///
 /// Returns config, state-directory, lock, spawn, or readiness errors.
-pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> {
+pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack, StackError> {
     spawn_stack_from_plan(
         plan::component_names(),
         || plan::build_plan(cfg),
         cfg.firma_bin.as_deref(),
         state_dir,
     )
+    .map_err(Into::into)
 }
 
 /// Start the authority and sidecar stack.
@@ -46,7 +47,11 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack> 
 /// # Errors
 ///
 /// Returns config, state directory, spawn, readiness, or detach errors.
-pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<StackHandle> {
+pub fn start(
+    cfg: &StackConfig,
+    state_dir: &Path,
+    mode: StartMode,
+) -> Result<StackHandle, StackError> {
     start_from_plan(
         plan::component_names(),
         || plan::build_plan(cfg),
@@ -55,6 +60,7 @@ pub fn start(cfg: &StackConfig, state_dir: &Path, mode: StartMode) -> Result<Sta
         state_dir,
         mode,
     )
+    .map_err(Into::into)
 }
 
 /// Spawn and own a detached stack for a launcher-assigned generation.
@@ -72,7 +78,7 @@ pub fn supervise_owned_generation(
     cfg: &StackConfig,
     state_dir: &Path,
     generation: StackGeneration,
-) -> Result<()> {
+) -> Result<(), StackError> {
     supervise_owned_generation_from_plan(
         plan::component_names(),
         || plan::build_plan(cfg),
@@ -80,4 +86,5 @@ pub fn supervise_owned_generation(
         state_dir,
         generation,
     )
+    .map_err(Into::into)
 }

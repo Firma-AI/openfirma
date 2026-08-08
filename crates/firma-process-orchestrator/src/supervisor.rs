@@ -13,7 +13,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::component::OwnedComponent;
-use crate::error::Result;
+use crate::error::OrchestratorError;
 use crate::platform::{Platform, SystemPlatform};
 
 /// Operation that starts a thread owning one component-reaper job.
@@ -28,8 +28,7 @@ pub type ReaperLauncher =
 ///
 /// Caching both success and failure prevents later supervisors from claiming
 /// signal readiness under a different handler state.
-static PROCESS_STOP_EPOCH: OnceLock<std::result::Result<Arc<SignalEpoch>, String>> =
-    OnceLock::new();
+static PROCESS_STOP_EPOCH: OnceLock<Result<Arc<SignalEpoch>, String>> = OnceLock::new();
 
 /// Monotonic process-wide signal history and subscription sequence.
 ///
@@ -63,7 +62,7 @@ impl StopSignal {
     /// # Errors
     ///
     /// Returns a platform error when the process handler cannot be installed.
-    pub fn install() -> Result<Self> {
+    pub fn install() -> Result<Self, OrchestratorError> {
         match PROCESS_STOP_EPOCH.get_or_init(|| {
             let epoch = Arc::new(SignalEpoch {
                 current: AtomicU64::new(0),
@@ -85,7 +84,7 @@ impl StopSignal {
                     baseline,
                 })
             }
-            Err(error) => Err(crate::error::StackError::Platform(format!(
+            Err(error) => Err(OrchestratorError::Platform(format!(
                 "install termination handler failed: {error}"
             ))),
         }
@@ -108,7 +107,7 @@ impl StopSignal {
 pub fn block_until_owned_exit_with(
     stop: &StopSignal,
     components: &mut [OwnedComponent],
-) -> Result<()> {
+) -> Result<(), OrchestratorError> {
     debug!(
         component_count = components.len(),
         "foreground supervisor watching owned children"
@@ -204,7 +203,7 @@ impl ReaperStartError {
 /// error carries the complete input collection.
 pub fn collect_in_background(
     components: Vec<OwnedComponent>,
-) -> std::result::Result<std::thread::JoinHandle<()>, ReaperStartError> {
+) -> Result<std::thread::JoinHandle<()>, ReaperStartError> {
     collect_in_background_with(components, launch_reaper)
 }
 
@@ -224,7 +223,7 @@ pub fn launch_reaper(
 pub fn collect_in_background_with(
     components: Vec<OwnedComponent>,
     spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>,
-) -> std::result::Result<std::thread::JoinHandle<()>, ReaperStartError> {
+) -> Result<std::thread::JoinHandle<()>, ReaperStartError> {
     let components = Arc::new(std::sync::Mutex::new(Some(components)));
     let worker_components = Arc::clone(&components);
     spawn(Box::new(move || {

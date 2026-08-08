@@ -14,10 +14,12 @@ workspace = true
 test-support = ["firma-process-orchestrator/test-support"]
 
 [dependencies]
+anyhow = { workspace = true }
 firma-authority = { workspace = true }
 firma-config-loader = { workspace = true }
 firma-process-orchestrator = { workspace = true }
 firma-sidecar = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

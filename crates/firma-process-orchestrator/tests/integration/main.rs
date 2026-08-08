@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+mod error_boundary;
 mod forced_termination;
 mod ownership;
 mod status_state_machine;

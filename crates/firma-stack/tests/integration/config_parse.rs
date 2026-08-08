@@ -1,7 +1,7 @@
 //! Unified `firma.toml` resolution round-trips.
 
 use firma_config_loader::CONFIG_FILE_NAME;
-use firma_stack::resolve_stack_config;
+use firma_stack::{StackError, resolve_stack_config};
 
 #[test]
 fn resolves_explicit_override() {
@@ -22,5 +22,9 @@ fn resolves_explicit_override() {
 #[test]
 fn explicit_override_errors_if_missing() {
     let cfg_path = std::path::Path::new("/definitely/not/here/firma.toml");
-    assert!(resolve_stack_config(Some(cfg_path)).is_err());
+    let error = resolve_stack_config(Some(cfg_path)).expect_err("missing override must fail");
+    let StackError::ConfigResolution { source } = error else {
+        panic!("expected typed config resolution error, got {error:?}");
+    };
+    assert_eq!(source.path, cfg_path);
 }

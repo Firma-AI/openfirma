@@ -25,7 +25,7 @@ mod state_lease;
 mod supervisor;
 
 pub use component::{ComponentName, ComponentSpec};
-pub use error::{Result, StackError};
+pub use error::{OrchestratorError, StartError};
 pub use start::{
     RunningStack, StackHandle, StartMode, spawn_stack_from_plan, start_from_plan,
     supervise_owned_generation_from_plan,
@@ -37,6 +37,9 @@ pub use stop::{StopOutcome, stop_components};
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod test_support {
+    use crate::component::{ComponentName, OwnedComponent};
+    use crate::{OrchestratorError, RunningStack, StackGeneration, StopOutcome};
+
     /// Component names, in startup order, used by the test scaffolding.
     ///
     /// These strings are ordinary test data that drive the generic machinery;
@@ -48,7 +51,7 @@ pub mod test_support {
     pub struct RawStartupTransaction {
         transaction: crate::state_lease::StateTransaction,
         state_lease: crate::state_lease::StateLease,
-        generation: crate::StackGeneration,
+        generation: StackGeneration,
     }
 
     /// Test-only capability holding runtime-state serialization without mutation.
@@ -59,7 +62,7 @@ pub mod test_support {
     impl RawStartupTransaction {
         /// Return the launcher identity assigned to this raw startup attempt.
         #[must_use]
-        pub const fn generation(&self) -> crate::StackGeneration {
+        pub const fn generation(&self) -> StackGeneration {
             self.generation
         }
 
@@ -68,7 +71,7 @@ pub mod test_support {
         /// # Errors
         ///
         /// Returns runtime-state read or removal errors.
-        pub fn cleanup(&self, state_dir: &std::path::Path) -> crate::error::Result<()> {
+        pub fn cleanup(&self, state_dir: &std::path::Path) -> Result<(), OrchestratorError> {
             crate::stop::cleanup_generation(
                 state_dir,
                 TEST_COMPONENT_NAMES,
@@ -85,15 +88,15 @@ pub mod test_support {
     /// Returns coordination-lock, generation-publication, or stale-lock errors.
     pub fn begin_raw_startup(
         state_dir: &std::path::Path,
-    ) -> crate::error::Result<RawStartupTransaction> {
+    ) -> Result<RawStartupTransaction, OrchestratorError> {
         let transaction = crate::state_lease::StateTransaction::acquire(state_dir)?;
         if state_dir.join("stack.lock").exists() {
             std::fs::remove_file(state_dir.join("stack.lock"))?;
         }
-        let generation = crate::StackGeneration::new();
+        let generation = StackGeneration::new();
         let state_lease = crate::state_lease::StateLease::try_claim(state_dir, generation)?
             .ok_or_else(|| {
-                crate::StackError::Platform("raw startup generation could not be claimed".into())
+                OrchestratorError::Platform("raw startup generation could not be claimed".into())
             })?;
         Ok(RawStartupTransaction {
             transaction,
@@ -109,7 +112,7 @@ pub mod test_support {
     /// Returns an I/O error when the coordination lock cannot be acquired.
     pub fn hold_runtime_state_transaction(
         state_dir: &std::path::Path,
-    ) -> crate::error::Result<RawStateTransaction> {
+    ) -> Result<RawStateTransaction, OrchestratorError> {
         Ok(RawStateTransaction {
             _transaction: crate::state_lease::StateTransaction::acquire(state_dir)?,
         })
@@ -124,7 +127,7 @@ pub mod test_support {
         state_dir: &std::path::Path,
         name: &str,
         cmd: &mut std::process::Command,
-    ) -> crate::error::Result<u32> {
+    ) -> Result<u32, OrchestratorError> {
         let mut child = spawn_raw_owned_into_group(state_dir, name, cmd)?;
         let pid = child.id();
         std::thread::spawn(move || {
@@ -142,7 +145,7 @@ pub mod test_support {
         state_dir: &std::path::Path,
         name: &str,
         cmd: &mut std::process::Command,
-    ) -> crate::error::Result<std::process::Child> {
+    ) -> Result<std::process::Child, OrchestratorError> {
         use crate::platform::{Platform, SystemPlatform};
         let group = SystemPlatform::new_group()?;
         let log_path = state_dir.join(format!("{name}.log"));
@@ -169,8 +172,8 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> Vec<std::process::Child> {
         let components = vec![
-            owned_component(crate::component::ComponentName::new("authority"), authority),
-            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            owned_component(ComponentName::new("authority"), authority),
+            owned_component(ComponentName::new("sidecar"), sidecar),
         ];
         match crate::supervisor::collect_in_background_with(components, |_| {
             Err(std::io::Error::other("injected reaper start failure"))
@@ -195,8 +198,8 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> std::io::Result<()> {
         let components = vec![
-            owned_component(crate::component::ComponentName::new("authority"), authority),
-            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            owned_component(ComponentName::new("authority"), authority),
+            owned_component(ComponentName::new("sidecar"), sidecar),
         ];
         match crate::supervisor::collect_in_background_with(components, |_| {
             Err(std::io::Error::other("injected reaper start failure"))
@@ -213,13 +216,13 @@ pub mod test_support {
         state_dir: &std::path::Path,
         authority: std::process::Child,
         sidecar: std::process::Child,
-    ) -> crate::error::Result<crate::RunningStack> {
+    ) -> Result<RunningStack, OrchestratorError> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
-        Ok(crate::RunningStack::from_components(
+        Ok(RunningStack::from_components(
             vec![
-                owned_component(crate::component::ComponentName::new("authority"), authority),
-                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority"), authority),
+                owned_component(ComponentName::new("sidecar"), sidecar),
             ],
             state_dir.to_path_buf(),
             state_lease,
@@ -237,13 +240,13 @@ pub mod test_support {
         timeout: std::time::Duration,
         authority: std::process::Child,
         sidecar: std::process::Child,
-    ) -> crate::error::Result<()> {
+    ) -> Result<(), OrchestratorError> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
         // Components in startup order: authority (server) then sidecar (client).
         let mut components = vec![
-            owned_component(crate::component::ComponentName::new("authority"), authority),
-            owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+            owned_component(ComponentName::new("authority"), authority),
+            owned_component(ComponentName::new("sidecar"), sidecar),
         ];
         let stop = crate::supervisor::StopSignal::install()?;
         let supervision_result =
@@ -265,13 +268,13 @@ pub mod test_support {
         state_dir: &std::path::Path,
         authority: std::process::Child,
         sidecar: std::process::Child,
-    ) -> crate::error::Result<crate::RunningStack> {
+    ) -> Result<RunningStack, OrchestratorError> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
-        Ok(crate::RunningStack::from_components_with_reaper_launcher(
+        Ok(RunningStack::from_components_with_reaper_launcher(
             vec![
-                owned_component(crate::component::ComponentName::new("authority"), authority),
-                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority"), authority),
+                owned_component(ComponentName::new("sidecar"), sidecar),
             ],
             state_dir.to_path_buf(),
             state_lease,
@@ -285,13 +288,13 @@ pub mod test_support {
         state_dir: &std::path::Path,
         authority: std::process::Child,
         sidecar: std::process::Child,
-    ) -> crate::error::Result<crate::RunningStack> {
+    ) -> Result<RunningStack, OrchestratorError> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         drop(transaction);
-        Ok(crate::RunningStack::from_components_with_reaper_launcher(
+        Ok(RunningStack::from_components_with_reaper_launcher(
             vec![
-                owned_component(crate::component::ComponentName::new("authority"), authority),
-                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority"), authority),
+                owned_component(ComponentName::new("sidecar"), sidecar),
             ],
             state_dir.to_path_buf(),
             state_lease,
@@ -310,7 +313,7 @@ pub mod test_support {
         state_dir: &std::path::Path,
         authority_command: &mut std::process::Command,
         sidecar_command: &mut std::process::Command,
-    ) -> crate::error::Result<crate::RunningStack> {
+    ) -> Result<RunningStack, OrchestratorError> {
         use crate::platform::{Platform, SystemPlatform};
 
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
@@ -320,16 +323,16 @@ pub mod test_support {
         let authority = spawn_test_component(
             &group,
             state_dir,
-            crate::component::ComponentName::new("authority"),
+            ComponentName::new("authority"),
             authority_command,
         )?;
         let sidecar = spawn_test_component(
             &group,
             state_dir,
-            crate::component::ComponentName::new("sidecar"),
+            ComponentName::new("sidecar"),
             sidecar_command,
         )?;
-        Ok(crate::RunningStack::from_components_with_reaper_launcher(
+        Ok(RunningStack::from_components_with_reaper_launcher(
             vec![authority, sidecar],
             state_dir.to_path_buf(),
             state_lease,
@@ -343,7 +346,7 @@ pub mod test_support {
     /// # Errors
     ///
     /// Returns an I/O error when the new generation cannot be persisted.
-    pub fn replace_stack_generation(state_dir: &std::path::Path) -> crate::error::Result<()> {
+    pub fn replace_stack_generation(state_dir: &std::path::Path) -> Result<(), OrchestratorError> {
         let _transaction = crate::state_lease::StateTransaction::acquire(state_dir)?;
         crate::state_lease::StateLease::replace_for_test(state_dir).map(|_| ())
     }
@@ -356,7 +359,9 @@ pub mod test_support {
     /// # Errors
     ///
     /// Returns an I/O error when the generation cannot be atomically replaced.
-    pub fn force_replace_stack_generation(state_dir: &std::path::Path) -> crate::error::Result<()> {
+    pub fn force_replace_stack_generation(
+        state_dir: &std::path::Path,
+    ) -> Result<(), OrchestratorError> {
         crate::state_lease::StateLease::replace_for_test(state_dir).map(|_| ())
     }
 
@@ -368,8 +373,8 @@ pub mod test_support {
     pub fn stop_stack_generation(
         state_dir: &std::path::Path,
         timeout: std::time::Duration,
-        generation: crate::StackGeneration,
-    ) -> crate::error::Result<crate::StopOutcome> {
+        generation: StackGeneration,
+    ) -> Result<StopOutcome, OrchestratorError> {
         crate::stop::stop_generation(state_dir, timeout, TEST_COMPONENT_NAMES, generation)
     }
 
@@ -396,9 +401,9 @@ pub mod test_support {
     /// # Errors
     ///
     /// Returns an error when the platform cannot request termination.
-    pub fn terminate_raw(pid: u32) -> crate::error::Result<()> {
+    pub fn terminate_raw(pid: u32) -> Result<(), OrchestratorError> {
         let pid = firma_runtime_state::UserProcessId::try_from(pid)
-            .map_err(|error| crate::StackError::Platform(error.to_string()))?;
+            .map_err(|error| OrchestratorError::Platform(error.to_string()))?;
         crate::platform::TerminationTarget::for_leader(pid).signal_hard()
     }
 
@@ -411,7 +416,7 @@ pub mod test_support {
         state_dir: &std::path::Path,
         supervisor: &mut std::process::Child,
         timeout: std::time::Duration,
-    ) -> crate::error::Result<()> {
+    ) -> Result<(), OrchestratorError> {
         crate::start::wait_for_supervisor_attachment(state_dir, supervisor, timeout)
     }
 
@@ -426,12 +431,12 @@ pub mod test_support {
         timeout: std::time::Duration,
         authority: std::process::Child,
         sidecar: std::process::Child,
-    ) -> crate::error::Result<()> {
+    ) -> Result<(), OrchestratorError> {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
-        let stack = crate::RunningStack::from_components(
+        let stack = RunningStack::from_components(
             vec![
-                owned_component(crate::component::ComponentName::new("authority"), authority),
-                owned_component(crate::component::ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority"), authority),
+                owned_component(ComponentName::new("sidecar"), sidecar),
             ],
             state_dir.to_path_buf(),
             state_lease,
@@ -449,7 +454,7 @@ pub mod test_support {
         state_dir: &std::path::Path,
         name: &str,
         cmd: &mut std::process::Command,
-    ) -> crate::error::Result<u32> {
+    ) -> Result<u32, OrchestratorError> {
         use crate::platform::{Platform, SystemPlatform};
 
         let group = SystemPlatform::new_group()?;
@@ -460,14 +465,11 @@ pub mod test_support {
         Ok(pid)
     }
 
-    fn owned_component(
-        name: crate::component::ComponentName,
-        child: std::process::Child,
-    ) -> crate::component::OwnedComponent {
+    fn owned_component(name: ComponentName, child: std::process::Child) -> OwnedComponent {
         use firma_runtime_state::ChildExt as _;
 
         let leader_pid = child.process_id();
-        crate::component::OwnedComponent::from_child(
+        OwnedComponent::from_child(
             name,
             child,
             leader_pid,
@@ -479,9 +481,9 @@ pub mod test_support {
     fn spawn_test_component(
         group: &crate::platform::Group,
         state_dir: &std::path::Path,
-        name: crate::component::ComponentName,
+        name: ComponentName,
         command: &mut std::process::Command,
-    ) -> crate::error::Result<crate::component::OwnedComponent> {
+    ) -> Result<OwnedComponent, OrchestratorError> {
         use crate::platform::{Platform, SystemPlatform};
 
         let spawned = SystemPlatform::spawn_in_group(
@@ -494,9 +496,7 @@ pub mod test_support {
             spawned.termination_target.stored_id(),
         )?;
         std::fs::write(state_dir.join(name.listen_file_name()), "127.0.0.1:0\n")?;
-        Ok(crate::component::OwnedComponent::from_spawned(
-            name, spawned,
-        ))
+        Ok(OwnedComponent::from_spawned(name, spawned))
     }
 
     fn fail_reaper_start(
@@ -517,21 +517,24 @@ pub mod test_support {
 
     fn claim_test_generation(
         state_dir: &std::path::Path,
-    ) -> crate::error::Result<(
-        crate::state_lease::StateLease,
-        crate::state_lease::StateTransaction,
-    )> {
+    ) -> Result<
+        (
+            crate::state_lease::StateLease,
+            crate::state_lease::StateTransaction,
+        ),
+        OrchestratorError,
+    > {
         let transaction = crate::state_lease::StateTransaction::acquire(state_dir)?;
         if let Some(state_lease) =
-            crate::state_lease::StateLease::try_claim(state_dir, crate::StackGeneration::new())?
+            crate::state_lease::StateLease::try_claim(state_dir, StackGeneration::new())?
         {
             return Ok((state_lease, transaction));
         }
         std::fs::remove_file(state_dir.join("stack.lock"))?;
         let state_lease =
-            crate::state_lease::StateLease::try_claim(state_dir, crate::StackGeneration::new())?
+            crate::state_lease::StateLease::try_claim(state_dir, StackGeneration::new())?
                 .ok_or_else(|| {
-                    crate::StackError::Platform("test generation lock could not be claimed".into())
+                    OrchestratorError::Platform("test generation lock could not be claimed".into())
                 })?;
         Ok((state_lease, transaction))
     }

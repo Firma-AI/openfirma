@@ -84,7 +84,10 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
     let error = result
         .err()
         .expect("authority exit must fail startup readiness");
-    let StackError::ReadinessProcessExited { component, .. } = error else {
+    let StackError::Orchestrator(
+        firma_process_orchestrator::OrchestratorError::ReadinessProcessExited { component, .. },
+    ) = error
+    else {
         panic!("unexpected startup error: {error}");
     };
     assert_eq!(component, "authority");

@@ -69,7 +69,9 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
         .err()
         .expect("orphaned component group must block a second start");
     match error {
-        StackError::AlreadyRunning { path } => assert_eq!(path, lock_path),
+        StackError::Orchestrator(
+            firma_process_orchestrator::OrchestratorError::AlreadyRunning { path },
+        ) => assert_eq!(path, lock_path),
         other => panic!("unexpected startup error: {other}"),
     }
     assert!(
@@ -85,7 +87,9 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
         .err()
         .expect("live component group must continue to block startup");
     match error {
-        StackError::AlreadyRunning { path } => assert_eq!(path, lock_path),
+        StackError::Orchestrator(
+            firma_process_orchestrator::OrchestratorError::AlreadyRunning { path },
+        ) => assert_eq!(path, lock_path),
         other => panic!("unexpected startup error: {other}"),
     }
 

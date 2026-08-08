@@ -7,6 +7,7 @@
 //! unchanged.
 
 pub mod config;
+pub mod error;
 pub mod start;
 pub mod status;
 pub mod stop;
@@ -14,6 +15,7 @@ pub mod stop;
 mod plan;
 
 pub use config::StackConfig;
+pub use error::StackError;
 pub use plan::resolve_stack_config;
 #[doc(hidden)]
 pub use start::supervise_owned_generation;
@@ -26,9 +28,8 @@ pub use stop::stop;
 // intentionally shadow the generic `spawn_stack_from_plan`/`start_from_plan`/
 // `stop_components`/`status_components` entries with firma-facing signatures.
 pub use firma_process_orchestrator::{
-    ComponentName, ComponentSpec, ComponentStatus, Result, RunningStack, StackError,
-    StackGeneration, StackHandle, StackStatus, StartMode, State, StopOutcome, error,
-    shutdown_event,
+    ComponentName, ComponentSpec, ComponentStatus, RunningStack, StackGeneration, StackHandle,
+    StackStatus, StartMode, State, StopOutcome, shutdown_event,
 };
 
 #[cfg(feature = "test-support")]

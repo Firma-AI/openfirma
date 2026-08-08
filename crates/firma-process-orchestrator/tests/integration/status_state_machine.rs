@@ -1,6 +1,6 @@
 //! Status cases that do not require a running stack.
 
-use firma_process_orchestrator::{StackError, State, status_components};
+use firma_process_orchestrator::{OrchestratorError, State, status_components};
 use tempfile::tempdir;
 
 #[test]
@@ -41,7 +41,7 @@ fn malformed_pidfile_is_reported() {
 
     let error = status_components(dir.path(), &["authority", "sidecar"])
         .expect_err("malformed status state must fail");
-    let StackError::RuntimeState(firma_runtime_state::RuntimeStateError::PidfileParse {
+    let OrchestratorError::RuntimeState(firma_runtime_state::RuntimeStateError::PidfileParse {
         path: error_path,
         value,
     }) = &error
