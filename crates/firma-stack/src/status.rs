@@ -51,8 +51,23 @@ pub struct StackStatus {
 ///
 /// Returns errors propagated by [`probe`].
 pub fn status(state_dir: &Path) -> Result<StackStatus> {
+    status_components(state_dir, crate::plan::component_names())
+}
+
+/// Probe each named component in order without acquiring process ownership.
+///
+/// The component names are firma-specific data supplied by the caller; this
+/// loop is agnostic to which components the stack contains.
+///
+/// # Errors
+///
+/// Returns errors propagated by [`probe`].
+fn status_components(state_dir: &Path, names: &[&str]) -> Result<StackStatus> {
     debug!(state_dir = %state_dir.display(), "probing stack status");
-    let components = vec![probe(state_dir, "authority")?, probe(state_dir, "sidecar")?];
+    let components = names
+        .iter()
+        .map(|name| probe(state_dir, name))
+        .collect::<Result<Vec<_>>>()?;
     for component in &components {
         trace!(
             name = %component.name,

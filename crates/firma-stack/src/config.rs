@@ -1,12 +1,10 @@
-//! Stack config: resolve the unified `firma.toml` shared by every
-//! subcommand. No separate per-component config files.
+//! Stack config: the resolved inputs needed to boot the stack as one unit.
+//!
+//! [`StackConfig`] is plain data with no dependency on the firma component
+//! crates. Resolving it from the unified `firma.toml` lives in the
+//! firma-specific plan module.
 
-use std::path::{Path, PathBuf};
-
-use firma_config_loader::CONFIG_FILE_NAME;
-use tracing::debug;
-
-use crate::error::{Result, StackError};
+use std::path::PathBuf;
 
 /// Configuration needed to boot the authority and sidecar as one unit.
 ///
@@ -24,54 +22,4 @@ pub struct StackConfig {
     /// [`std::env::current_exe`] is used when absent; callers whose executable
     /// is not `firma` must provide the binary explicitly.
     pub firma_bin: Option<PathBuf>,
-}
-
-/// Resolve the unified config for the stack.
-///
-/// An explicit `--config` path takes precedence; otherwise
-/// `firma-config-loader` discovery is used.
-///
-/// # Errors
-///
-/// Returns [`StackError::ConfigRead`] when no `firma.toml` can be
-/// resolved.
-pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> {
-    let resolved = firma_config_loader::ConfigResolver::default()
-        .resolve_config(cli_override)
-        .map_err(|error| StackError::ConfigRead {
-            path: error.path.clone(),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string()),
-        })?
-        .ok_or_else(|| StackError::ConfigRead {
-            path: cli_override.map_or_else(|| PathBuf::from(CONFIG_FILE_NAME), Path::to_path_buf),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, "no firma.toml found"),
-        })?;
-    debug!(config = %resolved.config_file().display(), "resolved unified firma.toml");
-    Ok(StackConfig {
-        state_dir: None,
-        config_file: resolved.config_file().to_path_buf(),
-        firma_bin: None,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn resolve_with_explicit_override() {
-        let tmp = tempdir().unwrap();
-        let p = tmp.path().join(CONFIG_FILE_NAME);
-        std::fs::write(&p, "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n").unwrap();
-        let cfg = resolve_stack_config(Some(&p)).unwrap();
-        assert_eq!(cfg.config_file, p);
-        assert!(cfg.state_dir.is_none());
-    }
-
-    #[test]
-    fn unresolvable_is_error() {
-        let missing = Path::new("/definitely/not/here/firma.toml");
-        assert!(resolve_stack_config(Some(missing)).is_err());
-    }
 }

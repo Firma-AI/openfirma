@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
-use crate::component::{ComponentName, OwnedComponent};
+use crate::component::{ComponentName, ComponentSpec, OwnedComponent};
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
-use crate::readiness::{FirmaToml, wait_for_tcp};
+use crate::readiness::wait_for_tcp;
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::supervisor::{
@@ -29,18 +29,6 @@ use crate::supervisor::{
     collect_child_until, collect_in_background, collect_in_background_with, launch_reaper,
 };
 use firma_runtime_state::{UserProcessId, pidfile};
-
-/// Resolve a component's listen address from the parsed unified `firma.toml`.
-///
-/// Resolution is deferred to each component's turn in the startup plan so that a
-/// component's own configuration error surfaces only after earlier components
-/// have spawned and become ready.
-type AddrResolver = dyn Fn(&FirmaToml) -> Result<std::net::SocketAddr>;
-
-/// Identity of the local policy authority component.
-const AUTHORITY_NAME: &str = "authority";
-/// Identity of the local enforcement sidecar component.
-const SIDECAR_NAME: &str = "sidecar";
 
 /// Mode in which [`start`] manages the stack after readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -495,12 +483,17 @@ fn spawn_stack_with_phase(
     firma_fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
     let transaction = StateTransaction::acquire(state_dir)?;
     debug!("acquiring stack lock");
-    let state_lease = acquire_lock(state_dir, &transaction, generation)?;
+    let component_names = crate::plan::component_names();
+    let state_lease = acquire_lock(state_dir, &transaction, generation, component_names)?;
     let mut startup = StartupGuard::new(state_dir, state_lease, transaction);
     debug!("reaping stale pidfiles");
-    reap_stale(state_dir)?;
+    reap_stale(state_dir, component_names)?;
 
-    match spawn_stack_inner(cfg, state_dir, &mut startup, stop_signal) {
+    // The firma-specific plan is resolved after the lock is claimed so that an
+    // already-running stack is reported before any configuration is parsed.
+    let plan = crate::plan::build_plan(cfg)?;
+    let exe = cfg.firma_bin.as_deref();
+    match spawn_stack_inner(plan, exe, state_dir, &mut startup, stop_signal) {
         Ok(()) => {
             let mut stack = startup.finish()?;
             if publish_ready {
@@ -519,47 +512,36 @@ fn spawn_stack_with_phase(
 
 /// Perform the ordered, rollback-protected component startup sequence.
 ///
-/// The plan is built up front from the unified `firma.toml` and spawned in
-/// order: each component must remain owned and live before the next is spawned,
-/// and live through every applicable readiness probe. Each successful
-/// [`spawn_with_config`] call records the component in [`StartupGuard`] before
-/// the next fallible step, and probe callbacks use
+/// The caller supplies a fully resolved [`ComponentSpec`] plan; this loop is
+/// agnostic to which components it contains. Specs are spawned in order: each
+/// component must remain owned and live before the next is spawned, and live
+/// through its readiness probe. Each successful spawn records the component in
+/// [`StartupGuard`] before the next fallible step, and probe callbacks use
 /// [`StartupGuard::exited_component`] rather than unowned process identities.
 /// These probes establish bounded startup evidence only; ongoing health belongs
 /// to supervision.
 fn spawn_stack_inner(
-    cfg: &StackConfig,
+    plan: Vec<ComponentSpec>,
+    exe: Option<&Path>,
     state_dir: &Path,
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
 ) -> Result<()> {
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
-    let exe = cfg.firma_bin.as_deref();
-    // Parse the unified firma.toml once; the probes below share it. The ordered
-    // startup plan is built up front in the fixed authority-then-sidecar order.
-    // Each entry resolves its listen address from the parsed config lazily, when
-    // that component's turn arrives, so a component's own configuration error
-    // surfaces only after the earlier components have spawned and become ready --
-    // preserving the exact failure ordering of the original open-coded sequence.
-    // Extracting this plan behind a config-driven closure is a later stage.
-    let config = FirmaToml::read(&cfg.config_file)?;
-    let plan: [(ComponentName, &AddrResolver); 2] = [
-        (ComponentName::new(AUTHORITY_NAME), &|config: &FirmaToml| {
-            config.authority_listen_addr()
-        }),
-        (ComponentName::new(SIDECAR_NAME), &|config: &FirmaToml| {
-            Ok(config.sidecar_config()?.interceptor.listen_addr)
-        }),
-    ];
 
-    for (name, resolve_addr) in plan {
-        debug!(config = %cfg.config_file.display(), exe = ?exe, component = %name.as_str(), "spawning component");
-        let component = spawn_with_config(&group, state_dir, name.clone(), &cfg.config_file, exe)?;
+    for spec in plan {
+        let ComponentSpec {
+            name,
+            args,
+            readiness_addr: addr,
+        } = spec;
+        debug!(exe = ?exe, component = %name.as_str(), args = ?args, "spawning component");
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let component = spawn_into_group(&group, state_dir, name.clone(), &arg_refs, exe)?;
         let pid = component.leader_pid();
         startup.record(component)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
-        let addr = resolve_addr(&config)?;
         std::fs::write(state_dir.join(name.listen_file_name()), format!("{addr}\n"))?;
         debug!(component = %name.as_str(), addr = %addr, "waiting for component TCP listen");
         wait_for_tcp(
@@ -643,7 +625,7 @@ fn start_detached(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
         let rollback = rollback_detached_start(state_dir, generation);
         return Err(with_rollback(error, rollback));
     }
-    let handle = match read_stack_handle(state_dir) {
+    let handle = match read_stack_handle(state_dir, crate::plan::component_names()) {
         Ok(handle) => handle,
         Err(error) => {
             terminate_detached_supervisor(&mut supervisor);
@@ -675,20 +657,16 @@ fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
 
 /// Reconstruct an informational [`StackHandle`] after supervisor-owned startup.
 ///
-/// This does not grant component collection, termination, or cleanup authority.
-fn read_stack_handle(state_dir: &Path) -> Result<StackHandle> {
-    // Enumerating which pidfiles to read from persisted state is a later stage;
-    // for now the two known component pidfiles are read in startup order.
-    let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?
-        .ok_or_else(|| StackError::Platform("authority.pid missing after startup".into()))?;
-    let sidecar_pid = pidfile::read(&state_dir.join("sidecar.pid"))?
-        .ok_or_else(|| StackError::Platform("sidecar.pid missing after startup".into()))?;
-    Ok(StackHandle {
-        component_pids: vec![
-            (AUTHORITY_NAME.to_string(), authority_pid),
-            (SIDECAR_NAME.to_string(), sidecar_pid),
-        ],
-    })
+/// The caller supplies the component names in startup order; this does not grant
+/// component collection, termination, or cleanup authority.
+fn read_stack_handle(state_dir: &Path, names: &[&str]) -> Result<StackHandle> {
+    let mut component_pids = Vec::with_capacity(names.len());
+    for name in names {
+        let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?
+            .ok_or_else(|| StackError::Platform(format!("{name}.pid missing after startup")))?;
+        component_pids.push(((*name).to_string(), pid));
+    }
+    Ok(StackHandle { component_pids })
 }
 
 /// Remove rollback-owned state through [`crate::stop::cleanup_generation`].
@@ -704,7 +682,12 @@ fn remove_startup_state(
         debug!("startup rollback lost state transaction; retaining runtime state");
         return;
     };
-    if let Err(error) = crate::stop::cleanup_generation(state_dir, Some(state_lease), transaction) {
+    if let Err(error) = crate::stop::cleanup_generation(
+        state_dir,
+        crate::plan::component_names(),
+        Some(state_lease),
+        transaction,
+    ) {
         debug!(%error, "startup rollback retained runtime state");
     }
 }
@@ -905,24 +888,19 @@ fn wait_for_launcher_ack(
     Ok(())
 }
 
-/// Translate a [`ComponentName`] into the private component spawn contract.
-fn spawn_with_config(
+/// Spawn one named component into the group with caller-supplied arguments.
+fn spawn_into_group(
     group: &crate::platform::Group,
     state_dir: &Path,
     name: ComponentName,
-    cfg_path: &Path,
+    args: &[&str],
     exe: Option<&Path>,
 ) -> Result<OwnedComponent> {
-    let cfg_str = cfg_path
-        .to_str()
-        .ok_or_else(|| StackError::Platform("non-utf8 config path".into()))?;
-    let subcommand = name.as_str().to_string();
-    let subcmd = vec![subcommand.as_str(), "--config", cfg_str];
     spawn_component(
         group,
         &SpawnRequest {
             name,
-            args: &subcmd,
+            args,
             state_dir,
             exe,
         },
@@ -937,10 +915,11 @@ fn acquire_lock(
     state_dir: &Path,
     _transaction: &StateTransaction,
     generation: StackGeneration,
+    component_names: &[&str],
 ) -> Result<StateLease> {
     let lock = state_dir.join("stack.lock");
     loop {
-        if !is_stack_stale(state_dir)? {
+        if !is_stack_stale(state_dir, component_names)? {
             return Err(StackError::AlreadyRunning { path: lock });
         }
         if let Some(state_lease) = StateLease::try_claim(state_dir, generation)? {
@@ -951,14 +930,14 @@ fn acquire_lock(
 }
 
 /// Prove that no persisted supervisor or component target remains live.
-fn is_stack_stale(state_dir: &Path) -> Result<bool> {
+fn is_stack_stale(state_dir: &Path, component_names: &[&str]) -> Result<bool> {
     if let Some(pid) = pidfile::read(&state_dir.join("stack.pid"))?
         && process_exists(pid)?
     {
         return Ok(false);
     }
-    for name in ["authority.pid", "sidecar.pid"] {
-        if let Some(id) = pidfile::read(&state_dir.join(name))?
+    for name in component_names {
+        if let Some(id) = pidfile::read(&state_dir.join(format!("{name}.pid")))?
             && TerminationTarget::from_stored_id(id).exists()?
         {
             return Ok(false);
@@ -968,9 +947,9 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
 }
 
 /// Remove process records only after their targets are proven absent.
-fn reap_stale(state_dir: &Path) -> Result<()> {
-    for name in ["authority.pid", "sidecar.pid"] {
-        let path = state_dir.join(name);
+fn reap_stale(state_dir: &Path, component_names: &[&str]) -> Result<()> {
+    for name in component_names {
+        let path = state_dir.join(format!("{name}.pid"));
         if let Some(id) = pidfile::read(&path)?
             && !TerminationTarget::from_stored_id(id).exists()?
         {

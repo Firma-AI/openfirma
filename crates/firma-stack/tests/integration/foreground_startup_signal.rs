@@ -64,8 +64,14 @@ fn sigterm_during_foreground_readiness_rolls_back_components() {
     std::fs::set_permissions(&fixture_path, Permissions::from_mode(0o700))
         .expect("make fixture executable");
 
-    std::fs::write(&config_path, "[authority]\nlisten_addr = \"127.0.0.1:9\"\n")
-        .expect("write config");
+    // A valid [sidecar] section lets the eager plan build succeed; the signal
+    // still interrupts authority readiness, which is what this test exercises.
+    std::fs::write(
+        &config_path,
+        "[authority]\nlisten_addr = \"127.0.0.1:9\"\n\
+         [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n",
+    )
+    .expect("write config");
 
     let mut launcher = Command::new(std::env::current_exe().expect("test executable"))
         .args([

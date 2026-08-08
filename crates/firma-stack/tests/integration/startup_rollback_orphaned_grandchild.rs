@@ -55,9 +55,14 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
         .expect("reserve authority port")
         .local_addr()
         .expect("authority address");
+    // A valid [sidecar] section lets the eager plan build succeed; the authority
+    // leader still exits during readiness, driving the rollback this test covers.
     std::fs::write(
         &config_path,
-        format!("[authority]\nlisten_addr = \"{port}\"\n"),
+        format!(
+            "[authority]\nlisten_addr = \"{port}\"\n\
+             [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n"
+        ),
     )
     .expect("write config");
     let config = StackConfig {

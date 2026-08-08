@@ -7,8 +7,14 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
     let dir = tempfile::tempdir().expect("dir");
     let state_dir = dir.path().join("state");
     let config_path = dir.path().join("firma.toml");
-    std::fs::write(&config_path, "[authority]\nlisten_addr = \"127.0.0.1:9\"\n")
-        .expect("write config");
+    // A valid [sidecar] section lets the eager plan build succeed; the authority
+    // child still exits before readiness, which is what this test exercises.
+    std::fs::write(
+        &config_path,
+        "[authority]\nlisten_addr = \"127.0.0.1:9\"\n\
+         [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n",
+    )
+    .expect("write config");
     let config = StackConfig {
         state_dir: Some(state_dir.clone()),
         config_file: config_path,

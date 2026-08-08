@@ -9,14 +9,16 @@ pub mod stop;
 
 mod component;
 mod detach;
+mod plan;
 mod platform;
 mod readiness;
 mod spawn;
 mod state_lease;
 mod supervisor;
 
-pub use config::{StackConfig, resolve_stack_config};
+pub use config::StackConfig;
 pub use error::StackError;
+pub use plan::resolve_stack_config;
 #[doc(hidden)]
 pub use start::supervise_owned_generation;
 pub use start::{RunningStack, StackHandle, StartMode, spawn_stack, start};
@@ -52,7 +54,12 @@ pub mod test_support {
         ///
         /// Returns runtime-state read or removal errors.
         pub fn cleanup(&self, state_dir: &std::path::Path) -> crate::error::Result<()> {
-            crate::stop::cleanup_generation(state_dir, Some(self.state_lease), &self.transaction)
+            crate::stop::cleanup_generation(
+                state_dir,
+                crate::plan::component_names(),
+                Some(self.state_lease),
+                &self.transaction,
+            )
         }
     }
 

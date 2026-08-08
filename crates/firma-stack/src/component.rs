@@ -42,6 +42,21 @@ impl ComponentName {
     }
 }
 
+/// Plain description of one component to spawn and wait on for readiness.
+///
+/// This carries no configuration types or closures: the firma-specific layer
+/// resolves everything eagerly and hands the generic startup loop this data.
+/// `args` is the full child subcommand, e.g. `["authority", "--config",
+/// "<path>"]`.
+pub struct ComponentSpec {
+    /// Identity used for command selection and runtime-state file names.
+    pub name: ComponentName,
+    /// Full child subcommand arguments passed to the component executable.
+    pub args: Vec<String>,
+    /// Address probed to establish this component's readiness.
+    pub readiness_addr: std::net::SocketAddr,
+}
+
 /// Exclusive process capabilities for one managed stack component.
 ///
 /// Holding this value authorizes its owner to collect the direct child and
