@@ -136,7 +136,9 @@ impl Platform for WindowsPlatform {
         // No component code may execute before Job assignment. This closes the
         // descendant-escape window between CreateProcess and assignment.
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
-        cmd.stdout(Stdio::from(log)).stderr(Stdio::from(stderr_log));
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr_log));
         let child = cmd.spawn().map_err(|source| OrchestratorError::Spawn {
             component: log_path
                 .file_stem()

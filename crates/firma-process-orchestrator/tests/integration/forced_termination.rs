@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use firma_process_orchestrator::{OrchestratorError, State};
 
-use crate::support::wait_for_file;
+use crate::{support::wait_for_file, topology};
 
 #[test]
 fn forced_termination_retains_state_until_target_disappears() {
@@ -33,12 +33,8 @@ fn forced_termination_retains_state_until_target_disappears() {
     .expect("spawn authority");
     wait_for_file(&ready);
 
-    let error = firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect_err("zombie target remains");
+    let error = firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect_err("zombie target remains");
     assert!(
         matches!(
             error,
@@ -51,12 +47,9 @@ fn forced_termination_retains_state_until_target_disappears() {
     assert!(state_dir.join("stack.lock").exists());
 
     child.wait().expect("collect authority");
-    let outcome = firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("retry stop");
+    let outcome =
+        firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+            .expect("retry stop");
     assert!(!outcome.forced);
     assert!(!state_dir.join("authority.pid").exists());
     assert!(!state_dir.join("stack.lock").exists());
@@ -92,9 +85,8 @@ fn status_probe_does_not_collect_owned_leader() {
         .read_to_end(&mut Vec::new())
         .expect("wait for authority exit");
 
-    let status =
-        firma_process_orchestrator::status_components(state_dir, &["authority", "sidecar"])
-            .expect("probe stack status");
+    let status = firma_process_orchestrator::status_components(state_dir, &topology())
+        .expect("probe stack status");
     let authority = status
         .components
         .iter()

@@ -11,10 +11,11 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
-use firma_process_orchestrator::{ComponentName, ComponentSpec};
+use firma_process_orchestrator::{ComponentSpec, OrchestratorError, StackTopology};
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
 
@@ -55,8 +56,8 @@ const SIDECAR_NAME: &str = "sidecar";
 /// The persisted-state readers (stop, status, cleanup, and detached handle
 /// reconstruction) enumerate the known components through this list so their
 /// runtime-state file names stay aligned with the startup plan.
-pub fn component_names() -> &'static [&'static str] {
-    &[AUTHORITY_NAME, SIDECAR_NAME]
+pub fn topology() -> Result<StackTopology, OrchestratorError> {
+    StackTopology::new([AUTHORITY_NAME, SIDECAR_NAME])
 }
 
 /// Build the ordered component startup plan from the unified `firma.toml`.
@@ -68,34 +69,36 @@ pub fn component_names() -> &'static [&'static str] {
 ///
 /// # Errors
 ///
-/// Returns a configuration error when the config path is not UTF-8, when the
-/// file cannot be read or parsed, or when either component section is missing
+/// Returns a configuration error when the file cannot be read or parsed, or
+/// when either component section is missing
 /// or holds an invalid listen address.
 pub fn build_plan(cfg: &StackConfig) -> Result<Vec<ComponentSpec>, StackError> {
-    let cfg_path = cfg
-        .config_file
-        .to_str()
-        .ok_or(StackError::NonUtf8ConfigPath)?;
     let config = FirmaToml::read(&cfg.config_file)?;
     let auth_addr = config.authority_listen_addr()?;
     let side_addr = config.sidecar_config()?.interceptor.listen_addr;
+    let executable = match &cfg.firma_bin {
+        Some(path) => path.clone(),
+        None => {
+            std::env::current_exe().map_err(|source| StackError::CurrentExecutable { source })?
+        }
+    };
+    let mut authority = Command::new(&executable);
+    authority
+        .arg(AUTHORITY_NAME)
+        .arg("--config")
+        .arg(&cfg.config_file);
+    let mut sidecar = Command::new(executable);
+    sidecar
+        .arg(SIDECAR_NAME)
+        .arg("--config")
+        .arg(&cfg.config_file);
     Ok(vec![
         ComponentSpec {
-            name: ComponentName::new(AUTHORITY_NAME),
-            args: vec![
-                AUTHORITY_NAME.to_string(),
-                "--config".to_string(),
-                cfg_path.to_string(),
-            ],
+            command: authority,
             readiness_addr: auth_addr,
         },
         ComponentSpec {
-            name: ComponentName::new(SIDECAR_NAME),
-            args: vec![
-                SIDECAR_NAME.to_string(),
-                "--config".to_string(),
-                cfg_path.to_string(),
-            ],
+            command: sidecar,
             readiness_addr: side_addr,
         },
     ])

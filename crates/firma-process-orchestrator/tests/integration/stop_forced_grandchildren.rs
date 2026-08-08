@@ -1,6 +1,9 @@
 //! Verifies that forced stack stop kills TERM-ignoring Unix grandchildren.
 
 #[cfg(unix)]
+use crate::topology;
+
+#[cfg(unix)]
 struct ProcessGroupCleanup(Option<nix::unistd::Pid>);
 
 #[cfg(unix)]
@@ -93,7 +96,7 @@ fn unix_pgrp_force_kills_term_ignoring_grandchild() {
     let stop_result = firma_process_orchestrator::stop_components(
         state_dir,
         Duration::from_millis(100),
-        &["authority", "sidecar"],
+        &topology(),
     );
 
     assert!(ready, "grandchild never became ready");

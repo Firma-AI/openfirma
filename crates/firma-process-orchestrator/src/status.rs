@@ -16,6 +16,7 @@ use firma_runtime_state::UserProcessId;
 use serde::Serialize;
 use tracing::{debug, trace};
 
+use crate::StackTopology;
 use crate::error::OrchestratorError;
 use crate::platform::TerminationTarget;
 use firma_runtime_state::pidfile;
@@ -55,11 +56,11 @@ pub struct StackStatus {
 /// Returns errors propagated by [`probe`].
 pub fn status_components(
     state_dir: &Path,
-    names: &[&str],
+    topology: &StackTopology,
 ) -> Result<StackStatus, OrchestratorError> {
     debug!(state_dir = %state_dir.display(), "probing stack status");
-    let components = names
-        .iter()
+    let components = topology
+        .names()
         .map(|name| probe(state_dir, name))
         .collect::<Result<Vec<_>, OrchestratorError>>()?;
     for component in &components {

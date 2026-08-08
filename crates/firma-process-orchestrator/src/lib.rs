@@ -14,6 +14,7 @@ pub mod shutdown_event;
 pub mod start;
 pub mod status;
 pub mod stop;
+mod topology;
 
 mod collect;
 mod component;
@@ -27,18 +28,19 @@ mod supervisor;
 pub use component::{ComponentName, ComponentSpec};
 pub use error::{OrchestratorError, StartError};
 pub use start::{
-    RunningStack, StackHandle, StartMode, spawn_stack_from_plan, start_from_plan,
+    RunningStack, StackHandle, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
     supervise_owned_generation_from_plan,
 };
 pub use state_lease::StackGeneration;
 pub use status::{ComponentStatus, StackStatus, State, status_components};
 pub use stop::{StopOutcome, stop_components};
+pub use topology::StackTopology;
 
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod test_support {
     use crate::component::{ComponentName, OwnedComponent};
-    use crate::{OrchestratorError, RunningStack, StackGeneration, StopOutcome};
+    use crate::{OrchestratorError, RunningStack, StackGeneration, StackTopology, StopOutcome};
 
     /// Component names, in startup order, used by the test scaffolding.
     ///
@@ -46,6 +48,10 @@ pub mod test_support {
     /// they mirror the firma stack topology only so the fixtures exercise a
     /// realistic two-component ordering.
     const TEST_COMPONENT_NAMES: &[&str] = &["authority", "sidecar"];
+
+    fn test_topology() -> Result<StackTopology, OrchestratorError> {
+        StackTopology::new(TEST_COMPONENT_NAMES.iter().copied())
+    }
 
     /// Test-only capability holding startup's exclusive runtime-state transaction.
     pub struct RawStartupTransaction {
@@ -74,7 +80,7 @@ pub mod test_support {
         pub fn cleanup(&self, state_dir: &std::path::Path) -> Result<(), OrchestratorError> {
             crate::stop::cleanup_generation(
                 state_dir,
-                TEST_COMPONENT_NAMES,
+                &test_topology()?,
                 Some(self.state_lease),
                 &self.transaction,
             )
@@ -166,25 +172,30 @@ pub mod test_support {
     }
 
     /// Simulate component-reaper thread creation failure and recover both children.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a test component name is invalid.
     pub fn recover_raw_children_after_reaper_failure(
         authority: std::process::Child,
         sidecar: std::process::Child,
-    ) -> Vec<std::process::Child> {
+    ) -> Result<Vec<std::process::Child>, OrchestratorError> {
         let components = vec![
-            owned_component(ComponentName::new("authority"), authority),
-            owned_component(ComponentName::new("sidecar"), sidecar),
+            owned_component(ComponentName::new("authority")?, authority),
+            owned_component(ComponentName::new("sidecar")?, sidecar),
         ];
-        match crate::supervisor::collect_in_background_with(components, |_| {
-            Err(std::io::Error::other("injected reaper start failure"))
-        }) {
-            Ok(_) => Vec::new(),
-            Err(error) => error
-                .into_components()
-                .into_iter()
-                .map(|component| component.into_parts().0)
-                .collect(),
-        }
+        Ok(
+            match crate::supervisor::collect_in_background_with(components, |_| {
+                Err(std::io::Error::other("injected reaper start failure"))
+            }) {
+                Ok(_) => Vec::new(),
+                Err(error) => error
+                    .into_components()
+                    .into_iter()
+                    .map(|component| component.into_parts().0)
+                    .collect(),
+            },
+        )
     }
 
     /// Simulate reaper creation failure and run the production fallback.
@@ -198,8 +209,14 @@ pub mod test_support {
         sidecar: std::process::Child,
     ) -> std::io::Result<()> {
         let components = vec![
-            owned_component(ComponentName::new("authority"), authority),
-            owned_component(ComponentName::new("sidecar"), sidecar),
+            owned_component(
+                ComponentName::new("authority").map_err(std::io::Error::other)?,
+                authority,
+            ),
+            owned_component(
+                ComponentName::new("sidecar").map_err(std::io::Error::other)?,
+                sidecar,
+            ),
         ];
         match crate::supervisor::collect_in_background_with(components, |_| {
             Err(std::io::Error::other("injected reaper start failure"))
@@ -221,9 +238,10 @@ pub mod test_support {
         drop(transaction);
         Ok(RunningStack::from_components(
             vec![
-                owned_component(ComponentName::new("authority"), authority),
-                owned_component(ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority")?, authority),
+                owned_component(ComponentName::new("sidecar")?, sidecar),
             ],
+            test_topology()?,
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -245,14 +263,19 @@ pub mod test_support {
         drop(transaction);
         // Components in startup order: authority (server) then sidecar (client).
         let mut components = vec![
-            owned_component(ComponentName::new("authority"), authority),
-            owned_component(ComponentName::new("sidecar"), sidecar),
+            owned_component(ComponentName::new("authority")?, authority),
+            owned_component(ComponentName::new("sidecar")?, sidecar),
         ];
         let stop = crate::supervisor::StopSignal::install()?;
         let supervision_result =
             crate::supervisor::block_until_owned_exit_with(&stop, &mut components);
-        let teardown_result =
-            crate::stop::stop_owned(state_dir, timeout, &mut components, state_lease);
+        let teardown_result = crate::stop::stop_owned(
+            state_dir,
+            timeout,
+            &test_topology()?,
+            &mut components,
+            state_lease,
+        );
         if teardown_result.is_ok() {
             // Collect in reverse of startup, consistent with owned teardown.
             for component in components.iter_mut().rev() {
@@ -273,9 +296,10 @@ pub mod test_support {
         drop(transaction);
         Ok(RunningStack::from_components_with_reaper_launcher(
             vec![
-                owned_component(ComponentName::new("authority"), authority),
-                owned_component(ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority")?, authority),
+                owned_component(ComponentName::new("sidecar")?, sidecar),
             ],
+            test_topology()?,
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -293,9 +317,10 @@ pub mod test_support {
         drop(transaction);
         Ok(RunningStack::from_components_with_reaper_launcher(
             vec![
-                owned_component(ComponentName::new("authority"), authority),
-                owned_component(ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority")?, authority),
+                owned_component(ComponentName::new("sidecar")?, sidecar),
             ],
+            test_topology()?,
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -323,17 +348,18 @@ pub mod test_support {
         let authority = spawn_test_component(
             &group,
             state_dir,
-            ComponentName::new("authority"),
+            ComponentName::new("authority")?,
             authority_command,
         )?;
         let sidecar = spawn_test_component(
             &group,
             state_dir,
-            ComponentName::new("sidecar"),
+            ComponentName::new("sidecar")?,
             sidecar_command,
         )?;
         Ok(RunningStack::from_components_with_reaper_launcher(
             vec![authority, sidecar],
+            test_topology()?,
             state_dir.to_path_buf(),
             state_lease,
             None,
@@ -375,7 +401,8 @@ pub mod test_support {
         timeout: std::time::Duration,
         generation: StackGeneration,
     ) -> Result<StopOutcome, OrchestratorError> {
-        crate::stop::stop_generation(state_dir, timeout, TEST_COMPONENT_NAMES, generation)
+        let topology = StackTopology::new(TEST_COMPONENT_NAMES.iter().copied())?;
+        crate::stop::stop_generation(state_dir, timeout, &topology, generation)
     }
 
     /// Return the PID-scoped detached readiness path.
@@ -435,9 +462,10 @@ pub mod test_support {
         let (state_lease, transaction) = claim_test_generation(state_dir)?;
         let stack = RunningStack::from_components(
             vec![
-                owned_component(ComponentName::new("authority"), authority),
-                owned_component(ComponentName::new("sidecar"), sidecar),
+                owned_component(ComponentName::new("authority")?, authority),
+                owned_component(ComponentName::new("sidecar")?, sidecar),
             ],
+            test_topology()?,
             state_dir.to_path_buf(),
             state_lease,
             Some(transaction),

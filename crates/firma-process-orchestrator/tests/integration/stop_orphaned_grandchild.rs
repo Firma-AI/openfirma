@@ -1,5 +1,7 @@
 //! Verifies that stack stop tracks process groups after their leaders exit.
 
+use crate::topology;
+
 struct ProcessGroupCleanup(Option<nix::unistd::Pid>);
 
 impl ProcessGroupCleanup {
@@ -84,7 +86,7 @@ fn unix_pgrp_kills_grandchild_after_leader_exits() {
     let stop_result = firma_process_orchestrator::stop_components(
         state_dir,
         Duration::from_millis(100),
-        &["authority", "sidecar"],
+        &topology(),
     );
 
     assert!(ready, "grandchild never became ready");
