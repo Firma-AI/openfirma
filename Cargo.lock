@@ -1571,7 +1571,6 @@ version = "0.1.6"
 dependencies = [
  "ctrlc",
  "firma-fs",
- "firma-process-orchestrator",
  "firma-runtime-state",
  "fs2",
  "insta",

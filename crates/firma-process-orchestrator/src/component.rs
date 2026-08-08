@@ -120,25 +120,6 @@ impl OwnedComponent {
         }
     }
 
-    /// Bind an existing child and termination target to a component identity.
-    ///
-    /// This constructor is used by test scaffolding that starts processes
-    /// outside the production spawn path.
-    #[cfg(feature = "test-support")]
-    pub(crate) fn from_child(
-        name: ComponentName,
-        child: Child,
-        leader_pid: UserProcessId,
-        termination_target: TerminationTarget,
-    ) -> Self {
-        Self {
-            name,
-            child,
-            leader_pid,
-            termination_target,
-        }
-    }
-
     /// Return the component's immutable identity.
     pub const fn name(&self) -> &ComponentName {
         &self.name

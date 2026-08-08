@@ -28,10 +28,7 @@ use crate::readiness::wait_for_tcp;
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::stop::StopOutcome;
-use crate::supervisor::{
-    ReaperLauncher, StopSignal, block_until_owned_exit_with, collect_in_background,
-    collect_in_background_with, launch_reaper,
-};
+use crate::supervisor::{StopSignal, block_until_owned_exit_with, collect_in_background};
 use firma_runtime_state::{UserProcessId, pidfile};
 
 /// Informational handle returned once the stack is ready.
@@ -67,7 +64,6 @@ struct OwnedStack {
     components: Vec<OwnedComponent>,
     topology: StackTopology,
     state_dir: PathBuf,
-    reaper_launcher: ReaperLauncher,
     state_lease: StateLease,
     startup_transaction: Option<StateTransaction>,
 }
@@ -327,31 +323,12 @@ impl RunningStack {
     ///
     /// The startup [`StateTransaction`] remains held until
     /// [`RunningStack::mark_ready`] commits complete-state publication.
-    pub(crate) fn from_components(
+    fn from_components(
         components: Vec<OwnedComponent>,
         topology: StackTopology,
         state_dir: PathBuf,
         state_lease: StateLease,
         startup_transaction: Option<StateTransaction>,
-    ) -> Self {
-        Self::from_components_with_reaper_launcher(
-            components,
-            topology,
-            state_dir,
-            state_lease,
-            startup_transaction,
-            launch_reaper,
-        )
-    }
-
-    /// Construct the sole running owner with a caller-supplied reaper launcher.
-    pub(crate) fn from_components_with_reaper_launcher(
-        components: Vec<OwnedComponent>,
-        topology: StackTopology,
-        state_dir: PathBuf,
-        state_lease: StateLease,
-        startup_transaction: Option<StateTransaction>,
-        reaper_launcher: ReaperLauncher,
     ) -> Self {
         let handle = StackHandle {
             component_pids: components
@@ -370,7 +347,6 @@ impl RunningStack {
                 components,
                 topology,
                 state_dir,
-                reaper_launcher,
                 state_lease,
                 startup_transaction,
             })),
@@ -414,7 +390,7 @@ impl RunningStack {
     /// Returns process-probe, termination, or runtime-state cleanup errors.
     pub fn shutdown(&mut self, timeout: Duration) -> Result<StopOutcome, OrchestratorError> {
         let RunningStackState::Owned(owned) = &mut self.state else {
-            return Ok(crate::stop::StopOutcome { forced: false });
+            return Ok(StopOutcome { forced: false });
         };
         // A detached attachment failure may tear down before publishing ready.
         // Release startup serialization before the owned stop reacquires it.
@@ -442,7 +418,7 @@ impl RunningStack {
         let state = std::mem::replace(&mut self.state, RunningStackState::Stopped);
         if let RunningStackState::Owned(owned) = state {
             let owned = *owned;
-            return match collect_in_background_with(owned.components, owned.reaper_launcher) {
+            return match collect_in_background(owned.components) {
                 Ok(_) => true,
                 Err(error) => {
                     debug!(error = %error.source(), "could not transfer components to background reaper");
@@ -797,23 +773,6 @@ pub fn supervise_owned_generation_from_plan<E>(
         .map_err(StartError::Orchestrator)
 }
 
-/// Supervise an already-owned stack after installing [`StopSignal`].
-#[cfg(feature = "test-support")]
-pub(crate) fn supervise_running_stack(
-    mut stack: RunningStack,
-    state_dir: &Path,
-    timeout: Duration,
-) -> Result<(), OrchestratorError> {
-    let stop_signal = match StopSignal::install() {
-        Ok(stop_signal) => stop_signal,
-        Err(error) => {
-            let rollback = stack.shutdown(timeout);
-            return Err(with_rollback(error, rollback));
-        }
-    };
-    supervise_running_stack_with_signal(stack, state_dir, timeout, &stop_signal)
-}
-
 /// Execute the supervisor side of [`LauncherAttachmentState`] and own teardown.
 ///
 /// Attachment state is written while the startup [`StateTransaction`] remains
@@ -863,7 +822,7 @@ fn supervise_running_stack_with_signal(
 ///
 /// Child exit, identity mismatch, or timeout leaves the launcher responsible for
 /// terminating and collecting the supervisor.
-pub(crate) fn wait_for_supervisor_attachment(
+fn wait_for_supervisor_attachment(
     state_dir: &Path,
     supervisor: &mut std::process::Child,
     timeout: Duration,

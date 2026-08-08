@@ -10,9 +10,6 @@ description = "Generic process-supervision machinery for a local multi-component
 [lints]
 workspace = true
 
-[features]
-test-support = []
-
 [dependencies]
 ctrlc = { workspace = true }
 firma-fs = { workspace = true }
@@ -25,7 +22,6 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-firma-process-orchestrator = { path = ".", features = ["test-support"] }
 insta = { workspace = true }
 serial_test = { workspace = true }
 
