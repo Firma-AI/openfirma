@@ -1,12 +1,12 @@
 //! Status cases that do not require a running stack.
 
-use firma_stack::{StackError, State, status};
+use firma_process_orchestrator::{StackError, State, status_components};
 use tempfile::tempdir;
 
 #[test]
 fn no_pidfiles_yields_stopped() {
     let dir = tempdir().expect("dir");
-    let stack_status = status(dir.path()).expect("status");
+    let stack_status = status_components(dir.path(), &["authority", "sidecar"]).expect("status");
     assert_eq!(stack_status.components.len(), 2);
     for component in &stack_status.components {
         assert_eq!(component.state, State::Stopped);
@@ -18,7 +18,7 @@ fn dead_pid_yields_stopped() {
     let dir = tempdir().expect("dir");
     std::fs::write(dir.path().join("authority.pid"), "999998\n").expect("write authority");
     std::fs::write(dir.path().join("sidecar.pid"), "999999\n").expect("write sidecar");
-    let stack_status = status(dir.path()).expect("status");
+    let stack_status = status_components(dir.path(), &["authority", "sidecar"]).expect("status");
     let authority = stack_status
         .components
         .iter()
@@ -39,7 +39,8 @@ fn malformed_pidfile_is_reported() {
     let path = dir.path().join("sidecar.pid");
     std::fs::write(&path, "not-a-pid\n").expect("write sidecar pidfile");
 
-    let error = status(dir.path()).expect_err("malformed status state must fail");
+    let error = status_components(dir.path(), &["authority", "sidecar"])
+        .expect_err("malformed status state must fail");
     let StackError::RuntimeState(firma_runtime_state::RuntimeStateError::PidfileParse {
         path: error_path,
         value,

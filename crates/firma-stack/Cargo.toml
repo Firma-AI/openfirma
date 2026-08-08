@@ -26,7 +26,6 @@ firma-stack = { path = ".", features = ["test-support"] }
 insta = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-uuid = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { workspace = true }

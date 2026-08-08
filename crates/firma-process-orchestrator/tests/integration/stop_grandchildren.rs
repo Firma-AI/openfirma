@@ -34,8 +34,12 @@ fn unix_pgrp_kills_grandchild() {
     .env("CHILD_READY_MARKER", &child_ready_marker)
     .env("PARENT_READY_MARKER", &parent_ready_marker)
     .env("TERMINATED_MARKER", &terminated_marker);
-    firma_stack::test_support::spawn_raw_into_group(state_dir, "authority", &mut cmd)
-        .expect("spawn");
+    firma_process_orchestrator::test_support::spawn_raw_into_group(
+        state_dir,
+        "authority",
+        &mut cmd,
+    )
+    .expect("spawn");
 
     // Poll the marker contents rather than its existence: shell redirection
     // creates the file before `printf` writes the readiness payload.
@@ -51,7 +55,11 @@ fn unix_pgrp_kills_grandchild() {
 
     // Stop even when readiness timed out so a failed fixture cannot leak its
     // process group into subsequent tests.
-    let stop_result = firma_stack::stop(state_dir, Duration::from_secs(5));
+    let stop_result = firma_process_orchestrator::stop_components(
+        state_dir,
+        Duration::from_secs(5),
+        &["authority", "sidecar"],
+    );
 
     assert!(ready, "grandchild never became ready");
     let outcome = stop_result.expect("stop");
