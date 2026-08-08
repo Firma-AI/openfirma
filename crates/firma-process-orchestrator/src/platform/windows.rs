@@ -26,15 +26,16 @@ use windows_sys::Win32::System::JobObjects::{
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, EVENT_MODIFY_STATE,
-    GetCurrentProcess, OpenEventW, OpenProcess, OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-    ResumeThread, SetEvent, THREAD_SUSPEND_RESUME, TerminateProcess,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+    DETACHED_PROCESS, EVENT_MODIFY_STATE, GetCurrentProcess, OpenEventW, OpenProcess, OpenThread,
+    PROCESS_SET_QUOTA, PROCESS_TERMINATE, ResumeThread, SetEvent, THREAD_SUSPEND_RESUME,
+    TerminateProcess,
 };
 
+use crate::collect::{collect_child_in_background, collect_child_until};
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
 use crate::shutdown_event::windows_shutdown_event_name;
-use crate::supervisor::{collect_child_in_background, collect_child_until};
 use firma_runtime_state::ChildExt as _;
 
 /// Windows implementation of the process-authority [`Platform`] contract.
@@ -235,6 +236,22 @@ impl Platform for WindowsPlatform {
             return Err(StackError::Platform("TerminateProcess failed".into()));
         }
         Ok(())
+    }
+
+    fn child_already_reaped(_error: &std::io::Error) -> bool {
+        false
+    }
+
+    fn spawn_detached(cmd: &mut Command) -> Result<Child> {
+        // The breakaway creation flag ensures the supervisor survives the
+        // launcher's Job Object. If that Job does not grant breakaway, startup
+        // fails closed: launching inside it would make detached lifetime depend
+        // on an external owner-loss policy that Firma cannot inspect or control.
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        cmd.spawn().map_err(|source| StackError::Spawn {
+            component: "supervisor (breakaway required)".into(),
+            source,
+        })
     }
 }
 

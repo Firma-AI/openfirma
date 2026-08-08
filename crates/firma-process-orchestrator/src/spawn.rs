@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 
 use tracing::debug;
 
+use crate::collect::{collect_child_until, collect_target_in_background};
 use crate::component::{ComponentName, OwnedComponent};
 use crate::error::Result;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
-use crate::supervisor::{collect_child_until, collect_target_in_background};
 use firma_runtime_state::pidfile;
 
 /// Immutable inputs required to spawn one managed stack component.
