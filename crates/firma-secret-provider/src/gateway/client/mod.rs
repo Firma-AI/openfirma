@@ -281,7 +281,7 @@ impl GatewayClient {
             // `+ 1` lets an over-limit line still trip the length check below
             // instead of being silently truncated to exactly the limit.
             let mut limited = reader.take(self.config.max_buffer_size.as_u64().saturating_add(1));
-            let mut line = String::with_capacity(self.max_buffer_size());
+            let mut line = String::new();
             limited
                 .read_line(&mut line)
                 .await
