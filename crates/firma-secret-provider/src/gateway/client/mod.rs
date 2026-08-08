@@ -226,7 +226,17 @@ impl GatewayClient {
         };
 
         match serde_json::from_str::<PushResponse>(&response_line) {
-            Ok(PushResponse::Ok { placeholder }) => Ok(placeholder),
+            Ok(PushResponse::Ok {
+                placeholder: returned,
+            }) if &returned == placeholder => Ok(returned),
+            Ok(PushResponse::Ok {
+                placeholder: returned,
+            }) => Err(GatewayClientError::ProtocolViolation(
+                ProtocolViolation::PushPlaceholderMismatch {
+                    expected: placeholder.clone(),
+                    actual: returned,
+                },
+            )),
             Ok(PushResponse::Err { error }) => Err(GatewayClientError::Rejected(error.to_string())),
             Err(error) => Err(GatewayClientError::ProtocolViolation(
                 ProtocolViolation::Deserialize(error),

@@ -264,6 +264,40 @@ async fn push_secret_returns_placeholder_on_success() {
 }
 
 #[tokio::test]
+async fn push_secret_rejects_mismatched_placeholder() {
+    let requested = SecretPlaceholder::new();
+    let returned = SecretPlaceholder::new();
+    let secret = SecretString::from("s3cr3t");
+    let client = GatewayClient::new(
+        mock_gateway(&format!(r#"{{"type":"ok","placeholder":"{returned}"}}"#))
+            .await
+            .expect("mock gateway"),
+        GatewayClientConfig::default(),
+    );
+
+    let error = client
+        .push_secret(&requested, &secret, vec![])
+        .await
+        .expect_err("mismatched placeholder must fail closed");
+
+    let rendered = error.to_string();
+    let requested_text = requested.to_string();
+    let returned_text = returned.to_string();
+    assert!(rendered.contains(&requested_text));
+    assert!(rendered.contains(&returned_text));
+    let rendered = rendered
+        .replace(&requested_text, "[requested]")
+        .replace(&returned_text, "[returned]");
+    insta::assert_snapshot!(rendered, @"secret gateway protocol violation: gateway returned placeholder [returned] after pushing [requested]");
+    std::assert_matches!(
+        error,
+        GatewayClientError::ProtocolViolation(
+            ProtocolViolation::PushPlaceholderMismatch { expected, actual }
+        ) if expected == requested && actual == returned
+    );
+}
+
+#[tokio::test]
 async fn push_secret_reports_gateway_rejection() {
     let placeholder = SecretPlaceholder::new();
     let secret = SecretString::from("s3cr3t");
