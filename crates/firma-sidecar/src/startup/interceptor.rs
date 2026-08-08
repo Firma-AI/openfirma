@@ -5,7 +5,6 @@
 //! returns a [`tokio::task::JoinHandle`] that resolves when the
 //! interceptor shuts down.
 
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -14,18 +13,13 @@ use tokio_util::sync::CancellationToken;
 use crate::composio::PROTECTED_HOSTS;
 use crate::config::{self, HttpsMitmConfig, InterceptorMode};
 use crate::handler::RequestHandler;
+use crate::interceptor;
+#[cfg(unix)]
+use crate::interceptor::Interceptor as _;
 use crate::interceptor::https_mitm::{host_matches_any, normalize_patterns};
-use crate::interceptor::{self, Interceptor as _};
 
 fn is_loopback_addr(addr: SocketAddr) -> bool {
     addr.ip().is_loopback()
-}
-
-fn bind_tcp_listener(addr: SocketAddr) -> io::Result<(tokio::net::TcpListener, SocketAddr)> {
-    let listener = std::net::TcpListener::bind(addr)?;
-    listener.set_nonblocking(true)?;
-    let bound_addr = listener.local_addr()?;
-    Ok((tokio::net::TcpListener::from_std(listener)?, bound_addr))
 }
 
 /// Report HTTPS MITM configuration gaps that would blind Composio governance.
@@ -75,6 +69,31 @@ pub struct SpawnedInterceptor {
     pub listen_addr: String,
 }
 
+fn spawn_grpc_interceptor(
+    addr: SocketAddr,
+    handler: Arc<RequestHandler>,
+    cancel: CancellationToken,
+) -> anyhow::Result<SpawnedInterceptor> {
+    let interceptor = interceptor::grpc::GrpcInterceptor::new(addr);
+    let listener = std::net::TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
+    let bound_addr = listener.local_addr()?;
+    let listener = tokio::net::TcpListener::from_std(listener)?;
+    tracing::debug!(listen_addr = %addr, "gRPC interceptor configured");
+    let handle = tokio::spawn(async move {
+        if let Err(e) = interceptor
+            .run_with_listener(listener, handler, cancel)
+            .await
+        {
+            tracing::error!(error = %e, "gRPC interceptor failed");
+        }
+    });
+    Ok(SpawnedInterceptor {
+        handle,
+        listen_addr: bound_addr.to_string(),
+    })
+}
+
 /// Spawn the configured interceptor as a background tokio task.
 ///
 /// # Errors
@@ -117,7 +136,10 @@ pub fn spawn_interceptor(
             // failure surfaces synchronously here (the sidecar exits non-zero)
             // rather than leaving a dead bound port to time out.
             let mitm_runtime = interceptor.build_mitm_runtime()?;
-            let (listener, bound_addr) = bind_tcp_listener(ic.listen_addr)?;
+            let std_listener = std::net::TcpListener::bind(ic.listen_addr)?;
+            std_listener.set_nonblocking(true)?;
+            let bound_addr = std_listener.local_addr()?;
+            let listener = tokio::net::TcpListener::from_std(std_listener)?;
             tracing::debug!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
             let handle = tokio::spawn(async move {
                 if let Err(e) = interceptor
@@ -132,23 +154,7 @@ pub fn spawn_interceptor(
                 listen_addr: bound_addr.to_string(),
             })
         }
-        InterceptorMode::Grpc => {
-            let interceptor = interceptor::grpc::GrpcInterceptor::new(ic.listen_addr);
-            let (listener, bound_addr) = bind_tcp_listener(ic.listen_addr)?;
-            tracing::debug!(listen_addr = %ic.listen_addr, "gRPC interceptor configured");
-            let handle = tokio::spawn(async move {
-                if let Err(e) = interceptor
-                    .run_with_listener(listener, handler, cancel)
-                    .await
-                {
-                    tracing::error!(error = %e, "gRPC interceptor failed");
-                }
-            });
-            Ok(SpawnedInterceptor {
-                handle,
-                listen_addr: bound_addr.to_string(),
-            })
-        }
+        InterceptorMode::Grpc => spawn_grpc_interceptor(ic.listen_addr, handler, cancel),
         #[cfg(unix)]
         InterceptorMode::UnixSocket => {
             let socket_path = ic

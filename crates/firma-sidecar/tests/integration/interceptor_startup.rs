@@ -34,7 +34,7 @@ mode = "grpc"
 listen_addr = "{listen_addr}"
 
 [mapping]
-rules_path = "{}"
+rules_path = '{}'
 default_protected = false
 "#,
             rules_path.display()
