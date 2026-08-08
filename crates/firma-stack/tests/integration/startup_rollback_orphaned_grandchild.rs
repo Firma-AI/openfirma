@@ -66,7 +66,6 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
     )
     .expect("write config");
     let config = StackConfig {
-        state_dir: Some(state_dir.clone()),
         config_file: config_path,
         firma_bin: Some(fixture_path),
     };

@@ -1,10 +1,8 @@
-//! Firma-specific stack topology over the generic process orchestrator.
+//! Firma-specific authority and sidecar stack lifecycle.
 //!
 //! This crate knows the concrete `[authority, sidecar]` topology and its unified
-//! `firma.toml`. It resolves that topology into a plain [`ComponentSpec`] plan
-//! and hands it to [`firma_process_orchestrator`], whose generic supervision
-//! machinery is re-exported here so the stable `firma_stack::` API paths are
-//! unchanged.
+//! `firma.toml`, and exposes the lifecycle operations used by the Firma CLI and
+//! demo.
 
 pub mod config;
 pub mod error;
@@ -24,14 +22,9 @@ pub use start::{spawn_stack, start};
 pub use status::status;
 pub use stop::stop;
 
-// Re-export the generic orchestrator surface so every public type the workspace
-// uses through `firma_stack::` keeps its path. The firma entry wrappers above
-// intentionally shadow the generic process-orchestrator entry points and
-// `stop_components`/`status_components` entries with firma-facing signatures.
-pub use firma_process_orchestrator::{
-    ComponentName, ComponentSpec, ComponentStatus, RunningStack, StackGeneration, StackHandle,
-    StackStatus, State, StopOutcome, shutdown_event,
-};
+pub use firma_process_orchestrator::{RunningStack, StackHandle, StackStatus, State, StopOutcome};
+#[doc(hidden)]
+pub use firma_process_orchestrator::{StackGeneration, shutdown_event};
 
 #[cfg(feature = "test-support")]
 #[doc(hidden)]

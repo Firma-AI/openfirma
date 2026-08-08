@@ -122,7 +122,6 @@ fn run_foreground_child() {
     let config_path = PathBuf::from(std::env::var_os(CONFIG_ENV).expect("config path"));
     let state_dir = PathBuf::from(std::env::var_os(STATE_ENV).expect("state path"));
     let config = StackConfig {
-        state_dir: Some(state_dir.clone()),
         config_file: config_path,
         firma_bin: Some(state_dir.parent().expect("state parent").join("fixture.sh")),
     };
