@@ -220,6 +220,30 @@ async fn resolve_batch_rejects_oversized_unterminated_response() {
 }
 
 #[tokio::test]
+async fn resolve_batch_does_not_preallocate_configured_maximum() {
+    let client = GatewayClient::new(
+        mock_gateway(r#"[{"type":"ok","secret_b64":"aA=="}]"#)
+            .await
+            .expect("mock gateway"),
+        GatewayClientConfig {
+            max_buffer_size: bytesize::ByteSize::b(u64::MAX),
+            ..Default::default()
+        },
+    );
+
+    let secrets = client
+        .resolve_batch(
+            &[SecretPlaceholder::new()],
+            Authority::from_static("example.com"),
+        )
+        .await
+        .expect("transport succeeds")
+        .expect("resolution succeeds");
+
+    assert_eq!(secrets.len(), 1);
+}
+
+#[tokio::test]
 async fn resolve_batch_reports_unreachable_gateway() {
     let client = GatewayClient::new(
         unreachable_endpoint().await.expect("unreachable endpoint"),
