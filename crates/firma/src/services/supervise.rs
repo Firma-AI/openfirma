@@ -15,7 +15,6 @@ pub fn run(args: Args) -> ExitCode {
     } = args;
     info!(state_dir = %state_dir.display(), "supervisor process starting");
     let config = firma_stack::StackConfig {
-        state_dir: Some(state_dir.clone()),
         config_file: config,
         firma_bin,
     };

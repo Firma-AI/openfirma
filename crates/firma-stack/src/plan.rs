@@ -40,7 +40,6 @@ pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig, 
         })?;
     debug!(config = %resolved.config_file().display(), "resolved unified firma.toml");
     Ok(StackConfig {
-        state_dir: None,
         config_file: resolved.config_file().to_path_buf(),
         firma_bin: None,
     })
@@ -181,7 +180,6 @@ mod tests {
             .expect("write config");
         let cfg = resolve_stack_config(Some(&p)).expect("resolve override");
         assert_eq!(cfg.config_file, p);
-        assert!(cfg.state_dir.is_none());
     }
 
     #[test]

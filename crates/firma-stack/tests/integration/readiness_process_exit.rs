@@ -16,7 +16,6 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
     )
     .expect("write config");
     let config = StackConfig {
-        state_dir: Some(state_dir.clone()),
         config_file: config_path,
         // The stack launches the readiness child as `<exe> authority --config
         // <path>`. Pointed back at this test binary, libtest rejects the
@@ -92,7 +91,6 @@ fn authority_exit_aborts_sidecar_readiness() {
     )
     .expect("write config");
     let config = StackConfig {
-        state_dir: Some(state_dir.clone()),
         config_file: config_path,
         firma_bin: Some(fixture_path),
     };

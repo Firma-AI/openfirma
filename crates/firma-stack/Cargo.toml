@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
-description = "Process supervision and observability primitives for the firma stack"
+description = "Firma authority and sidecar stack lifecycle"
 
 [lints]
 workspace = true

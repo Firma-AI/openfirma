@@ -30,7 +30,6 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
     wipe_ca_dir(&state_dir.join("generated-firma-ca"))?;
 
     let cfg = StackConfig {
-        state_dir: Some(state_dir.clone()),
         config_file: manifest.config_file.clone(),
         firma_bin: Some(resolve_firma_bin()?),
     };

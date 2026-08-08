@@ -59,7 +59,6 @@ fn start_recovers_missing_lock_for_orphaned_component_group() {
     assert_eq!(authority.state, State::Unhealthy);
 
     let config = StackConfig {
-        state_dir: Some(state_dir.to_path_buf()),
         config_file: state_dir.join("missing-firma.toml"),
         firma_bin: None,
     };
