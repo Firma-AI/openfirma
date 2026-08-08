@@ -1,6 +1,9 @@
 //! Verifies that stack stop kills a Unix process group, including grandchildren.
 
 #[cfg(unix)]
+use crate::topology;
+
+#[cfg(unix)]
 #[test]
 fn unix_pgrp_kills_grandchild() {
     use std::process::Command;
@@ -55,11 +58,8 @@ fn unix_pgrp_kills_grandchild() {
 
     // Stop even when readiness timed out so a failed fixture cannot leak its
     // process group into subsequent tests.
-    let stop_result = firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::from_secs(5),
-        &["authority", "sidecar"],
-    );
+    let stop_result =
+        firma_process_orchestrator::stop_components(state_dir, Duration::from_secs(5), &topology());
 
     assert!(ready, "grandchild never became ready");
     let outcome = stop_result.expect("stop");

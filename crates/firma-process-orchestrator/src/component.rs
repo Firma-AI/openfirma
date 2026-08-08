@@ -1,4 +1,4 @@
-//! Firma component identity and owned process capabilities.
+//! Component identity and owned process capabilities.
 //!
 //! [`OwnedComponent`] is the canonical in-process capability: it keeps the
 //! direct-child handle required for collection inseparable from the
@@ -6,12 +6,13 @@
 //! [`ComponentName`] supplies stable command and runtime-state identity but
 //! grants no process authority by itself.
 
-use std::process::{Child, ExitStatus};
+use std::process::{Child, Command, ExitStatus};
 
+use crate::OrchestratorError;
 use crate::platform::{SpawnedChild, TerminationTarget};
 use firma_runtime_state::UserProcessId;
 
-/// Opaque identity of a managed process in the local Firma stack.
+/// Opaque identity of a managed process in the local stack.
 ///
 /// The name determines command selection and runtime-state file names; it does
 /// not itself grant authority to signal or collect a process. This machinery is
@@ -22,8 +23,17 @@ pub struct ComponentName(String);
 
 impl ComponentName {
     /// Create a component identity from its stable name.
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrchestratorError::InvalidComponentName`] when the name is
+    /// unsafe as a cross-platform runtime-state filename.
+    pub(crate) fn new(name: impl Into<String>) -> Result<Self, OrchestratorError> {
+        let name = name.into();
+        if !is_safe_name(&name) {
+            return Err(OrchestratorError::InvalidComponentName { name });
+        }
+        Ok(Self(name))
     }
 
     /// Return the name used in commands, logs, and diagnostics.
@@ -42,17 +52,46 @@ impl ComponentName {
     }
 }
 
+fn is_safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.ends_with(['.', ' '])
+        && !is_windows_device_name(name)
+        && !name.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+        })
+}
+
+fn is_windows_device_name(name: &str) -> bool {
+    let basename = name.split('.').next().unwrap_or(name);
+    let basename = basename.to_ascii_uppercase();
+    matches!(basename.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || basename
+            .strip_prefix("COM")
+            .or_else(|| basename.strip_prefix("LPT"))
+            .is_some_and(|number| {
+                matches!(
+                    number,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+}
+
 /// Plain description of one component to spawn and wait on for readiness.
 ///
-/// This carries no configuration types or closures: the firma-specific layer
-/// resolves everything eagerly and hands the generic startup loop this data.
-/// `args` is the full child subcommand, e.g. `["authority", "--config",
-/// "<path>"]`.
+/// The caller retains control over all command settings, including non-UTF-8
+/// arguments, environment variables, and the working directory. The
+/// orchestrator overrides standard I/O on every platform and native creation
+/// flags on Windows. Caller-provided Windows creation flags cannot be preserved
+/// through the standard library's [`Command`] API.
 pub struct ComponentSpec {
-    /// Identity used for command selection and runtime-state file names.
-    pub name: ComponentName,
-    /// Full child subcommand arguments passed to the component executable.
-    pub args: Vec<String>,
+    /// Fully configured command used to launch this component.
+    pub command: Command,
     /// Address probed to establish this component's readiness.
     pub readiness_addr: std::net::SocketAddr,
 }

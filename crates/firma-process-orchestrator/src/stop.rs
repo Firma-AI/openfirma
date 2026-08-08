@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
+use crate::StackTopology;
 use crate::component::OwnedComponent;
 use crate::error::OrchestratorError;
 use crate::platform::TerminationTarget;
@@ -143,9 +144,9 @@ pub struct StopOutcome {
 pub fn stop_components(
     state_dir: &Path,
     timeout: Duration,
-    component_names: &[&str],
+    topology: &StackTopology,
 ) -> Result<StopOutcome, OrchestratorError> {
-    stop_expected_generation(state_dir, timeout, component_names, None)
+    stop_expected_generation(state_dir, timeout, topology, None)
 }
 
 /// Stop only the processes belonging to one launcher-assigned generation.
@@ -156,10 +157,10 @@ pub fn stop_components(
 pub(crate) fn stop_generation(
     state_dir: &Path,
     timeout: Duration,
-    component_names: &[&str],
+    topology: &StackTopology,
     generation: StackGeneration,
 ) -> Result<StopOutcome, OrchestratorError> {
-    stop_expected_generation(state_dir, timeout, component_names, Some(generation))
+    stop_expected_generation(state_dir, timeout, topology, Some(generation))
 }
 
 /// Snapshot and stop state under the expected [`StackGeneration`] policy.
@@ -170,7 +171,7 @@ pub(crate) fn stop_generation(
 fn stop_expected_generation(
     state_dir: &Path,
     timeout: Duration,
-    component_names: &[&str],
+    topology: &StackTopology,
     expected_generation: Option<StackGeneration>,
 ) -> Result<StopOutcome, OrchestratorError> {
     if !state_dir.exists() {
@@ -201,15 +202,15 @@ fn stop_expected_generation(
     let supervisor = read_target(state_dir, "stack.pid")?;
     // Read the caller-supplied component pidfiles in startup order. The set of
     // component names is firma-specific data supplied by the caller.
-    let component_targets = component_names
-        .iter()
+    let component_targets = topology
+        .names()
         .map(|name| read_target(state_dir, &format!("{name}.pid")))
         .collect::<Result<Vec<_>, OrchestratorError>>()?;
     let components = component_targets.iter().flatten().collect();
     stop_inner(
         state_dir,
         timeout,
-        component_names,
+        topology,
         &StopTargets {
             supervisor: supervisor.as_ref(),
             components,
@@ -233,14 +234,10 @@ fn stop_expected_generation(
 pub(crate) fn stop_owned(
     state_dir: &Path,
     timeout: Duration,
+    topology: &StackTopology,
     components: &mut [OwnedComponent],
     state_lease: StateLease,
 ) -> Result<StopOutcome, OrchestratorError> {
-    let owned_names: Vec<String> = components
-        .iter()
-        .map(|component| component.name().as_str().to_string())
-        .collect();
-    let component_names: Vec<&str> = owned_names.iter().map(String::as_str).collect();
     let (mut children, targets): (Vec<&mut std::process::Child>, Vec<&TerminationTarget>) =
         components
             .iter_mut()
@@ -249,7 +246,7 @@ pub(crate) fn stop_owned(
     stop_inner(
         state_dir,
         timeout,
-        &component_names,
+        topology,
         &StopTargets {
             supervisor: None,
             components: targets,
@@ -267,9 +264,9 @@ pub(crate) fn stop_owned(
 
 /// Apply the common graceful-to-forced teardown state machine.
 ///
-/// The Sidecar receives [`TerminationTarget::signal_soft`] before the Authority
-/// so its long-lived RPC streams can close before Authority shutdown. Soft
-/// signalling failure does not prevent a later forced request. Probe or child
+/// Components receive [`TerminationTarget::signal_soft`] in reverse startup
+/// order so dependents can close before their dependencies. Soft signalling
+/// failure does not prevent a later forced request. Probe or child
 /// collection errors retain the first failure while teardown continues
 /// conservatively. A forced request is a normal timeout outcome, but [`cleanup`]
 /// remains forbidden until [`targets_absent`] proves every recorded target gone
@@ -277,13 +274,13 @@ pub(crate) fn stop_owned(
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
-    component_names: &[&str],
+    topology: &StackTopology,
     targets: &StopTargets<'_>,
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
     mut collect_owned: impl FnMut() -> Result<(), OrchestratorError>,
 ) -> Result<StopOutcome, OrchestratorError> {
-    info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping firma stack");
+    info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping stack");
     debug!(
         supervisor_target = ?targets.supervisor,
         component_targets = ?targets.components,
@@ -291,11 +288,7 @@ fn stop_inner(
     );
 
     // Signal everything we know about in the uniform teardown order (reverse of
-    // startup, supervisor last; see `StopTargets::teardown_order`). The sidecar
-    // is a component that starts after the authority, so it is signalled first:
-    // its outbound gRPC streams to the authority close cleanly, letting the
-    // authority's tonic graceful shutdown finish instead of blocking on
-    // long-lived server-streaming RPCs.
+    // startup, supervisor last; see `StopTargets::teardown_order`).
     let mut teardown_error = FirstError::default();
     if let Err(error) = collect_owned() {
         teardown_error.record(error);
@@ -321,7 +314,7 @@ fn stop_inner(
         }
         if targets_absent(targets.teardown_order(), &mut teardown_error) {
             info!("all component targets exited cleanly");
-            cleanup(state_dir, component_names, state_lease, cleanup_lock)?;
+            cleanup(state_dir, topology, state_lease, cleanup_lock)?;
             return Ok(StopOutcome { forced: false });
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -376,7 +369,7 @@ fn stop_inner(
         info!(%error, "teardown incomplete; retaining runtime state");
         return Err(error);
     }
-    cleanup(state_dir, component_names, state_lease, cleanup_lock)?;
+    cleanup(state_dir, topology, state_lease, cleanup_lock)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
 }
@@ -432,7 +425,7 @@ fn read_target(
 /// skips cleanup and returns success.
 pub(crate) fn cleanup_generation(
     state_dir: &Path,
-    component_names: &[&str],
+    topology: &StackTopology,
     state_lease: Option<StateLease>,
     _transaction: &StateTransaction,
 ) -> Result<(), OrchestratorError> {
@@ -460,7 +453,7 @@ pub(crate) fn cleanup_generation(
     }
     // Derive each component's runtime-state files from its caller-supplied name
     // (startup order), then remove the supervisor's files.
-    for component in component_names {
+    for component in topology.names() {
         pidfile::remove(&state_dir.join(format!("{component}.pid")))?;
         pidfile::remove(&state_dir.join(format!("{component}.listen")))?;
     }
@@ -476,13 +469,13 @@ pub(crate) fn cleanup_generation(
 /// target absence is proven and deliberately leaves all state intact.
 fn cleanup(
     state_dir: &Path,
-    component_names: &[&str],
+    topology: &StackTopology,
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
 ) -> Result<(), OrchestratorError> {
     match cleanup_lock {
         CleanupLock::Held(transaction) => {
-            cleanup_generation(state_dir, component_names, state_lease, transaction)
+            cleanup_generation(state_dir, topology, state_lease, transaction)
         }
         CleanupLock::Try => {
             let transaction = StateTransaction::try_acquire(state_dir)?.ok_or_else(|| {
@@ -490,7 +483,7 @@ fn cleanup(
                     path: state_dir.to_path_buf(),
                 }
             })?;
-            cleanup_generation(state_dir, component_names, state_lease, &transaction)
+            cleanup_generation(state_dir, topology, state_lease, &transaction)
         }
         CleanupLock::Retain {
             _transaction: _,

@@ -17,6 +17,7 @@ mod plan;
 pub use config::StackConfig;
 pub use error::StackError;
 pub use plan::resolve_stack_config;
+pub use start::StartMode;
 #[doc(hidden)]
 pub use start::supervise_owned_generation;
 pub use start::{spawn_stack, start};
@@ -25,11 +26,11 @@ pub use stop::stop;
 
 // Re-export the generic orchestrator surface so every public type the workspace
 // uses through `firma_stack::` keeps its path. The firma entry wrappers above
-// intentionally shadow the generic `spawn_stack_from_plan`/`start_from_plan`/
+// intentionally shadow the generic process-orchestrator entry points and
 // `stop_components`/`status_components` entries with firma-facing signatures.
 pub use firma_process_orchestrator::{
     ComponentName, ComponentSpec, ComponentStatus, RunningStack, StackGeneration, StackHandle,
-    StackStatus, StartMode, State, StopOutcome, shutdown_event,
+    StackStatus, State, StopOutcome, shutdown_event,
 };
 
 #[cfg(feature = "test-support")]

@@ -12,6 +12,31 @@ use thiserror::Error;
 /// `format!("{err}")` and exit non-zero rather than introspect variants.
 #[derive(Debug, Error)]
 pub enum OrchestratorError {
+    /// A component name cannot safely identify runtime-state files.
+    #[error(
+        "invalid component name '{name}': names must be safe cross-platform runtime-state filenames"
+    )]
+    InvalidComponentName {
+        /// Rejected component name.
+        name: String,
+    },
+
+    /// A topology contains the same component name more than once.
+    #[error("duplicate component name '{name}' in stack topology")]
+    DuplicateComponentName {
+        /// Duplicate component name.
+        name: String,
+    },
+
+    /// A resolved plan does not contain exactly one spec per topology component.
+    #[error("resolved plan has {actual} component specs, but topology requires {expected}")]
+    PlanCountMismatch {
+        /// Number of components in the topology.
+        expected: usize,
+        /// Number of resolved launch specs.
+        actual: usize,
+    },
+
     /// Creating or securing the state directory failed.
     #[error(transparent)]
     StateDir(firma_fs::CreatePrivateDirError),
@@ -42,18 +67,17 @@ pub enum OrchestratorError {
         source: uuid::Error,
     },
 
-    /// Spawning a child component (authority or sidecar) failed.
+    /// Spawning a child component failed.
     #[error("failed to spawn '{component}': {source}")]
     Spawn {
-        /// Logical component name (`authority` / `sidecar` / `supervisor`).
+        /// Logical component name.
         component: String,
         /// Underlying spawn / I/O error.
         #[source]
         source: io::Error,
     },
 
-    /// A component did not become ready (TCP listen or CA material) within
-    /// the configured timeout.
+    /// A component did not become ready within the configured timeout.
     #[error("'{component}' did not become ready within {timeout_secs}s")]
     Readiness {
         /// Logical component name.

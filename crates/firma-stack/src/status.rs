@@ -16,5 +16,5 @@ use crate::plan;
 ///
 /// Returns errors propagated by the underlying component probes.
 pub fn status(state_dir: &Path) -> Result<StackStatus, StackError> {
-    Ok(status_components(state_dir, plan::component_names())?)
+    Ok(status_components(state_dir, &plan::topology()?)?)
 }

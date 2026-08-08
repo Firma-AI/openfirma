@@ -4,7 +4,7 @@
 //! and returns the sole [`RunningStack`] owner after ordered readiness.
 //! [`StartupGuard`] owns every partial startup until [`StartupGuard::finish`]
 //! commits that transition; its [`Drop`] implementation rolls back uncommitted
-//! [`OwnedComponent`] capabilities. [`start_from_plan`] retains that owner in
+//! [`OwnedComponent`] capabilities. Foreground startup retains that owner in
 //! foreground mode. In detached mode, [`start_detached`] owns only the
 //! supervisor child while [`supervise_owned_generation_from_plan`] spawns and
 //! owns the components, so no component capability crosses a process boundary.
@@ -13,13 +13,15 @@
 //! authority.
 
 use std::path::{Path, PathBuf};
-use std::process::ExitStatus;
+use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
+use crate::StackTopology;
 use crate::collect::{collect_child_in_background, collect_child_until};
 use crate::component::{ComponentName, ComponentSpec, OwnedComponent};
+use crate::detach::spawn_supervisor;
 use crate::error::{OrchestratorError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::wait_for_tcp;
@@ -32,20 +34,7 @@ use crate::supervisor::{
 };
 use firma_runtime_state::{UserProcessId, pidfile};
 
-/// Mode in which [`start_from_plan`] manages the stack after readiness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartMode {
-    /// Block in the calling thread, forwarding `SIGINT` / `SIGTERM` /
-    /// `Ctrl-C` to children until any child exits or the user interrupts.
-    /// Suitable for `systemd`-style or Docker `CMD` invocation.
-    Foreground,
-    /// Fork a hidden `__supervise` child that spawns and owns the stack, then
-    /// return after it acknowledges readiness. The original process exits
-    /// after printing a one-line summary.
-    Detached,
-}
-
-/// Informational handle returned by [`start_from_plan`] once the stack is ready.
+/// Informational handle returned once the stack is ready.
 ///
 /// The handle does not own the children's lifecycle. [`RunningStack`] holds
 /// in-process ownership; persisted runtime state supports external observation
@@ -76,6 +65,7 @@ pub struct RunningStack {
 /// [`RunningStack::mark_ready`] publishes complete startup.
 struct OwnedStack {
     components: Vec<OwnedComponent>,
+    topology: StackTopology,
     state_dir: PathBuf,
     reaper_launcher: ReaperLauncher,
     state_lease: StateLease,
@@ -108,8 +98,7 @@ struct StartupGuard {
     state_dir: PathBuf,
     state_lease: StateLease,
     transaction: Option<StateTransaction>,
-    /// Component names, in startup order, used to fence generation cleanup.
-    component_names: Vec<String>,
+    topology: StackTopology,
 }
 
 /// Valid process-ownership phases while the components are starting.
@@ -151,14 +140,14 @@ impl StartupGuard {
         state_dir: &Path,
         state_lease: StateLease,
         transaction: StateTransaction,
-        component_names: Vec<String>,
+        topology: StackTopology,
     ) -> Self {
         Self {
             state: StartupState::Building(Vec::new()),
             state_dir: state_dir.to_path_buf(),
             state_lease,
             transaction: Some(transaction),
-            component_names,
+            topology,
         }
     }
 
@@ -221,6 +210,7 @@ impl StartupGuard {
         match std::mem::replace(&mut self.state, StartupState::Finished) {
             StartupState::Building(components) => Ok(RunningStack::from_components(
                 components,
+                self.topology.clone(),
                 self.state_dir.clone(),
                 self.state_lease,
                 self.transaction.take(),
@@ -243,11 +233,10 @@ impl Drop for StartupGuard {
         let StartupState::Building(components) = state else {
             return;
         };
-        let component_names: Vec<&str> = self.component_names.iter().map(String::as_str).collect();
         if components.is_empty() {
             remove_startup_state(
                 &self.state_dir,
-                &component_names,
+                &self.topology,
                 self.state_lease,
                 self.transaction.as_ref(),
             );
@@ -256,7 +245,7 @@ impl Drop for StartupGuard {
         rollback_startup_components(
             components,
             &self.state_dir,
-            &component_names,
+            &self.topology,
             self.state_lease,
             self.transaction.as_ref(),
         );
@@ -274,7 +263,7 @@ impl Drop for StartupGuard {
 fn rollback_startup_components(
     mut components: Vec<OwnedComponent>,
     state_dir: &Path,
-    component_names: &[&str],
+    topology: &StackTopology,
     state_lease: StateLease,
     transaction: Option<&StateTransaction>,
 ) {
@@ -316,7 +305,7 @@ fn rollback_startup_components(
             }
         }
         if all_absent && children_collected {
-            remove_startup_state(state_dir, component_names, state_lease, transaction);
+            remove_startup_state(state_dir, topology, state_lease, transaction);
             return;
         }
         if probe_failed || Instant::now() >= deadline {
@@ -340,12 +329,14 @@ impl RunningStack {
     /// [`RunningStack::mark_ready`] commits complete-state publication.
     pub(crate) fn from_components(
         components: Vec<OwnedComponent>,
+        topology: StackTopology,
         state_dir: PathBuf,
         state_lease: StateLease,
         startup_transaction: Option<StateTransaction>,
     ) -> Self {
         Self::from_components_with_reaper_launcher(
             components,
+            topology,
             state_dir,
             state_lease,
             startup_transaction,
@@ -356,6 +347,7 @@ impl RunningStack {
     /// Construct the sole running owner with a caller-supplied reaper launcher.
     pub(crate) fn from_components_with_reaper_launcher(
         components: Vec<OwnedComponent>,
+        topology: StackTopology,
         state_dir: PathBuf,
         state_lease: StateLease,
         startup_transaction: Option<StateTransaction>,
@@ -376,6 +368,7 @@ impl RunningStack {
             handle,
             state: RunningStackState::Owned(Box::new(OwnedStack {
                 components,
+                topology,
                 state_dir,
                 reaper_launcher,
                 state_lease,
@@ -421,15 +414,20 @@ impl RunningStack {
     /// Returns process-probe, termination, or runtime-state cleanup errors.
     pub fn shutdown(&mut self, timeout: Duration) -> Result<StopOutcome, OrchestratorError> {
         let RunningStackState::Owned(owned) = &mut self.state else {
-            return Ok(StopOutcome { forced: false });
+            return Ok(crate::stop::StopOutcome { forced: false });
         };
         // A detached attachment failure may tear down before publishing ready.
         // Release startup serialization before the owned stop reacquires it.
         owned.startup_transaction = None;
         let state_dir = &owned.state_dir;
         let state_lease = owned.state_lease;
-        let result =
-            crate::stop::stop_owned(state_dir, timeout, &mut owned.components, state_lease);
+        let result = crate::stop::stop_owned(
+            state_dir,
+            timeout,
+            &owned.topology,
+            &mut owned.components,
+            state_lease,
+        );
         if result.is_ok() {
             for component in owned.components.iter_mut().rev() {
                 let _ = component.wait();
@@ -468,15 +466,14 @@ impl Drop for RunningStack {
 /// Spawn the stack and wait for readiness without blocking on supervision.
 ///
 /// Returns ownership of the component child handles once every component is
-/// listening. `component_names` lists the components in startup order and is
-/// used to claim the stack lock and reap stale runtime state; `build_plan`
+/// listening. `topology` defines startup order and runtime-state identity;
+/// `build_plan`
 /// resolves the full [`ComponentSpec`] plan and is invoked **after** the lock is
 /// claimed, so an already-running stack is reported before the caller's
 /// (possibly failing) plan resolution runs. The caller must eventually call
 /// [`RunningStack::shutdown`] to tear the stack down and collect its children.
 ///
-/// Used by the firma wrapper `spawn_stack` and as the first step of
-/// [`start_from_plan`].
+/// Used by wrappers that need in-process ownership after readiness.
 ///
 /// # Errors
 ///
@@ -485,15 +482,13 @@ impl Drop for RunningStack {
 /// Runtime state is retained when target disappearance cannot be confirmed so
 /// callers can retry cleanup.
 pub fn spawn_stack_from_plan<E>(
-    component_names: &[&str],
+    topology: &StackTopology,
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
-    exe: Option<&Path>,
     state_dir: &Path,
 ) -> Result<RunningStack, StartError<E>> {
     spawn_stack_from_plan_with_phase(
-        component_names,
+        topology,
         build_plan,
-        exe,
         state_dir,
         true,
         StackGeneration::new(),
@@ -511,31 +506,33 @@ pub fn spawn_stack_from_plan<E>(
 /// termination cannot fall between those phases. Every error after
 /// [`StartupGuard::new`] remains rollback-protected.
 fn spawn_stack_from_plan_with_phase<E>(
-    component_names: &[&str],
+    topology: &StackTopology,
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
-    exe: Option<&Path>,
     state_dir: &Path,
     publish_ready: bool,
     generation: StackGeneration,
     stop_signal: Option<&StopSignal>,
 ) -> Result<RunningStack, StartError<E>> {
-    info!(state_dir = %state_dir.display(), "spawning firma stack");
+    info!(state_dir = %state_dir.display(), "spawning stack");
     firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
     let transaction = StateTransaction::acquire(state_dir)?;
     debug!("acquiring stack lock");
-    let state_lease = acquire_lock(state_dir, &transaction, generation, component_names)?;
-    let owned_names: Vec<String> = component_names
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect();
-    let mut startup = StartupGuard::new(state_dir, state_lease, transaction, owned_names);
+    let state_lease = acquire_lock(state_dir, &transaction, generation, topology)?;
+    let mut startup = StartupGuard::new(state_dir, state_lease, transaction, topology.clone());
     debug!("reaping stale pidfiles");
-    reap_stale(state_dir, component_names)?;
+    reap_stale(state_dir, topology)?;
 
     // The plan is resolved after the lock is claimed so that an already-running
     // stack is reported before any (possibly failing) plan resolution runs.
     let plan = build_plan().map_err(StartError::Plan)?;
-    match spawn_stack_inner(plan, exe, state_dir, &mut startup, stop_signal) {
+    if plan.len() != topology.components().len() {
+        return Err(OrchestratorError::PlanCountMismatch {
+            expected: topology.components().len(),
+            actual: plan.len(),
+        }
+        .into());
+    }
+    match spawn_stack_inner(topology, plan, state_dir, &mut startup, stop_signal) {
         Ok(()) => {
             let mut stack = startup.finish()?;
             if publish_ready {
@@ -563,8 +560,8 @@ fn spawn_stack_from_plan_with_phase<E>(
 /// These probes establish bounded startup evidence only; ongoing health belongs
 /// to supervision.
 fn spawn_stack_inner(
+    topology: &StackTopology,
     plan: Vec<ComponentSpec>,
-    exe: Option<&Path>,
     state_dir: &Path,
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
@@ -572,15 +569,12 @@ fn spawn_stack_inner(
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
 
-    for spec in plan {
+    for (name, spec) in topology.components().iter().cloned().zip(plan) {
         let ComponentSpec {
-            name,
-            args,
+            mut command,
             readiness_addr: addr,
         } = spec;
-        debug!(exe = ?exe, component = %name.as_str(), args = ?args, "spawning component");
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let component = spawn_into_group(&group, state_dir, name.clone(), &arg_refs, exe)?;
+        let component = spawn_into_group(&group, state_dir, name.clone(), &mut command)?;
         let pid = component.leader_pid();
         startup.record(component)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
@@ -593,9 +587,6 @@ fn spawn_stack_inner(
             stop_signal,
             || startup.exited_component(),
         )?;
-        // A connectable sidecar already implies CA readiness: the sidecar
-        // generates its CA material before opening the interceptor port, so
-        // readiness is a single signal with no separate CA-material probe.
         info!(component = %name.as_str(), addr = %addr, "component listening");
     }
 
@@ -608,15 +599,9 @@ fn spawn_stack_inner(
     Ok(())
 }
 
-/// Start a stack made of the named components.
+/// Start a caller-described stack in the foreground.
 ///
-/// `component_names` lists the components in startup order. `build_plan`
-/// resolves the full [`ComponentSpec`] plan for foreground startup and is only
-/// invoked after the lock is claimed. `exe` is the executable used to launch
-/// each component (and, in detached mode, the supervisor). `config_file` is the
-/// configuration path re-passed to the detached supervisor child so it can
-/// re-derive the same plan; it is unused in foreground mode, where the detached
-/// supervisor is never spawned.
+/// The plan is resolved only after the topology's runtime-state lock is claimed.
 ///
 /// # Errors
 ///
@@ -624,39 +609,15 @@ fn spawn_stack_inner(
 /// On failure after children have been spawned, this function tears them down.
 /// Runtime state is retained when hard termination fails so callers can retry
 /// cleanup.
-pub fn start_from_plan<E>(
-    component_names: &[&str],
+pub fn start_foreground_from_plan<E>(
+    topology: &StackTopology,
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
-    exe: Option<&Path>,
-    config_file: &Path,
-    state_dir: &Path,
-    mode: StartMode,
-) -> Result<StackHandle, StartError<E>> {
-    match mode {
-        StartMode::Foreground => start_foreground(component_names, build_plan, exe, state_dir),
-        StartMode::Detached => {
-            let _ = build_plan;
-            start_detached(component_names, exe, config_file, state_dir)
-                .map_err(StartError::Orchestrator)
-        }
-    }
-}
-
-/// Spawn, supervise, and tear down components in the calling process.
-///
-/// [`StopSignal`] is installed before startup and reused for supervision, so a
-/// termination request during readiness triggers [`StartupGuard`] rollback.
-fn start_foreground<E>(
-    component_names: &[&str],
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
-    exe: Option<&Path>,
     state_dir: &Path,
 ) -> Result<StackHandle, StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let mut stack = spawn_stack_from_plan_with_phase(
-        component_names,
+        topology,
         build_plan,
-        exe,
         state_dir,
         true,
         StackGeneration::new(),
@@ -685,39 +646,43 @@ fn start_foreground<E>(
 /// The handoff protocol is defined by [`LauncherAttachmentState`]. The launcher
 /// retains the supervisor child handle through both phases and uses
 /// [`rollback_detached_start`] on any failure before collection transfer. The
-/// launcher never resolves the plan itself: the supervisor child re-derives it
-/// from `config_file`. `component_names` (startup order) drives handle
-/// reconstruction and rollback so both enumerate exactly the components the
-/// supervisor will own.
-fn start_detached(
-    component_names: &[&str],
-    exe: Option<&Path>,
-    config_file: &Path,
+/// The caller constructs the complete supervisor command from the allocated
+/// generation. The orchestrator adds detached-process settings and log
+/// redirection, but assigns no command-line protocol to the child.
+///
+/// # Errors
+///
+/// Returns state-directory, supervisor spawn, attachment, handle
+/// reconstruction, collection-transfer, or rollback errors.
+pub fn start_detached(
+    topology: &StackTopology,
     state_dir: &Path,
+    build_supervisor: impl FnOnce(StackGeneration) -> Command,
 ) -> Result<StackHandle, OrchestratorError> {
     firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
     let generation = StackGeneration::new();
     info!("forking detached supervisor owner");
-    let mut supervisor = crate::detach::spawn_supervisor(state_dir, config_file, exe, generation)?;
+    let mut supervisor_command = build_supervisor(generation);
+    let mut supervisor = spawn_supervisor(state_dir, &mut supervisor_command)?;
     if let Err(error) =
         wait_for_supervisor_attachment(state_dir, &mut supervisor, Duration::from_mins(4))
     {
         terminate_detached_supervisor(&mut supervisor);
-        let rollback = rollback_detached_start(state_dir, component_names, generation);
+        let rollback = rollback_detached_start(state_dir, topology, generation);
         return Err(with_rollback(error, rollback));
     }
-    let handle = match read_stack_handle(state_dir, component_names) {
+    let handle = match read_stack_handle(state_dir, topology) {
         Ok(handle) => handle,
         Err(error) => {
             terminate_detached_supervisor(&mut supervisor);
-            let rollback = rollback_detached_start(state_dir, component_names, generation);
+            let rollback = rollback_detached_start(state_dir, topology, generation);
             return Err(with_rollback(error, rollback));
         }
     };
     if collect_child_in_background(supervisor).is_none() {
         let error =
             OrchestratorError::Platform("could not start detached supervisor collector".into());
-        let rollback = rollback_detached_start(state_dir, component_names, generation);
+        let rollback = rollback_detached_start(state_dir, topology, generation);
         return Err(with_rollback(error, rollback));
     }
     Ok(handle)
@@ -726,16 +691,11 @@ fn start_detached(
 /// Roll back only state matching this launcher's [`StackGeneration`].
 fn rollback_detached_start(
     state_dir: &Path,
-    component_names: &[&str],
+    topology: &StackTopology,
     generation: StackGeneration,
 ) -> Result<(), OrchestratorError> {
-    crate::stop::stop_generation(
-        state_dir,
-        Duration::from_secs(10),
-        component_names,
-        generation,
-    )
-    .map(|_| ())
+    crate::stop::stop_generation(state_dir, Duration::from_secs(10), topology, generation)
+        .map(|_| ())
 }
 
 /// Terminate and make a bounded collection attempt for the supervisor child.
@@ -749,15 +709,18 @@ fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
 
 /// Reconstruct an informational [`StackHandle`] after supervisor-owned startup.
 ///
-/// The caller supplies the component names in startup order; this does not grant
+/// The caller supplies the topology used for startup; this does not grant
 /// component collection, termination, or cleanup authority.
-fn read_stack_handle(state_dir: &Path, names: &[&str]) -> Result<StackHandle, OrchestratorError> {
-    let mut component_pids = Vec::with_capacity(names.len());
-    for name in names {
+fn read_stack_handle(
+    state_dir: &Path,
+    topology: &StackTopology,
+) -> Result<StackHandle, OrchestratorError> {
+    let mut component_pids = Vec::with_capacity(topology.components().len());
+    for name in topology.names() {
         let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {
             OrchestratorError::Platform(format!("{name}.pid missing after startup"))
         })?;
-        component_pids.push(((*name).to_string(), pid));
+        component_pids.push((name.to_string(), pid));
     }
     Ok(StackHandle { component_pids })
 }
@@ -768,7 +731,7 @@ fn read_stack_handle(state_dir: &Path, names: &[&str]) -> Result<StackHandle, Or
 /// destructor path retains state for a later [`crate::stop::stop_components()`].
 fn remove_startup_state(
     state_dir: &Path,
-    component_names: &[&str],
+    topology: &StackTopology,
     state_lease: StateLease,
     transaction: Option<&StateTransaction>,
 ) {
@@ -777,7 +740,7 @@ fn remove_startup_state(
         return;
     };
     if let Err(error) =
-        crate::stop::cleanup_generation(state_dir, component_names, Some(state_lease), transaction)
+        crate::stop::cleanup_generation(state_dir, topology, Some(state_lease), transaction)
     {
         debug!(%error, "startup rollback retained runtime state");
     }
@@ -808,17 +771,15 @@ fn with_rollback<T>(
 /// Returns startup, readiness, supervision, termination, or cleanup errors.
 #[doc(hidden)]
 pub fn supervise_owned_generation_from_plan<E>(
-    component_names: &[&str],
+    topology: &StackTopology,
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
-    exe: Option<&Path>,
     state_dir: &Path,
     generation: StackGeneration,
 ) -> Result<(), StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let stack = spawn_stack_from_plan_with_phase(
-        component_names,
+        topology,
         build_plan,
-        exe,
         state_dir,
         false,
         generation,
@@ -993,21 +954,19 @@ fn wait_for_launcher_ack(
     Ok(())
 }
 
-/// Spawn one named component into the group with caller-supplied arguments.
+/// Spawn one named component into the group with a caller-configured command.
 fn spawn_into_group(
     group: &crate::platform::Group,
     state_dir: &Path,
     name: ComponentName,
-    args: &[&str],
-    exe: Option<&Path>,
+    command: &mut std::process::Command,
 ) -> Result<OwnedComponent, OrchestratorError> {
     spawn_component(
         group,
-        &SpawnRequest {
+        &mut SpawnRequest {
             name,
-            args,
+            command,
             state_dir,
-            exe,
         },
     )
 }
@@ -1020,11 +979,11 @@ fn acquire_lock(
     state_dir: &Path,
     _transaction: &StateTransaction,
     generation: StackGeneration,
-    component_names: &[&str],
+    topology: &StackTopology,
 ) -> Result<StateLease, OrchestratorError> {
     let lock = state_dir.join("stack.lock");
     loop {
-        if !is_stack_stale(state_dir, component_names)? {
+        if !is_stack_stale(state_dir, topology)? {
             return Err(OrchestratorError::AlreadyRunning { path: lock });
         }
         if let Some(state_lease) = StateLease::try_claim(state_dir, generation)? {
@@ -1035,13 +994,13 @@ fn acquire_lock(
 }
 
 /// Prove that no persisted supervisor or component target remains live.
-fn is_stack_stale(state_dir: &Path, component_names: &[&str]) -> Result<bool, OrchestratorError> {
+fn is_stack_stale(state_dir: &Path, topology: &StackTopology) -> Result<bool, OrchestratorError> {
     if let Some(pid) = pidfile::read(&state_dir.join("stack.pid"))?
         && process_exists(pid)?
     {
         return Ok(false);
     }
-    for name in component_names {
+    for name in topology.names() {
         if let Some(id) = pidfile::read(&state_dir.join(format!("{name}.pid")))?
             && TerminationTarget::from_stored_id(id).exists()?
         {
@@ -1052,8 +1011,8 @@ fn is_stack_stale(state_dir: &Path, component_names: &[&str]) -> Result<bool, Or
 }
 
 /// Remove process records only after their targets are proven absent.
-fn reap_stale(state_dir: &Path, component_names: &[&str]) -> Result<(), OrchestratorError> {
-    for name in component_names {
+fn reap_stale(state_dir: &Path, topology: &StackTopology) -> Result<(), OrchestratorError> {
+    for name in topology.names() {
         let path = state_dir.join(format!("{name}.pid"));
         if let Some(id) = pidfile::read(&path)?
             && !TerminationTarget::from_stored_id(id).exists()?

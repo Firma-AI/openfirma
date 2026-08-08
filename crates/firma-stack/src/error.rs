@@ -1,5 +1,6 @@
 //! Firma stack configuration and startup errors.
 
+use std::io;
 use std::net::AddrParseError;
 use std::path::PathBuf;
 
@@ -10,6 +11,13 @@ use thiserror::Error;
 /// Error returned by Firma-specific stack operations.
 #[derive(Debug, Error)]
 pub enum StackError {
+    /// Discovering the current Firma executable failed.
+    #[error("failed to resolve current Firma executable: {source}")]
+    CurrentExecutable {
+        /// Executable discovery failure.
+        #[source]
+        source: io::Error,
+    },
     /// Resolving a selected stack configuration failed.
     #[error(transparent)]
     ConfigResolution {
@@ -29,9 +37,6 @@ pub enum StackError {
         #[source]
         source: anyhow::Error,
     },
-    /// The configuration path cannot be passed to a child process.
-    #[error("non-utf8 config path")]
-    NonUtf8ConfigPath,
     /// The Authority listen address is invalid.
     #[error("invalid authority listen_addr '{address}': {source}")]
     InvalidAuthorityListenAddr {

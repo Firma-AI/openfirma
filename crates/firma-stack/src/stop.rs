@@ -19,9 +19,5 @@ use crate::plan;
 /// state is retained when probing or hard termination fails, or when the
 /// generation is malformed, so cleanup can be retried.
 pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome, StackError> {
-    Ok(stop_components(
-        state_dir,
-        timeout,
-        plan::component_names(),
-    )?)
+    Ok(stop_components(state_dir, timeout, &plan::topology()?)?)
 }

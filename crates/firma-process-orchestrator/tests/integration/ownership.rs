@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use firma_runtime_state::{UserProcessId, pidfile};
 
+use crate::topology;
+
 const CHILD_MARKER: &str = "FIRMA_STACK_TEST_CHILD_MARKER";
 #[cfg(windows)]
 const JOB_FIXTURE_STAGE: &str = "FIRMA_STACK_TEST_JOB_FIXTURE_STAGE";
@@ -235,12 +237,8 @@ fn external_stop_terminates_targets_but_retains_malformed_generation_state() {
     std::fs::write(state_dir.join("stack.lock"), "not-a-generation\n")
         .expect("write malformed generation");
 
-    let error = firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect_err("malformed generation must prevent cleanup");
+    let error = firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect_err("malformed generation must prevent cleanup");
 
     assert!(matches!(
         &error,
@@ -291,12 +289,8 @@ fn generation_scoped_stop_does_not_signal_targets_with_malformed_lock() {
     let sidecar_collector =
         firma_process_orchestrator::test_support::collect_raw_child_in_background(sidecar);
     std::fs::remove_file(state_dir.join("stack.lock")).expect("remove malformed generation");
-    firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("clean up fixtures");
+    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect("clean up fixtures");
     join_collector(authority_collector);
     join_collector(sidecar_collector);
 }
@@ -401,12 +395,8 @@ fn stale_detached_rollback_does_not_signal_replacement_processes() {
         firma_process_orchestrator::test_support::collect_raw_child_in_background(authority);
     let sidecar_collector =
         firma_process_orchestrator::test_support::collect_raw_child_in_background(sidecar);
-    firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("stop replacement");
+    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect("stop replacement");
     join_collector(authority_collector);
     join_collector(sidecar_collector);
     assert_process_absent(authority_pid);
@@ -438,7 +428,7 @@ fn stop_waits_for_each_startup_transition_before_snapshot() {
             let _ = result_tx.send(firma_process_orchestrator::stop_components(
                 &stop_state_dir,
                 Duration::ZERO,
-                &["authority", "sidecar"],
+                &topology(),
             ));
         });
 
@@ -508,12 +498,8 @@ fn dropping_owner_transfers_child_collection() {
     .expect("claim stack generation");
 
     drop(stack);
-    firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("stop observed stack");
+    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect("stop observed stack");
 
     assert_process_absent(authority_pid);
     assert_process_absent(sidecar_pid);
@@ -529,7 +515,8 @@ fn reaper_start_failure_returns_owned_children_alive() {
     let mut children =
         firma_process_orchestrator::test_support::recover_raw_children_after_reaper_failure(
             authority, sidecar,
-        );
+        )
+        .expect("construct test components");
 
     assert_eq!(children.len(), 2);
     assert!(
@@ -592,12 +579,8 @@ fn dropping_owner_falls_back_when_reaper_cannot_start() {
     assert!(state_dir.join("authority.pid").exists());
     assert!(state_dir.join("sidecar.pid").exists());
 
-    firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("clean retained runtime state");
+    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect("clean retained runtime state");
     assert!(!state_dir.join("stack.lock").exists());
     assert!(!state_dir.join("authority.pid").exists());
     assert!(!state_dir.join("sidecar.pid").exists());
@@ -675,12 +658,8 @@ fn failed_reaper_transfer_terminates_owned_process_group() {
     assert!(fifo_closed, "descendant still holds its liveness FIFO");
     cleanup.disarm();
 
-    firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("clean retained runtime state");
+    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect("clean retained runtime state");
 }
 
 #[test]
@@ -692,12 +671,8 @@ fn detached_supervisor_child_is_collected_for_long_lived_launcher() {
     let collector =
         firma_process_orchestrator::test_support::collect_raw_child_in_background(supervisor);
 
-    firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("stop detached supervisor");
+    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect("stop detached supervisor");
     join_collector(collector);
 
     assert_process_absent(supervisor_pid);
@@ -875,12 +850,8 @@ fn failed_reaper_transfer_terminates_owned_job_descendant() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    firma_process_orchestrator::stop_components(
-        state_dir,
-        Duration::ZERO,
-        &["authority", "sidecar"],
-    )
-    .expect("clean retained runtime state");
+    firma_process_orchestrator::stop_components(state_dir, Duration::ZERO, &topology())
+        .expect("clean retained runtime state");
 }
 
 #[test]
