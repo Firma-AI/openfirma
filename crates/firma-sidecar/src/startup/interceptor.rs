@@ -5,6 +5,7 @@
 //! returns a [`tokio::task::JoinHandle`] that resolves when the
 //! interceptor shuts down.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -12,10 +13,12 @@ use tokio_util::sync::CancellationToken;
 use crate::composio::PROTECTED_HOSTS;
 use crate::config::{self, HttpsMitmConfig, InterceptorMode};
 use crate::handler::RequestHandler;
+use crate::interceptor;
+#[cfg(unix)]
+use crate::interceptor::Interceptor as _;
 use crate::interceptor::https_mitm::{host_matches_any, normalize_patterns};
-use crate::interceptor::{self, Interceptor as _};
 
-fn is_loopback_addr(addr: std::net::SocketAddr) -> bool {
+fn is_loopback_addr(addr: SocketAddr) -> bool {
     addr.ip().is_loopback()
 }
 
@@ -57,17 +60,49 @@ pub fn composio_mitm_coverage_warnings(mitm: &HttpsMitmConfig) -> Vec<String> {
 }
 
 pub struct SpawnedInterceptor {
+    /// Background server task.
     pub handle: tokio::task::JoinHandle<()>,
+    /// Effective bound TCP address, or the configured Unix socket path.
+    ///
+    /// For TCP configurations that request port zero, this contains the
+    /// nonzero port assigned by the operating system.
     pub listen_addr: String,
+}
+
+fn spawn_grpc_interceptor(
+    addr: SocketAddr,
+    handler: Arc<RequestHandler>,
+    cancel: CancellationToken,
+) -> anyhow::Result<SpawnedInterceptor> {
+    let interceptor = interceptor::grpc::GrpcInterceptor::new(addr);
+    let listener = std::net::TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
+    let bound_addr = listener.local_addr()?;
+    let listener = tokio::net::TcpListener::from_std(listener)?;
+    tracing::debug!(listen_addr = %addr, "gRPC interceptor configured");
+    let handle = tokio::spawn(async move {
+        if let Err(e) = interceptor
+            .run_with_listener(listener, handler, cancel)
+            .await
+        {
+            tracing::error!(error = %e, "gRPC interceptor failed");
+        }
+    });
+    Ok(SpawnedInterceptor {
+        handle,
+        listen_addr: bound_addr.to_string(),
+    })
 }
 
 /// Spawn the configured interceptor as a background tokio task.
 ///
 /// # Errors
 ///
-/// Returns an error when the interceptor mode is `unix_socket` but
-/// the required `socket_path` is missing (should be caught by
-/// validation, but enforced here defensively).
+/// Returns an error when a TCP listener cannot be bound or converted for Tokio.
+/// TCP binding completes synchronously before the server task is spawned.
+/// Also returns an error when the interceptor mode is `unix_socket` but the
+/// required `socket_path` is missing (should be caught by validation, but
+/// enforced here defensively).
 pub fn spawn_interceptor(
     config: &config::SidecarConfig,
     handler: Arc<RequestHandler>,
@@ -119,19 +154,7 @@ pub fn spawn_interceptor(
                 listen_addr: bound_addr.to_string(),
             })
         }
-        InterceptorMode::Grpc => {
-            let interceptor = interceptor::grpc::GrpcInterceptor::new(ic.listen_addr);
-            tracing::debug!(listen_addr = %ic.listen_addr, "gRPC interceptor configured");
-            let handle = tokio::spawn(async move {
-                if let Err(e) = interceptor.run(handler, cancel).await {
-                    tracing::error!(error = %e, "gRPC interceptor failed");
-                }
-            });
-            Ok(SpawnedInterceptor {
-                handle,
-                listen_addr: ic.listen_addr.to_string(),
-            })
-        }
+        InterceptorMode::Grpc => spawn_grpc_interceptor(ic.listen_addr, handler, cancel),
         #[cfg(unix)]
         InterceptorMode::UnixSocket => {
             let socket_path = ic
