@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::gateway::endpoint::GatewayEndpoint;
+use crate::{SecretPlaceholder, gateway::endpoint::GatewayEndpoint};
 
 /// Whole-request failures from talking to the firma-run secret gateway,
 /// returned by [`super::GatewayClient::resolve_batch`] and [`super::GatewayClient::push_secret`].
@@ -94,6 +94,13 @@ pub enum ProtocolViolation {
     /// cannot be reliably matched to placeholders.
     #[error("gateway returned {results} results for {placeholders} placeholders")]
     Mismatch { results: usize, placeholders: usize },
+    /// A successful push response echoed a different placeholder than the one
+    /// sent in the request, so the client cannot know which key was stored.
+    #[error("gateway returned placeholder {actual} after pushing {expected}")]
+    PushPlaceholderMismatch {
+        expected: SecretPlaceholder,
+        actual: SecretPlaceholder,
+    },
     #[error("gateway max buffer size exceeded")]
     MaxBufferSizeExceeded,
 }
