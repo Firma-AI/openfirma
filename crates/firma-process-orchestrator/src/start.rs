@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info};
 
+use crate::LifecycleTimeouts;
 use crate::StackTopology;
 use crate::collect::{collect_child_in_background, collect_child_until};
 use crate::component::{ComponentName, ComponentSpec, OwnedComponent};
@@ -29,7 +30,11 @@ use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::stop::StopOutcome;
 use crate::supervisor::{StopSignal, block_until_owned_exit_with, collect_in_background};
+use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
 use firma_runtime_state::{UserProcessId, pidfile};
+
+const STARTUP_ROLLBACK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const DETACHED_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Informational handle returned once the stack is ready.
 ///
@@ -275,7 +280,7 @@ fn rollback_startup_components(
         let _ = component.kill_leader();
     }
 
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + CHILD_COLLECTION_TIMEOUT;
     loop {
         let mut children_collected = true;
         for component in &mut components {
@@ -314,7 +319,7 @@ fn rollback_startup_components(
             }
             return;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(STARTUP_ROLLBACK_POLL_INTERVAL);
     }
 }
 
@@ -461,6 +466,7 @@ pub fn spawn_stack_from_plan<E>(
     topology: &StackTopology,
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
+    timeouts: LifecycleTimeouts,
 ) -> Result<RunningStack, StartError<E>> {
     spawn_stack_from_plan_with_phase(
         topology,
@@ -469,6 +475,7 @@ pub fn spawn_stack_from_plan<E>(
         true,
         StackGeneration::new(),
         None,
+        timeouts,
     )
 }
 
@@ -488,6 +495,7 @@ fn spawn_stack_from_plan_with_phase<E>(
     publish_ready: bool,
     generation: StackGeneration,
     stop_signal: Option<&StopSignal>,
+    timeouts: LifecycleTimeouts,
 ) -> Result<RunningStack, StartError<E>> {
     info!(state_dir = %state_dir.display(), "spawning stack");
     firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
@@ -508,7 +516,14 @@ fn spawn_stack_from_plan_with_phase<E>(
         }
         .into());
     }
-    match spawn_stack_inner(topology, plan, state_dir, &mut startup, stop_signal) {
+    match spawn_stack_inner(
+        topology,
+        plan,
+        state_dir,
+        &mut startup,
+        stop_signal,
+        timeouts.component_readiness,
+    ) {
         Ok(()) => {
             let mut stack = startup.finish()?;
             if publish_ready {
@@ -541,6 +556,7 @@ fn spawn_stack_inner(
     state_dir: &Path,
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
+    readiness_timeout: Duration,
 ) -> Result<(), OrchestratorError> {
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
@@ -556,13 +572,9 @@ fn spawn_stack_inner(
         info!(component = %name.as_str(), pid = %pid, "component spawned");
         std::fs::write(state_dir.join(name.listen_file_name()), format!("{addr}\n"))?;
         debug!(component = %name.as_str(), addr = %addr, "waiting for component TCP listen");
-        wait_for_tcp(
-            name.as_str(),
-            addr,
-            Duration::from_mins(1),
-            stop_signal,
-            || startup.exited_component(),
-        )?;
+        wait_for_tcp(name.as_str(), addr, readiness_timeout, stop_signal, || {
+            startup.exited_component()
+        })?;
         info!(component = %name.as_str(), addr = %addr, "component listening");
     }
 
@@ -578,7 +590,7 @@ fn spawn_stack_inner(
 /// Start a caller-described stack in the foreground.
 ///
 /// The plan is resolved only after the topology's runtime-state lock is claimed.
-/// `teardown_timeout` bounds graceful component shutdown before forced termination.
+/// `timeouts` bounds component readiness and graceful shutdown.
 ///
 /// # Errors
 ///
@@ -590,7 +602,7 @@ pub fn start_foreground_from_plan<E>(
     topology: &StackTopology,
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
-    teardown_timeout: Duration,
+    timeouts: LifecycleTimeouts,
 ) -> Result<StackHandle, StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let mut stack = spawn_stack_from_plan_with_phase(
@@ -600,6 +612,7 @@ pub fn start_foreground_from_plan<E>(
         true,
         StackGeneration::new(),
         Some(&stop_signal),
+        timeouts,
     )?;
     let handle = stack.handle();
     info!("entering foreground supervisor loop");
@@ -608,7 +621,7 @@ pub fn start_foreground_from_plan<E>(
         block_until_owned_exit_with(&stop_signal, &mut owned.components)
     };
     info!("foreground supervisor exiting; tearing down stack");
-    let teardown_result = stack.shutdown(teardown_timeout);
+    let teardown_result = stack.shutdown(timeouts.graceful_teardown);
     if let Err(error) = supervision_result {
         return Err(StartError::Orchestrator(with_rollback(
             error,
@@ -627,7 +640,7 @@ pub fn start_foreground_from_plan<E>(
 /// caller constructs the complete supervisor command from the allocated
 /// generation. The orchestrator adds detached-process settings and log
 /// redirection, but assigns no command-line protocol to the child.
-/// `teardown_timeout` applies when rolling back a failed handoff; callers must
+/// `timeouts` applies to the handoff and failed-handoff rollback; callers must
 /// separately pass the same policy to the supervisor process they construct.
 ///
 /// # Errors
@@ -637,7 +650,7 @@ pub fn start_foreground_from_plan<E>(
 pub fn start_detached(
     topology: &StackTopology,
     state_dir: &Path,
-    teardown_timeout: Duration,
+    timeouts: LifecycleTimeouts,
     build_supervisor: impl FnOnce(StackGeneration) -> Command,
 ) -> Result<StackHandle, OrchestratorError> {
     firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
@@ -646,25 +659,31 @@ pub fn start_detached(
     let mut supervisor_command = build_supervisor(generation);
     let mut supervisor = spawn_supervisor(state_dir, &mut supervisor_command)?;
     if let Err(error) =
-        wait_for_supervisor_attachment(state_dir, &mut supervisor, Duration::from_mins(4))
+        wait_for_supervisor_attachment(state_dir, &mut supervisor, timeouts.detached_handoff)
     {
         terminate_detached_supervisor(&mut supervisor);
-        let rollback = rollback_detached_start(state_dir, topology, generation, teardown_timeout);
+        let rollback =
+            rollback_detached_start(state_dir, topology, generation, timeouts.graceful_teardown);
         return Err(with_rollback(error, rollback));
     }
     let handle = match read_stack_handle(state_dir, topology) {
         Ok(handle) => handle,
         Err(error) => {
             terminate_detached_supervisor(&mut supervisor);
-            let rollback =
-                rollback_detached_start(state_dir, topology, generation, teardown_timeout);
+            let rollback = rollback_detached_start(
+                state_dir,
+                topology,
+                generation,
+                timeouts.graceful_teardown,
+            );
             return Err(with_rollback(error, rollback));
         }
     };
     if collect_child_in_background(supervisor).is_none() {
         let error =
             OrchestratorError::Platform("could not start detached supervisor collector".into());
-        let rollback = rollback_detached_start(state_dir, topology, generation, teardown_timeout);
+        let rollback =
+            rollback_detached_start(state_dir, topology, generation, timeouts.graceful_teardown);
         return Err(with_rollback(error, rollback));
     }
     Ok(handle)
@@ -686,7 +705,7 @@ fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
         TerminationTarget::for_leader(firma_runtime_state::ChildExt::process_id(supervisor));
     let _ = target.signal_hard();
     let _ = supervisor.kill();
-    let _ = collect_child_until(supervisor, Instant::now() + Duration::from_secs(2));
+    let _ = collect_child_until(supervisor, Instant::now() + CHILD_COLLECTION_TIMEOUT);
 }
 
 /// Reconstruct an informational [`StackHandle`] after supervisor-owned startup.
@@ -746,8 +765,7 @@ fn with_rollback<T>(
 ///
 /// [`StopSignal`] is installed before component readiness and reused by
 /// [`supervise_running_stack_with_signal`] for the two-phase handoff and
-/// supervision. `teardown_timeout` bounds graceful component shutdown before
-/// forced termination.
+/// supervision. `timeouts` bounds readiness, handoff, and graceful teardown.
 ///
 /// # Errors
 ///
@@ -758,7 +776,7 @@ pub fn supervise_owned_generation_from_plan<E>(
     build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
     generation: StackGeneration,
-    teardown_timeout: Duration,
+    timeouts: LifecycleTimeouts,
 ) -> Result<(), StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let stack = spawn_stack_from_plan_with_phase(
@@ -768,8 +786,9 @@ pub fn supervise_owned_generation_from_plan<E>(
         false,
         generation,
         Some(&stop_signal),
+        timeouts,
     )?;
-    supervise_running_stack_with_signal(stack, state_dir, teardown_timeout, &stop_signal)
+    supervise_running_stack_with_signal(stack, state_dir, timeouts, &stop_signal)
         .map_err(StartError::Orchestrator)
 }
 
@@ -781,7 +800,7 @@ pub fn supervise_owned_generation_from_plan<E>(
 fn supervise_running_stack_with_signal(
     mut stack: RunningStack,
     state_dir: &Path,
-    timeout: Duration,
+    timeouts: LifecycleTimeouts,
     stop_signal: &StopSignal,
 ) -> Result<(), OrchestratorError> {
     let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
@@ -791,7 +810,7 @@ fn supervise_running_stack_with_signal(
         let ready_path = supervisor_ready_path(state_dir, supervisor_pid);
         pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)?;
         pidfile::write(&ready_path, supervisor_pid)?;
-        wait_for_launcher_ack(&ready_path, stop_signal, Duration::from_mins(4))?;
+        wait_for_launcher_ack(&ready_path, stop_signal, timeouts.detached_handoff)?;
         pidfile::write(
             &supervisor_attached_path(state_dir, supervisor_pid),
             supervisor_pid,
@@ -801,7 +820,7 @@ fn supervise_running_stack_with_signal(
     })();
     if let Err(error) = attachment_result {
         let _ = stack.mark_ready();
-        let rollback = stack.shutdown(timeout);
+        let rollback = stack.shutdown(timeouts.graceful_teardown);
         return Err(with_rollback(error, rollback));
     }
 
@@ -811,7 +830,7 @@ fn supervise_running_stack_with_signal(
         block_until_owned_exit_with(stop_signal, &mut owned.components)
     };
     info!("detached supervisor tearing down owned components");
-    let teardown_result = stack.shutdown(timeout);
+    let teardown_result = stack.shutdown(timeouts.graceful_teardown);
     if let Err(error) = supervision_result {
         return Err(with_rollback(error, teardown_result));
     }
@@ -879,7 +898,7 @@ fn wait_for_supervisor_attachment(
                 timeout_secs: timeout.as_secs(),
             });
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(DETACHED_HANDOFF_POLL_INTERVAL);
     }
 }
 
@@ -916,7 +935,7 @@ fn wait_for_launcher_ack(
                 timeout_secs: timeout.as_secs(),
             });
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(DETACHED_HANDOFF_POLL_INTERVAL);
     }
     Ok(())
 }

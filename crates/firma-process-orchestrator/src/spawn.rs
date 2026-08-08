@@ -7,7 +7,7 @@
 
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tracing::debug;
 
@@ -15,6 +15,7 @@ use crate::collect::{collect_child_until, collect_target_in_background};
 use crate::component::{ComponentName, OwnedComponent};
 use crate::error::OrchestratorError;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
+use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
 use firma_runtime_state::pidfile;
 
 /// Inputs required to spawn one managed stack component.
@@ -71,7 +72,7 @@ pub fn spawn_component(
 pub fn cleanup_failed_spawn(mut spawned: SpawnedChild) {
     let _ = spawned.termination_target.signal_hard();
     let _ = spawned.child.kill();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + CHILD_COLLECTION_TIMEOUT;
     if !collect_child_until(&mut spawned.child, deadline) {
         let _ = collect_target_in_background(spawned.child, spawned.termination_target);
     }

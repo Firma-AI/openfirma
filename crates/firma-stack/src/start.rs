@@ -8,18 +8,15 @@
 
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use firma_process_orchestrator::{
-    RunningStack, StackGeneration, StackHandle, spawn_stack_from_plan, start_detached,
-    start_foreground_from_plan, supervise_owned_generation_from_plan,
+    LifecycleTimeouts, RunningStack, StackGeneration, StackHandle, spawn_stack_from_plan,
+    start_detached, start_foreground_from_plan, supervise_owned_generation_from_plan,
 };
 
 use crate::config::StackConfig;
 use crate::error::StackError;
 use crate::plan;
-
-const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Mode in which [`start`] manages the stack after readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +41,13 @@ pub enum StartMode {
 /// Returns config, state-directory, lock, spawn, or readiness errors.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack, StackError> {
     let topology = plan::topology()?;
-    spawn_stack_from_plan(&topology, || plan::build_plan(cfg), state_dir).map_err(Into::into)
+    spawn_stack_from_plan(
+        &topology,
+        || plan::build_plan(cfg),
+        state_dir,
+        LifecycleTimeouts::default(),
+    )
+    .map_err(Into::into)
 }
 
 /// Start the authority and sidecar stack.
@@ -66,26 +69,31 @@ pub fn start(
             &topology,
             || plan::build_plan(cfg),
             state_dir,
-            TEARDOWN_TIMEOUT,
+            LifecycleTimeouts::default(),
         )
         .map_err(Into::into),
         StartMode::Detached => {
             let executable = std::env::current_exe()
                 .map_err(|source| StackError::CurrentExecutable { source })?;
-            start_detached(&topology, state_dir, TEARDOWN_TIMEOUT, |generation| {
-                let mut command = Command::new(executable);
-                command
-                    .args(["__supervise", "--state-dir"])
-                    .arg(state_dir)
-                    .arg("--config")
-                    .arg(&cfg.config_file)
-                    .arg("--generation")
-                    .arg(generation.to_string());
-                if let Some(firma_bin) = &cfg.firma_bin {
-                    command.arg("--firma-bin").arg(firma_bin);
-                }
-                command
-            })
+            start_detached(
+                &topology,
+                state_dir,
+                LifecycleTimeouts::default(),
+                |generation| {
+                    let mut command = Command::new(executable);
+                    command
+                        .args(["__supervise", "--state-dir"])
+                        .arg(state_dir)
+                        .arg("--config")
+                        .arg(&cfg.config_file)
+                        .arg("--generation")
+                        .arg(generation.to_string());
+                    if let Some(firma_bin) = &cfg.firma_bin {
+                        command.arg("--firma-bin").arg(firma_bin);
+                    }
+                    command
+                },
+            )
             .map_err(Into::into)
         }
     }
@@ -113,7 +121,7 @@ pub fn supervise_owned_generation(
         || plan::build_plan(cfg),
         state_dir,
         generation,
-        TEARDOWN_TIMEOUT,
+        LifecycleTimeouts::default(),
     )
     .map_err(Into::into)
 }

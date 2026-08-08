@@ -16,6 +16,8 @@ use crate::component::OwnedComponent;
 use crate::error::OrchestratorError;
 use crate::platform::{Platform, SystemPlatform};
 
+const SUPERVISION_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
 /// Process-wide result of installing the termination handler exactly once.
 ///
 /// Caching both success and failure prevents later supervisors from claiming
@@ -120,7 +122,7 @@ pub fn block_until_owned_exit_with(
                 return Ok(());
             }
         }
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(SUPERVISION_POLL_INTERVAL);
     }
 }
 
@@ -216,7 +218,7 @@ pub fn collect_in_background(
                     }
                 });
                 if !components.is_empty() {
-                    std::thread::sleep(Duration::from_millis(200));
+                    std::thread::sleep(SUPERVISION_POLL_INTERVAL);
                 }
             }
         })

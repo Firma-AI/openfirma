@@ -1,5 +1,6 @@
 use firma_process_orchestrator::{
-    ComponentSpec, OrchestratorError, StackTopology, StartError, spawn_stack_from_plan,
+    ComponentSpec, LifecycleTimeouts, OrchestratorError, StackTopology, StartError,
+    spawn_stack_from_plan,
 };
 use std::net::{SocketAddr, TcpListener};
 use std::process::Command;
@@ -81,6 +82,7 @@ fn component_spec_explicit_executable_is_used() {
             }])
         },
         state_dir.path(),
+        LifecycleTimeouts::default(),
     )
     .expect("explicit executable starts and becomes ready");
 
@@ -110,6 +112,7 @@ fn plan_count_is_validated_before_any_spawn() {
         &topology,
         || Ok::<Vec<ComponentSpec>, std::convert::Infallible>(Vec::new()),
         state_dir.path(),
+        LifecycleTimeouts::default(),
     );
 
     let Err(StartError::Orchestrator(OrchestratorError::PlanCountMismatch {

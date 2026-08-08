@@ -14,7 +14,11 @@ use tracing::{debug, warn};
 
 use crate::component::OwnedComponent;
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
+use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
 use firma_runtime_state::ChildExt as _;
+
+const COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const BACKGROUND_COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Transfer one direct child and its leader target to a background collector.
 pub fn collect_child_in_background(
@@ -38,13 +42,13 @@ pub fn collect_child_until(child: &mut std::process::Child, deadline: std::time:
         match child.try_wait() {
             Ok(Some(_)) => return true,
             Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(COLLECTION_POLL_INTERVAL);
             }
             Ok(None) => return false,
             Err(error) if SystemPlatform::child_already_reaped(&error) => return true,
             Err(error) if std::time::Instant::now() < deadline => {
                 debug!(%error, "child collection probe failed; retrying");
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(COLLECTION_POLL_INTERVAL);
             }
             Err(error) => {
                 debug!(%error, "child collection probe did not recover before deadline");
@@ -89,7 +93,7 @@ fn spawn_collector(children: Vec<CollectedChild>) -> Option<std::thread::JoinHan
                     }
                 });
                 if !children.is_empty() {
-                    std::thread::sleep(Duration::from_millis(200));
+                    std::thread::sleep(BACKGROUND_COLLECTION_POLL_INTERVAL);
                 }
             }
         }) {
@@ -102,7 +106,7 @@ fn spawn_collector(children: Vec<CollectedChild>) -> Option<std::thread::JoinHan
                     let _ = child.child.kill();
                     let _ = collect_child_until(
                         &mut child.child,
-                        std::time::Instant::now() + Duration::from_secs(2),
+                        std::time::Instant::now() + CHILD_COLLECTION_TIMEOUT,
                     );
                 }
             }

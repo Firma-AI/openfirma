@@ -7,9 +7,9 @@ use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
-    ComponentSpec, OrchestratorError, RunningStack, StackGeneration, StackTopology, StartError,
-    spawn_stack_from_plan, start_detached, start_foreground_from_plan, stop_components,
-    supervise_owned_generation_from_plan,
+    ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack, StackGeneration,
+    StackTopology, StartError, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
+    stop_components, supervise_owned_generation_from_plan,
 };
 use firma_runtime_state::UserProcessId;
 use fs2::FileExt as _;
@@ -22,6 +22,13 @@ const SUPERVISOR_STATE_DIR: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_STATE_DIR";
 const SUPERVISOR_GENERATION: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_GENERATION";
 const SUPERVISOR_MODE: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_MODE";
 const SUPERVISOR_SENTINEL_PID: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_SENTINEL_PID";
+
+fn fast_timeouts() -> LifecycleTimeouts {
+    LifecycleTimeouts {
+        graceful_teardown: Duration::ZERO,
+        ..LifecycleTimeouts::default()
+    }
+}
 
 struct ProcessCleanup(Vec<u32>);
 
@@ -182,6 +189,7 @@ fn startup_guard_rollback_preserves_replacement_generation_runtime_state() {
             Err::<Vec<ComponentSpec>, &'static str>("planned failure")
         },
         dir.path(),
+        fast_timeouts(),
     );
     let Err(error) = result else {
         panic!("plan unexpectedly succeeded");
@@ -228,6 +236,7 @@ fn stop_waits_for_start_plan_transaction() {
                 Ok::<_, std::convert::Infallible>(component_plan(&start_dir, &["authority"]))
             },
             &start_dir,
+            fast_timeouts(),
         );
         let _ = start_tx.send(result);
     });
@@ -284,6 +293,7 @@ fn generation_publication_is_atomic_for_concurrent_readers() {
                     Ok::<_, std::convert::Infallible>(Vec::new())
                 },
                 &writer_dir,
+                fast_timeouts(),
             )
         });
         let reader_barrier = Arc::clone(&barrier);
@@ -356,14 +366,10 @@ fn dropped_owner_retains_process_group_behavior_for_descendants() {
             }])
         },
         dir.path(),
+        fast_timeouts(),
     )
     .expect("spawn grouped leader");
-    wait_for_file(&marker);
-    let descendant = std::fs::read_to_string(&marker)
-        .expect("descendant pid")
-        .trim()
-        .parse::<u32>()
-        .expect("parse descendant pid");
+    let descendant = wait_for_marker(&marker);
     drop(listener);
     drop(stack);
 
@@ -378,7 +384,7 @@ fn detached_launcher_exit_before_readiness_rolls_back_generation() {
     let Err(error) = start_detached(
         &topology(&["authority"]),
         dir.path(),
-        Duration::ZERO,
+        fast_timeouts(),
         |_| exiting_command(),
     ) else {
         panic!("exiting supervisor unexpectedly attached");
@@ -395,7 +401,7 @@ fn detached_component_exit_tears_down_peer_and_supervisor_state() {
     start_detached(
         &topology(&["authority", "sidecar"]),
         dir.path(),
-        Duration::ZERO,
+        fast_timeouts(),
         |generation| supervisor_command(dir.path(), generation, "run"),
     )
     .expect("attach detached supervisor");
@@ -429,7 +435,7 @@ fn stale_detached_launcher_rollback_does_not_signal_replacement_target() {
     let result = start_detached(
         &topology(&["authority"]),
         dir.path(),
-        Duration::ZERO,
+        fast_timeouts(),
         |generation| {
             let mut command = supervisor_command(dir.path(), generation, "replace");
             command.env(SUPERVISOR_SENTINEL_PID, sentinel_pid.to_string());
@@ -459,6 +465,7 @@ fn component_pidfile_publication_failure_collects_spawned_child() {
         &topology(&["authority", "sidecar"]),
         || Ok::<_, std::convert::Infallible>(plan),
         dir.path(),
+        fast_timeouts(),
     ) else {
         panic!("pidfile publication unexpectedly succeeded");
     };
@@ -512,7 +519,7 @@ fn owned_child_fixture() {
             || Ok::<_, std::convert::Infallible>(plan),
             state_dir,
             generation,
-            Duration::ZERO,
+            fast_timeouts(),
         )
         .expect("supervise detached fixture");
         return;
@@ -549,7 +556,7 @@ fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
             &topology(&["authority", "sidecar"]),
             || Ok::<_, std::convert::Infallible>(plan),
             &state_dir,
-            Duration::ZERO,
+            fast_timeouts(),
         );
         let _ = result_tx.send(result);
     });
@@ -575,6 +582,7 @@ fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
         &topology(names),
         || Ok::<_, std::convert::Infallible>(plan),
         state_dir,
+        fast_timeouts(),
     )
     .expect("spawn public stack");
     let pids = names
@@ -626,6 +634,7 @@ fn assert_stop_waits_for_partial_publication(published_components: usize) {
             &topology(&["authority", "sidecar"]),
             || Ok::<_, std::convert::Infallible>(plan),
             &start_dir,
+            fast_timeouts(),
         ));
     });
     wait_for_file(&state_dir.join("authority.pid"));
