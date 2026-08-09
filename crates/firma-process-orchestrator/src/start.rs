@@ -139,6 +139,94 @@ enum LauncherAttachmentState {
     AwaitingConfirmation,
 }
 
+/// Armed launcher ownership of a detached supervisor and its generation.
+///
+/// Explicit rollback handles fallible generation cleanup. Dropping an armed
+/// guard is an emergency path that terminates and transfers collection of the
+/// direct supervisor child while retaining durable state for later cleanup.
+struct DetachedLaunchGuard<'a> {
+    supervisor: Option<std::process::Child>,
+    generation: StackGeneration,
+    state_dir: &'a Path,
+    topology: &'a StackTopology,
+    teardown_timeout: Duration,
+}
+
+impl<'a> DetachedLaunchGuard<'a> {
+    fn new(
+        supervisor: std::process::Child,
+        generation: StackGeneration,
+        state_dir: &'a Path,
+        topology: &'a StackTopology,
+        teardown_timeout: Duration,
+    ) -> Self {
+        Self {
+            supervisor: Some(supervisor),
+            generation,
+            state_dir,
+            topology,
+            teardown_timeout,
+        }
+    }
+
+    fn supervisor_mut(&mut self) -> Result<&mut std::process::Child, OrchestratorError> {
+        self.supervisor.as_mut().ok_or_else(|| {
+            OrchestratorError::Platform("detached supervisor ownership unavailable".into())
+        })
+    }
+
+    /// Transfer collection ownership and disarm launcher rollback.
+    fn transfer_to_collector(&mut self) -> Result<(), OrchestratorError> {
+        let supervisor = self.supervisor.take().ok_or_else(|| {
+            OrchestratorError::Platform("detached supervisor ownership unavailable".into())
+        })?;
+        match collect_child_in_background(supervisor) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let message = format!(
+                    "could not start detached supervisor collector: {}",
+                    error.source()
+                );
+                self.supervisor = error.into_child();
+                Err(OrchestratorError::Platform(message))
+            }
+        }
+    }
+
+    /// Terminate the supervisor and roll back only this launcher's generation.
+    fn rollback(&mut self) -> Result<(), OrchestratorError> {
+        let supervisor_result = self
+            .supervisor
+            .take()
+            .map_or(Ok(()), terminate_detached_supervisor);
+        let generation_result = rollback_detached_start(
+            self.state_dir,
+            self.topology,
+            self.generation,
+            self.teardown_timeout,
+        );
+        match supervisor_result {
+            Ok(()) => generation_result,
+            Err(error) => Err(with_rollback(error, generation_result)),
+        }
+    }
+}
+
+impl Drop for DetachedLaunchGuard<'_> {
+    fn drop(&mut self) {
+        let Some(mut supervisor) = self.supervisor.take() else {
+            return;
+        };
+        let target =
+            TerminationTarget::for_leader(firma_runtime_state::ChildExt::process_id(&supervisor));
+        let _ = target.signal_hard();
+        let _ = supervisor.kill();
+        if let Err(error) = collect_child_in_background(supervisor) {
+            let _ = error.terminate_and_collect();
+        }
+    }
+}
+
 impl StartupGuard {
     /// Begin an armed, empty [`StartupState::Building`] after generation claim.
     fn new(
@@ -736,36 +824,28 @@ pub fn start_detached(
     let generation = StackGeneration::new();
     info!("forking detached supervisor owner");
     let mut supervisor_command = build_supervisor(generation);
-    let mut supervisor = spawn_supervisor(state_dir, &mut supervisor_command)?;
-    if let Err(error) =
-        wait_for_supervisor_attachment(state_dir, &mut supervisor, timeouts.detached_handoff)
-    {
-        terminate_detached_supervisor(&mut supervisor);
-        let rollback =
-            rollback_detached_start(state_dir, topology, generation, timeouts.graceful_teardown);
-        return Err(with_rollback(error, rollback));
+    let supervisor = spawn_supervisor(state_dir, &mut supervisor_command)?;
+    let mut launch = DetachedLaunchGuard::new(
+        supervisor,
+        generation,
+        state_dir,
+        topology,
+        timeouts.graceful_teardown,
+    );
+    let launch_result = (|| {
+        wait_for_supervisor_attachment(
+            state_dir,
+            launch.supervisor_mut()?,
+            timeouts.detached_handoff,
+        )?;
+        let handle = read_stack_handle(state_dir, topology)?;
+        launch.transfer_to_collector()?;
+        Ok(handle)
+    })();
+    match launch_result {
+        Ok(handle) => Ok(handle),
+        Err(error) => Err(with_rollback(error, launch.rollback())),
     }
-    let handle = match read_stack_handle(state_dir, topology) {
-        Ok(handle) => handle,
-        Err(error) => {
-            terminate_detached_supervisor(&mut supervisor);
-            let rollback = rollback_detached_start(
-                state_dir,
-                topology,
-                generation,
-                timeouts.graceful_teardown,
-            );
-            return Err(with_rollback(error, rollback));
-        }
-    };
-    if collect_child_in_background(supervisor).is_none() {
-        let error =
-            OrchestratorError::Platform("could not start detached supervisor collector".into());
-        let rollback =
-            rollback_detached_start(state_dir, topology, generation, timeouts.graceful_teardown);
-        return Err(with_rollback(error, rollback));
-    }
-    Ok(handle)
 }
 
 /// Roll back only state matching this launcher's [`StackGeneration`].
@@ -778,13 +858,21 @@ fn rollback_detached_start(
     crate::stop::stop_generation(state_dir, teardown_timeout, topology, generation).map(|_| ())
 }
 
-/// Terminate and make a bounded collection attempt for the supervisor child.
-fn terminate_detached_supervisor(supervisor: &mut std::process::Child) {
+/// Terminate the supervisor and preserve collection responsibility.
+fn terminate_detached_supervisor(
+    mut supervisor: std::process::Child,
+) -> Result<(), OrchestratorError> {
     let target =
-        TerminationTarget::for_leader(firma_runtime_state::ChildExt::process_id(supervisor));
+        TerminationTarget::for_leader(firma_runtime_state::ChildExt::process_id(&supervisor));
     let _ = target.signal_hard();
     let _ = supervisor.kill();
-    let _ = collect_child_until(supervisor, Instant::now() + CHILD_COLLECTION_TIMEOUT);
+    if collect_child_until(&mut supervisor, Instant::now() + CHILD_COLLECTION_TIMEOUT) {
+        return Ok(());
+    }
+    match collect_child_in_background(supervisor) {
+        Ok(_) => Ok(()),
+        Err(error) => error.terminate_and_collect().map_err(OrchestratorError::Io),
+    }
 }
 
 /// Reconstruct an informational [`StackHandle`] after supervisor-owned startup.

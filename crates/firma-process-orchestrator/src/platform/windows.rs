@@ -357,7 +357,9 @@ fn resume_suspended_process(
 fn cleanup_failed_child(mut child: Child) {
     let _ = child.kill();
     if !collect_child_until(&mut child, Instant::now() + CHILD_COLLECTION_TIMEOUT) {
-        let _ = collect_child_in_background(child);
+        if let Err(error) = collect_child_in_background(child) {
+            let _ = error.terminate_and_collect();
+        }
     }
 }
 
