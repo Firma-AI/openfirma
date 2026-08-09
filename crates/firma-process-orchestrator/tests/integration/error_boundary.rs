@@ -12,7 +12,7 @@ fn plan_failure_after_lock_acquisition_retains_caller_type() {
     let topology = StackTopology::new(std::iter::empty::<&str>()).expect("valid topology");
     let result = spawn_stack_from_plan(
         &topology,
-        || {
+        |_| {
             assert!(state_dir.path().join("stack.lock").is_file());
             Err::<Vec<_>, _>(PlanFailure)
         },

@@ -187,6 +187,11 @@ impl StateLease {
     pub(crate) fn belongs_to(self, generation: StackGeneration) -> bool {
         self.generation == generation
     }
+
+    /// Return the generation fenced by this lease.
+    pub(crate) const fn generation(self) -> StackGeneration {
+        self.generation
+    }
 }
 
 /// Write and flush a complete generation beside [`LOCK_FILE`] for atomic publication.

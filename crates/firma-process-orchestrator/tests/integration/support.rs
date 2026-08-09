@@ -18,10 +18,10 @@ pub fn spawn_managed_component(
     let readiness_addr = readiness_listener.local_addr().expect("readiness address");
     let stack = spawn_stack_from_plan(
         topology,
-        || {
+        |_| {
             Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
                 command,
-                readiness_addr,
+                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(readiness_addr),
             }])
         },
         state_dir,

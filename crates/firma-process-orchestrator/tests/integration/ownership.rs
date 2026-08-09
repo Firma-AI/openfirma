@@ -7,15 +7,17 @@ use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
-    ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack, StackGeneration,
-    StackTopology, StartError, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
-    stop_components, supervise_owned_generation_from_plan,
+    ComponentContext, ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack,
+    StackGeneration, StackTopology, StartError, publish_startup_report, spawn_stack_from_plan,
+    start_detached, start_foreground_from_plan, stop_components,
+    supervise_owned_generation_from_plan,
 };
 use firma_runtime_state::UserProcessId;
 use fs2::FileExt as _;
 
 const CHILD_MARKER: &str = "FIRMA_ORCHESTRATOR_CHILD_MARKER";
 const CHILD_LISTEN: &str = "FIRMA_ORCHESTRATOR_CHILD_LISTEN";
+const CHILD_PUBLICATION: &str = "FIRMA_ORCHESTRATOR_CHILD_PUBLICATION";
 const CHILD_RELEASE: &str = "FIRMA_ORCHESTRATOR_CHILD_RELEASE";
 const CHILD_BLOCK_PIDFILE: &str = "FIRMA_ORCHESTRATOR_CHILD_BLOCK_PIDFILE";
 const SUPERVISOR_STATE_DIR: &str = "FIRMA_ORCHESTRATOR_SUPERVISOR_STATE_DIR";
@@ -100,6 +102,70 @@ fn sidecar_exit_tears_down_owned_foreground_stack() {
 }
 
 #[test]
+fn authority_exit_during_startup_reports_readiness_process_exited() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let state_dir = dir.path().to_path_buf();
+    let startup = std::thread::spawn(move || {
+        spawn_stack_from_plan(
+            &topology(&["authority", "sidecar"]),
+            |contexts| {
+                Ok::<_, std::convert::Infallible>(delayed_component_plan(
+                    contexts,
+                    &state_dir,
+                    &["authority", "sidecar"],
+                ))
+            },
+            &state_dir,
+            fast_timeouts(),
+        )
+    });
+    std::fs::write(dir.path().join("authority.release"), []).expect("release authority");
+    let authority_pid = wait_for_marker(&dir.path().join("authority.marker"));
+    terminate_process(authority_pid);
+
+    let Err(error) = startup.join().expect("join startup") else {
+        panic!("authority exit must fail startup");
+    };
+    assert!(matches!(
+        error,
+        StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
+    ));
+}
+
+#[test]
+fn wildcard_child_publication_uses_loopback_canonical_endpoint() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let mut stack = spawn_stack_from_plan(
+        &topology(&["worker"]),
+        |contexts| {
+            let context = contexts.first().expect("worker context");
+            let publication = context
+                .child_published_tcp("0.0.0.0:0".parse().expect("wildcard child bind endpoint"));
+            let mut command = fixture_command();
+            command
+                .env(CHILD_LISTEN, "0.0.0.0:0")
+                .env(CHILD_PUBLICATION, publication.startup_report_path());
+            Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
+                command,
+                readiness: publication.into_readiness(),
+            }])
+        },
+        dir.path(),
+        fast_timeouts(),
+    )
+    .expect("wildcard child readiness");
+
+    let canonical: std::net::SocketAddr = std::fs::read_to_string(dir.path().join("worker.listen"))
+        .expect("read canonical worker endpoint")
+        .trim()
+        .parse()
+        .expect("parse canonical worker endpoint");
+    assert_eq!(canonical.ip(), std::net::Ipv4Addr::LOCALHOST);
+    std::net::TcpStream::connect(canonical).expect("dial canonical worker endpoint");
+    stack.shutdown(Duration::ZERO).expect("shutdown fixture");
+}
+
+#[test]
 fn external_stop_terminates_targets_but_retains_malformed_generation_state() {
     let dir = tempfile::tempdir().expect("state dir");
     let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
@@ -161,17 +227,13 @@ fn old_owner_does_not_remove_replacement_generation_state() {
 #[test]
 fn startup_guard_rollback_preserves_replacement_generation_runtime_state() {
     let dir = tempfile::tempdir().expect("state dir");
-    let mut sentinel = fixture_command();
-    let (addr, listener) = reserve_address();
-    sentinel.env(CHILD_LISTEN, addr.to_string());
-    let mut child = sentinel.spawn().expect("spawn replacement sentinel");
-    drop(listener);
+    let (mut child, addr) = spawn_published_fixture(dir.path(), "replacement-sentinel");
     let sentinel_pid = child.id();
     let cleanup = ProcessCleanup::new([sentinel_pid]);
     let replacement = StackGeneration::default();
     let result = spawn_stack_from_plan(
         &topology(&["authority"]),
-        || {
+        |_| {
             std::fs::write(dir.path().join("stack.lock"), format!("{replacement}\n"))
                 .expect("replace generation");
             let pid = UserProcessId::new(sentinel_pid).expect("sentinel PID");
@@ -230,10 +292,14 @@ fn stop_waits_for_start_plan_transaction() {
     let starter = std::thread::spawn(move || {
         let result = spawn_stack_from_plan(
             &start_topology,
-            || {
+            |contexts| {
                 plan_barrier.wait();
                 plan_release.wait();
-                Ok::<_, std::convert::Infallible>(component_plan(&start_dir, &["authority"]))
+                Ok::<_, std::convert::Infallible>(component_plan(
+                    contexts,
+                    &start_dir,
+                    &["authority"],
+                ))
             },
             &start_dir,
             fast_timeouts(),
@@ -288,7 +354,7 @@ fn generation_publication_is_atomic_for_concurrent_readers() {
             writer_barrier.wait();
             spawn_stack_from_plan(
                 &topology(&[]),
-                || {
+                |_| {
                     writer_release.wait();
                     Ok::<_, std::convert::Infallible>(Vec::new())
                 },
@@ -359,10 +425,10 @@ fn dropped_owner_retains_process_group_behavior_for_descendants() {
     command.env("DESCENDANT", &marker);
     let stack = spawn_stack_from_plan(
         &topology(&["authority"]),
-        || {
+        |_| {
             Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
                 command,
-                readiness_addr: addr,
+                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(addr),
             }])
         },
         dir.path(),
@@ -424,11 +490,7 @@ fn detached_component_exit_tears_down_peer_and_supervisor_state() {
 #[test]
 fn stale_detached_launcher_rollback_does_not_signal_replacement_target() {
     let dir = tempfile::tempdir().expect("state dir");
-    let mut sentinel_command = fixture_command();
-    let (addr, listener) = reserve_address();
-    sentinel_command.env(CHILD_LISTEN, addr.to_string());
-    let mut sentinel = sentinel_command.spawn().expect("spawn sentinel");
-    drop(listener);
+    let (mut sentinel, _) = spawn_published_fixture(dir.path(), "detached-sentinel");
     let sentinel_pid = sentinel.id();
     let cleanup = ProcessCleanup::new([sentinel_pid]);
 
@@ -456,14 +518,15 @@ fn stale_detached_launcher_rollback_does_not_signal_replacement_target() {
 #[test]
 fn component_pidfile_publication_failure_collects_spawned_child() {
     let dir = tempfile::tempdir().expect("state dir");
-    let mut plan = component_plan(dir.path(), &["authority", "sidecar"]);
-    plan[0]
-        .command
-        .env(CHILD_BLOCK_PIDFILE, dir.path().join("sidecar.pid"));
-
     let Err(error) = spawn_stack_from_plan(
         &topology(&["authority", "sidecar"]),
-        || Ok::<_, std::convert::Infallible>(plan),
+        |contexts| {
+            let mut plan = component_plan(contexts, dir.path(), &["authority", "sidecar"]);
+            plan[0]
+                .command
+                .env(CHILD_BLOCK_PIDFILE, dir.path().join("sidecar.pid"));
+            Ok::<_, std::convert::Infallible>(plan)
+        },
         dir.path(),
         fast_timeouts(),
     ) else {
@@ -513,10 +576,15 @@ fn owned_child_fixture() {
                 .expect("write replacement component");
             return;
         }
-        let plan = component_plan(state_dir, &["authority", "sidecar"]);
         supervise_owned_generation_from_plan(
             &topology(&["authority", "sidecar"]),
-            || Ok::<_, std::convert::Infallible>(plan),
+            |contexts| {
+                Ok::<_, std::convert::Infallible>(component_plan(
+                    contexts,
+                    state_dir,
+                    &["authority", "sidecar"],
+                ))
+            },
             state_dir,
             generation,
             fast_timeouts(),
@@ -525,9 +593,6 @@ fn owned_child_fixture() {
         return;
     }
     if let Some(address) = std::env::var_os(CHILD_LISTEN) {
-        if let Some(marker) = std::env::var_os(CHILD_MARKER) {
-            std::fs::write(marker, std::process::id().to_string()).expect("write marker");
-        }
         if let Some(release) = std::env::var_os(CHILD_RELEASE) {
             while !Path::new(&release).exists() {
                 std::thread::sleep(Duration::from_millis(10));
@@ -538,6 +603,16 @@ fn owned_child_fixture() {
         }
         let listener = std::net::TcpListener::bind(address.to_string_lossy().as_ref())
             .expect("bind component readiness listener");
+        if let Some(publication) = std::env::var_os(CHILD_PUBLICATION) {
+            publish_startup_report(
+                Path::new(&publication),
+                listener.local_addr().expect("effective component endpoint"),
+            )
+            .expect("publish component endpoint");
+        }
+        if let Some(marker) = std::env::var_os(CHILD_MARKER) {
+            std::fs::write(marker, std::process::id().to_string()).expect("write marker");
+        }
         println!("{}", std::process::id());
         std::io::stdout().flush().expect("flush PID");
         loop {
@@ -549,12 +624,17 @@ fn owned_child_fixture() {
 fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
     let dir = tempfile::tempdir().expect("state dir");
     let state_dir = dir.path().to_path_buf();
-    let plan = component_plan(&state_dir, &["authority", "sidecar"]);
     let (result_tx, result_rx) = mpsc::channel();
     let supervisor = std::thread::spawn(move || {
         let result = start_foreground_from_plan(
             &topology(&["authority", "sidecar"]),
-            || Ok::<_, std::convert::Infallible>(plan),
+            |contexts| {
+                Ok::<_, std::convert::Infallible>(component_plan(
+                    contexts,
+                    &state_dir,
+                    &["authority", "sidecar"],
+                ))
+            },
             &state_dir,
             fast_timeouts(),
         );
@@ -564,7 +644,9 @@ fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
         wait_for_marker(&dir.path().join("authority.marker")),
         wait_for_marker(&dir.path().join("sidecar.marker")),
     ];
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_file(&dir.path().join("authority.listen"));
+    wait_for_file(&dir.path().join("sidecar.listen"));
+    wait_for_transaction_release(dir.path());
     terminate_process(pids[exiting_component]);
 
     result_rx
@@ -577,10 +659,9 @@ fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
 }
 
 fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
-    let plan = component_plan(state_dir, names);
     let stack = spawn_stack_from_plan(
         &topology(names),
-        || Ok::<_, std::convert::Infallible>(plan),
+        |contexts| Ok::<_, std::convert::Infallible>(component_plan(contexts, state_dir, names)),
         state_dir,
         fast_timeouts(),
     )
@@ -592,30 +673,40 @@ fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
     (stack, pids)
 }
 
-fn component_plan(state_dir: &Path, names: &[&str]) -> Vec<ComponentSpec> {
+fn component_plan(
+    contexts: &[ComponentContext<'_>],
+    state_dir: &Path,
+    names: &[&str],
+) -> Vec<ComponentSpec> {
     names
         .iter()
-        .map(|name| {
-            let (address, listener) = reserve_address();
-            drop(listener);
+        .zip(contexts)
+        .map(|(name, context)| {
+            let publication =
+                context.child_published_tcp("127.0.0.1:0".parse().expect("fixture bind endpoint"));
             let mut command = fixture_command();
             command
                 .env_remove(SUPERVISOR_STATE_DIR)
                 .env_remove(SUPERVISOR_GENERATION)
                 .env_remove(SUPERVISOR_MODE)
                 .env_remove(SUPERVISOR_SENTINEL_PID)
-                .env(CHILD_LISTEN, address.to_string())
+                .env(CHILD_LISTEN, "127.0.0.1:0")
+                .env(CHILD_PUBLICATION, publication.startup_report_path())
                 .env(CHILD_MARKER, state_dir.join(format!("{name}.marker")));
             ComponentSpec {
                 command,
-                readiness_addr: address,
+                readiness: publication.into_readiness(),
             }
         })
         .collect()
 }
 
-fn delayed_component_plan(state_dir: &Path, names: &[&str]) -> Vec<ComponentSpec> {
-    let mut plan = component_plan(state_dir, names);
+fn delayed_component_plan(
+    contexts: &[ComponentContext<'_>],
+    state_dir: &Path,
+    names: &[&str],
+) -> Vec<ComponentSpec> {
+    let mut plan = component_plan(contexts, state_dir, names);
     for (spec, name) in plan.iter_mut().zip(names) {
         spec.command
             .env(CHILD_RELEASE, state_dir.join(format!("{name}.release")));
@@ -629,10 +720,15 @@ fn assert_stop_waits_for_partial_publication(published_components: usize) {
     let (start_tx, start_rx) = mpsc::channel();
     let start_dir = state_dir.clone();
     let starter = std::thread::spawn(move || {
-        let plan = delayed_component_plan(&start_dir, &["authority", "sidecar"]);
         let _ = start_tx.send(spawn_stack_from_plan(
             &topology(&["authority", "sidecar"]),
-            || Ok::<_, std::convert::Infallible>(plan),
+            |contexts| {
+                Ok::<_, std::convert::Infallible>(delayed_component_plan(
+                    contexts,
+                    &start_dir,
+                    &["authority", "sidecar"],
+                ))
+            },
             &start_dir,
             fast_timeouts(),
         ));
@@ -670,9 +766,60 @@ fn assert_stop_waits_for_partial_publication(published_components: usize) {
     stopper.join().expect("join stopper");
 }
 
+#[cfg(unix)]
 fn reserve_address() -> (std::net::SocketAddr, std::net::TcpListener) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve address");
     (listener.local_addr().expect("reserved address"), listener)
+}
+
+fn spawn_published_fixture(
+    state_dir: &Path,
+    name: &str,
+) -> (std::process::Child, std::net::SocketAddr) {
+    let publication = state_dir.join(format!("{name}.endpoint"));
+    let marker = state_dir.join(format!("{name}.marker"));
+    let mut command = fixture_command();
+    command
+        .env(CHILD_LISTEN, "127.0.0.1:0")
+        .env(CHILD_PUBLICATION, &publication)
+        .env(CHILD_MARKER, &marker);
+    let child = command.spawn().expect("spawn published fixture");
+    wait_for_marker(&marker);
+    let record = std::fs::read_to_string(publication).expect("read fixture endpoint");
+    let addr = record
+        .lines()
+        .find_map(|line| line.strip_prefix("tcp_listen_addr = \"")?.strip_suffix('"'))
+        .expect("fixture endpoint field")
+        .parse()
+        .expect("parse fixture endpoint");
+    (child, addr)
+}
+
+fn wait_for_transaction_release(state_dir: &Path) {
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(state_dir.join(".stack-state.lock"))
+        .expect("open transaction lock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match lock.try_lock_shared() {
+            Ok(()) => {
+                fs2::FileExt::unlock(&lock).expect("release observed transaction lock");
+                return;
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "startup transaction remained held"
+                );
+                std::thread::yield_now();
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                panic!("observe startup transaction: {error}")
+            }
+        }
+    }
 }
 
 fn fixture_command() -> Command {

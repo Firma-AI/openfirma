@@ -156,7 +156,7 @@ type-safe-id = { version = "0.3.3", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 wait-timeout = "0.2"
 webpki-roots = "1"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
 wiremock = "0.6"
 x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

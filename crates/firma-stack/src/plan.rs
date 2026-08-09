@@ -15,7 +15,9 @@ use std::process::Command;
 
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
-use firma_process_orchestrator::{ComponentSpec, OrchestratorError, StackTopology};
+use firma_process_orchestrator::{
+    ComponentContext, ComponentSpec, OrchestratorError, Readiness, StackTopology,
+};
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
 
@@ -71,7 +73,10 @@ pub fn topology() -> Result<StackTopology, OrchestratorError> {
 /// Returns a configuration error when the file cannot be read or parsed, or
 /// when either component section is missing
 /// or holds an invalid listen address.
-pub fn build_plan(cfg: &StackConfig) -> Result<Vec<ComponentSpec>, StackError> {
+pub fn build_plan(
+    cfg: &StackConfig,
+    _contexts: &[ComponentContext<'_>],
+) -> Result<Vec<ComponentSpec>, StackError> {
     let config = FirmaToml::read(&cfg.config_file)?;
     let auth_addr = config.authority_listen_addr()?;
     let side_addr = config.sidecar_config()?.interceptor.listen_addr;
@@ -94,11 +99,11 @@ pub fn build_plan(cfg: &StackConfig) -> Result<Vec<ComponentSpec>, StackError> {
     Ok(vec![
         ComponentSpec {
             command: authority,
-            readiness_addr: auth_addr,
+            readiness: Readiness::ConfiguredTcp(auth_addr),
         },
         ComponentSpec {
             command: sidecar,
-            readiness_addr: side_addr,
+            readiness: Readiness::ConfiguredTcp(side_addr),
         },
     ])
 }
