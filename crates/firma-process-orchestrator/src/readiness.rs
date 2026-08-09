@@ -219,8 +219,14 @@ fn check_startup_stop(stop_signal: Option<&StopSignal>) -> Result<(), Orchestrat
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_ips_match, dial_addr_for_bind_addr, validate_startup_report};
+    use super::{
+        bind_ips_match, dial_addr_for_bind_addr, validate_startup_report,
+        wait_for_child_published_tcp,
+    };
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+    use std::time::Duration;
+
+    use crate::error::OrchestratorError;
 
     #[test]
     fn wildcard_dial_addresses_preserve_ip_family_and_port() {
@@ -257,5 +263,47 @@ mod tests {
         let error = validate_startup_report("worker", requested, published)
             .expect_err("mismatched IPv6 scope must fail raw bind validation");
         assert!(error.to_string().contains("does not match requested IP"));
+    }
+
+    #[test]
+    fn observable_child_exit_wins_over_malformed_publication() {
+        let dir = tempfile::tempdir().expect("startup report dir");
+        let path = dir.path().join("startup.toml");
+        std::fs::write(&path, "not = valid = toml").expect("malformed startup report");
+        let mut checks = 0;
+
+        let error = wait_for_child_published_tcp(
+            "worker",
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            &path,
+            Duration::from_secs(1),
+            None,
+            || {
+                checks += 1;
+                Ok((checks == 2).then(|| ("worker".to_string(), fixture_exit_status(17))))
+            },
+        )
+        .expect_err("observable child exit must supersede the malformed report");
+
+        let OrchestratorError::ReadinessProcessExited { component, status } = error else {
+            panic!("unexpected readiness error: {error:?}");
+        };
+        assert_eq!(component, "worker");
+        assert_eq!(status.code(), Some(17));
+        assert_eq!(checks, 2);
+    }
+
+    #[cfg(unix)]
+    fn fixture_exit_status(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn fixture_exit_status(code: i32) -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt as _;
+
+        std::process::ExitStatus::from_raw(code as u32)
     }
 }

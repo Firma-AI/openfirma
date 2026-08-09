@@ -177,14 +177,6 @@ fn child_exit_before_or_after_publication_fails_and_rolls_back() {
 }
 
 #[test]
-fn child_exit_wins_over_malformed_publication() {
-    let fixture = Fixture::new(ChildBehavior::PublishRawThenExit(
-        "not = valid = toml".to_string(),
-    ));
-    fixture.assert_process_exit(loopback_ephemeral());
-}
-
-#[test]
 fn canonical_endpoint_remains_absent_while_probe_is_unvalidated() {
     let fixture = Fixture::new(ChildBehavior::PublishWithoutListener(loopback_ephemeral()));
     let marker = fixture.marker.clone();
@@ -231,7 +223,6 @@ enum ChildBehavior {
     Publish(SocketAddr),
     Configured(SocketAddr),
     Raw(String),
-    PublishRawThenExit(String),
     Symlink,
     Directory,
     ExitBeforePublication,
@@ -265,9 +256,6 @@ impl Fixture {
             ChildBehavior::Publish(addr) => ("publish", Some(*addr), None),
             ChildBehavior::Configured(addr) => ("configured", Some(*addr), None),
             ChildBehavior::Raw(record) => ("raw", None, Some(record.as_str())),
-            ChildBehavior::PublishRawThenExit(record) => {
-                ("malformed-exit", None, Some(record.as_str()))
-            }
             ChildBehavior::Symlink => ("symlink", None, None),
             ChildBehavior::Directory => ("directory", None, None),
             ChildBehavior::ExitBeforePublication => ("exit-before", None, None),
@@ -320,10 +308,14 @@ impl Fixture {
         let Err(error) = self.spawn(requested_addr) else {
             panic!("{:?} unexpectedly succeeded", self.behavior);
         };
-        assert!(matches!(
-            error,
-            StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
-        ));
+        assert!(
+            matches!(
+                &error,
+                StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
+            ),
+            "{:?} returned unexpected error: {error:?}",
+            self.behavior
+        );
         assert_rollback_clean(&self.state_dir);
     }
 
@@ -384,16 +376,11 @@ fn child_fixture() {
     if mode == "exit-before" {
         return;
     }
-    if mode == "raw" || mode == "malformed-exit" {
+    if mode == "raw" {
         publish_raw(
             &startup_report_path(),
             &std::env::var(CHILD_RECORD).expect("raw child record"),
         );
-        if mode == "malformed-exit" {
-            // Skip the test harness shutdown path so the child has exited by
-            // the orchestrator's liveness recheck.
-            std::process::exit(0);
-        }
         std::thread::sleep(Duration::from_mins(1));
         return;
     }
