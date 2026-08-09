@@ -7,7 +7,6 @@
 //! external-collection condition, so both the high-level supervisor and the
 //! low-level platform layer can share them without an inverted dependency.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::Duration;
 
@@ -22,16 +21,9 @@ const BACKGROUND_COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(200)
 
 static COLLECTOR: OnceLock<Collector> = OnceLock::new();
 static COLLECTOR_INIT: Mutex<()> = Mutex::new(());
-/// Process that first attempted collector initialization.
-///
-/// This lock-free claim must be checked before [`COLLECTOR_INIT`]: a child of a
-/// multithreaded `fork` can inherit that mutex while its owning thread no longer
-/// exists, but it retains the parent's process identity in this atomic value.
-static COLLECTOR_PROCESS: AtomicU32 = AtomicU32::new(0);
 
 /// Process-global collection worker initialized before any managed child exists.
 struct Collector {
-    owner_pid: u32,
     sender: mpsc::Sender<CollectionRequest>,
 }
 
@@ -45,7 +37,6 @@ enum CollectionRequest {
 #[derive(Debug)]
 enum HandoffFailure {
     Uninitialized,
-    Forked { owner_pid: u32, current_pid: u32 },
     Disconnected,
 }
 
@@ -53,13 +44,6 @@ impl std::fmt::Display for HandoffFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Uninitialized => formatter.write_str("child collector is not initialized"),
-            Self::Forked {
-                owner_pid,
-                current_pid,
-            } => write!(
-                formatter,
-                "child collector belongs to process {owner_pid}, not forked process {current_pid}"
-            ),
             Self::Disconnected => formatter.write_str("child collector worker disconnected"),
         }
     }
@@ -101,7 +85,6 @@ impl HandoffError {
 
 /// Initialize the process-global collector before any managed child is spawned.
 pub fn initialize_collector() -> Result<(), std::io::Error> {
-    claim_collector_process()?;
     if COLLECTOR.get().is_none() {
         let _initialization = match COLLECTOR_INIT.lock() {
             Ok(guard) => guard,
@@ -116,31 +99,12 @@ pub fn initialize_collector() -> Result<(), std::io::Error> {
             }
         }
     }
-    let Some(collector) = COLLECTOR.get() else {
+    if COLLECTOR.get().is_none() {
         return Err(std::io::Error::other(
             "child collector initialization completed without a worker",
         ));
-    };
-    let current_pid = std::process::id();
-    if collector.owner_pid != current_pid {
-        return Err(std::io::Error::other(format!(
-            "child collector belongs to process {}, not forked process {current_pid}",
-            collector.owner_pid
-        )));
     }
     Ok(())
-}
-
-/// Claim initialization for this process without touching fork-inherited locks.
-fn claim_collector_process() -> Result<(), std::io::Error> {
-    let current_pid = std::process::id();
-    match COLLECTOR_PROCESS.compare_exchange(0, current_pid, Ordering::AcqRel, Ordering::Acquire) {
-        Ok(_) => Ok(()),
-        Err(owner_pid) if owner_pid == current_pid => Ok(()),
-        Err(owner_pid) => Err(std::io::Error::other(format!(
-            "child collector belongs to process {owner_pid}, not forked process {current_pid}"
-        ))),
-    }
 }
 
 fn start_collector() -> Result<Collector, std::io::Error> {
@@ -148,10 +112,7 @@ fn start_collector() -> Result<Collector, std::io::Error> {
     std::thread::Builder::new()
         .name("child-collector".into())
         .spawn(move || collect_children(&receiver))?;
-    Ok(Collector {
-        owner_pid: std::process::id(),
-        sender,
-    })
+    Ok(Collector { sender })
 }
 
 /// Transfer one direct child and its leader target to a background collector.
@@ -196,15 +157,7 @@ pub fn collect_components_in_background(
 }
 
 fn initialized_collector() -> Result<&'static Collector, HandoffFailure> {
-    let collector = COLLECTOR.get().ok_or(HandoffFailure::Uninitialized)?;
-    let current_pid = std::process::id();
-    if collector.owner_pid != current_pid {
-        return Err(HandoffFailure::Forked {
-            owner_pid: collector.owner_pid,
-            current_pid,
-        });
-    }
-    Ok(collector)
+    COLLECTOR.get().ok_or(HandoffFailure::Uninitialized)
 }
 
 /// Attempt direct-child collection until a deadline without relinquishing ownership.
