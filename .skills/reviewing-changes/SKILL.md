@@ -24,6 +24,21 @@ Prioritize actionable issues involving:
 - missing or ineffective tests for changed behavior; and
 - documentation that would mislead users or contributors.
 
+For security or material hardening recommendations, establish the actors,
+authority and trust boundaries, supported workloads and deployment modes,
+attacker capability, and protected asset. Show that the suspect state is
+reachable in that model before adding defenses, and prefer repairing the
+invariant at its owner over adding downstream guards.
+
+Judge guardrails against their stated misuse model. An accident-prevention
+check need not resist deliberate bypass unless it is claimed as a security
+boundary. Do not preserve compatibility when doing so keeps a confirmed
+security bypass viable; identify the break and migration explicitly.
+
+When reviewing a stack, inspect both each revision and the cumulative tip.
+Label findings that exist only in an intermediate revision; report a surviving
+defect only when it remains in the cumulative result.
+
 Apply any more specific repository or language review guidance in addition to
 this baseline. Before reviewing, identify the languages and file types in the
 change and load the specialized guidance that applies to each subset:
@@ -40,10 +55,20 @@ Honor review priorities explicitly requested by the user.
 Return one severity-ordered report. For each finding, include:
 
 - concrete file and line evidence;
-- the conditions required to trigger the issue;
-- the expected impact;
+- the trigger conditions and causal chain from the changed code to the
+  observable behavior;
+- the practical or operational impact;
 - a suggested correction when one is reasonably clear; and
 - relevant unverified assumptions.
+
+A recommendation for a material abstraction must identify its owner and
+consumers, operational role, construction or update lifecycle, relevant costs,
+and what it replaces or deliberately does not solve.
+
+When the user requests a saved or shareable review artifact, make it stand
+without thread context. State the reviewed scope, intended behavior,
+verification limits, and assumptions, and include any supporting code needed
+to use a requested self-contained snippet.
 
 Report only actionable findings. Do not include process narration or duplicate
 findings from multiple reviewers. If there are no findings, say so plainly and

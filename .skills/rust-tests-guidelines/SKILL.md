@@ -14,12 +14,18 @@ Guidelines for writing new tests for Rust code.
    unreachable that way, ask before changing visibility or adding a test-only
    API.
 3. Add edge-case coverage for parsing, validation, and error-handling paths.
-4. Use `proptest` where property-based coverage adds real value for invariants or parser-like behavior.
-5. Write tests with the same care as production code: clear structure, minimal duplication, readable intent.
-6. Avoid comments that depend on exact line numbers.
-7. Prefer one test per distinct branch or behavior, not many tests with different inputs that exercise the same control flow.
-8. Do not add tests that differ only in input values when they exercise the same branch structure.
-9. Do not write standalone tests for trivial delegations or constructors that are already covered transitively unless they encode meaningful validation logic.
+4. For a bug regression, include every causally relevant input, exercise the
+   same public entry or launch path used by production, and assert every
+   affected observable output or side effect.
+5. For a security fix, add an executable regression for every confirmed bypass
+   class. Helper-only tests do not prove that the patched production path
+   closes the bypass.
+6. Use `proptest` where property-based coverage adds real value for invariants or parser-like behavior.
+7. Write tests with the same care as production code: clear structure, minimal duplication, readable intent.
+8. Avoid comments that depend on exact line numbers.
+9. Prefer one test per distinct branch or behavior, not many tests with different inputs that exercise the same control flow.
+10. Do not add tests that differ only in input values when they exercise the same branch structure.
+11. Do not write standalone tests for trivial delegations or constructors that are already covered transitively unless they encode meaningful validation logic.
 
 ## Error assertions
 

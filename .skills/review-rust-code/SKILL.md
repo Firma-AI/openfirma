@@ -99,6 +99,10 @@ Look for:
 - unchecked conversions or lossy assumptions
 - stale or ambiguous config behavior
 - surprising defaults in operator-facing code
+- abstractions or contracts coupled to an incidental backend, transport, or OS
+  rather than enduring domain semantics
+- local parsers, constants, builders, identifiers, or fixtures that duplicate
+  a canonical owner or helper
 - platform-specific code that adds fallback, no-op, passthrough, stub, or
   `compile_error!` implementations outside the supported Unix and Windows
   targets
