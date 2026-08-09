@@ -50,7 +50,7 @@ pub fn wait_for_tcp(
 pub fn wait_for_child_published_tcp(
     component: &str,
     requested_bind_addr: SocketAddr,
-    publication_path: &Path,
+    startup_report_path: &Path,
     timeout: Duration,
     stop_signal: Option<&StopSignal>,
     mut process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
@@ -58,16 +58,16 @@ pub fn wait_for_child_published_tcp(
     let deadline = Instant::now() + timeout;
     let published_bind_addr = loop {
         check_startup(component, stop_signal, &mut process_status)?;
-        match crate::endpoint_publication::read_tcp_endpoint(publication_path) {
-            Ok(Some((version, published_bind_addr))) => {
+        match crate::startup_report::read_startup_report(startup_report_path) {
+            Ok(Some(published_bind_addr)) => {
                 check_startup(component, stop_signal, &mut process_status)?;
-                validate_publication(component, requested_bind_addr, version, published_bind_addr)?;
+                validate_startup_report(component, requested_bind_addr, published_bind_addr)?;
                 break published_bind_addr;
             }
             Ok(None) => {}
             Err(error) => {
                 check_startup(component, stop_signal, &mut process_status)?;
-                return Err(invalid_publication(component, error));
+                return Err(invalid_startup_report(component, error));
             }
         }
         if Instant::now() >= deadline {
@@ -127,23 +127,16 @@ fn wait_for_tcp_until(
     }
 }
 
-fn validate_publication(
+fn validate_startup_report(
     component: &str,
     requested_bind_addr: SocketAddr,
-    version: u32,
     published_bind_addr: SocketAddr,
 ) -> Result<(), OrchestratorError> {
-    if version != crate::endpoint_publication::endpoint_protocol_version() {
-        return Err(invalid_publication(
-            component,
-            format!("unsupported protocol version {version}"),
-        ));
-    }
     if published_bind_addr.port() == 0 {
-        return Err(invalid_publication(component, "effective port is zero"));
+        return Err(invalid_startup_report(component, "effective port is zero"));
     }
     if !bind_ips_match(published_bind_addr, requested_bind_addr) {
-        return Err(invalid_publication(
+        return Err(invalid_startup_report(
             component,
             format!(
                 "effective IP {} does not match requested IP {}",
@@ -153,7 +146,7 @@ fn validate_publication(
         ));
     }
     if requested_bind_addr.port() != 0 && published_bind_addr != requested_bind_addr {
-        return Err(invalid_publication(
+        return Err(invalid_startup_report(
             component,
             format!(
                 "effective endpoint {published_bind_addr} does not match requested {requested_bind_addr}"
@@ -175,9 +168,9 @@ fn bind_ips_match(published: SocketAddr, requested: SocketAddr) -> bool {
     }
 }
 
-fn invalid_publication(component: &str, reason: impl std::fmt::Display) -> OrchestratorError {
+fn invalid_startup_report(component: &str, reason: impl std::fmt::Display) -> OrchestratorError {
     OrchestratorError::Platform(format!(
-        "invalid endpoint publication from '{component}': {reason}"
+        "invalid startup report from '{component}': {reason}"
     ))
 }
 
@@ -226,7 +219,7 @@ fn check_startup_stop(stop_signal: Option<&StopSignal>) -> Result<(), Orchestrat
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_ips_match, dial_addr_for_bind_addr, validate_publication};
+    use super::{bind_ips_match, dial_addr_for_bind_addr, validate_startup_report};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 
     #[test]
@@ -261,13 +254,8 @@ mod tests {
         ));
 
         assert!(!bind_ips_match(published, requested));
-        let error = validate_publication(
-            "worker",
-            requested,
-            crate::endpoint_publication::endpoint_protocol_version(),
-            published,
-        )
-        .expect_err("mismatched IPv6 scope must fail raw bind validation");
+        let error = validate_startup_report("worker", requested, published)
+            .expect_err("mismatched IPv6 scope must fail raw bind validation");
         assert!(error.to_string().contains("does not match requested IP"));
     }
 }

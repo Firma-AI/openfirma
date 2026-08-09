@@ -2,31 +2,32 @@
 
 use std::io::Write as _;
 use std::net::{SocketAddr, TcpListener};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use firma_process_orchestrator::{
     ComponentSpec, LifecycleTimeouts, OrchestratorError, Readiness, RunningStack, StackTopology,
-    StartError, publish_tcp_endpoint, spawn_stack_from_plan,
+    StartError, publish_startup_report, spawn_stack_from_plan,
 };
+
+use crate::support::wait_for_file;
 
 const CHILD_MODE: &str = "FIRMA_ENDPOINT_CHILD_MODE";
 const CHILD_BIND_ADDR: &str = "FIRMA_ENDPOINT_CHILD_BIND_ADDR";
 const CHILD_RECORD: &str = "FIRMA_ENDPOINT_CHILD_RECORD";
 const CHILD_MARKER: &str = "FIRMA_ENDPOINT_CHILD_MARKER";
-const CHILD_PUBLICATION_PATH: &str = "FIRMA_ENDPOINT_CHILD_PUBLICATION_PATH";
+const CHILD_STARTUP_REPORT_PATH: &str = "FIRMA_ENDPOINT_CHILD_STARTUP_REPORT_PATH";
 
 #[test]
 fn dynamic_publication_replaces_stale_canonical_only_after_validation() {
-    let fixture = Fixture::new("publish", "127.0.0.1:0", None);
+    let fixture = Fixture::new(ChildBehavior::Publish(loopback_ephemeral()));
     std::fs::create_dir_all(&fixture.state_dir).expect("create state dir");
     std::fs::write(fixture.state_dir.join("worker.listen"), "127.0.0.1:1\n")
         .expect("write stale canonical endpoint");
-    let stale_publication = fixture.state_dir.join(".startup-stale/0.listen");
+    let stale_publication = fixture.state_dir.join(".startup-stale/0.toml");
     std::fs::create_dir_all(stale_publication.parent().expect("stale parent"))
         .expect("create stale generation");
-    publish_tcp_endpoint(
+    publish_startup_report(
         &stale_publication,
         "127.0.0.1:2".parse().expect("stale endpoint"),
     )
@@ -36,11 +37,7 @@ fn dynamic_publication_replaces_stale_canonical_only_after_validation() {
         .spawn("127.0.0.1:0".parse().expect("requested endpoint"))
         .expect("dynamic child-published readiness");
 
-    let effective: SocketAddr = std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
-        .expect("read canonical endpoint")
-        .trim()
-        .parse()
-        .expect("parse canonical endpoint");
+    let effective = fixture.canonical_endpoint("worker");
     assert_eq!(effective.ip().to_string(), "127.0.0.1");
     assert_ne!(effective.port(), 0);
     assert!(
@@ -61,14 +58,9 @@ fn wildcard_bind_publications_are_probed_and_published_as_family_matching_loopba
             } else {
                 format_endpoint(bind_ip, 0)
             };
-            let fixture = Fixture::new("publish", &requested.to_string(), None);
+            let fixture = Fixture::new(ChildBehavior::Publish(requested));
             let mut stack = fixture.spawn(requested).expect("wildcard readiness");
-            let canonical: SocketAddr =
-                std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
-                    .expect("read wildcard canonical endpoint")
-                    .trim()
-                    .parse()
-                    .expect("parse wildcard canonical endpoint");
+            let canonical = fixture.canonical_endpoint("worker");
 
             assert_eq!(canonical.ip().to_string(), dial_ip);
             assert_ne!(canonical.port(), 0);
@@ -83,21 +75,16 @@ fn wildcard_bind_publications_are_probed_and_published_as_family_matching_loopba
 
 #[test]
 fn wildcard_publication_is_validated_before_dial_normalization() {
-    let fixture = Fixture::new("publish", "127.0.0.1:0", None);
-    let Err(error) = fixture.spawn("0.0.0.0:0".parse().expect("wildcard request")) else {
-        panic!("loopback publication must not satisfy wildcard bind attestation");
-    };
-    assert!(matches!(
-        &error,
-        StartError::Orchestrator(OrchestratorError::Platform(_))
-    ));
-    assert!(error.to_string().contains("does not match requested IP"));
-    assert_rollback_clean(&fixture.state_dir);
+    let fixture = Fixture::new(ChildBehavior::Publish(loopback_ephemeral()));
+    fixture.assert_platform_rejection(
+        "0.0.0.0:0".parse().expect("wildcard request"),
+        "does not match requested IP",
+    );
 }
 
 #[test]
 fn non_wildcard_publication_is_unchanged() {
-    let fixture = Fixture::new("publish", "127.0.0.1:0", None);
+    let fixture = Fixture::new(ChildBehavior::Publish(loopback_ephemeral()));
     let mut stack = fixture
         .spawn("127.0.0.1:0".parse().expect("loopback request"))
         .expect("loopback readiness");
@@ -110,7 +97,7 @@ fn non_wildcard_publication_is_unchanged() {
 #[test]
 fn fixed_publication_requires_the_exact_requested_endpoint() {
     let requested = reserve_endpoint();
-    let fixture = Fixture::new("publish", &requested.to_string(), None);
+    let fixture = Fixture::new(ChildBehavior::Publish(requested));
     let mut stack = fixture
         .spawn(requested)
         .expect("fixed endpoint attestation");
@@ -122,25 +109,14 @@ fn fixed_publication_requires_the_exact_requested_endpoint() {
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
 
     let requested = reserve_endpoint();
-    let mismatch = Fixture::new("publish", "127.0.0.1:0", None);
-    let Err(error) = mismatch.spawn(requested) else {
-        panic!("different effective port must fail fixed readiness");
-    };
-    assert!(matches!(
-        &error,
-        StartError::Orchestrator(OrchestratorError::Platform(_))
-    ));
-    assert!(
-        error.to_string().contains("does not match requested"),
-        "unexpected error: {error}"
-    );
-    assert_rollback_clean(&mismatch.state_dir);
+    let mismatch = Fixture::new(ChildBehavior::Publish(loopback_ephemeral()));
+    mismatch.assert_platform_rejection(requested, "does not match requested");
 }
 
 #[test]
 fn configured_tcp_readiness_preserves_fixed_endpoint_behavior() {
     let requested = reserve_endpoint();
-    let fixture = Fixture::new("configured", &requested.to_string(), None);
+    let fixture = Fixture::new(ChildBehavior::Configured(requested));
     let mut stack = fixture
         .spawn_with_readiness(Readiness::ConfiguredTcp(requested))
         .expect("configured TCP readiness");
@@ -157,116 +133,60 @@ fn configured_tcp_readiness_preserves_fixed_endpoint_behavior() {
 #[test]
 fn malformed_and_invalid_publications_fail_closed() {
     let cases = [
+        ("not = valid = toml", "invalid startup report"),
         (
-            "malformed",
-            "not = valid = toml",
-            "invalid endpoint publication",
-        ),
-        (
-            "wrong version",
-            "protocol_version = 2\neffective_addr = \"127.0.0.1:41000\"\n",
+            "protocol_version = 2\ntcp_listen_addr = \"127.0.0.1:41000\"\n",
             "unsupported protocol version 2",
         ),
         (
-            "wrong IP",
-            "protocol_version = 1\neffective_addr = \"127.0.0.2:41000\"\n",
+            "protocol_version = 1\ntcp_listen_addr = \"127.0.0.2:41000\"\n",
             "does not match requested IP",
         ),
         (
-            "zero port",
-            "protocol_version = 1\neffective_addr = \"127.0.0.1:0\"\n",
+            "protocol_version = 1\ntcp_listen_addr = \"127.0.0.1:0\"\n",
             "effective port is zero",
         ),
     ];
-    for (label, record, expected) in cases {
-        let fixture = Fixture::new("raw", "127.0.0.1:0", Some(record));
-        let Err(error) = fixture.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
-            panic!("{label} publication unexpectedly succeeded");
-        };
-        assert!(matches!(
-            &error,
-            StartError::Orchestrator(OrchestratorError::Platform(_))
-        ));
-        assert!(
-            error.to_string().contains(expected),
-            "{label} returned unexpected error: {error}"
-        );
-        assert_rollback_clean(&fixture.state_dir);
+    for (record, expected) in cases {
+        let fixture = Fixture::new(ChildBehavior::Raw(record.to_string()));
+        fixture.assert_platform_rejection(loopback_ephemeral(), expected);
     }
 
-    let symlink = Fixture::new("symlink", "127.0.0.1:0", None);
-    let Err(error) = symlink.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
-        panic!("symlink publication unexpectedly succeeded");
-    };
-    assert!(matches!(
-        &error,
-        StartError::Orchestrator(OrchestratorError::Platform(_))
-    ));
-    assert!(
-        error.to_string().contains("invalid endpoint publication"),
-        "unexpected symlink error: {error}"
-    );
-    assert_rollback_clean(&symlink.state_dir);
+    let symlink = Fixture::new(ChildBehavior::Symlink);
+    symlink.assert_platform_rejection(loopback_ephemeral(), "invalid startup report");
 
-    for (mode, record, expected) in [
-        ("directory", None, "not a regular file"),
-        ("raw", Some("x".repeat(4_097)), "exceeds the size limit"),
+    for (behavior, expected) in [
+        (ChildBehavior::Directory, "not a regular file"),
+        (
+            ChildBehavior::Raw("x".repeat(4_097)),
+            "exceeds the size limit",
+        ),
     ] {
-        let fixture = Fixture::new(mode, "127.0.0.1:0", record.as_deref());
-        let Err(error) = fixture.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
-            panic!("{mode} publication unexpectedly succeeded");
-        };
-        assert!(matches!(
-            &error,
-            StartError::Orchestrator(OrchestratorError::Platform(_))
-        ));
-        assert!(
-            error.to_string().contains(expected),
-            "unexpected {mode} error: {error}"
-        );
-        assert_rollback_clean(&fixture.state_dir);
+        let fixture = Fixture::new(behavior);
+        fixture.assert_platform_rejection(loopback_ephemeral(), expected);
     }
 }
 
 #[test]
 fn child_exit_before_or_after_publication_fails_and_rolls_back() {
-    let before = Fixture::new("exit-before", "127.0.0.1:0", None);
-    let Err(before_error) = before.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
-        panic!("exit before publication must fail");
-    };
-    assert!(matches!(
-        before_error,
-        StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
-    ));
-    assert_rollback_clean(&before.state_dir);
+    let before = Fixture::new(ChildBehavior::ExitBeforePublication);
+    before.assert_process_exit(loopback_ephemeral());
 
-    let after = Fixture::new("publish-without-listener", "127.0.0.1:0", None);
-    let Err(after_error) = after.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
-        panic!("publication without a live listener must fail");
-    };
-    assert!(matches!(
-        after_error,
-        StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
-    ));
-    assert_rollback_clean(&after.state_dir);
+    let after = Fixture::new(ChildBehavior::PublishWithoutListener(loopback_ephemeral()));
+    after.assert_process_exit(loopback_ephemeral());
 }
 
 #[test]
 fn child_exit_wins_over_malformed_publication() {
-    let fixture = Fixture::new("malformed-exit", "127.0.0.1:0", Some("not = valid = toml"));
-    let Err(error) = fixture.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
-        panic!("malformed publication from exited child must fail");
-    };
-    assert!(matches!(
-        error,
-        StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
+    let fixture = Fixture::new(ChildBehavior::PublishRawThenExit(
+        "not = valid = toml".to_string(),
     ));
-    assert_rollback_clean(&fixture.state_dir);
+    fixture.assert_process_exit(loopback_ephemeral());
 }
 
 #[test]
 fn canonical_endpoint_remains_absent_while_probe_is_unvalidated() {
-    let fixture = Fixture::new("publish-without-listener", "127.0.0.1:0", None);
+    let fixture = Fixture::new(ChildBehavior::PublishWithoutListener(loopback_ephemeral()));
     let marker = fixture.marker.clone();
     let state_dir = fixture.state_dir.clone();
     let startup = std::thread::spawn(move || {
@@ -294,10 +214,10 @@ fn publication_is_atomic_and_no_clobber() {
     let dir = tempfile::tempdir().expect("publication dir");
     let path = dir.path().join("endpoint.toml");
     let first = "127.0.0.1:41000".parse().expect("first endpoint");
-    publish_tcp_endpoint(&path, first).expect("initial publication");
+    publish_startup_report(&path, first).expect("initial publication");
     let original = std::fs::read_to_string(&path).expect("read initial publication");
 
-    let error = publish_tcp_endpoint(&path, "127.0.0.1:42000".parse().expect("second endpoint"))
+    let error = publish_startup_report(&path, "127.0.0.1:42000".parse().expect("second endpoint"))
         .expect_err("publication must not replace an existing path");
     assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
     assert_eq!(
@@ -306,41 +226,105 @@ fn publication_is_atomic_and_no_clobber() {
     );
 }
 
+#[derive(Debug)]
+enum ChildBehavior {
+    Publish(SocketAddr),
+    Configured(SocketAddr),
+    Raw(String),
+    PublishRawThenExit(String),
+    Symlink,
+    Directory,
+    ExitBeforePublication,
+    PublishWithoutListener(SocketAddr),
+}
+
 struct Fixture {
     _dir: tempfile::TempDir,
     state_dir: PathBuf,
     executable: PathBuf,
     marker: PathBuf,
+    behavior: ChildBehavior,
 }
 
 impl Fixture {
-    fn new(mode: &str, bind_addr: &str, record: Option<&str>) -> Self {
+    fn new(behavior: ChildBehavior) -> Self {
         let dir = tempfile::tempdir().expect("fixture dir");
         let state_dir = dir.path().join("state");
-        let executable = dir.path().join("fixture.sh");
         let marker = dir.path().join("child.published");
-        let test_binary = std::env::current_exe().expect("test executable");
-        let record = record.unwrap_or("");
-        let publication = format!("{CHILD_PUBLICATION_PATH}=\"$2\"");
-        let expected_args = usize::from(mode != "configured") + 1;
-        let script = format!(
-            "#!/bin/sh\n[ \"$#\" -eq {expected_args} ] || exit 64\n{mode} {bind_addr} {record} {marker} {publication} {test_binary} --exact endpoint_readiness::child_fixture --ignored\n",
-            mode = shell_env(CHILD_MODE, mode),
-            bind_addr = shell_env(CHILD_BIND_ADDR, bind_addr),
-            record = shell_env(CHILD_RECORD, record),
-            marker = shell_env(CHILD_MARKER, &marker.to_string_lossy()),
-            publication = publication,
-            test_binary = shell_quote(&test_binary.to_string_lossy()),
-        );
-        std::fs::write(&executable, script).expect("write fixture executable");
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
-            .expect("make fixture executable");
         Self {
             _dir: dir,
             state_dir,
-            executable,
+            executable: std::env::current_exe().expect("test executable"),
             marker,
+            behavior,
         }
+    }
+
+    fn command(&self, startup_report_path: Option<&Path>) -> std::process::Command {
+        let (mode, bind_addr, record) = match &self.behavior {
+            ChildBehavior::Publish(addr) => ("publish", Some(*addr), None),
+            ChildBehavior::Configured(addr) => ("configured", Some(*addr), None),
+            ChildBehavior::Raw(record) => ("raw", None, Some(record.as_str())),
+            ChildBehavior::PublishRawThenExit(record) => {
+                ("malformed-exit", None, Some(record.as_str()))
+            }
+            ChildBehavior::Symlink => ("symlink", None, None),
+            ChildBehavior::Directory => ("directory", None, None),
+            ChildBehavior::ExitBeforePublication => ("exit-before", None, None),
+            ChildBehavior::PublishWithoutListener(addr) => {
+                ("publish-without-listener", Some(*addr), None)
+            }
+        };
+        let mut command = std::process::Command::new(&self.executable);
+        command
+            .args(["--exact", "endpoint_readiness::child_fixture", "--ignored"])
+            .env(CHILD_MODE, mode)
+            .env(CHILD_MARKER, &self.marker);
+        if let Some(bind_addr) = bind_addr {
+            command.env(CHILD_BIND_ADDR, bind_addr.to_string());
+        }
+        if let Some(record) = record {
+            command.env(CHILD_RECORD, record);
+        }
+        if let Some(path) = startup_report_path {
+            command.env(CHILD_STARTUP_REPORT_PATH, path);
+        }
+        command
+    }
+
+    fn canonical_endpoint(&self, component: &str) -> SocketAddr {
+        std::fs::read_to_string(self.state_dir.join(format!("{component}.listen")))
+            .expect("read canonical endpoint")
+            .trim()
+            .parse()
+            .expect("parse canonical endpoint")
+    }
+
+    fn assert_platform_rejection(&self, requested_addr: SocketAddr, expected: &str) {
+        let Err(error) = self.spawn(requested_addr) else {
+            panic!("{:?} unexpectedly succeeded", self.behavior);
+        };
+        assert!(matches!(
+            &error,
+            StartError::Orchestrator(OrchestratorError::Platform(_))
+        ));
+        assert!(
+            error.to_string().contains(expected),
+            "{:?} returned unexpected error: {error}",
+            self.behavior
+        );
+        assert_rollback_clean(&self.state_dir);
+    }
+
+    fn assert_process_exit(&self, requested_addr: SocketAddr) {
+        let Err(error) = self.spawn(requested_addr) else {
+            panic!("{:?} unexpectedly succeeded", self.behavior);
+        };
+        assert!(matches!(
+            error,
+            StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
+        ));
+        assert_rollback_clean(&self.state_dir);
     }
 
     fn spawn(
@@ -354,20 +338,19 @@ impl Fixture {
                 let publication = contexts[0].child_published_tcp(requested_addr);
                 assert_eq!(
                     publication
-                        .publication_path()
+                        .startup_report_path()
                         .file_name()
                         .and_then(std::ffi::OsStr::to_str),
-                    Some("0.listen")
+                    Some("0.toml")
                 );
                 assert!(
                     publication
-                        .publication_path()
+                        .startup_report_path()
                         .parent()
                         .and_then(Path::file_name)
                         .is_some_and(|name| name.to_string_lossy().starts_with(".startup-"))
                 );
-                let mut command = std::process::Command::new(&self.executable);
-                command.arg("fixture").arg(publication.publication_path());
+                let command = self.command(Some(publication.startup_report_path()));
                 Ok(vec![ComponentSpec {
                     command,
                     readiness: publication.into_readiness(),
@@ -385,8 +368,7 @@ impl Fixture {
         spawn_stack_from_plan(
             &StackTopology::new(["worker"]).expect("valid topology"),
             |_| {
-                let mut command = std::process::Command::new(&self.executable);
-                command.arg("fixture");
+                let command = self.command(None);
                 Ok(vec![ComponentSpec { command, readiness }])
             },
             &self.state_dir,
@@ -399,23 +381,24 @@ impl Fixture {
 #[ignore = "spawned as a process-lifecycle fixture"]
 fn child_fixture() {
     let mode = std::env::var(CHILD_MODE).expect("child mode");
-    let publication_path =
-        PathBuf::from(std::env::var_os(CHILD_PUBLICATION_PATH).expect("child publication path"));
     if mode == "exit-before" {
         return;
     }
     if mode == "raw" || mode == "malformed-exit" {
         publish_raw(
-            &publication_path,
+            &startup_report_path(),
             &std::env::var(CHILD_RECORD).expect("raw child record"),
         );
         if mode == "malformed-exit" {
-            return;
+            // Skip the test harness shutdown path so the child has exited by
+            // the orchestrator's liveness recheck.
+            std::process::exit(0);
         }
         std::thread::sleep(Duration::from_mins(1));
         return;
     }
     if mode == "symlink" {
+        let publication_path = startup_report_path();
         let outside = publication_path
             .parent()
             .and_then(Path::parent)
@@ -423,14 +406,14 @@ fn child_fixture() {
             .join("outside-endpoint.toml");
         publish_raw(
             &outside,
-            "protocol_version = 1\neffective_addr = \"127.0.0.1:41000\"\n",
+            "protocol_version = 1\ntcp_listen_addr = \"127.0.0.1:41000\"\n",
         );
         std::os::unix::fs::symlink(outside, publication_path).expect("publish endpoint symlink");
         std::thread::sleep(Duration::from_mins(1));
         return;
     }
     if mode == "directory" {
-        std::fs::create_dir(publication_path).expect("publish endpoint directory");
+        std::fs::create_dir(startup_report_path()).expect("publish endpoint directory");
         std::thread::sleep(Duration::from_mins(1));
         return;
     }
@@ -453,7 +436,7 @@ fn child_fixture() {
     if mode == "publish-without-listener" {
         drop(listener);
     }
-    publish_tcp_endpoint(&publication_path, effective_addr).expect("publish child endpoint");
+    publish_startup_report(&startup_report_path(), effective_addr).expect("publish startup report");
     std::fs::write(std::env::var_os(CHILD_MARKER).expect("child marker"), [])
         .expect("write child marker");
     if mode == "publish-without-listener" {
@@ -463,6 +446,10 @@ fn child_fixture() {
     loop {
         std::thread::sleep(Duration::from_mins(1));
     }
+}
+
+fn startup_report_path() -> PathBuf {
+    PathBuf::from(std::env::var_os(CHILD_STARTUP_REPORT_PATH).expect("child startup report path"))
 }
 
 fn publish_raw(path: &Path, record: &str) {
@@ -478,6 +465,10 @@ fn publish_raw(path: &Path, record: &str) {
 fn reserve_endpoint() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve endpoint");
     listener.local_addr().expect("reserved endpoint")
+}
+
+fn loopback_ephemeral() -> SocketAddr {
+    "127.0.0.1:0".parse().expect("loopback endpoint")
 }
 
 fn reserve_endpoint_for_ip(ip: &str) -> SocketAddr {
@@ -515,20 +506,4 @@ fn assert_current_publications_absent(state_dir: &Path) {
             "publication state remained: {current:?}"
         );
     }
-}
-
-fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.exists() {
-        assert!(Instant::now() < deadline, "{} missing", path.display());
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn shell_env(name: &str, value: &str) -> String {
-    format!("{name}={}", shell_quote(value))
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }

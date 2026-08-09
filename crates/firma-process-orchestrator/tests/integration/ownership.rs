@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
     ComponentContext, ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack,
-    StackGeneration, StackTopology, StartError, publish_tcp_endpoint, spawn_stack_from_plan,
+    StackGeneration, StackTopology, StartError, publish_startup_report, spawn_stack_from_plan,
     start_detached, start_foreground_from_plan, stop_components,
     supervise_owned_generation_from_plan,
 };
@@ -144,7 +144,7 @@ fn wildcard_child_publication_uses_loopback_canonical_endpoint() {
             let mut command = fixture_command();
             command
                 .env(CHILD_LISTEN, "0.0.0.0:0")
-                .env(CHILD_PUBLICATION, publication.publication_path());
+                .env(CHILD_PUBLICATION, publication.startup_report_path());
             Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
                 command,
                 readiness: publication.into_readiness(),
@@ -604,7 +604,7 @@ fn owned_child_fixture() {
         let listener = std::net::TcpListener::bind(address.to_string_lossy().as_ref())
             .expect("bind component readiness listener");
         if let Some(publication) = std::env::var_os(CHILD_PUBLICATION) {
-            publish_tcp_endpoint(
+            publish_startup_report(
                 Path::new(&publication),
                 listener.local_addr().expect("effective component endpoint"),
             )
@@ -691,7 +691,7 @@ fn component_plan(
                 .env_remove(SUPERVISOR_MODE)
                 .env_remove(SUPERVISOR_SENTINEL_PID)
                 .env(CHILD_LISTEN, "127.0.0.1:0")
-                .env(CHILD_PUBLICATION, publication.publication_path())
+                .env(CHILD_PUBLICATION, publication.startup_report_path())
                 .env(CHILD_MARKER, state_dir.join(format!("{name}.marker")));
             ComponentSpec {
                 command,
@@ -788,7 +788,7 @@ fn spawn_published_fixture(
     let record = std::fs::read_to_string(publication).expect("read fixture endpoint");
     let addr = record
         .lines()
-        .find_map(|line| line.strip_prefix("effective_addr = \"")?.strip_suffix('"'))
+        .find_map(|line| line.strip_prefix("tcp_listen_addr = \"")?.strip_suffix('"'))
         .expect("fixture endpoint field")
         .parse()
         .expect("parse fixture endpoint");

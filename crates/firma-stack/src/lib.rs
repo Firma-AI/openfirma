@@ -23,7 +23,7 @@ pub use status::status;
 pub use stop::stop;
 
 pub use firma_process_orchestrator::{
-    Readiness, RunningStack, StackHandle, StackStatus, State, StopOutcome, publish_tcp_endpoint,
+    Readiness, RunningStack, StackHandle, StackStatus, State, StopOutcome, publish_startup_report,
 };
 #[doc(hidden)]
 pub use firma_process_orchestrator::{StackGeneration, shutdown_event};

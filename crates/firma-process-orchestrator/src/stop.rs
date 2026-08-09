@@ -459,7 +459,7 @@ pub(crate) fn cleanup_generation(
         pidfile::remove(&state_dir.join(format!("{component}.listen")))?;
     }
     if let Some(state_lease) = state_lease {
-        crate::start::remove_publication_dir(&crate::start::publication_dir(
+        crate::start::remove_startup_report_dir(&crate::start::startup_report_dir(
             state_dir,
             state_lease.generation(),
         ))?;

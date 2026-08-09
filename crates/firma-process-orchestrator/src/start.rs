@@ -101,7 +101,7 @@ struct StartupGuard {
     state_lease: StateLease,
     transaction: Option<StateTransaction>,
     topology: StackTopology,
-    publication_dir: PathBuf,
+    startup_report_dir: PathBuf,
 }
 
 /// Valid process-ownership phases while the components are starting.
@@ -151,21 +151,21 @@ impl StartupGuard {
             state_lease,
             transaction: Some(transaction),
             topology,
-            publication_dir: publication_dir(state_dir, state_lease.generation()),
+            startup_report_dir: startup_report_dir(state_dir, state_lease.generation()),
         }
     }
 
-    fn prepare_publication_dir(&self) -> Result<(), OrchestratorError> {
-        create_private_publication_dir(&self.publication_dir)
+    fn prepare_startup_report_dir(&self) -> Result<(), OrchestratorError> {
+        create_private_startup_report_dir(&self.startup_report_dir)
     }
 
-    fn cleanup_publications(&self) -> Result<(), OrchestratorError> {
+    fn cleanup_startup_reports(&self) -> Result<(), OrchestratorError> {
         if !self.state_lease.is_current(&self.state_dir)? {
             return Err(OrchestratorError::Platform(
-                "startup generation changed before publication cleanup".into(),
+                "startup generation changed before report cleanup".into(),
             ));
         }
-        remove_publication_dir(&self.publication_dir)
+        remove_startup_report_dir(&self.startup_report_dir)
     }
 
     /// Append one owned component in spawn order to [`StartupState::Building`].
@@ -250,8 +250,8 @@ impl Drop for StartupGuard {
         let StartupState::Building(components) = state else {
             return;
         };
-        if let Err(error) = self.cleanup_publications() {
-            debug!(%error, "startup rollback retained endpoint publication state");
+        if let Err(error) = self.cleanup_startup_reports() {
+            debug!(%error, "startup rollback retained report state");
         }
         if components.is_empty() {
             remove_startup_state(
@@ -469,7 +469,7 @@ impl Drop for RunningStack {
 /// listening. `topology` defines startup order and runtime-state identity;
 /// `build_plan` receives one aligned [`ComponentContext`] per topology component
 /// and resolves the full [`ComponentSpec`] plan. It is invoked **after** the
-/// lock is claimed and the generation publication directory is created, so an
+/// lock is claimed and the generation startup-report directory is created, so an
 /// already-running stack is reported before the caller's (possibly failing)
 /// plan resolution runs. Commands are spawned unchanged except for the
 /// documented lifecycle process settings on [`ComponentSpec`]. The caller must eventually call
@@ -524,20 +524,20 @@ fn spawn_stack_from_plan_with_phase<E>(
     debug!("acquiring stack lock");
     let state_lease = acquire_lock(state_dir, &transaction, generation, topology)?;
     let mut startup = StartupGuard::new(state_dir, state_lease, transaction, topology.clone());
-    startup.prepare_publication_dir()?;
+    startup.prepare_startup_report_dir()?;
     debug!("reaping stale pidfiles");
     reap_stale(state_dir, topology)?;
 
-    let publication_paths: Vec<_> = topology
+    let startup_report_paths: Vec<_> = topology
         .components()
         .iter()
         .enumerate()
-        .map(|(index, _)| startup.publication_dir.join(format!("{index}.listen")))
+        .map(|(index, _)| startup.startup_report_dir.join(format!("{index}.toml")))
         .collect();
     let contexts: Vec<_> = topology
         .components()
         .iter()
-        .zip(&publication_paths)
+        .zip(&startup_report_paths)
         .map(|(name, path)| ComponentContext::new(name.as_str(), path))
         .collect();
 
@@ -555,14 +555,14 @@ fn spawn_stack_from_plan_with_phase<E>(
     match spawn_stack_inner(
         topology,
         plan,
-        publication_paths,
+        startup_report_paths,
         state_dir,
         &mut startup,
         stop_signal,
         timeouts.component_readiness,
     ) {
         Ok(()) => {
-            startup.cleanup_publications()?;
+            startup.cleanup_startup_reports()?;
             let mut stack = startup.finish()?;
             if publish_ready {
                 stack.mark_ready()?;
@@ -591,7 +591,7 @@ fn spawn_stack_from_plan_with_phase<E>(
 fn spawn_stack_inner(
     topology: &StackTopology,
     plan: Vec<ComponentSpec>,
-    publication_paths: Vec<PathBuf>,
+    startup_report_paths: Vec<PathBuf>,
     state_dir: &Path,
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
@@ -600,12 +600,12 @@ fn spawn_stack_inner(
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
 
-    for ((name, spec), publication_path) in topology
+    for ((name, spec), startup_report_path) in topology
         .components()
         .iter()
         .cloned()
         .zip(plan)
-        .zip(publication_paths)
+        .zip(startup_report_paths)
     {
         let ComponentSpec {
             mut command,
@@ -628,12 +628,12 @@ fn spawn_stack_inner(
                 let dial_addr = wait_for_child_published_tcp(
                     name.as_str(),
                     requested_addr,
-                    &publication_path,
+                    &startup_report_path,
                     readiness_timeout,
                     stop_signal,
                     || startup.exited_component(),
                 )?;
-                std::fs::remove_file(&publication_path)?;
+                std::fs::remove_file(&startup_report_path)?;
                 dial_addr
             }
         };
@@ -1108,11 +1108,11 @@ fn publish_canonical_listen_addr(
     Ok(())
 }
 
-pub(crate) fn publication_dir(state_dir: &Path, generation: StackGeneration) -> PathBuf {
+pub(crate) fn startup_report_dir(state_dir: &Path, generation: StackGeneration) -> PathBuf {
     state_dir.join(format!(".startup-{generation}"))
 }
 
-fn create_private_publication_dir(path: &Path) -> Result<(), OrchestratorError> {
+fn create_private_startup_report_dir(path: &Path) -> Result<(), OrchestratorError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt as _;
@@ -1124,7 +1124,7 @@ fn create_private_publication_dir(path: &Path) -> Result<(), OrchestratorError> 
     Ok(())
 }
 
-pub(crate) fn remove_publication_dir(path: &Path) -> Result<(), OrchestratorError> {
+pub(crate) fn remove_startup_report_dir(path: &Path) -> Result<(), OrchestratorError> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_dir() => std::fs::remove_dir_all(path)?,
         Ok(_) => std::fs::remove_file(path)?,

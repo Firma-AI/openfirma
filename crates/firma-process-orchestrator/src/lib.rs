@@ -20,10 +20,10 @@ mod topology;
 mod collect;
 mod component;
 mod detach;
-mod endpoint_publication;
 mod platform;
 mod readiness;
 mod spawn;
+mod startup_report;
 mod state_lease;
 mod supervisor;
 
@@ -31,12 +31,12 @@ pub use component::{
     ChildPublishedTcpContext, ChildPublishedTcpReadiness, ComponentContext, ComponentName,
     ComponentSpec, Readiness,
 };
-pub use endpoint_publication::publish_tcp_endpoint;
 pub use error::{OrchestratorError, StartError};
 pub use start::{
     RunningStack, StackHandle, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
     supervise_owned_generation_from_plan,
 };
+pub use startup_report::publish_startup_report;
 pub use state_lease::StackGeneration;
 pub use status::{ComponentStatus, StackStatus, State, status_components};
 pub use stop::{StopOutcome, stop_components};

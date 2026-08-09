@@ -102,18 +102,18 @@ pub struct ComponentSpec {
 ///
 /// Contexts follow the component order in [`crate::StackTopology`] and remain
 /// valid only while the post-lock plan callback runs. The caller decides how to
-/// pass publication paths to its child commands.
+/// pass startup-report paths to its child commands.
 #[derive(Debug, Clone, Copy)]
 pub struct ComponentContext<'a> {
     name: &'a str,
-    publication_path: &'a Path,
+    startup_report_path: &'a Path,
 }
 
 impl<'a> ComponentContext<'a> {
-    pub(crate) const fn new(name: &'a str, publication_path: &'a Path) -> Self {
+    pub(crate) const fn new(name: &'a str, startup_report_path: &'a Path) -> Self {
         Self {
             name,
-            publication_path,
+            startup_report_path,
         }
     }
 
@@ -123,7 +123,7 @@ impl<'a> ComponentContext<'a> {
         self.name
     }
 
-    /// Describe child-published readiness using this component's publication path.
+    /// Describe child-published readiness using this component's startup report.
     #[must_use]
     pub const fn child_published_tcp(
         &self,
@@ -131,23 +131,23 @@ impl<'a> ComponentContext<'a> {
     ) -> ChildPublishedTcpContext<'a> {
         ChildPublishedTcpContext {
             requested_addr,
-            publication_path: self.publication_path,
+            startup_report_path: self.startup_report_path,
         }
     }
 }
 
-/// Borrowed child-publication inputs available during post-lock plan building.
+/// Borrowed child-report inputs available during post-lock plan building.
 #[derive(Debug, Clone, Copy)]
 pub struct ChildPublishedTcpContext<'a> {
     requested_addr: SocketAddr,
-    publication_path: &'a Path,
+    startup_report_path: &'a Path,
 }
 
 impl<'a> ChildPublishedTcpContext<'a> {
-    /// Return the generation-scoped path the child must publish to.
+    /// Return the generation-scoped path for the child's startup report.
     #[must_use]
-    pub const fn publication_path(&self) -> &'a Path {
-        self.publication_path
+    pub const fn startup_report_path(&self) -> &'a Path {
+        self.startup_report_path
     }
 
     /// Convert the borrowed planning context into owned readiness evidence.
