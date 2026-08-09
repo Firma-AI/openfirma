@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
-    ComponentSpec, OrchestratorError, Readiness, RunningStack, StackTopology, StartError,
-    publish_tcp_endpoint, spawn_stack_from_plan,
+    ComponentSpec, LifecycleTimeouts, OrchestratorError, Readiness, RunningStack, StackTopology,
+    StartError, publish_tcp_endpoint, spawn_stack_from_plan,
 };
 
 const CHILD_MODE: &str = "FIRMA_ENDPOINT_CHILD_MODE";
@@ -49,6 +49,61 @@ fn dynamic_publication_replaces_stale_canonical_only_after_validation() {
     );
     assert_current_publications_absent(&fixture.state_dir);
 
+    stack.shutdown(Duration::ZERO).expect("shutdown fixture");
+}
+
+#[test]
+fn wildcard_bind_publications_are_probed_and_published_as_family_matching_loopback() {
+    for (bind_ip, dial_ip) in [("0.0.0.0", "127.0.0.1"), ("::", "::1")] {
+        for fixed_port in [false, true] {
+            let requested = if fixed_port {
+                reserve_endpoint_for_ip(bind_ip)
+            } else {
+                format_endpoint(bind_ip, 0)
+            };
+            let fixture = Fixture::new("publish", &requested.to_string(), None);
+            let mut stack = fixture.spawn(requested).expect("wildcard readiness");
+            let canonical: SocketAddr =
+                std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
+                    .expect("read wildcard canonical endpoint")
+                    .trim()
+                    .parse()
+                    .expect("parse wildcard canonical endpoint");
+
+            assert_eq!(canonical.ip().to_string(), dial_ip);
+            assert_ne!(canonical.port(), 0);
+            if fixed_port {
+                assert_eq!(canonical.port(), requested.port());
+            }
+            std::net::TcpStream::connect(canonical).expect("dial canonical wildcard endpoint");
+            stack.shutdown(Duration::ZERO).expect("shutdown fixture");
+        }
+    }
+}
+
+#[test]
+fn wildcard_publication_is_validated_before_dial_normalization() {
+    let fixture = Fixture::new("publish", "127.0.0.1:0", None);
+    let Err(error) = fixture.spawn("0.0.0.0:0".parse().expect("wildcard request")) else {
+        panic!("loopback publication must not satisfy wildcard bind attestation");
+    };
+    assert!(matches!(
+        &error,
+        StartError::Orchestrator(OrchestratorError::Platform(_))
+    ));
+    assert!(error.to_string().contains("does not match requested IP"));
+    assert_rollback_clean(&fixture.state_dir);
+}
+
+#[test]
+fn non_wildcard_publication_is_unchanged() {
+    let fixture = Fixture::new("publish", "127.0.0.1:0", None);
+    let mut stack = fixture
+        .spawn("127.0.0.1:0".parse().expect("loopback request"))
+        .expect("loopback readiness");
+    let canonical = std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
+        .expect("read loopback canonical endpoint");
+    assert!(canonical.starts_with("127.0.0.1:"));
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
 }
 
@@ -134,6 +189,16 @@ fn malformed_and_invalid_publications_fail_closed() {
         );
         assert_rollback_clean(&fixture.state_dir);
     }
+
+    let symlink = Fixture::new("symlink", "127.0.0.1:0", None);
+    let Err(error) = symlink.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
+        panic!("symlink publication unexpectedly succeeded");
+    };
+    assert!(
+        error.to_string().contains("invalid endpoint publication"),
+        "unexpected symlink error: {error}"
+    );
+    assert_rollback_clean(&symlink.state_dir);
 }
 
 #[test]
@@ -157,6 +222,19 @@ fn child_exit_before_or_after_publication_fails_and_rolls_back() {
         StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
     ));
     assert_rollback_clean(&after.state_dir);
+}
+
+#[test]
+fn child_exit_wins_over_malformed_publication() {
+    let fixture = Fixture::new("malformed-exit", "127.0.0.1:0", Some("not = valid = toml"));
+    let Err(error) = fixture.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
+        panic!("malformed publication from exited child must fail");
+    };
+    assert!(matches!(
+        error,
+        StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
+    ));
+    assert_rollback_clean(&fixture.state_dir);
 }
 
 #[test]
@@ -266,6 +344,7 @@ impl Fixture {
                 }])
             },
             &self.state_dir,
+            LifecycleTimeouts::default(),
         )
     }
 
@@ -281,6 +360,7 @@ impl Fixture {
                 Ok(vec![ComponentSpec { command, readiness }])
             },
             &self.state_dir,
+            LifecycleTimeouts::default(),
         )
     }
 }
@@ -310,6 +390,7 @@ fn publication_contexts_cannot_be_reassigned_before_spawn() {
             ])
         },
         dir.path(),
+        LifecycleTimeouts::default(),
     );
 
     let Err(StartError::Orchestrator(OrchestratorError::Platform(message))) = result else {
@@ -332,11 +413,28 @@ fn child_fixture() {
     if mode == "exit-before" {
         return;
     }
-    if mode == "raw" {
+    if mode == "raw" || mode == "malformed-exit" {
         publish_raw(
             &publication_path,
             &std::env::var(CHILD_RECORD).expect("raw child record"),
         );
+        if mode == "malformed-exit" {
+            return;
+        }
+        std::thread::sleep(Duration::from_mins(1));
+        return;
+    }
+    if mode == "symlink" {
+        let outside = publication_path
+            .parent()
+            .and_then(Path::parent)
+            .expect("state dir")
+            .join("outside-endpoint.toml");
+        publish_raw(
+            &outside,
+            "protocol_version = 1\neffective_addr = \"127.0.0.1:41000\"\n",
+        );
+        std::os::unix::fs::symlink(outside, publication_path).expect("publish endpoint symlink");
         std::thread::sleep(Duration::from_mins(1));
         return;
     }
@@ -384,6 +482,20 @@ fn publish_raw(path: &Path, record: &str) {
 fn reserve_endpoint() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve endpoint");
     listener.local_addr().expect("reserved endpoint")
+}
+
+fn reserve_endpoint_for_ip(ip: &str) -> SocketAddr {
+    TcpListener::bind(format_endpoint(ip, 0))
+        .expect("reserve endpoint for IP family")
+        .local_addr()
+        .expect("reserved endpoint")
+}
+
+fn format_endpoint(ip: &str, port: u16) -> SocketAddr {
+    format!("{ip}:{port}")
+        .parse()
+        .or_else(|_| format!("[{ip}]:{port}").parse())
+        .expect("format endpoint")
 }
 
 fn assert_rollback_clean(state_dir: &Path) {

@@ -49,38 +49,56 @@ pub fn wait_for_tcp(
 /// Wait for a live child to publish, then accept connections on, its bound endpoint.
 pub fn wait_for_child_published_tcp(
     component: &str,
-    requested_addr: SocketAddr,
+    requested_bind_addr: SocketAddr,
     publication_path: &Path,
     timeout: Duration,
     stop_signal: Option<&StopSignal>,
     mut process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
 ) -> Result<SocketAddr, OrchestratorError> {
     let deadline = Instant::now() + timeout;
-    let effective_addr = loop {
+    let published_bind_addr = loop {
         check_startup(component, stop_signal, &mut process_status)?;
         match crate::endpoint_publication::read_tcp_endpoint(publication_path) {
-            Ok(Some((version, effective))) => {
-                validate_publication(component, requested_addr, version, effective)?;
+            Ok(Some((version, published_bind_addr))) => {
                 check_startup(component, stop_signal, &mut process_status)?;
-                break effective;
+                validate_publication(component, requested_bind_addr, version, published_bind_addr)?;
+                break published_bind_addr;
             }
             Ok(None) => {}
-            Err(error) => return Err(invalid_publication(component, error)),
+            Err(error) => {
+                check_startup(component, stop_signal, &mut process_status)?;
+                return Err(invalid_publication(component, error));
+            }
         }
         if Instant::now() >= deadline {
+            check_startup(component, stop_signal, &mut process_status)?;
             return Err(readiness_timeout(component, timeout));
         }
         sleep_until_next_probe(deadline);
     };
+    let dial_addr = dial_addr_for_bind_addr(published_bind_addr);
     wait_for_tcp_until(
         component,
-        effective_addr,
+        dial_addr,
         deadline,
         timeout,
         stop_signal,
         &mut process_status,
     )?;
-    Ok(effective_addr)
+    Ok(dial_addr)
+}
+
+/// Convert a successfully validated bind address into an endpoint clients can dial.
+fn dial_addr_for_bind_addr(bind_addr: SocketAddr) -> SocketAddr {
+    match bind_addr {
+        SocketAddr::V4(addr) if addr.ip().is_unspecified() => {
+            SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, addr.port()))
+        }
+        SocketAddr::V6(addr) if addr.ip().is_unspecified() => {
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, addr.port()))
+        }
+        _ => bind_addr,
+    }
 }
 
 fn wait_for_tcp_until(
@@ -111,9 +129,9 @@ fn wait_for_tcp_until(
 
 fn validate_publication(
     component: &str,
-    requested: SocketAddr,
+    requested_bind_addr: SocketAddr,
     version: u32,
-    effective: SocketAddr,
+    published_bind_addr: SocketAddr,
 ) -> Result<(), OrchestratorError> {
     if version != crate::endpoint_publication::endpoint_protocol_version() {
         return Err(invalid_publication(
@@ -121,26 +139,40 @@ fn validate_publication(
             format!("unsupported protocol version {version}"),
         ));
     }
-    if effective.port() == 0 {
+    if published_bind_addr.port() == 0 {
         return Err(invalid_publication(component, "effective port is zero"));
     }
-    if effective.ip() != requested.ip() {
+    if !bind_ips_match(published_bind_addr, requested_bind_addr) {
         return Err(invalid_publication(
             component,
             format!(
                 "effective IP {} does not match requested IP {}",
-                effective.ip(),
-                requested.ip()
+                published_bind_addr.ip(),
+                requested_bind_addr.ip()
             ),
         ));
     }
-    if requested.port() != 0 && effective != requested {
+    if requested_bind_addr.port() != 0 && published_bind_addr != requested_bind_addr {
         return Err(invalid_publication(
             component,
-            format!("effective endpoint {effective} does not match requested {requested}"),
+            format!(
+                "effective endpoint {published_bind_addr} does not match requested {requested_bind_addr}"
+            ),
         ));
     }
     Ok(())
+}
+
+fn bind_ips_match(published: SocketAddr, requested: SocketAddr) -> bool {
+    match (published, requested) {
+        (SocketAddr::V4(published), SocketAddr::V4(requested)) => published.ip() == requested.ip(),
+        (SocketAddr::V6(published), SocketAddr::V6(requested)) => {
+            // Flow information does not identify the bound interface, but the
+            // scope does for scoped IPv6 addresses.
+            published.ip() == requested.ip() && published.scope_id() == requested.scope_id()
+        }
+        _ => false,
+    }
 }
 
 fn invalid_publication(component: &str, reason: impl std::fmt::Display) -> OrchestratorError {
@@ -190,4 +222,52 @@ fn check_startup_stop(stop_signal: Option<&StopSignal>) -> Result<(), Orchestrat
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bind_ips_match, dial_addr_for_bind_addr, validate_publication};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+
+    #[test]
+    fn wildcard_dial_addresses_preserve_ip_family_and_port() {
+        assert_eq!(
+            dial_addr_for_bind_addr(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 41_001))),
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 41_001))
+        );
+        assert_eq!(
+            dial_addr_for_bind_addr(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 42_001))),
+            SocketAddr::from((Ipv6Addr::LOCALHOST, 42_001))
+        );
+        assert_eq!(
+            dial_addr_for_bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 43_001))),
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 43_001))
+        );
+    }
+
+    #[test]
+    fn dynamic_ipv6_publication_must_preserve_scope() {
+        let requested = SocketAddr::V6(SocketAddrV6::new(
+            "fe80::1".parse().expect("requested IPv6"),
+            0,
+            0,
+            3,
+        ));
+        let published = SocketAddr::V6(SocketAddrV6::new(
+            "fe80::1".parse().expect("published IPv6"),
+            41_002,
+            7,
+            4,
+        ));
+
+        assert!(!bind_ips_match(published, requested));
+        let error = validate_publication(
+            "worker",
+            requested,
+            crate::endpoint_publication::endpoint_protocol_version(),
+            published,
+        )
+        .expect_err("mismatched IPv6 scope must fail raw bind validation");
+        assert!(error.to_string().contains("does not match requested IP"));
+    }
 }

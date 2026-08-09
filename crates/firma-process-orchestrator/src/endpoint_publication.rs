@@ -51,11 +51,12 @@ pub fn publish_tcp_endpoint(path: &Path, effective_addr: SocketAddr) -> std::io:
 
 /// Read and validate a complete child publication record.
 pub fn read_tcp_endpoint(path: &Path) -> std::io::Result<Option<(u32, SocketAddr)>> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+    let file = match open_endpoint_record(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
+    let metadata = file.metadata()?;
     if !metadata.file_type().is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -69,8 +70,7 @@ pub fn read_tcp_endpoint(path: &Path) -> std::io::Result<Option<(u32, SocketAddr
         ));
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(MAX_ENDPOINT_RECORD_BYTES + 1)
+    file.take(MAX_ENDPOINT_RECORD_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_ENDPOINT_RECORD_BYTES {
         return Err(std::io::Error::new(
@@ -83,6 +83,38 @@ pub fn read_tcp_endpoint(path: &Path) -> std::io::Result<Option<(u32, SocketAddr
     let record: EndpointRecord = toml::from_str(text)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     Ok(Some((record.protocol_version, record.effective_addr)))
+}
+
+/// Open one record handle without following a final symlink or reparse point.
+#[cfg(unix)]
+fn open_endpoint_record(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)
+}
+
+/// Open one record handle and reject Windows reparse points on that handle.
+#[cfg(windows)]
+fn open_endpoint_record(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "endpoint publication is a reparse point",
+        ));
+    }
+    Ok(file)
 }
 
 pub const fn endpoint_protocol_version() -> u32 {

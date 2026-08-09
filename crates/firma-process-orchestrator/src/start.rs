@@ -551,7 +551,6 @@ fn spawn_stack_from_plan_with_phase<E>(
         }
         .into());
     }
-    validate_plan_contexts(topology, &plan, &publication_paths)?;
     clear_canonical_listen_state(state_dir, topology)?;
     match spawn_stack_inner(
         topology,
@@ -625,9 +624,8 @@ fn spawn_stack_inner(
             }
             Readiness::ChildPublishedTcp(crate::component::ChildPublishedTcpReadiness {
                 requested_addr,
-                ..
             }) => {
-                let effective = wait_for_child_published_tcp(
+                let dial_addr = wait_for_child_published_tcp(
                     name.as_str(),
                     requested_addr,
                     &publication_path,
@@ -636,9 +634,12 @@ fn spawn_stack_inner(
                     || startup.exited_component(),
                 )?;
                 std::fs::remove_file(&publication_path)?;
-                effective
+                dial_addr
             }
         };
+        if let Some((component, status)) = startup.exited_component()? {
+            return Err(OrchestratorError::ReadinessProcessExited { component, status });
+        }
         publish_canonical_listen_addr(&state_dir.join(name.listen_file_name()), addr)?;
         if let Some((component, status)) = startup.exited_component()? {
             return Err(OrchestratorError::ReadinessProcessExited { component, status });
@@ -652,30 +653,6 @@ fn spawn_stack_inner(
     // so closing the original handle does not terminate the ready stack.
     let _ = group;
 
-    Ok(())
-}
-
-/// Verify every child-published readiness value came from its aligned context.
-fn validate_plan_contexts(
-    topology: &StackTopology,
-    plan: &[ComponentSpec],
-    publication_paths: &[PathBuf],
-) -> Result<(), OrchestratorError> {
-    for ((name, spec), publication_path) in topology
-        .components()
-        .iter()
-        .zip(plan)
-        .zip(publication_paths)
-    {
-        if let Readiness::ChildPublishedTcp(readiness) = &spec.readiness
-            && readiness.publication_path != *publication_path
-        {
-            return Err(OrchestratorError::Platform(format!(
-                "{} readiness used a publication path from another component context",
-                name.as_str()
-            )));
-        }
-    }
     Ok(())
 }
 

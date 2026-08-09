@@ -7,7 +7,7 @@
 //! grants no process authority by itself.
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus};
 
 use crate::OrchestratorError;
@@ -155,19 +155,14 @@ impl<'a> ChildPublishedTcpContext<'a> {
     pub fn into_readiness(self) -> Readiness {
         Readiness::ChildPublishedTcp(ChildPublishedTcpReadiness {
             requested_addr: self.requested_addr,
-            publication_path: self.publication_path.to_path_buf(),
         })
     }
 }
 
 /// Owned child-publication evidence retained after the plan callback returns.
-///
-/// Values can only be created from [`ChildPublishedTcpContext`], ensuring the
-/// readiness path belongs to the active startup generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildPublishedTcpReadiness {
     pub(crate) requested_addr: SocketAddr,
-    pub(crate) publication_path: PathBuf,
 }
 
 /// TCP endpoint evidence required from a component during startup.
