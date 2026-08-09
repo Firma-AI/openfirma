@@ -75,8 +75,16 @@ pub fn topology() -> Result<StackTopology, OrchestratorError> {
 /// or holds an invalid listen address.
 pub fn build_plan(
     cfg: &StackConfig,
-    _contexts: &[ComponentContext<'_>],
+    contexts: &[ComponentContext<'_>],
 ) -> Result<Vec<ComponentSpec>, StackError> {
+    let [authority_context, _sidecar_context] = contexts else {
+        return Err(StackError::Orchestrator(
+            OrchestratorError::PlanCountMismatch {
+                expected: 2,
+                actual: contexts.len(),
+            },
+        ));
+    };
     let config = FirmaToml::read(&cfg.config_file)?;
     let auth_addr = config.authority_listen_addr()?;
     let side_addr = config.sidecar_config()?.interceptor.listen_addr;
@@ -91,6 +99,10 @@ pub fn build_plan(
         .arg(AUTHORITY_NAME)
         .arg("--config")
         .arg(&cfg.config_file);
+    let authority_publication = authority_context.child_published_tcp(auth_addr);
+    authority
+        .arg("--startup-report")
+        .arg(authority_publication.startup_report_path());
     let mut sidecar = Command::new(executable);
     sidecar
         .arg(SIDECAR_NAME)
@@ -99,7 +111,7 @@ pub fn build_plan(
     Ok(vec![
         ComponentSpec {
             command: authority,
-            readiness: Readiness::ConfiguredTcp(auth_addr),
+            readiness: authority_publication.into_readiness(),
         },
         ComponentSpec {
             command: sidecar,

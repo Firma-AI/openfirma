@@ -12,6 +12,10 @@ pub struct Args {
     #[arg(short, long)]
     pub config: Option<PathBuf>,
 
+    /// Internal path for writing the one-shot startup report.
+    #[arg(long, hide = true)]
+    pub startup_report: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -143,4 +147,31 @@ pub struct IssueArgs {
     /// Output TOML path.
     #[arg(short, long)]
     pub output: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::Args;
+
+    #[derive(clap::Parser)]
+    struct Wrapper {
+        #[command(flatten)]
+        args: Args,
+    }
+
+    #[test]
+    fn parses_hidden_startup_report_path() {
+        let args = Wrapper::try_parse_from([
+            "firma-authority",
+            "--startup-report",
+            "/private/startup/0.toml",
+        ])
+        .expect("parse internal startup-report path")
+        .args;
+
+        assert_eq!(args.startup_report, Some("/private/startup/0.toml".into()));
+        assert!(args.command.is_none());
+    }
 }

@@ -114,6 +114,12 @@ impl Server {
     pub fn port(&self) -> u16 {
         self.port
     }
+
+    /// Return the effective socket address bound by this server.
+    #[must_use]
+    pub const fn listen_addr(&self) -> SocketAddr {
+        self.listen_addr
+    }
 }
 
 // ---------------------------------------------------------------------------
