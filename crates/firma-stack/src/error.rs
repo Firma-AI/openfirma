@@ -55,6 +55,14 @@ pub enum StackError {
     /// Generic process orchestration failed.
     #[error(transparent)]
     Orchestrator(#[from] OrchestratorError),
+    /// Stack planning or startup failed and process rollback also failed.
+    #[error("{operation}; rollback failed: {rollback}")]
+    Rollback {
+        /// Original stack failure.
+        operation: Box<Self>,
+        /// Failure encountered while rolling back the partial stack.
+        rollback: Box<OrchestratorError>,
+    },
 }
 
 impl From<StartError<Self>> for StackError {
@@ -62,6 +70,13 @@ impl From<StartError<Self>> for StackError {
         match error {
             StartError::Plan(error) => error,
             StartError::Orchestrator(error) => Self::Orchestrator(error),
+            StartError::Rollback {
+                operation,
+                rollback,
+            } => Self::Rollback {
+                operation: Box::new(Self::from(*operation)),
+                rollback,
+            },
         }
     }
 }

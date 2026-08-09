@@ -130,4 +130,12 @@ pub enum StartError<E> {
     /// Generic process orchestration failed.
     #[error(transparent)]
     Orchestrator(#[from] OrchestratorError),
+    /// Startup failed and explicit rollback also reported a failure.
+    #[error("{operation}; rollback failed: {rollback}")]
+    Rollback {
+        /// Original planning or orchestration failure.
+        operation: Box<Self>,
+        /// Failure encountered while rolling back the partial stack.
+        rollback: Box<OrchestratorError>,
+    },
 }
