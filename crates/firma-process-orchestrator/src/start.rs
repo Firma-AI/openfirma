@@ -227,6 +227,58 @@ impl Drop for DetachedLaunchGuard<'_> {
     }
 }
 
+/// Per-component transaction for transient and canonical endpoint publication.
+///
+/// Process ownership remains with [`StartupGuard`]. This guard ensures a
+/// canonical endpoint survives the loop iteration only after matching
+/// [`ReadyComponent`] evidence is committed.
+struct ComponentPublicationGuard {
+    startup_report_path: PathBuf,
+    canonical_listen_path: PathBuf,
+    startup_report_pending: bool,
+    canonical_published: bool,
+}
+
+impl ComponentPublicationGuard {
+    fn new(startup_report_path: PathBuf, canonical_listen_path: PathBuf) -> Self {
+        Self {
+            startup_report_path,
+            canonical_listen_path,
+            startup_report_pending: true,
+            canonical_published: false,
+        }
+    }
+
+    fn remove_startup_report(&mut self) -> Result<(), OrchestratorError> {
+        std::fs::remove_file(&self.startup_report_path)?;
+        self.startup_report_pending = false;
+        Ok(())
+    }
+
+    fn publish_canonical(&mut self, addr: std::net::SocketAddr) -> Result<(), OrchestratorError> {
+        publish_canonical_listen_addr(&self.canonical_listen_path, addr)?;
+        self.canonical_published = true;
+        Ok(())
+    }
+
+    fn commit(mut self, name: &ComponentName, addr: std::net::SocketAddr) -> ReadyComponent {
+        self.startup_report_pending = false;
+        self.canonical_published = false;
+        ReadyComponent::new(name.as_str(), addr)
+    }
+}
+
+impl Drop for ComponentPublicationGuard {
+    fn drop(&mut self) {
+        if self.startup_report_pending {
+            let _ = pidfile::remove(&self.startup_report_path);
+        }
+        if self.canonical_published {
+            let _ = pidfile::remove(&self.canonical_listen_path);
+        }
+    }
+}
+
 impl StartupGuard {
     /// Begin an armed, empty [`StartupState::Building`] after generation claim.
     fn new(
@@ -753,6 +805,10 @@ fn spawn_stack_inner<E>(
             mut command,
             readiness,
         } = spec;
+        let mut publication = ComponentPublicationGuard::new(
+            startup_report_path.clone(),
+            state_dir.join(name.listen_file_name()),
+        );
         let pid = startup.spawn_component(&group, &name, &mut command)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
         let addr = match readiness {
@@ -773,19 +829,19 @@ fn spawn_stack_inner<E>(
                     stop_signal,
                     || startup.exited_component(),
                 )?;
-                std::fs::remove_file(&startup_report_path).map_err(OrchestratorError::from)?;
+                publication.remove_startup_report()?;
                 dial_addr
             }
         };
         if let Some((component, status)) = startup.exited_component()? {
             return Err(OrchestratorError::ReadinessProcessExited { component, status }.into());
         }
-        publish_canonical_listen_addr(&state_dir.join(name.listen_file_name()), addr)?;
+        publication.publish_canonical(addr)?;
         if let Some((component, status)) = startup.exited_component()? {
             return Err(OrchestratorError::ReadinessProcessExited { component, status }.into());
         }
         info!(component = %name.as_str(), addr = %addr, "component listening");
-        ready_components.push(ReadyComponent::new(name.as_str(), addr));
+        ready_components.push(publication.commit(&name, addr));
     }
 
     // The Group goes out of scope at the end of this function. On Unix that is
