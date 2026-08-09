@@ -111,37 +111,51 @@ impl Drop for HostDnsStubHandle {
 
 /// Binds a UDP and TCP loopback listener on the *same* ephemeral port.
 ///
-/// TCP chooses the candidate port because Windows can assign a UDP dynamic port
-/// from a TCP excluded/reserved range (Hyper-V/WSL), causing the subsequent TCP
-/// bind to fail with `WSAEACCES` (`os error 10013`). TCP and UDP exclusions are
-/// independent, so retry if UDP cannot bind the TCP-selected port.
+/// Windows maintains independent TCP and UDP excluded-port ranges. Alternate
+/// which protocol chooses the candidate so a sequence allocated from one
+/// protocol's excluded range does not exhaust every attempt.
 fn bind_stub_pair() -> Result<(UdpSocket, TcpListener, SocketAddr), RunError> {
-    const MAX_ATTEMPTS: u32 = 20;
-    let mut last_error = String::new();
+    const MAX_ATTEMPTS: usize = 32;
+
+    let mut last_error = None;
+
     for _ in 0..MAX_ATTEMPTS {
-        let tcp = match TcpListener::bind("127.0.0.1:0") {
-            Ok(listener) => listener,
+        match bind_udp_first() {
+            Ok(pair) => return Ok(pair),
+            Err(error) => last_error = Some(format!("UDP-first: {error}")),
+        }
+
+        match bind_tcp_first() {
+            Ok(pair) => return Ok(pair),
             Err(error) => {
-                last_error = format!("TCP bind: {error}");
-                continue;
+                last_error = Some(last_error.map_or_else(
+                    || format!("TCP-first: {error}"),
+                    |prev| format!("{prev}; TCP-first: {error}"),
+                ));
             }
-        };
-        let listen_addr = match tcp.local_addr() {
-            Ok(addr) => addr,
-            Err(error) => {
-                last_error = format!("read listen addr: {error}");
-                continue;
-            }
-        };
-        match UdpSocket::bind(listen_addr) {
-            Ok(udp) => return Ok((udp, tcp, listen_addr)),
-            Err(error) => last_error = format!("UDP bind on {listen_addr}: {error}"),
         }
     }
+
     Err(RunError::Spawn(format!(
         "failed to bind host DNS stub UDP+TCP on a shared loopback port after \
-         {MAX_ATTEMPTS} attempts: {last_error}"
+         {} candidates: {}",
+        MAX_ATTEMPTS * 2,
+        last_error.unwrap_or_else(|| "unknown error".into()),
     )))
+}
+
+fn bind_udp_first() -> std::io::Result<(UdpSocket, TcpListener, SocketAddr)> {
+    let udp = UdpSocket::bind("127.0.0.1:0")?;
+    let addr = udp.local_addr()?;
+    let tcp = TcpListener::bind(addr)?;
+    Ok((udp, tcp, addr))
+}
+
+fn bind_tcp_first() -> std::io::Result<(UdpSocket, TcpListener, SocketAddr)> {
+    let tcp = TcpListener::bind("127.0.0.1:0")?;
+    let addr = tcp.local_addr()?;
+    let udp = UdpSocket::bind(addr)?;
+    Ok((udp, tcp, addr))
 }
 
 fn run_stub_udp_nonblocking(socket: &UdpSocket, stop_rx: &mpsc::Receiver<()>) {
