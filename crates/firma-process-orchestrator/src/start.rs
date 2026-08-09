@@ -21,7 +21,7 @@ use tracing::{debug, info};
 
 use crate::LifecycleTimeouts;
 use crate::StackTopology;
-use crate::collect::{collect_child_in_background, collect_child_until};
+use crate::collect::{collect_child_in_background, collect_child_until, initialize_collector};
 use crate::component::{
     ComponentName, ComponentPlanContext, ComponentSpec, OwnedComponent, Readiness, ReadyComponent,
 };
@@ -181,11 +181,11 @@ impl<'a> DetachedLaunchGuard<'a> {
             OrchestratorError::Platform("detached supervisor ownership unavailable".into())
         })?;
         match collect_child_in_background(supervisor) {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(error) => {
                 let message = format!(
                     "could not start detached supervisor collector: {}",
-                    error.source()
+                    error.reason()
                 );
                 self.supervisor = error.into_child();
                 Err(OrchestratorError::Platform(message))
@@ -222,7 +222,8 @@ impl Drop for DetachedLaunchGuard<'_> {
         let _ = target.signal_hard();
         let _ = supervisor.kill();
         if let Err(error) = collect_child_in_background(supervisor) {
-            let _ = error.terminate_and_collect();
+            debug!(error = %error.reason(), "detached launch drop could not hand off collection");
+            error.forget();
         }
     }
 }
@@ -453,10 +454,8 @@ impl StartupGuard {
             let _ = component.kill_leader();
         }
         if let Err(error) = collect_in_background(components) {
-            debug!(error = %error.source(), "could not start emergency component reaper");
-            if let Err(error) = error.terminate_and_collect() {
-                debug!(%error, "could not synchronously collect emergency components");
-            }
+            debug!(error = %error.reason(), "startup drop could not hand off collection");
+            error.forget();
         }
     }
 }
@@ -476,8 +475,9 @@ impl Drop for StartupGuard {
 ///
 /// All component [`TerminationTarget`] values receive a forced request before
 /// bounded collection begins. If target absence or child collection cannot be
-/// established, ownership moves to [`collect_in_background`]; reaper startup
-/// failure uses [`crate::supervisor::ReaperStartError::terminate_and_collect`].
+/// established, ownership moves to [`collect_in_background`]. An invariant
+/// failure in that pre-initialized handoff falls back to explicit synchronous
+/// termination and collection.
 /// [`remove_startup_state`] applies the guard's generation fence only after
 /// teardown is proven complete.
 fn rollback_startup_components(
@@ -532,10 +532,11 @@ fn rollback_startup_components(
         if probe_error.is_some() || Instant::now() >= deadline {
             debug!("startup rollback retained runtime state for a later cleanup attempt");
             let collection_result = match collect_in_background(components) {
-                Ok(_) => Ok(()),
+                Ok(()) => Ok(()),
                 Err(error) => {
-                    debug!(error = %error.source(), "could not start rollback component reaper");
-                    error.terminate_and_collect().map_err(OrchestratorError::Io)
+                    debug!(error = %error.reason(), "could not hand rollback to component collector");
+                    let components = error.into_components().unwrap_or_default();
+                    terminate_and_collect_components(components).map_err(OrchestratorError::Io)
                 }
             };
             let rollback_error = probe_error.unwrap_or(OrchestratorError::TerminationTimeout {
@@ -656,13 +657,13 @@ impl RunningStack {
             let mut owned = *owned;
             let components = std::mem::take(&mut owned.components);
             return match collect_in_background(components) {
-                Ok(_) => Ok(()),
+                Ok(()) => Ok(()),
                 Err(error) => {
                     let message = format!(
                         "could not transfer components to background reaper: {}",
-                        error.source()
+                        error.reason()
                     );
-                    owned.components = error.into_components();
+                    owned.components = error.into_components().unwrap_or_default();
                     self.state = RunningStackState::Owned(Box::new(owned));
                     Err(OrchestratorError::Platform(message))
                 }
@@ -683,10 +684,8 @@ impl RunningStack {
             let _ = component.kill_leader();
         }
         if let Err(error) = collect_in_background(components) {
-            debug!(error = %error.source(), "could not start dropped-stack reaper");
-            if let Err(error) = error.terminate_and_collect() {
-                debug!(%error, "could not synchronously collect dropped stack");
-            }
+            debug!(error = %error.reason(), "dropped stack could not hand off collection");
+            error.forget();
         }
     }
 }
@@ -755,6 +754,7 @@ fn spawn_stack_from_plan_with_phase<E>(
     timeouts: LifecycleTimeouts,
 ) -> Result<RunningStack, StartError<E>> {
     info!(state_dir = %state_dir.display(), "spawning stack");
+    initialize_collector().map_err(OrchestratorError::Io)?;
     firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
     let transaction = StateTransaction::acquire(state_dir)?;
     debug!("acquiring stack lock");
@@ -948,6 +948,7 @@ pub fn start_detached(
     timeouts: LifecycleTimeouts,
     build_supervisor: impl FnOnce(StackGeneration) -> Command,
 ) -> Result<StackHandle, OrchestratorError> {
+    initialize_collector().map_err(OrchestratorError::Io)?;
     firma_fs::create_private_dir_all(state_dir).map_err(OrchestratorError::StateDir)?;
     let generation = StackGeneration::new();
     info!("forking detached supervisor owner");
@@ -998,9 +999,34 @@ fn terminate_detached_supervisor(
         return Ok(());
     }
     match collect_child_in_background(supervisor) {
-        Ok(_) => Ok(()),
-        Err(error) => error.terminate_and_collect().map_err(OrchestratorError::Io),
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let Some(mut supervisor) = error.into_child() else {
+                return Err(OrchestratorError::Platform(
+                    "supervisor collector returned a different ownership payload".into(),
+                ));
+            };
+            supervisor.wait().map(|_| ()).map_err(OrchestratorError::Io)
+        }
     }
+}
+
+/// Explicit fallback when the pre-initialized collector rejects components.
+fn terminate_and_collect_components(mut components: Vec<OwnedComponent>) -> std::io::Result<()> {
+    for component in &mut components {
+        let _ = component.termination_target().signal_hard();
+        let _ = component.kill_leader();
+    }
+    let mut collection_error = None;
+    for component in &mut components {
+        if let Err(error) = component.wait()
+            && !SystemPlatform::child_already_reaped(&error)
+            && collection_error.is_none()
+        {
+            collection_error = Some(error);
+        }
+    }
+    collection_error.map_or(Ok(()), Err)
 }
 
 /// Reconstruct an informational [`StackHandle`] after supervisor-owned startup.

@@ -1,9 +1,8 @@
 //! Owned-child supervision and collection.
 //!
 //! Supervision observes [`OwnedComponent`] values without relinquishing them.
-//! Background collection is an explicit ownership transfer: component reaper
-//! startup either accepts the complete capability set or returns it through
-//! [`ReaperStartError`].
+//! Background collection is an explicit ownership transfer to the persistent
+//! collector initialized before managed children are spawned.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -12,9 +11,9 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
+use crate::collect::HandoffError;
 use crate::component::OwnedComponent;
 use crate::error::OrchestratorError;
-use crate::platform::{Platform, SystemPlatform};
 
 const SUPERVISION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -126,103 +125,9 @@ pub fn block_until_owned_exit_with(
     }
 }
 
-/// Failure to transfer component ownership into a background reaper.
-///
-/// The owned components remain available through [`Self::into_components`],
-/// allowing the caller to retry, terminate them synchronously, or retain them.
-pub struct ReaperStartError {
-    source: std::io::Error,
-    components: Arc<std::sync::Mutex<Option<Vec<OwnedComponent>>>>,
-}
-
-impl ReaperStartError {
-    /// Return the operating-system error that prevented thread creation.
-    pub const fn source(&self) -> &std::io::Error {
-        &self.source
-    }
-
-    /// Recover every process capability offered to the failed reaper.
-    pub fn into_components(self) -> Vec<OwnedComponent> {
-        match self.components.lock() {
-            Ok(mut components) => components.take().unwrap_or_default(),
-            Err(components) => components.into_inner().take().unwrap_or_default(),
-        }
-    }
-
-    /// Hard-terminate and synchronously collect the recovered components.
-    ///
-    /// This is the fail-closed fallback for callers, such as [`Drop`]
-    /// implementations, that cannot return ownership to their own caller. It
-    /// deliberately waits without a deadline: after reaper creation fails,
-    /// returning early would discard the only handles capable of reaping the
-    /// direct children.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first child collection error after attempting to terminate
-    /// and collect every recovered component.
-    pub fn terminate_and_collect(self) -> std::io::Result<()> {
-        let mut components = self.into_components();
-        for component in &mut components {
-            if let Err(error) = component.termination_target().signal_hard() {
-                warn!(role = component.name().as_str(), %error, "fallback process-tree termination failed");
-            }
-            if let Err(error) = component.kill_leader() {
-                debug!(role = component.name().as_str(), %error, "fallback leader termination failed");
-            }
-        }
-
-        let mut collection_error = None;
-        for component in &mut components {
-            if let Err(error) = component.wait() {
-                if SystemPlatform::child_already_reaped(&error) {
-                    continue;
-                }
-                warn!(role = component.name().as_str(), %error, "fallback child collection failed");
-                if collection_error.is_none() {
-                    collection_error = Some(error);
-                }
-            }
-        }
-        if let Some(error) = collection_error {
-            return Err(error);
-        }
-        Ok(())
-    }
-}
-
-/// Transfer component ownership to a named background reaper.
-///
-/// On thread-creation failure, no process capability is dropped; the returned
-/// error carries the complete input collection.
-pub fn collect_in_background(
-    components: Vec<OwnedComponent>,
-) -> Result<std::thread::JoinHandle<()>, ReaperStartError> {
-    let components = Arc::new(std::sync::Mutex::new(Some(components)));
-    let worker_components = Arc::clone(&components);
-    std::thread::Builder::new()
-        .name("component-reaper".into())
-        .spawn(move || {
-            let mut components = match worker_components.lock() {
-                Ok(mut components) => components.take().unwrap_or_default(),
-                Err(components) => components.into_inner().take().unwrap_or_default(),
-            };
-            while !components.is_empty() {
-                components.retain_mut(|component| match component.try_wait() {
-                    Ok(None) => true,
-                    Ok(Some(_)) => false,
-                    Err(error) if SystemPlatform::child_already_reaped(&error) => false,
-                    Err(error) => {
-                        debug!(role = component.name().as_str(), %error, "component collection probe failed; retrying");
-                        true
-                    }
-                });
-                if !components.is_empty() {
-                    std::thread::sleep(SUPERVISION_POLL_INTERVAL);
-                }
-            }
-        })
-        .map_err(|source| ReaperStartError { source, components })
+/// Transfer component ownership to the process-global background collector.
+pub fn collect_in_background(components: Vec<OwnedComponent>) -> Result<(), HandoffError> {
+    crate::collect::collect_components_in_background(components)
 }
 
 #[cfg(test)]

@@ -7,10 +7,10 @@
 //! external-collection condition, so both the high-level supervisor and the
 //! low-level platform layer can share them without an inverted dependency.
 
-use std::sync::Arc;
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::Duration;
 
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::component::OwnedComponent;
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
@@ -19,20 +19,172 @@ use firma_runtime_state::ChildExt as _;
 const COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const BACKGROUND_COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
-/// Transfer one direct child and its leader target to a background collector.
-pub fn collect_child_in_background(
-    child: std::process::Child,
-) -> Result<std::thread::JoinHandle<()>, CollectorStartError> {
-    let target = TerminationTarget::for_leader(child.process_id());
-    collect_target_in_background(child, target)
+static COLLECTOR: OnceLock<Collector> = OnceLock::new();
+static COLLECTOR_INIT: Mutex<()> = Mutex::new(());
+
+/// Process-global collection worker initialized before any managed child exists.
+struct Collector {
+    owner_pid: u32,
+    sender: mpsc::Sender<CollectionRequest>,
 }
 
-/// Transfer a child and explicit [`TerminationTarget`] to a background collector.
-pub fn collect_target_in_background(
-    child: std::process::Child,
-    target: TerminationTarget,
-) -> Result<std::thread::JoinHandle<()>, CollectorStartError> {
-    spawn_collector(CollectedChild { child, target })
+/// Ownership payloads accepted by the persistent collector.
+enum CollectionRequest {
+    Child(CollectedChild),
+    Components(Vec<OwnedComponent>),
+}
+
+/// Reason an initialized collector could not accept ownership.
+#[derive(Debug)]
+enum HandoffFailure {
+    Uninitialized,
+    Forked { owner_pid: u32, current_pid: u32 },
+    Disconnected,
+}
+
+impl std::fmt::Display for HandoffFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uninitialized => formatter.write_str("child collector is not initialized"),
+            Self::Forked {
+                owner_pid,
+                current_pid,
+            } => write!(
+                formatter,
+                "child collector belongs to process {owner_pid}, not forked process {current_pid}"
+            ),
+            Self::Disconnected => formatter.write_str("child collector worker disconnected"),
+        }
+    }
+}
+
+/// Failed ownership transfer that returns the exact offered capability.
+pub struct HandoffError {
+    failure: HandoffFailure,
+    request: CollectionRequest,
+}
+
+impl HandoffError {
+    /// Describe why the persistent collector rejected ownership.
+    pub fn reason(&self) -> impl std::fmt::Display + '_ {
+        &self.failure
+    }
+
+    /// Recover an offered direct child.
+    pub fn into_child(self) -> Option<std::process::Child> {
+        match self.request {
+            CollectionRequest::Child(collected) => Some(collected.child),
+            CollectionRequest::Components(_) => None,
+        }
+    }
+
+    /// Recover an offered component collection.
+    pub fn into_components(self) -> Option<Vec<OwnedComponent>> {
+        match self.request {
+            CollectionRequest::Components(components) => Some(components),
+            CollectionRequest::Child(_) => None,
+        }
+    }
+
+    /// Deliberately retain rejected capabilities until process exit.
+    pub fn forget(self) {
+        std::mem::forget(self.request);
+    }
+}
+
+/// Initialize the process-global collector before any managed child is spawned.
+pub fn initialize_collector() -> Result<(), std::io::Error> {
+    if COLLECTOR.get().is_none() {
+        let _initialization = match COLLECTOR_INIT.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if COLLECTOR.get().is_none() {
+            let collector = start_collector()?;
+            if COLLECTOR.set(collector).is_err() {
+                return Err(std::io::Error::other(
+                    "child collector initialized concurrently",
+                ));
+            }
+        }
+    }
+    let Some(collector) = COLLECTOR.get() else {
+        return Err(std::io::Error::other(
+            "child collector initialization completed without a worker",
+        ));
+    };
+    let current_pid = std::process::id();
+    if collector.owner_pid != current_pid {
+        return Err(std::io::Error::other(format!(
+            "child collector belongs to process {}, not forked process {current_pid}",
+            collector.owner_pid
+        )));
+    }
+    Ok(())
+}
+
+fn start_collector() -> Result<Collector, std::io::Error> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("child-collector".into())
+        .spawn(move || collect_children(&receiver))?;
+    Ok(Collector {
+        owner_pid: std::process::id(),
+        sender,
+    })
+}
+
+/// Transfer one direct child and its leader target to a background collector.
+pub fn collect_child_in_background(child: std::process::Child) -> Result<(), HandoffError> {
+    let request = CollectionRequest::Child(CollectedChild {
+        _target: TerminationTarget::for_leader(child.process_id()),
+        child,
+    });
+    let collector = match initialized_collector() {
+        Ok(collector) => collector,
+        Err(failure) => {
+            return Err(HandoffError { failure, request });
+        }
+    };
+    match collector.sender.send(request) {
+        Ok(()) => Ok(()),
+        Err(mpsc::SendError(request)) => Err(HandoffError {
+            failure: HandoffFailure::Disconnected,
+            request,
+        }),
+    }
+}
+
+/// Transfer owned components to the persistent collector.
+pub fn collect_components_in_background(
+    components: Vec<OwnedComponent>,
+) -> Result<(), HandoffError> {
+    let request = CollectionRequest::Components(components);
+    let collector = match initialized_collector() {
+        Ok(collector) => collector,
+        Err(failure) => {
+            return Err(HandoffError { failure, request });
+        }
+    };
+    match collector.sender.send(request) {
+        Ok(()) => Ok(()),
+        Err(mpsc::SendError(request)) => Err(HandoffError {
+            failure: HandoffFailure::Disconnected,
+            request,
+        }),
+    }
+}
+
+fn initialized_collector() -> Result<&'static Collector, HandoffFailure> {
+    let collector = COLLECTOR.get().ok_or(HandoffFailure::Uninitialized)?;
+    let current_pid = std::process::id();
+    if collector.owner_pid != current_pid {
+        return Err(HandoffFailure::Forked {
+            owner_pid: collector.owner_pid,
+            current_pid,
+        });
+    }
+    Ok(collector)
 }
 
 /// Attempt direct-child collection until a deadline without relinquishing ownership.
@@ -60,89 +212,48 @@ pub fn collect_child_until(child: &mut std::process::Child, deadline: std::time:
 /// Inseparable collection and termination capabilities owned by a collector.
 struct CollectedChild {
     child: std::process::Child,
-    target: TerminationTarget,
+    _target: TerminationTarget,
 }
 
 impl From<OwnedComponent> for CollectedChild {
     fn from(component: OwnedComponent) -> Self {
         let (child, target) = component.into_parts();
-        Self { child, target }
-    }
-}
-
-/// Failure to transfer a child into a background collector.
-///
-/// The error retains both process capabilities so callers can choose an
-/// appropriate synchronous fallback without losing collection responsibility.
-pub struct CollectorStartError {
-    source: std::io::Error,
-    child: Arc<std::sync::Mutex<Option<CollectedChild>>>,
-}
-
-impl CollectorStartError {
-    /// Return the operating-system error that prevented thread creation.
-    pub const fn source(&self) -> &std::io::Error {
-        &self.source
-    }
-
-    /// Recover the child while releasing its leader-only termination target.
-    pub fn into_child(self) -> Option<std::process::Child> {
-        self.take_child().map(|collected| collected.child)
-    }
-
-    /// Hard-terminate and synchronously collect the retained child.
-    pub fn terminate_and_collect(self) -> std::io::Result<()> {
-        let Some(mut collected) = self.take_child() else {
-            return Ok(());
-        };
-        if let Err(error) = collected.target.signal_hard() {
-            warn!(%error, "fallback child-target termination failed");
-        }
-        if let Err(error) = collected.child.kill() {
-            debug!(%error, "fallback child termination failed");
-        }
-        match collected.child.wait() {
-            Ok(_) => Ok(()),
-            Err(error) if SystemPlatform::child_already_reaped(&error) => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn take_child(&self) -> Option<CollectedChild> {
-        match self.child.lock() {
-            Ok(mut child) => child.take(),
-            Err(child) => child.into_inner().take(),
+        Self {
+            child,
+            _target: target,
         }
     }
 }
 
-/// Transfer one child to a reaper while preserving ownership on failure.
-fn spawn_collector(
-    child: CollectedChild,
-) -> Result<std::thread::JoinHandle<()>, CollectorStartError> {
-    let child = Arc::new(std::sync::Mutex::new(Some(child)));
-    let worker_child = Arc::clone(&child);
-    std::thread::Builder::new()
-        .name("child-collector".into())
-        .spawn(move || {
-            let child = match worker_child.lock() {
-                Ok(mut child) => child.take(),
-                Err(child) => child.into_inner().take(),
-            };
-            let Some(mut child) = child else {
-                return;
-            };
-            loop {
-                match child.child.try_wait() {
-                    Ok(None) => std::thread::sleep(BACKGROUND_COLLECTION_POLL_INTERVAL),
-                    Ok(Some(_)) => return,
-                    Err(error) if SystemPlatform::child_already_reaped(&error) => return,
-                    Err(error) => {
-                        debug!(%error, "child collection probe failed; retrying");
-                        std::thread::sleep(BACKGROUND_COLLECTION_POLL_INTERVAL);
-                    }
-                }
+/// Multiplex collection so one long-lived child cannot starve later handoffs.
+fn collect_children(receiver: &mpsc::Receiver<CollectionRequest>) {
+    let mut children = Vec::new();
+    loop {
+        match receiver.recv_timeout(BACKGROUND_COLLECTION_POLL_INTERVAL) {
+            Ok(request) => append_request(request, &mut children),
+            Err(mpsc::RecvTimeoutError::Disconnected) if children.is_empty() => return,
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+        while let Ok(request) = receiver.try_recv() {
+            append_request(request, &mut children);
+        }
+        children.retain_mut(|owned: &mut CollectedChild| match owned.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(error) if SystemPlatform::child_already_reaped(&error) => false,
+            Err(error) => {
+                debug!(%error, "child collection probe failed; retrying");
+                true
             }
-        })
-        .map_err(|source| CollectorStartError { source, child })
+        });
+    }
+}
+
+fn append_request(request: CollectionRequest, children: &mut Vec<CollectedChild>) {
+    match request {
+        CollectionRequest::Child(child) => children.push(child),
+        CollectionRequest::Components(components) => {
+            children.extend(components.into_iter().map(CollectedChild::from));
+        }
+    }
 }
