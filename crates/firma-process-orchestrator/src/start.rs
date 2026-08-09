@@ -22,7 +22,9 @@ use tracing::{debug, info};
 use crate::LifecycleTimeouts;
 use crate::StackTopology;
 use crate::collect::{collect_child_in_background, collect_child_until};
-use crate::component::{ComponentContext, ComponentName, ComponentSpec, OwnedComponent, Readiness};
+use crate::component::{
+    ComponentName, ComponentPlanContext, ComponentSpec, OwnedComponent, Readiness, ReadyComponent,
+};
 use crate::detach::spawn_supervisor;
 use crate::error::{OrchestratorError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
@@ -467,13 +469,15 @@ impl Drop for RunningStack {
 ///
 /// Returns ownership of the component child handles once every component is
 /// listening. `topology` defines startup order and runtime-state identity;
-/// `build_plan` receives one aligned [`ComponentContext`] per topology component
-/// and resolves the full [`ComponentSpec`] plan. It is invoked **after** the
-/// lock is claimed and the generation startup-report directory is created, so an
-/// already-running stack is reported before the caller's (possibly failing)
-/// plan resolution runs. Commands are spawned unchanged except for the
-/// documented lifecycle process settings on [`ComponentSpec`]. The caller must eventually call
-/// [`RunningStack::shutdown`] to tear the stack down and collect its children.
+/// `build_component` receives an aligned [`ComponentPlanContext`] immediately
+/// before each component's spawn, in topology order. Its prior endpoints have
+/// already passed publication validation, probing, and canonical publication.
+/// Planning begins **after** the lock is claimed and the generation startup-report
+/// directory is created, so an already-running stack is reported before the
+/// caller's (possibly failing) resolution runs. Commands are spawned unchanged
+/// except for the documented lifecycle process settings on [`ComponentSpec`].
+/// The caller must eventually call [`RunningStack::shutdown`] to tear the stack
+/// down and collect its children.
 ///
 /// Used by wrappers that need in-process ownership after readiness.
 ///
@@ -485,13 +489,13 @@ impl Drop for RunningStack {
 /// callers can retry cleanup.
 pub fn spawn_stack_from_plan<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
+    build_component: impl FnMut(ComponentPlanContext<'_>) -> Result<ComponentSpec, E>,
     state_dir: &Path,
     timeouts: LifecycleTimeouts,
 ) -> Result<RunningStack, StartError<E>> {
     spawn_stack_from_plan_with_phase(
         topology,
-        build_plan,
+        build_component,
         state_dir,
         true,
         StackGeneration::new(),
@@ -504,14 +508,14 @@ pub fn spawn_stack_from_plan<E>(
 ///
 /// [`StateTransaction`] acquisition precedes the supplied [`StackGeneration`]
 /// claim and remains in the returned [`RunningStack`] when detached attachment
-/// must publish more state. `build_plan` is invoked only after the lock is
+/// must publish more state. Component planning begins only after the lock is
 /// claimed, so an already-running stack is reported before plan resolution.
 /// When supplied, one [`StopSignal`] spans readiness and supervision so
 /// termination cannot fall between those phases. Every error after
 /// [`StartupGuard::new`] remains rollback-protected.
 fn spawn_stack_from_plan_with_phase<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
+    build_component: impl FnMut(ComponentPlanContext<'_>) -> Result<ComponentSpec, E>,
     state_dir: &Path,
     publish_ready: bool,
     generation: StackGeneration,
@@ -534,27 +538,10 @@ fn spawn_stack_from_plan_with_phase<E>(
         .enumerate()
         .map(|(index, _)| startup.startup_report_dir.join(format!("{index}.toml")))
         .collect();
-    let contexts: Vec<_> = topology
-        .components()
-        .iter()
-        .zip(&startup_report_paths)
-        .map(|(name, path)| ComponentContext::new(name.as_str(), path))
-        .collect();
-
-    // The plan is resolved after the lock is claimed so that an already-running
-    // stack is reported before any (possibly failing) plan resolution runs.
-    let plan = build_plan(&contexts).map_err(StartError::Plan)?;
-    if plan.len() != topology.components().len() {
-        return Err(OrchestratorError::PlanCountMismatch {
-            expected: topology.components().len(),
-            actual: plan.len(),
-        }
-        .into());
-    }
     clear_canonical_listen_state(state_dir, topology)?;
     match spawn_stack_inner(
         topology,
-        plan,
+        build_component,
         startup_report_paths,
         state_dir,
         &mut startup,
@@ -572,41 +559,43 @@ fn spawn_stack_from_plan_with_phase<E>(
             Ok(stack)
         }
         Err(error) => {
-            debug!(%error, "spawn failed; startup guard will roll back");
-            Err(StartError::Orchestrator(error))
+            debug!("spawn failed; startup guard will roll back");
+            Err(error)
         }
     }
 }
 
 /// Perform the ordered, rollback-protected component startup sequence.
 ///
-/// The caller supplies a fully resolved [`ComponentSpec`] plan; this loop is
-/// agnostic to which components it contains. Specs are spawned in order: each
-/// component must remain owned and live before the next is spawned, and live
-/// through its readiness probe. Each successful spawn records the component in
-/// [`StartupGuard`] before the next fallible step, and probe callbacks use
-/// [`StartupGuard::exited_component`] rather than unowned process identities.
-/// These probes establish bounded startup evidence only; ongoing health belongs
-/// to supervision.
-fn spawn_stack_inner(
+/// The topology fixes component cardinality and order before any spawn. For each
+/// identity, the caller produces one complete [`ComponentSpec`] using only
+/// prior validated endpoints and its own generation publication context. Each
+/// successful spawn is recorded in [`StartupGuard`] before the next fallible
+/// step, and probe callbacks use [`StartupGuard::exited_component`] rather than
+/// unowned process identities. These probes establish bounded startup evidence
+/// only; ongoing health belongs to supervision.
+fn spawn_stack_inner<E>(
     topology: &StackTopology,
-    plan: Vec<ComponentSpec>,
+    mut build_component: impl FnMut(ComponentPlanContext<'_>) -> Result<ComponentSpec, E>,
     startup_report_paths: Vec<PathBuf>,
     state_dir: &Path,
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
     readiness_timeout: Duration,
-) -> Result<(), OrchestratorError> {
+) -> Result<(), StartError<E>> {
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
+    let mut ready_components = Vec::with_capacity(topology.components().len());
 
-    for ((name, spec), startup_report_path) in topology
+    for (name, startup_report_path) in topology
         .components()
         .iter()
         .cloned()
-        .zip(plan)
         .zip(startup_report_paths)
     {
+        let context =
+            ComponentPlanContext::new(name.as_str(), &startup_report_path, &ready_components);
+        let spec = build_component(context).map_err(StartError::Plan)?;
         let ComponentSpec {
             mut command,
             readiness,
@@ -633,18 +622,19 @@ fn spawn_stack_inner(
                     stop_signal,
                     || startup.exited_component(),
                 )?;
-                std::fs::remove_file(&startup_report_path)?;
+                std::fs::remove_file(&startup_report_path).map_err(OrchestratorError::from)?;
                 dial_addr
             }
         };
         if let Some((component, status)) = startup.exited_component()? {
-            return Err(OrchestratorError::ReadinessProcessExited { component, status });
+            return Err(OrchestratorError::ReadinessProcessExited { component, status }.into());
         }
         publish_canonical_listen_addr(&state_dir.join(name.listen_file_name()), addr)?;
         if let Some((component, status)) = startup.exited_component()? {
-            return Err(OrchestratorError::ReadinessProcessExited { component, status });
+            return Err(OrchestratorError::ReadinessProcessExited { component, status }.into());
         }
         info!(component = %name.as_str(), addr = %addr, "component listening");
+        ready_components.push(ReadyComponent::new(name.as_str(), addr));
     }
 
     // The Group goes out of scope at the end of this function. On Unix that is
@@ -669,14 +659,14 @@ fn spawn_stack_inner(
 /// cleanup.
 pub fn start_foreground_from_plan<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
+    build_component: impl FnMut(ComponentPlanContext<'_>) -> Result<ComponentSpec, E>,
     state_dir: &Path,
     timeouts: LifecycleTimeouts,
 ) -> Result<StackHandle, StartError<E>> {
     let stop_signal = StopSignal::install()?;
     let mut stack = spawn_stack_from_plan_with_phase(
         topology,
-        build_plan,
+        build_component,
         state_dir,
         true,
         StackGeneration::new(),
@@ -842,7 +832,7 @@ fn with_rollback<T>(
 #[doc(hidden)]
 pub fn supervise_owned_generation_from_plan<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
+    build_component: impl FnMut(ComponentPlanContext<'_>) -> Result<ComponentSpec, E>,
     state_dir: &Path,
     generation: StackGeneration,
     timeouts: LifecycleTimeouts,
@@ -850,7 +840,7 @@ pub fn supervise_owned_generation_from_plan<E>(
     let stop_signal = StopSignal::install()?;
     let stack = spawn_stack_from_plan_with_phase(
         topology,
-        build_plan,
+        build_component,
         state_dir,
         false,
         generation,

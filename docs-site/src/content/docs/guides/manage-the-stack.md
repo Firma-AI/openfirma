@@ -85,14 +85,17 @@ What `start` does, in order:
    publishes its effective address there. The owner validates that address
    against the configured IP and port, then probes it while retaining the child
    handle.
-3. The owner boots the Sidecar with the same private endpoint-publication
+3. If Authority was configured with port `0`, the owner uses the validated
+   `authority.listen` value as the Sidecar's `--authority-connect-addr`. The
+   configured Authority URL remains the logical HTTP origin and TLS identity;
+   only the physical TCP destination changes.
+4. The owner boots the Sidecar with the same private endpoint-publication
    contract and validates and probes its effective interceptor address. When
    HTTPS MITM is active, the Sidecar generates its `generated-firma-ca/`
    material before opening that port, so a connectable port already implies CA
-   readiness; readiness is a single signal.
-4. Fixed configured ports remain fixed for both components. Port `0` is
-   supported by the internal publication contract without changing scaffold
-   defaults or wiring the Authority's dynamic endpoint into Sidecar config.
+   readiness; readiness is a single signal. Fixed configured ports remain
+   unchanged; setting either listener to port `0` delegates port selection to
+   the kernel.
 5. With `--detach`, the supervisor announces readiness, waits for the launcher's
    acknowledgement, then confirms attachment. The launcher exits 0 only after
    that two-phase handoff. Without detachment, the owner continues blocking in

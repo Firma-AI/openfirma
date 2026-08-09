@@ -100,17 +100,85 @@ pub struct ComponentSpec {
 
 /// Generation-scoped inputs for building one component's launch specification.
 ///
-/// Contexts follow the component order in [`crate::StackTopology`] and remain
-/// valid only while the post-lock plan callback runs. The caller decides how to
-/// pass startup-report paths to its child commands.
+/// The caller decides how to pass startup-report paths to its child commands.
 #[derive(Debug, Clone, Copy)]
-pub struct ComponentContext<'a> {
+struct ComponentContext<'a> {
     name: &'a str,
     startup_report_path: &'a Path,
 }
 
+/// Validated endpoint published by an earlier component in startup order.
+#[derive(Debug)]
+pub struct ReadyComponent {
+    name: String,
+    dial_addr: SocketAddr,
+}
+
+impl ReadyComponent {
+    pub(crate) fn new(name: &str, dial_addr: SocketAddr) -> Self {
+        Self {
+            name: name.to_string(),
+            dial_addr,
+        }
+    }
+
+    /// Return the endpoint that passed publication validation and probing.
+    #[must_use]
+    const fn dial_addr(&self) -> SocketAddr {
+        self.dial_addr
+    }
+}
+
+/// Inputs for producing one complete caller-owned component specification.
+///
+/// The orchestrator invokes the planner once per topology component immediately
+/// before spawning it. `ready_components` contains only earlier components
+/// whose endpoints passed readiness and canonical publication.
+#[derive(Debug)]
+pub struct ComponentPlanContext<'a> {
+    component: ComponentContext<'a>,
+    ready_components: &'a [ReadyComponent],
+}
+
+impl<'a> ComponentPlanContext<'a> {
+    pub(crate) const fn new(
+        name: &'a str,
+        startup_report_path: &'a Path,
+        ready_components: &'a [ReadyComponent],
+    ) -> Self {
+        Self {
+            component: ComponentContext::new(name, startup_report_path),
+            ready_components,
+        }
+    }
+
+    /// Return the topology identity of the component being planned.
+    #[must_use]
+    pub const fn name(&self) -> &'a str {
+        self.component.name()
+    }
+
+    /// Describe child-published readiness for the component being planned.
+    #[must_use]
+    pub const fn child_published_tcp(
+        &self,
+        requested_addr: SocketAddr,
+    ) -> ChildPublishedTcpContext<'a> {
+        self.component.child_published_tcp(requested_addr)
+    }
+
+    /// Find a prior validated endpoint by topology identity.
+    #[must_use]
+    pub fn ready_endpoint(&self, name: &str) -> Option<SocketAddr> {
+        self.ready_components
+            .iter()
+            .find(|component| component.name == name)
+            .map(ReadyComponent::dial_addr)
+    }
+}
+
 impl<'a> ComponentContext<'a> {
-    pub(crate) const fn new(name: &'a str, startup_report_path: &'a Path) -> Self {
+    const fn new(name: &'a str, startup_report_path: &'a Path) -> Self {
         Self {
             name,
             startup_report_path,
@@ -119,13 +187,13 @@ impl<'a> ComponentContext<'a> {
 
     /// Return the topology identity of this component.
     #[must_use]
-    pub const fn name(&self) -> &'a str {
+    const fn name(&self) -> &'a str {
         self.name
     }
 
     /// Describe child-published readiness using this component's startup report.
     #[must_use]
-    pub const fn child_published_tcp(
+    const fn child_published_tcp(
         &self,
         requested_addr: SocketAddr,
     ) -> ChildPublishedTcpContext<'a> {

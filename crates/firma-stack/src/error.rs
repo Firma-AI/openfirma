@@ -46,6 +46,12 @@ pub enum StackError {
         #[source]
         source: AddrParseError,
     },
+    /// Staged planning did not receive a required prior endpoint.
+    #[error("missing ready endpoint for prior component '{component}'")]
+    MissingReadyEndpoint {
+        /// Prior component required by this plan stage.
+        component: &'static str,
+    },
     /// Generic process orchestration failed.
     #[error(transparent)]
     Orchestrator(#[from] OrchestratorError),

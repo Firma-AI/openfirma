@@ -3,8 +3,8 @@
 //! This crate owns the platform-agnostic supervision core: ordered startup with
 //! rollback, generation-fenced runtime state, foreground and detached ownership,
 //! fail-closed teardown, and observational status. It is agnostic to which
-//! components a stack contains — callers describe the topology as a
-//! [`ComponentSpec`] plan and supply the ordered component names.
+//! components a stack contains — callers supply ordered component names and
+//! produce each complete [`ComponentSpec`] immediately before its spawn.
 //!
 //! The firma-specific topology (the `[authority, sidecar]` plan and its config
 //! parsing) lives in `firma-stack`, which wraps these entry points.
@@ -28,7 +28,7 @@ mod state_lease;
 mod supervisor;
 
 pub use component::{
-    ChildPublishedTcpContext, ChildPublishedTcpReadiness, ComponentContext, ComponentName,
+    ChildPublishedTcpContext, ChildPublishedTcpReadiness, ComponentName, ComponentPlanContext,
     ComponentSpec, Readiness,
 };
 pub use error::{OrchestratorError, StartError};

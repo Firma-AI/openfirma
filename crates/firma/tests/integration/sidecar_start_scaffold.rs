@@ -12,7 +12,7 @@
 
 use std::fs::File;
 use std::io::{Read, Seek};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -95,8 +95,6 @@ struct Scaffold {
     _tmp: tempfile::TempDir,
     cfg_path: std::path::PathBuf,
     state_dir: std::path::PathBuf,
-    authority_addr: std::net::SocketAddr,
-    interceptor_addr: std::net::SocketAddr,
 }
 
 impl Scaffold {
@@ -105,41 +103,41 @@ impl Scaffold {
         let config_dir = tmp.path().join("cfg");
         let state_dir = tmp.path().join("state");
 
-        // Holding both reservations prevents sequential ephemeral binds from
-        // selecting the same port. Health binding remains independently
-        // ephemeral through `start_detached`.
-        let authority_listener = TcpListener::bind("127.0.0.1:0").expect("reserve authority port");
-        let interceptor_listener =
-            TcpListener::bind("127.0.0.1:0").expect("reserve interceptor port");
-        let authority_addr = authority_listener.local_addr().expect("authority addr");
-        let interceptor_addr = interceptor_listener.local_addr().expect("interceptor addr");
-
         let init = firma()
             .args(["config", "--yes", "--mode", "agent-local", "--output-dir"])
             .arg(&config_dir)
             .args(["--state-dir"])
             .arg(&state_dir)
             .args(["--authority-listen"])
-            .arg(authority_addr.to_string())
+            .arg("127.0.0.1:0")
             .output()
             .expect("run firma config");
         assert!(init.status.success(), "config scaffold failed: {init:?}");
 
         let cfg_path = config_dir.join(CONFIG_FILE_NAME);
         let text = std::fs::read_to_string(&cfg_path).expect("read firma.toml");
-        let text = text.replace("127.0.0.1:8080", &interceptor_addr.to_string());
-        std::fs::write(&cfg_path, text).expect("write firma.toml");
+        let mut config: toml::Value = toml::from_str(&text).expect("parse firma.toml");
+        config["sidecar"]["interceptor"]["listen_addr"] =
+            toml::Value::String("127.0.0.1:0".to_string());
+        config["sidecar"]["authority"]
+            .as_table_mut()
+            .expect("sidecar Authority config")
+            .insert(
+                "connect_addr".to_string(),
+                toml::Value::String("127.0.0.1:1".to_string()),
+            );
+        std::fs::write(
+            &cfg_path,
+            toml::to_string_pretty(&config).expect("serialize firma.toml"),
+        )
+        .expect("write firma.toml");
 
-        drop(authority_listener);
-        drop(interceptor_listener);
         std::fs::create_dir_all(&state_dir).expect("state dir");
 
         Self {
             _tmp: tmp,
             cfg_path,
             state_dir,
-            authority_addr,
-            interceptor_addr,
         }
     }
 
@@ -153,6 +151,48 @@ impl Scaffold {
 
     fn stack_pid_path(&self) -> std::path::PathBuf {
         self.state_dir.join("stack.pid")
+    }
+
+    fn endpoint(&self, component: &str) -> SocketAddr {
+        let endpoint = std::fs::read_to_string(self.state_dir.join(format!("{component}.listen")))
+            .expect("read canonical component endpoint")
+            .trim()
+            .parse::<SocketAddr>()
+            .expect("parse canonical component endpoint");
+        assert_ne!(endpoint.port(), 0, "{component} retained port zero");
+        TcpStream::connect(endpoint).expect("connect to canonical component endpoint");
+        endpoint
+    }
+
+    fn assert_sidecar_connected_to(&self, authority_addr: SocketAddr) {
+        let text = std::fs::read_to_string(&self.cfg_path).expect("read scaffold config");
+        let config: toml::Value = toml::from_str(&text).expect("parse scaffold config");
+        let expected_url = config["sidecar"]["authority"]["url"]
+            .as_str()
+            .expect("configured logical Authority URL");
+        let expected_endpoint = format!("endpoint={expected_url}");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let log = read_log(&self.state_dir.join("sidecar.log")).unwrap_or_default();
+            let reports_endpoint = log.lines().any(|line| {
+                line.contains("authority stream connected") && line.contains(&expected_endpoint)
+            });
+            let connected_streams = log
+                .lines()
+                .filter(|line| line.contains("authority stream connected"))
+                .filter(|line| {
+                    line.contains("stream=policy_bundle") || line.contains("stream=revocations")
+                })
+                .count();
+            if reports_endpoint && connected_streams == 2 {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Sidecar did not connect both streams to {authority_addr}:\n{log}"
+            );
+            std::thread::yield_now();
+        }
     }
 
     fn start_failure_diagnostics(&self, output: &std::process::Output) -> StartDiagnostics {
@@ -185,12 +225,10 @@ impl Scaffold {
         .join(", ");
 
         format!(
-            "exit status: {}\nconfig path: {}\nstate dir: {}\nconfigured addresses: authority={}, interceptor={}, health=127.0.0.1:0\nstate files: {state_files}\n{diagnostics}",
+            "exit status: {}\nconfig path: {}\nstate dir: {}\nconfigured addresses: authority=127.0.0.1:0, interceptor=127.0.0.1:0, health=127.0.0.1:0\nstate files: {state_files}\n{diagnostics}",
             output.status,
             self.cfg_path.display(),
             self.state_dir.display(),
-            self.authority_addr,
-            self.interceptor_addr,
         )
     }
 }
@@ -248,13 +286,16 @@ fn scaffold_start_reaches_readiness_and_reports_running_json_status() {
         scaffold.format_start_failure(&start)
     );
     assert_stack_pid_published(&scaffold.stack_pid_path());
+    let authority_addr = scaffold.endpoint("authority");
+    let sidecar_addr = scaffold.endpoint("sidecar");
+    scaffold.assert_sidecar_connected_to(authority_addr);
 
     let (status, rows) = daemon_status(&scaffold.state_dir);
     assert!(status.success(), "running daemon status was {status}");
     assert_eq!(rows.as_array().map(Vec::len), Some(1));
     assert_eq!(rows[0]["sandbox_id"], "daemon");
     assert_eq!(rows[0]["state"], "running");
-    assert_eq!(rows[0]["listen"], scaffold.interceptor_addr.to_string());
+    assert_eq!(rows[0]["listen"], sidecar_addr.to_string());
 }
 
 #[test]
@@ -333,6 +374,8 @@ fn stopped_stack_reports_stopped_and_can_restart() {
     let (status, rows) = daemon_status(&scaffold.state_dir);
     assert_eq!(status.code(), Some(1));
     assert_eq!(rows[0]["state"], "stopped");
+    assert!(!scaffold.state_dir.join("authority.listen").exists());
+    assert!(!scaffold.state_dir.join("sidecar.listen").exists());
 
     let restart = scaffold.start();
     assert!(
@@ -341,6 +384,9 @@ fn stopped_stack_reports_stopped_and_can_restart() {
         scaffold.format_start_failure(&restart)
     );
     assert_stack_pid_published(&scaffold.stack_pid_path());
+    let authority_addr = scaffold.endpoint("authority");
+    let _sidecar_addr = scaffold.endpoint("sidecar");
+    scaffold.assert_sidecar_connected_to(authority_addr);
 }
 
 #[test]
@@ -397,7 +443,7 @@ fn concurrent_starts_publish_exactly_one_stack() {
     assert!(status.success(), "winning stack status was {status}");
     assert_eq!(rows.as_array().map(Vec::len), Some(1));
     assert_eq!(rows[0]["state"], "running");
-    assert_eq!(rows[0]["listen"], scaffold.interceptor_addr.to_string());
+    assert_eq!(rows[0]["listen"], scaffold.endpoint("sidecar").to_string());
 }
 
 #[test]

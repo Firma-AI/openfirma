@@ -16,13 +16,14 @@ pub fn spawn_managed_component(
     let readiness_listener =
         std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind readiness listener");
     let readiness_addr = readiness_listener.local_addr().expect("readiness address");
+    let mut command = Some(command);
     let stack = spawn_stack_from_plan(
         topology,
         |_| {
-            Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
-                command,
+            Ok::<_, std::convert::Infallible>(ComponentSpec {
+                command: command.take().expect("single component planned once"),
                 readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(readiness_addr),
-            }])
+            })
         },
         state_dir,
         LifecycleTimeouts::default(),

@@ -16,7 +16,7 @@ use std::process::Command;
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
 use firma_process_orchestrator::{
-    ComponentContext, ComponentSpec, OrchestratorError, StackTopology,
+    ComponentPlanContext, ComponentSpec, OrchestratorError, StackTopology,
 };
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
@@ -61,67 +61,127 @@ pub fn topology() -> Result<StackTopology, OrchestratorError> {
     StackTopology::new([AUTHORITY_NAME, SIDECAR_NAME])
 }
 
-/// Build the ordered component startup plan from the unified `firma.toml`.
+/// Firma-specific staged component planner.
 ///
-/// Both listen addresses are resolved eagerly, so a malformed or missing
-/// `[authority]` or `[sidecar]` section fails before any component spawns. This
-/// is a deliberate fail-fast validation: the caller learns of a configuration
-/// error without leaving a half-started stack behind.
-///
-/// # Errors
-///
-/// Returns a configuration error when the file cannot be read or parsed, or
-/// when either component section is missing
-/// or holds an invalid listen address.
-pub fn build_plan(
-    cfg: &StackConfig,
-    contexts: &[ComponentContext<'_>],
-) -> Result<Vec<ComponentSpec>, StackError> {
-    let [authority_context, sidecar_context] = contexts else {
-        return Err(StackError::Orchestrator(
-            OrchestratorError::PlanCountMismatch {
-                expected: 2,
-                actual: contexts.len(),
-            },
-        ));
-    };
-    let config = FirmaToml::read(&cfg.config_file)?;
-    let auth_addr = config.authority_listen_addr()?;
-    let side_addr = config.sidecar_config()?.interceptor.listen_addr;
-    let executable = match &cfg.firma_bin {
-        Some(path) => path.clone(),
-        None => {
-            std::env::current_exe().map_err(|source| StackError::CurrentExecutable { source })?
+/// Preparation is intentionally lazy so the orchestrator claims the stack
+/// generation before reading caller configuration. The first stage validates
+/// both component sections before Authority is spawned; later stages reuse
+/// those validated launch inputs.
+pub struct ComponentPlanner<'a> {
+    cfg: &'a StackConfig,
+    prepared: Option<PreparedPlan>,
+}
+
+struct PreparedPlan {
+    authority_bind_addr: SocketAddr,
+    sidecar_bind_addr: SocketAddr,
+    sidecar_authority_configured: bool,
+    executable: PathBuf,
+}
+
+impl<'a> ComponentPlanner<'a> {
+    pub const fn new(cfg: &'a StackConfig) -> Self {
+        Self {
+            cfg,
+            prepared: None,
         }
-    };
-    let mut authority = Command::new(&executable);
-    authority
-        .arg(AUTHORITY_NAME)
-        .arg("--config")
-        .arg(&cfg.config_file);
-    let authority_publication = authority_context.child_published_tcp(auth_addr);
-    authority
-        .arg("--startup-report")
-        .arg(authority_publication.startup_report_path());
-    let mut sidecar = Command::new(executable);
-    sidecar
-        .arg(SIDECAR_NAME)
-        .arg("--config")
-        .arg(&cfg.config_file);
-    let sidecar_publication = sidecar_context.child_published_tcp(side_addr);
-    sidecar
-        .arg("--startup-report")
-        .arg(sidecar_publication.startup_report_path());
-    Ok(vec![
-        ComponentSpec {
-            command: authority,
-            readiness: authority_publication.into_readiness(),
-        },
-        ComponentSpec {
-            command: sidecar,
-            readiness: sidecar_publication.into_readiness(),
-        },
-    ])
+    }
+
+    /// Build one complete caller-owned command immediately before its spawn.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed config or staged-planning error. A Sidecar-stage failure
+    /// is returned after Authority readiness and is rolled back by the generic
+    /// startup transaction.
+    pub fn build(
+        &mut self,
+        context: &ComponentPlanContext<'_>,
+    ) -> Result<ComponentSpec, StackError> {
+        match context.name() {
+            AUTHORITY_NAME => {
+                let prepared = PreparedPlan::read(self.cfg)?;
+                let mut authority = Command::new(&prepared.executable);
+                authority
+                    .arg(AUTHORITY_NAME)
+                    .arg("--config")
+                    .arg(&self.cfg.config_file);
+                let authority_publication =
+                    context.child_published_tcp(prepared.authority_bind_addr);
+                authority
+                    .arg("--startup-report")
+                    .arg(authority_publication.startup_report_path());
+                self.prepared = Some(prepared);
+                Ok(ComponentSpec {
+                    command: authority,
+                    readiness: authority_publication.into_readiness(),
+                })
+            }
+            SIDECAR_NAME => {
+                let prepared = self
+                    .prepared
+                    .as_ref()
+                    .ok_or(StackError::MissingReadyEndpoint {
+                        component: AUTHORITY_NAME,
+                    })?;
+                let sidecar_publication = context.child_published_tcp(prepared.sidecar_bind_addr);
+                let authority_connect_addr = if prepared.authority_bind_addr.port() == 0
+                    && prepared.sidecar_authority_configured
+                {
+                    Some(context.ready_endpoint(AUTHORITY_NAME).ok_or(
+                        StackError::MissingReadyEndpoint {
+                            component: AUTHORITY_NAME,
+                        },
+                    )?)
+                } else {
+                    None
+                };
+                let mut sidecar = Command::new(&prepared.executable);
+                sidecar
+                    .arg(SIDECAR_NAME)
+                    .arg("--config")
+                    .arg(&self.cfg.config_file);
+                if let Some(connect_addr) = authority_connect_addr {
+                    sidecar
+                        .arg("--authority-connect-addr")
+                        .arg(connect_addr.to_string());
+                }
+                sidecar
+                    .arg("--startup-report")
+                    .arg(sidecar_publication.startup_report_path());
+                Ok(ComponentSpec {
+                    command: sidecar,
+                    readiness: sidecar_publication.into_readiness(),
+                })
+            }
+            other => Err(StackError::Orchestrator(
+                OrchestratorError::InvalidComponentName {
+                    name: other.to_string(),
+                },
+            )),
+        }
+    }
+}
+
+impl PreparedPlan {
+    fn read(cfg: &StackConfig) -> Result<Self, StackError> {
+        let config = FirmaToml::read(&cfg.config_file)?;
+        let authority_bind_addr = config.authority_listen_addr()?;
+        let sidecar_config = config.sidecar_config()?;
+        let sidecar_bind_addr = sidecar_config.interceptor.listen_addr;
+        let sidecar_authority_configured = sidecar_config.authority.url.is_some();
+        let executable = match &cfg.firma_bin {
+            Some(path) => path.clone(),
+            None => std::env::current_exe()
+                .map_err(|source| StackError::CurrentExecutable { source })?,
+        };
+        Ok(Self {
+            authority_bind_addr,
+            sidecar_bind_addr,
+            sidecar_authority_configured,
+            executable,
+        })
+    }
 }
 
 /// One parsed unified Firma configuration shared by the plan builder.

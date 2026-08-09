@@ -55,7 +55,7 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
 #[cfg(unix)]
 #[test]
 fn authority_exit_aborts_sidecar_readiness() {
-    use std::os::unix::fs::PermissionsExt as _;
+    use crate::support::write_executable_script;
 
     // Keep Authority's socket ready while Sidecar's reserved socket is closed.
     // Authority exits after one second; Sidecar would exit after three. Startup
@@ -73,15 +73,12 @@ fn authority_exit_aborts_sidecar_readiness() {
     let sidecar_addr = sidecar_listener.local_addr().expect("sidecar address");
     drop(sidecar_listener);
 
-    std::fs::write(
+    write_executable_script(
         &fixture_path,
         "#!/bin/sh\n\
          if [ \"$1\" = authority ]; then sleep 1; exit 23; fi\n\
          if [ \"$1\" = sidecar ]; then sleep 3; exit 24; fi\n",
-    )
-    .expect("write fixture");
-    std::fs::set_permissions(&fixture_path, std::fs::Permissions::from_mode(0o700))
-        .expect("make fixture executable");
+    );
     std::fs::write(
         &config_path,
         format!(
@@ -158,12 +155,51 @@ fn wait_for_file_while_starting<'scope>(
 #[cfg(unix)]
 #[test]
 fn sidecar_exit_before_publication_rolls_back_ready_authority() {
-    use std::os::unix::fs::PermissionsExt as _;
+    let outcome = run_sidecar_exit_and_assert_rollback(StackScenario::DynamicAuthority);
+    assert!(
+        outcome.sidecar_args.contains(&format!(
+            "--authority-connect-addr\n{}\n",
+            outcome.authority_addr
+        )),
+        "Sidecar command did not use current Authority publication: {}",
+        outcome.sidecar_args
+    );
+}
 
+#[cfg(unix)]
+#[test]
+fn fixed_authority_does_not_override_sidecar_connect_address() {
+    let outcome = run_sidecar_exit_and_assert_rollback(StackScenario::FixedAuthority);
+    assert!(!outcome.sidecar_args.contains("--authority-connect-addr"));
+}
+
+#[cfg(unix)]
+#[test]
+fn dynamic_authority_does_not_enable_disabled_sidecar_authority_client() {
+    let outcome = run_sidecar_exit_and_assert_rollback(StackScenario::DisabledAuthorityClient);
+    assert!(!outcome.sidecar_args.contains("--authority-connect-addr"));
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum StackScenario {
+    DynamicAuthority,
+    FixedAuthority,
+    DisabledAuthorityClient,
+}
+
+#[cfg(unix)]
+struct StartupOutcome {
+    authority_addr: std::net::SocketAddr,
+    sidecar_args: String,
+}
+
+#[cfg(unix)]
+fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutcome {
     use nix::errno::Errno;
     use nix::unistd::Pid;
 
-    use crate::support::{ProcessGroupCleanup, wait_for_pidfile};
+    use crate::support::{ProcessGroupCleanup, wait_for_pidfile, write_executable_script};
 
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path();
@@ -174,8 +210,14 @@ fn sidecar_exit_before_publication_rolls_back_ready_authority() {
     let authority_listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
     let authority_addr = authority_listener.local_addr().expect("authority address");
+    let requested_authority_addr = match scenario {
+        StackScenario::DynamicAuthority | StackScenario::DisabledAuthorityClient => {
+            "127.0.0.1:0".parse().expect("dynamic Authority address")
+        }
+        StackScenario::FixedAuthority => authority_addr,
+    };
 
-    std::fs::write(
+    write_executable_script(
         &fixture_path,
         format!(
             "#!/bin/sh\n\
@@ -185,19 +227,24 @@ fn sidecar_exit_before_publication_rolls_back_ready_authority() {
                while :; do sleep 1; done\n\
              fi\n\
              if [ \"$1\" = sidecar ]; then\n\
+               printf '%s\\n' \"$@\" > \"$root/sidecar.args\"\n\
                while [ ! -f \"$root/release-sidecar\" ]; do sleep 0.01; done\n\
                exit 25\n\
              fi\n"
         ),
-    )
-    .expect("write fixture");
-    std::fs::set_permissions(&fixture_path, std::fs::Permissions::from_mode(0o700))
-        .expect("make fixture executable");
+    );
+    let sidecar_authority = match scenario {
+        StackScenario::DynamicAuthority | StackScenario::FixedAuthority => {
+            "[sidecar.authority]\nurl = \"http://localhost:50051\"\n"
+        }
+        StackScenario::DisabledAuthorityClient => "",
+    };
     std::fs::write(
         &config_path,
         format!(
-            "[authority]\nlisten_addr = \"{authority_addr}\"\n\
-             [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n"
+            "[authority]\nlisten_addr = \"{requested_authority_addr}\"\n\
+             [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n\
+             {sidecar_authority}"
         ),
     )
     .expect("write config");
@@ -206,19 +253,23 @@ fn sidecar_exit_before_publication_rolls_back_ready_authority() {
         firma_bin: Some(fixture_path),
     };
 
-    let (result, authority_pid, mut cleanup) = std::thread::scope(|scope| {
+    let (result, authority_pid, mut cleanup, sidecar_args) = std::thread::scope(|scope| {
         let startup = scope.spawn(|| firma_stack::spawn_stack(&config, &state_dir));
         let startup = wait_for_file_while_starting(&state_dir.join("authority.listen"), startup);
         let authority_pid = wait_for_pidfile(&state_dir.join("authority.pid"));
         let cleanup = ProcessGroupCleanup::new(authority_pid);
         wait_for_pidfile(&state_dir.join("sidecar.pid"));
+        let sidecar_args_path = root.join("sidecar.args");
+        let startup = wait_for_file_while_starting(&sidecar_args_path, startup);
+        let sidecar_args =
+            std::fs::read_to_string(sidecar_args_path).expect("captured Sidecar arguments");
         assert!(
             !state_dir.join("sidecar.listen").exists(),
             "Sidecar canonical listen state appeared before publication"
         );
         std::fs::write(&release_sidecar, []).expect("release sidecar fixture");
         let result = startup.join().expect("startup thread");
-        (result, authority_pid, cleanup)
+        (result, authority_pid, cleanup, sidecar_args)
     });
 
     let error = result.err().expect("Sidecar exit must fail startup");
@@ -246,5 +297,10 @@ fn sidecar_exit_before_publication_rolls_back_ready_authority() {
         "stack.lock",
     ] {
         assert!(!state_dir.join(name).exists(), "rollback left {name}");
+    }
+
+    StartupOutcome {
+        authority_addr,
+        sidecar_args,
     }
 }
