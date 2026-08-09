@@ -458,6 +458,12 @@ pub(crate) fn cleanup_generation(
         pidfile::remove(&state_dir.join(format!("{component}.pid")))?;
         pidfile::remove(&state_dir.join(format!("{component}.listen")))?;
     }
+    if let Some(state_lease) = state_lease {
+        crate::start::remove_publication_dir(&crate::start::publication_dir(
+            state_dir,
+            state_lease.generation(),
+        ))?;
+    }
     pidfile::remove(&state_dir.join("stack.pid"))?;
     pidfile::remove(&state_dir.join("stack.lock"))?;
     Ok(())

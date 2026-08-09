@@ -75,10 +75,10 @@ fn component_spec_explicit_executable_is_used() {
         .env("FIRMA_TEST_FIXTURE_ADDR", fixture_addr.to_string());
     let mut stack = spawn_stack_from_plan(
         &topology,
-        || {
+        |_| {
             Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
                 command,
-                readiness_addr: fixture_addr,
+                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(fixture_addr),
             }])
         },
         state_dir.path(),
@@ -110,7 +110,7 @@ fn plan_count_is_validated_before_any_spawn() {
     let topology = StackTopology::new(["first", "second"]).expect("valid topology");
     let result = spawn_stack_from_plan(
         &topology,
-        || Ok::<Vec<ComponentSpec>, std::convert::Infallible>(Vec::new()),
+        |_| Ok::<Vec<ComponentSpec>, std::convert::Infallible>(Vec::new()),
         state_dir.path(),
         LifecycleTimeouts::default(),
     );

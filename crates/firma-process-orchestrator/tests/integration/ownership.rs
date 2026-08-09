@@ -171,7 +171,7 @@ fn startup_guard_rollback_preserves_replacement_generation_runtime_state() {
     let replacement = StackGeneration::default();
     let result = spawn_stack_from_plan(
         &topology(&["authority"]),
-        || {
+        |_| {
             std::fs::write(dir.path().join("stack.lock"), format!("{replacement}\n"))
                 .expect("replace generation");
             let pid = UserProcessId::new(sentinel_pid).expect("sentinel PID");
@@ -230,7 +230,7 @@ fn stop_waits_for_start_plan_transaction() {
     let starter = std::thread::spawn(move || {
         let result = spawn_stack_from_plan(
             &start_topology,
-            || {
+            |_| {
                 plan_barrier.wait();
                 plan_release.wait();
                 Ok::<_, std::convert::Infallible>(component_plan(&start_dir, &["authority"]))
@@ -288,7 +288,7 @@ fn generation_publication_is_atomic_for_concurrent_readers() {
             writer_barrier.wait();
             spawn_stack_from_plan(
                 &topology(&[]),
-                || {
+                |_| {
                     writer_release.wait();
                     Ok::<_, std::convert::Infallible>(Vec::new())
                 },
@@ -359,10 +359,10 @@ fn dropped_owner_retains_process_group_behavior_for_descendants() {
     command.env("DESCENDANT", &marker);
     let stack = spawn_stack_from_plan(
         &topology(&["authority"]),
-        || {
+        |_| {
             Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
                 command,
-                readiness_addr: addr,
+                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(addr),
             }])
         },
         dir.path(),
@@ -463,7 +463,7 @@ fn component_pidfile_publication_failure_collects_spawned_child() {
 
     let Err(error) = spawn_stack_from_plan(
         &topology(&["authority", "sidecar"]),
-        || Ok::<_, std::convert::Infallible>(plan),
+        |_| Ok::<_, std::convert::Infallible>(plan),
         dir.path(),
         fast_timeouts(),
     ) else {
@@ -516,7 +516,7 @@ fn owned_child_fixture() {
         let plan = component_plan(state_dir, &["authority", "sidecar"]);
         supervise_owned_generation_from_plan(
             &topology(&["authority", "sidecar"]),
-            || Ok::<_, std::convert::Infallible>(plan),
+            |_| Ok::<_, std::convert::Infallible>(plan),
             state_dir,
             generation,
             fast_timeouts(),
@@ -554,7 +554,7 @@ fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
     let supervisor = std::thread::spawn(move || {
         let result = start_foreground_from_plan(
             &topology(&["authority", "sidecar"]),
-            || Ok::<_, std::convert::Infallible>(plan),
+            |_| Ok::<_, std::convert::Infallible>(plan),
             &state_dir,
             fast_timeouts(),
         );
@@ -580,7 +580,7 @@ fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
     let plan = component_plan(state_dir, names);
     let stack = spawn_stack_from_plan(
         &topology(names),
-        || Ok::<_, std::convert::Infallible>(plan),
+        |_| Ok::<_, std::convert::Infallible>(plan),
         state_dir,
         fast_timeouts(),
     )
@@ -608,7 +608,7 @@ fn component_plan(state_dir: &Path, names: &[&str]) -> Vec<ComponentSpec> {
                 .env(CHILD_MARKER, state_dir.join(format!("{name}.marker")));
             ComponentSpec {
                 command,
-                readiness_addr: address,
+                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(address),
             }
         })
         .collect()
@@ -632,7 +632,7 @@ fn assert_stop_waits_for_partial_publication(published_components: usize) {
         let plan = delayed_component_plan(&start_dir, &["authority", "sidecar"]);
         let _ = start_tx.send(spawn_stack_from_plan(
             &topology(&["authority", "sidecar"]),
-            || Ok::<_, std::convert::Infallible>(plan),
+            |_| Ok::<_, std::convert::Infallible>(plan),
             &start_dir,
             fast_timeouts(),
         ));

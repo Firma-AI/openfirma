@@ -43,7 +43,7 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack, 
     let topology = plan::topology()?;
     spawn_stack_from_plan(
         &topology,
-        || plan::build_plan(cfg),
+        |contexts| plan::build_plan(cfg, contexts),
         state_dir,
         LifecycleTimeouts::default(),
     )
@@ -67,7 +67,7 @@ pub fn start(
     match mode {
         StartMode::Foreground => start_foreground_from_plan(
             &topology,
-            || plan::build_plan(cfg),
+            |contexts| plan::build_plan(cfg, contexts),
             state_dir,
             LifecycleTimeouts::default(),
         )
@@ -118,7 +118,7 @@ pub fn supervise_owned_generation(
     let topology = plan::topology()?;
     supervise_owned_generation_from_plan(
         &topology,
-        || plan::build_plan(cfg),
+        |contexts| plan::build_plan(cfg, contexts),
         state_dir,
         generation,
         LifecycleTimeouts::default(),

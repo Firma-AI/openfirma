@@ -12,6 +12,7 @@
 //! allowing [`crate::stop_components()`] to retry cleanup without losing process
 //! authority.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
@@ -21,11 +22,11 @@ use tracing::{debug, info};
 use crate::LifecycleTimeouts;
 use crate::StackTopology;
 use crate::collect::{collect_child_in_background, collect_child_until};
-use crate::component::{ComponentName, ComponentSpec, OwnedComponent};
+use crate::component::{ComponentContext, ComponentName, ComponentSpec, OwnedComponent, Readiness};
 use crate::detach::spawn_supervisor;
 use crate::error::{OrchestratorError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
-use crate::readiness::wait_for_tcp;
+use crate::readiness::{wait_for_child_published_tcp, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::stop::StopOutcome;
@@ -100,6 +101,7 @@ struct StartupGuard {
     state_lease: StateLease,
     transaction: Option<StateTransaction>,
     topology: StackTopology,
+    publication_dir: PathBuf,
 }
 
 /// Valid process-ownership phases while the components are starting.
@@ -149,7 +151,21 @@ impl StartupGuard {
             state_lease,
             transaction: Some(transaction),
             topology,
+            publication_dir: publication_dir(state_dir, state_lease.generation()),
         }
+    }
+
+    fn prepare_publication_dir(&self) -> Result<(), OrchestratorError> {
+        create_private_publication_dir(&self.publication_dir)
+    }
+
+    fn cleanup_publications(&self) -> Result<(), OrchestratorError> {
+        if !self.state_lease.is_current(&self.state_dir)? {
+            return Err(OrchestratorError::Platform(
+                "startup generation changed before publication cleanup".into(),
+            ));
+        }
+        remove_publication_dir(&self.publication_dir)
     }
 
     /// Append one owned component in spawn order to [`StartupState::Building`].
@@ -234,6 +250,9 @@ impl Drop for StartupGuard {
         let StartupState::Building(components) = state else {
             return;
         };
+        if let Err(error) = self.cleanup_publications() {
+            debug!(%error, "startup rollback retained endpoint publication state");
+        }
         if components.is_empty() {
             remove_startup_state(
                 &self.state_dir,
@@ -448,10 +467,12 @@ impl Drop for RunningStack {
 ///
 /// Returns ownership of the component child handles once every component is
 /// listening. `topology` defines startup order and runtime-state identity;
-/// `build_plan`
-/// resolves the full [`ComponentSpec`] plan and is invoked **after** the lock is
-/// claimed, so an already-running stack is reported before the caller's
-/// (possibly failing) plan resolution runs. The caller must eventually call
+/// `build_plan` receives one aligned [`ComponentContext`] per topology component
+/// and resolves the full [`ComponentSpec`] plan. It is invoked **after** the
+/// lock is claimed and the generation publication directory is created, so an
+/// already-running stack is reported before the caller's (possibly failing)
+/// plan resolution runs. Commands are spawned unchanged except for the
+/// documented lifecycle process settings on [`ComponentSpec`]. The caller must eventually call
 /// [`RunningStack::shutdown`] to tear the stack down and collect its children.
 ///
 /// Used by wrappers that need in-process ownership after readiness.
@@ -464,7 +485,7 @@ impl Drop for RunningStack {
 /// callers can retry cleanup.
 pub fn spawn_stack_from_plan<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
+    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
     timeouts: LifecycleTimeouts,
 ) -> Result<RunningStack, StartError<E>> {
@@ -490,7 +511,7 @@ pub fn spawn_stack_from_plan<E>(
 /// [`StartupGuard::new`] remains rollback-protected.
 fn spawn_stack_from_plan_with_phase<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
+    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
     publish_ready: bool,
     generation: StackGeneration,
@@ -503,12 +524,26 @@ fn spawn_stack_from_plan_with_phase<E>(
     debug!("acquiring stack lock");
     let state_lease = acquire_lock(state_dir, &transaction, generation, topology)?;
     let mut startup = StartupGuard::new(state_dir, state_lease, transaction, topology.clone());
+    startup.prepare_publication_dir()?;
     debug!("reaping stale pidfiles");
     reap_stale(state_dir, topology)?;
 
+    let publication_paths: Vec<_> = topology
+        .components()
+        .iter()
+        .enumerate()
+        .map(|(index, _)| startup.publication_dir.join(format!("{index}.listen")))
+        .collect();
+    let contexts: Vec<_> = topology
+        .components()
+        .iter()
+        .zip(&publication_paths)
+        .map(|(name, path)| ComponentContext::new(name.as_str(), path))
+        .collect();
+
     // The plan is resolved after the lock is claimed so that an already-running
     // stack is reported before any (possibly failing) plan resolution runs.
-    let plan = build_plan().map_err(StartError::Plan)?;
+    let plan = build_plan(&contexts).map_err(StartError::Plan)?;
     if plan.len() != topology.components().len() {
         return Err(OrchestratorError::PlanCountMismatch {
             expected: topology.components().len(),
@@ -516,15 +551,19 @@ fn spawn_stack_from_plan_with_phase<E>(
         }
         .into());
     }
+    validate_plan_contexts(topology, &plan, &publication_paths)?;
+    clear_canonical_listen_state(state_dir, topology)?;
     match spawn_stack_inner(
         topology,
         plan,
+        publication_paths,
         state_dir,
         &mut startup,
         stop_signal,
         timeouts.component_readiness,
     ) {
         Ok(()) => {
+            startup.cleanup_publications()?;
             let mut stack = startup.finish()?;
             if publish_ready {
                 stack.mark_ready()?;
@@ -553,6 +592,7 @@ fn spawn_stack_from_plan_with_phase<E>(
 fn spawn_stack_inner(
     topology: &StackTopology,
     plan: Vec<ComponentSpec>,
+    publication_paths: Vec<PathBuf>,
     state_dir: &Path,
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
@@ -561,20 +601,48 @@ fn spawn_stack_inner(
     let group = SystemPlatform::new_group()?;
     SystemPlatform::arm_group_termination(&group)?;
 
-    for (name, spec) in topology.components().iter().cloned().zip(plan) {
+    for ((name, spec), publication_path) in topology
+        .components()
+        .iter()
+        .cloned()
+        .zip(plan)
+        .zip(publication_paths)
+    {
         let ComponentSpec {
             mut command,
-            readiness_addr: addr,
+            readiness,
         } = spec;
         let component = spawn_into_group(&group, state_dir, name.clone(), &mut command)?;
         let pid = component.leader_pid();
         startup.record(component)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
-        std::fs::write(state_dir.join(name.listen_file_name()), format!("{addr}\n"))?;
-        debug!(component = %name.as_str(), addr = %addr, "waiting for component TCP listen");
-        wait_for_tcp(name.as_str(), addr, readiness_timeout, stop_signal, || {
-            startup.exited_component()
-        })?;
+        let addr = match readiness {
+            Readiness::ConfiguredTcp(addr) => {
+                wait_for_tcp(name.as_str(), addr, readiness_timeout, stop_signal, || {
+                    startup.exited_component()
+                })?;
+                addr
+            }
+            Readiness::ChildPublishedTcp(crate::component::ChildPublishedTcpReadiness {
+                requested_addr,
+                ..
+            }) => {
+                let effective = wait_for_child_published_tcp(
+                    name.as_str(),
+                    requested_addr,
+                    &publication_path,
+                    readiness_timeout,
+                    stop_signal,
+                    || startup.exited_component(),
+                )?;
+                std::fs::remove_file(&publication_path)?;
+                effective
+            }
+        };
+        publish_canonical_listen_addr(&state_dir.join(name.listen_file_name()), addr)?;
+        if let Some((component, status)) = startup.exited_component()? {
+            return Err(OrchestratorError::ReadinessProcessExited { component, status });
+        }
         info!(component = %name.as_str(), addr = %addr, "component listening");
     }
 
@@ -584,6 +652,30 @@ fn spawn_stack_inner(
     // so closing the original handle does not terminate the ready stack.
     let _ = group;
 
+    Ok(())
+}
+
+/// Verify every child-published readiness value came from its aligned context.
+fn validate_plan_contexts(
+    topology: &StackTopology,
+    plan: &[ComponentSpec],
+    publication_paths: &[PathBuf],
+) -> Result<(), OrchestratorError> {
+    for ((name, spec), publication_path) in topology
+        .components()
+        .iter()
+        .zip(plan)
+        .zip(publication_paths)
+    {
+        if let Readiness::ChildPublishedTcp(readiness) = &spec.readiness
+            && readiness.publication_path != *publication_path
+        {
+            return Err(OrchestratorError::Platform(format!(
+                "{} readiness used a publication path from another component context",
+                name.as_str()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -600,7 +692,7 @@ fn spawn_stack_inner(
 /// cleanup.
 pub fn start_foreground_from_plan<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
+    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
     timeouts: LifecycleTimeouts,
 ) -> Result<StackHandle, StartError<E>> {
@@ -773,7 +865,7 @@ fn with_rollback<T>(
 #[doc(hidden)]
 pub fn supervise_owned_generation_from_plan<E>(
     topology: &StackTopology,
-    build_plan: impl FnOnce() -> Result<Vec<ComponentSpec>, E>,
+    build_plan: impl FnOnce(&[ComponentContext<'_>]) -> Result<Vec<ComponentSpec>, E>,
     state_dir: &Path,
     generation: StackGeneration,
     timeouts: LifecycleTimeouts,
@@ -1011,6 +1103,56 @@ fn reap_stale(state_dir: &Path, topology: &StackTopology) -> Result<(), Orchestr
         && !process_exists(pid)?
     {
         pidfile::remove(&supervisor)?;
+    }
+    Ok(())
+}
+
+fn clear_canonical_listen_state(
+    state_dir: &Path,
+    topology: &StackTopology,
+) -> Result<(), OrchestratorError> {
+    for name in topology.names() {
+        pidfile::remove(&state_dir.join(format!("{name}.listen")))?;
+    }
+    Ok(())
+}
+
+fn publish_canonical_listen_addr(
+    path: &Path,
+    addr: std::net::SocketAddr,
+) -> Result<(), OrchestratorError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    writeln!(temp, "{addr}")?;
+    temp.as_file().sync_all()?;
+    temp.persist_noclobber(path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+pub(crate) fn publication_dir(state_dir: &Path, generation: StackGeneration) -> PathBuf {
+    state_dir.join(format!(".startup-{generation}"))
+}
+
+fn create_private_publication_dir(path: &Path) -> Result<(), OrchestratorError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700).create(path)?;
+    }
+    #[cfg(windows)]
+    std::fs::create_dir(path)?;
+    Ok(())
+}
+
+pub(crate) fn remove_publication_dir(path: &Path) -> Result<(), OrchestratorError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => std::fs::remove_dir_all(path)?,
+        Ok(_) => std::fs::remove_file(path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     Ok(())
 }

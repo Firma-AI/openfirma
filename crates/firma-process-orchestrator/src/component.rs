@@ -6,6 +6,8 @@
 //! [`ComponentName`] supplies stable command and runtime-state identity but
 //! grants no process authority by itself.
 
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 
 use crate::OrchestratorError;
@@ -92,8 +94,89 @@ fn is_windows_device_name(name: &str) -> bool {
 pub struct ComponentSpec {
     /// Fully configured command used to launch this component.
     pub command: Command,
-    /// Address probed to establish this component's readiness.
-    pub readiness_addr: std::net::SocketAddr,
+    /// Contract used to discover and probe this component's TCP endpoint.
+    pub readiness: Readiness,
+}
+
+/// Generation-scoped inputs for building one component's launch specification.
+///
+/// Contexts follow the component order in [`crate::StackTopology`] and remain
+/// valid only while the post-lock plan callback runs. The caller decides how to
+/// pass publication paths to its child commands.
+#[derive(Debug, Clone, Copy)]
+pub struct ComponentContext<'a> {
+    name: &'a str,
+    publication_path: &'a Path,
+}
+
+impl<'a> ComponentContext<'a> {
+    pub(crate) const fn new(name: &'a str, publication_path: &'a Path) -> Self {
+        Self {
+            name,
+            publication_path,
+        }
+    }
+
+    /// Return the topology identity of this component.
+    #[must_use]
+    pub const fn name(&self) -> &'a str {
+        self.name
+    }
+
+    /// Describe child-published readiness using this component's publication path.
+    #[must_use]
+    pub const fn child_published_tcp(
+        &self,
+        requested_addr: SocketAddr,
+    ) -> ChildPublishedTcpContext<'a> {
+        ChildPublishedTcpContext {
+            requested_addr,
+            publication_path: self.publication_path,
+        }
+    }
+}
+
+/// Borrowed child-publication inputs available during post-lock plan building.
+#[derive(Debug, Clone, Copy)]
+pub struct ChildPublishedTcpContext<'a> {
+    requested_addr: SocketAddr,
+    publication_path: &'a Path,
+}
+
+impl<'a> ChildPublishedTcpContext<'a> {
+    /// Return the generation-scoped path the child must publish to.
+    #[must_use]
+    pub const fn publication_path(&self) -> &'a Path {
+        self.publication_path
+    }
+
+    /// Convert the borrowed planning context into owned readiness evidence.
+    #[must_use]
+    pub fn into_readiness(self) -> Readiness {
+        Readiness::ChildPublishedTcp(ChildPublishedTcpReadiness {
+            requested_addr: self.requested_addr,
+            publication_path: self.publication_path.to_path_buf(),
+        })
+    }
+}
+
+/// Owned child-publication evidence retained after the plan callback returns.
+///
+/// Values can only be created from [`ChildPublishedTcpContext`], ensuring the
+/// readiness path belongs to the active startup generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildPublishedTcpReadiness {
+    pub(crate) requested_addr: SocketAddr,
+    pub(crate) publication_path: PathBuf,
+}
+
+/// TCP endpoint evidence required from a component during startup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readiness {
+    /// Probe the configured endpoint directly.
+    ConfiguredTcp(SocketAddr),
+    /// Require the child to publish its effective bound endpoint before probing.
+    ChildPublishedTcp(ChildPublishedTcpReadiness),
 }
 
 /// Exclusive process capabilities for one managed stack component.
