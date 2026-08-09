@@ -441,32 +441,77 @@ pub(crate) fn cleanup_generation(
         );
         return Ok(());
     }
-    let current_owner = pidfile::read(&state_dir.join("stack.pid"))?;
-    if let Some(current_owner) = current_owner {
-        pidfile::remove(&crate::start::supervisor_ready_path(
-            state_dir,
-            current_owner,
-        ))?;
-        pidfile::remove(&crate::start::supervisor_attached_path(
-            state_dir,
-            current_owner,
-        ))?;
-    }
+    let mut cleanup_error = FirstError::default();
+    let stack_pid_readable = match pidfile::read(&state_dir.join("stack.pid")) {
+        Ok(Some(current_owner)) => {
+            record_cleanup(
+                &mut cleanup_error,
+                pidfile::remove(&crate::start::supervisor_ready_path(
+                    state_dir,
+                    current_owner,
+                ))
+                .map_err(OrchestratorError::from),
+            );
+            record_cleanup(
+                &mut cleanup_error,
+                pidfile::remove(&crate::start::supervisor_attached_path(
+                    state_dir,
+                    current_owner,
+                ))
+                .map_err(OrchestratorError::from),
+            );
+            true
+        }
+        Ok(None) => true,
+        Err(error) => {
+            cleanup_error.record(error.into());
+            false
+        }
+    };
     // Derive each component's runtime-state files from its caller-supplied name
     // (startup order), then remove the supervisor's files.
     for component in topology.names() {
-        pidfile::remove(&state_dir.join(format!("{component}.pid")))?;
-        pidfile::remove(&state_dir.join(format!("{component}.listen")))?;
+        record_cleanup(
+            &mut cleanup_error,
+            pidfile::remove(&state_dir.join(format!("{component}.pid")))
+                .map_err(OrchestratorError::from),
+        );
+        record_cleanup(
+            &mut cleanup_error,
+            pidfile::remove(&state_dir.join(format!("{component}.listen")))
+                .map_err(OrchestratorError::from),
+        );
     }
     if let Some(state_lease) = state_lease {
-        crate::start::remove_startup_report_dir(&crate::start::startup_report_dir(
-            state_dir,
-            state_lease.generation(),
-        ))?;
+        record_cleanup(
+            &mut cleanup_error,
+            crate::start::remove_startup_report_dir(&crate::start::startup_report_dir(
+                state_dir,
+                state_lease.generation(),
+            )),
+        );
     }
-    pidfile::remove(&state_dir.join("stack.pid"))?;
+    if stack_pid_readable {
+        record_cleanup(
+            &mut cleanup_error,
+            pidfile::remove(&state_dir.join("stack.pid")).map_err(OrchestratorError::from),
+        );
+    }
+    if let Some(error) = cleanup_error.into_inner() {
+        return Err(error);
+    }
+    // The generation lock is the commit marker for cleanup. Retain it whenever
+    // any prior artifact could not be removed, preventing a replacement startup
+    // from observing partially cleaned state as available.
     pidfile::remove(&state_dir.join("stack.lock"))?;
     Ok(())
+}
+
+/// Attempt every generation artifact while retaining the first cleanup error.
+fn record_cleanup(cleanup_error: &mut FirstError, result: Result<(), OrchestratorError>) {
+    if let Err(error) = result {
+        cleanup_error.record(error);
+    }
 }
 
 /// Apply the cleanup policy selected before process teardown.
