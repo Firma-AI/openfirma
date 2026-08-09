@@ -18,6 +18,7 @@ mod run_authority_flags;
 mod run_autostart_flags;
 mod run_implicit_init_prompt;
 mod sandbox_identity;
+mod sidecar_endpoint_publication;
 mod sidecar_invalid_config;
 mod sidecar_readiness_gate;
 mod sidecar_seed_e2e;

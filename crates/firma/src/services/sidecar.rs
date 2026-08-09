@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use firma_sidecar::authority_client::readiness::ReadinessFlag;
 use firma_sidecar::startup::CapabilityReloader;
 use firma_sidecar::{config, handler, health, startup};
@@ -123,6 +124,10 @@ fn load_composio_catalogs() -> anyhow::Result<Arc<firma_sidecar::composio::Compo
     Ok(Arc::new(catalogs))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "startup sequencing stays linear so readiness ordering remains auditable"
+)]
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
     let sandbox_id = propagated_sandbox_id()?;
@@ -188,6 +193,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
+    write_startup_report(args.startup_report.as_deref(), &interceptor.listen_addr)?;
 
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
 
@@ -243,6 +249,17 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     debug!("firma sidecar exiting");
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn write_startup_report(path: Option<&Path>, listen_addr: &str) -> anyhow::Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let effective_addr = listen_addr
+        .parse()
+        .with_context(|| format!("interceptor reported a non-TCP listen address: {listen_addr}"))?;
+    firma_stack::publish_startup_report(path, effective_addr)
+        .with_context(|| format!("failed to write startup report to {}", path.display()))
 }
 
 fn propagated_sandbox_id() -> anyhow::Result<Option<firma_runtime_state::SandboxId>> {
