@@ -451,10 +451,10 @@ fn generation_publication_is_atomic_for_concurrent_readers() {
 }
 
 #[test]
-fn dropping_owner_transfers_real_children_to_reaper() {
+fn explicit_detach_transfers_real_children_to_reaper() {
     let dir = tempfile::tempdir().expect("state dir");
-    let (stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
-    drop(stack);
+    let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+    stack.detach().expect("detach stack");
 
     stop_components(
         dir.path(),
@@ -465,9 +465,26 @@ fn dropping_owner_transfers_real_children_to_reaper() {
     assert_all_absent(&pids);
 }
 
+#[test]
+fn dropping_owner_hard_terminates_children_and_retains_state() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let (stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+
+    drop(stack);
+
+    assert_all_absent(&pids);
+    assert!(dir.path().join("stack.lock").exists());
+    stop_components(
+        dir.path(),
+        Duration::ZERO,
+        &topology(&["authority", "sidecar"]),
+    )
+    .expect("clean dropped stack state");
+}
+
 #[cfg(unix)]
 #[test]
-fn dropped_owner_retains_process_group_behavior_for_descendants() {
+fn dropped_owner_hard_terminates_descendant_process_group() {
     let dir = tempfile::tempdir().expect("state dir");
     let marker = dir.path().join("descendant.pid");
     let (addr, listener) = reserve_address();
@@ -491,9 +508,9 @@ fn dropped_owner_retains_process_group_behavior_for_descendants() {
     drop(listener);
     drop(stack);
 
-    stop_components(dir.path(), Duration::ZERO, &topology(&["authority"]))
-        .expect("stop process group");
     assert_process_absent(descendant);
+    stop_components(dir.path(), Duration::ZERO, &topology(&["authority"]))
+        .expect("clean process group state");
 }
 
 #[test]

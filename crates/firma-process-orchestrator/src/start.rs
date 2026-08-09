@@ -53,10 +53,10 @@ pub struct StackHandle {
 /// An in-process stack whose component child handles are owned by the caller.
 ///
 /// Call [`RunningStack::shutdown`] for an orderly teardown. Successful shutdown
-/// consumes the [`OwnedStack`], so repeated calls are no-ops. Dropping this
-/// value does not terminate the stack; [`RunningStack::transfer_to_observer`]
-/// transfers collection to a background owner so later exits cannot remain
-/// zombies.
+/// consumes the [`OwnedStack`], so repeated calls are no-ops. Call
+/// [`RunningStack::detach`] to leave processes running under a background child
+/// collector. Dropping an owned stack fails closed by hard-terminating its
+/// process scopes and retaining runtime state for a later cleanup attempt.
 pub struct RunningStack {
     handle: StackHandle,
     state: RunningStackState,
@@ -642,29 +642,58 @@ impl RunningStack {
         result
     }
 
-    /// Transfer child collection to a background owner and disarm this value.
-    fn transfer_to_observer(&mut self) -> bool {
+    /// Leave the stack running while transferring direct-child collection.
+    ///
+    /// The stack remains owned if collector creation fails, allowing `Drop` to
+    /// apply its fail-closed fallback rather than losing process capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if collection ownership cannot be transferred.
+    pub fn detach(&mut self) -> Result<(), OrchestratorError> {
         let state = std::mem::replace(&mut self.state, RunningStackState::Stopped);
         if let RunningStackState::Owned(owned) = state {
-            let owned = *owned;
-            return match collect_in_background(owned.components) {
-                Ok(_) => true,
+            let mut owned = *owned;
+            let components = std::mem::take(&mut owned.components);
+            return match collect_in_background(components) {
+                Ok(_) => Ok(()),
                 Err(error) => {
-                    debug!(error = %error.source(), "could not transfer components to background reaper");
-                    if let Err(error) = error.terminate_and_collect() {
-                        debug!(%error, "could not synchronously collect transferred components");
-                    }
-                    false
+                    let message = format!(
+                        "could not transfer components to background reaper: {}",
+                        error.source()
+                    );
+                    owned.components = error.into_components();
+                    self.state = RunningStackState::Owned(Box::new(owned));
+                    Err(OrchestratorError::Platform(message))
                 }
             };
         }
-        true
+        Ok(())
+    }
+
+    /// Hard-terminate and transfer collection without deleting runtime state.
+    fn emergency_terminate(&mut self) {
+        let state = std::mem::replace(&mut self.state, RunningStackState::Stopped);
+        let RunningStackState::Owned(owned) = state else {
+            return;
+        };
+        let mut components = owned.components;
+        for component in &mut components {
+            let _ = component.termination_target().signal_hard();
+            let _ = component.kill_leader();
+        }
+        if let Err(error) = collect_in_background(components) {
+            debug!(error = %error.source(), "could not start dropped-stack reaper");
+            if let Err(error) = error.terminate_and_collect() {
+                debug!(%error, "could not synchronously collect dropped stack");
+            }
+        }
     }
 }
 
 impl Drop for RunningStack {
     fn drop(&mut self) {
-        let _ = self.transfer_to_observer();
+        self.emergency_terminate();
     }
 }
 
