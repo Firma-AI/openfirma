@@ -140,7 +140,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         source = ?resolved.source,
         "config resolved"
     );
-    let config = read_config(&resolved)?;
+    let config = read_config(&resolved, args.authority_connect_addr)?;
     debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
@@ -396,6 +396,7 @@ fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr:
 
 fn read_config(
     resolved: &firma_config_loader::ResolvedConfig,
+    authority_connect_addr: Option<std::net::SocketAddr>,
 ) -> anyhow::Result<config::SidecarConfig> {
     let body = resolved
         .config
@@ -403,6 +404,9 @@ fn read_config(
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
     let mut config: config::SidecarConfig = toml::from_str(&body)?;
     config.rebase_defaults(&resolved.config_dir());
+    if let Some(connect_addr) = authority_connect_addr {
+        config.authority.connect_addr = Some(connect_addr);
+    }
     config
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
@@ -411,6 +415,7 @@ fn read_config(
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
@@ -418,6 +423,26 @@ mod tests {
     use firma_sidecar::authority_client::readiness::{ReadinessFlag, ReadinessState};
 
     use super::*;
+
+    #[test]
+    fn authority_connect_addr_cli_override_takes_precedence_over_config() {
+        let directory = tempfile::tempdir().expect("create config directory");
+        let config_path = directory.path().join("firma.toml");
+        std::fs::write(
+            &config_path,
+            "[sidecar.authority]\nurl = 'http://localhost:50051'\nconnect_addr = '127.0.0.1:41000'\n",
+        )
+        .expect("write config");
+        let resolved = firma_config_loader::ConfigResolver::default()
+            .resolve_config(Some(&config_path))
+            .expect("resolve config")
+            .expect("explicit config exists");
+        let cli_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 42000);
+
+        let config = read_config(&resolved, Some(cli_address)).expect("read config");
+
+        assert_eq!(config.authority.connect_addr, Some(cli_address));
+    }
 
     #[tokio::test]
     async fn health_mirror_clears_ready_when_revocation_readiness_is_lost() {

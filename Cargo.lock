@@ -1741,6 +1741,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tonic",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",

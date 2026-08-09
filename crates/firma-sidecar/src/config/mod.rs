@@ -21,7 +21,7 @@ mod revocation;
 mod tenancy;
 
 pub use self::audit::{AuditConfig, AuditSink};
-pub use self::authority::AuthorityConfig;
+pub use self::authority::{AuthorityConfig, AuthorityEndpoint, AuthorityEndpointError};
 pub use self::capability_seed::{CapabilitySeedConfig, SeedFile};
 pub use self::connector::ConnectorConfig;
 
@@ -38,8 +38,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use firma_http::HeaderName;
-use hyper::Uri;
 use serde::Deserialize;
+
+pub(crate) enum AuthorityTarget {
+    Disabled,
+    Enabled(AuthorityEndpoint),
+}
 
 // ---------------------------------------------------------------------------
 // Top-level sidecar configuration
@@ -173,6 +177,10 @@ impl SidecarConfig {
         self.authority
             .validate()
             .map_err(|e| format!("authority: {e}"))?;
+        let authority_target = self
+            .authority
+            .target()
+            .map_err(|e| format!("authority: {e}"))?;
         self.enforcement.validate()?;
         self.revocation.validate()?;
         self.capability_seed
@@ -184,38 +192,31 @@ impl SidecarConfig {
                     .to_string(),
             );
         }
-        if let Some(ref url) = self.authority.url {
-            let uri: Uri = url
-                .parse()
-                .map_err(|e| format!("authority.url must be a valid URI: {e}"))?;
-            match uri.scheme_str() {
-                Some("https") => {
-                    if self.authority.ca_cert_path.is_none() {
-                        return Err(
-                            "authority.ca_cert_path must be set when authority.url uses https://"
-                                .to_string(),
-                        );
-                    }
+        if let AuthorityTarget::Enabled(endpoint) = authority_target {
+            let host = endpoint.origin().host().ok_or_else(|| {
+                "authority: validated endpoint unexpectedly has no host".to_string()
+            })?;
+            if endpoint.is_https() {
+                if self.authority.ca_cert_path.is_none() {
+                    return Err(
+                        "authority.ca_cert_path must be set when authority.url uses https://"
+                            .to_string(),
+                    );
                 }
-                Some("http") => {
-                    let host = uri.host().ok_or_else(|| {
-                        "authority.url with http:// must include a host".to_string()
-                    })?;
-                    let host_unbracketed = host.trim_start_matches('[').trim_end_matches(']');
-                    let is_loopback = host.eq_ignore_ascii_case("localhost")
-                        || host_unbracketed
-                            .parse::<IpAddr>()
-                            .is_ok_and(|ip| ip.is_loopback());
-                    if !is_loopback && !self.authority.allow_insecure_remote_authority {
-                        return Err("authority.url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true".to_string());
-                    }
+            } else {
+                let is_loopback = endpoint.connect_addr().map_or_else(
+                    || {
+                        let host_unbracketed = host.trim_start_matches('[').trim_end_matches(']');
+                        host.eq_ignore_ascii_case("localhost")
+                            || host_unbracketed
+                                .parse::<IpAddr>()
+                                .is_ok_and(|ip| ip.is_loopback())
+                    },
+                    |connect_addr| connect_addr.ip().is_loopback(),
+                );
+                if !is_loopback && !self.authority.allow_insecure_remote_authority {
+                    return Err("authority.url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true".to_string());
                 }
-                Some(other) => {
-                    return Err(format!(
-                        "authority.url scheme must be http or https, got {other}"
-                    ));
-                }
-                None => return Err("authority.url must include a scheme".to_string()),
             }
         }
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;

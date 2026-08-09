@@ -31,9 +31,12 @@ pub fn spawn_authority_client(
     runtime: &PipelineRuntime,
     cancel: CancellationToken,
 ) -> anyhow::Result<Option<AuthorityClientHandle>> {
-    let Some(authority_url) = config.authority.url.as_deref() else {
-        tracing::debug!("authority.url not set; Authority stream clients disabled");
-        return Ok(None);
+    let endpoint = match config.authority.target()? {
+        config::AuthorityTarget::Disabled => {
+            tracing::debug!("authority.url not set; Authority stream clients disabled");
+            return Ok(None);
+        }
+        config::AuthorityTarget::Enabled(endpoint) => endpoint,
     };
 
     let ca_cert_pem: Option<Vec<u8>> = if let Some(ref path) = config.authority.ca_cert_path {
@@ -63,7 +66,7 @@ pub fn spawn_authority_client(
         };
 
     let channel = authority_client::channel::build_channel(
-        authority_url,
+        &endpoint,
         Duration::from_secs(config.authority.connect_timeout_secs),
         ca_cert_pem.as_deref(),
         client_cert_pem.as_deref(),

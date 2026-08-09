@@ -1,3 +1,4 @@
+mod authority_connect_addr;
 mod capability_reload;
 mod composio_catalog;
 mod composio_cedar;

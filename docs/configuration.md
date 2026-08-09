@@ -635,6 +635,7 @@ mode and this section is ignored.
 
 | Field                                  | Type    | Default | Description                                                                                                                 |
 | -------------------------------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `connect_addr`                         | address | none    | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                            |
 | `connect_timeout_secs`                 | u64     | `10`    | Connection timeout for the tonic channel                                                                                    |
 | `reconnect_min_backoff_ms`             | u64     | `250`   | Minimum reconnect backoff                                                                                                   |
 | `reconnect_max_backoff_secs`           | u64     | `30`    | Maximum reconnect backoff                                                                                                   |
@@ -647,6 +648,8 @@ Validation:
 
 - `connect_timeout_secs`, `reconnect_min_backoff_ms`, and
   `reconnect_max_backoff_secs` must all be greater than `0`.
+- `connect_addr` requires `url` and must use a nonzero port. For plaintext
+  URLs, the insecure-remote check uses this physical address when present.
 - `reconnect_max_backoff_secs * 1000` must be ≥
   `reconnect_min_backoff_ms`.
 - When `credentials` is present, `workspace_id` and `sidecar_id`

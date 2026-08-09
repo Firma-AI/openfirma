@@ -46,6 +46,11 @@ fn parse_sidecar_with_config_flag() {
 }
 
 #[test]
+fn parse_sidecar_with_authority_connect_addr() {
+    parse_ok(&["sidecar", "--authority-connect-addr", "127.0.0.1:42000"]);
+}
+
+#[test]
 fn parse_authority_default() {
     parse_ok(&["authority"]);
 }

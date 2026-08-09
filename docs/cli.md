@@ -180,10 +180,11 @@ firma sidecar [OPTIONS]
 
 ### Options
 
-| Flag                 | Short | Env var                          | Default                                                | Description               |
-| -------------------- | ----- | -------------------------------- | ------------------------------------------------------ | ------------------------- |
-| `--config`           | `-c`  | `FIRMA_SIDECAR_CONFIG_FILE`      | discovered (see [Config Discovery](#config-discovery)) | TOML configuration file   |
-| `--health-bind-addr` |       | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000`                                       | Health check bind address |
+| Flag                       | Short | Env var                          | Default                                                | Description                                                  |
+| -------------------------- | ----- | -------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------ |
+| `--config`                 | `-c`  | `FIRMA_SIDECAR_CONFIG_FILE`      | discovered (see [Config Discovery](#config-discovery)) | TOML configuration file                                      |
+| `--authority-connect-addr` |       | —                                | URL/DNS routing                                        | Physical Authority address; preserves the logical URL origin |
+| `--health-bind-addr`       |       | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000`                                       | Health check bind address                                    |
 
 Log-level flags are global (placed **before** the subcommand):
 
