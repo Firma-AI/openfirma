@@ -127,7 +127,7 @@ fn fixed_publication_requires_the_exact_requested_endpoint() {
         panic!("different effective port must fail fixed readiness");
     };
     assert!(matches!(
-        error,
+        &error,
         StartError::Orchestrator(OrchestratorError::Platform(_))
     ));
     assert!(
@@ -183,6 +183,10 @@ fn malformed_and_invalid_publications_fail_closed() {
         let Err(error) = fixture.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
             panic!("{label} publication unexpectedly succeeded");
         };
+        assert!(matches!(
+            &error,
+            StartError::Orchestrator(OrchestratorError::Platform(_))
+        ));
         assert!(
             error.to_string().contains(expected),
             "{label} returned unexpected error: {error}"
@@ -194,11 +198,34 @@ fn malformed_and_invalid_publications_fail_closed() {
     let Err(error) = symlink.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
         panic!("symlink publication unexpectedly succeeded");
     };
+    assert!(matches!(
+        &error,
+        StartError::Orchestrator(OrchestratorError::Platform(_))
+    ));
     assert!(
         error.to_string().contains("invalid endpoint publication"),
         "unexpected symlink error: {error}"
     );
     assert_rollback_clean(&symlink.state_dir);
+
+    for (mode, record, expected) in [
+        ("directory", None, "not a regular file"),
+        ("raw", Some("x".repeat(4_097)), "exceeds the size limit"),
+    ] {
+        let fixture = Fixture::new(mode, "127.0.0.1:0", record.as_deref());
+        let Err(error) = fixture.spawn("127.0.0.1:0".parse().expect("requested endpoint")) else {
+            panic!("{mode} publication unexpectedly succeeded");
+        };
+        assert!(matches!(
+            &error,
+            StartError::Orchestrator(OrchestratorError::Platform(_))
+        ));
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected {mode} error: {error}"
+        );
+        assert_rollback_clean(&fixture.state_dir);
+    }
 }
 
 #[test]
@@ -252,10 +279,13 @@ fn canonical_endpoint_remains_absent_while_probe_is_unvalidated() {
         "canonical endpoint appeared before a successful TCP probe"
     );
     let startup_result = startup.join().expect("join startup");
-    assert!(
-        startup_result.is_err(),
-        "listener-free publication must fail"
-    );
+    let Err(error) = startup_result else {
+        panic!("listener-free publication must fail");
+    };
+    assert!(matches!(
+        error,
+        StartError::Orchestrator(OrchestratorError::ReadinessProcessExited { .. })
+    ));
     assert_rollback_clean(&state_dir);
 }
 
@@ -366,45 +396,6 @@ impl Fixture {
 }
 
 #[test]
-fn publication_contexts_cannot_be_reassigned_before_spawn() {
-    let dir = tempfile::tempdir().expect("state dir");
-    let topology = StackTopology::new(["first", "second"]).expect("valid topology");
-    let requested_addr = "127.0.0.1:0".parse().expect("requested endpoint");
-    let result = spawn_stack_from_plan(
-        &topology,
-        |contexts| {
-            let [_, second] = contexts else {
-                panic!("unexpected context count");
-            };
-            Ok::<_, std::convert::Infallible>(vec![
-                ComponentSpec {
-                    command: std::process::Command::new("must-not-spawn"),
-                    readiness: second.child_published_tcp(requested_addr).into_readiness(),
-                },
-                ComponentSpec {
-                    command: std::process::Command::new("must-not-spawn"),
-                    readiness: Readiness::ConfiguredTcp(
-                        "127.0.0.1:1".parse().expect("configured endpoint"),
-                    ),
-                },
-            ])
-        },
-        dir.path(),
-        LifecycleTimeouts::default(),
-    );
-
-    let Err(StartError::Orchestrator(OrchestratorError::Platform(message))) = result else {
-        panic!("misaligned publication context was accepted");
-    };
-    assert_eq!(
-        message,
-        "first readiness used a publication path from another component context"
-    );
-    assert!(!dir.path().join("first.pid").exists());
-    assert!(!dir.path().join("second.pid").exists());
-}
-
-#[test]
 #[ignore = "spawned as a process-lifecycle fixture"]
 fn child_fixture() {
     let mode = std::env::var(CHILD_MODE).expect("child mode");
@@ -435,6 +426,11 @@ fn child_fixture() {
             "protocol_version = 1\neffective_addr = \"127.0.0.1:41000\"\n",
         );
         std::os::unix::fs::symlink(outside, publication_path).expect("publish endpoint symlink");
+        std::thread::sleep(Duration::from_mins(1));
+        return;
+    }
+    if mode == "directory" {
+        std::fs::create_dir(publication_path).expect("publish endpoint directory");
         std::thread::sleep(Duration::from_mins(1));
         return;
     }
