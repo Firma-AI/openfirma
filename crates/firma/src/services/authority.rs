@@ -56,7 +56,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         })?;
 
     match args.command {
-        None => run_server(config).await?,
+        None => run_server(config, args.startup_report.as_deref()).await?,
         Some(Commands::Revocations {
             action: RevocationsCommand::Add(rargs),
         }) => run_revoke(&config, rargs.token_id, &rargs.reason).await?,
@@ -73,10 +73,14 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-async fn run_server(config: AuthorityConfig) -> Result<()> {
+async fn run_server(config: AuthorityConfig, startup_report: Option<&Path>) -> Result<()> {
     let server = Server::try_new(config, shutdown_future())
         .await
         .context("failed to initialize authority server")?;
+    if let Some(path) = startup_report {
+        firma_stack::publish_startup_report(path, server.listen_addr())
+            .with_context(|| format!("failed to write startup report to {}", path.display()))?;
+    }
     server
         .run()
         .await

@@ -80,8 +80,12 @@ What `start` does, in order:
 
 1. With `--detach`, assigns a random startup generation and forks the hidden
    owning supervisor; without it, the current process remains the owner.
-2. The owner boots the Authority in its own process group and probes its gRPC
-   port until it accepts connections.
+2. The owner boots the Authority in its own process group with a private,
+   generation-scoped publication path. After binding, Authority atomically
+   publishes its effective address there. The owner validates that address
+   against the configured IP and port, then probes it while retaining the child
+   handle. Fixed configured ports remain fixed; port `0` is supported by this
+   internal contract without changing scaffold defaults.
 3. The owner boots the Sidecar in its own process group.
 4. The owner probes the Sidecar's listen port. When HTTPS MITM is active, the
    Sidecar generates its `generated-firma-ca/` material before opening that
@@ -98,6 +102,9 @@ teardown; if termination or probing fails, it returns an error, retains runtime
 state, and may continue collection in the background so cleanup can be retried.
 Readiness polling also watches each owned component leader and fails immediately
 if it exits instead of waiting for the probe timeout.
+Canonical `authority.listen` and `sidecar.listen` files appear only after the
+corresponding endpoint passes its readiness probe. Children never write these
+canonical files.
 
 `start` flags:
 
