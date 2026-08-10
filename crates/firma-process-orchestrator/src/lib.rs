@@ -6,6 +6,10 @@
 //! components a stack contains — callers supply ordered component names and
 //! produce each complete [`ComponentSpec`] immediately before its spawn.
 //!
+//! The canonical [lifecycle and ownership model](mod@start) explains how process
+//! capabilities, runtime-state authority, foreground supervision, and detached
+//! handoff fit together. Public lifecycle types link back to that model.
+//!
 //! The firma-specific topology (the `[authority, sidecar]` plan and its config
 //! parsing) lives in `firma-stack`, which wraps these entry points.
 

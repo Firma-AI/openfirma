@@ -5,7 +5,8 @@
 //! after every target is proven absent and [`cleanup_generation`] confirms the
 //! original [`StateLease`] still owns the directory. [`target_may_exist`] treats
 //! probe uncertainty as presence, preserving signalling effort and retry
-//! evidence.
+//! evidence. See the [lifecycle and ownership model](mod@crate::start) for the
+//! process and runtime-state capabilities required by teardown.
 
 use std::path::Path;
 use std::time::{Duration, Instant};

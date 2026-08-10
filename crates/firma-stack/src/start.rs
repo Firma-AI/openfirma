@@ -31,8 +31,9 @@ pub enum StartMode {
 ///
 /// Defers to [`spawn_stack_from_plan`], resolving the firma plan from `cfg` only
 /// after the stack lock is claimed so an already-running stack is reported
-/// before config parsing. The caller must eventually call
-/// [`RunningStack::shutdown`] to tear the stack down and collect its children.
+/// before config parsing. The caller must choose one of the ownership transitions
+/// documented by [`RunningStack`]: orderly shutdown, explicit detachment, or the
+/// fail-closed `Drop` backstop.
 ///
 /// Used by `firma-demo-tui`.
 ///

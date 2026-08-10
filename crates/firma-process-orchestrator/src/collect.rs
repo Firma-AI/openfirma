@@ -1,9 +1,12 @@
 //! Shared direct-child collection utilities.
 //!
 //! These leaf helpers reap direct children without relinquishing ownership,
-//! transfer them to background collector threads, and provide the fallback used
-//! when collector-thread creation fails. They depend only on
-//! [`crate::platform`] for termination authority and the platform-specific
+//! or transfer them to one process-global collector initialized before any
+//! managed child is spawned. A rejected handoff returns the exact offered
+//! capability so explicit paths can recover it and destructor paths can retain
+//! it without blocking. See the
+//! [lifecycle and ownership model](mod@crate::start). These helpers depend only
+//! on [`crate::platform`] for termination authority and the platform-specific
 //! external-collection condition, so both the high-level supervisor and the
 //! low-level platform layer can share them without an inverted dependency.
 
