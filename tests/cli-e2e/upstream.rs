@@ -62,6 +62,14 @@ impl Upstream {
         format!("http://{}/{nonce}", self.address, nonce = self.nonce)
     }
 
+    pub(crate) fn url_for_host(&self, host: &str) -> String {
+        format!(
+            "http://{host}:{port}/{nonce}",
+            port = self.address.port(),
+            nonce = self.nonce
+        )
+    }
+
     pub(crate) fn finish(self) -> Capture {
         self.task.join().expect("upstream thread")
     }
@@ -178,6 +186,14 @@ impl UnreachedUpstream {
 
     pub(crate) fn url(&self) -> String {
         format!("http://{}/{nonce}", self.address, nonce = self.nonce)
+    }
+
+    pub(crate) fn url_for_host(&self, host: &str) -> String {
+        format!(
+            "http://{host}:{port}/{nonce}",
+            port = self.address.port(),
+            nonce = self.nonce
+        )
     }
 
     pub(crate) fn finish(self) {
