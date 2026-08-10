@@ -1,13 +1,36 @@
 //! Stack lifecycle and ownership transitions.
 //!
+//! # OS process concepts
+//!
+//! A component can be a process tree, not just one process: the program Firma
+//! starts may create descendants that outlive their leader. Stopping only the
+//! leader can therefore leave part of the component running. The orchestrator
+//! manages a platform process scope—process groups on Unix and Job Objects for
+//! in-process ownership on Windows—through a [`TerminationTarget`].
+//!
+//! Spawning also returns a [`std::process::Child`] handle for the direct child.
+//! The spawning process must eventually wait on that handle to collect the exit
+//! result. On Unix, an exited but uncollected child remains as a zombie; on all
+//! platforms, dropping the handle is not a portable substitute for collection.
+//! This non-reconstructable collection responsibility is different from the
+//! ability to send a termination request.
+//!
+//! A persisted numeric identity is neither a child handle nor proof that the
+//! original process is still alive. Operating systems can reuse process IDs,
+//! and the stored value has platform-specific meaning: it identifies a process
+//! group on Unix but only the component leader across Windows process boundaries.
+//! Runtime state therefore supports external observation and the strongest
+//! reconstructable termination request; it cannot transfer direct-child
+//! collection or reconstruct an owned Windows Job Object.
+//!
 //! # Lifecycle and ownership model
 //!
-//! A process capability always has one in-process owner. [`StartupGuard`] owns
-//! each [`OwnedComponent`] before startup performs another fallible operation,
-//! then either transfers the complete set to [`RunningStack`] or explicitly
-//! rolls it back. Normal failures report rollback errors; [`Drop`] implementations
-//! are bounded emergency backstops that hard-terminate and transfer collection
-//! without claiming fallible runtime-state cleanup succeeded.
+//! The direct-child collection capability always has one in-process owner.
+//! [`StartupGuard`] owns each [`OwnedComponent`] before startup performs another
+//! fallible operation, then either transfers the complete set to [`RunningStack`]
+//! or explicitly rolls it back. Normal failures report rollback errors; [`Drop`]
+//! implementations are bounded emergency backstops that hard-terminate and
+//! transfer collection without claiming fallible runtime-state cleanup succeeded.
 //!
 //! ```text
 //! plan -> StartupGuard -> RunningStack -- shutdown --> stopped and cleaned
@@ -18,11 +41,23 @@
 //!              |                                      collection transferred,
 //!              |                                      runtime state retained
 //!              +-- failure -------------------------> explicit rollback
+//!
+//! persisted runtime state -> external stop -> reconstruct termination targets
+//!                                      |      and request process-scope exit
+//!                                      +----> generation-fenced state cleanup
 //! ```
 //!
 //! [`StackHandle`] is deliberately outside this ownership chain: it carries
 //! component identities and PIDs for observation but grants no authority to
 //! collect, terminate, or clean up processes.
+//!
+//! [`crate::stop_components()`] is also outside the collection-ownership chain.
+//! It can reconstruct termination targets from persisted state and request that
+//! another process's stack exit, but it cannot wait on children it did not
+//! spawn. The existing [`RunningStack`], detached supervisor, or persistent
+//! collector retains that collection responsibility. On Windows, reconstructed
+//! targets are necessarily leader-only; the supervisor's owned Job Object
+//! remains the complete descendant authority.
 //!
 //! ## Runtime-state authority
 //!
