@@ -15,7 +15,7 @@ status-level = "fail"
 final-status-level = "slow"
 
 [profile.ci]
-default-filter = "all()"
+default-filter = "not binary_id(firma::e2e)"
 status-level = "fail"
 final-status-level = "slow"
 failure-output = "immediate-final"

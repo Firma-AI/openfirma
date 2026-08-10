@@ -107,7 +107,8 @@ cargo nextest run --profile ci -p firma --test cli --no-tests=fail \
 Run the deterministic full-stack suite (excluded by the default profile):
 
 ```sh
-cargo nextest run --profile ci -p firma --test e2e --no-tests=fail
+cargo nextest run --profile ci --ignore-default-filter \
+  -p firma --test e2e --no-tests=fail
 ```
 
 Run the ignored FIR-366 regression explicitly. It is expected to fail until the

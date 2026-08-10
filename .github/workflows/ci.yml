@@ -264,6 +264,61 @@ jobs:
             exit 1
           fi
 
+  # Deterministic CLI end-to-end tests need a working structural sandbox and run
+  # only on Linux, so keep them out of the broad cross-platform `check` matrix.
+  cli-e2e:
+    name: CLI E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+
+      - name: Load tool versions
+        shell: bash
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - name: Install protoc
+        uses: ./.github/actions/setup-protoc
+        with:
+          version: ${{ env.PROTOC_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@ead08b90bd7b2e6d81963fb9cf0b7239f66d5db4 # v1.21.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-nextest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: command -v cargo-nextest || cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
+        shell: bash
+
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+
+      - name: Allow bwrap user namespaces via AppArmor profile
+        run: |
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+              userns,
+              include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
+      # The CI profile excludes this target from broad workspace runs. The
+      # explicit target both opts in and makes a renamed target fail loudly.
+      - name: Run deterministic CLI end-to-end tests
+        run: cargo nextest run --profile ci --ignore-default-filter -p firma --test e2e --no-tests=fail
+
   # The managed VS Code launch suite drives `firma run` end to end, so it needs a
   # working structural sandbox. That is unavailable in the `check` job, so the
   # suite is `#[ignore]`d there and selected explicitly here instead.
