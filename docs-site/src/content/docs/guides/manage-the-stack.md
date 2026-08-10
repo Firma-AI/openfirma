@@ -84,13 +84,15 @@ What `start` does, in order:
    generation-scoped publication path. After binding, Authority atomically
    publishes its effective address there. The owner validates that address
    against the configured IP and port, then probes it while retaining the child
-   handle. Fixed configured ports remain fixed; port `0` is supported by this
-   internal contract without changing scaffold defaults.
-3. The owner boots the Sidecar in its own process group.
-4. The owner probes the Sidecar's listen port. When HTTPS MITM is active, the
-   Sidecar generates its `generated-firma-ca/` material before opening that
-   port, so a connectable port already implies CA readiness; readiness is a
-   single signal.
+   handle.
+3. The owner boots the Sidecar with the same private endpoint-publication
+   contract and validates and probes its effective interceptor address. When
+   HTTPS MITM is active, the Sidecar generates its `generated-firma-ca/`
+   material before opening that port, so a connectable port already implies CA
+   readiness; readiness is a single signal.
+4. Fixed configured ports remain fixed for both components. Port `0` is
+   supported by the internal publication contract without changing scaffold
+   defaults or wiring the Authority's dynamic endpoint into Sidecar config.
 5. With `--detach`, the supervisor announces readiness, waits for the launcher's
    acknowledgement, then confirms attachment. The launcher exits 0 only after
    that two-phase handoff. Without detachment, the owner continues blocking in

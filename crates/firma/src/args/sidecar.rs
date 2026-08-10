@@ -39,6 +39,9 @@ pub struct ServeArgs {
     /// dirs (see docs/cli.md).
     #[clap(long, short = 'c', env = "FIRMA_SIDECAR_CONFIG_FILE")]
     pub config: Option<PathBuf>,
+    /// Internal path for writing the one-shot startup report.
+    #[arg(long, hide = true)]
+    pub startup_report: Option<PathBuf>,
     /// Address the readiness / health-check HTTP endpoint binds to.
     #[clap(
         long,

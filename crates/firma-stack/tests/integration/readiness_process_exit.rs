@@ -114,3 +114,137 @@ fn authority_exit_aborts_sidecar_readiness() {
         "startup waited for the sidecar fixture to exit"
     );
 }
+
+#[cfg(unix)]
+fn wait_for_file_while_starting<'scope>(
+    path: &std::path::Path,
+    startup: std::thread::ScopedJoinHandle<'scope, Result<firma_stack::RunningStack, StackError>>,
+) -> std::thread::ScopedJoinHandle<'scope, Result<firma_stack::RunningStack, StackError>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if path.exists() {
+            return startup;
+        }
+        if startup.is_finished() {
+            let result = match startup.join() {
+                Ok(result) => result,
+                Err(payload) => {
+                    eprintln!(
+                        "stack startup thread panicked before {} appeared",
+                        path.display()
+                    );
+                    std::panic::resume_unwind(payload);
+                }
+            };
+            match result {
+                Ok(mut stack) => {
+                    let shutdown = stack.shutdown(Duration::ZERO);
+                    panic!(
+                        "stack startup completed before {} appeared; shutdown result: {shutdown:?}",
+                        path.display()
+                    );
+                }
+                Err(error) => panic!(
+                    "stack startup failed before {} appeared: {error:?}",
+                    path.display()
+                ),
+            }
+        }
+        assert!(Instant::now() < deadline, "{} missing", path.display());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sidecar_exit_before_publication_rolls_back_ready_authority() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use nix::errno::Errno;
+    use nix::unistd::Pid;
+
+    use crate::support::{ProcessGroupCleanup, wait_for_pidfile};
+
+    let dir = tempfile::tempdir().expect("dir");
+    let root = dir.path();
+    let state_dir = root.join("state");
+    let config_path = root.join("firma.toml");
+    let fixture_path = root.join("fixture.sh");
+    let release_sidecar = root.join("release-sidecar");
+    let authority_listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
+    let authority_addr = authority_listener.local_addr().expect("authority address");
+
+    std::fs::write(
+        &fixture_path,
+        format!(
+            "#!/bin/sh\n\
+             root=${{0%/*}}\n\
+             if [ \"$1\" = authority ]; then\n\
+               printf 'protocol_version = 1\\ntcp_listen_addr = \"{authority_addr}\"\\n' > \"$5\"\n\
+               while :; do sleep 1; done\n\
+             fi\n\
+             if [ \"$1\" = sidecar ]; then\n\
+               while [ ! -f \"$root/release-sidecar\" ]; do sleep 0.01; done\n\
+               exit 25\n\
+             fi\n"
+        ),
+    )
+    .expect("write fixture");
+    std::fs::set_permissions(&fixture_path, std::fs::Permissions::from_mode(0o700))
+        .expect("make fixture executable");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[authority]\nlisten_addr = \"{authority_addr}\"\n\
+             [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n"
+        ),
+    )
+    .expect("write config");
+    let config = StackConfig {
+        config_file: config_path,
+        firma_bin: Some(fixture_path),
+    };
+
+    let (result, authority_pid, mut cleanup) = std::thread::scope(|scope| {
+        let startup = scope.spawn(|| firma_stack::spawn_stack(&config, &state_dir));
+        let startup = wait_for_file_while_starting(&state_dir.join("authority.listen"), startup);
+        let authority_pid = wait_for_pidfile(&state_dir.join("authority.pid"));
+        let cleanup = ProcessGroupCleanup::new(authority_pid);
+        wait_for_pidfile(&state_dir.join("sidecar.pid"));
+        assert!(
+            !state_dir.join("sidecar.listen").exists(),
+            "Sidecar canonical listen state appeared before publication"
+        );
+        std::fs::write(&release_sidecar, []).expect("release sidecar fixture");
+        let result = startup.join().expect("startup thread");
+        (result, authority_pid, cleanup)
+    });
+
+    let error = result.err().expect("Sidecar exit must fail startup");
+    let StackError::Orchestrator(
+        firma_process_orchestrator::OrchestratorError::ReadinessProcessExited { component, status },
+    ) = error
+    else {
+        panic!("expected readiness process exit, got {error:?}");
+    };
+    assert_eq!(component, "sidecar");
+    assert_eq!(status.code(), Some(25));
+    let authority_pid = Pid::from_raw(i32::try_from(authority_pid).expect("PID fits i32"));
+    assert_eq!(
+        nix::sys::signal::kill(authority_pid, None),
+        Err(Errno::ESRCH),
+        "startup rollback left Authority running"
+    );
+    cleanup.disarm();
+
+    for name in [
+        "authority.pid",
+        "authority.listen",
+        "sidecar.pid",
+        "sidecar.listen",
+        "stack.lock",
+    ] {
+        assert!(!state_dir.join(name).exists(), "rollback left {name}");
+    }
+}

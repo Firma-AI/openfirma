@@ -16,7 +16,7 @@ use std::process::Command;
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
 use firma_process_orchestrator::{
-    ComponentContext, ComponentSpec, OrchestratorError, Readiness, StackTopology,
+    ComponentContext, ComponentSpec, OrchestratorError, StackTopology,
 };
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
@@ -77,7 +77,7 @@ pub fn build_plan(
     cfg: &StackConfig,
     contexts: &[ComponentContext<'_>],
 ) -> Result<Vec<ComponentSpec>, StackError> {
-    let [authority_context, _sidecar_context] = contexts else {
+    let [authority_context, sidecar_context] = contexts else {
         return Err(StackError::Orchestrator(
             OrchestratorError::PlanCountMismatch {
                 expected: 2,
@@ -108,6 +108,10 @@ pub fn build_plan(
         .arg(SIDECAR_NAME)
         .arg("--config")
         .arg(&cfg.config_file);
+    let sidecar_publication = sidecar_context.child_published_tcp(side_addr);
+    sidecar
+        .arg("--startup-report")
+        .arg(sidecar_publication.startup_report_path());
     Ok(vec![
         ComponentSpec {
             command: authority,
@@ -115,7 +119,7 @@ pub fn build_plan(
         },
         ComponentSpec {
             command: sidecar,
-            readiness: Readiness::ConfiguredTcp(side_addr),
+            readiness: sidecar_publication.into_readiness(),
         },
     ])
 }
