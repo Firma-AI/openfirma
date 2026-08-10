@@ -71,6 +71,170 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Default ports are stripped from bracketed IPv6 rule hosts exactly as they
+/// are from IPv4/hostname rule hosts, while a nonstandard port is preserved
+/// and still requires an exact port match.
+#[test]
+fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
+    let registry = ActionClassRegistry::v0_1();
+    let default_port = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![rule("[::1]:443")],
+        },
+        &registry,
+        false,
+    )?;
+    assert!(matches!(
+        default_port.find_match(&Method::GET, "[::1]", "/repos/x"),
+        MatchResult::Matched(_)
+    ));
+
+    // A request host is normalized by the full pipeline before matching, so
+    // it matches a default-port rule host whether or not it repeats the
+    // port, exactly like an IPv4/hostname request.
+    let normalizer = IntentNormalizer::new(default_port);
+    for request_host in ["[::1]", "[::1]:443"] {
+        let envelope = normalizer
+            .normalize(&RawRequest {
+                method: Method::GET,
+                host: request_host.to_string(),
+                path: "/repos/x".to_string(),
+                headers: HashMap::new(),
+                body: None,
+                is_https: true,
+            })
+            .map_err(|decision| {
+                anyhow::anyhow!("expected classification for {request_host}, got {decision:?}")
+            })?;
+        assert_eq!(
+            envelope.intent().action_class,
+            "communication.external.read"
+        );
+    }
+
+    let nonstandard_port = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![rule("[fe80::1]:8443")],
+        },
+        &registry,
+        false,
+    )?;
+    assert!(matches!(
+        nonstandard_port.find_match(&Method::GET, "[fe80::1]:8443", "/repos/x"),
+        MatchResult::Matched(_)
+    ));
+    assert!(matches!(
+        nonstandard_port.find_match(&Method::GET, "[fe80::1]", "/repos/x"),
+        MatchResult::NotProtected
+    ));
+    Ok(())
+}
+
+/// A bracketed IPv6 literal preserves a nonstandard port on both sides of a
+/// match, mirroring how a nonstandard port is preserved for IPv4/hostname
+/// rule hosts.
+#[test]
+fn ipv6_rule_hosts_match_ipv6_request_hosts_on_any_port() -> anyhow::Result<()> {
+    let registry = ActionClassRegistry::v0_1();
+    for host in ["[::1]:443", "[fe80::1]:8443"] {
+        let table = MappingTable::from_config(
+            &MappingRulesFile {
+                rules: vec![rule(host)],
+            },
+            &registry,
+            false,
+        )?;
+        let normalizer = IntentNormalizer::new(table);
+
+        let envelope = normalizer
+            .normalize(&RawRequest {
+                method: Method::GET,
+                host: host.to_string(),
+                path: "/repos/x".to_string(),
+                headers: HashMap::new(),
+                body: None,
+                is_https: true,
+            })
+            .map_err(|decision| {
+                anyhow::anyhow!("expected classification for {host}, got {decision:?}")
+            })?;
+
+        assert_eq!(
+            envelope.intent().action_class,
+            "communication.external.read"
+        );
+    }
+    Ok(())
+}
+
+/// An explicit port that is not the default for the request's scheme must be
+/// preserved because the HTTP connector dispatches to the authority stored in
+/// the normalized resource.
+#[test]
+fn ipv6_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
+    let table = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![rule("[::1]:443")],
+        },
+        &ActionClassRegistry::v0_1(),
+        false,
+    )?;
+    let normalizer = IntentNormalizer::new(table);
+
+    let envelope = normalizer
+        .normalize(&RawRequest {
+            method: Method::GET,
+            host: "[::1]:443".to_string(),
+            path: "/repos/x".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            // Key detail: not using HTTPS, so default port would be `80`
+            is_https: false,
+        })
+        .map_err(|decision| anyhow::anyhow!("expected classification, got {decision:?}"))?;
+
+    assert_eq!(
+        envelope.intent().resource.get("host").map(String::as_str),
+        Some("[::1]:443"),
+        "HTTP dispatch must retain the explicitly requested port 443"
+    );
+    Ok(())
+}
+
+/// The same opposite-scheme-port preservation applies to IPv4/hostname
+/// authorities, not just bracketed IPv6 literals: dispatch-host
+/// normalization must not special-case address family.
+#[test]
+fn ipv4_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
+    let table = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![rule("api.example.com:443")],
+        },
+        &ActionClassRegistry::v0_1(),
+        false,
+    )?;
+    let normalizer = IntentNormalizer::new(table);
+
+    let envelope = normalizer
+        .normalize(&RawRequest {
+            method: Method::GET,
+            host: "api.example.com:443".to_string(),
+            path: "/repos/x".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            // Key detail: not using HTTPS, so default port would be `80`
+            is_https: false,
+        })
+        .map_err(|decision| anyhow::anyhow!("expected classification, got {decision:?}"))?;
+
+    assert_eq!(
+        envelope.intent().resource.get("host").map(String::as_str),
+        Some("api.example.com:443"),
+        "HTTP dispatch must retain the explicitly requested port 443"
+    );
+    Ok(())
+}
+
 /// A trailing dot must not evade a host-scoped rule whether it hides before
 /// the port (`host.:8443`) or after it (`host:443.`); every spelling of the
 /// same authority normalizes identically. Exercised through the normalizer,
