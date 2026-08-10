@@ -17,8 +17,15 @@ Prefer local checkpoint commits or jj changesets during substantial work.
 - Prefer checkpoints that can pass `just check` on their own. If that is too
   expensive or not yet possible, run the narrowest relevant verification and
   state what remains.
-- If work is already under review in an open PR, preserve that history by
-  default and add follow-up revisions instead of rewriting reviewed ones.
+
+## Reviewed history
+
+Preserve reviewed history by default and add follow-up revisions for new work.
+Rebasing onto the latest target branch is always allowed to keep reviewed work
+mergeable, including when dependent revisions must be restacked. Limit changes
+to existing revisions during that rebase to resolving conflicts introduced by
+it. Rewrite reviewed history for other reasons only when the user explicitly
+asks.
 
 ## Workflow
 
@@ -61,9 +68,7 @@ If the repository already has uncommitted changes, decide whether the new work:
 If that relationship is unclear, ask the user before mixing work.
 
 Also decide whether the target branch or changeset is already under review.
-
-- If yes, prefer follow-up revisions that preserve the reviewed history.
-- Rewrite reviewed history only when the user explicitly asks.
+If it is, follow the reviewed-history policy above.
 
 ## Grouping rules
 
@@ -74,6 +79,10 @@ Group by intent, not by file type.
 - Do not mix unrelated cleanup, formatting, refactors, and behavior changes.
 - If a file contains mixed logical changes and the split is ambiguous, ask the
   user before assigning those hunks.
+
+For a stack, keep each PR's base-to-head diff limited to that PR's intent.
+Repair and restack bottom-up so dependent revisions are evaluated on corrected
+predecessors.
 
 ## Git workflow
 
@@ -93,8 +102,7 @@ If `just check` is too expensive during iteration, run the narrowest relevant
 verification first, but report what remains unverified.
 
 For unreviewed local work, it is fine to reshape local Git history to keep it
-atomic. For branches with an open PR or active review, prefer follow-up commits
-over amend, rebase, or force-push.
+atomic.
 
 ## Jujutsu workflow
 
@@ -113,8 +121,7 @@ jj describe -r <rev> -m "<intent>"
 For mixed hunks within one file, reconstruct the file content deliberately.
 
 For unreviewed local work, it is fine to reshape the jj stack to keep it
-atomic. For changesets already under review, avoid rewriting them unless the
-user explicitly asks.
+atomic.
 
 ## Output
 

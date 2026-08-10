@@ -43,3 +43,6 @@ Before finalizing, confirm that any required docs updates are present:
 ## Notes
 
 - Do not mark work complete based only on a successful build; run the matching tests too.
+- Required-check failures are blocking and must be traced to an actionable
+  cause. Report coverage deltas separately; coverage pressure is not a
+  correctness failure unless an enforced threshold or required check fails.
