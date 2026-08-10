@@ -78,3 +78,9 @@ the affected tests for both structural coverage and rendered-message coverage.
 2. Do not add `#[cfg(test)]` modules or inline tests to `src/` files.
 3. Do not change visibility or add test-only APIs solely to enable integration tests without explicit approval.
 4. Add doctests only when the example is genuinely useful documentation, not just another place to duplicate unit coverage.
+
+## CLI black-box tests
+
+Load and follow
+[`writing-black-box-tests`](../writing-black-box-tests/SKILL.md) when testing
+the CLI, a structural sandbox, a live agent, or VS Code.

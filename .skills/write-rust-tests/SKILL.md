@@ -15,11 +15,14 @@ Write new Rust tests for OpenFirma code.
 ## Instructions
 
 1. Identify the public behavior, branch, or invariant that needs coverage.
-2. Place new tests in a crate-level `tests/` integration suite as required by the test guidelines.
-3. Check existing tests before writing anything new.
-4. Add the smallest test set that covers the missing behavior.
-5. Run the relevant tests.
-6. Follow [`rust-tests-guidelines`](../rust-tests-guidelines/SKILL.md) for test quality and organization rules.
+2. For CLI, structural-sandbox, live-agent, or VS Code coverage, load and follow
+   [`writing-black-box-tests`](../writing-black-box-tests/SKILL.md) before
+   choosing a file.
+3. Otherwise, place the test in the owning crate's integration suite.
+4. Check existing tests before writing anything new.
+5. Add the smallest test set that covers the missing behavior.
+6. Run the relevant tests.
+7. Follow [`rust-tests-guidelines`](../rust-tests-guidelines/SKILL.md) for test quality and organization rules.
 
 ## What to test
 

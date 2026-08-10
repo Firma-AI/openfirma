@@ -66,6 +66,12 @@ cargo test --doc -p <crate-name>
 cargo nextest run -p <crate-name> <test-name>
 ```
 
+### Firma black-box suites
+
+Load and follow
+[`writing-black-box-tests`](../writing-black-box-tests/SKILL.md) for the
+current CLI, structural-sandbox, live-agent, and VS Code commands.
+
 If the target is a doctest-specific failure, use:
 
 ```bash
