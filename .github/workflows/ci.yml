@@ -420,13 +420,13 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/bwrap
 
       # White-box tests may call production Rust APIs directly. The CLI
-      # integration target is excluded so its coverage remains attributable to
+      # black-box target is excluded so its coverage remains attributable to
       # the user-facing black-box boundary.
       - name: Generate internal white-box coverage
         run: >-
           cargo llvm-cov nextest --profile ci --workspace --all-features
           --codecov --output-path codecov-internal-white-box.json
-          -E 'not binary_id(firma::integration)'
+          -E 'not binary_id(firma::cli)'
 
       - name: Upload internal white-box coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -447,7 +447,7 @@ jobs:
         run: >-
           cargo llvm-cov nextest --profile ci --workspace --all-features
           --no-clean --codecov --output-path codecov-cli-black-box.json
-          -E 'binary_id(firma::integration)'
+          -E 'binary_id(firma::cli)'
 
       - name: Upload CLI black-box coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0

@@ -56,8 +56,8 @@ macos-vz-basic-exec:
 macos-vz-codex-pty:
   just --justfile examples/firma-run/macos-vz-codex-pty/justfile run
 
-e2e:
-  cargo nextest run -p firma --test e2e --run-ignored all
+live-agent-e2e:
+  cargo nextest run -p firma --test live-agent --run-ignored all --no-tests=fail
 
 audit:
   cargo audit --deny warnings

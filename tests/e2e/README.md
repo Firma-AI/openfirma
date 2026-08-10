@@ -1,4 +1,4 @@
-# E2E Tests
+# Live-agent E2E tests
 
 End-to-end validation of the OpenFirma enforcement boundary against real coding
 agent workloads.
@@ -6,23 +6,23 @@ agent workloads.
 ## Running locally
 
 ```sh
-make e2e
+just live-agent-e2e
 ```
 
-nextest builds the debug `firma` binary as part of compiling the e2e test;
+nextest builds the debug `firma` binary as part of compiling the live-agent test;
 `firma_bin()` reads its path from `CARGO_BIN_EXE_firma` — no manual build needed.
 
 Run only Claude or only Codex scenarios:
 
 ```sh
-cargo nextest run -p firma --test e2e --run-ignored all -E 'test(claude::)'
-cargo nextest run -p firma --test e2e --run-ignored all -E 'test(codex::)'
+cargo nextest run -p firma --test live-agent --run-ignored all --no-tests=fail -E 'test(claude::)'
+cargo nextest run -p firma --test live-agent --run-ignored all --no-tests=fail -E 'test(codex::)'
 ```
 
 Run a single scenario:
 
 ```sh
-cargo nextest run -p firma --test e2e --run-ignored all -E 'test(claude::simple_prompt)'
+cargo nextest run -p firma --test live-agent --run-ignored all --no-tests=fail -E 'test(claude::simple_prompt)'
 ```
 
 ## Scenarios

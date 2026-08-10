@@ -9,7 +9,7 @@ command = ["tests/architecture/setup-metadata.sh"]
 command = ["pwsh", "-NoProfile", "-File", "tests/architecture/setup-metadata.ps1"]
 
 [profile.default]
-default-filter = 'not (binary_id(firma::integration) & test(/^structural_sandbox::/))'
+default-filter = 'not (binary_id(firma::cli) & test(/^structural_sandbox::/))'
 slow-timeout = { period = "60s", terminate-after = 5 }
 status-level = "fail"
 final-status-level = "slow"
@@ -25,7 +25,7 @@ success-output = "never"
 max-threads = 1
 
 [[profile.default.overrides]]
-filter = 'binary_id(firma::integration) & test(/^structural_sandbox::/)'
+filter = 'binary_id(firma::cli) & test(/^structural_sandbox::/)'
 test-group = "structural-sandbox"
 
 [[profile.default.scripts]]
@@ -38,10 +38,10 @@ filter = 'binary_id(firma::architecture)'
 platform = { host = "cfg(windows)" }
 setup = "compute-architecture-metadata-windows"
 
-# Some e2e enforcement scenarios require structural confinement (Linux `bwrap`).
+# Some live-agent enforcement scenarios require structural confinement (Linux `bwrap`).
 # On macOS `firma run` falls back to non-structural compatibility mode
 # (sandbox-exec + HTTP_PROXY), so those scenarios cannot assert real
 # enforcement.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "macos")'
-default-filter = 'not (binary_id(firma::e2e) & test(/^(claude|codex)::(block_raw_tcp_egress|fs_read_deny|fs_delete_deny)$/))'
+default-filter = 'not (binary_id(firma::live-agent) & test(/^(claude|codex)::(block_raw_tcp_egress|fs_read_deny|fs_delete_deny)$/))'
