@@ -18,10 +18,10 @@
 //! - **termination**: probing and signalling the platform scope used to govern
 //!   the component and its descendants.
 //!
-//! The spawning process must eventually wait on its direct-child handle so the
-//! operating system can release the child's exit bookkeeping; abandoning that
-//! responsibility can leave a zombie on Unix. A PID or persisted state cannot
-//! reconstruct or transfer the child handle.
+//! Firma retains and eventually consumes the non-reconstructable direct-child
+//! handle to observe the child's exit and complete collection. A PID or
+//! persisted state cannot replace or transfer that handle. On Unix, collection
+//! includes waiting on the child so an exited process does not remain a zombie.
 //!
 //! [`RunningStack`] is the sole in-process owner of those capabilities after
 //! startup. [`StackHandle`] is observational. Persisted runtime state is a weaker
