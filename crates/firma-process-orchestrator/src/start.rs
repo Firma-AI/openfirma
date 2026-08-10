@@ -170,21 +170,43 @@ impl StartupGuard {
         remove_startup_report_dir(&self.startup_report_dir)
     }
 
-    /// Append one owned component in spawn order to [`StartupState::Building`].
+    /// Spawn, record, and publish one component without an unowned failure gap.
     ///
-    /// # Errors
-    ///
-    /// Returns an error without changing state if startup has already finished.
-    fn record(&mut self, component: OwnedComponent) -> Result<(), OrchestratorError> {
-        match &mut self.state {
-            StartupState::Building(components) => {
-                components.push(component);
-                Ok(())
-            }
-            StartupState::Finished => Err(OrchestratorError::Platform(
-                "component child recorded after startup finished".into(),
-            )),
-        }
+    /// The guard takes ownership of the child and its termination target before
+    /// writing the pidfile. A publication failure therefore follows the same
+    /// generation-fenced rollback path as every later startup failure.
+    fn spawn_component(
+        &mut self,
+        group: &crate::platform::Group,
+        name: &ComponentName,
+        command: &mut Command,
+    ) -> Result<UserProcessId, OrchestratorError> {
+        let StartupState::Building(components) = &mut self.state else {
+            return Err(OrchestratorError::Platform(
+                "component child spawned after startup finished".into(),
+            ));
+        };
+        let spawned = spawn_component(
+            group,
+            &mut SpawnRequest {
+                name: name.clone(),
+                command,
+                state_dir: &self.state_dir,
+            },
+        )?;
+        let leader_pid = spawned.leader_pid;
+        let stored_id = spawned.termination_target.stored_id();
+        components.push(OwnedComponent::from_spawned(name.clone(), spawned));
+
+        let pidfile_path = self.state_dir.join(name.pidfile_name());
+        pidfile::write(&pidfile_path, stored_id)?;
+        debug!(
+            name = name.as_str(),
+            pid = %leader_pid,
+            pidfile = %pidfile_path.display(),
+            "pidfile written"
+        );
+        Ok(leader_pid)
     }
 
     /// Collect and report the first exited component currently owned by startup.
@@ -600,9 +622,7 @@ fn spawn_stack_inner<E>(
             mut command,
             readiness,
         } = spec;
-        let component = spawn_into_group(&group, state_dir, name.clone(), &mut command)?;
-        let pid = component.leader_pid();
-        startup.record(component)?;
+        let pid = startup.spawn_component(&group, &name, &mut command)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
         let addr = match readiness {
             Readiness::ConfiguredTcp(addr) => {
@@ -997,23 +1017,6 @@ fn wait_for_launcher_ack(
         std::thread::sleep(DETACHED_HANDOFF_POLL_INTERVAL);
     }
     Ok(())
-}
-
-/// Spawn one named component into the group with a caller-configured command.
-fn spawn_into_group(
-    group: &crate::platform::Group,
-    state_dir: &Path,
-    name: ComponentName,
-    command: &mut std::process::Command,
-) -> Result<OwnedComponent, OrchestratorError> {
-    spawn_component(
-        group,
-        &mut SpawnRequest {
-            name,
-            command,
-            state_dir,
-        },
-    )
 }
 
 /// Claim the launcher's [`StackGeneration`] only after existing state is stale.

@@ -1,22 +1,17 @@
 //! Cross-platform component creation for [`mod@crate::start`].
 //!
-//! [`spawn_component`] is the commit boundary between an untracked child and an
-//! [`OwnedComponent`]: it does not return until the process-tree
-//! [`crate::platform::TerminationTarget`] has been persisted. Until then, this
-//! module retains both termination and direct-child collection responsibility.
+//! [`spawn_component`] creates the platform child and its process-tree
+//! [`crate::platform::TerminationTarget`]. The startup owner must record those
+//! capabilities before performing another fallible operation.
 
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
 
 use tracing::debug;
 
-use crate::collect::{collect_child_until, collect_target_in_background};
-use crate::component::{ComponentName, OwnedComponent};
+use crate::component::ComponentName;
 use crate::error::OrchestratorError;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
-use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
-use firma_runtime_state::pidfile;
 
 /// Inputs required to spawn one managed stack component.
 pub struct SpawnRequest<'a> {
@@ -30,22 +25,15 @@ pub struct SpawnRequest<'a> {
 
 /// Spawn one component and return its exclusive process capabilities.
 ///
-/// The returned [`OwnedComponent`] is committed only after [`pidfile::write`]
-/// records its termination target. If publication fails,
-/// [`cleanup_failed_spawn`] prevents an ungoverned process from escaping the
-/// startup transaction.
-///
 /// # Errors
 ///
-/// Returns process spawn or pidfile errors. A process whose pidfile cannot be
-/// written is terminated and collected before return.
+/// Returns process spawn or platform-setup errors.
 pub fn spawn_component(
     group: &Group,
     req: &mut SpawnRequest<'_>,
-) -> Result<OwnedComponent, OrchestratorError> {
+) -> Result<SpawnedChild, OrchestratorError> {
     let name = req.name.as_str();
     let log_path = req.state_dir.join(format!("{name}.log"));
-    let pidfile_path = req.state_dir.join(req.name.pidfile_name());
     debug!(
         name,
         program = ?req.command.get_program(),
@@ -53,27 +41,5 @@ pub fn spawn_component(
         "spawning component"
     );
 
-    let spawned = SystemPlatform::spawn_in_group(group, req.command, &log_path)?;
-    if let Err(error) = pidfile::write(&pidfile_path, spawned.termination_target.stored_id()) {
-        cleanup_failed_spawn(spawned);
-        return Err(error.into());
-    }
-    let leader_pid = spawned.leader_pid;
-    debug!(name, pid = %leader_pid, pidfile = %pidfile_path.display(), "pidfile written");
-    Ok(OwnedComponent::from_spawned(req.name.clone(), spawned))
-}
-
-/// Recover process ownership after post-spawn publication fails.
-///
-/// This function requests process-tree and leader termination, then attempts
-/// bounded direct-child collection. If collection is not yet possible, it
-/// transfers the paired child and target to
-/// [`collect_target_in_background`] rather than dropping the only collector.
-pub fn cleanup_failed_spawn(mut spawned: SpawnedChild) {
-    let _ = spawned.termination_target.signal_hard();
-    let _ = spawned.child.kill();
-    let deadline = Instant::now() + CHILD_COLLECTION_TIMEOUT;
-    if !collect_child_until(&mut spawned.child, deadline) {
-        let _ = collect_target_in_background(spawned.child, spawned.termination_target);
-    }
+    SystemPlatform::spawn_in_group(group, req.command, &log_path)
 }
