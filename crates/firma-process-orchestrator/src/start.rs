@@ -349,38 +349,74 @@ impl StartupGuard {
             )),
         }
     }
-}
 
-impl Drop for StartupGuard {
-    /// Roll back the exact capability set represented by [`StartupState`].
-    ///
-    /// [`StartupState::Finished`] is the only disarmed state. Destruction cannot
-    /// report cleanup errors, so [`rollback_startup_components`] preserves
-    /// retryable runtime state when rollback cannot prove completion.
-    fn drop(&mut self) {
+    /// Roll back an incomplete startup and report any cleanup failure.
+    fn rollback(mut self) -> Result<(), OrchestratorError> {
+        self.rollback_inner()
+    }
+
+    /// Consume the currently owned startup capabilities exactly once.
+    fn rollback_inner(&mut self) -> Result<(), OrchestratorError> {
         let state = std::mem::replace(&mut self.state, StartupState::Finished);
         let StartupState::Building(components) = state else {
-            return;
+            return Ok(());
         };
-        if let Err(error) = self.cleanup_startup_reports() {
-            debug!(%error, "startup rollback retained report state");
-        }
-        if components.is_empty() {
+        let report_result = self.cleanup_startup_reports();
+        let process_result = if components.is_empty() {
             remove_startup_state(
                 &self.state_dir,
                 &self.topology,
                 self.state_lease,
                 self.transaction.as_ref(),
-            );
+            )
+        } else {
+            rollback_startup_components(
+                components,
+                &self.state_dir,
+                &self.topology,
+                self.state_lease,
+                self.transaction.as_ref(),
+            )
+        };
+        match report_result {
+            Ok(()) => process_result,
+            Err(error) => Err(with_rollback(error, process_result)),
+        }
+    }
+
+    /// Fail closed without performing fallible generation cleanup from `Drop`.
+    fn emergency_rollback(&mut self) {
+        let state = std::mem::replace(&mut self.state, StartupState::Finished);
+        let StartupState::Building(mut components) = state else {
+            return;
+        };
+        if let Err(error) = self.cleanup_startup_reports() {
+            debug!(%error, "startup drop retained report state");
+        }
+        if components.is_empty() {
             return;
         }
-        rollback_startup_components(
-            components,
-            &self.state_dir,
-            &self.topology,
-            self.state_lease,
-            self.transaction.as_ref(),
-        );
+        for component in &mut components {
+            let _ = component.termination_target().signal_hard();
+            let _ = component.kill_leader();
+        }
+        if let Err(error) = collect_in_background(components) {
+            debug!(error = %error.source(), "could not start emergency component reaper");
+            if let Err(error) = error.terminate_and_collect() {
+                debug!(%error, "could not synchronously collect emergency components");
+            }
+        }
+    }
+}
+
+impl Drop for StartupGuard {
+    /// Fail closed for an incomplete startup outside the explicit error path.
+    ///
+    /// Normal failures use [`StartupGuard::rollback`] so absence proof and
+    /// generation cleanup can report errors. Destruction only hard-terminates
+    /// and transfers collection, retaining durable state for a later stop.
+    fn drop(&mut self) {
+        self.emergency_rollback();
     }
 }
 
@@ -398,7 +434,7 @@ fn rollback_startup_components(
     topology: &StackTopology,
     state_lease: StateLease,
     transaction: Option<&StateTransaction>,
-) {
+) -> Result<(), OrchestratorError> {
     debug!(state_dir = %state_dir.display(), "startup failed; collecting owned children");
     for component in &mut components {
         if let Err(error) = component.termination_target().signal_hard() {
@@ -420,7 +456,7 @@ fn rollback_startup_components(
             }
         }
         let mut all_absent = true;
-        let mut probe_failed = false;
+        let mut probe_error = None;
         for component in &components {
             match component.termination_target().exists() {
                 Ok(false) => {}
@@ -431,24 +467,29 @@ fn rollback_startup_components(
                         %error,
                         "startup rollback target probe failed"
                     );
-                    probe_failed = true;
+                    if probe_error.is_none() {
+                        probe_error = Some(error);
+                    }
                     all_absent = false;
                 }
             }
         }
         if all_absent && children_collected {
-            remove_startup_state(state_dir, topology, state_lease, transaction);
-            return;
+            return remove_startup_state(state_dir, topology, state_lease, transaction);
         }
-        if probe_failed || Instant::now() >= deadline {
+        if probe_error.is_some() || Instant::now() >= deadline {
             debug!("startup rollback retained runtime state for a later cleanup attempt");
-            if let Err(error) = collect_in_background(components) {
-                debug!(error = %error.source(), "could not start rollback component reaper");
-                if let Err(error) = error.terminate_and_collect() {
-                    debug!(%error, "could not synchronously collect rollback components");
+            let collection_result = match collect_in_background(components) {
+                Ok(_) => Ok(()),
+                Err(error) => {
+                    debug!(error = %error.source(), "could not start rollback component reaper");
+                    error.terminate_and_collect().map_err(OrchestratorError::Io)
                 }
-            }
-            return;
+            };
+            let rollback_error = probe_error.unwrap_or(OrchestratorError::TerminationTimeout {
+                timeout_secs: CHILD_COLLECTION_TIMEOUT.as_secs(),
+            });
+            return Err(with_rollback(rollback_error, collection_result));
         }
         std::thread::sleep(STARTUP_ROLLBACK_POLL_INTERVAL);
     }
@@ -638,41 +679,43 @@ fn spawn_stack_from_plan_with_phase<E>(
     debug!("acquiring stack lock");
     let state_lease = acquire_lock(state_dir, &transaction, generation, topology)?;
     let mut startup = StartupGuard::new(state_dir, state_lease, transaction, topology.clone());
-    startup.prepare_startup_report_dir()?;
-    debug!("reaping stale pidfiles");
-    reap_stale(state_dir, topology)?;
+    let startup_result = (|| {
+        startup.prepare_startup_report_dir()?;
+        debug!("reaping stale pidfiles");
+        reap_stale(state_dir, topology)?;
 
-    let startup_report_paths: Vec<_> = topology
-        .components()
-        .iter()
-        .enumerate()
-        .map(|(index, _)| startup.startup_report_dir.join(format!("{index}.toml")))
-        .collect();
-    clear_canonical_listen_state(state_dir, topology)?;
-    match spawn_stack_inner(
-        topology,
-        build_component,
-        startup_report_paths,
-        state_dir,
-        &mut startup,
-        stop_signal,
-        timeouts.component_readiness,
-    ) {
-        Ok(()) => {
-            startup.cleanup_startup_reports()?;
-            let mut stack = startup.finish()?;
-            if publish_ready {
-                stack.mark_ready()?;
-            }
-            let handle = stack.handle();
-            info!(components = ?handle.component_pids, "stack ready");
-            Ok(stack)
-        }
-        Err(error) => {
-            debug!("spawn failed; startup guard will roll back");
-            Err(error)
-        }
+        let startup_report_paths: Vec<_> = topology
+            .components()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| startup.startup_report_dir.join(format!("{index}.toml")))
+            .collect();
+        clear_canonical_listen_state(state_dir, topology)?;
+        spawn_stack_inner(
+            topology,
+            build_component,
+            startup_report_paths,
+            state_dir,
+            &mut startup,
+            stop_signal,
+            timeouts.component_readiness,
+        )?;
+        startup.cleanup_startup_reports()?;
+        Ok::<_, StartError<E>>(())
+    })();
+    if let Err(error) = startup_result {
+        debug!("startup failed; rolling back explicit ownership");
+        let rollback = startup.rollback();
+        return Err(with_start_rollback(error, rollback));
     }
+
+    let mut stack = startup.finish()?;
+    if publish_ready {
+        stack.mark_ready()?;
+    }
+    let handle = stack.handle();
+    info!(components = ?handle.component_pids, "stack ready");
+    Ok(stack)
 }
 
 /// Perform the ordered, rollback-protected component startup sequence.
@@ -902,16 +945,13 @@ fn remove_startup_state(
     topology: &StackTopology,
     state_lease: StateLease,
     transaction: Option<&StateTransaction>,
-) {
+) -> Result<(), OrchestratorError> {
     let Some(transaction) = transaction else {
-        debug!("startup rollback lost state transaction; retaining runtime state");
-        return;
+        return Err(OrchestratorError::Platform(
+            "startup rollback lost state transaction; retaining runtime state".into(),
+        ));
     };
-    if let Err(error) =
-        crate::stop::cleanup_generation(state_dir, topology, Some(state_lease), transaction)
-    {
-        debug!(%error, "startup rollback retained runtime state");
-    }
+    crate::stop::cleanup_generation(state_dir, topology, Some(state_lease), transaction)
 }
 
 /// Preserve the initiating failure together with any required rollback failure.
@@ -922,6 +962,20 @@ fn with_rollback<T>(
     match rollback {
         Ok(_) => operation,
         Err(rollback) => OrchestratorError::Rollback {
+            operation: Box::new(operation),
+            rollback: Box::new(rollback),
+        },
+    }
+}
+
+/// Preserve a planning or orchestration failure with explicit startup rollback.
+fn with_start_rollback<E>(
+    operation: StartError<E>,
+    rollback: Result<(), OrchestratorError>,
+) -> StartError<E> {
+    match rollback {
+        Ok(()) => operation,
+        Err(rollback) => StartError::Rollback {
             operation: Box::new(operation),
             rollback: Box::new(rollback),
         },

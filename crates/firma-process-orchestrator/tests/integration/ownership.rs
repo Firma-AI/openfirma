@@ -276,7 +276,15 @@ fn startup_guard_rollback_preserves_replacement_generation_runtime_state() {
         panic!("plan unexpectedly succeeded");
     };
 
-    assert!(matches!(error, StartError::Plan(_)));
+    let StartError::Rollback {
+        operation,
+        rollback,
+    } = error
+    else {
+        panic!("generation replacement did not report guarded cleanup refusal");
+    };
+    assert!(matches!(*operation, StartError::Plan("planned failure")));
+    assert!(matches!(*rollback, OrchestratorError::Platform(_)));
     assert_process_present(sentinel_pid);
     assert_eq!(
         std::fs::read_to_string(dir.path().join("stack.lock")).expect("replacement lock"),
@@ -557,7 +565,15 @@ fn component_pidfile_publication_failure_collects_spawned_child() {
         panic!("pidfile publication unexpectedly succeeded");
     };
 
-    assert!(matches!(error, StartError::Orchestrator(_)));
+    let StartError::Rollback {
+        operation,
+        rollback,
+    } = error
+    else {
+        panic!("pidfile failure did not report explicit rollback failure");
+    };
+    assert!(matches!(*operation, StartError::Orchestrator(_)));
+    assert!(matches!(*rollback, OrchestratorError::RuntimeState(_)));
     let authority_pid = wait_for_marker(&dir.path().join("authority.marker"));
     assert_process_absent(authority_pid);
     std::fs::remove_dir(dir.path().join("sidecar.pid")).expect("remove pidfile blocker");
