@@ -13,12 +13,13 @@ collect evidence that proves the behavior under test.
 Choose by the production boundary the test proves, not by whether it starts a
 process.
 
-| Suite                 | Current location                  | Use it for                                                               |
-| --------------------- | --------------------------------- | ------------------------------------------------------------------------ |
-| `firma::cli`          | `crates/firma/tests/integration/` | Deterministic CLI contracts, component lifecycle, and sandboxed commands |
-| `firma::live-agent`   | `tests/e2e/`                      | Claude and Codex behavior that requires a real agent and credentials     |
-| `firma::vscode`       | `tests/vscode/`                   | Managed VS Code launch behavior                                          |
-| `firma::architecture` | `tests/architecture/`             | Repository structure and dependency invariants                           |
+| Suite                 | Current location                  | Use it for                                                            |
+| --------------------- | --------------------------------- | --------------------------------------------------------------------- |
+| `firma::cli`          | `crates/firma/tests/integration/` | CLI and component contracts, including structural-sandbox regressions |
+| `firma::e2e`          | `tests/cli-e2e/`                  | Deterministic full-stack tests through real Authority and Sidecar     |
+| `firma::live-agent`   | `tests/e2e/`                      | Claude and Codex behavior that requires a real agent and credentials  |
+| `firma::vscode`       | `tests/vscode/`                   | Managed VS Code launch behavior                                       |
+| `firma::architecture` | `tests/architecture/`             | Repository structure and dependency invariants                        |
 
 The Cargo target name is authoritative. Some source directory names predate
 these boundaries and will be migrated separately.
@@ -101,6 +102,12 @@ excludes:
 ```sh
 cargo nextest run --profile ci -p firma --test cli --no-tests=fail \
   -E 'test(/^structural_sandbox::/)'
+```
+
+Run the deterministic full-stack suite (excluded by the default profile):
+
+```sh
+cargo nextest run --profile ci -p firma --test e2e --no-tests=fail
 ```
 
 Run the ignored FIR-366 regression explicitly. It is expected to fail until the
