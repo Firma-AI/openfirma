@@ -41,9 +41,10 @@ pub enum StartMode {
 /// Returns config, state-directory, lock, spawn, or readiness errors.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack, StackError> {
     let topology = plan::topology()?;
+    let mut planner = plan::ComponentPlanner::new(cfg);
     spawn_stack_from_plan(
         &topology,
-        |contexts| plan::build_plan(cfg, contexts),
+        |context| planner.build(&context),
         state_dir,
         LifecycleTimeouts::default(),
     )
@@ -65,13 +66,16 @@ pub fn start(
 ) -> Result<StackHandle, StackError> {
     let topology = plan::topology()?;
     match mode {
-        StartMode::Foreground => start_foreground_from_plan(
-            &topology,
-            |contexts| plan::build_plan(cfg, contexts),
-            state_dir,
-            LifecycleTimeouts::default(),
-        )
-        .map_err(Into::into),
+        StartMode::Foreground => {
+            let mut planner = plan::ComponentPlanner::new(cfg);
+            start_foreground_from_plan(
+                &topology,
+                |context| planner.build(&context),
+                state_dir,
+                LifecycleTimeouts::default(),
+            )
+            .map_err(Into::into)
+        }
         StartMode::Detached => {
             let executable = std::env::current_exe()
                 .map_err(|source| StackError::CurrentExecutable { source })?;
@@ -116,9 +120,10 @@ pub fn supervise_owned_generation(
     generation: StackGeneration,
 ) -> Result<(), StackError> {
     let topology = plan::topology()?;
+    let mut planner = plan::ComponentPlanner::new(cfg);
     supervise_owned_generation_from_plan(
         &topology,
-        |contexts| plan::build_plan(cfg, contexts),
+        |context| planner.build(&context),
         state_dir,
         generation,
         LifecycleTimeouts::default(),

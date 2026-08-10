@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,12 @@ impl Drop for ProcessGroupCleanup {
             let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
         }
     }
+}
+
+pub fn write_executable_script(path: &Path, contents: impl AsRef<[u8]>) {
+    std::fs::write(path, contents).expect("write fixture script");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .expect("make fixture script executable");
 }
 
 pub fn wait_for_pidfile(path: &Path) -> u32 {

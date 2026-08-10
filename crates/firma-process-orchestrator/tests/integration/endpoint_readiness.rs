@@ -325,9 +325,10 @@ impl Fixture {
     ) -> Result<RunningStack, StartError<std::convert::Infallible>> {
         spawn_stack_from_plan(
             &StackTopology::new(["worker"]).expect("valid topology"),
-            |contexts| {
-                assert_eq!(contexts[0].name(), "worker");
-                let publication = contexts[0].child_published_tcp(requested_addr);
+            |context| {
+                assert_eq!(context.name(), "worker");
+                assert!(context.ready_endpoint("worker").is_none());
+                let publication = context.child_published_tcp(requested_addr);
                 assert_eq!(
                     publication
                         .startup_report_path()
@@ -343,10 +344,10 @@ impl Fixture {
                         .is_some_and(|name| name.to_string_lossy().starts_with(".startup-"))
                 );
                 let command = self.command(Some(publication.startup_report_path()));
-                Ok(vec![ComponentSpec {
+                Ok(ComponentSpec {
                     command,
                     readiness: publication.into_readiness(),
-                }])
+                })
             },
             &self.state_dir,
             LifecycleTimeouts::default(),
@@ -357,16 +358,59 @@ impl Fixture {
         &self,
         readiness: Readiness,
     ) -> Result<RunningStack, StartError<std::convert::Infallible>> {
+        let mut readiness = Some(readiness);
         spawn_stack_from_plan(
             &StackTopology::new(["worker"]).expect("valid topology"),
             |_| {
                 let command = self.command(None);
-                Ok(vec![ComponentSpec { command, readiness }])
+                Ok(ComponentSpec {
+                    command,
+                    readiness: readiness.take().expect("single component planned once"),
+                })
             },
             &self.state_dir,
             LifecycleTimeouts::default(),
         )
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SecondPlanFailure;
+
+#[test]
+fn later_plan_failure_sees_prior_endpoint_and_rolls_it_back() {
+    let fixture = Fixture::new(ChildBehavior::Publish(loopback_ephemeral()));
+    let topology = StackTopology::new(["first", "second"]).expect("valid topology");
+    let requested_addr = "127.0.0.1:0".parse().expect("requested endpoint");
+    let result = spawn_stack_from_plan(
+        &topology,
+        |context| {
+            if context.name() == "first" {
+                let publication = context.child_published_tcp(requested_addr);
+                let command = fixture.command(Some(publication.startup_report_path()));
+                return Ok(ComponentSpec {
+                    command,
+                    readiness: publication.into_readiness(),
+                });
+            }
+            let ready = context
+                .ready_endpoint("first")
+                .expect("first endpoint must be available to second planner");
+            assert_ne!(ready.port(), 0);
+            assert_eq!(
+                std::fs::read_to_string(fixture.state_dir.join("first.listen"))
+                    .expect("canonical first endpoint")
+                    .trim(),
+                ready.to_string()
+            );
+            Err(SecondPlanFailure)
+        },
+        &fixture.state_dir,
+        LifecycleTimeouts::default(),
+    );
+
+    assert!(matches!(result, Err(StartError::Plan(SecondPlanFailure))));
+    assert_rollback_clean_named(&fixture.state_dir, &["first", "second"]);
 }
 
 #[test]
@@ -473,8 +517,16 @@ fn format_endpoint(ip: &str, port: u16) -> SocketAddr {
 }
 
 fn assert_rollback_clean(state_dir: &Path) {
-    for name in ["worker.pid", "worker.listen", "stack.lock"] {
-        assert!(!state_dir.join(name).exists(), "rollback left {name}");
+    assert_rollback_clean_named(state_dir, &["worker"]);
+}
+
+fn assert_rollback_clean_named(state_dir: &Path, components: &[&str]) {
+    for name in components
+        .iter()
+        .flat_map(|component| [format!("{component}.pid"), format!("{component}.listen")])
+        .chain(["stack.lock".to_string()])
+    {
+        assert!(!state_dir.join(&name).exists(), "rollback left {name}");
     }
     assert_current_publications_absent(state_dir);
 }

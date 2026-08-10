@@ -7,7 +7,7 @@ use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
-    ComponentContext, ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack,
+    ComponentPlanContext, ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack,
     StackGeneration, StackTopology, StartError, publish_startup_report, spawn_stack_from_plan,
     start_detached, start_foreground_from_plan, stop_components,
     supervise_owned_generation_from_plan,
@@ -108,13 +108,7 @@ fn authority_exit_during_startup_reports_readiness_process_exited() {
     let startup = std::thread::spawn(move || {
         spawn_stack_from_plan(
             &topology(&["authority", "sidecar"]),
-            |contexts| {
-                Ok::<_, std::convert::Infallible>(delayed_component_plan(
-                    contexts,
-                    &state_dir,
-                    &["authority", "sidecar"],
-                ))
-            },
+            delayed_component_planner(&state_dir, &["authority", "sidecar"]),
             &state_dir,
             fast_timeouts(),
         )
@@ -137,18 +131,17 @@ fn wildcard_child_publication_uses_loopback_canonical_endpoint() {
     let dir = tempfile::tempdir().expect("state dir");
     let mut stack = spawn_stack_from_plan(
         &topology(&["worker"]),
-        |contexts| {
-            let context = contexts.first().expect("worker context");
+        |context| {
             let publication = context
                 .child_published_tcp("0.0.0.0:0".parse().expect("wildcard child bind endpoint"));
             let mut command = fixture_command();
             command
                 .env(CHILD_LISTEN, "0.0.0.0:0")
                 .env(CHILD_PUBLICATION, publication.startup_report_path());
-            Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
+            Ok::<_, std::convert::Infallible>(ComponentSpec {
                 command,
                 readiness: publication.into_readiness(),
-            }])
+            })
         },
         dir.path(),
         fast_timeouts(),
@@ -225,6 +218,32 @@ fn old_owner_does_not_remove_replacement_generation_state() {
 }
 
 #[test]
+fn already_running_precedes_staged_plan_failure() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let (mut stack, _pids) = spawn_stack(dir.path(), &["authority"]);
+    let mut planner_called = false;
+
+    let result = spawn_stack_from_plan(
+        &topology(&["authority"]),
+        |_| {
+            planner_called = true;
+            Err::<ComponentSpec, _>("planner must not run")
+        },
+        dir.path(),
+        fast_timeouts(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(StartError::Orchestrator(
+            OrchestratorError::AlreadyRunning { .. }
+        ))
+    ));
+    assert!(!planner_called);
+    stack.shutdown(Duration::ZERO).expect("shutdown fixture");
+}
+
+#[test]
 fn startup_guard_rollback_preserves_replacement_generation_runtime_state() {
     let dir = tempfile::tempdir().expect("state dir");
     let (mut child, addr) = spawn_published_fixture(dir.path(), "replacement-sentinel");
@@ -248,7 +267,7 @@ fn startup_guard_rollback_preserves_replacement_generation_runtime_state() {
                 pid,
             )
             .expect("write replacement ready state");
-            Err::<Vec<ComponentSpec>, &'static str>("planned failure")
+            Err::<ComponentSpec, &'static str>("planned failure")
         },
         dir.path(),
         fast_timeouts(),
@@ -290,16 +309,13 @@ fn stop_waits_for_start_plan_transaction() {
     let plan_barrier = Arc::clone(&barrier);
     let plan_release = Arc::clone(&release);
     let starter = std::thread::spawn(move || {
+        let mut planner = component_planner(&start_dir, &["authority"]);
         let result = spawn_stack_from_plan(
             &start_topology,
-            |contexts| {
+            |context| {
                 plan_barrier.wait();
                 plan_release.wait();
-                Ok::<_, std::convert::Infallible>(component_plan(
-                    contexts,
-                    &start_dir,
-                    &["authority"],
-                ))
+                planner(context)
             },
             &start_dir,
             fast_timeouts(),
@@ -353,10 +369,10 @@ fn generation_publication_is_atomic_for_concurrent_readers() {
         let writer = std::thread::spawn(move || {
             writer_barrier.wait();
             spawn_stack_from_plan(
-                &topology(&[]),
+                &topology(&["authority"]),
                 |_| {
                     writer_release.wait();
-                    Ok::<_, std::convert::Infallible>(Vec::new())
+                    Err::<ComponentSpec, _>("stop after observing publication")
                 },
                 &writer_dir,
                 fast_timeouts(),
@@ -393,9 +409,12 @@ fn generation_publication_is_atomic_for_concurrent_readers() {
             .recv_timeout(Duration::from_secs(5))
             .expect("publication observed");
         release.wait();
-        let mut stack = writer.join().expect("join writer").expect("empty stack");
+        assert!(matches!(
+            writer.join().expect("join writer"),
+            Err(StartError::Plan("stop after observing publication"))
+        ));
         reader.join().expect("join reader");
-        stack.shutdown(Duration::ZERO).expect("clean generation");
+        assert!(!state_dir.join("stack.lock").exists());
     }
 }
 
@@ -423,13 +442,14 @@ fn dropped_owner_retains_process_group_behavior_for_descendants() {
     let mut command = Command::new("sh");
     command.args(["-c", "sleep 600 & echo $! > \"$DESCENDANT\"; wait"]);
     command.env("DESCENDANT", &marker);
+    let mut command = Some(command);
     let stack = spawn_stack_from_plan(
         &topology(&["authority"]),
         |_| {
-            Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
-                command,
+            Ok::<_, std::convert::Infallible>(ComponentSpec {
+                command: command.take().expect("single component planned once"),
                 readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(addr),
-            }])
+            })
         },
         dir.path(),
         fast_timeouts(),
@@ -518,14 +538,18 @@ fn stale_detached_launcher_rollback_does_not_signal_replacement_target() {
 #[test]
 fn component_pidfile_publication_failure_collects_spawned_child() {
     let dir = tempfile::tempdir().expect("state dir");
+    let mut planner = component_planner(dir.path(), &["authority", "sidecar"]);
+    let mut index = 0;
     let Err(error) = spawn_stack_from_plan(
         &topology(&["authority", "sidecar"]),
-        |contexts| {
-            let mut plan = component_plan(contexts, dir.path(), &["authority", "sidecar"]);
-            plan[0]
-                .command
-                .env(CHILD_BLOCK_PIDFILE, dir.path().join("sidecar.pid"));
-            Ok::<_, std::convert::Infallible>(plan)
+        |context| {
+            let mut spec = planner(context)?;
+            if index == 0 {
+                spec.command
+                    .env(CHILD_BLOCK_PIDFILE, dir.path().join("sidecar.pid"));
+            }
+            index += 1;
+            Ok::<_, std::convert::Infallible>(spec)
         },
         dir.path(),
         fast_timeouts(),
@@ -578,13 +602,7 @@ fn owned_child_fixture() {
         }
         supervise_owned_generation_from_plan(
             &topology(&["authority", "sidecar"]),
-            |contexts| {
-                Ok::<_, std::convert::Infallible>(component_plan(
-                    contexts,
-                    state_dir,
-                    &["authority", "sidecar"],
-                ))
-            },
+            component_planner(state_dir, &["authority", "sidecar"]),
             state_dir,
             generation,
             fast_timeouts(),
@@ -628,13 +646,7 @@ fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
     let supervisor = std::thread::spawn(move || {
         let result = start_foreground_from_plan(
             &topology(&["authority", "sidecar"]),
-            |contexts| {
-                Ok::<_, std::convert::Infallible>(component_plan(
-                    contexts,
-                    &state_dir,
-                    &["authority", "sidecar"],
-                ))
-            },
+            component_planner(&state_dir, &["authority", "sidecar"]),
             &state_dir,
             fast_timeouts(),
         );
@@ -661,7 +673,7 @@ fn assert_component_exit_tears_down_foreground_stack(exiting_component: usize) {
 fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
     let stack = spawn_stack_from_plan(
         &topology(names),
-        |contexts| Ok::<_, std::convert::Infallible>(component_plan(contexts, state_dir, names)),
+        component_planner(state_dir, names),
         state_dir,
         fast_timeouts(),
     )
@@ -673,45 +685,61 @@ fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
     (stack, pids)
 }
 
-fn component_plan(
-    contexts: &[ComponentContext<'_>],
-    state_dir: &Path,
-    names: &[&str],
-) -> Vec<ComponentSpec> {
-    names
-        .iter()
-        .zip(contexts)
-        .map(|(name, context)| {
-            let publication =
-                context.child_published_tcp("127.0.0.1:0".parse().expect("fixture bind endpoint"));
-            let mut command = fixture_command();
-            command
-                .env_remove(SUPERVISOR_STATE_DIR)
-                .env_remove(SUPERVISOR_GENERATION)
-                .env_remove(SUPERVISOR_MODE)
-                .env_remove(SUPERVISOR_SENTINEL_PID)
-                .env(CHILD_LISTEN, "127.0.0.1:0")
-                .env(CHILD_PUBLICATION, publication.startup_report_path())
-                .env(CHILD_MARKER, state_dir.join(format!("{name}.marker")));
-            ComponentSpec {
-                command,
-                readiness: publication.into_readiness(),
-            }
-        })
-        .collect()
+fn component_spec(context: &ComponentPlanContext<'_>, state_dir: &Path) -> ComponentSpec {
+    let publication =
+        context.child_published_tcp("127.0.0.1:0".parse().expect("fixture bind endpoint"));
+    let mut command = fixture_command();
+    command
+        .env_remove(SUPERVISOR_STATE_DIR)
+        .env_remove(SUPERVISOR_GENERATION)
+        .env_remove(SUPERVISOR_MODE)
+        .env_remove(SUPERVISOR_SENTINEL_PID)
+        .env(CHILD_LISTEN, "127.0.0.1:0")
+        .env(CHILD_PUBLICATION, publication.startup_report_path())
+        .env(
+            CHILD_MARKER,
+            state_dir.join(format!("{}.marker", context.name())),
+        );
+    ComponentSpec {
+        command,
+        readiness: publication.into_readiness(),
+    }
 }
 
-fn delayed_component_plan(
-    contexts: &[ComponentContext<'_>],
+fn component_planner<'a>(
     state_dir: &Path,
-    names: &[&str],
-) -> Vec<ComponentSpec> {
-    let mut plan = component_plan(contexts, state_dir, names);
-    for (spec, name) in plan.iter_mut().zip(names) {
+    names: &'a [&'a str],
+) -> impl FnMut(ComponentPlanContext<'_>) -> Result<ComponentSpec, std::convert::Infallible> + use<'a>
+{
+    let state_dir = state_dir.to_path_buf();
+    let mut index = 0;
+    move |context| {
+        assert_eq!(context.name(), names[index]);
+        assert!(
+            names[..index]
+                .iter()
+                .all(|name| context.ready_endpoint(name).is_some()),
+            "each staged invocation sees every prior ready endpoint"
+        );
+        assert!(context.ready_endpoint(names[index]).is_none());
+        index += 1;
+        Ok(component_spec(&context, &state_dir))
+    }
+}
+
+fn delayed_component_planner<'a>(
+    state_dir: &Path,
+    names: &'a [&'a str],
+) -> impl FnMut(ComponentPlanContext<'_>) -> Result<ComponentSpec, std::convert::Infallible> {
+    let state_dir = state_dir.to_path_buf();
+    let mut planner = component_planner(&state_dir, names);
+    move |context| {
+        let name = context.name().to_string();
+        let mut spec = planner(context)?;
         spec.command
             .env(CHILD_RELEASE, state_dir.join(format!("{name}.release")));
+        Ok(spec)
     }
-    plan
 }
 
 fn assert_stop_waits_for_partial_publication(published_components: usize) {
@@ -720,18 +748,13 @@ fn assert_stop_waits_for_partial_publication(published_components: usize) {
     let (start_tx, start_rx) = mpsc::channel();
     let start_dir = state_dir.clone();
     let starter = std::thread::spawn(move || {
-        let _ = start_tx.send(spawn_stack_from_plan(
+        let result = spawn_stack_from_plan(
             &topology(&["authority", "sidecar"]),
-            |contexts| {
-                Ok::<_, std::convert::Infallible>(delayed_component_plan(
-                    contexts,
-                    &start_dir,
-                    &["authority", "sidecar"],
-                ))
-            },
+            delayed_component_planner(&start_dir, &["authority", "sidecar"]),
             &start_dir,
             fast_timeouts(),
-        ));
+        );
+        let _ = start_tx.send(result);
     });
     wait_for_file(&state_dir.join("authority.pid"));
     if published_components == 2 {

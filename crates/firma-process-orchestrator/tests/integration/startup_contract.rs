@@ -73,13 +73,14 @@ fn component_spec_explicit_executable_is_used() {
             "--ignored",
         ])
         .env("FIRMA_TEST_FIXTURE_ADDR", fixture_addr.to_string());
+    let mut command = Some(command);
     let mut stack = spawn_stack_from_plan(
         &topology,
         |_| {
-            Ok::<_, std::convert::Infallible>(vec![ComponentSpec {
-                command,
+            Ok::<_, std::convert::Infallible>(ComponentSpec {
+                command: command.take().expect("single component planned once"),
                 readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(fixture_addr),
-            }])
+            })
         },
         state_dir.path(),
         LifecycleTimeouts::default(),
@@ -105,23 +106,22 @@ fn explicit_executable_fixture() {
 }
 
 #[test]
-fn plan_count_is_validated_before_any_spawn() {
+fn topology_controls_staged_planner_cardinality() {
     let state_dir = tempfile::tempdir().expect("state dir");
     let topology = StackTopology::new(["first", "second"]).expect("valid topology");
+    let mut calls = 0;
     let result = spawn_stack_from_plan(
         &topology,
-        |_| Ok::<Vec<ComponentSpec>, std::convert::Infallible>(Vec::new()),
+        |_| {
+            calls += 1;
+            Err::<ComponentSpec, _>("stop before spawn")
+        },
         state_dir.path(),
         LifecycleTimeouts::default(),
     );
 
-    let Err(StartError::Orchestrator(OrchestratorError::PlanCountMismatch {
-        expected: 2,
-        actual: 0,
-    })) = result
-    else {
-        panic!("unexpected plan-count result");
-    };
+    assert!(matches!(result, Err(StartError::Plan("stop before spawn"))));
+    assert_eq!(calls, 1, "planner is called lazily in topology order");
     assert!(!state_dir.path().join("first.pid").exists());
     assert!(!state_dir.path().join("second.pid").exists());
 }

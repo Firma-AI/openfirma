@@ -9,12 +9,12 @@ struct PlanFailure;
 fn plan_failure_after_lock_acquisition_retains_caller_type() {
     let state_dir = tempfile::tempdir().expect("state dir");
 
-    let topology = StackTopology::new(std::iter::empty::<&str>()).expect("valid topology");
+    let topology = StackTopology::new(["worker"]).expect("valid topology");
     let result = spawn_stack_from_plan(
         &topology,
         |_| {
             assert!(state_dir.path().join("stack.lock").is_file());
-            Err::<Vec<_>, _>(PlanFailure)
+            Err::<firma_process_orchestrator::ComponentSpec, _>(PlanFailure)
         },
         state_dir.path(),
         LifecycleTimeouts::default(),
