@@ -14,7 +14,6 @@ use tracing::{debug, warn};
 
 use crate::component::OwnedComponent;
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
-use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
 use firma_runtime_state::ChildExt as _;
 
 const COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -23,7 +22,7 @@ const BACKGROUND_COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(200)
 /// Transfer one direct child and its leader target to a background collector.
 pub fn collect_child_in_background(
     child: std::process::Child,
-) -> Option<std::thread::JoinHandle<()>> {
+) -> Result<std::thread::JoinHandle<()>, CollectorStartError> {
     let target = TerminationTarget::for_leader(child.process_id());
     collect_target_in_background(child, target)
 }
@@ -32,8 +31,8 @@ pub fn collect_child_in_background(
 pub fn collect_target_in_background(
     child: std::process::Child,
     target: TerminationTarget,
-) -> Option<std::thread::JoinHandle<()>> {
-    spawn_collector(vec![CollectedChild { child, target }])
+) -> Result<std::thread::JoinHandle<()>, CollectorStartError> {
+    spawn_collector(CollectedChild { child, target })
 }
 
 /// Attempt direct-child collection until a deadline without relinquishing ownership.
@@ -71,46 +70,79 @@ impl From<OwnedComponent> for CollectedChild {
     }
 }
 
-/// Transfer all children to one reaper or terminate them if transfer fails.
-fn spawn_collector(children: Vec<CollectedChild>) -> Option<std::thread::JoinHandle<()>> {
-    let children = Arc::new(std::sync::Mutex::new(children));
-    let worker_children = Arc::clone(&children);
-    match std::thread::Builder::new()
-        .name("child-collector".into())
-        .spawn(move || {
-            let mut children = match worker_children.lock() {
-                Ok(mut children) => std::mem::take(&mut *children),
-                Err(_) => return,
-            };
-            while !children.is_empty() {
-                children.retain_mut(|owned| match owned.child.try_wait() {
-                    Ok(None) => true,
-                    Ok(Some(_)) => false,
-                    Err(error) if SystemPlatform::child_already_reaped(&error) => false,
-                    Err(error) => {
-                        debug!(%error, "child collection probe failed; retrying");
-                        true
-                    }
-                });
-                if !children.is_empty() {
-                    std::thread::sleep(BACKGROUND_COLLECTION_POLL_INTERVAL);
-                }
-            }
-        }) {
-        Ok(handle) => Some(handle),
-        Err(error) => {
-            warn!(%error, "could not start child collector; terminating uncollected children");
-            if let Ok(mut children) = children.lock() {
-                for child in children.iter_mut() {
-                    let _ = child.target.signal_hard();
-                    let _ = child.child.kill();
-                    let _ = collect_child_until(
-                        &mut child.child,
-                        std::time::Instant::now() + CHILD_COLLECTION_TIMEOUT,
-                    );
-                }
-            }
-            None
+/// Failure to transfer a child into a background collector.
+///
+/// The error retains both process capabilities so callers can choose an
+/// appropriate synchronous fallback without losing collection responsibility.
+pub struct CollectorStartError {
+    source: std::io::Error,
+    child: Arc<std::sync::Mutex<Option<CollectedChild>>>,
+}
+
+impl CollectorStartError {
+    /// Return the operating-system error that prevented thread creation.
+    pub const fn source(&self) -> &std::io::Error {
+        &self.source
+    }
+
+    /// Recover the child while releasing its leader-only termination target.
+    pub fn into_child(self) -> Option<std::process::Child> {
+        self.take_child().map(|collected| collected.child)
+    }
+
+    /// Hard-terminate and synchronously collect the retained child.
+    pub fn terminate_and_collect(self) -> std::io::Result<()> {
+        let Some(mut collected) = self.take_child() else {
+            return Ok(());
+        };
+        if let Err(error) = collected.target.signal_hard() {
+            warn!(%error, "fallback child-target termination failed");
+        }
+        if let Err(error) = collected.child.kill() {
+            debug!(%error, "fallback child termination failed");
+        }
+        match collected.child.wait() {
+            Ok(_) => Ok(()),
+            Err(error) if SystemPlatform::child_already_reaped(&error) => Ok(()),
+            Err(error) => Err(error),
         }
     }
+
+    fn take_child(&self) -> Option<CollectedChild> {
+        match self.child.lock() {
+            Ok(mut child) => child.take(),
+            Err(child) => child.into_inner().take(),
+        }
+    }
+}
+
+/// Transfer one child to a reaper while preserving ownership on failure.
+fn spawn_collector(
+    child: CollectedChild,
+) -> Result<std::thread::JoinHandle<()>, CollectorStartError> {
+    let child = Arc::new(std::sync::Mutex::new(Some(child)));
+    let worker_child = Arc::clone(&child);
+    std::thread::Builder::new()
+        .name("child-collector".into())
+        .spawn(move || {
+            let child = match worker_child.lock() {
+                Ok(mut child) => child.take(),
+                Err(child) => child.into_inner().take(),
+            };
+            let Some(mut child) = child else {
+                return;
+            };
+            loop {
+                match child.child.try_wait() {
+                    Ok(None) => std::thread::sleep(BACKGROUND_COLLECTION_POLL_INTERVAL),
+                    Ok(Some(_)) => return,
+                    Err(error) if SystemPlatform::child_already_reaped(&error) => return,
+                    Err(error) => {
+                        debug!(%error, "child collection probe failed; retrying");
+                        std::thread::sleep(BACKGROUND_COLLECTION_POLL_INTERVAL);
+                    }
+                }
+            }
+        })
+        .map_err(|source| CollectorStartError { source, child })
 }
