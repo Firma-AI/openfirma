@@ -144,17 +144,47 @@ fn bind_stub_pair() -> Result<(UdpSocket, TcpListener, SocketAddr), RunError> {
     )))
 }
 
-fn bind_udp_first() -> std::io::Result<(UdpSocket, TcpListener, SocketAddr)> {
-    let udp = UdpSocket::bind("127.0.0.1:0")?;
-    let addr = udp.local_addr()?;
-    let tcp = TcpListener::bind(addr)?;
+fn bind_udp_first() -> io::Result<(UdpSocket, TcpListener, SocketAddr)> {
+    let udp = UdpSocket::bind("127.0.0.1:0").map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("bind UDP selector on 127.0.0.1:0: {error}"),
+        )
+    })?;
+    let addr = udp.local_addr().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("read UDP-selected listen address: {error}"),
+        )
+    })?;
+    let tcp = TcpListener::bind(addr).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("bind TCP on UDP-selected {addr}: {error}"),
+        )
+    })?;
     Ok((udp, tcp, addr))
 }
 
-fn bind_tcp_first() -> std::io::Result<(UdpSocket, TcpListener, SocketAddr)> {
-    let tcp = TcpListener::bind("127.0.0.1:0")?;
-    let addr = tcp.local_addr()?;
-    let udp = UdpSocket::bind(addr)?;
+fn bind_tcp_first() -> io::Result<(UdpSocket, TcpListener, SocketAddr)> {
+    let tcp = TcpListener::bind("127.0.0.1:0").map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("bind TCP selector on 127.0.0.1:0: {error}"),
+        )
+    })?;
+    let addr = tcp.local_addr().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("read TCP-selected listen address: {error}"),
+        )
+    })?;
+    let udp = UdpSocket::bind(addr).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("bind UDP on TCP-selected {addr}: {error}"),
+        )
+    })?;
     Ok((udp, tcp, addr))
 }
 
