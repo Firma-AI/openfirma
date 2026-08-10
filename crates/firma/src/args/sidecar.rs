@@ -39,6 +39,10 @@ pub struct ServeArgs {
     /// dirs (see docs/cli.md).
     #[clap(long, short = 'c', env = "FIRMA_SIDECAR_CONFIG_FILE")]
     pub config: Option<PathBuf>,
+    /// Physically connect to this Authority address while retaining the
+    /// configured Authority URL as the logical HTTP and TLS origin.
+    #[arg(long)]
+    pub authority_connect_addr: Option<SocketAddr>,
     /// Internal path for writing the one-shot startup report.
     #[arg(long, hide = true)]
     pub startup_report: Option<PathBuf>,

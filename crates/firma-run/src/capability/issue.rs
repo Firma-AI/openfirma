@@ -18,6 +18,7 @@ use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_protobuf::v1::{IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision};
 use firma_sidecar::authority_client::channel::build_channel;
 use firma_sidecar::authority_credentials::ResolvedSidecarCredentials;
+use firma_sidecar::config::AuthorityEndpoint;
 
 use crate::error::RunError;
 
@@ -144,8 +145,14 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
     // site does not need to already be running on a runtime. `firma run`
     // invokes this from a synchronous code path, so this must self-host.
     let response = runtime.block_on(async {
+        let endpoint = AuthorityEndpoint::new(&params.authority_url, None).map_err(|e| {
+            RunError::AuthorityUnreachable {
+                url: params.authority_url.clone(),
+                reason: e.to_string(),
+            }
+        })?;
         let channel = build_channel(
-            &params.authority_url,
+            &endpoint,
             Duration::from_secs(10),
             ca_pem.as_deref(),
             None,

@@ -1,11 +1,115 @@
 //! Authority stream client configuration.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use firma_core::AgentId;
+use hyper::Uri;
 use serde::Deserialize;
 
+use super::AuthorityTarget;
 use crate::authority_credentials::SidecarCredentialsConfig;
+
+/// A validated Authority destination.
+///
+/// The URI is the logical HTTP and TLS origin. The optional socket address is
+/// only the physical TCP route and does not change HTTP authority or TLS
+/// server-name verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorityEndpoint {
+    origin: Uri,
+    connect_addr: Option<SocketAddr>,
+}
+
+impl AuthorityEndpoint {
+    /// Validate and construct an Authority endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorityEndpointError`] when the logical origin or physical
+    /// route is not suitable for an outbound Authority connection.
+    pub fn new(
+        url: &str,
+        connect_addr: Option<SocketAddr>,
+    ) -> Result<Self, AuthorityEndpointError> {
+        if url.trim().is_empty() {
+            return Err(AuthorityEndpointError::EmptyUrl);
+        }
+        let origin = url
+            .parse::<Uri>()
+            .map_err(|error| AuthorityEndpointError::InvalidUrl(error.to_string()))?;
+        let scheme = origin
+            .scheme_str()
+            .ok_or(AuthorityEndpointError::MissingScheme)?;
+        if !matches!(scheme, "http" | "https") {
+            return Err(AuthorityEndpointError::UnsupportedScheme(
+                scheme.to_string(),
+            ));
+        }
+        if origin.host().is_none_or(str::is_empty) {
+            return Err(AuthorityEndpointError::MissingHost);
+        }
+        if let Some(address) = connect_addr {
+            if address.port() == 0 {
+                return Err(AuthorityEndpointError::ZeroPhysicalPort);
+            }
+            if address.ip().is_unspecified() {
+                return Err(AuthorityEndpointError::UnspecifiedPhysicalIp);
+            }
+        }
+        Ok(Self {
+            origin,
+            connect_addr,
+        })
+    }
+
+    /// Return the logical HTTP and TLS origin.
+    #[must_use]
+    pub(crate) const fn origin(&self) -> &Uri {
+        &self.origin
+    }
+
+    /// Return the optional physical TCP route.
+    #[must_use]
+    pub(crate) const fn connect_addr(&self) -> Option<SocketAddr> {
+        self.connect_addr
+    }
+
+    /// Return whether the logical origin uses HTTPS.
+    #[must_use]
+    pub(crate) fn is_https(&self) -> bool {
+        self.origin.scheme_str() == Some("https")
+    }
+}
+
+/// Error constructing an [`AuthorityEndpoint`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AuthorityEndpointError {
+    /// The configured URL is empty.
+    #[error("url must not be empty when set")]
+    EmptyUrl,
+    /// The configured URL is not a valid URI.
+    #[error("url must be a valid URI: {0}")]
+    InvalidUrl(String),
+    /// A physical route was configured without a logical origin.
+    #[error("connect_addr requires url to be set")]
+    ConnectAddrWithoutUrl,
+    /// The configured URL has no scheme.
+    #[error("url must include a scheme")]
+    MissingScheme,
+    /// The configured URL has no host.
+    #[error("url must include a host")]
+    MissingHost,
+    /// The configured URL does not use HTTP or HTTPS.
+    #[error("url scheme must be http or https, got {0}")]
+    UnsupportedScheme(String),
+    /// The physical route uses port zero.
+    #[error("connect_addr port must be > 0")]
+    ZeroPhysicalPort,
+    /// The physical route uses an unspecified IP address.
+    #[error("connect_addr IP must not be unspecified")]
+    UnspecifiedPhysicalIp,
+}
 
 /// Tuning for background Authority stream clients.
 #[derive(Debug, Clone, Deserialize)]
@@ -18,6 +122,12 @@ pub struct AuthorityConfig {
     /// sidecar streams policy bundles and revocations from the Authority.
     #[serde(default)]
     pub url: Option<String>,
+    /// Optional physical TCP destination for the Authority connection.
+    ///
+    /// `url` remains the logical HTTP and TLS origin. This override is useful
+    /// when a composition layer discovers the Authority's endpoint at runtime.
+    #[serde(default)]
+    pub connect_addr: Option<SocketAddr>,
     /// Connection timeout in seconds.
     #[serde(default = "default_connect_timeout_secs")]
     pub(crate) connect_timeout_secs: u64,
@@ -66,17 +176,24 @@ pub struct AuthorityConfig {
 }
 
 impl AuthorityConfig {
+    pub(crate) fn target(&self) -> Result<AuthorityTarget, AuthorityEndpointError> {
+        match self.url.as_deref() {
+            Some(url) => {
+                AuthorityEndpoint::new(url, self.connect_addr).map(AuthorityTarget::Enabled)
+            }
+            None if self.connect_addr.is_some() => {
+                Err(AuthorityEndpointError::ConnectAddrWithoutUrl)
+            }
+            None => Ok(AuthorityTarget::Disabled),
+        }
+    }
+
     /// Validate authority client tuning.
     ///
     /// # Errors
     ///
     /// Returns a human-readable field error for invalid values.
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if let Some(ref url) = self.url
-            && url.trim().is_empty()
-        {
-            return Err("url must not be empty when set".into());
-        }
         if self.connect_timeout_secs == 0 {
             return Err("connect_timeout_secs must be > 0".to_string());
         }
@@ -132,6 +249,7 @@ impl Default for AuthorityConfig {
         Self {
             agent_id: None,
             url: None,
+            connect_addr: None,
             connect_timeout_secs: default_connect_timeout_secs(),
             reconnect_min_backoff_ms: default_min_backoff_ms(),
             reconnect_max_backoff_secs: default_max_backoff_secs(),

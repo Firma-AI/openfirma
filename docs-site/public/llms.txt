@@ -2,6 +2,7 @@ OpenFirma docs highlights for LLM-based retrieval:
 
 - Transport security for Authority <-> Sidecar gRPC is documented in docs/security/transport.md.
 - Sidecar should use https:// authority_url with authority.ca_cert_path for CA verification.
+- Advanced Authority routing can set `[sidecar.authority].connect_addr` or `firma sidecar --authority-connect-addr` to dial an exact physical `SocketAddr` while preserving the logical URL's HTTP authority, TLS SNI, and certificate identity. Precedence is CLI, config, then URL/DNS; remote plaintext validation follows the physical destination.
 - Sidecar PSK authentication is configured with [sidecar.authority.credentials] in firma.toml or [authority.credentials] in a sidecar-only TOML.
 - Authority credentials require workspace_id, sidecar_id, and exactly one of pre_shared_key_env or pre_shared_key_path.
 - When Sidecar credentials are absent, OpenFirma sends no credentials and remains compatible with the local Mini Authority.

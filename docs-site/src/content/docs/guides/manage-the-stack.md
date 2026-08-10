@@ -117,9 +117,16 @@ canonical files.
 | `--detach`    | —                           | _off_                                        |
 
 `start` resolves `firma.toml` via the shared
-[Config Discovery](../../../docs/cli.md) precedence and passes that
-exact file to both children with `--config`. `state_dir` is never a
-config-file key.
+[Config Discovery](../../../docs/cli.md) precedence and passes that exact file
+to both children. `state_dir` is never a config-file key.
+
+For advanced direct-dial routing, `[sidecar.authority].connect_addr` selects a
+physical TCP destination without changing `[sidecar.authority].url`. The URL
+still controls the HTTP authority, TLS SNI, and certificate identity. The
+precedence is `firma sidecar --authority-connect-addr`, then
+`[sidecar.authority].connect_addr`, then normal URL DNS routing. Port `0` is
+invalid for a connect address, and plaintext `http://` routing to a non-loopback
+physical address still requires `allow_insecure_remote_authority = true`.
 
 ## Inspect live sidecars
 

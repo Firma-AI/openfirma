@@ -33,7 +33,7 @@ use super::{AuthorityClientHandle, AuthorityDeps, spawn_authority_client};
 use crate::authority_credentials::{
     RedactedPreSharedKey, ResolvedSidecarCredentials, SidecarCredentialSource,
 };
-use crate::config::AuthorityConfig;
+use crate::config::{AuthorityConfig, AuthorityEndpoint};
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
 use crate::enforcement::revocation::{BloomLruRevocationStore, RevocationConfig};
 
@@ -171,6 +171,7 @@ impl AuthorityService for MockAuthority {
 
 struct MockAuthorityServer {
     url: String,
+    addr: std::net::SocketAddr,
     handle: MockAuthorityHandle,
     shutdown: CancellationToken,
     join: JoinHandle<()>,
@@ -226,6 +227,7 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
 
     Ok(MockAuthorityServer {
         url,
+        addr,
         handle: MockAuthorityHandle { state },
         shutdown,
         join,
@@ -281,6 +283,7 @@ async fn spawn_mock_authority_tls(
 
     Ok(MockAuthorityServer {
         url,
+        addr,
         handle: MockAuthorityHandle { state },
         shutdown,
         join,
@@ -365,8 +368,9 @@ fn spawn_sidecar_with_credentials(
     client_key_pem: Option<&[u8]>,
     credentials: Option<ResolvedSidecarCredentials>,
 ) -> anyhow::Result<SidecarHarness> {
+    let endpoint = AuthorityEndpoint::new(url, config.connect_addr)?;
     let channel = build_channel(
-        url,
+        &endpoint,
         Duration::from_secs(config.connect_timeout_secs),
         ca_cert_pem,
         client_cert_pem,
@@ -467,6 +471,7 @@ fn test_config() -> AuthorityConfig {
     AuthorityConfig {
         agent_id: None,
         url: None,
+        connect_addr: None,
         connect_timeout_secs: 2,
         reconnect_min_backoff_ms: 50,
         reconnect_max_backoff_secs: 1,
@@ -934,6 +939,74 @@ async fn tls_handshake_succeeds_and_policy_streams_over_tls() -> anyhow::Result<
         Some("v-tls"),
         "TLS-delivered bundle version should be applied"
     );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tls_connect_addr_routes_physically_without_changing_server_identity() -> anyhow::Result<()>
+{
+    let certs = generate_test_tls_certs()?;
+    let server = spawn_mock_authority_tls(&certs.server_cert, &certs.server_key).await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v-connect-addr", 60));
+    let mut config = test_config();
+    config.connect_addr = Some(server.addr);
+
+    let harness = spawn_sidecar(
+        "https://localhost:1",
+        config,
+        Some(&certs.ca_cert),
+        None,
+        None,
+    )?;
+
+    assert!(
+        wait_for(Duration::from_secs(5), || {
+            harness.readiness_view.snapshot().policy_bundle_ready
+        })
+        .await,
+        "logical URL with an unreachable port did not connect through connect_addr"
+    );
+    assert_eq!(
+        harness.swappable_policy.version().as_deref(),
+        Some("v-connect-addr")
+    );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tls_connect_addr_does_not_bypass_logical_hostname_verification() -> anyhow::Result<()> {
+    let certs = generate_test_tls_certs()?;
+    let server = spawn_mock_authority_tls(&certs.server_cert, &certs.server_key).await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v-wrong-host", 60));
+    let mut config = test_config();
+    config.connect_addr = Some(server.addr);
+
+    let harness = spawn_sidecar(
+        "https://wrong.example:1",
+        config,
+        Some(&certs.ca_cert),
+        None,
+        None,
+    )?;
+
+    assert!(
+        !wait_for(Duration::from_millis(600), || {
+            harness.readiness_view.snapshot().policy_bundle_ready
+        })
+        .await,
+        "wrong logical hostname bypassed TLS certificate verification"
+    );
+    assert_eq!(harness.swappable_policy.version(), None);
 
     harness.shutdown().await;
     server.stop().await;
