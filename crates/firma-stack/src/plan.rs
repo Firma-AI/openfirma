@@ -36,8 +36,7 @@ use crate::error::StackError;
 /// Returns [`StackError::ConfigResolution`] when a selected configuration cannot be
 /// resolved, or [`StackError::ConfigNotFound`] when discovery finds no `firma.toml`.
 pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig, StackError> {
-    let resolved = firma_config_loader::ConfigResolver::default()
-        .resolve_config(cli_override)
+    let resolved = firma_config_loader::resolve_config(cli_override)
         .map_err(|source| StackError::ConfigResolution { source })?
         .ok_or_else(|| StackError::ConfigNotFound {
             path: cli_override.map_or_else(|| PathBuf::from(CONFIG_FILE_NAME), Path::to_path_buf),

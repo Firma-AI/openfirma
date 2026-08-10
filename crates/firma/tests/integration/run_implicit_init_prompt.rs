@@ -25,6 +25,17 @@ fn firma_bin() -> PathBuf {
 fn isolated_firma_command(cwd: &std::path::Path) -> Command {
     let mut command = Command::new(firma_bin());
     command.current_dir(cwd).env_remove("FIRMA_CONFIG");
+    // Pin the trusted config directory to the empty tmp cwd so discovery cannot
+    // pick up the developer's real `~/.firma`; otherwise these no-config abort
+    // paths would find an unrelated machine-wide config and proceed.
+    #[cfg(unix)]
+    {
+        command.env("HOME", cwd).env_remove("XDG_CONFIG_HOME");
+    }
+    #[cfg(windows)]
+    {
+        command.env("USERPROFILE", cwd);
+    }
     command
 }
 
@@ -145,6 +156,64 @@ fn explicit_missing_run_config_does_not_scaffold() {
     assert!(
         !cwd.join(CONFIG_DIR_NAME).exists(),
         "{CONFIG_DIR_NAME}/ must not be created when explicit --config is missing"
+    );
+}
+
+/// `firma run --authority local` with no config and no TTY commits to local
+/// implicit init: it scaffolds into the trusted config directory (`$HOME/.firma`)
+/// — never a cwd-local `.firma` a planted config could shadow — then launches a
+/// real local stack for the wrapped command. Driving `true` keeps the launch
+/// short; a clean exit is also what flushes coverage for the scaffold path.
+///
+/// Linux-only: implicit init launches a real `bwrap` sandbox. The absence of
+/// `bwrap`/user namespaces fails the test loudly rather than silently skipping.
+#[cfg(target_os = "linux")]
+#[test]
+fn authority_local_implicit_init_scaffolds_into_trusted_dir_and_runs() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let home = tmp.path().join("home");
+    let cwd = tmp.path().join("cwd");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let mut command = Command::new(firma_bin());
+    command
+        .current_dir(&cwd)
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("FIRMA_CONFIG")
+        // No --profile: the scaffold must infer the wrapped command's profile.
+        .args([
+            "run",
+            "--authority",
+            "local",
+            "--sidecar",
+            "local",
+            "--",
+            "true",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = command.output().expect("spawn firma run");
+
+    assert!(
+        out.status.success(),
+        "implicit init + local stack run must succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // Scaffold lands in the trusted config directory, not cwd/.firma.
+    assert!(
+        home.join(CONFIG_DIR_NAME)
+            .join(super::CONFIG_FILE_NAME)
+            .is_file(),
+        "implicit init must scaffold firma.toml into $HOME/.firma"
+    );
+    assert!(
+        !cwd.join(CONFIG_DIR_NAME).exists(),
+        "implicit init must not create a cwd-local {CONFIG_DIR_NAME}/"
     );
 }
 

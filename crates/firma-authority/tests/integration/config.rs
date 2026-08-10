@@ -1,8 +1,6 @@
-use std::path::Path;
-
 use anyhow::{Context as _, anyhow};
 use firma_authority::AuthorityConfig;
-use firma_config_loader::{CONFIG_FILE_NAME, ConfigResolver, ResolvedConfig};
+use firma_config_loader::{CONFIG_FILE_NAME, resolve_config};
 use fs_err as fs;
 
 #[test]
@@ -17,7 +15,8 @@ fn loads_authority_config_from_resolved_section() -> anyhow::Result<()> {
         "#,
     )?;
 
-    let resolved = resolved_config(&config_path)?;
+    let resolved = resolve_config(Some(&config_path))?
+        .with_context(|| format!("resolve config at {}", config_path.display()))?;
     let config = AuthorityConfig::from_resolved_section(&resolved)?
         .ok_or_else(|| anyhow!("authority section should be present"))?;
 
@@ -37,16 +36,11 @@ fn missing_authority_section_returns_none() -> anyhow::Result<()> {
         "#,
     )?;
 
-    let resolved = resolved_config(&config_path)?;
+    let resolved = resolve_config(Some(&config_path))?
+        .with_context(|| format!("resolve config at {}", config_path.display()))?;
     let config = AuthorityConfig::from_resolved_section(&resolved)?;
 
     assert!(config.is_none());
 
     Ok(())
-}
-
-fn resolved_config(path: &Path) -> anyhow::Result<ResolvedConfig> {
-    ConfigResolver::default()
-        .resolve_config(Some(path))?
-        .with_context(|| format!("resolve config at {}", path.display()))
 }

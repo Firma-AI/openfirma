@@ -55,8 +55,9 @@ firma sidecar --config /etc/firma/firma.toml
 | `--health-bind-addr` | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000` |
 
 When `--config` is omitted, a shared `firma.toml` is discovered from
-`$FIRMA_CONFIG` or by walking up to `.firma/firma.toml` — see the Config
-Discovery section in `docs/cli.md`.
+`$FIRMA_CONFIG` or the trusted config directory (`~/.firma`, or
+`%USERPROFILE%\.firma` on Windows) — see the Config Discovery section in
+`docs/cli.md`.
 
 Config schema: see `crates/firma-sidecar/src/config.rs`.
 
@@ -140,7 +141,7 @@ Wrapped command and args after `--`.
 
 ### `firma config`
 
-Scaffold a fresh project: signing keys, default `firma.toml`, empty
+Scaffold a fresh config layout: signing keys, default `firma.toml`, empty
 policy directories. Three usage shapes:
 
 ```bash
@@ -155,10 +156,10 @@ firma config --mode agent-local --profile codex \
 when no `firma.toml` is discoverable, so the one-command path works
 from a fresh clone.
 
-Layout written by `firma config`:
+Layout written by `firma config` with no `--output-dir`:
 
 ```text
-<workspace>/.firma/        # project-local config dir
+~/.firma/                  # trusted config dir (%USERPROFILE%\.firma on Windows)
   firma.toml            authority.key       audit.key
   mapping-rules.toml    policies/           issuance-policies/
 

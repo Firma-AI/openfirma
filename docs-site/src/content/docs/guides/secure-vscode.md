@@ -37,7 +37,7 @@ process-local state.
 ## Step 1: Scaffold the config
 
 ```bash
-firma config --profile vscode --posture dev
+firma config --profile vscode --posture dev --output-dir .firma
 ```
 
 This selects the `vscode` mapping. The mapping is CONNECT-level in v1: VS Code

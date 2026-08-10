@@ -102,16 +102,18 @@ Guest mode is still under active development. Today it validates those artifact 
 firma config --profile generic --posture dev --mapping anthropic
 ```
 
-This writes to the **current directory** by default. To write to a specific directory, pass `--output-dir`:
+This writes to the trusted config directory (`~/.firma`, or
+`%USERPROFILE%\.firma` on Windows) by default. To write to a specific
+directory, pass `--output-dir`:
 
 ```bash
 firma config --profile generic --posture dev --mapping anthropic --output-dir .local
 ```
 
-Generated layout (default `--output-dir .firma`):
+Generated layout with no `--output-dir`:
 
 ```
-.firma/
+~/.firma/
   firma.toml                   — unified config (authority + sidecar + run profiles)
   mapping-rules.toml           — base mapping rules
   mappings/anthropic.toml      — Anthropic endpoint mapping
@@ -199,8 +201,8 @@ Precedence:
 
 1. `--authority local` / `--authority <url>` — CLI override.
 2. `[authority]` section present in the discovered `firma.toml`
-   (walk-up from the current directory to `<dir>/.firma/firma.toml`, or
-   `$FIRMA_CONFIG`) — autostart a local Mini Authority.
+   (the trusted config directory `~/.firma`, or `$FIRMA_CONFIG`) — autostart a
+   local Mini Authority.
 3. `[sidecar.authority].url` set — connect to that remote Authority.
 4. Nothing configured — `firma run` falls back to local autostart so
    zero-config works. The spawned Authority uses an ephemeral signing

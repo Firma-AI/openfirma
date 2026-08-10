@@ -90,10 +90,11 @@ firma config --yes \
   --name quickstart \
   --posture dev \
   --mapping github \
-  --extra-hosts api.github.com
+  --extra-hosts api.github.com \
+  --output-dir .firma
 ```
 
-This creates `.firma/` with a unified `firma.toml` (authority, sidecar, and run profiles), mapping files, policy files, and local signing material under the platform state directory. The GitHub mapping enables HTTPS interception for `api.github.com`; `--extra-hosts` adds a catch-all rule for the public profile endpoint used below.
+This creates project-local `.firma/` with a unified `firma.toml` (authority, sidecar, and run profiles), mapping files, policy files, and local signing material under the platform state directory. The GitHub mapping enables HTTPS interception for `api.github.com`; `--extra-hosts` adds a catch-all rule for the public profile endpoint used below.
 
 ## Run an agent under enforcement
 
@@ -103,7 +104,7 @@ The command after `--` is whatever you want to govern. Here it's a one-line `cur
 
 On **Linux**, `firma run` uses the `bwrap` backend and structurally confines outbound traffic.
 
-On **macOS** and **Windows (WSL2)**, the default backends (`vz` and `wsl2`) provide proxy-only enforcement: traffic is mediated for cooperative HTTP clients like `curl`, but `firma run` requires an explicit opt-in before starting. Pass `--allow-non-structural`, or set `allow_non_structural = true` under `[run.defaults]` in `.firma/firma.toml`. See [The sandbox boundary](../concepts/sandbox/) for details.
+On **macOS** and **Windows (WSL2)**, the default backends (`vz` and `wsl2`) provide proxy-only enforcement: traffic is mediated for cooperative HTTP clients like `curl`, but `firma run` requires an explicit opt-in before starting. Pass `--allow-non-structural`, or set `allow_non_structural = true` under `[run.defaults]` in the selected `firma.toml`. See [The sandbox boundary](../concepts/sandbox/) for details.
 
 <Tabs>
 <TabItem label="Linux">

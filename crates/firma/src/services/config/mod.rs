@@ -12,7 +12,7 @@ use dialoguer::theme::ColorfulTheme;
 
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 use doc::DocInputs;
-use firma_config_loader::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_config_loader::{AgentProfile, CONFIG_FILE_NAME};
 use firma_core::AgentId;
 use firma_fs::create_private_dir_all;
 
@@ -352,10 +352,22 @@ fn path_display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn default_output_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(CONFIG_DIR_NAME)
+/// Default scaffold destination: the trusted config directory that discovery
+/// reads (`~/.firma` on Unix, `%USERPROFILE%\.firma` on Windows). `$XDG_CONFIG_HOME`
+/// is deliberately ignored, matching `home_config_dir`.
+///
+/// Writing here keeps `firma config` and discovery in lockstep — a scaffolded
+/// file lands exactly where `resolve_config` looks.
+///
+/// # Errors
+///
+/// Fails closed when the OS provides no home anchor, matching discovery: a
+/// `cwd`-relative fallback would write a config that discovery can never find,
+/// so we surface the error and let the user pick a location with `--output-dir`.
+fn default_output_dir() -> Result<PathBuf> {
+    firma_config_loader::home_config_dir().map_err(|error| {
+        anyhow::anyhow!("resolve trusted config directory for scaffold output: {error}")
+    })
 }
 
 fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
@@ -461,9 +473,10 @@ fn resolve_config_dir(
         return std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()));
     }
 
-    let default = firma_config_loader::ConfigResolver::default()
-        .resolve_config(None)?
-        .map_or_else(default_output_dir, |resolved| resolved.config_dir());
+    let default = match firma_config_loader::resolve_config(None)? {
+        Some(resolved) => resolved.config_dir(),
+        None => default_output_dir()?,
+    };
 
     if interactive {
         let s: String = dialoguer::Input::with_theme(theme)
@@ -1181,8 +1194,7 @@ pub fn resolve_audit_log_path(
         return Ok(state_dir.join("audit.jsonl"));
     }
 
-    if let Some(resolved) = firma_config_loader::ConfigResolver::default()
-        .resolve_config(config_override)
+    if let Some(resolved) = firma_config_loader::resolve_config(config_override)
         .map_err(|error| format!("resolve discovered config: {error}"))?
         && let Ok(body) = resolved.config.raw_section("sidecar.audit")
     {
@@ -1836,7 +1848,7 @@ mod tests {
     fn implicit_scaffold_uses_workspace_not_config_dir_for_mount() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("project");
-        let config_dir = workspace.join(CONFIG_DIR_NAME);
+        let config_dir = workspace.join(firma_config_loader::CONFIG_DIR_NAME);
         let state_dir = tmp.path().join("state");
         std::fs::create_dir_all(&workspace).unwrap();
 

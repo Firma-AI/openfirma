@@ -43,10 +43,13 @@ Keep this list as tight as the agent will tolerate. If the agent reaches for git
 firma config \
   --profile codex \
   --posture strict \
-  --mapping anthropic
+  --mapping anthropic \
+  --output-dir .firma
 ```
 
-This writes to the **current directory** by default. Pass `--output-dir` to write to a specific path:
+This writes to project-local `.firma/` for this guide. Without `--output-dir`,
+`firma config` writes to the trusted config directory (`~/.firma`, or
+`%USERPROFILE%\.firma` on Windows).
 
 ```bash
 firma config --profile codex --posture strict --mapping anthropic --output-dir .local
@@ -58,7 +61,7 @@ New local configurations generate a stable UUIDv7 at
 
 `--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping classifies `CONNECT` tunnels to `*.anthropic.com`. Credential injection in Step 5 requires HTTPS MITM on `api.anthropic.com` — see [Inject credentials](../inject-credentials/).
 
-Generated layout (default `--output-dir .firma`):
+Generated layout for `--output-dir .firma`:
 
 ```
 .firma/

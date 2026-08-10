@@ -438,25 +438,19 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[
 /// mounts.
 ///
 /// Mount order is load-bearing and enforced here. bwrap is last-write-wins, so
-/// the `.firma/` config mask must beat any profile mount that would re-expose
-/// `firma.toml`, while still letting an intentional mount of a subpath *inside*
-/// a masked `.firma/` (e.g. the `vscode` profile's `.firma/vscode/` state) poke
-/// through. To satisfy both, profile mounts are partitioned by whether their
-/// target lands inside a masked `.firma/`, and emitted around the mask:
+/// the `.firma/` config mask is emitted **last** — after the workspace cwd bind
+/// and every profile mount — and therefore always beats any mount that would
+/// otherwise re-expose `firma.toml`:
 ///
 /// 1. workspace cwd bind;
-/// 2. profile mounts that are **not** a strict `.firma/` subpath re-expose (see
-///    [`MountSpec::reexposes_firma_subpath`]) — this includes a broad workspace
-///    bind of a *parent* of `.firma/` (e.g. the repo root) *and* a mount whose
-///    target *is* a `.firma/`, neither of which may re-leak or replace the mask;
-/// 3. the `.firma/` mask ([`mask_firma_dir`]), which now wins over the binds
-///    above and is also projected through them so an aliased bind can't re-expose
-///    the config elsewhere;
-/// 4. profile mounts whose target is **strictly inside** a masked `.firma/`,
-///    re-exposed on top of the mask via last-write-wins.
+/// 2. all profile mounts (including a broad workspace-parent bind, e.g. the repo
+///    root, or a mount whose target *is* a `.firma/`);
+/// 3. the `.firma/` mask ([`mask_firma_dir`]), which wins over the binds above
+///    and is also projected through them so an aliased bind can't re-expose the
+///    config at another path.
 ///
-/// Reordering would either bury the vscode-style subpath mounts or re-leak
-/// `firma.toml` under a workspace-parent bind.
+/// Reordering the mask before the binds would re-leak `firma.toml` under a
+/// workspace-parent bind.
 fn append_filesystem_layout(
     command: &mut Command,
     handle: &SandboxHandle,
@@ -486,24 +480,15 @@ fn append_filesystem_layout(
         command.arg("--unshare-net");
     }
 
-    // Partition profile mounts around the mask. A strict `.firma/` subpath
-    // re-expose (e.g. the vscode state) is emitted *after* the mask; everything
-    // else — a workspace-parent bind and a mount whose target *is* `.firma` —
-    // is emitted *before*, so neither can re-leak nor replace the mask.
-    let (inside, outside): (Vec<&MountSpec>, Vec<&MountSpec>) = handle
-        .mounts
-        .iter()
-        .partition(|mount| mount.reexposes_firma_subpath());
-
-    emit_mounts(command, outside.iter().copied());
-
-    // Mask the discoverable `.firma/`, then project each mask through the outside
-    // binds above so an alias mount of a `.firma`-containing tree (e.g. the
-    // workspace rebound elsewhere) can't re-expose the config at the aliased path.
+    // Emit every profile mount, then mask the discoverable `.firma/` *last* so
+    // the mask beats all of them via bwrap last-write-wins — no mount can
+    // re-expose `firma.toml`. Project each mask through those binds too, so an
+    // alias mount of a `.firma`-containing tree (e.g. the workspace rebound
+    // elsewhere) can't re-expose the config at the aliased path.
+    let mounts: Vec<&MountSpec> = handle.mounts.iter().collect();
+    emit_mounts(command, mounts.iter().copied());
     let masked = mask_firma_dir(command, launch);
-    project_mount_aliases(command, &outside, masked);
-
-    emit_mounts(command, inside.iter().copied());
+    project_mount_aliases(command, &mounts, masked);
 }
 
 /// Emit each profile/runtime bind mount (`--ro-bind` or `--bind`) in order.
@@ -525,21 +510,20 @@ fn emit_mounts<'a>(command: &mut Command, mounts: impl Iterator<Item = &'a Mount
 /// enforcement config for a later `firma run`.
 ///
 /// The sandbox binds host root, so every `.firma/` is in principle readable.
-/// Rather than scan the filesystem, we mask the discovery-relevant set:
+/// Rather than scan the filesystem, we mask exactly the discovery set — which,
+/// with no cwd/ancestor walk, is just the trusted config directory plus any
+/// explicit override:
 ///
-/// - every `.firma/` on the cwd walk-up path, via the shared
-///   [`firma_config_loader::FirmaConfigCandidateAncestors`] iterator, so the mask stays
-///   in lockstep with what a later run could select. The cwd candidate is masked
-///   even when absent, since the cwd is bound read-write and an agent could
-///   otherwise plant a higher-precedence `.firma/` there for a later run;
-/// - `$HOME/.firma`, discoverable from `$HOME` and writable (home is rebound
-///   read-write), so an agent can't plant a poisoned config there;
-/// - the explicitly resolved `config_file`, which may sit outside the cwd
-///   ancestry when set via `--config` / `FIRMA_CONFIG`.
+/// - `$HOME/.firma`, the sole HOME-rooted trusted config directory discovery
+///   reads. Home is rebound read-write, so it is masked **even when absent** —
+///   otherwise an agent could plant a poisoned `~/.firma/firma.toml` for a later
+///   run to trust; the tmpfs sends any such write to ephemeral storage;
+/// - the explicitly resolved `config_file` set via `--config` / `FIRMA_CONFIG`,
+///   which may sit anywhere.
 ///
-/// Not covered: an agent planting a `.firma/` in a *descendant* subfolder (below
-/// the run cwd, off the walk-up path) that the user later `cd`s into — a
-/// discovery-time trust problem tracked separately.
+/// A `.firma/` an agent plants in the cwd (or any ancestor) is deliberately not
+/// masked: discovery never walks the cwd tree, so it can never be selected for a
+/// later run.
 ///
 /// Each path is `canonicalize`d before mounting to resolve any post-discovery
 /// symlink swap. A residual race remains (bwrap re-resolves the destination
@@ -553,36 +537,29 @@ fn emit_mounts<'a>(command: &mut Command, mounts: impl Iterator<Item = &'a Mount
 /// Fail closed: a `.firma/` that exists but won't canonicalize (permission,
 /// `ELOOP`, race) is masked at its literal path; only `NotFound` is a no-op.
 ///
-/// Masks are emitted after the workspace cwd bind and after profile/runtime
-/// mounts that land *outside* a `.firma/`, but before mounts that land *inside*
-/// one (see [`append_filesystem_layout`] and [`MountSpec::reexposes_firma_subpath`]), so
-/// an intentional subpath mount can re-expose requested paths while the config
-/// stays hidden even under a workspace-parent bind. A relative `config_file` is
-/// resolved against the host cwd first, since bwrap destinations must be
-/// absolute.
+/// Masks are emitted after the workspace cwd bind and after every profile/
+/// runtime mount (see [`append_filesystem_layout`]), so the mask wins over all
+/// of them and the config stays hidden even under a workspace-parent bind. A
+/// relative `config_file` is resolved against the host cwd first, since bwrap
+/// destinations must be absolute.
 ///
-/// Returns the emitted mask set so the caller can project it through outside
+/// Returns the emitted mask set so the caller can project it through the profile
 /// binds (see [`project_mount_aliases`]).
 fn mask_firma_dir(command: &mut Command, launch: &LaunchSpec) -> BTreeMap<PathBuf, MaskKind> {
     let mut masked: BTreeMap<PathBuf, MaskKind> = BTreeMap::new();
 
-    for candidate in firma_config_loader::FirmaConfigCandidateAncestors::new(&launch.cwd, None) {
-        mask_firma_dir_at(command, &candidate.config_dir, &mut masked);
-    }
-
-    // The cwd is bound read-write, so the agent can *plant* a higher-precedence
-    // `.firma/` here for a later run even when none exists today. Mask the cwd
-    // candidate whether or not it currently exists; writes then land in the
-    // ephemeral tmpfs instead of the host bind. Ancestors above the cwd sit on
-    // the read-only root bind and are not plantable, so absent ones are skipped
-    // (and tmpfs-ing them there could fail `EROFS`).
-    let cwd_firma = launch.cwd.join(CONFIG_DIR_NAME);
-    if !cwd_firma.exists() {
-        emit_tmpfs(command, cwd_firma, &mut masked);
-    }
-
     if let Some(home_firma) = host_home_firma_dir(launch) {
-        mask_firma_dir_at(command, &home_firma, &mut masked);
+        // `$HOME` is rebound read-write, so an agent could plant a poisoned
+        // `~/.firma/firma.toml` for a later run to discover. Mask the trusted
+        // config dir whether or not it exists today: an existing one is
+        // canonicalized and tmpfs'd (also masking a symlinked `firma.toml`); an
+        // absent one is tmpfs'd at its literal path so a planted write lands in
+        // the ephemeral tmpfs instead of the host home.
+        if home_firma.exists() {
+            mask_firma_dir_at(command, &home_firma, &mut masked);
+        } else {
+            emit_tmpfs(command, home_firma, &mut masked);
+        }
     }
 
     if let Some(config_file) = &launch.config_file {
@@ -608,7 +585,7 @@ fn mask_firma_dir(command: &mut Command, launch: &LaunchSpec) -> BTreeMap<PathBu
     masked
 }
 
-/// Re-apply each mask at the aliased path it acquires under an outside bind.
+/// Re-apply each mask at the aliased path it acquires under a profile bind.
 ///
 /// A profile mount that binds a `.firma`-containing tree at another target (e.g.
 /// the workspace rebound elsewhere) re-exposes every masked path at
@@ -671,17 +648,14 @@ fn host_home_firma_dir(launch: &LaunchSpec) -> Option<PathBuf> {
 /// Refuse discoverable `.firma/` symlinks before launch.
 ///
 /// The mask protects the selected config's read/write target, but a symlinked
-/// `.firma` entry inside a writable workspace can still be unlinked and replaced
-/// with a real directory, planting a higher-precedence config for the next run.
-/// bwrap mount targets are paths rather than protected parent-directory file
-/// descriptors, so the robust behavior is to fail closed when any `.firma`
-/// directory in the discovery/mask set is itself a symlink.
+/// `.firma` entry in a writable location (`$HOME/.firma` or the `.firma/` of an
+/// explicit `--config` / `$FIRMA_CONFIG` path) can still be unlinked and
+/// replaced with a real directory mid-run, defeating the mask. bwrap mount
+/// targets are paths rather than protected parent-directory file descriptors, so
+/// the robust behavior is to fail closed when any `.firma` directory in the
+/// masked set is itself a symlink.
 fn reject_symlinked_firma_dirs(launch: &LaunchSpec) -> Result<(), RunError> {
     let mut checked = std::collections::BTreeSet::new();
-    for candidate in firma_config_loader::FirmaConfigCandidateAncestors::new(&launch.cwd, None) {
-        reject_symlinked_firma_dir(&candidate.config_dir, &mut checked)?;
-    }
-
     if let Some(home_firma) = host_home_firma_dir(launch) {
         reject_symlinked_firma_dir(&home_firma, &mut checked)?;
     }
@@ -744,9 +718,7 @@ fn reject_symlinked_firma_dir(
 /// - canonicalizes to a non-`.firma` directory (the `.firma` path is a symlink
 ///   escaping to an unrelated tree) → do not tmpfs the unrelated target, but
 ///   mask the `firma.toml` it exposes at the target's canonical path;
-/// - `NotFound` → skip (no `.firma/` here). The one exception is the run cwd,
-///   whose absent `.firma/` is masked separately (see [`mask_firma_dir`]) since
-///   the cwd is bound read-write and thus *plantable*;
+/// - `NotFound` → skip (no `.firma/` here);
 /// - any other canonicalize error → fail closed, tmpfs the literal path.
 ///
 /// Deduplicates via `masked` so shared ancestors are only emitted once.
@@ -1015,12 +987,13 @@ mod tests {
         cwd: std::path::PathBuf,
         config_file: Option<std::path::PathBuf>,
     ) -> crate::backend::LaunchSpec {
-        // Pin HOME to a non-existent path so `host_home_firma_dir` does not fall
-        // back to the test runner's real `$HOME`, whose `.firma` would make mask
+        // Pin HOME to empty so `host_home_firma_dir` returns `None` (no trusted
+        // dir can be derived) rather than falling back to the test runner's real
+        // `$HOME` — whose `.firma`, now masked even when absent, would make mask
         // assertions non-deterministic. Tests that exercise `$HOME/.firma`
-        // masking set HOME explicitly instead.
+        // masking set an absolute HOME explicitly instead.
         let mut env = BTreeMap::new();
-        env.insert("HOME".to_string(), "/nonexistent-firma-home".to_string());
+        env.insert("HOME".to_string(), String::new());
         launch_with_env(cwd, config_file, env)
     }
 
@@ -1064,7 +1037,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_masks_dir_without_recreating_file() {
         let mut cmd = std::process::Command::new("bwrap");
-        // Config discovered in a `.firma/` above the workspace cwd (walk-up).
+        // Config resolved to a `.firma/` (here via `--config`): its directory is
+        // tmpfs-masked so the agent can't read or poison the live config.
         let temp = tempfile::tempdir().expect("tempdir");
         let firma_dir = temp.path().join(".firma");
         std::fs::create_dir_all(&firma_dir).expect("mkdir .firma");
@@ -1081,11 +1055,12 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn mask_firma_dir_masks_all_ancestor_dirs() {
+    fn mask_firma_dir_does_not_mask_ancestor_dirs() {
         let mut cmd = std::process::Command::new("bwrap");
-        // Two `.firma/` on the discovery path: the nearest (resolved) and a
-        // parent that lost the walk-up race. Both must be masked, since root is
-        // bound and a later `firma run` could select the parent.
+        // Home-only discovery has no cwd/ancestor walk, so only the resolved
+        // config's `.firma/` is masked. A `.firma/` in a *parent* directory is
+        // never discovered and must not be masked (masking it protects nothing
+        // and would tmpfs an unrelated tree).
         let temp = tempfile::tempdir().expect("tempdir");
         let parent_firma = temp.path().join(".firma");
         let child = temp.path().join("service");
@@ -1100,21 +1075,29 @@ mod tests {
 
         let rendered = rendered_args(&cmd).join(" ");
         assert!(rendered.contains(&format!("--tmpfs {}", canonical(&child_firma))));
-        assert!(rendered.contains(&format!("--tmpfs {}", canonical(&parent_firma))));
+        assert!(
+            !rendered.contains(&format!("--tmpfs {}", canonical(&parent_firma))),
+            "ancestor `.firma/` must not be masked under home-only discovery"
+        );
     }
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn filesystem_layout_masks_firma_after_cwd_bind_and_before_mounts() {
-        // Regression guard for the load-bearing ordering: the `.firma` mask must
-        // land after the workspace cwd bind (so it hides workspace config) and
-        // before profile mounts (so a mount like the vscode `.firma/vscode/`
-        // state can re-expose a subpath via bwrap last-write-wins).
+    fn filesystem_layout_masks_firma_after_cwd_bind_and_all_mounts() {
+        // Regression guard for the load-bearing ordering: the `.firma` mask is
+        // emitted last — after the workspace cwd bind and after every profile
+        // mount — so it beats all of them via bwrap last-write-wins. A mount
+        // landing *inside* `.firma/` (vscode-style `.firma/vscode/` state) is
+        // therefore hidden by the mask, not re-exposed.
         let temp = tempfile::tempdir().expect("tempdir");
         let cwd = temp.path().join("workspace");
         let firma_dir = cwd.join(".firma");
         let vscode_state = firma_dir.join("vscode");
         std::fs::create_dir_all(&vscode_state).expect("mkdir .firma/vscode");
+        // `--config` into the workspace `.firma/` is what puts it in the mask set
+        // now that discovery no longer walks the cwd tree.
+        let config_file = firma_dir.join("firma.toml");
+        std::fs::write(&config_file, "").expect("write firma.toml");
         let runtime_dir = temp.path().join("runtime");
         std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
 
@@ -1140,7 +1123,7 @@ mod tests {
             super::BWRAP_ROOTFS_MODE_ENV.to_string(),
             super::BWRAP_ROOTFS_MODE_READONLY.to_string(),
         );
-        let launch = launch_with_env(cwd.clone(), None, env);
+        let launch = launch_with_env(cwd.clone(), Some(config_file), env);
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
         let mut cmd = std::process::Command::new("bwrap");
@@ -1158,9 +1141,12 @@ mod tests {
         let vscode_mount = rendered
             .iter()
             .position(|arg| arg == &vscode_state.display().to_string())
-            .expect("vscode mount re-exposed");
+            .expect("vscode mount emitted");
         assert!(cwd_bind < mask, "mask must follow the cwd bind");
-        assert!(mask < vscode_mount, "mask must precede profile mounts");
+        assert!(
+            vscode_mount < mask,
+            "mask must follow profile mounts so it wins over a mount inside `.firma/`"
+        );
     }
 
     #[test]
@@ -1176,7 +1162,8 @@ mod tests {
         let workspace = temp.path().join("workspace");
         let firma_dir = workspace.join(".firma");
         std::fs::create_dir_all(&firma_dir).expect("mkdir .firma");
-        std::fs::write(firma_dir.join("firma.toml"), "").expect("write firma.toml");
+        let config_file = firma_dir.join("firma.toml");
+        std::fs::write(&config_file, "").expect("write firma.toml");
         let runtime_dir = temp.path().join("runtime");
         std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
 
@@ -1201,7 +1188,7 @@ mod tests {
 
         let mut env = BTreeMap::new();
         env.insert("HOME".to_string(), "/nonexistent-firma-home".to_string());
-        let launch = launch_with_env(workspace.clone(), None, env);
+        let launch = launch_with_env(workspace.clone(), Some(config_file), env);
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
         let mut cmd = std::process::Command::new("bwrap");
@@ -1230,9 +1217,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_masks_home_firma_outside_cwd_ancestry() {
         let mut cmd = std::process::Command::new("bwrap");
-        // cwd is not under $HOME, so $HOME/.firma is outside the walk-up path.
-        // It must still be masked: a later run from $HOME would discover it, and
-        // $HOME is rebound read-write, so an agent could plant a config there.
+        // $HOME/.firma is the trusted config directory home-only discovery reads.
+        // It must be masked wherever the cwd sits: $HOME is rebound read-write, so
+        // an agent could otherwise read or plant a config there.
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let home_firma = home.join(".firma");
@@ -1252,6 +1239,39 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    fn mask_firma_dir_masks_absent_home_firma_to_block_planting() {
+        let mut cmd = std::process::Command::new("bwrap");
+        // $HOME exists but has no `.firma/` yet. Since $HOME is rebound
+        // read-write and `~/.firma` is the sole discovery root, an agent could
+        // plant `~/.firma/firma.toml` for a later run to trust. The absent dir
+        // must still be tmpfs-masked at its literal path so the write lands in
+        // the ephemeral tmpfs, not the host home.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).expect("mkdir home");
+        let home_firma = home.join(".firma");
+        assert!(
+            !home_firma.exists(),
+            "precondition: home `.firma` is absent"
+        );
+        let cwd = temp.path().join("work");
+        std::fs::create_dir_all(&cwd).expect("mkdir cwd");
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), home.display().to_string());
+        let launch = launch_with_env(cwd, None, env);
+
+        super::mask_firma_dir(&mut cmd, &launch);
+
+        let rendered = rendered_args(&cmd).join(" ");
+        assert!(
+            rendered.contains(&format!("--tmpfs {}", home_firma.display())),
+            "absent $HOME/.firma must be masked to block planting: {rendered}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
     fn mask_firma_dir_fails_closed_when_canonicalize_errors() {
         let mut cmd = std::process::Command::new("bwrap");
         // A `.firma` that exists but cannot be canonicalized (here a self-
@@ -1267,7 +1287,7 @@ mod tests {
             "self-symlink should fail canonicalization"
         );
 
-        let launch = launch_with_cwd_and_config(cwd, None);
+        let launch = launch_with_cwd_and_config(cwd, Some(link.join("firma.toml")));
 
         super::mask_firma_dir(&mut cmd, &launch);
 
@@ -1290,7 +1310,7 @@ mod tests {
         let link = cwd.join(".firma");
         std::os::unix::fs::symlink(&real_firma, &link).expect("symlink .firma");
 
-        let launch = launch_with_cwd_and_config(cwd, None);
+        let launch = launch_with_cwd_and_config(cwd, Some(link.join("firma.toml")));
 
         super::mask_firma_dir(&mut cmd, &launch);
 
@@ -1311,7 +1331,7 @@ mod tests {
         let link = cwd.join(".firma");
         std::os::unix::fs::symlink(&cwd, &link).expect("symlink .firma -> workspace");
 
-        let launch = launch_with_cwd_and_config(cwd, None);
+        let launch = launch_with_cwd_and_config(cwd, Some(link.join("firma.toml")));
 
         super::mask_firma_dir(&mut cmd, &launch);
 
@@ -1328,8 +1348,7 @@ mod tests {
         let mut cmd = std::process::Command::new("bwrap");
         // Explicit --config pointing at a bare file: parent is not `.firma`, so
         // we must NOT tmpfs the parent (it could be the workspace root); only the
-        // file itself is masked. The absent cwd `.firma` is still masked to block
-        // planting, but that is a sibling of the file, not the parent.
+        // file itself is masked.
         let temp = tempfile::tempdir().expect("tempdir");
         let config_file = temp.path().join("firma.toml");
         std::fs::write(&config_file, "").expect("write firma.toml");
@@ -1345,20 +1364,13 @@ mod tests {
                 .join(" ")
                 .contains(&format!("--ro-bind /dev/null {}", canonical(&config_file)))
         );
-        // The parent (workspace root) is never tmpfs'd; only the cwd `.firma`.
+        // The parent (workspace root) is never tmpfs'd.
         let parent = temp.path().display().to_string();
         assert!(
             !rendered
                 .windows(2)
                 .any(|w| w[0] == "--tmpfs" && w[1] == parent),
             "must not tmpfs the bare file's parent directory"
-        );
-        assert!(
-            rendered
-                .windows(2)
-                .any(|w| w[0] == "--tmpfs"
-                    && w[1] == temp.path().join(".firma").display().to_string()),
-            "absent cwd `.firma` should still be masked"
         );
     }
 
@@ -1384,25 +1396,19 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn mask_firma_dir_masks_absent_cwd_candidate_to_block_planting() {
+    fn mask_firma_dir_masks_nothing_without_home_or_config() {
         let mut cmd = std::process::Command::new("bwrap");
-        // No `.firma/` anywhere and no `--config`: the only mask is the absent
-        // cwd candidate, tmpfs'd so the agent can't plant a higher-precedence
-        // `.firma/` at the rw-bound cwd for a later run to select. Ancestors
-        // above the cwd are absent too but not plantable, so they stay unmasked.
+        // No derivable `$HOME` (the helper pins HOME empty) and no `--config`:
+        // there is no discovery source, so nothing is masked. A planted cwd
+        // `.firma` can never be discovered under home-only, so it stays unmasked.
         let temp = tempfile::tempdir().expect("tempdir");
         let launch = launch_with_cwd_and_config(temp.path().to_path_buf(), None);
 
         super::mask_firma_dir(&mut cmd, &launch);
 
-        let rendered = rendered_args(&cmd);
-        assert_eq!(
-            rendered,
-            vec![
-                "--tmpfs".to_string(),
-                temp.path().join(".firma").display().to_string(),
-            ],
-            "only the absent cwd `.firma` is masked"
+        assert!(
+            rendered_args(&cmd).is_empty(),
+            "no discovery source means no mask"
         );
     }
 

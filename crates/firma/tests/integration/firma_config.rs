@@ -280,6 +280,94 @@ fn explicit_agent_id_replaces_legacy_profile_value() {
     );
 }
 
+/// With no `--output-dir`, `firma config` scaffolds into the trusted config
+/// directory (`~/.firma`) — the same location discovery reads. Exercises the
+/// HOME-rooted `default_output_dir` path and keeps `firma config` and discovery
+/// in lockstep.
+#[cfg(unix)]
+#[test]
+fn init_without_output_dir_scaffolds_into_home_firma() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let home = tmp.path().join("home");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&home).unwrap();
+
+    let output = firma()
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("FIRMA_CONFIG")
+        .args(["config", "--yes", "--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn firma config");
+    assert!(
+        output.status.success(),
+        "config without --output-dir failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let firma_toml = home.join(super::CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+    assert!(
+        firma_toml.is_file(),
+        "firma config with no --output-dir must scaffold into ~/.firma: {}",
+        firma_toml.display()
+    );
+    assert_unified_config_parses(&firma_toml);
+}
+
+/// With a config already present in the trusted directory and no
+/// `--output-dir`, `firma config` must resolve that discovered directory as the
+/// default rather than recomputing the HOME fallback — exercising the
+/// discovered-config branch of `resolve_config_dir`. The generated agent id must
+/// survive the in-place rewrite.
+#[cfg(unix)]
+#[test]
+fn init_without_output_dir_reuses_discovered_config_dir() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let home = tmp.path().join("home");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&home).unwrap();
+
+    let run = |label: &str| {
+        let output = firma()
+            .env("HOME", &home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("FIRMA_CONFIG")
+            .args(["config", "--yes", "--state-dir"])
+            .arg(&state_dir)
+            .output()
+            .expect("spawn firma config");
+        assert!(
+            output.status.success(),
+            "{label} firma config failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    };
+
+    // Seed the trusted directory so discovery resolves an existing config.
+    run("seeding");
+    let firma_toml = home.join(super::CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+    let seeded: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&firma_toml).unwrap()).unwrap();
+    let seeded_id = seeded["sidecar"]["authority"]["agent_id"]
+        .as_str()
+        .expect("seeded agent id")
+        .to_owned();
+
+    // Second run with no --output-dir must discover the seeded config directory
+    // and rewrite it in place rather than scaffolding a fresh one.
+    run("discovering");
+    let rewritten: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&firma_toml).unwrap()).unwrap();
+    assert_eq!(
+        rewritten["sidecar"]["authority"]["agent_id"].as_str(),
+        Some(seeded_id.as_str()),
+        "discovered config dir must be reused, preserving the generated agent id",
+    );
+}
+
 fn assert_unified_config_parses(firma_toml: &Path) {
     let text = std::fs::read_to_string(firma_toml)
         .unwrap_or_else(|e| panic!("read {}: {e}", firma_toml.display()));

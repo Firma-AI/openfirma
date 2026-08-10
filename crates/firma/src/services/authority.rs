@@ -41,8 +41,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let resolved = firma_config_loader::ConfigResolver::default()
-        .resolve_config(args.config.as_deref())?
+    let resolved = firma_config_loader::resolve_config(args.config.as_deref())?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `authority`"))?;
     tracing::info!(
         path = %resolved.config_file().display(),

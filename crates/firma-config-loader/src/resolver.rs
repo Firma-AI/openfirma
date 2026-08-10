@@ -1,4 +1,23 @@
 //! Config-file discovery: fixed precedence, first selected file wins.
+//!
+//! The config is a security boundary: it carries enforcement policy, action
+//! mappings, allowlists, Authority/Sidecar endpoints and keys, secret
+//! providers, sandbox backend selection, and egress/DNS confinement. Whoever
+//! controls the selected file controls the guardrails, so discovery must never
+//! trust a path an agent or repository can write.
+//!
+//! Precedence:
+//! 1. `--config <path>` — explicit, launcher-controlled escape.
+//! 2. `$FIRMA_CONFIG` — explicit, launcher-controlled escape.
+//! 3. The [trusted config directory](home_config_dir) — a single,
+//!    user-controlled, HOME-rooted location (`~/.firma` on every OS). No
+//!    directory-tree walk, no `$XDG_CONFIG_HOME`.
+//!
+//! There is deliberately no cwd/ancestor walk-up: a nearest-`.firma`-wins scan
+//! (borrowed from git/npm/eslint) lets a compromised prompt plant
+//! `./.firma/firma.toml` in the workspace or any writable ancestor and weaken
+//! its own enforcement. The trust root is a path the user controls, not one the
+//! agent/repo controls.
 
 use std::{
     io::ErrorKind,
@@ -9,87 +28,56 @@ use fs_err as fs;
 
 use crate::{CONFIG_DIR_NAME, CONFIG_ENV_NAME, CONFIG_FILE_NAME, FirmaConfig};
 
-/// A candidate `.firma/` location produced while walking up the directory tree.
 ///
-/// Yielded nearest-first by [`FirmaConfigCandidateAncestors`]. Discovery reads
-/// [`config_file`](Self::config_file) to find the winning config; the sandbox
-/// backend masks [`config_dir`](Self::config_dir) so an agent cannot read or
-/// poison it. Paths are constructed by joining, not stat'd — callers decide
-/// whether each candidate exists.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FirmaConfigCandidate {
-    /// The `.firma/` directory for this ancestor (`<dir>/.firma`).
-    pub config_dir: PathBuf,
+/// Fail-closed: when the anchoring environment variable is unset, empty, or
+/// relative we refuse to guess a location rather than fall back to an
+/// agent-writable path.
+#[derive(Debug, thiserror::Error)]
+pub enum HomeConfigDirError {
+    /// The HOME-anchoring variable (`HOME` on Unix, `USERPROFILE` on Windows)
+    /// is unset, empty, or not an absolute path, so no user-controlled
+    /// directory can be derived.
+    #[error("cannot locate trusted config directory: `{0}` is unset, empty, or not absolute")]
+    MissingHome(&'static str),
 }
 
-impl FirmaConfigCandidate {
-    /// The `firma.toml` candidate inside this `.firma/` directory
-    /// (`<dir>/.firma/firma.toml`), at its canonical fixed name.
-    #[must_use]
-    pub fn config_file(&self) -> PathBuf {
-        self.config_dir.join(CONFIG_FILE_NAME)
-    }
-}
-
-/// Iterator over ancestor `.firma/` candidates, nearest-first.
+/// The user-controlled trusted config directory: `~/.firma` on every OS.
 ///
-/// Built via [`FirmaConfigCandidateAncestors::new`]. An optional inclusive ceiling stops
-/// iteration after the ceiling directory, and yields nothing when the start path
-/// is not within the ceiling.
-#[derive(Debug, Clone)]
-pub struct FirmaConfigCandidateAncestors<'a> {
-    ancestors: std::path::Ancestors<'a>,
-    ceiling: Option<&'a Path>,
-    done: bool,
-}
-
-impl<'a> FirmaConfigCandidateAncestors<'a> {
-    /// Walk up from `start`, yielding each ancestor's `.firma/` candidate
-    /// nearest-first.
-    ///
-    /// Shared by config discovery ([`ConfigResolver::resolve_config`], which
-    /// reads the first existing `firma.toml`) and the Linux sandbox mask (which
-    /// hides every candidate directory). Centralizing the walk keeps both in
-    /// lockstep: the mask covers exactly the set discovery can select.
-    ///
-    /// When `ceiling` is `Some`, the walk is bounded to that directory
-    /// (inclusive), and yields nothing when `start` is not within it. Pass
-    /// `None` for an unbounded walk to the filesystem root.
-    #[must_use]
-    pub fn new(start: &'a Path, ceiling: Option<&'a Path>) -> Self {
-        let out_of_bounds = ceiling.is_some_and(|ceiling| !start.starts_with(ceiling));
-        Self {
-            ancestors: start.ancestors(),
-            ceiling,
-            done: out_of_bounds,
-        }
-    }
-}
-
-impl Iterator for FirmaConfigCandidateAncestors<'_> {
-    type Item = FirmaConfigCandidate;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-        let dir = self.ancestors.next()?;
-        // Stop after (inclusive) the ceiling so it is still a candidate.
-        if self.ceiling.is_some_and(|ceiling| dir == ceiling) {
-            self.done = true;
-        }
-        let config_dir = dir.join(CONFIG_DIR_NAME);
-        Some(FirmaConfigCandidate { config_dir })
-    }
-}
-
-/// A helper to determine which configuration should be applied to the
-/// `firma` command that's about to execute.
+/// | OS      | Trusted config directory  |
+/// |---------|---------------------------|
+/// | Unix    | `$HOME/.firma`            |
+/// | Windows | `%USERPROFILE%\.firma`    |
 ///
-/// Refer to [`ConfigResolver::resolve_config`] for more details.
-#[derive(Debug, Clone, Default)]
-pub struct ConfigResolver {
-    walk_ceiling: Option<PathBuf>,
+/// A single HOME-rooted directory on all platforms, deliberately **not** the
+/// XDG base directory. Firma's config is a security boundary, and like other
+/// security-sensitive tools (`~/.ssh`, `~/.aws`, `~/.gnupg`) it lives in one
+/// predictable `~/.firma` rather than honoring `$XDG_CONFIG_HOME`. This keeps a
+/// single cross-platform mental model and a single directory to reason about
+/// (and, later, to mask inside the sandbox).
+///
+/// This is the discovery trust root: a path the user controls, outside any
+/// sandbox-writable mount by construction. Its `firma.toml` is read only when
+/// neither `--config` nor `$FIRMA_CONFIG` is set.
+///
+/// # Errors
+///
+/// Returns [`HomeConfigDirError::MissingHome`] when the anchoring variable
+/// (`HOME` on Unix, `USERPROFILE` on Windows) is unset, empty, or not absolute.
+/// We fail closed instead of falling back to a guessable, potentially
+/// agent-writable path.
+pub fn home_config_dir() -> Result<PathBuf, HomeConfigDirError> {
+    #[cfg(unix)]
+    let key = "HOME";
+    #[cfg(windows)]
+    let key = "USERPROFILE";
+
+    std::env::var_os(key)
+        // The anchor must be absolute: an empty or relative value would root the
+        // trusted dir at the current working directory, reintroducing the exact
+        // cwd-dependence (a plantable `./.firma`) this discovery model removes.
+        .filter(|value| Path::new(value).is_absolute())
+        .map(|home| PathBuf::from(home).join(CONFIG_DIR_NAME))
+        .ok_or(HomeConfigDirError::MissingHome(key))
 }
 
 /// Where the resolved config came from.
@@ -99,8 +87,9 @@ pub enum ConfigSource {
     Flag,
     /// `$FIRMA_CONFIG` env var pointing directly to the file.
     EnvVar,
-    /// Project-local `.firma/firma.toml` found by walking up from cwd.
-    ProjectLocal,
+    /// The user-controlled [trusted config directory](home_config_dir)
+    /// (`~/.firma`).
+    Home,
 }
 
 /// Resolved config location plus the dir to re-base defaults against.
@@ -143,106 +132,78 @@ pub struct ConfigResolveError {
     reason: anyhow::Error,
 }
 
-impl ConfigResolver {
-    /// Create a new [`ConfigResolver`].
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+/// The path to a configuration file specified via the canonical environment
+/// variable.
+///
+/// We treat the environment variable as unset if empty.
+fn env_config_file() -> Option<PathBuf> {
+    std::env::var_os(CONFIG_ENV_NAME)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Resolve and load the config file.
+///
+/// We check these sources, in priority order:
+/// 1. `cli_override` (`--config` flag).
+/// 2. Environment variable ([`CONFIG_ENV_NAME`]).
+/// 3. The [trusted config directory](home_config_dir)'s `firma.toml`.
+///
+/// Tiers 1 and 2 are explicit, launcher-controlled escapes: both are read from
+/// the launcher's environment, which a sandboxed agent cannot set, so they do
+/// not widen the trust surface. Tier 3 is a fixed, user-controlled directory —
+/// there is no cwd/ancestor walk, so no agent- or repo-writable path can ever
+/// become the config source without explicit user action.
+///
+/// # Errors
+///
+/// Returns `Ok(None)` when no file exists in any tier. Returns
+/// [`ConfigResolveError`] when a selected file cannot be read or parsed, or when
+/// the trusted directory cannot be determined (fail-closed).
+pub fn resolve_config(
+    cli_override: Option<&Path>,
+) -> Result<Option<ResolvedConfig>, ConfigResolveError> {
+    fn load_path(path: &Path, source: ConfigSource) -> Result<ResolvedConfig, ConfigResolveError> {
+        FirmaConfig::load(path)
+            .map(|config| ResolvedConfig::new(source, config))
+            .map_err(|reason| ConfigResolveError {
+                config_source: source,
+                path: path.to_path_buf(),
+                reason,
+            })
     }
 
-    /// Set an upper bound for walk-up resolution.
-    ///
-    /// The upper bound is _inclusive_—i.e. if `ceiling` contains
-    /// a configuration file, it'll be used if appropriate.
-    ///
-    /// # Implementation details
-    ///
-    /// Callers can use this to prevent discovery from escaping an explicit
-    /// workspace root.
-    #[must_use]
-    pub fn walk_up_to(mut self, ceiling: impl Into<PathBuf>) -> Self {
-        self.walk_ceiling = Some(ceiling.into());
-        self
+    if let Some(path) = cli_override {
+        return load_path(path, ConfigSource::Flag).map(Some);
     }
 
-    /// The path to a configuration file specified via the canonical environment
-    /// variable.
-    ///
-    /// We treat the environment variable as unset if empty.
-    fn env_config_file() -> Option<PathBuf> {
-        std::env::var_os(CONFIG_ENV_NAME)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
+    if let Some(env_path) = env_config_file() {
+        return load_path(&env_path, ConfigSource::EnvVar).map(Some);
     }
 
-    /// Resolve and load the config file.
-    ///
-    /// We check these sources, in priority order:
-    /// 1. `cli_override` (`--config` flag).
-    /// 2. Environment variable ([`CONFIG_ENV_NAME`]).
-    /// 3. Filesystem, using the closest configuration file to the current working directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Ok(None)` when no file exists in any discovery tier.
-    /// Returns [`ConfigResolveError`] when a selected file cannot be read or parsed.
-    pub fn resolve_config(
-        &self,
-        cli_override: Option<&Path>,
-    ) -> Result<Option<ResolvedConfig>, ConfigResolveError> {
-        fn load_path(
-            path: &Path,
-            source: ConfigSource,
-        ) -> Result<ResolvedConfig, ConfigResolveError> {
-            FirmaConfig::load(path)
-                .map(|config| ResolvedConfig::new(source, config))
-                .map_err(|reason| ConfigResolveError {
-                    config_source: source,
-                    path: path.to_path_buf(),
+    let trusted_dir = home_config_dir().map_err(|reason| ConfigResolveError {
+        config_source: ConfigSource::Home,
+        // We never resolved a directory, so name the file we were seeking rather
+        // than emitting an empty path in the error's Display.
+        path: PathBuf::from(CONFIG_FILE_NAME),
+        reason: reason.into(),
+    })?;
+    let candidate = trusted_dir.join(CONFIG_FILE_NAME);
+    match fs::read_to_string(&candidate) {
+        Ok(text) => {
+            let config =
+                FirmaConfig::parse(&candidate, &text).map_err(|reason| ConfigResolveError {
+                    config_source: ConfigSource::Home,
+                    path: candidate.clone(),
                     reason,
-                })
+                })?;
+            Ok(Some(ResolvedConfig::new(ConfigSource::Home, config)))
         }
-
-        if let Some(path) = cli_override {
-            return load_path(path, ConfigSource::Flag).map(Some);
-        }
-
-        if let Some(env_path) = Self::env_config_file() {
-            return load_path(&env_path, ConfigSource::EnvVar).map(Some);
-        }
-
-        let cwd = std::env::current_dir().map_err(|e| ConfigResolveError {
-            config_source: ConfigSource::ProjectLocal,
-            path: PathBuf::default(),
-            reason: e.into(),
-        })?;
-        for candidate in FirmaConfigCandidateAncestors::new(&cwd, self.walk_ceiling.as_deref()) {
-            let candidate = candidate.config_file();
-            match fs::read_to_string(&candidate) {
-                Ok(text) => {
-                    let config = FirmaConfig::parse(&candidate, &text).map_err(|reason| {
-                        ConfigResolveError {
-                            config_source: ConfigSource::ProjectLocal,
-                            path: candidate.clone(),
-                            reason,
-                        }
-                    })?;
-                    return Ok(Some(ResolvedConfig::new(
-                        ConfigSource::ProjectLocal,
-                        config,
-                    )));
-                }
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(ConfigResolveError {
-                        config_source: ConfigSource::ProjectLocal,
-                        path: candidate,
-                        reason: error.into(),
-                    });
-                }
-            }
-        }
-
-        Ok(None)
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ConfigResolveError {
+            config_source: ConfigSource::Home,
+            path: candidate,
+            reason: error.into(),
+        }),
     }
 }
