@@ -73,6 +73,11 @@ impl TestWorld {
     pub(crate) fn audit_path(&self) -> PathBuf {
         self.root.path().join("state/audit.jsonl")
     }
+
+    pub(crate) fn add_policy(&self, name: &str, policy: &str) {
+        std::fs::write(self.root.path().join("config/policies").join(name), policy)
+            .expect("write scenario policy");
+    }
 }
 
 pub(crate) fn isolated_command(program: impl AsRef<OsStr>, world: &TestWorld) -> Command {
