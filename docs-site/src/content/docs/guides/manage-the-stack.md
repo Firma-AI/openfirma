@@ -271,6 +271,8 @@ when { false }; // openfirma-control:disabled
 
 The Authority picks up the file through its normal policy-dir hot reload path.
 
+Press `e` in the policy pane to open the selected Cedar file in `$EDITOR`.
+
 Follow vs. one-shot:
 
 - **Follow** (default when stdout is a TTY, or forced with `--tail`) starts at

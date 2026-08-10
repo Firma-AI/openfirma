@@ -1,4 +1,11 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use crate::support::{
     BlockingRewriteHandler, CRANK_TEST_TIMEOUT, FakeTerminal, REWRITE_TEST_TIMEOUT, RewriteRelease,
@@ -10,7 +17,8 @@ use crate::support::{
 use crossterm::event::KeyCode;
 use firma_tui::control::{
     AuditSourceError, ControlAnnouncement, ControlEffect, ControlError, ControlRuntimeState,
-    EditorError, Event, PolicyRewriteRequest, PolicyRowStatus, PolicyState, read_policy_state,
+    EditorError, Event, Pane, PolicyRewriteRequest, PolicyRowStatus, PolicyState,
+    read_policy_state,
     testing::{ControlCrankOutcome, EventKind, HeadlessRunner},
 };
 
@@ -400,6 +408,303 @@ fn resize_and_mouse_events_are_reported() -> anyhow::Result<()> {
         mouse_outcome,
         ControlCrankOutcome::Processed(EventKind::Mouse)
     );
+
+    Ok(())
+}
+
+#[test]
+fn enter_toggles_selected_policy_in_policy_pane() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let policy_path = write_policy_file(temp.path(), &permit_policy("policy_one"))?;
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
+    let mut release_rewrite = RewriteRelease::new(release);
+    let (mut runner, rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
+        Some(temp.path().to_path_buf()),
+        None,
+        handler,
+    );
+
+    let outcome = runner.try_crank(&FakeTerminal::with_key(KeyCode::Enter), successful_editor())?;
+
+    assert_eq!(outcome, ControlCrankOutcome::Processed(EventKind::Input));
+    assert_eq!(
+        policy_status(runner.app(), "policy_one"),
+        Some(PolicyRowStatus::Queued)
+    );
+
+    rewrite_probe.wait_for_started(REWRITE_TEST_TIMEOUT)?;
+    release_rewrite.release()?;
+    rewrite_probe.wait_for_completed(REWRITE_TEST_TIMEOUT)?;
+
+    drop(runner);
+
+    assert_eq!(
+        read_policy_state(&policy_path, "policy_one"),
+        PolicyState::Disabled
+    );
+
+    Ok(())
+}
+
+#[test]
+fn enter_opens_audit_inspector_in_audit_pane() -> anyhow::Result<()> {
+    let (_audit_tx, audit_rx) = audit_channel_with_rows(3)?;
+    let mut runner = HeadlessRunner::new(None, Some(&audit_rx));
+
+    crank_until(
+        &mut runner,
+        |app| app.audit_rows_len() == 3,
+        CRANK_TEST_TIMEOUT,
+    )?;
+    assert_eq!(
+        runner.try_crank(&FakeTerminal::with_key(KeyCode::Tab), successful_editor())?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+    assert_eq!(
+        runner.try_crank(&FakeTerminal::with_key(KeyCode::Enter), successful_editor())?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+
+    let text = crate::support::render_text(runner.app(), 120, 24)?;
+    assert!(text.contains("Inspect"));
+    assert!(text.contains("resource-2"));
+
+    Ok(())
+}
+
+#[test]
+fn edit_key_is_ignored_in_audit_pane() -> anyhow::Result<()> {
+    let (_temp, _policy_path, mut runner) =
+        headless_runner_with_policy_source(&permit_policy("policy_one"))?;
+    let editor_called = Arc::new(AtomicBool::new(false));
+    let editor_called_for_test = Arc::clone(&editor_called);
+
+    assert_eq!(
+        runner.try_crank(&FakeTerminal::with_key(KeyCode::Tab), successful_editor())?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+    assert_eq!(runner.app().selected_pane(), Pane::Audit);
+
+    assert_eq!(
+        runner.try_crank(&FakeTerminal::with_key(KeyCode::Char('e')), move |_path| {
+            editor_called_for_test.store(true, Ordering::SeqCst);
+            Ok(Ok(()))
+        })?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+
+    assert!(!editor_called.load(Ordering::SeqCst));
+    assert_eq!(runner.app().policy_error(), None);
+    assert_eq!(
+        runner.app().status().runtime_state,
+        ControlRuntimeState::Running
+    );
+    assert_eq!(runner.app().selected_pane(), Pane::Audit);
+
+    Ok(())
+}
+
+#[test]
+fn esc_closes_help_without_quitting() -> anyhow::Result<()> {
+    let mut runner = HeadlessRunner::new(None, None);
+
+    assert_eq!(
+        runner.try_crank(
+            &FakeTerminal::with_key(KeyCode::Char('h')),
+            successful_editor()
+        )?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+    assert!(runner.app().help_visible());
+
+    assert_eq!(
+        runner.try_crank(&FakeTerminal::with_key(KeyCode::Esc), successful_editor())?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+
+    assert!(!runner.app().help_visible());
+    assert!(!runner.app().should_quit());
+
+    Ok(())
+}
+
+#[test]
+fn about_context_closes_without_quitting() -> anyhow::Result<()> {
+    let mut runner = HeadlessRunner::new(None, None);
+
+    assert_eq!(
+        runner.try_crank(
+            &FakeTerminal::with_key(KeyCode::Char('o')),
+            successful_editor()
+        )?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+    assert!(crate::support::render_text(runner.app(), 100, 24)?.contains("About"));
+
+    assert_eq!(
+        runner.try_crank(
+            &FakeTerminal::with_key(KeyCode::Char('o')),
+            successful_editor()
+        )?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+
+    let text = crate::support::render_text(runner.app(), 100, 24)?;
+    assert!(!text.contains("About"));
+    assert!(!runner.app().should_quit());
+
+    Ok(())
+}
+
+#[test]
+fn audit_inspect_context_closes_without_quitting() -> anyhow::Result<()> {
+    let (_audit_tx, audit_rx) = audit_channel_with_rows(1)?;
+    let mut runner = HeadlessRunner::new(None, Some(&audit_rx));
+
+    crank_until(
+        &mut runner,
+        |app| app.audit_rows_len() == 1,
+        CRANK_TEST_TIMEOUT,
+    )?;
+    assert_eq!(
+        runner.try_crank(&FakeTerminal::with_key(KeyCode::Tab), successful_editor())?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+    assert_eq!(
+        runner.try_crank(
+            &FakeTerminal::with_key(KeyCode::Char('i')),
+            successful_editor()
+        )?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+    assert!(crate::support::render_text(runner.app(), 100, 24)?.contains("Inspect"));
+
+    assert_eq!(
+        runner.try_crank(
+            &FakeTerminal::with_key(KeyCode::Char('i')),
+            successful_editor()
+        )?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+
+    let text = crate::support::render_text(runner.app(), 100, 24)?;
+    assert!(!text.contains("Inspect"));
+    assert!(!runner.app().should_quit());
+
+    Ok(())
+}
+
+#[test]
+fn esc_quits_when_no_overlay_is_open() -> anyhow::Result<()> {
+    let mut runner = HeadlessRunner::new(None, None);
+
+    let outcome = runner.try_crank(&FakeTerminal::with_key(KeyCode::Esc), successful_editor())?;
+
+    assert_eq!(outcome, ControlCrankOutcome::Quit);
+    assert!(runner.app().should_quit());
+
+    Ok(())
+}
+
+#[test]
+fn editing_is_rejected_while_rewrite_is_pending() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let policy_path = write_policy_file(temp.path(), &permit_policy("policy_one"))?;
+    let BlockingRewriteHandler { handler, release } = blocking_first_rewrite_handler();
+    let mut release_rewrite = RewriteRelease::new(release);
+    let editor_called = Arc::new(AtomicBool::new(false));
+    let editor_called_for_test = Arc::clone(&editor_called);
+    let (mut runner, _rewrite_probe) = HeadlessRunner::with_observed_policy_rewrite_handler(
+        Some(temp.path().to_path_buf()),
+        None,
+        handler,
+    );
+
+    assert_eq!(
+        runner.try_crank(
+            &FakeTerminal::with_key(KeyCode::Char(' ')),
+            successful_editor()
+        )?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+
+    assert_eq!(
+        runner.try_crank(&FakeTerminal::with_key(KeyCode::Char('e')), move |_path| {
+            editor_called_for_test.store(true, Ordering::SeqCst);
+            Ok(Ok(()))
+        })?,
+        ControlCrankOutcome::Processed(EventKind::Input)
+    );
+
+    assert!(!editor_called.load(Ordering::SeqCst));
+    assert_eq!(
+        runner.app().status().runtime_state,
+        ControlRuntimeState::Error
+    );
+    let Some(ControlError::Editor { path, error }) = runner.app().policy_error() else {
+        anyhow::bail!("pending edit did not produce an editor error");
+    };
+    assert_eq!(path, &policy_path);
+    assert_eq!(error.as_ref(), &EditorError::PendingRewrite);
+
+    release_rewrite.release()?;
+    drop(runner);
+
+    Ok(())
+}
+
+#[test]
+fn editor_reload_error_keeps_old_policy_rows_visible() -> anyhow::Result<()> {
+    let (_temp, policy_path, mut runner) =
+        headless_runner_with_policy_source(&permit_policy("policy_one"))?;
+
+    let outcome = runner.try_crank(
+        &FakeTerminal::with_key(KeyCode::Char('e')),
+        replace_policy_source_editor(policy_path, "@id(\"broken\")\npermit (".to_string()),
+    )?;
+
+    assert_eq!(outcome, ControlCrankOutcome::Processed(EventKind::Input));
+    assert_eq!(runner.app().policies().len(), 1);
+    assert_eq!(runner.app().policies()[0].id, "policy_one");
+    assert!(runner.app().policy_error().is_some());
+
+    Ok(())
+}
+
+#[test]
+fn editor_handoff_failure_finishes_editing_state() -> anyhow::Result<()> {
+    let (_temp, policy_path, mut runner) =
+        headless_runner_with_policy_source(&permit_policy("policy_one"))?;
+    let edited_path = policy_path.clone();
+
+    let error = runner
+        .try_crank(
+            &FakeTerminal::with_key(KeyCode::Char('e')),
+            move |path: &std::path::Path| {
+                assert_eq!(path, edited_path.as_path());
+                Err(anyhow::anyhow!("terminal handoff failed"))
+            },
+        )
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("editor handoff unexpectedly succeeded"))?;
+
+    let context = format!(
+        "failed to hand terminal to editor for `{}`",
+        policy_path.display()
+    );
+
+    assert_eq!(error.to_string(), context);
+    assert_eq!(
+        format!("{error:#}"),
+        format!("{context}: terminal handoff failed")
+    );
+    assert_eq!(runner.app().runtime_state(), ControlRuntimeState::Running);
+    assert_eq!(
+        runner.app().status().runtime_state,
+        ControlRuntimeState::Running
+    );
+    assert_eq!(runner.app().policy_error(), None);
+    assert_eq!(runner.app().policies().len(), 1);
 
     Ok(())
 }

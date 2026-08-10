@@ -1,3 +1,4 @@
+use crate::support::{app_with_audit_rows, handle_key};
 use crossterm::event::KeyCode;
 use firma_tui::control::{
     App, AuditFilter, BindingHint, ControlCommand, SelectionMovement, command_for_key,
@@ -127,4 +128,20 @@ fn footer_entries_stay_small() {
             },
         ]
     );
+}
+
+#[test]
+fn footer_entries_follow_active_context() {
+    let mut help_app = App::default();
+    help_app.toggle_help();
+    assert_eq!(footer_entries(&help_app), Vec::<BindingHint>::new());
+
+    let mut about_app = App::default();
+    handle_key(&mut about_app, KeyCode::Char('o'));
+    assert_eq!(footer_entries(&about_app), Vec::<BindingHint>::new());
+
+    let mut inspect_app = app_with_audit_rows();
+    inspect_app.switch_pane();
+    handle_key(&mut inspect_app, KeyCode::Char('i'));
+    assert_eq!(footer_entries(&inspect_app), Vec::<BindingHint>::new());
 }

@@ -438,7 +438,10 @@ pub fn help_entries(app: &App) -> Vec<BindingHint> {
 /// Returns the compact binding rows shown in the bottom footer.
 #[must_use]
 pub fn footer_entries(app: &App) -> Vec<BindingHint> {
-    visible_hints(app, |binding| binding.show_in_footer)
+    let contexts = active_contexts(app);
+    visible_hints(app, |binding| {
+        contexts.contains(&binding.context) && binding.show_in_footer
+    })
 }
 
 /// Returns the footer rows used while the help overlay is open.
@@ -502,7 +505,7 @@ fn enter_command(app: &App) -> ControlCommand {
     }
 }
 
-fn visible_hints(app: &App, include: fn(Binding) -> bool) -> Vec<BindingHint> {
+fn visible_hints(app: &App, include: impl Fn(Binding) -> bool) -> Vec<BindingHint> {
     let mut hints = Vec::new();
     for binding in BINDINGS.iter().copied() {
         if include(binding) && binding.is_visible(app) && !hints.contains(&binding.hint) {

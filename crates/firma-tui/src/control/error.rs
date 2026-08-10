@@ -179,22 +179,72 @@ pub enum PolicyDiscoveryError {
     DuplicateId { id: String },
 }
 
+/// Exit status from an editor process that started successfully.
+///
+/// Launch errors are modeled separately as [`EditorProcessError`]. This value
+/// only carries the status reported by a process that actually ran.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EditorExitStatus {
+    status: String,
+}
+
+impl EditorExitStatus {
+    /// Creates an editor exit status from its rendered process status.
+    #[must_use]
+    pub fn new(status: impl Into<String>) -> Self {
+        Self {
+            status: status.into(),
+        }
+    }
+
+    /// Returns the rendered process status.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.status
+    }
+}
+
+impl fmt::Display for EditorExitStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.status)
+    }
+}
+
+/// Error produced before an editor process starts running.
+///
+/// Once the process has started, an unsuccessful exit is reported as
+/// [`EditorError::Exit`] instead.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum EditorError {
-    #[error("finish pending policy rewrite before editing policies")]
-    PendingRewrite,
-    #[error("failed to launch editor: {source}")]
-    Launch {
+pub enum EditorProcessError {
+    /// The configured editor command could not be spawned.
+    #[error("failed to start editor process: {source}")]
+    Start {
         #[source]
         source: ErrorMessage,
     },
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum EditorError {
+    /// Editing is blocked while a policy rewrite is still pending.
+    #[error("finish pending policy rewrite before editing policies")]
+    PendingRewrite,
+    /// The editor process could not be started.
+    #[error("failed to launch editor: {source}")]
+    Launch {
+        #[source]
+        source: EditorProcessError,
+    },
+    /// The editor process ran and returned an unsuccessful status.
     #[error("editor exited unsuccessfully: {status}")]
-    Exit { status: String },
+    Exit { status: EditorExitStatus },
+    /// Generic editor operation failure with a user-facing message.
     #[error("{message}")]
     Operation { message: String },
 }
 
 impl EditorError {
+    /// Creates a generic editor operation failure.
     #[must_use]
     pub fn operation(message: impl Into<String>) -> Self {
         Self::Operation {
