@@ -27,9 +27,10 @@ pub use announcement::ControlAnnouncement;
 pub use app::App;
 pub use bindings::{BindingHint, footer_entries};
 pub use command::{ControlCommand, ControlEffect, SelectionMovement};
+pub use editor::{Editor, EditorExit, EditorLaunch, EditorProcess};
 pub use error::{
-    AuditSourceError, ControlError, EditorError, ErrorMessage, PolicyDiscoveryError,
-    PolicyRewriteError, RewriteEventProbeError, RuntimeError,
+    AuditSourceError, ControlError, EditorError, EditorExitStatus, EditorProcessError,
+    ErrorMessage, PolicyDiscoveryError, PolicyRewriteError, RewriteEventProbeError, RuntimeError,
 };
 pub use event::{Event, Sources, TerminalEventSource};
 pub use input::{command_for_key, handle_key};

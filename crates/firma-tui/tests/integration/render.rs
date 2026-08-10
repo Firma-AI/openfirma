@@ -1,5 +1,11 @@
-use crate::support::{app_with_audit_rows, audit_row, render_text};
-use firma_tui::control::{App, AuditDecision, AuditFilter};
+use crate::support::{
+    app_with_audit_rows, app_with_default_policies, audit_row, handle_key, render_text,
+};
+use crossterm::event::KeyCode;
+use firma_tui::control::{
+    App, AuditDecision, AuditFilter, ControlError, PolicyRewriteCompletion, PolicyRewriteError,
+    PolicyRewriteStart,
+};
 
 #[test]
 fn empty_state_renders_policy_and_audit_messages() -> anyhow::Result<()> {
@@ -63,6 +69,156 @@ fn help_overlay_renders_bindings_and_footer() -> anyhow::Result<()> {
     assert!(text.contains("Last row"));
     assert!(text.contains("Close"));
     assert!(text.contains("Quit"));
+
+    Ok(())
+}
+
+#[test]
+fn about_overlay_renders_project_metadata() -> anyhow::Result<()> {
+    let mut app = App::default();
+    handle_key(&mut app, KeyCode::Char('o'));
+
+    let text = render_text(&app, 100, 24)?;
+
+    assert!(text.contains("About"));
+    assert!(text.contains("OPENFIRMA"));
+    assert!(text.contains("Policy Control"));
+    assert!(text.contains("firma-tui"));
+    assert!(text.contains("GPL-3.0-only"));
+
+    Ok(())
+}
+
+#[test]
+fn audit_inspect_overlay_renders_selected_row() -> anyhow::Result<()> {
+    let mut app = app_with_audit_rows();
+    app.switch_pane();
+    app.move_selection_up();
+    handle_key(&mut app, KeyCode::Char('i'));
+
+    let text = render_text(&app, 120, 24)?;
+
+    assert!(text.contains("Inspect"));
+    assert!(text.contains("decision"));
+    assert!(text.contains("deny"));
+    assert!(text.contains("action"));
+    assert!(text.contains("class-1"));
+    assert!(text.contains("resource-1"));
+
+    Ok(())
+}
+
+#[test]
+fn audit_inspect_overlay_renders_empty_selection_message() -> anyhow::Result<()> {
+    let mut app = App::new(None, true);
+    app.push_audit_row(audit_row(AuditDecision::Allow, 0));
+    app.switch_pane();
+    handle_key(&mut app, KeyCode::Char('i'));
+    app.set_audit_filter(AuditFilter::Deny);
+
+    let text = render_text(&app, 120, 24)?;
+
+    assert!(text.contains("Inspect"));
+    assert!(text.contains("No audit row selected."));
+
+    Ok(())
+}
+
+#[test]
+fn policy_table_renders_queued_and_writing_statuses() -> anyhow::Result<()> {
+    let (_temp, mut app) = app_with_default_policies()?;
+    let writing = app
+        .request_selected_policy_toggle()
+        .ok_or_else(|| anyhow::anyhow!("first policy did not produce a rewrite request"))?;
+
+    app.start_policy_rewrite(&PolicyRewriteStart {
+        file: writing.file,
+        ids: writing.ids,
+    });
+
+    app.move_selection_down();
+    let _ = app
+        .request_selected_policy_toggle()
+        .ok_or_else(|| anyhow::anyhow!("second policy did not produce a rewrite request"))?;
+
+    let text = render_text(&app, 120, 24)?;
+
+    assert!(text.contains("writing"));
+    assert!(text.contains("queued"));
+
+    Ok(())
+}
+
+#[test]
+fn policy_error_renders_in_policy_pane() -> anyhow::Result<()> {
+    let (_temp, mut app) = app_with_default_policies()?;
+    let error_request = app
+        .request_selected_policy_toggle()
+        .ok_or_else(|| anyhow::anyhow!("policy did not produce a rewrite request"))?;
+
+    let rewrite_error = ControlError::policy_rewrite(
+        error_request.file.clone(),
+        error_request.ids.clone(),
+        PolicyRewriteError::operation("write failed"),
+    );
+
+    app.finish_policy_rewrite(&PolicyRewriteCompletion {
+        file: error_request.file,
+        ids: error_request.ids,
+        requested: error_request.requested,
+        result: Err(rewrite_error),
+    });
+
+    let text = render_text(&app, 120, 24)?;
+
+    assert!(text.contains("Policy error"));
+    assert!(text.contains("failed to rewrite"));
+
+    Ok(())
+}
+
+#[test]
+fn help_overlay_hides_edit_without_policy_source() -> anyhow::Result<()> {
+    let mut app = App::default();
+    app.toggle_help();
+
+    let text = render_text(&app, 100, 24)?;
+
+    assert!(!text.contains("Edit policy"));
+
+    Ok(())
+}
+
+#[test]
+fn help_overlay_shows_edit_with_policy_source() -> anyhow::Result<()> {
+    let (_temp, mut app) = app_with_default_policies()?;
+    app.toggle_help();
+
+    let text = render_text(&app, 100, 24)?;
+
+    assert!(text.contains("Edit policy"));
+
+    Ok(())
+}
+
+#[test]
+fn footer_hides_edit_hint_without_policy_source() -> anyhow::Result<()> {
+    let app = App::default();
+
+    let text = render_text(&app, 100, 24)?;
+
+    assert!(!text.contains("edit policy"));
+
+    Ok(())
+}
+
+#[test]
+fn small_terminal_renders_without_error() -> anyhow::Result<()> {
+    let app = app_with_audit_rows();
+
+    let text = render_text(&app, 24, 8)?;
+
+    assert!(!text.is_empty());
 
     Ok(())
 }
