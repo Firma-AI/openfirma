@@ -2,10 +2,9 @@
 //!
 //! This crate knows the concrete `[authority, sidecar]` topology and its unified
 //! `firma.toml`, and exposes the lifecycle operations used by the Firma CLI and
-//! demo. [`firma_process_orchestrator::start`] is the canonical developer
-//! documentation for process ownership, runtime-state authority, foreground
-//! supervision, and detached handoff; this crate supplies the Firma-specific
-//! plan to that machinery.
+//! demo. [`firma_process_orchestrator`] provides the canonical lifecycle and
+//! ownership model; this crate supplies the Firma-specific plan to that
+//! machinery.
 
 pub mod config;
 pub mod error;

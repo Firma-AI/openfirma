@@ -5,8 +5,15 @@
 //! after every target is proven absent and [`cleanup_generation`] confirms the
 //! original [`StateLease`] still owns the directory. [`target_may_exist`] treats
 //! probe uncertainty as presence, preserving signalling effort and retry
-//! evidence. See the [lifecycle and ownership model](mod@crate::start) for the
+//! evidence. See the [crate-level lifecycle model](crate) for the
 //! process and runtime-state capabilities required by teardown.
+//!
+//! External teardown reconstructs the strongest available termination targets
+//! from persisted numeric identities. A [`StackGeneration`] fences which runtime
+//! state may be cleaned, but it does not prove that a reused OS process or
+//! process-group ID still names the original target. Callers should therefore
+//! treat retained runtime state as termination evidence, not durable process
+//! identity.
 
 use std::path::Path;
 use std::time::{Duration, Instant};

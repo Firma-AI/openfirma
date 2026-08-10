@@ -7,6 +7,18 @@
 //! ordinary process ID: it identifies a process group on Unix and a component
 //! process on Windows. [`Group`] is setup-time grouping authority and is not a
 //! substitute for the target persisted by [`crate::spawn::spawn_component`].
+//!
+//! A managed scope is not a sandbox. Unix descendants normally inherit the
+//! component process group, but a process can create a new group or session and
+//! escape it. A Windows Job Object governs only processes assigned to it, subject
+//! to Windows' job-membership rules. The lifecycle APIs guarantee signalling and
+//! absence checks for the available managed scope, not containment of arbitrary
+//! descendants.
+//!
+//! Persisted identities are also weaker than owned handles. Numeric process and
+//! process-group IDs can be reused after the original target exits. Reconstructing
+//! a target from runtime state cannot prove that the current OS target is the one
+//! originally recorded.
 
 #[cfg(unix)]
 mod unix;

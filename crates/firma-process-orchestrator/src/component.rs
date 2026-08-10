@@ -5,7 +5,7 @@
 //! [`TerminationTarget`] required to govern the complete platform scope.
 //! [`ComponentName`] supplies stable command and runtime-state identity but
 //! grants no process authority by itself. See the
-//! [lifecycle and ownership model](mod@crate::start) for how this capability
+//! [crate-level lifecycle model](crate) for how this capability
 //! moves through startup, running ownership, and collection.
 
 use std::net::SocketAddr;

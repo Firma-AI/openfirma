@@ -5,7 +5,7 @@
 //! managed child is spawned. A rejected handoff returns the exact offered
 //! capability so explicit paths can recover it and destructor paths can retain
 //! it without blocking. See the
-//! [lifecycle and ownership model](mod@crate::start). These helpers depend only
+//! [crate-level lifecycle model](crate). These helpers depend only
 //! on [`crate::platform`] for termination authority and the platform-specific
 //! external-collection condition, so both the high-level supervisor and the
 //! low-level platform layer can share them without an inverted dependency.

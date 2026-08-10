@@ -5,8 +5,8 @@
 //! files. The capabilities are deliberately separate: a stop can release
 //! serialization while terminating processes, then use its lease to reject
 //! cleanup if another generation has claimed the directory. See the
-//! [lifecycle and ownership model](mod@crate::start) for their relationship to
-//! process ownership and cleanup.
+//! [crate-level lifecycle model](crate) for their relationship to process
+//! ownership and cleanup.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -75,10 +75,12 @@ fn is_lock_contended(error: &std::io::Error) -> bool {
 /// Unlike a process ID, this value is not reused by the operating system and
 /// does not imply that any process is alive. It exists only to distinguish one
 /// startup attempt and its runtime-state files from predecessors and successors.
+/// It does not bind a persisted numeric process identity to an OS process or
+/// prevent process-ID reuse.
 /// Detached startup creates the identity before spawning its supervisor, which
 /// lets both processes fence rollback to the same attempt. A [`StateLease`] is
 /// the capability that proves this identity was successfully claimed.
-/// See the [lifecycle and ownership model](mod@crate::start).
+/// See the [crate-level lifecycle model](crate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StackGeneration(uuid::Uuid);
 

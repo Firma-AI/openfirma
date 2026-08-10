@@ -1,81 +1,18 @@
-//! Stack lifecycle and ownership transitions.
+//! Ordered startup, ownership transfer, and supervision.
 //!
-//! # OS process concepts
+//! See the [crate-level lifecycle model](crate) for how this phase relates to
+//! external stop, status, and runtime-state authority.
 //!
-//! A component can be a process tree, not just one process: the program Firma
-//! starts may create descendants that outlive their leader. Stopping only the
-//! leader can therefore leave part of the component running. The orchestrator
-//! manages a platform process scope—process groups on Unix and Job Objects for
-//! in-process ownership on Windows—through a [`TerminationTarget`].
+//! # Startup transaction
 //!
-//! Spawning also returns a [`std::process::Child`] handle for the direct child.
-//! The spawning process must eventually wait on that handle to collect the exit
-//! result. On Unix, an exited but uncollected child remains as a zombie; on all
-//! platforms, dropping the handle is not a portable substitute for collection.
-//! This non-reconstructable collection responsibility is different from the
-//! ability to send a termination request.
+//! [`StartupGuard`] owns every [`OwnedComponent`] before startup performs another
+//! fallible operation. After ordered readiness it transfers the complete set to
+//! [`RunningStack`]. Normal errors invoke explicit rollback so a cleanup failure
+//! can be returned alongside the initiating error. Guard destruction is only an
+//! emergency hard-termination and collection-handoff path; it deliberately
+//! leaves uncertain runtime state for later teardown.
 //!
-//! A persisted numeric identity is neither a child handle nor proof that the
-//! original process is still alive. Operating systems can reuse process IDs,
-//! and the stored value has platform-specific meaning: it identifies a process
-//! group on Unix but only the component leader across Windows process boundaries.
-//! Runtime state therefore supports external observation and the strongest
-//! reconstructable termination request; it cannot transfer direct-child
-//! collection or reconstruct an owned Windows Job Object.
-//!
-//! # Lifecycle and ownership model
-//!
-//! The direct-child collection capability always has one in-process owner.
-//! [`StartupGuard`] owns each [`OwnedComponent`] before startup performs another
-//! fallible operation, then either transfers the complete set to [`RunningStack`]
-//! or explicitly rolls it back. Normal failures report rollback errors; [`Drop`]
-//! implementations are bounded emergency backstops that hard-terminate and
-//! transfer collection without claiming fallible runtime-state cleanup succeeded.
-//!
-//! ```text
-//! plan -> StartupGuard -> RunningStack -- shutdown --> stopped and cleaned
-//!              |              |
-//!              |              +-- detach ----------> persistent collector
-//!              |              |
-//!              |              +-- Drop ------------> hard termination,
-//!              |                                      collection transferred,
-//!              |                                      runtime state retained
-//!              +-- failure -------------------------> explicit rollback
-//!
-//! persisted runtime state -> external stop -> reconstruct termination targets
-//!                                      |      and request process-scope exit
-//!                                      +----> generation-fenced state cleanup
-//! ```
-//!
-//! [`StackHandle`] is deliberately outside this ownership chain: it carries
-//! component identities and PIDs for observation but grants no authority to
-//! collect, terminate, or clean up processes.
-//!
-//! [`crate::stop_components()`] is also outside the collection-ownership chain.
-//! It can reconstruct termination targets from persisted state and request that
-//! another process's stack exit, but it cannot wait on children it did not
-//! spawn. The existing [`RunningStack`], detached supervisor, or persistent
-//! collector retains that collection responsibility. On Windows, reconstructed
-//! targets are necessarily leader-only; the supervisor's owned Job Object
-//! remains the complete descendant authority.
-//!
-//! ## Runtime-state authority
-//!
-//! Process ownership and runtime-state authority are separate capabilities:
-//!
-//! - [`OwnedComponent`] couples direct-child collection with authority over the
-//!   component's complete platform process scope.
-//! - [`StateTransaction`] serializes runtime-state mutation across processes.
-//! - [`StackGeneration`] identifies one startup attempt without implying that a
-//!   process is alive.
-//! - [`StateLease`] authorizes cleanup only while that generation remains current.
-//!
-//! Cleanup requires both current-generation proof and process-absence proof.
-//! Uncertain teardown therefore retains runtime state for a later
-//! [`crate::stop_components()`] attempt. The generation lock is removed last as
-//! the cleanup commit marker.
-//!
-//! ## Foreground and detached ownership
+//! # Foreground and detached supervision
 //!
 //! [`start_foreground_from_plan`] keeps the [`RunningStack`] in the calling
 //! process through supervision and shutdown. [`start_detached`] instead owns a
@@ -123,8 +60,8 @@ const DETACHED_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The handle does not own the children's lifecycle. [`RunningStack`] holds
 /// in-process ownership; persisted runtime state supports external observation
 /// through [`crate::status::status_components()`] and retryable teardown through [`crate::stop::stop_components()`].
-/// See the [lifecycle and ownership model](mod@crate::start) for its place in
-/// foreground and detached operation.
+/// See the [crate-level lifecycle model](crate) for its place in foreground and
+/// detached operation.
 #[derive(Clone)]
 pub struct StackHandle {
     /// Ordered component identities paired with their leader PIDs.
@@ -138,8 +75,8 @@ pub struct StackHandle {
 /// [`RunningStack::detach`] to leave processes running under a background child
 /// collector. Dropping an owned stack fails closed by hard-terminating its
 /// process scopes and retaining runtime state for a later cleanup attempt.
-/// See the [lifecycle and ownership model](mod@crate::start) for the capabilities
-/// transferred by each transition.
+/// See the [crate-level lifecycle model](crate) for the capabilities transferred
+/// by each transition.
 pub struct RunningStack {
     handle: StackHandle,
     state: RunningStackState,
@@ -797,7 +734,7 @@ impl Drop for RunningStack {
 /// [`RunningStack::shutdown`] tears it down, [`RunningStack::detach`] explicitly
 /// leaves it running under the persistent collector, and [`Drop`] is a
 /// fail-closed emergency termination path. See the
-/// [lifecycle and ownership model](mod@crate::start).
+/// [crate-level lifecycle model](crate).
 ///
 /// Used by wrappers that need in-process ownership after readiness.
 ///
