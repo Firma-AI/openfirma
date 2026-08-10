@@ -60,12 +60,15 @@ impl FirmaAuditTrail {
 
     #[track_caller]
     pub fn assert_snapshot(&self, scenario_name: &str, ctx: &ScenarioSetup) {
-        let name = format!("{}_{}", ctx.agent.kind.as_ref(), scenario_name);
+        // Keep existing snapshot names stable when the Cargo test target is
+        // renamed. Otherwise insta derives the filename prefix from the target.
+        let name = format!("e2e__audit__{}_{}", ctx.agent.kind.as_ref(), scenario_name);
         let mock_port = ctx.mock_server.address().port().to_string();
         let mock_port_filter = regex::escape(&mock_port);
         let tcp_port = ctx.raw_tcp.address().port().to_string();
         let tcp_port_filter = regex::escape(&tcp_port);
         insta::with_settings!({
+            prepend_module_to_snapshot => false,
             filters => vec![
                 (mock_port_filter.as_str(), "<mock-port>"),
                 (tcp_port_filter.as_str(), "<tcp-port>"),
