@@ -276,8 +276,9 @@ impl IntentNormalizer {
             MatchResult::Matched(rule) => {
                 let raw_action_ref = format!("{} {}", request.method, request.path);
                 let raw_transport = if request.is_https { "https" } else { "http" };
+                let dispatch_host = normalize_dispatch_host(&request.host, request.is_https);
                 let mut resource = BTreeMap::new();
-                resource.insert("host".to_string(), normalized_host.clone());
+                resource.insert("host".to_string(), dispatch_host);
                 resource.insert("path".to_string(), sanitized_path);
                 if let Some(provider) = provider_for_host(&normalized_host) {
                     resource.insert("provider".to_string(), provider.to_string());
@@ -703,6 +704,20 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
 /// rule host can never disagree in form.
 fn normalize_host(host: &str) -> String {
     mapping::normalize_host_pattern(host)
+}
+
+/// Normalize a request host into the authority stored as the intent's
+/// resource `host` and used verbatim by the HTTP connector to dispatch the
+/// outbound request.
+///
+/// Unlike [`normalize_host`], which strips either default port so that
+/// matching cannot be evaded, this only strips the port that is default for
+/// the request's *actual* scheme: `:443` on HTTPS, `:80` on HTTP. An explicit
+/// port naming the opposite scheme's default (`example.com:443` over plain
+/// HTTP) is not this request's default and must be preserved, or the
+/// connector would dispatch to the wrong port.
+fn normalize_dispatch_host(host: &str, is_https: bool) -> String {
+    mapping::normalize_dispatch_host(host, is_https)
 }
 
 /// Normalize a request path according to the canonicalization rules:

@@ -167,6 +167,74 @@ fn ipv6_rule_hosts_match_ipv6_request_hosts_on_any_port() -> anyhow::Result<()> 
     Ok(())
 }
 
+/// An explicit port that is not the default for the request's scheme must be
+/// preserved because the HTTP connector dispatches to the authority stored in
+/// the normalized resource.
+#[test]
+fn ipv6_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
+    let table = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![rule("[::1]:443")],
+        },
+        &ActionClassRegistry::v0_1(),
+        false,
+    )?;
+    let normalizer = IntentNormalizer::new(table);
+
+    let envelope = normalizer
+        .normalize(&RawRequest {
+            method: Method::GET,
+            host: "[::1]:443".to_string(),
+            path: "/repos/x".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            // Key detail: not using HTTPS, so default port would be `80`
+            is_https: false,
+        })
+        .map_err(|decision| anyhow::anyhow!("expected classification, got {decision:?}"))?;
+
+    assert_eq!(
+        envelope.intent().resource.get("host").map(String::as_str),
+        Some("[::1]:443"),
+        "HTTP dispatch must retain the explicitly requested port 443"
+    );
+    Ok(())
+}
+
+/// The same opposite-scheme-port preservation applies to IPv4/hostname
+/// authorities, not just bracketed IPv6 literals: dispatch-host
+/// normalization must not special-case address family.
+#[test]
+fn ipv4_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
+    let table = MappingTable::from_config(
+        &MappingRulesFile {
+            rules: vec![rule("api.example.com:443")],
+        },
+        &ActionClassRegistry::v0_1(),
+        false,
+    )?;
+    let normalizer = IntentNormalizer::new(table);
+
+    let envelope = normalizer
+        .normalize(&RawRequest {
+            method: Method::GET,
+            host: "api.example.com:443".to_string(),
+            path: "/repos/x".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            // Key detail: not using HTTPS, so default port would be `80`
+            is_https: false,
+        })
+        .map_err(|decision| anyhow::anyhow!("expected classification, got {decision:?}"))?;
+
+    assert_eq!(
+        envelope.intent().resource.get("host").map(String::as_str),
+        Some("api.example.com:443"),
+        "HTTP dispatch must retain the explicitly requested port 443"
+    );
+    Ok(())
+}
+
 /// A trailing dot must not evade a host-scoped rule whether it hides before
 /// the port (`host.:8443`) or after it (`host:443.`); every spelling of the
 /// same authority normalizes identically. Exercised through the normalizer,

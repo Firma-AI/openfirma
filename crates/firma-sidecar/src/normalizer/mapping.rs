@@ -254,6 +254,29 @@ pub fn normalize_host_pattern(host: &str) -> String {
     }
 }
 
+/// Normalize a request host into the authority used for outbound dispatch.
+///
+/// Splits the authority exactly like [`normalize_host_pattern`], but drops
+/// the port only when it is the default for the request's *actual* scheme
+/// (`443` for HTTPS, `80` for HTTP) rather than either default. An explicit
+/// port that names the opposite scheme's default — `:443` on a plain HTTP
+/// request, or `:80` on HTTPS — is not this request's default port and must
+/// be preserved, since the connector dispatches to exactly the authority
+/// stored in the normalized envelope's resource host.
+pub fn normalize_dispatch_host(host: &str, is_https: bool) -> String {
+    let trimmed = host.trim();
+    let (name, port) = if trimmed.starts_with('[') {
+        split_ipv6_authority(trimmed)
+    } else {
+        split_authority(trimmed)
+    };
+    let default_port = if is_https { "443" } else { "80" };
+    match port.as_deref() {
+        Some(port) if port != default_port => format!("{name}:{port}"),
+        _ => name,
+    }
+}
+
 /// Returns `true` for a nonempty all-digit port, the only form accepted as a
 /// port when splitting an authority.
 fn is_valid_port(port: &str) -> bool {
