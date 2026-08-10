@@ -27,14 +27,24 @@ these boundaries and will be migrated separately.
 Use a crate integration suite instead when the behavior is a Rust API contract
 rather than user-facing CLI behavior.
 
+Within `firma::e2e`, add each scenario to its own file under
+`tests/cli-e2e/scenarios/` and register it in `scenarios/mod.rs`. Scenarios use
+the shared harness to launch bounded processes and must not import production
+crate APIs to calculate expected behavior. Deterministic scenarios cannot be
+ignored; missing host prerequisites must fail their dedicated CI job.
+
 Within `firma::cli`:
 
 - parsing, diagnostics, generated files, and one-component lifecycle tests get
   a module named after the command or component;
 - tests that run real commands inside a structural sandbox belong in
   `structural_sandbox.rs`;
-- policy and pipeline changes should have structural-sandbox coverage whenever
-  the behavior is reachable through `firma run`.
+- structural-sandbox regressions belong there even when they are currently
+  expected to fail.
+
+Policy and pipeline changes reachable through `firma run` should have
+`firma::e2e` coverage. Add `firma::cli` structural-sandbox coverage as well only
+when the behavior specifically concerns that sandbox boundary.
 
 FIR-366 remains an ignored regression in `structural_sandbox.rs` because it
 documents a structural sandbox weakness. Keep known-failing regression targets
