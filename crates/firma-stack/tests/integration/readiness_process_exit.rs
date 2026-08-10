@@ -2,6 +2,17 @@ use std::time::{Duration, Instant};
 
 use firma_stack::{StackConfig, StackError};
 
+#[cfg(unix)]
+const FIXTURE_MODE: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_MODE";
+#[cfg(unix)]
+const FIXTURE_ROOT: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_ROOT";
+#[cfg(unix)]
+const FIXTURE_AUTHORITY_ADDR: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_AUTHORITY_ADDR";
+#[cfg(unix)]
+const FIXTURE_STARTUP_REPORT: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_STARTUP_REPORT";
+#[cfg(unix)]
+const FIXTURE_SIDECAR_ARGS: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_SIDECAR_ARGS";
+
 #[test]
 fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
     let dir = tempfile::tempdir().expect("dir");
@@ -181,6 +192,38 @@ fn dynamic_authority_does_not_enable_disabled_sidecar_authority_client() {
 }
 
 #[cfg(unix)]
+#[test]
+#[ignore = "spawned as a process-lifecycle fixture"]
+fn lifecycle_fixture() {
+    let mode = std::env::var(FIXTURE_MODE).expect("fixture mode");
+    if mode == "authority" {
+        let authority_addr = std::env::var(FIXTURE_AUTHORITY_ADDR)
+            .expect("fixture Authority address")
+            .parse()
+            .expect("parse fixture Authority address");
+        let startup_report = std::path::PathBuf::from(
+            std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
+        );
+        firma_stack::publish_startup_report(&startup_report, authority_addr)
+            .expect("publish fixture startup report");
+        loop {
+            std::thread::sleep(Duration::from_mins(1));
+        }
+    }
+
+    assert_eq!(mode, "sidecar");
+    let root = std::path::PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
+    let mut sidecar_args = std::env::var(FIXTURE_SIDECAR_ARGS).expect("fixture Sidecar args");
+    sidecar_args.push('\n');
+    std::fs::write(root.join("sidecar.args"), sidecar_args).expect("capture Sidecar arguments");
+    std::fs::write(root.join("sidecar.args.ready"), []).expect("publish Sidecar arguments");
+    while !root.join("release-sidecar").exists() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::process::exit(25);
+}
+
+#[cfg(unix)]
 #[derive(Clone, Copy)]
 enum StackScenario {
     DynamicAuthority,
@@ -206,6 +249,7 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
     let state_dir = root.join("state");
     let config_path = root.join("firma.toml");
     let fixture_path = root.join("fixture.sh");
+    let fixture_test_bin = root.join("fixture-test-bin");
     let release_sidecar = root.join("release-sidecar");
     let authority_listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
@@ -217,20 +261,29 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
         StackScenario::FixedAuthority => authority_addr,
     };
 
+    std::os::unix::fs::symlink(
+        std::env::current_exe().expect("test executable"),
+        &fixture_test_bin,
+    )
+    .expect("link fixture test executable");
+
     write_executable_script(
         &fixture_path,
         format!(
             "#!/bin/sh\n\
              root=${{0%/*}}\n\
              if [ \"$1\" = authority ]; then\n\
-               printf 'protocol_version = 1\\ntcp_listen_addr = \"{authority_addr}\"\\n' > \"$5\"\n\
-               while :; do sleep 1; done\n\
+               export {FIXTURE_MODE}=authority\n\
+               export {FIXTURE_AUTHORITY_ADDR}={authority_addr}\n\
+               export {FIXTURE_STARTUP_REPORT}=\"$5\"\n\
              fi\n\
              if [ \"$1\" = sidecar ]; then\n\
-               printf '%s\\n' \"$@\" > \"$root/sidecar.args\"\n\
-               while [ ! -f \"$root/release-sidecar\" ]; do sleep 0.01; done\n\
-               exit 25\n\
-             fi\n"
+               export {FIXTURE_MODE}=sidecar\n\
+               export {FIXTURE_SIDECAR_ARGS}=\"$(printf '%s\\n' \"$@\")\"\n\
+             fi\n\
+             export {FIXTURE_ROOT}=\"$root\"\n\
+             exec \"$root/fixture-test-bin\" --exact \
+               readiness_process_exit::lifecycle_fixture --ignored\n"
         ),
     );
     let sidecar_authority = match scenario {
@@ -260,7 +313,7 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
         let cleanup = ProcessGroupCleanup::new(authority_pid);
         wait_for_pidfile(&state_dir.join("sidecar.pid"));
         let sidecar_args_path = root.join("sidecar.args");
-        let startup = wait_for_file_while_starting(&sidecar_args_path, startup);
+        let startup = wait_for_file_while_starting(&root.join("sidecar.args.ready"), startup);
         let sidecar_args =
             std::fs::read_to_string(sidecar_args_path).expect("captured Sidecar arguments");
         assert!(
