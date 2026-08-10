@@ -18,6 +18,11 @@
 //! - **termination**: probing and signalling the platform scope used to govern
 //!   the component and its descendants.
 //!
+//! The spawning process must eventually wait on its direct-child handle so the
+//! operating system can release the child's exit bookkeeping; abandoning that
+//! responsibility can leave a zombie on Unix. A PID or persisted state cannot
+//! reconstruct or transfer the child handle.
+//!
 //! [`RunningStack`] is the sole in-process owner of those capabilities after
 //! startup. [`StackHandle`] is observational. Persisted runtime state is a weaker
 //! cross-process coordination record: it lets another process discover and
@@ -46,11 +51,9 @@
 //! ```
 //!
 //! Foreground startup keeps [`RunningStack`] in the caller through supervision
-//! and shutdown. Detached startup gives a new supervisor process the generation
-//! to claim; that process spawns and owns the components, so child capabilities
-//! never cross a process boundary. The launcher returns only after a two-phase
-//! attachment handshake and transfers collection of its supervisor child to a
-//! process-global collector.
+//! and shutdown. Detached startup creates a supervisor that owns the components,
+//! so child capabilities never cross a process boundary; the launcher returns
+//! only after that ownership is established. [`start`] documents the handoff.
 //!
 //! # Core invariants
 //!
