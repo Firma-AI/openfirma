@@ -103,6 +103,10 @@ pub enum ScrapeResult {
 /// down (`SIGTERM` then `SIGKILL`) and cleans the marker directory.
 #[doc(hidden)]
 pub struct SidecarSupervisor {
+    #[expect(
+        dead_code,
+        reason = "legacy supervisor remains available for direct integration tests"
+    )]
     endpoint: SidecarEndpoint,
     marker_dir: PathBuf,
     pid: UserProcessId,
@@ -256,7 +260,11 @@ impl SidecarSupervisor {
 
     /// The UDS endpoint the spawned sidecar is listening on.
     #[must_use]
-    pub(crate) fn endpoint(&self) -> SidecarEndpoint {
+    #[expect(
+        dead_code,
+        reason = "legacy supervisor remains available for the 8b migration"
+    )]
+    fn endpoint(&self) -> SidecarEndpoint {
         self.endpoint.clone()
     }
 

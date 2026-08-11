@@ -311,10 +311,7 @@ fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
     .expect("test binary cannot autostart as the Sidecar");
 
     assert!(
-        matches!(
-            error,
-            RunError::SidecarReadyTimeout { .. } | RunError::SidecarStartupFailed { .. }
-        ),
+        matches!(error, RunError::SidecarOrchestration(_)),
         "got: {error}"
     );
     let sidecar = read_synthesized_sidecar(&identity);
@@ -360,10 +357,7 @@ fn autostart_without_effective_key_preserves_no_mint_behavior() {
     .expect("test binary cannot autostart as the Sidecar");
 
     assert!(
-        matches!(
-            error,
-            RunError::SidecarReadyTimeout { .. } | RunError::SidecarStartupFailed { .. }
-        ),
+        matches!(error, RunError::SidecarOrchestration(_)),
         "got: {error}"
     );
     let sidecar = read_synthesized_sidecar(&identity);

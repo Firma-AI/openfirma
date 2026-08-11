@@ -146,7 +146,7 @@ impl ShutdownError {
 
     /// Discard the shutdown phase while preserving the underlying error.
     #[must_use]
-    pub(crate) fn into_orchestrator_error(self) -> OrchestratorError {
+    pub fn into_orchestrator_error(self) -> OrchestratorError {
         match self {
             Self::TeardownUncertain(error) | Self::StateCleanup(error) => error,
         }

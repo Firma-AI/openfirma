@@ -4,8 +4,17 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(unix)]
 use firma_config_loader::AgentProfile;
-use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
+use firma_process_orchestrator::RunningStack;
+#[cfg(unix)]
+use firma_process_orchestrator::{
+    ComponentEndpoint, ComponentSpec, LifecycleTimeouts, StackTopology, UnixEndpoint,
+    spawn_stack_from_plan,
+};
+#[cfg(unix)]
+use firma_runtime_state::runtime_paths::default_runtime_dir;
+use firma_runtime_state::runtime_paths::run_entry_from;
 
 #[cfg(unix)]
 use std::io;
@@ -23,7 +32,6 @@ use crate::capability::refresh::CapabilityRefresher;
 use crate::config::{CapabilityLeaseConfig, CapabilitySource, SidecarEndpoint};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
-use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
 use firma_sidecar::authority_credentials::{ResolvedSidecarCredentials, SidecarCredentialsConfig};
 
 #[cfg(unix)]
@@ -139,24 +147,25 @@ pub struct NetworkRuntime {
     // authority supervisor.  Rust drops fields top-to-bottom, so declaration
     // order here is load-bearing.
     #[cfg(unix)]
-    _host_bridge: Option<crate::proxy_bridge::HostBridgeHandle>,
+    host_bridge: Option<crate::proxy_bridge::HostBridgeHandle>,
     /// Host-side DNS refusal stub for macOS structural paths.
     #[cfg(target_os = "macos")]
-    _host_dns_stub: Option<crate::dns_stub::host::HostDnsStubHandle>,
+    host_dns_stub: Option<crate::dns_stub::host::HostDnsStubHandle>,
     #[cfg(unix)]
-    _adapter: Option<SidecarAdapter>,
+    adapter: Option<SidecarAdapter>,
     /// Loopback egress guard supervisor. Held so the seccomp notify loop runs
     /// for the agent's lifetime and is torn down on Drop. Linux-only.
     #[cfg(target_os = "linux")]
-    _egress_guard: Option<crate::egress_guard::EgressGuardHandle>,
-    _sidecar_supervisor: Option<SidecarSupervisor>,
-    _authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
+    egress_guard: Option<crate::egress_guard::EgressGuardHandle>,
+    sidecar_stack: Option<RunningStack>,
+    authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
     // Stops the background re-mint thread. Declared before the guard so the
     // refresher halts (no further seed writes) before the file is deleted.
-    _capability_refresher: Option<crate::capability::refresh::CapabilityRefresher>,
+    capability_refresher: Option<crate::capability::refresh::CapabilityRefresher>,
     // Declared last so it drops last: the sidecar reads the seed file, so the
     // guard that DELETES the file must outlive the sidecar supervisor above.
-    _capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
+    capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
+    marker_guard: Option<RunMarkerGuard>,
 }
 
 impl NetworkRuntime {
@@ -172,6 +181,67 @@ impl NetworkRuntime {
     #[must_use]
     pub(crate) fn sidecar_endpoint(&self) -> &SidecarEndpoint {
         &self.sidecar_endpoint
+    }
+
+    /// Tear down networking before the owned Sidecar, then release its
+    /// Authority and capability dependencies in their established safe order.
+    pub(crate) fn shutdown(mut self, timeout: Duration) -> Result<(), RunError> {
+        #[cfg(unix)]
+        drop(self.host_bridge.take());
+        #[cfg(target_os = "macos")]
+        drop(self.host_dns_stub.take());
+        #[cfg(unix)]
+        drop(self.adapter.take());
+        #[cfg(target_os = "linux")]
+        drop(self.egress_guard.take());
+
+        if let Some(stack) = self.sidecar_stack.as_mut()
+            && let Err(error) = stack.shutdown(timeout)
+        {
+            let processes_stopped = error.processes_stopped();
+            let error = error.into_orchestrator_error();
+            if !processes_stopped {
+                // Keep the Authority, capability seed, and marker evidence
+                // alive while process teardown remains uncertain. Dropping
+                // this owner would violate dependency order.
+                std::mem::forget(self);
+                return Err(RunError::SidecarShutdown(error));
+            }
+            // Process ownership is discharged. Release capability material but
+            // retain the run marker that contains deferred orchestrator state.
+            self.sidecar_stack = None;
+            self.authority_supervisor = None;
+            self.capability_refresher = None;
+            self.capability_guard = None;
+            std::mem::forget(self.marker_guard.take());
+            return Err(RunError::SidecarShutdown(error));
+        }
+        self.sidecar_stack = None;
+        self.authority_supervisor = None;
+        self.capability_refresher = None;
+        self.capability_guard = None;
+        if let Some(guard) = self.marker_guard.take() {
+            guard.cleanup()?;
+        }
+        Ok(())
+    }
+}
+
+struct RunMarkerGuard {
+    path: PathBuf,
+}
+
+impl RunMarkerGuard {
+    fn cleanup(&self) -> Result<(), RunError> {
+        if std::env::var_os("FIRMA_RUN_KEEP_MARKERS").is_none() && self.path.exists() {
+            std::fs::remove_dir_all(&self.path).map_err(|error| {
+                RunError::Internal(format!(
+                    "remove run markers {}: {error}",
+                    self.path.display()
+                ))
+            })?;
+        }
+        Ok(())
     }
 }
 
@@ -273,26 +343,61 @@ pub struct ResolveAuthorityRequest<'a> {
 struct RuntimeParts {
     effective_endpoint: SidecarEndpoint,
     autostart_trust_env: BTreeMap<String, String>,
-    sidecar_supervisor: Option<SidecarSupervisor>,
+    sidecar_stack: Option<RunningStack>,
+    owned_sidecar_marker: Option<PathBuf>,
     authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
     capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
     capability_refresher: Option<crate::capability::refresh::CapabilityRefresher>,
 }
 
+impl RuntimeParts {
+    #[cfg(unix)]
+    fn rollback_after(mut self, operation: RunError) -> RunError {
+        if let Some(stack) = self.sidecar_stack.as_mut()
+            && let Err(rollback) = stack.shutdown(Duration::from_secs(10))
+        {
+            let processes_stopped = rollback.processes_stopped();
+            let rollback = rollback.into_orchestrator_error();
+            if !processes_stopped {
+                // Retain dependencies and marker evidence for the incompletely
+                // stopped Sidecar, matching NetworkRuntime's shutdown contract.
+                std::mem::forget(self);
+                return RunError::SidecarPostReadyRollback {
+                    operation: Box::new(operation),
+                    rollback,
+                };
+            }
+            self.sidecar_stack = None;
+            self.authority_supervisor = None;
+            drop(self.capability_refresher.take());
+            drop(self.capability_guard.take());
+            return RunError::SidecarPostReadyRollback {
+                operation: Box::new(operation),
+                rollback,
+            };
+        }
+        if let Some(path) = self.owned_sidecar_marker.take()
+            && let Err(error) = (RunMarkerGuard { path }).cleanup()
+        {
+            tracing::warn!(%error, "post-readiness rollback could not remove run markers");
+        }
+        operation
+    }
+}
+
 /// Prepare network runtime artifacts for a sandbox launch.
 ///
 /// When `flags.sidecar_autostart == true` (local selection), autostarts a
-/// per-run sidecar via
-/// [`SidecarSupervisor`] and substitutes its endpoint into the returned
-/// [`NetworkRuntime`]. The supervisor is held inside the returned struct so
-/// [`Drop`] tears the sidecar down when the wrapped process exits.
+/// per-run Sidecar through `firma-process-orchestrator` and substitutes its
+/// readiness-validated endpoint into the returned [`NetworkRuntime`]. The
+/// running stack is retained until explicit shutdown after the agent exits.
 ///
 /// # Errors
 ///
 /// - [`RunError::SidecarUnreachable`] when the endpoint is unreachable and
 ///   autostart is disabled.
-/// - [`RunError::SidecarReadyTimeout`] / [`RunError::SidecarStartupFailed`]
-///   when the autostarted sidecar fails to come up.
+/// - [`RunError::SidecarOrchestration`] when the autostarted Sidecar fails to
+///   publish readiness or orchestration otherwise fails.
 /// - [`RunError::UnsupportedPlatform`] when autostart is required on a
 ///   platform that does not support it.
 /// - [`RunError::Backend`] for adapter socket failures.
@@ -302,7 +407,7 @@ pub fn prepare_network_runtime(
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     flags: &AutostartFlags,
-    authority: ResolvedAuthority,
+    mut authority: ResolvedAuthority,
     capability_lease: &CapabilityLeaseConfig,
 ) -> Result<NetworkRuntime, RunError> {
     #[cfg(not(unix))]
@@ -347,14 +452,28 @@ pub fn prepare_network_runtime(
         (None, None)
     };
 
-    let (effective_endpoint, sidecar_supervisor) =
-        resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
-    let autostart_trust_env = sidecar_trust_env_overrides(sidecar_supervisor.as_ref());
+    let (effective_endpoint, sidecar_stack, owned_sidecar_marker) =
+        match resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags) {
+            Ok(resolved) => resolved,
+            Err(error @ RunError::SidecarPostReadyRollback { .. }) => {
+                // The stack retained an incompletely stopped Sidecar. Keep its
+                // Authority and capability inputs alive for cross-process
+                // recovery rather than invalidating them while returning the
+                // structured operation-plus-rollback error.
+                std::mem::forget(authority.supervisor.take());
+                std::mem::forget(capability_refresher);
+                std::mem::forget(capability_guard);
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+    let autostart_trust_env = sidecar_trust_env_overrides(owned_sidecar_marker.as_deref());
 
     let parts = RuntimeParts {
         effective_endpoint,
         autostart_trust_env,
-        sidecar_supervisor,
+        sidecar_stack,
+        owned_sidecar_marker,
         authority_supervisor: authority.supervisor,
         capability_guard,
         capability_refresher,
@@ -390,38 +509,47 @@ fn prepare_flat_runtime(
     identity: &RunIdentity,
     parts: RuntimeParts,
 ) -> Result<NetworkRuntime, RunError> {
-    let RuntimeParts {
-        effective_endpoint,
-        autostart_trust_env,
-        sidecar_supervisor,
-        authority_supervisor,
-        capability_guard,
-        capability_refresher,
-    } = parts;
-
     #[cfg(not(unix))]
     let _ = identity;
     #[cfg(not(target_os = "macos"))]
     let _ = (handle, proof);
 
-    let env_overrides = EnvOverrides::from(autostart_trust_env);
+    let env_overrides = EnvOverrides::from(parts.autostart_trust_env.clone());
     #[cfg(unix)]
-    let (host_bridge, env_overrides) = {
-        let host_bridge = setup_host_bridge(&effective_endpoint, identity)?;
-        let env_overrides = env_overrides.with_bridge_address(host_bridge.listen_addr());
-        (host_bridge, env_overrides)
+    let (host_bridge, env_overrides) = match setup_host_bridge(&parts.effective_endpoint, identity)
+    {
+        Ok(host_bridge) => {
+            let env_overrides = env_overrides.with_bridge_address(host_bridge.listen_addr());
+            (host_bridge, env_overrides)
+        }
+        Err(error) => return Err(parts.rollback_after(error)),
     };
 
     #[cfg(target_os = "macos")]
-    let (host_dns_stub, env_overrides) = {
-        let dns_stub = maybe_start_host_dns_stub(handle, proof)?;
-        let env_overrides = env_overrides.with_dns_stub_address(
-            dns_stub
-                .as_ref()
-                .map(crate::dns_stub::host::HostDnsStubHandle::listen_addr),
-        );
-        (dns_stub, env_overrides)
+    let (host_dns_stub, env_overrides) = match maybe_start_host_dns_stub(handle, proof) {
+        Ok(dns_stub) => {
+            let env_overrides = env_overrides.with_dns_stub_address(
+                dns_stub
+                    .as_ref()
+                    .map(crate::dns_stub::host::HostDnsStubHandle::listen_addr),
+            );
+            (dns_stub, env_overrides)
+        }
+        Err(error) => {
+            drop(host_bridge);
+            return Err(parts.rollback_after(error));
+        }
     };
+
+    let RuntimeParts {
+        effective_endpoint,
+        autostart_trust_env: _,
+        sidecar_stack,
+        owned_sidecar_marker,
+        authority_supervisor,
+        capability_guard,
+        capability_refresher,
+    } = parts;
 
     // macOS structural modes without a Linux network namespace also need a
     // host-side DNS refusal stub. sandbox-exec reaches it on loopback; the
@@ -432,17 +560,18 @@ fn prepare_flat_runtime(
         env_overrides,
         sidecar_endpoint: effective_endpoint,
         #[cfg(unix)]
-        _host_bridge: Some(host_bridge),
+        host_bridge: Some(host_bridge),
         #[cfg(target_os = "macos")]
-        _host_dns_stub: host_dns_stub,
+        host_dns_stub,
         #[cfg(unix)]
-        _adapter: None,
+        adapter: None,
         #[cfg(target_os = "linux")]
-        _egress_guard: None,
-        _sidecar_supervisor: sidecar_supervisor,
-        _authority_supervisor: authority_supervisor,
-        _capability_refresher: capability_refresher,
-        _capability_guard: capability_guard,
+        egress_guard: None,
+        sidecar_stack,
+        authority_supervisor,
+        capability_refresher,
+        capability_guard,
+        marker_guard: owned_sidecar_marker.map(|path| RunMarkerGuard { path }),
     })
 }
 
@@ -455,25 +584,23 @@ fn prepare_structural_runtime(
     identity: &RunIdentity,
     parts: RuntimeParts,
 ) -> Result<NetworkRuntime, RunError> {
-    let RuntimeParts {
-        effective_endpoint,
-        autostart_trust_env,
-        sidecar_supervisor,
-        authority_supervisor,
-        capability_guard,
-        capability_refresher,
-    } = parts;
-
     #[cfg(not(target_os = "linux"))]
     let _ = identity;
 
     let adapter_path = handle.runtime_dir.join("sidecar-upstream.sock");
-    let adapter = SidecarAdapter::start(&adapter_path, &effective_endpoint)?;
-    let current_exe = std::env::current_exe().map_err(|error| {
-        RunError::Internal(format!(
-            "failed to resolve current executable path: {error}"
-        ))
-    })?;
+    let adapter = match SidecarAdapter::start(&adapter_path, &parts.effective_endpoint) {
+        Ok(adapter) => adapter,
+        Err(error) => return Err(parts.rollback_after(error)),
+    };
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            drop(adapter);
+            return Err(parts.rollback_after(RunError::Internal(format!(
+                "failed to resolve current executable path: {error}"
+            ))));
+        }
+    };
 
     let proxy_addr = structural_proxy_listen_addr();
     let dns_addr = structural_dns_stub_listen_addr();
@@ -487,11 +614,11 @@ fn prepare_structural_runtime(
         handle,
         proxy_addr,
         dns_addr,
-        sidecar_supervisor.as_ref(),
+        parts.owned_sidecar_marker.as_deref(),
         identity,
     );
 
-    let env_overrides = EnvOverrides::from(autostart_trust_env).structural_proxy_env(
+    let env_overrides = EnvOverrides::from(parts.autostart_trust_env.clone()).structural_proxy_env(
         proxy_addr,
         dns_addr,
         &adapter_path,
@@ -507,19 +634,30 @@ fn prepare_structural_runtime(
         env_overrides
     };
 
+    let RuntimeParts {
+        effective_endpoint,
+        autostart_trust_env: _,
+        sidecar_stack,
+        owned_sidecar_marker,
+        authority_supervisor,
+        capability_guard,
+        capability_refresher,
+    } = parts;
+
     Ok(NetworkRuntime {
         env_overrides,
         sidecar_endpoint: effective_endpoint,
-        _host_bridge: None,
+        host_bridge: None,
         #[cfg(target_os = "macos")]
-        _host_dns_stub: None,
-        _adapter: Some(adapter),
+        host_dns_stub: None,
+        adapter: Some(adapter),
         #[cfg(target_os = "linux")]
-        _egress_guard: egress_guard,
-        _sidecar_supervisor: sidecar_supervisor,
-        _authority_supervisor: authority_supervisor,
-        _capability_refresher: capability_refresher,
-        _capability_guard: capability_guard,
+        egress_guard,
+        sidecar_stack,
+        authority_supervisor,
+        capability_refresher,
+        capability_guard,
+        marker_guard: owned_sidecar_marker.map(|path| RunMarkerGuard { path }),
     })
 }
 
@@ -537,7 +675,7 @@ fn start_loopback_guard(
     handle: &SandboxHandle,
     proxy_addr: &str,
     dns_addr: &str,
-    sidecar_supervisor: Option<&SidecarSupervisor>,
+    owned_sidecar_marker: Option<&Path>,
     identity: &RunIdentity,
 ) -> Option<crate::egress_guard::EgressGuardHandle> {
     // Ports the agent may still reach on loopback. A parse failure here would
@@ -561,8 +699,8 @@ fn start_loopback_guard(
     // audit channel so they become signed audit events. With an external
     // Sidecar we do not control its env, so reporting is skipped (blocks are
     // still enforced).
-    let report = sidecar_supervisor.map(|supervisor| crate::egress_guard::AuditChannel {
-        socket_path: firma_sidecar::run_audit::socket_path_in(supervisor.marker_dir()),
+    let report = owned_sidecar_marker.map(|marker| crate::egress_guard::AuditChannel {
+        socket_path: firma_sidecar::run_audit::socket_path_in(marker),
         session_id: identity.session_id.clone(),
         agent_id: identity.agent_id,
     });
@@ -693,14 +831,12 @@ fn maybe_start_host_dns_stub(
     Ok(Some(stub))
 }
 
-fn sidecar_trust_env_overrides(
-    sidecar_supervisor: Option<&SidecarSupervisor>,
-) -> BTreeMap<String, String> {
+fn sidecar_trust_env_overrides(owned_sidecar_marker: Option<&Path>) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    let Some(supervisor) = sidecar_supervisor else {
+    let Some(marker) = owned_sidecar_marker else {
         return env;
     };
-    let ca_dir = supervisor.marker_dir().join("firma-ca");
+    let ca_dir = marker.join("firma-ca");
     let ca_cert = ca_dir.join("firma-ca.crt");
     env.insert(
         "FIRMA_SIDECAR_CA_DIR".to_string(),
@@ -718,23 +854,33 @@ fn resolve_effective_endpoint(
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     flags: &AutostartFlags,
-) -> Result<(SidecarEndpoint, Option<SidecarSupervisor>), RunError> {
+) -> Result<(SidecarEndpoint, Option<RunningStack>, Option<PathBuf>), RunError> {
     // Local selection: autostart unconditionally. `--sidecar local` +
     // `--no-autostart` was already rejected during selection resolution.
     if flags.sidecar_autostart {
-        let supervisor = autostart_sidecar(identity, flags)?;
-        return Ok((supervisor.endpoint(), Some(supervisor)));
+        #[cfg(unix)]
+        {
+            let (endpoint, stack, marker) = autostart_sidecar(identity, flags)?;
+            return Ok((endpoint, Some(stack), Some(marker)));
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = identity;
+            return Err(RunError::UnsupportedPlatform {
+                reason: "firma run local Sidecar autostart requires Unix".into(),
+            });
+        }
     }
 
     // External selection: never autostart.
     // `fail_closed = false` is an explicit dev/test escape that disables the
     // probe. It mirrors the pre-FIR-102 behaviour.
     if !handle.network_policy.fail_closed {
-        return Ok((sidecar_endpoint.clone(), None));
+        return Ok((sidecar_endpoint.clone(), None, None));
     }
 
     match probe_sidecar(sidecar_endpoint) {
-        Ok(()) => Ok((sidecar_endpoint.clone(), None)),
+        Ok(()) => Ok((sidecar_endpoint.clone(), None, None)),
         Err(reason) => Err(RunError::SidecarUnreachable {
             endpoint: format_endpoint(sidecar_endpoint),
             reason,
@@ -742,10 +888,11 @@ fn resolve_effective_endpoint(
     }
 }
 
+#[cfg(unix)]
 fn autostart_sidecar(
     identity: &RunIdentity,
     flags: &AutostartFlags,
-) -> Result<SidecarSupervisor, RunError> {
+) -> Result<(SidecarEndpoint, RunningStack, PathBuf), RunError> {
     let runtime_dir = default_runtime_dir();
     let marker_dir = run_entry_from(&runtime_dir, &identity.sandbox_id);
     let firma_exe = std::env::current_exe().map_err(|error| {
@@ -768,29 +915,176 @@ fn autostart_sidecar(
             ))
         })?;
 
-    SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: &identity.sandbox_id,
-        agent_id: &identity.agent_id,
-        execution_profile,
-        session_id: &identity.session_id,
-        marker_dir,
-        template_path: flags.template_path.as_deref(),
-        env_template,
-        cwd_template,
-        firma_exe,
-        startup_timeout: flags.startup_timeout,
-        authority_url: flags.authority_url.as_deref(),
-        authority_ca_cert: flags.authority_ca_cert.clone(),
-        authority_pub_key: flags.authority_pub_key.clone(),
-        authority_credentials: flags.authority_credentials.clone(),
-        capability_seed_path: flags.capability_seed_path.clone(),
-        use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
-        monitor_mode: flags.monitor_mode,
-        // `runtime_dir` is the state dir `firma monitor` resolves, so a
-        // per-run sidecar with no configured audit sink still writes a
-        // monitorable `<state_dir>/audit.jsonl`.
-        audit_fallback_path: Some(runtime_dir.join("audit.jsonl")),
+    let orchestrator_dir = marker_dir.join("orchestrator");
+    let topology = StackTopology::new(["sidecar"])
+        .map_err(|error| RunError::Internal(format!("construct run Sidecar topology: {error}")))?;
+    let mut prepared = None;
+    let stack = spawn_stack_from_plan(
+        &topology,
+        |context| {
+            create_sidecar_log_alias(&marker_dir, &orchestrator_dir.join("sidecar.log"))?;
+            let mut launch =
+                crate::sidecar::prepare::prepare(crate::sidecar::prepare::PrepareRequest {
+                    sandbox_id: &identity.sandbox_id,
+                    agent_id: &identity.agent_id,
+                    execution_profile,
+                    session_id: &identity.session_id,
+                    marker_dir: marker_dir.clone(),
+                    template_path: flags.template_path.as_deref(),
+                    env_template: env_template.clone(),
+                    cwd_template: cwd_template.clone(),
+                    firma_exe: firma_exe.clone(),
+                    authority_url: flags.authority_url.as_deref(),
+                    authority_ca_cert: flags.authority_ca_cert.clone(),
+                    authority_pub_key: flags.authority_pub_key.clone(),
+                    authority_credentials: flags.authority_credentials.clone(),
+                    capability_seed_path: flags.capability_seed_path.clone(),
+                    use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
+                    monitor_mode: flags.monitor_mode,
+                    // `runtime_dir` is the state dir `firma monitor` resolves, so a
+                    // per-run sidecar with no configured audit sink still writes a
+                    // monitorable `<state_dir>/audit.jsonl`.
+                    audit_fallback_path: Some(runtime_dir.join("audit.jsonl")),
+                })?;
+            let expected = sidecar_to_component(&launch.expected_endpoint)?;
+            let publication = context.child_published(expected);
+            let mut command = launch.take_command()?;
+            command
+                .arg("--startup-report")
+                .arg(publication.startup_report_path());
+            prepared = Some(launch);
+            Ok(ComponentSpec {
+                command,
+                readiness: publication.into_readiness(),
+            })
+        },
+        &orchestrator_dir,
+        LifecycleTimeouts {
+            component_readiness: flags.startup_timeout,
+            ..LifecycleTimeouts::default()
+        },
+    )
+    .map_err(|error| RunError::SidecarOrchestration(Box::new(error)))?;
+    let Some(component) = stack.handle().component("sidecar") else {
+        return Err(rollback_ready_sidecar(
+            stack,
+            RunError::Internal("ready Sidecar stack omitted its component handle".into()),
+            &marker_dir,
+        ));
+    };
+    let endpoint = component_to_sidecar(component.endpoint());
+    let leader_pid = component.leader_pid();
+    let Some(launch) = prepared.as_ref() else {
+        return Err(rollback_ready_sidecar(
+            stack,
+            RunError::Internal("Sidecar planner completed without retaining its launch".into()),
+            &marker_dir,
+        ));
+    };
+    if let Err(error) =
+        crate::sidecar::prepare::publish_metadata(launch, &endpoint, leader_pid, None)
+    {
+        return Err(rollback_ready_sidecar(stack, error, &marker_dir));
+    }
+    Ok((endpoint, stack, marker_dir))
+}
+
+#[cfg(unix)]
+fn rollback_ready_sidecar(
+    mut stack: RunningStack,
+    operation: RunError,
+    marker_dir: &Path,
+) -> RunError {
+    if let Err(rollback) = stack.shutdown(Duration::from_secs(10)) {
+        let processes_stopped = rollback.processes_stopped();
+        let rollback = rollback.into_orchestrator_error();
+        if !processes_stopped {
+            // Preserve the sole in-process owner and durable state after an
+            // uncertain rollback. The caller likewise retains the Authority
+            // and capability dependencies.
+            std::mem::forget(stack);
+        }
+        return RunError::SidecarPostReadyRollback {
+            operation: Box::new(operation),
+            rollback,
+        };
+    }
+    if let Err(cleanup) = (RunMarkerGuard {
+        path: marker_dir.to_path_buf(),
     })
+    .cleanup()
+    {
+        tracing::warn!(%cleanup, "Sidecar rollback could not remove run markers");
+    }
+    operation
+}
+
+#[cfg(unix)]
+fn sidecar_to_component(endpoint: &SidecarEndpoint) -> Result<ComponentEndpoint, RunError> {
+    match endpoint {
+        SidecarEndpoint::Tcp { addr } => Ok(ComponentEndpoint::Tcp(*addr)),
+        SidecarEndpoint::Unix { path } => UnixEndpoint::new(path.clone())
+            .map(ComponentEndpoint::Unix)
+            .map_err(|path| {
+                RunError::ConfigValidation(format!(
+                    "Sidecar socket path is not valid UTF-8: {}",
+                    path.display()
+                ))
+            }),
+    }
+}
+
+#[cfg(unix)]
+fn component_to_sidecar(endpoint: &ComponentEndpoint) -> SidecarEndpoint {
+    match endpoint {
+        ComponentEndpoint::Tcp(addr) => SidecarEndpoint::Tcp { addr: *addr },
+        ComponentEndpoint::Unix(path) => SidecarEndpoint::Unix {
+            path: path.clone().into_path().into_std_path_buf(),
+        },
+    }
+}
+
+#[cfg(unix)]
+fn create_sidecar_log_alias(marker_dir: &Path, target: &Path) -> Result<(), RunError> {
+    use std::os::unix::fs::symlink;
+    firma_fs::create_private_dir_all(marker_dir)
+        .map_err(|error| RunError::Internal(format!("mkdir {}: {error}", marker_dir.display())))?;
+    let target = std::path::absolute(target).map_err(|error| {
+        RunError::Internal(format!(
+            "resolve Sidecar log target {}: {error}",
+            target.display()
+        ))
+    })?;
+    let alias = marker_dir.join("sidecar.log");
+    match std::fs::symlink_metadata(&alias) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let existing = std::fs::read_link(&alias).map_err(|error| {
+                RunError::Internal(format!("read {}: {error}", alias.display()))
+            })?;
+            if existing == target {
+                return Ok(());
+            }
+            return Err(RunError::Internal(format!(
+                "refusing to replace existing {}",
+                alias.display()
+            )));
+        }
+        Ok(_) => {
+            return Err(RunError::Internal(format!(
+                "refusing to replace existing {}",
+                alias.display()
+            )));
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(RunError::Internal(format!(
+                "inspect {}: {error}",
+                alias.display()
+            )));
+        }
+        Err(_) => {}
+    }
+    symlink(target, &alias)
+        .map_err(|error| RunError::Internal(format!("create {}: {error}", alias.display())))
 }
 
 /// Step 0: resolve the Authority before any sidecar work.
