@@ -307,29 +307,15 @@ pub struct ResolvedAuthority {
     pub credentials: Option<ResolvedSidecarCredentials>,
     /// Unresolved credentials config passed to an autostarted Sidecar.
     pub credentials_config: Option<SidecarCredentialsConfig>,
-    /// Legacy test/compatibility ownership. Production run paths no longer set it.
-    pub supervisor: Option<crate::authority::AuthoritySupervisor>,
     #[doc(hidden)]
     pub owned: Option<OwnedAuthorityPlan>,
 }
 
 #[doc(hidden)]
 pub struct OwnedAuthorityPlan {
-    #[cfg_attr(
-        not(unix),
-        expect(dead_code, reason = "local Authority autostart is Unix-only")
-    )]
-    profile_name: String,
-    #[cfg_attr(
-        not(unix),
-        expect(dead_code, reason = "local Authority autostart is Unix-only")
-    )]
-    firma_exe: PathBuf,
-    #[cfg_attr(
-        not(unix),
-        expect(dead_code, reason = "local Authority autostart is Unix-only")
-    )]
-    user_config_path: Option<PathBuf>,
+    pub profile_name: String,
+    pub firma_exe: PathBuf,
+    pub user_config_path: Option<PathBuf>,
 }
 
 /// Inputs used to resolve the Authority for one `firma run` invocation.
@@ -918,7 +904,7 @@ fn prepare_run_components(
                         &orchestrator_dir.join("authority.log"),
                     )?;
                     let mut launch = crate::authority::prepare::prepare(
-                        crate::authority::prepare::PrepareRequest {
+                        &crate::authority::prepare::PrepareRequest {
                             sandbox_id: &identity.sandbox_id,
                             agent_id: &identity.agent_id,
                             session_id: &identity.session_id,
@@ -1037,6 +1023,12 @@ fn prepare_run_components(
                     // cross-process recovery rather than invalidating its inputs.
                     std::mem::forget(capability_refresher.take());
                     std::mem::forget(capability_guard.take());
+                } else {
+                    drop(capability_refresher);
+                    drop(capability_guard);
+                    if let Err(cleanup) = (RunMarkerGuard { path: marker_dir }).cleanup() {
+                        tracing::warn!(%cleanup, "run component startup rollback could not remove markers");
+                    }
                 }
                 return Err(RunError::RunComponentOrchestration(Box::new(error)));
             }
@@ -1051,20 +1043,7 @@ fn prepare_run_components(
                         "Authority handle has non-TCP endpoint".into(),
                     ));
                 };
-                firma_runtime_state::pidfile::write(&launch.pid_path, component.leader_pid())
-                    .map_err(|error| RunError::Internal(format!("write authority.pid: {error}")))?;
-                crate::authority::metadata::write(
-                    &launch.metadata_path,
-                    &crate::authority::metadata::Metadata {
-                        sandbox_id: launch.sandbox_id,
-                        agent_id: launch.agent_id,
-                        session_id: launch.session_id.clone(),
-                        profile: launch.profile_name.clone(),
-                        listen_addr: addr.to_string(),
-                        pid: component.leader_pid(),
-                        started_at: chrono::Utc::now().to_rfc3339(),
-                    },
-                )?;
+                crate::authority::prepare::publish_metadata(launch, *addr, component.leader_pid())?;
             }
             if let Some(component) = stack.handle().component("sidecar") {
                 let launch = sidecar_launch
@@ -1074,7 +1053,6 @@ fn prepare_run_components(
                     launch,
                     &component_to_sidecar(component.endpoint()),
                     component.leader_pid(),
-                    None,
                 )?;
             }
             if owns_authority && !owns_sidecar && handle.network_policy.fail_closed {
@@ -1293,7 +1271,6 @@ pub fn resolve_authority(
                 pub_key_path,
                 credentials,
                 credentials_config,
-                supervisor: None,
                 owned: None,
             })
         }
@@ -1316,7 +1293,6 @@ pub fn resolve_authority(
                     pub_key_path,
                     credentials,
                     credentials_config,
-                    supervisor: None,
                     owned: None,
                 });
             }
@@ -1342,7 +1318,6 @@ pub fn resolve_authority(
                 pub_key_path: capability_pub_key_path,
                 credentials,
                 credentials_config,
-                supervisor: None,
                 owned: Some(OwnedAuthorityPlan {
                     profile_name: request.profile_name.to_string(),
                     firma_exe: request.firma_exe.to_path_buf(),
@@ -1983,7 +1958,6 @@ mod non_structural_env_tests {
             pub_key_path: None,
             credentials: None,
             credentials_config: None,
-            supervisor: None,
             owned: None,
         };
         let proof = crate::backend::EnforcementProof {
@@ -2076,7 +2050,6 @@ mod non_structural_env_tests {
                 pub_key_path: None,
                 credentials: None,
                 credentials_config: None,
-                supervisor: None,
                 owned: None,
             };
             let structural_proof = crate::backend::EnforcementProof {
@@ -2147,7 +2120,6 @@ mod non_structural_env_tests {
             pub_key_path: None,
             credentials: None,
             credentials_config: None,
-            supervisor: None,
             owned: None,
         };
         let proof = crate::backend::EnforcementProof {

@@ -562,10 +562,8 @@ map to dedicated run errors and retain the Authority's diagnostic message.
 
 ### Authority typed errors
 
-| Error                     | Trigger                                                          |
-| ------------------------- | ---------------------------------------------------------------- |
-| `MissingAuthority`        | `--no-autostart` and nothing configured.                         |
-| `AuthorityStartupFailed`  | Spawn or stderr-pipe setup failed; stderr closed before `ready`. |
-| `AuthorityReadyTimeout`   | Spawned authority did not emit `ready` within the budget.        |
-| `AuthorityUnreachable`    | Remote URL did not answer a TCP connect probe.                   |
-| `AuthorityUnknownProfile` | `--authority-profile` is not a registered profile.               |
+| Error                     | Trigger                                            |
+| ------------------------- | -------------------------------------------------- |
+| `MissingAuthority`        | `--no-autostart` and nothing configured.           |
+| `AuthorityUnreachable`    | Remote URL did not answer a TCP connect probe.     |
+| `AuthorityUnknownProfile` | `--authority-profile` is not a registered profile. |
