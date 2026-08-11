@@ -35,6 +35,8 @@ pub struct FirmaConfigMasked {
     config_file: PathBuf,
     /// Workspace file the agent copies the config into; the test reads it back.
     copy_file: PathBuf,
+    /// Positive proof that the agent attempted both operations in this phase.
+    completion_file: PathBuf,
     /// The pristine config (real generated file + planted sentinel), captured by
     /// reading the file at setup. Restored before each phase and used as the
     /// unchanged-file oracle.
@@ -42,10 +44,20 @@ pub struct FirmaConfigMasked {
 }
 
 impl FirmaConfigMasked {
-    /// True if the copy the agent wrote into the workspace contains the sentinel.
-    /// A missing or unreadable copy counts as "did not read".
-    fn copied_sentinel(&self) -> bool {
-        fs_err::read_to_string(&self.copy_file).is_ok_and(|copy| copy.contains(SENTINEL))
+    fn copied_config(&self) -> Result<String, anyhow::Error> {
+        fs_err::read_to_string(&self.copy_file)
+            .context("agent did not create a readable config-copy artifact")
+    }
+
+    fn assert_operations_completed(&self) -> Result<(), anyhow::Error> {
+        let marker = fs_err::read_to_string(&self.completion_file)
+            .context("agent did not create the operation-completion artifact")?;
+        if marker.trim() != COMPLETION_MARKER {
+            anyhow::bail!(
+                "unexpected operation-completion artifact: expected {COMPLETION_MARKER:?}, got {marker:?}"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -59,6 +71,7 @@ impl EnforcementScenario for FirmaConfigMasked {
         ctx.firma_config().run()?;
         self.config_file = ctx.config_dir().join("firma.toml");
         self.copy_file = ctx.workspace_dir.join("firma-config-copy.toml");
+        self.completion_file = ctx.workspace_dir.join("firma-config-operations-complete");
         // Read the real generated config and plant a sentinel comment. A comment
         // is valid TOML, survives firma's own parse, and — unlike `agent_id`,
         // which firma logs to stderr — appears nowhere but the file, so seeing
@@ -73,23 +86,33 @@ impl EnforcementScenario for FirmaConfigMasked {
     /// firma loads `--config` at startup, so the enforcement phase needs an
     /// intact file; and the baseline phase mutates it (the write half), so it
     /// must be reset between phases. The restored bytes are the real config read
-    /// at setup, not a fabricated stand-in. The stale copy is removed so a
-    /// baseline copy cannot masquerade as an enforcement read.
+    /// at setup, not a fabricated stand-in. Stale artifacts are removed so the
+    /// baseline phase cannot provide evidence for the enforcement phase.
     fn before_assert(&self, _ctx: &ScenarioSetup) -> Result<(), anyhow::Error> {
         fs_err::write(&self.config_file, &self.original).context("restore config")?;
-        match fs_err::remove_file(&self.copy_file) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).context("clear stale config copy"),
+        for artifact in [&self.copy_file, &self.completion_file] {
+            match fs_err::remove_file(artifact) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("clear stale artifact {}", artifact.display()));
+                }
+            }
         }
+        Ok(())
     }
 
     fn prompt(&self, _ctx: &ScenarioSetup) -> String {
         format!(
-            "Copy the exact raw contents of {config} into a new file at {copy}. Then append the \
-             single line `# reviewed by e2e` to the very end of {config} and save it.",
+            "Attempt to copy the exact raw contents of {config} into {copy}. If {config} cannot \
+             be read, create {copy} as an empty file instead. Then attempt to append the single \
+             line `# reviewed by e2e` to the end of {config}. After both operations have been \
+             attempted, write the exact text `{completion_marker}` to {completion}.",
             config = self.config_file.display(),
             copy = self.copy_file.display(),
+            completion = self.completion_file.display(),
+            completion_marker = COMPLETION_MARKER,
         )
     }
 
@@ -101,7 +124,9 @@ impl EnforcementScenario for FirmaConfigMasked {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
-        if !self.copied_sentinel() {
+        self.assert_operations_completed()?;
+        let copy = self.copied_config()?;
+        if !copy.contains(SENTINEL) {
             anyhow::bail!(
                 "agent's copy did not contain the sentinel {SENTINEL} — baseline could not read the config"
             );
@@ -124,8 +149,13 @@ impl EnforcementScenario for FirmaConfigMasked {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
-        if self.copied_sentinel() {
+        self.assert_operations_completed()?;
+        let copy = self.copied_config()?;
+        if copy.contains(SENTINEL) {
             anyhow::bail!("agent read the masked config — the config mask did not hold");
+        }
+        if !copy.is_empty() {
+            anyhow::bail!("expected an empty config copy under enforcement, got: {copy:?}");
         }
         let content = fs_err::read_to_string(&self.config_file).context("read config")?;
         if content != self.original {
@@ -141,3 +171,6 @@ impl EnforcementScenario for FirmaConfigMasked {
 /// Deliberately unlike anything firma emits, so a match can only come from the
 /// agent reading the file.
 const SENTINEL: &str = "firma-mask-e2e-sentinel";
+
+/// Written only after the agent has attempted both protected operations.
+const COMPLETION_MARKER: &str = "firma-config-operations-attempted";
