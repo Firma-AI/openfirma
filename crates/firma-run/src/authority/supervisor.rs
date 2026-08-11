@@ -2,8 +2,6 @@
 //! kill on Drop. Mirrors `firma-run/src/sidecar/supervisor.rs` (FIR-102).
 
 use std::io::{BufRead, Write};
-#[cfg(unix)]
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
@@ -11,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 #[cfg(unix)]
-use firma_authority::{AuthorityConfig, AuthorityTlsConfig};
+use tracing::debug;
 use tracing::{info, warn};
 use wait_timeout::ChildExt;
 
@@ -25,18 +23,6 @@ pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
 
 /// Grace period between `SIGTERM` and `SIGKILL` in [`Drop`].
 const STOP_GRACE: Duration = Duration::from_secs(5);
-#[cfg(unix)]
-const MAX_BIND_ATTEMPTS: usize = 8;
-#[cfg(unix)]
-const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r"// Local autostart profile for `firma run`.
-//
-// Governs token *issuance* only. Runtime enforcement is handled by the
-// sidecar's Cedar policy bundle (dev.cedar). All registered action classes
-// are permitted here so the sidecar can classify and enforce without the
-// Authority becoming the bottleneck for local dev.
-permit(principal, action, resource);
-";
-
 /// Inputs to [`AuthoritySupervisor::spawn`].
 #[doc(hidden)]
 #[derive(Debug)]
@@ -107,192 +93,122 @@ impl AuthoritySupervisor {
     #[cfg(unix)]
     #[expect(
         clippy::too_many_lines,
-        reason = "single linear spawn-then-scrape sequence reads more clearly inline"
+        reason = "linear handoff from preparation through guarded startup is easier to audit"
     )]
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
         use firma_runtime_state::ChildExt as _;
 
-        firma_authority::cedar_for(req.profile_name).map_err(|_| {
-            RunError::AuthorityUnknownProfile {
-                name: req.profile_name.to_string(),
+        let startup_timeout = req.startup_timeout;
+        let mut prepared =
+            crate::authority::prepare::prepare(crate::authority::prepare::PrepareRequest {
+                sandbox_id: req.sandbox_id,
+                agent_id: req.agent_id,
+                session_id: req.session_id,
+                marker_dir: req.marker_dir,
+                profile_name: req.profile_name,
+                firma_exe: req.firma_exe,
+                user_config_path: req.user_config_path,
+            })?;
+        debug!(
+            expected_endpoint = %prepared.expected_endpoint,
+            "authority launch prepared"
+        );
+        let child = prepared
+            .command
+            .spawn()
+            .map_err(|error| RunError::AuthorityStartupFailed {
+                reason: format!("spawn firma authority: {error}"),
+                log_path: prepared.log_path.clone(),
+            })?;
+        let pid = child.process_id();
+        // Arm ownership immediately: every error after spawn synchronously kills
+        // and reaps the child, and joins the scraper once one exists.
+        let mut startup = StartupOwner::new(child);
+        let stderr =
+            startup
+                .child_mut()
+                .stderr
+                .take()
+                .ok_or_else(|| RunError::AuthorityStartupFailed {
+                    reason: "stderr pipe missing".into(),
+                    log_path: prepared.log_path.clone(),
+                })?;
+        let log_file = std::fs::File::create(&prepared.log_path).map_err(|error| {
+            RunError::AuthorityStartupFailed {
+                reason: format!("create log {}: {error}", prepared.log_path.display()),
+                log_path: prepared.log_path.clone(),
             }
         })?;
-
-        firma_fs::create_private_dir_all(&req.marker_dir)
-            .map_err(|e| RunError::Internal(e.to_string()))?;
-
-        let authority_toml = req.marker_dir.join("authority.toml");
-        let log_path = req.marker_dir.join("authority.log");
-        let pid_path = req.marker_dir.join("authority.pid");
-        let metadata_path = req.marker_dir.join("metadata.toml");
-
-        // Resolve the key, policy dirs, and revocation file to use.
-        //
-        // Persisted path: `user_config_path` is set — use the key and policy
-        // dirs from the user's `[authority]` config so tokens survive authority
-        // restarts and the real Cedar posture is enforced. The key is generated
-        // on demand if the configured path has none yet.
-        //
-        // Ephemeral path: no user config — generate a fresh key and write a
-        // permissive issuance policy into a per-run temp dir.
-        let mut authority_config = if let Some(ref user_config) = req.user_config_path {
-            persisted_authority_config(user_config)?
-        } else {
-            ephemeral_authority_config(&req, &log_path)?
-        };
-
-        let supervisor_pub_key_path = authority_config.key_file.with_extension("pub");
-
-        let mut capture: Option<ReadyCapture> = None;
-        let mut child: Option<Child> = None;
-        let mut pid: Option<UserProcessId> = None;
-        let mut tee_handle: Option<JoinHandle<()>> = None;
-        let mut last_error: Option<RunError> = None;
-        for attempt in 0..MAX_BIND_ATTEMPTS {
-            let inner = toml::to_string_pretty(&authority_config).map_err(|err| {
-                RunError::Internal(format!("invalid synthetic authority config: {err}"))
-            })?;
-            let authority_conf_str = format!("[authority]\n{inner}");
-            std::fs::write(&authority_toml, &authority_conf_str).map_err(|e| {
-                RunError::Internal(format!("write {}: {e}", authority_toml.display()))
-            })?;
-
-            let mut try_child = std::process::Command::new(&req.firma_exe)
-                .args(["authority", "--config"])
-                .arg(&authority_toml)
-                .env_remove("FIRMA_LOG_FILE")
-                .env("NO_COLOR", "1")
-                .env("CLICOLOR", "0")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|e| RunError::AuthorityStartupFailed {
-                    reason: format!("spawn firma authority: {e}"),
-                    log_path: log_path.clone(),
-                })?;
-            let try_pid = try_child.process_id();
-            let stderr =
-                try_child
-                    .stderr
-                    .take()
-                    .ok_or_else(|| RunError::AuthorityStartupFailed {
-                        reason: "stderr pipe missing".into(),
-                        log_path: log_path.clone(),
-                    })?;
-            let log_file =
-                std::fs::File::create(&log_path).map_err(|e| RunError::AuthorityStartupFailed {
-                    reason: format!("create log {}: {e}", log_path.display()),
-                    log_path: log_path.clone(),
-                })?;
-            let reader = std::io::BufReader::new(stderr);
-            let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-            let mirror_child_logs = child_log_mirroring_enabled();
-            let try_tee_handle = std::thread::Builder::new()
-                .name("firma-authority-tee".into())
-                .spawn(move || {
-                    run_scraper(reader, log_file, std::io::stderr(), mirror_child_logs, tx);
-                })
-                .map_err(|e| RunError::AuthorityStartupFailed {
-                    reason: format!("spawn scraper thread: {e}"),
-                    log_path: log_path.clone(),
-                })?;
-
-            match rx.recv_timeout(req.startup_timeout) {
-                Ok(ScrapeResult::Ready(c)) => {
-                    capture = Some(c);
-                    child = Some(try_child);
-                    pid = Some(try_pid);
-                    tee_handle = Some(try_tee_handle);
-                    break;
-                }
-                Ok(ScrapeResult::Eof) => {
-                    let _ = try_child.wait();
-                    let _ = try_tee_handle.join();
-                    last_error = Some(RunError::AuthorityStartupFailed {
-                        reason: "authority stderr closed before 'ready'".into(),
-                        log_path: log_path.clone(),
-                    });
-                }
-                Ok(ScrapeResult::Error(reason)) => {
-                    let _ = try_child.kill();
-                    let _ = try_child.wait();
-                    let _ = try_tee_handle.join();
-                    last_error = Some(RunError::AuthorityStartupFailed {
-                        reason,
-                        log_path: log_path.clone(),
-                    });
-                }
-                Err(_) => {
-                    let _ = try_child.kill();
-                    let _ = try_child.wait();
-                    let _ = try_tee_handle.join();
-                    last_error = Some(RunError::AuthorityReadyTimeout {
-                        timeout_secs: req.startup_timeout.as_secs(),
-                        log_path: log_path.clone(),
-                    });
-                }
-            }
-            if attempt + 1 < MAX_BIND_ATTEMPTS {
-                std::thread::sleep(Duration::from_millis(120));
-            }
-            let listen_addr = select_loopback_v6_port()?;
-            authority_config.listen_addr = listen_addr.to_string();
-        }
-        let capture = capture.ok_or_else(|| {
-            last_error.unwrap_or_else(|| RunError::AuthorityStartupFailed {
-                reason: "authority autostart failed".into(),
-                log_path: log_path.clone(),
+        let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
+        let mirror_child_logs = child_log_mirroring_enabled();
+        let tee_handle = std::thread::Builder::new()
+            .name("firma-authority-tee".into())
+            .spawn(move || {
+                run_scraper(
+                    std::io::BufReader::new(stderr),
+                    log_file,
+                    std::io::stderr(),
+                    mirror_child_logs,
+                    tx,
+                );
             })
-        })?;
-        let child = child.ok_or_else(|| RunError::AuthorityStartupFailed {
-            reason: "authority child missing after startup".into(),
-            log_path: log_path.clone(),
-        })?;
-        let tee_handle = tee_handle.ok_or_else(|| RunError::AuthorityStartupFailed {
-            reason: "authority tee thread missing after startup".into(),
-            log_path: log_path.clone(),
-        })?;
-        let pid = pid.ok_or_else(|| RunError::AuthorityStartupFailed {
-            reason: "authority pid missing after startup".into(),
-            log_path: log_path.clone(),
-        })?;
-
-        firma_runtime_state::pidfile::write(&pid_path, pid)
-            .map_err(|e| RunError::Internal(format!("write authority.pid: {e}")))?;
+            .map_err(|error| RunError::AuthorityStartupFailed {
+                reason: format!("spawn scraper thread: {error}"),
+                log_path: prepared.log_path.clone(),
+            })?;
+        startup.tee_handle = Some(tee_handle);
+        let capture = match rx.recv_timeout(startup_timeout) {
+            Ok(ScrapeResult::Ready(capture)) => capture,
+            Ok(ScrapeResult::Eof) => {
+                return Err(RunError::AuthorityStartupFailed {
+                    reason: "authority stderr closed before 'ready'".into(),
+                    log_path: prepared.log_path,
+                });
+            }
+            Ok(ScrapeResult::Error(reason)) => {
+                return Err(RunError::AuthorityStartupFailed {
+                    reason,
+                    log_path: prepared.log_path,
+                });
+            }
+            Err(_) => {
+                return Err(RunError::AuthorityReadyTimeout {
+                    timeout_secs: startup_timeout.as_secs(),
+                    log_path: prepared.log_path,
+                });
+            }
+        };
+        firma_runtime_state::pidfile::write(&prepared.pid_path, pid)
+            .map_err(|error| RunError::Internal(format!("write authority.pid: {error}")))?;
         crate::authority::metadata::write(
-            &metadata_path,
+            &prepared.metadata_path,
             &crate::authority::metadata::Metadata {
-                sandbox_id: *req.sandbox_id,
-                agent_id: *req.agent_id,
-                session_id: req.session_id.to_string(),
-                profile: req.profile_name.to_string(),
+                sandbox_id: prepared.sandbox_id,
+                agent_id: prepared.agent_id,
+                session_id: prepared.session_id,
+                profile: prepared.profile_name,
                 listen_addr: capture.listen_addr.clone(),
                 pid,
                 started_at: chrono::Utc::now().to_rfc3339(),
             },
         )?;
-
-        info!(
-            sandbox_id = %req.sandbox_id,
-            pid = %pid,
-            listen_addr = %capture.listen_addr,
-            "authority started"
-        );
-
+        info!(sandbox_id = %prepared.sandbox_id, pid = %pid,
+            listen_addr = %capture.listen_addr, "authority started");
+        let (child, tee_handle) = startup.disarm();
         Ok(Self {
             listen_addr: capture.listen_addr,
-            marker_dir: req.marker_dir,
-            pub_key_path: supervisor_pub_key_path,
+            marker_dir: prepared.marker_dir,
+            pub_key_path: prepared.pub_key_path,
             pid,
             child: Some(child),
-            tee_handle: Some(tee_handle),
+            tee_handle,
         })
     }
 
     /// The URL the spawned Authority is reachable at.
     #[must_use]
-    pub(crate) fn url(&self) -> String {
+    #[doc(hidden)]
+    pub fn url(&self) -> String {
         format!("http://{}", self.listen_addr)
     }
 
@@ -312,6 +228,48 @@ impl AuthoritySupervisor {
     #[must_use]
     pub(crate) fn pub_key_path(&self) -> PathBuf {
         self.pub_key_path.clone()
+    }
+}
+
+#[cfg(unix)]
+struct StartupOwner {
+    child: Option<Child>,
+    tee_handle: Option<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl StartupOwner {
+    fn new(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            tee_handle: None,
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        // Constructed with a child and only emptied by disarm immediately
+        // before returning the completed supervisor.
+        self.child.as_mut().unwrap_or_else(|| unreachable!())
+    }
+
+    fn disarm(mut self) -> (Child, Option<JoinHandle<()>>) {
+        let child = self.child.take().unwrap_or_else(|| unreachable!());
+        (child, self.tee_handle.take())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StartupOwner {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            // Startup failure must be prompt; do not use the normal five-second
+            // graceful shutdown intended for a successfully started service.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(handle) = self.tee_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -348,149 +306,6 @@ impl Drop for AuthoritySupervisor {
             let _ = std::fs::remove_dir_all(&self.marker_dir);
         }
     }
-}
-
-/// Resolve key, policy, and revocation paths from the user's `firma.toml`.
-///
-/// Called when `user_config_path` is set. `firma config` has already generated
-/// the key and populated the policy dirs, so the persisted key and policies are
-/// reused — tokens survive authority restarts and the real Cedar posture is
-/// enforced. The authority is spawned with an ephemeral port + no TLS
-/// (plaintext loopback).
-#[cfg(unix)]
-fn persisted_authority_config(user_config: &std::path::Path) -> Result<AuthorityConfig, RunError> {
-    let config_dir = user_config
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .to_path_buf();
-
-    let body = firma_config_loader::load_section(user_config, "authority").map_err(|e| {
-        RunError::Internal(format!(
-            "load [authority] from {}: {e}",
-            user_config.display()
-        ))
-    })?;
-
-    let mut cfg = toml::from_str::<firma_authority::AuthorityConfig>(&body)
-        .map_err(|e| RunError::Internal(format!("parse authority config: {e}")))?;
-    cfg.rebase_defaults(&config_dir);
-
-    // Per-run authority always runs plaintext on loopback — strip any TLS and
-    // override any configured listen_addr with an ephemeral loopback port.
-    // Honoring the user's listen_addr could bind wide (e.g. 0.0.0.0) with no
-    // TLS, or collide with another run on a fixed port.
-    cfg.tls = firma_authority::AuthorityTlsConfig::default();
-    cfg.listen_addr = select_loopback_v6_port()?.to_string();
-
-    // Regenerate the signing key on demand when the configured path has none.
-    // `firma config` writes the key once, but the configured `key_file` often
-    // lives in a volatile location (e.g. `$XDG_RUNTIME_DIR`, a tmpfs cleared on
-    // logout): the persisted config keeps pointing at it after a reboot even
-    // though the file is gone. Without this, the spawned authority fails closed
-    // with "failed to read key file … No such file or directory".
-    ensure_authority_key(&cfg.key_file)?;
-
-    Ok(cfg)
-}
-
-/// Ensure an Ed25519 authority keypair exists at `key_path`, generating one
-/// only when the secret is missing. Idempotent: an existing key is preserved so
-/// issued tokens survive authority restarts. Unlike [`generate_authority_key`],
-/// this tolerates — and reuses — a pre-existing key.
-#[cfg(unix)]
-fn ensure_authority_key(key_path: &std::path::Path) -> Result<(), RunError> {
-    if key_path.is_file() {
-        return Ok(());
-    }
-    if let Some(parent) = key_path.parent() {
-        firma_fs::create_private_dir_all(parent).map_err(|e| RunError::Internal(e.to_string()))?;
-    }
-    firma_authority::write_keypair(key_path).map_err(|e| {
-        RunError::Internal(format!(
-            "generate authority key at {}: {e}",
-            key_path.display()
-        ))
-    })?;
-    Ok(())
-}
-
-/// Generate an Ed25519 authority keypair at `key_path` and its `.pub` sibling.
-///
-/// Calls [`firma_authority::write_keypair`] in-process so the on-disk key
-/// format stays identical to `firma authority generate-key`. Fails if a key is
-/// already present — callers that may race a concurrent writer should use
-/// [`ensure_authority_key`] instead.
-#[cfg(unix)]
-fn generate_authority_key(
-    key_path: &std::path::Path,
-    log_path: &std::path::Path,
-) -> Result<(), RunError> {
-    firma_authority::write_keypair(key_path).map_err(|e| RunError::AuthorityStartupFailed {
-        reason: format!("generate authority key: {e}"),
-        log_path: log_path.to_path_buf(),
-    })?;
-    Ok(())
-}
-
-/// Set up ephemeral key, policy dir, and revocation file in `marker_dir`.
-///
-/// Called when no `user_config_path` is set. Generates a fresh signing key
-/// and writes a permissive issuance Cedar policy so any action class can be
-/// granted during local development.
-#[cfg(unix)]
-fn ephemeral_authority_config(
-    req: &SpawnRequest<'_>,
-    log_path: &std::path::Path,
-) -> Result<AuthorityConfig, RunError> {
-    let policy_dir = req.marker_dir.join("policy_dir");
-    let keys_dir = req.marker_dir.join("keys");
-    let cedar_path = policy_dir.join(format!("{}.cedar", req.profile_name));
-    let key_path = keys_dir.join("authority.key");
-    let revocation_file = req.marker_dir.join("revocations.txt");
-
-    firma_fs::create_private_dir_all(&policy_dir).map_err(|e| RunError::Internal(e.to_string()))?;
-    firma_fs::create_private_dir_all(&keys_dir).map_err(|e| RunError::Internal(e.to_string()))?;
-
-    let cedar_text = if req.profile_name == firma_authority::DEFAULT_PROFILE {
-        AUTOSTART_LOCAL_DEVELOPER_POLICY
-    } else {
-        firma_authority::cedar_for(req.profile_name).map_err(|_| {
-            RunError::AuthorityUnknownProfile {
-                name: req.profile_name.to_string(),
-            }
-        })?
-    };
-    std::fs::write(&cedar_path, cedar_text)
-        .map_err(|e| RunError::Internal(format!("write {}: {e}", cedar_path.display())))?;
-
-    std::fs::write(&revocation_file, b"")
-        .map_err(|e| RunError::Internal(format!("write {}: {e}", revocation_file.display())))?;
-
-    generate_authority_key(&key_path, log_path)?;
-
-    Ok(AuthorityConfig {
-        listen_addr: select_loopback_v6_port()?.to_string(),
-        policy_dir: policy_dir.clone(),
-        issuance_policy_dir: policy_dir,
-        schema_path: None,
-        revocation_file,
-        max_ttl_seconds: 3600,
-        key_file: key_path,
-        log_level: "info".to_string(),
-        bundle_ttl_seconds: 30,
-        tls: AuthorityTlsConfig::default(),
-    })
-}
-
-#[cfg(unix)]
-fn select_loopback_v6_port() -> Result<SocketAddr, RunError> {
-    let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0));
-    let listener =
-        TcpListener::bind(addr).map_err(|e| RunError::Internal(format!("bind [::1]:0: {e}")))?;
-    let selected = listener
-        .local_addr()
-        .map_err(|e| RunError::Internal(format!("read local addr for authority port: {e}")))?;
-    Ok(selected)
 }
 
 const LISTENING_TOKEN: &str = "listening";
@@ -645,62 +460,4 @@ fn extract_kv(line: &str, key: &str) -> Option<String> {
 #[doc(hidden)]
 pub mod testing {
     pub use super::{ReadyCapture, ScrapeResult, run_scraper};
-}
-
-#[cfg(all(test, unix))]
-mod persisted_key_tests {
-    use super::persisted_authority_config;
-
-    /// The configured `key_file` path is resolved and left untouched.
-    #[test]
-    fn resolves_configured_key_path() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let key = dir.path().join("authority.key");
-        fs_err::write(&key, b"existing").expect("write key");
-        let config = dir.path().join("firma.toml");
-        fs_err::write(
-            &config,
-            format!(
-                "[authority]\nlisten_addr = \"[::1]:0\"\nkey_file = \"{}\"\n",
-                key.display()
-            ),
-        )
-        .expect("write firma.toml");
-
-        let cfg = persisted_authority_config(&config).expect("resolve persisted");
-
-        assert_eq!(cfg.key_file, key);
-        assert_eq!(fs_err::read(&cfg.key_file).expect("read key"), b"existing");
-    }
-
-    /// A configured `key_file` that no longer exists (e.g. its `$XDG_RUNTIME_DIR`
-    /// tmpfs was wiped on reboot) is regenerated on demand rather than failing
-    /// closed at authority startup. Regression test for #174.
-    #[test]
-    fn regenerates_missing_key_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        // Point at a key inside a not-yet-created subdir to also cover parent
-        // directory creation, mirroring a wiped runtime dir.
-        let key = dir.path().join("wiped-runtime").join("authority.key");
-        let config = dir.path().join("firma.toml");
-        fs_err::write(
-            &config,
-            format!(
-                "[authority]\nlisten_addr = \"[::1]:0\"\nkey_file = \"{}\"\n",
-                key.display()
-            ),
-        )
-        .expect("write firma.toml");
-
-        assert!(!key.exists(), "precondition: key absent");
-
-        let cfg = persisted_authority_config(&config).expect("resolve persisted");
-
-        assert_eq!(cfg.key_file, key);
-        assert!(cfg.key_file.is_file(), "secret key generated on demand");
-        assert!(
-            cfg.key_file.with_extension("pub").is_file(),
-            "public key generated alongside the secret"
-        );
-    }
 }

@@ -12,6 +12,8 @@ pub mod bootstrap;
 pub mod config;
 #[cfg(unix)]
 pub(crate) mod metadata;
+#[cfg(unix)]
+mod prepare;
 pub mod prompt;
 pub mod selection;
 pub mod supervisor;
