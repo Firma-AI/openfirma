@@ -1569,6 +1569,7 @@ dependencies = [
 name = "firma-process-orchestrator"
 version = "0.1.6"
 dependencies = [
+ "camino",
  "ctrlc",
  "firma-fs",
  "firma-runtime-state",
@@ -1577,6 +1578,7 @@ dependencies = [
  "nix 0.31.3",
  "serde",
  "serial_test",
+ "socket2",
  "tempfile",
  "thiserror 2.0.18",
  "toml",

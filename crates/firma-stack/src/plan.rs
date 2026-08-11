@@ -16,7 +16,7 @@ use std::process::Command;
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
 use firma_process_orchestrator::{
-    ComponentPlanContext, ComponentSpec, OrchestratorError, StackTopology,
+    ComponentEndpoint, ComponentPlanContext, ComponentSpec, OrchestratorError, StackTopology,
 };
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
@@ -128,11 +128,23 @@ impl<'a> ComponentPlanner<'a> {
                 let authority_connect_addr = if prepared.authority_bind_addr.port() == 0
                     && prepared.sidecar_authority_configured
                 {
-                    Some(context.ready_endpoint(AUTHORITY_NAME).ok_or(
+                    let endpoint = context.ready_endpoint(AUTHORITY_NAME).ok_or(
                         StackError::MissingReadyEndpoint {
                             component: AUTHORITY_NAME,
                         },
-                    )?)
+                    )?;
+                    #[cfg(unix)]
+                    let addr = match endpoint {
+                        ComponentEndpoint::Tcp(addr) => addr,
+                        ComponentEndpoint::Unix(_) => {
+                            return Err(StackError::Orchestrator(OrchestratorError::Platform(
+                                "Authority published a non-TCP endpoint".to_string(),
+                            )));
+                        }
+                    };
+                    #[cfg(windows)]
+                    let ComponentEndpoint::Tcp(addr) = endpoint;
+                    Some(*addr)
                 } else {
                     None
                 };

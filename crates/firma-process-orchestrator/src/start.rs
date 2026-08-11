@@ -39,12 +39,13 @@ use crate::LifecycleTimeouts;
 use crate::StackTopology;
 use crate::collect::{collect_child_in_background, collect_child_until, initialize_collector};
 use crate::component::{
-    ComponentName, ComponentPlanContext, ComponentSpec, OwnedComponent, Readiness, ReadyComponent,
+    ComponentEndpoint, ComponentName, ComponentPlanContext, ComponentSpec, OwnedComponent,
+    Readiness, ReadyComponent,
 };
 use crate::detach::spawn_supervisor;
 use crate::error::{OrchestratorError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
-use crate::readiness::{wait_for_child_published_tcp, wait_for_tcp};
+use crate::readiness::{wait_for_child_published_tcp, wait_for_endpoint};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::stop::StopOutcome;
@@ -278,16 +279,16 @@ impl ComponentPublicationGuard {
         Ok(())
     }
 
-    fn publish_canonical(&mut self, addr: std::net::SocketAddr) -> Result<(), OrchestratorError> {
-        publish_canonical_listen_addr(&self.canonical_listen_path, addr)?;
+    fn publish_canonical(&mut self, endpoint: &ComponentEndpoint) -> Result<(), OrchestratorError> {
+        publish_canonical_listen_endpoint(&self.canonical_listen_path, endpoint)?;
         self.canonical_published = true;
         Ok(())
     }
 
-    fn commit(mut self, name: &ComponentName, addr: std::net::SocketAddr) -> ReadyComponent {
+    fn commit(mut self, name: &ComponentName, endpoint: ComponentEndpoint) -> ReadyComponent {
         self.startup_report_pending = false;
         self.canonical_published = false;
-        ReadyComponent::new(name.as_str(), addr)
+        ReadyComponent::new(name.as_str(), endpoint)
     }
 }
 
@@ -866,12 +867,16 @@ fn spawn_stack_inner<E>(
         );
         let pid = startup.spawn_component(&group, &name, &mut command)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
-        let addr = match readiness {
-            Readiness::ConfiguredTcp(addr) => {
-                wait_for_tcp(name.as_str(), addr, readiness_timeout, stop_signal, || {
-                    startup.exited_component()
-                })?;
-                addr
+        let endpoint = match readiness {
+            Readiness::Configured(endpoint) => {
+                wait_for_endpoint(
+                    name.as_str(),
+                    &endpoint,
+                    readiness_timeout,
+                    stop_signal,
+                    || startup.exited_component(),
+                )?;
+                endpoint
             }
             Readiness::ChildPublishedTcp(crate::component::ChildPublishedTcpReadiness {
                 requested_addr,
@@ -885,18 +890,18 @@ fn spawn_stack_inner<E>(
                     || startup.exited_component(),
                 )?;
                 publication.remove_startup_report()?;
-                dial_addr
+                ComponentEndpoint::Tcp(dial_addr)
             }
         };
         if let Some((component, status)) = startup.exited_component()? {
             return Err(OrchestratorError::ReadinessProcessExited { component, status }.into());
         }
-        publication.publish_canonical(addr)?;
+        publication.publish_canonical(&endpoint)?;
         if let Some((component, status)) = startup.exited_component()? {
             return Err(OrchestratorError::ReadinessProcessExited { component, status }.into());
         }
-        info!(component = %name.as_str(), addr = %addr, "component listening");
-        ready_components.push(publication.commit(&name, addr));
+        info!(component = %name.as_str(), endpoint = %endpoint, "component listening");
+        ready_components.push(publication.commit(&name, endpoint));
     }
 
     // The Group goes out of scope at the end of this function. On Unix that is
@@ -1366,13 +1371,13 @@ fn clear_canonical_listen_state(
     Ok(())
 }
 
-fn publish_canonical_listen_addr(
+fn publish_canonical_listen_endpoint(
     path: &Path,
-    addr: std::net::SocketAddr,
+    endpoint: &ComponentEndpoint,
 ) -> Result<(), OrchestratorError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    writeln!(temp, "{addr}")?;
+    writeln!(temp, "{endpoint}")?;
     temp.as_file().sync_all()?;
     temp.persist_noclobber(path).map_err(|error| error.error)?;
     #[cfg(unix)]

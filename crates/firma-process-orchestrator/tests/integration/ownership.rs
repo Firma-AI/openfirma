@@ -523,7 +523,9 @@ fn dropped_owner_hard_terminates_descendant_process_group() {
         |_| {
             Ok::<_, std::convert::Infallible>(ComponentSpec {
                 command: command.take().expect("single component planned once"),
-                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(addr),
+                readiness: firma_process_orchestrator::Readiness::Configured(
+                    firma_process_orchestrator::ComponentEndpoint::Tcp(addr),
+                ),
             })
         },
         dir.path(),
