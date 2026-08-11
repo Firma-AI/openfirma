@@ -107,7 +107,7 @@ libc = "0.2"
 lru = "0.18.2"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
 mime = "0.3"
-nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
+nix = { version = "0.31", features = ["fs", "poll", "process", "signal", "socket", "user"] }
 notify = "8"
 objc2 = "0.6"
 objc2-foundation = "0.3"
