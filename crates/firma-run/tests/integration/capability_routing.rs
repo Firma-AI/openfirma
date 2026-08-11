@@ -63,7 +63,6 @@ fn authority(public_key_path: Option<PathBuf>) -> ResolvedAuthority {
         pub_key_path: public_key_path,
         credentials: None,
         credentials_config: None,
-        supervisor: None,
         owned: None,
     }
 }
@@ -285,6 +284,23 @@ fn autostart_with_effective_key_attempts_managed_capability_mint() {
 #[cfg(unix)]
 #[test]
 fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
+    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "capability_routing::capability_file_synthesis_fixture",
+            "--ignored",
+        ])
+        .env("FIRMA_RUN_KEEP_MARKERS", "")
+        .status()
+        .expect("run synthesis fixture");
+
+    assert!(status.success());
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "subprocess fixture"]
+fn capability_file_synthesis_fixture() {
     let dir = tempfile::tempdir().expect("tempdir");
     let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
     let missing_key = dir.path().join("missing-firmateam.pub");
@@ -311,10 +327,7 @@ fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
     .err()
     .expect("test binary cannot autostart as the Sidecar");
 
-    assert!(
-        matches!(error, RunError::RunComponentOrchestration(_)),
-        "got: {error}"
-    );
+    assert!(matches!(error, RunError::RunComponentOrchestration(_)));
     let sidecar = read_synthesized_sidecar(&identity);
     let sidecar_table = sidecar.get("sidecar").expect("sidecar table");
     assert_eq!(
@@ -361,6 +374,51 @@ fn autostart_without_effective_key_preserves_no_mint_behavior() {
         matches!(error, RunError::RunComponentOrchestration(_)),
         "got: {error}"
     );
+    assert!(
+        !marker_dir(&identity).exists(),
+        "clean orchestrator rollback must remove generated artifacts"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn autostart_without_effective_key_synthesizes_no_authority_key() {
+    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "capability_routing::no_authority_key_synthesis_fixture",
+            "--ignored",
+        ])
+        .env("FIRMA_RUN_KEEP_MARKERS", "1")
+        .status()
+        .expect("run synthesis fixture");
+
+    assert!(status.success());
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "subprocess fixture"]
+fn no_authority_key_synthesis_fixture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
+    let handle = sandbox_handle(&identity, dir.path());
+
+    let error = prepare_network_runtime(
+        &handle,
+        &enforcement_proof(),
+        &SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:1".parse().expect("sidecar address"),
+        },
+        &identity,
+        &autostart_flags(None),
+        authority(None),
+        &capability(CapabilitySource::Disabled, None),
+    )
+    .err()
+    .expect("test binary cannot autostart as the Sidecar");
+
+    assert!(matches!(error, RunError::RunComponentOrchestration(_)));
     let sidecar = read_synthesized_sidecar(&identity);
     assert!(
         sidecar
