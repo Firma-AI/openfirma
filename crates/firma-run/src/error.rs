@@ -69,6 +69,12 @@ pub enum RunError {
         rollback: firma_process_orchestrator::ShutdownError,
     },
 
+    #[error("{operation}; run marker cleanup failed: {cleanup}")]
+    RunMarkerCleanup {
+        operation: Box<Self>,
+        cleanup: Box<Self>,
+    },
+
     #[error("sidecar endpoint {endpoint} is unreachable and autostart is disabled ({reason})")]
     SidecarUnreachable { endpoint: String, reason: String },
 

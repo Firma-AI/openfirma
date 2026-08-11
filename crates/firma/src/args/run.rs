@@ -76,8 +76,9 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 10)]
     pub sidecar_startup_timeout_secs: u64,
 
-    /// Authority selection. `local` autostarts a local Mini Authority on
-    /// `[::1]:50051`; any other value is treated as a remote Authority URL.
+    /// Authority selection. `local` reuses the configured/default probe endpoint
+    /// when available, otherwise it autostarts a Mini Authority on an ephemeral
+    /// loopback port. Any other value is treated as a remote Authority URL.
     /// When unset, falls back to the persisted `[authority]` section or
     /// the y/N bootstrap prompt.
     #[arg(long)]

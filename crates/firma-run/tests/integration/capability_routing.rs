@@ -283,6 +283,43 @@ fn autostart_with_effective_key_attempts_managed_capability_mint() {
 
 #[cfg(unix)]
 #[test]
+fn clean_startup_failure_removes_enclosing_run_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
+    let missing_key = dir.path().join("missing-firmateam.pub");
+    let seed_path = dir.path().join("existing-capability.toml");
+    std::fs::write(&seed_path, "existing seed\n").expect("write seed placeholder");
+    let handle = sandbox_handle(&identity, dir.path());
+
+    let error = prepare_network_runtime(
+        &handle,
+        &enforcement_proof(),
+        &SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:1".parse().expect("sidecar address"),
+        },
+        &identity,
+        &autostart_flags(Some(seed_path.clone())),
+        authority(Some(missing_key.clone())),
+        &capability(
+            CapabilitySource::File { path: seed_path },
+            Some(missing_key),
+        ),
+    )
+    .err()
+    .expect("test binary cannot autostart as the Sidecar");
+
+    assert!(
+        matches!(error, RunError::RunComponentOrchestration(_)),
+        "got: {error}"
+    );
+    assert!(
+        !marker_dir(&identity).exists(),
+        "clean orchestrator rollback must remove the enclosing run marker"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
     let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
@@ -347,6 +384,30 @@ fn capability_file_synthesis_fixture() {
         Some(seed_path.display().to_string()).as_deref()
     );
     remove_marker(&identity);
+}
+
+#[test]
+fn marker_cleanup_error_preserves_both_failures() {
+    let error = RunError::RunMarkerCleanup {
+        operation: Box::new(RunError::Internal("startup operation".to_string())),
+        cleanup: Box::new(RunError::Internal("cleanup operation".to_string())),
+    };
+
+    let RunError::RunMarkerCleanup { operation, cleanup } = &error else {
+        panic!("unexpected error: {error}");
+    };
+    assert_eq!(
+        operation.to_string(),
+        "internal runtime error: startup operation"
+    );
+    assert_eq!(
+        cleanup.to_string(),
+        "internal runtime error: cleanup operation"
+    );
+    assert_eq!(
+        error.to_string(),
+        "internal runtime error: startup operation; run marker cleanup failed: internal runtime error: cleanup operation"
+    );
 }
 
 #[cfg(unix)]
