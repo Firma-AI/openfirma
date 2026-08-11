@@ -57,6 +57,32 @@ pub fn read(path: &Path) -> Result<Option<UserProcessId>> {
     }
 }
 
+/// Read a pid file only when it has the exact format emitted by [`write()`].
+///
+/// # Errors
+///
+/// Returns filesystem errors other than not-found, or an error unless the file
+/// contains one canonical non-zero decimal process ID followed by one newline.
+pub fn read_canonical(path: &Path) -> Result<Option<UserProcessId>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let value = text.strip_suffix('\n').unwrap_or(&text);
+            let pid = value
+                .parse()
+                .ok()
+                .and_then(UserProcessId::new)
+                .filter(|pid| text == format!("{pid}\n"))
+                .ok_or_else(|| RuntimeStateError::PidfileParse {
+                    path: path.to_path_buf(),
+                    value: text.clone(),
+                })?;
+            Ok(Some(pid))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Remove a pid file if present.
 ///
 /// # Errors

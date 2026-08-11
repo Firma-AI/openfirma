@@ -7,10 +7,10 @@ use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
-    ComponentPlanContext, ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack,
-    ShutdownError, StackGeneration, StackTopology, StartError, publish_startup_report,
-    spawn_stack_from_plan, start_detached, start_foreground_from_plan, stop_components,
-    supervise_owned_generation_from_plan,
+    ComponentEndpoint, ComponentPlanContext, ComponentSpec, LifecycleTimeouts, OrchestratorError,
+    RunningStack, ShutdownError, StackGeneration, StackTopology, StartError,
+    publish_startup_report, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
+    stop_components, supervise_owned_generation_from_plan,
 };
 use firma_runtime_state::UserProcessId;
 use fs2::FileExt as _;
@@ -56,6 +56,21 @@ impl Drop for ProcessCleanup {
 fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let dir = tempfile::tempdir().expect("state dir");
     let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+    let handle = stack.handle().clone();
+    let ordered: Vec<_> = handle
+        .components()
+        .map(firma_process_orchestrator::ComponentHandle::name)
+        .collect();
+    assert_eq!(ordered, ["authority", "sidecar"]);
+    assert_eq!(
+        handle
+            .component("authority")
+            .expect("authority handle")
+            .leader_pid()
+            .get(),
+        pids[0]
+    );
+    assert!(handle.component("missing").is_none());
     std::fs::remove_file(dir.path().join("authority.pid")).expect("remove pidfile");
     std::fs::write(dir.path().join("sidecar.pid"), "not-a-pid\n").expect("corrupt pidfile");
 
@@ -63,6 +78,7 @@ fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let repeated = stack.shutdown(Duration::ZERO).expect("repeated shutdown");
 
     assert!(!repeated.forced);
+    assert_eq!(handle.components().count(), 2);
     assert_all_absent(&pids);
     assert!(!dir.path().join("stack.lock").exists());
 }
@@ -190,6 +206,14 @@ fn wildcard_child_publication_uses_loopback_canonical_endpoint() {
         .trim()
         .parse()
         .expect("parse canonical worker endpoint");
+    assert_eq!(
+        stack
+            .handle()
+            .component("worker")
+            .expect("worker handle")
+            .endpoint(),
+        &firma_process_orchestrator::ComponentEndpoint::Tcp(canonical)
+    );
     assert_eq!(canonical.ip(), std::net::Ipv4Addr::LOCALHOST);
     std::net::TcpStream::connect(canonical).expect("dial canonical worker endpoint");
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
@@ -574,7 +598,7 @@ fn detached_launcher_exit_before_readiness_rolls_back_generation() {
 #[test]
 fn detached_component_exit_tears_down_peer_and_supervisor_state() {
     let dir = tempfile::tempdir().expect("state dir");
-    start_detached(
+    let handle = start_detached(
         &topology(&["authority", "sidecar"]),
         dir.path(),
         fast_timeouts(),
@@ -585,6 +609,23 @@ fn detached_component_exit_tears_down_peer_and_supervisor_state() {
         wait_for_marker(&dir.path().join("authority.marker")),
         wait_for_marker(&dir.path().join("sidecar.marker")),
     ];
+    assert_eq!(
+        handle
+            .components()
+            .map(|component| (component.name(), component.leader_pid().get()))
+            .collect::<Vec<_>>(),
+        [("authority", pids[0]), ("sidecar", pids[1])]
+    );
+    for component in handle.components() {
+        #[cfg(unix)]
+        let endpoint = match component.endpoint() {
+            ComponentEndpoint::Tcp(endpoint) => endpoint,
+            ComponentEndpoint::Unix(_) => unreachable!("fixture publishes TCP endpoints"),
+        };
+        #[cfg(windows)]
+        let ComponentEndpoint::Tcp(endpoint) = component.endpoint();
+        assert_ne!(endpoint.port(), 0);
+    }
     let supervisor_pid = read_pidfile(&dir.path().join("stack.pid"));
     let cleanup = ProcessCleanup::new(pids.into_iter().chain([supervisor_pid]));
 

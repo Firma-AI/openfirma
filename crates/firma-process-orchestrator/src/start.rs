@@ -65,8 +65,53 @@ const DETACHED_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// detached operation.
 #[derive(Clone)]
 pub struct StackHandle {
-    /// Ordered component identities paired with their leader PIDs.
-    component_pids: Vec<(String, UserProcessId)>,
+    components: Vec<ComponentHandle>,
+}
+
+/// Observational identity, process ID, and ready endpoint for one component.
+///
+/// This value grants no authority to signal or collect the process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentHandle {
+    name: String,
+    leader_pid: UserProcessId,
+    endpoint: ComponentEndpoint,
+}
+
+impl ComponentHandle {
+    /// Return the component's topology identity.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Return the leader process ID observed at startup.
+    #[must_use]
+    pub const fn leader_pid(&self) -> UserProcessId {
+        self.leader_pid
+    }
+
+    /// Return the endpoint that passed readiness and canonical publication.
+    #[must_use]
+    pub const fn endpoint(&self) -> &ComponentEndpoint {
+        &self.endpoint
+    }
+}
+
+impl StackHandle {
+    /// Iterate over ready components in topology and startup order.
+    #[must_use]
+    pub fn components(&self) -> impl ExactSizeIterator<Item = &ComponentHandle> {
+        self.components.iter()
+    }
+
+    /// Look up a ready component by its topology identity.
+    #[must_use]
+    pub fn component(&self, name: &str) -> Option<&ComponentHandle> {
+        self.components
+            .iter()
+            .find(|component| component.name == name)
+    }
 }
 
 /// An in-process stack whose component child handles are owned by the caller.
@@ -411,10 +456,14 @@ impl StartupGuard {
     ///
     /// Returns an error and leaves rollback armed if startup has already
     /// finished.
-    fn finish(mut self) -> Result<RunningStack, OrchestratorError> {
+    fn finish(
+        mut self,
+        ready_components: Vec<ReadyComponent>,
+    ) -> Result<RunningStack, OrchestratorError> {
         match std::mem::replace(&mut self.state, StartupState::Finished) {
             StartupState::Building(components) => Ok(RunningStack::from_components(
                 components,
+                ready_components,
                 self.topology.clone(),
                 self.state_dir.clone(),
                 self.state_lease,
@@ -578,19 +627,20 @@ impl RunningStack {
     /// [`RunningStack::mark_ready`] commits complete-state publication.
     fn from_components(
         components: Vec<OwnedComponent>,
+        ready_components: Vec<ReadyComponent>,
         topology: StackTopology,
         state_dir: PathBuf,
         state_lease: StateLease,
         startup_transaction: Option<StateTransaction>,
     ) -> Self {
         let handle = StackHandle {
-            component_pids: components
+            components: components
                 .iter()
-                .map(|component| {
-                    (
-                        component.name().as_str().to_string(),
-                        component.leader_pid(),
-                    )
+                .zip(ready_components)
+                .map(|(component, ready)| ComponentHandle {
+                    name: component.name().as_str().to_string(),
+                    leader_pid: component.leader_pid(),
+                    endpoint: ready.endpoint().clone(),
                 })
                 .collect(),
         };
@@ -630,10 +680,10 @@ impl RunningStack {
         Ok(())
     }
 
-    /// Return an informational handle containing the component process IDs.
+    /// Borrow the informational handle, including ready endpoints.
     #[must_use]
-    fn handle(&self) -> StackHandle {
-        self.handle.clone()
+    pub const fn handle(&self) -> &StackHandle {
+        &self.handle
     }
 
     /// Stop the stack and collect its child processes.
@@ -801,7 +851,7 @@ fn spawn_stack_from_plan_with_phase<E>(
             .map(|(index, _)| startup.startup_report_dir.join(format!("{index}.toml")))
             .collect();
         clear_canonical_listen_state(state_dir, topology)?;
-        spawn_stack_inner(
+        let ready_components = spawn_stack_inner(
             topology,
             build_component,
             startup_report_paths,
@@ -811,20 +861,22 @@ fn spawn_stack_from_plan_with_phase<E>(
             timeouts.component_readiness,
         )?;
         startup.cleanup_startup_reports()?;
-        Ok::<_, StartError<E>>(())
+        Ok::<_, StartError<E>>(ready_components)
     })();
-    if let Err(error) = startup_result {
-        debug!("startup failed; rolling back explicit ownership");
-        let rollback = startup.rollback();
-        return Err(with_start_rollback(error, rollback));
-    }
+    let ready_components = match startup_result {
+        Ok(ready_components) => ready_components,
+        Err(error) => {
+            debug!("startup failed; rolling back explicit ownership");
+            let rollback = startup.rollback();
+            return Err(with_start_rollback(error, rollback));
+        }
+    };
 
-    let mut stack = startup.finish()?;
+    let mut stack = startup.finish(ready_components)?;
     if publish_ready {
         stack.mark_ready()?;
     }
-    let handle = stack.handle();
-    info!(components = ?handle.component_pids, "stack ready");
+    info!(components = ?stack.handle.components, "stack ready");
     Ok(stack)
 }
 
@@ -845,7 +897,7 @@ fn spawn_stack_inner<E>(
     startup: &mut StartupGuard,
     stop_signal: Option<&StopSignal>,
     readiness_timeout: Duration,
-) -> Result<(), StartError<E>> {
+) -> Result<Vec<ReadyComponent>, StartError<E>> {
     let mut ready_components = Vec::with_capacity(topology.components().len());
 
     for (name, startup_report_path) in topology
@@ -872,16 +924,13 @@ fn spawn_stack_inner<E>(
         let pid = startup.spawn_component(&group, &name, &mut command)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
         let endpoint = match readiness {
-            Readiness::Configured(endpoint) => {
-                wait_for_endpoint(
-                    name.as_str(),
-                    &endpoint,
-                    readiness_timeout,
-                    stop_signal,
-                    || startup.exited_component(),
-                )?;
-                endpoint
-            }
+            Readiness::Configured(endpoint) => wait_for_endpoint(
+                name.as_str(),
+                &endpoint,
+                readiness_timeout,
+                stop_signal,
+                || startup.exited_component(),
+            )?,
             Readiness::ChildPublished(crate::component::ChildPublishedReadiness {
                 expected_endpoint,
             }) => {
@@ -908,7 +957,7 @@ fn spawn_stack_inner<E>(
         ready_components.push(publication.commit(&name, endpoint));
     }
 
-    Ok(())
+    Ok(ready_components)
 }
 
 /// Start a caller-described stack in the foreground.
@@ -938,7 +987,7 @@ pub fn start_foreground_from_plan<E>(
         Some(&stop_signal),
         timeouts,
     )?;
-    let handle = stack.handle();
+    let handle = stack.handle().clone();
     info!("entering foreground supervisor loop");
     let supervision_result = {
         let owned = stack.owned_mut()?;
@@ -1068,14 +1117,44 @@ fn read_stack_handle(
     state_dir: &Path,
     topology: &StackTopology,
 ) -> Result<StackHandle, OrchestratorError> {
-    let mut component_pids = Vec::with_capacity(topology.components().len());
+    let mut components = Vec::with_capacity(topology.components().len());
     for name in topology.names() {
-        let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {
-            OrchestratorError::Platform(format!("{name}.pid missing after startup"))
-        })?;
-        component_pids.push((name.to_string(), pid));
+        let pid =
+            pidfile::read_canonical(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {
+                OrchestratorError::Platform(format!("{name}.pid missing after startup"))
+            })?;
+        let endpoint = read_canonical_endpoint(&state_dir.join(format!("{name}.listen")), name)?;
+        components.push(ComponentHandle {
+            name: name.to_string(),
+            leader_pid: pid,
+            endpoint,
+        });
     }
-    Ok(StackHandle { component_pids })
+    Ok(StackHandle { components })
+}
+
+fn read_canonical_endpoint(
+    path: &Path,
+    name: &str,
+) -> Result<ComponentEndpoint, OrchestratorError> {
+    let mut text = std::fs::read_to_string(path).map_err(|error| {
+        OrchestratorError::Platform(format!("{name}.listen unavailable after startup: {error}"))
+    })?;
+    if !text.ends_with('\n') {
+        return Err(OrchestratorError::Platform(format!(
+            "{name}.listen is not canonical after startup"
+        )));
+    }
+    text.pop();
+    let endpoint = text.parse::<ComponentEndpoint>().map_err(|error| {
+        OrchestratorError::Platform(format!("{name}.listen is invalid after startup: {error}"))
+    })?;
+    if endpoint.to_string() != text {
+        return Err(OrchestratorError::Platform(format!(
+            "{name}.listen is not canonical after startup"
+        )));
+    }
+    Ok(endpoint)
 }
 
 /// Remove rollback-owned state through [`crate::stop::cleanup_generation`].

@@ -13,7 +13,7 @@ pub enum RuntimeStateError {
     PidfileParse {
         /// Path of the malformed pidfile.
         path: PathBuf,
-        /// Trimmed malformed value read from the file.
+        /// Malformed value read from the file.
         value: String,
     },
 

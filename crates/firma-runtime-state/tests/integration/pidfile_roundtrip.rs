@@ -77,6 +77,38 @@ fn missing_pidfile_is_none() {
 }
 
 #[test]
+fn canonical_read_accepts_writer_output_and_preserves_missing_semantics() {
+    let dir = tempdir().expect("dir");
+    let path = dir.path().join("child.pid");
+    assert_eq!(pidfile::read_canonical(&path).expect("missing read"), None);
+
+    let pid = UserProcessId::new(4242).expect("non-zero pid");
+    pidfile::write(&path, pid).expect("write");
+    assert_eq!(
+        pidfile::read_canonical(&path).expect("canonical read"),
+        Some(pid)
+    );
+}
+
+#[test]
+fn canonical_read_rejects_noncanonical_pid_state() {
+    let dir = tempdir().expect("dir");
+    let path = dir.path().join("child.pid");
+
+    for value in [
+        "0\n", "04242\n", "+4242\n", " 4242\n", "4242 \n", "4242", "4242\n\n",
+    ] {
+        std::fs::write(&path, value).expect("write malformed pidfile");
+        let error = pidfile::read_canonical(&path).expect_err("noncanonical pidfile must fail");
+        assert!(matches!(
+            error,
+            firma_runtime_state::RuntimeStateError::PidfileParse { value: actual, .. }
+                if actual == value
+        ));
+    }
+}
+
+#[test]
 fn read_propagates_filesystem_failure() {
     let dir = tempdir().expect("dir");
     let error = pidfile::read(dir.path()).expect_err("a directory is not a pidfile");

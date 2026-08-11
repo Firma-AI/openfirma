@@ -239,7 +239,7 @@ impl ReadyComponent {
 
     /// Return the endpoint that passed publication validation and probing.
     #[must_use]
-    const fn endpoint(&self) -> &ComponentEndpoint {
+    pub(crate) const fn endpoint(&self) -> &ComponentEndpoint {
         &self.endpoint
     }
 }
