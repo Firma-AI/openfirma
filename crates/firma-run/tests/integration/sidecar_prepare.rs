@@ -6,7 +6,7 @@
 use std::ffi::OsStr;
 
 use firma_run::config::SidecarEndpoint;
-use firma_run::sidecar::prepare::{PrepareRequest, prepare};
+use firma_run::sidecar::prepare::{PrepareRequest, prepare, publish_metadata};
 
 fn request(
     sandbox_id: &firma_run::identity::SandboxId,
@@ -118,4 +118,37 @@ fn tcp_preparation_leaves_port_selection_to_child() {
     );
     let config = std::fs::read_to_string(prepared.config_path).expect("read config");
     assert!(config.contains("listen_addr = \"127.0.0.1:0\""));
+}
+
+#[test]
+fn publication_writes_effective_endpoint_and_complete_marker_schema() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let prepared =
+        prepare(request(&sandbox_id, temp.path().join("marker"), true)).expect("prepare Sidecar");
+    let endpoint = SidecarEndpoint::Tcp {
+        addr: "127.0.0.1:43127".parse().expect("effective endpoint"),
+    };
+    let pid = firma_runtime_state::UserProcessId::new(4242).expect("nonzero user PID");
+
+    publish_metadata(&prepared, &endpoint, pid, None).expect("publish Sidecar metadata");
+
+    assert_eq!(
+        firma_runtime_state::pidfile::read(&prepared.pid_path).expect("read sidecar.pid"),
+        Some(pid)
+    );
+    let text = std::fs::read_to_string(&prepared.metadata_path).expect("read metadata.toml");
+    let metadata: firma_runtime_state::sidecar_markers::MetadataFile =
+        toml::from_str(&text).expect("parse metadata.toml");
+    assert_eq!(metadata.sandbox_id, sandbox_id);
+    assert_eq!(metadata.agent_id, super::helper::agent_id().to_string());
+    assert_eq!(metadata.session_id, "prepared-session");
+    assert_eq!(metadata.authority_url, prepared.planned_authority_url);
+    assert_eq!(
+        metadata.policy_bundle_version,
+        prepared.planned_policy_bundle_version
+    );
+    assert_eq!(metadata.pid, pid);
+    assert_eq!(metadata.listen, "127.0.0.1:43127");
+    chrono::DateTime::parse_from_rfc3339(&metadata.started_at).expect("RFC 3339 started_at");
 }

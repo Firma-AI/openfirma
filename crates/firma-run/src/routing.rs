@@ -364,10 +364,7 @@ struct RuntimeParts {
     effective_endpoint: SidecarEndpoint,
     autostart_trust_env: BTreeMap<String, String>,
     run_stack: Option<RunningStack>,
-    #[cfg_attr(
-        not(unix),
-        expect(dead_code, reason = "local Sidecar autostart is Unix-only")
-    )]
+    #[cfg(unix)]
     owned_sidecar_marker: Option<PathBuf>,
     stack_marker: Option<PathBuf>,
     capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
@@ -447,6 +444,7 @@ pub fn prepare_network_runtime(
         autostart_trust_env: sidecar_trust_env_overrides(prepared.sidecar_marker.as_deref()),
         effective_endpoint: prepared.endpoint,
         run_stack: prepared.stack,
+        #[cfg(unix)]
         owned_sidecar_marker: prepared.sidecar_marker,
         stack_marker: prepared.stack_marker,
         capability_guard: prepared.capability_guard,
@@ -517,7 +515,8 @@ fn prepare_flat_runtime(
         effective_endpoint,
         autostart_trust_env: _,
         run_stack,
-        owned_sidecar_marker: _,
+        #[cfg(unix)]
+            owned_sidecar_marker: _,
         stack_marker,
         capability_guard,
         capability_refresher,

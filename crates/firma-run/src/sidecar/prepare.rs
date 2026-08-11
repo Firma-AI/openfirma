@@ -25,11 +25,10 @@ pub struct PreparedSidecarLaunch {
     pub expected_endpoint: SidecarEndpoint,
     pub marker_dir: PathBuf,
     pub config_path: PathBuf,
-    pub(crate) log_path: PathBuf,
-    pid_path: PathBuf,
-    metadata_path: PathBuf,
+    pub pid_path: PathBuf,
+    pub metadata_path: PathBuf,
     pub audit_socket_path: PathBuf,
-    pub(crate) sandbox_id: SandboxId,
+    sandbox_id: SandboxId,
     agent_id: AgentId,
     session_id: String,
     /// Version computed during preparation, not evidence of the running child.
@@ -88,7 +87,6 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
 
     let socket_path = marker_dir.join("sidecar.sock");
     let config_path = marker_dir.join("sidecar.toml");
-    let log_path = marker_dir.join("sidecar.log");
     let pid_path = marker_dir.join("sidecar.pid");
     let metadata_path = marker_dir.join("metadata.toml");
     let audit_socket_path = firma_sidecar::run_audit::socket_path_in(&marker_dir);
@@ -171,7 +169,6 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         expected_endpoint,
         marker_dir,
         config_path,
-        log_path,
         pid_path,
         metadata_path,
         audit_socket_path,
@@ -184,7 +181,7 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
 }
 
 /// Publish the existing Sidecar marker schema after a prepared launch starts.
-pub(crate) fn publish_metadata(
+pub fn publish_metadata(
     prepared: &PreparedSidecarLaunch,
     endpoint: &SidecarEndpoint,
     pid: firma_runtime_state::UserProcessId,

@@ -16,8 +16,9 @@ use crate::identity::RunIdentity;
 use crate::mediator::enforce_local_command_governance;
 use crate::routing::{AutostartFlags, ResolveAuthorityRequest, prepare_network_runtime};
 use crate::seccomp::resolve_effective_seccomp;
-use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
+
+const DEFAULT_SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 10;
 
 #[doc(hidden)]
 pub mod vscode;
@@ -200,7 +201,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             no_autostart: args.no_autostart,
             template_path: sidecar_template_path,
             startup_timeout: Duration::from_secs(if args.sidecar_startup_timeout_secs == 0 {
-                DEFAULT_STARTUP_TIMEOUT_SECS
+                DEFAULT_SIDECAR_STARTUP_TIMEOUT_SECS
             } else {
                 args.sidecar_startup_timeout_secs
             }),
