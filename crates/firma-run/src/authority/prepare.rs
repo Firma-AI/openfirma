@@ -24,7 +24,7 @@ permit(principal, action, resource);
 /// Preparation has already performed all validation and filesystem bootstrap;
 /// the command can be spawned exactly once by a lifecycle owner.
 pub struct PreparedAuthorityLaunch {
-    pub command: Command,
+    command: Option<Command>,
     pub expected_endpoint: SocketAddr,
     pub pub_key_path: PathBuf,
     pub marker_dir: PathBuf,
@@ -35,6 +35,15 @@ pub struct PreparedAuthorityLaunch {
     pub agent_id: firma_core::AgentId,
     pub session_id: String,
     pub profile_name: String,
+}
+
+impl PreparedAuthorityLaunch {
+    /// Transfer the prepared command to its lifecycle owner exactly once.
+    pub fn take_command(&mut self) -> Result<Command, RunError> {
+        self.command.take().ok_or_else(|| {
+            RunError::Internal("prepared Authority command was already taken".into())
+        })
+    }
 }
 
 /// Inputs needed to validate and materialize an Authority launch.
@@ -92,7 +101,7 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunEr
         .stderr(Stdio::piped());
 
     Ok(PreparedAuthorityLaunch {
-        command,
+        command: Some(command),
         expected_endpoint: LOOPBACK_EPHEMERAL,
         pub_key_path,
         marker_dir: req.marker_dir,

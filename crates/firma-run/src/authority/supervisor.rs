@@ -113,13 +113,14 @@ impl AuthoritySupervisor {
             expected_endpoint = %prepared.expected_endpoint,
             "authority launch prepared"
         );
-        let child = prepared
-            .command
-            .spawn()
-            .map_err(|error| RunError::AuthorityStartupFailed {
-                reason: format!("spawn firma authority: {error}"),
-                log_path: prepared.log_path.clone(),
-            })?;
+        let child =
+            prepared
+                .take_command()?
+                .spawn()
+                .map_err(|error| RunError::AuthorityStartupFailed {
+                    reason: format!("spawn firma authority: {error}"),
+                    log_path: prepared.log_path.clone(),
+                })?;
         let pid = child.process_id();
         // Arm ownership immediately: every error after spawn synchronously kills
         // and reaps the child, and joins the scraper once one exists.
@@ -226,7 +227,11 @@ impl AuthoritySupervisor {
 
     /// Path to the Ed25519 public key for this run's authority instance.
     #[must_use]
-    pub(crate) fn pub_key_path(&self) -> PathBuf {
+    #[expect(
+        dead_code,
+        reason = "legacy supervisor remains available for direct integration tests"
+    )]
+    fn pub_key_path(&self) -> PathBuf {
         self.pub_key_path.clone()
     }
 }

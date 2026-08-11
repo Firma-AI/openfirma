@@ -2,9 +2,9 @@
 //!
 //! These exercise the decision matrix inside `routing::resolve_authority`:
 //! when the prompt fires, when it is bypassed, and what gets persisted.
-//! A non-existent `firma_exe` forces `AuthoritySupervisor::spawn` to fail,
-//! letting us assert on bootstrap side-effects (prompt invocation counts,
-//! persisted `firma.toml`) without actually launching an Authority.
+//! A non-existent `firma_exe` demonstrates that selection does not prepare or
+//! spawn the owned Authority before the orchestrator acquires its lock, while
+//! still allowing assertions on prompt and persistence side effects.
 
 #![allow(
     clippy::unwrap_used,
@@ -103,7 +103,7 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, true);
-    let err = resolve_test_authority(
+    let resolved = resolve_test_authority(
         &tmp,
         &cfg,
         &identity,
@@ -111,10 +111,9 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
         &AuthorityCli::Unset,
         &mut prompt,
     )
-    .err()
-    .expect("spawn must fail with bogus firma_exe");
+    .expect("selection must defer local preparation");
 
-    // Bootstrap path ran: prompt invoked + section persisted before spawn.
+    // Bootstrap path ran: prompt invoked + section persisted before planning.
     assert_eq!(prompt.confirm_calls, 1);
     let persisted = std::fs::read_to_string(&cfg).unwrap();
     assert!(persisted.contains("[authority]"), "got: {persisted}");
@@ -122,16 +121,7 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
         persisted.contains(r#"listen_addr = "[::1]:0""#),
         "got: {persisted}"
     );
-    // Final error is the spawn failure, not the bootstrap path. The
-    // exact variant differs by platform (`AuthorityStartupFailed` on Unix,
-    // `UnsupportedPlatform` on Windows); both prove spawn was attempted.
-    assert!(
-        !matches!(
-            err,
-            RunError::AuthorityBootstrapDeclined | RunError::AuthorityBootstrapNoTty
-        ),
-        "{err:?}"
-    );
+    assert!(resolved.owned.is_some());
 }
 
 #[test]
@@ -196,7 +186,7 @@ fn cli_local_skips_prompt_even_without_config() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let err = resolve_test_authority(
+    let resolved = resolve_test_authority(
         &tmp,
         &cfg,
         &identity,
@@ -204,21 +194,12 @@ fn cli_local_skips_prompt_even_without_config() {
         &AuthorityCli::Local,
         &mut prompt,
     )
-    .err()
-    .expect("spawn must fail with bogus firma_exe");
+    .expect("selection must defer local preparation");
 
     // `--authority local` is a commitment: prompt must not be consulted.
     assert_eq!(prompt.confirm_calls, 0);
     assert!(!cfg.exists(), "CLI commitment must not trigger persistence");
-    // Spawn was reached: exact variant differs by platform
-    // (`AuthorityStartupFailed` on Unix, `UnsupportedPlatform` on Windows).
-    assert!(
-        !matches!(
-            err,
-            RunError::AuthorityBootstrapDeclined | RunError::AuthorityBootstrapNoTty
-        ),
-        "{err:?}"
-    );
+    assert!(resolved.owned.is_some());
 }
 
 #[test]
@@ -230,7 +211,7 @@ fn config_authority_section_skips_prompt() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let err = resolve_test_authority(
+    let resolved = resolve_test_authority(
         &tmp,
         &cfg,
         &identity,
@@ -238,17 +219,8 @@ fn config_authority_section_skips_prompt() {
         &AuthorityCli::Unset,
         &mut prompt,
     )
-    .err()
-    .expect("spawn must fail with bogus firma_exe");
+    .expect("selection must defer local preparation");
 
     assert_eq!(prompt.confirm_calls, 0);
-    // Spawn was reached: exact variant differs by platform
-    // (`AuthorityStartupFailed` on Unix, `UnsupportedPlatform` on Windows).
-    assert!(
-        !matches!(
-            err,
-            RunError::AuthorityBootstrapDeclined | RunError::AuthorityBootstrapNoTty
-        ),
-        "{err:?}"
-    );
+    assert!(resolved.owned.is_some());
 }
