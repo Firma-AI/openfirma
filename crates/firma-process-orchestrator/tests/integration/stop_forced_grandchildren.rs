@@ -72,7 +72,7 @@ fn unix_pgrp_force_kills_term_ignoring_grandchild() {
     .env("CHILD_READY_MARKER", &child_ready_marker)
     .env("PARENT_READY_MARKER", &parent_ready_marker);
     let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
-    let stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
+    let mut stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
     let group_pid = firma_runtime_state::pidfile::read(&state_dir.join("authority.pid"))
         .expect("read authority pidfile")
         .expect("authority pid")
@@ -91,7 +91,7 @@ fn unix_pgrp_force_kills_term_ignoring_grandchild() {
 
     // Stop before asserting readiness so a broken fixture cannot leak its
     // process group into subsequent tests.
-    drop(stack);
+    stack.detach().expect("detach stack owner");
     let stop_result = firma_process_orchestrator::stop_components(
         state_dir,
         Duration::from_millis(100),

@@ -36,7 +36,7 @@ fn unix_pgrp_kills_grandchild() {
     .env("PARENT_READY_MARKER", &parent_ready_marker)
     .env("TERMINATED_MARKER", &terminated_marker);
     let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
-    let stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
+    let mut stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
 
     // Poll the marker contents rather than its existence: shell redirection
     // creates the file before `printf` writes the readiness payload.
@@ -52,7 +52,7 @@ fn unix_pgrp_kills_grandchild() {
 
     // Stop even when readiness timed out so a failed fixture cannot leak its
     // process group into subsequent tests.
-    drop(stack);
+    stack.detach().expect("detach stack owner");
     let stop_result =
         firma_process_orchestrator::stop_components(state_dir, Duration::from_secs(5), &topology);
 
