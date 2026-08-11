@@ -2,7 +2,9 @@
 //!
 //! This crate knows the concrete `[authority, sidecar]` topology and its unified
 //! `firma.toml`, and exposes the lifecycle operations used by the Firma CLI and
-//! demo.
+//! demo. [`firma_process_orchestrator`] provides the canonical lifecycle and
+//! ownership model; this crate supplies the Firma-specific plan to that
+//! machinery.
 
 pub mod config;
 pub mod error;

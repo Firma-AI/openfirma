@@ -4,7 +4,9 @@
 //! direct-child handle required for collection inseparable from the
 //! [`TerminationTarget`] required to govern the complete platform scope.
 //! [`ComponentName`] supplies stable command and runtime-state identity but
-//! grants no process authority by itself.
+//! grants no process authority by itself. See the
+//! [crate-level lifecycle model](crate) for how this capability
+//! moves through startup, running ownership, and collection.
 
 use std::net::SocketAddr;
 use std::path::Path;

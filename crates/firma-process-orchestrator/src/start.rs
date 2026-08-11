@@ -1,16 +1,32 @@
-//! Stack startup, ownership, and supervision transitions.
+//! Ordered startup, ownership transfer, and supervision.
 //!
-//! [`spawn_stack_from_plan`] claims a [`StateLease`] under a [`StateTransaction`]
-//! and returns the sole [`RunningStack`] owner after ordered readiness.
-//! [`StartupGuard`] owns every partial startup until [`StartupGuard::finish`]
-//! commits that transition; its [`Drop`] implementation rolls back uncommitted
-//! [`OwnedComponent`] capabilities. Foreground startup retains that owner in
-//! foreground mode. In detached mode, [`start_detached`] owns only the
-//! supervisor child while [`supervise_owned_generation_from_plan`] spawns and
-//! owns the components, so no component capability crosses a process boundary.
-//! Failure paths retain runtime state unless target absence can be proved,
-//! allowing [`crate::stop_components()`] to retry cleanup without losing process
-//! authority.
+//! See the [crate-level lifecycle model](crate) for how this phase relates to
+//! external stop, status, and runtime-state authority.
+//!
+//! # Startup transaction
+//!
+//! [`StartupGuard`] owns every [`OwnedComponent`] before startup performs another
+//! fallible operation. After ordered readiness it transfers the complete set to
+//! [`RunningStack`]. Normal errors invoke explicit rollback so a cleanup failure
+//! can be returned alongside the initiating error. Guard destruction is only an
+//! emergency hard-termination and collection-handoff path; it deliberately
+//! leaves uncertain runtime state for later teardown.
+//!
+//! # Foreground and detached supervision
+//!
+//! [`start_foreground_from_plan`] keeps the [`RunningStack`] in the calling
+//! process through supervision and shutdown. [`start_detached`] instead owns a
+//! direct supervisor child through a two-phase readiness and attachment
+//! handshake. The supervisor calls [`supervise_owned_generation_from_plan`] and
+//! creates the components itself, so component capabilities never cross a
+//! process boundary. The launcher transfers only supervisor-child collection
+//! after attachment is confirmed; failures roll back only the generation it
+//! assigned.
+//!
+//! A process-global collector is initialized before any managed child is
+//! spawned. Explicit detachment and destructor backstops transfer direct-child
+//! collection to it without creating threads or waiting for process exit during
+//! [`Drop`].
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -44,6 +60,8 @@ const DETACHED_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The handle does not own the children's lifecycle. [`RunningStack`] holds
 /// in-process ownership; persisted runtime state supports external observation
 /// through [`crate::status::status_components()`] and retryable teardown through [`crate::stop::stop_components()`].
+/// See the [crate-level lifecycle model](crate) for its place in foreground and
+/// detached operation.
 #[derive(Clone)]
 pub struct StackHandle {
     /// Ordered component identities paired with their leader PIDs.
@@ -57,6 +75,8 @@ pub struct StackHandle {
 /// [`RunningStack::detach`] to leave processes running under a background child
 /// collector. Dropping an owned stack fails closed by hard-terminating its
 /// process scopes and retaining runtime state for a later cleanup attempt.
+/// See the [crate-level lifecycle model](crate) for the capabilities transferred
+/// by each transition.
 pub struct RunningStack {
     handle: StackHandle,
     state: RunningStackState,
@@ -92,11 +112,13 @@ enum RunningStackState {
 /// Rollback guard for the ordered component-startup state machine.
 ///
 /// Every spawned [`OwnedComponent`] is recorded before startup performs another
-/// fallible operation. Unless [`StartupGuard::finish`] commits the
-/// [`StartupState::Building`] components to a [`RunningStack`], [`Drop`]
-/// delegates rollback to [`rollback_startup_components`]. The guard retains the
-/// [`StateTransaction`] and [`StateLease`] needed to remove only its generation;
-/// target or collection uncertainty preserves state for [`crate::stop::stop_components()`].
+/// fallible operation. Normal error paths call [`StartupGuard::rollback`] unless
+/// [`StartupGuard::finish`] commits the [`StartupState::Building`] components to
+/// a [`RunningStack`]. [`Drop`] is only a fail-closed emergency backstop: it
+/// hard-terminates and transfers collection without performing fallible
+/// generation cleanup. The guard retains the [`StateTransaction`] and
+/// [`StateLease`] needed to remove only its generation; target or collection
+/// uncertainty preserves state for [`crate::stop::stop_components()`].
 struct StartupGuard {
     state: StartupState,
     state_dir: PathBuf,
@@ -645,8 +667,9 @@ impl RunningStack {
 
     /// Leave the stack running while transferring direct-child collection.
     ///
-    /// The stack remains owned if collector creation fails, allowing `Drop` to
-    /// apply its fail-closed fallback rather than losing process capabilities.
+    /// The stack remains owned if the persistent collector rejects the handoff,
+    /// allowing `Drop` to apply its fail-closed fallback rather than losing
+    /// process capabilities.
     ///
     /// # Errors
     ///
@@ -707,8 +730,11 @@ impl Drop for RunningStack {
 /// directory is created, so an already-running stack is reported before the
 /// caller's (possibly failing) resolution runs. Commands are spawned unchanged
 /// except for the documented lifecycle process settings on [`ComponentSpec`].
-/// The caller must eventually call [`RunningStack::shutdown`] to tear the stack
-/// down and collect its children.
+/// The caller chooses an ownership transition on the returned stack:
+/// [`RunningStack::shutdown`] tears it down, [`RunningStack::detach`] explicitly
+/// leaves it running under the persistent collector, and [`Drop`] is a
+/// fail-closed emergency termination path. See the
+/// [crate-level lifecycle model](crate).
 ///
 /// Used by wrappers that need in-process ownership after readiness.
 ///
