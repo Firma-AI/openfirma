@@ -68,6 +68,30 @@ fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
 }
 
 #[test]
+fn cleanup_attempts_all_artifacts_before_retaining_generation_lock() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let (mut stack, pids) = spawn_stack(dir.path(), &["authority"]);
+    let pidfile = dir.path().join("authority.pid");
+    std::fs::remove_file(&pidfile).expect("remove component pidfile");
+    std::fs::create_dir(&pidfile).expect("block component pidfile cleanup");
+
+    let error = stack
+        .shutdown(Duration::ZERO)
+        .expect_err("blocked state cleanup must fail");
+
+    assert!(matches!(error, OrchestratorError::RuntimeState(_)));
+    assert_all_absent(&pids);
+    assert!(!dir.path().join("authority.listen").exists());
+    assert!(!dir.path().join("stack.pid").exists());
+    assert!(dir.path().join("stack.lock").exists());
+
+    std::fs::remove_dir(pidfile).expect("remove pidfile blocker");
+    stop_components(dir.path(), Duration::ZERO, &topology(&["authority"]))
+        .expect("retry retained generation cleanup");
+    assert!(!dir.path().join("stack.lock").exists());
+}
+
+#[test]
 fn owned_shutdown_terminates_children_when_state_transaction_is_busy() {
     let dir = tempfile::tempdir().expect("state dir");
     let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
