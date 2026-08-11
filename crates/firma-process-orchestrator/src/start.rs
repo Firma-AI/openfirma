@@ -45,7 +45,7 @@ use crate::component::{
 use crate::detach::spawn_supervisor;
 use crate::error::{OrchestratorError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
-use crate::readiness::{wait_for_child_published_tcp, wait_for_endpoint};
+use crate::readiness::{wait_for_child_published, wait_for_endpoint};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::stop::StopOutcome;
@@ -878,19 +878,19 @@ fn spawn_stack_inner<E>(
                 )?;
                 endpoint
             }
-            Readiness::ChildPublishedTcp(crate::component::ChildPublishedTcpReadiness {
-                requested_addr,
+            Readiness::ChildPublished(crate::component::ChildPublishedReadiness {
+                expected_endpoint,
             }) => {
-                let dial_addr = wait_for_child_published_tcp(
+                let endpoint = wait_for_child_published(
                     name.as_str(),
-                    requested_addr,
+                    &expected_endpoint,
                     &startup_report_path,
                     readiness_timeout,
                     stop_signal,
                     || startup.exited_component(),
                 )?;
                 publication.remove_startup_report()?;
-                ComponentEndpoint::Tcp(dial_addr)
+                endpoint
             }
         };
         if let Some((component, status)) = startup.exited_component()? {

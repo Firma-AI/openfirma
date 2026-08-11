@@ -204,8 +204,11 @@ fn lifecycle_fixture() {
         let startup_report = std::path::PathBuf::from(
             std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
         );
-        firma_stack::publish_startup_report(&startup_report, authority_addr)
-            .expect("publish fixture startup report");
+        firma_stack::publish_startup_report(
+            &startup_report,
+            &firma_stack::ComponentEndpoint::Tcp(authority_addr),
+        )
+        .expect("publish fixture startup report");
         loop {
             std::thread::sleep(Duration::from_mins(1));
         }

@@ -156,8 +156,10 @@ fn wildcard_child_publication_uses_loopback_canonical_endpoint() {
     let mut stack = spawn_stack_from_plan(
         &topology(&["worker"]),
         |context| {
-            let publication = context
-                .child_published_tcp("0.0.0.0:0".parse().expect("wildcard child bind endpoint"));
+            let publication =
+                context.child_published(firma_process_orchestrator::ComponentEndpoint::Tcp(
+                    "0.0.0.0:0".parse().expect("wildcard child bind endpoint"),
+                ));
             let mut command = fixture_command();
             command
                 .env(CHILD_LISTEN, "0.0.0.0:0")
@@ -709,7 +711,9 @@ fn owned_child_fixture() {
         if let Some(publication) = std::env::var_os(CHILD_PUBLICATION) {
             publish_startup_report(
                 Path::new(&publication),
-                listener.local_addr().expect("effective component endpoint"),
+                &firma_process_orchestrator::ComponentEndpoint::Tcp(
+                    listener.local_addr().expect("effective component endpoint"),
+                ),
             )
             .expect("publish component endpoint");
         }
@@ -771,8 +775,9 @@ fn spawn_stack(state_dir: &Path, names: &[&str]) -> (RunningStack, Vec<u32>) {
 }
 
 fn component_spec(context: &ComponentPlanContext<'_>, state_dir: &Path) -> ComponentSpec {
-    let publication =
-        context.child_published_tcp("127.0.0.1:0".parse().expect("fixture bind endpoint"));
+    let publication = context.child_published(firma_process_orchestrator::ComponentEndpoint::Tcp(
+        "127.0.0.1:0".parse().expect("fixture bind endpoint"),
+    ));
     let mut command = fixture_command();
     command
         .env_remove(SUPERVISOR_STATE_DIR)
@@ -896,7 +901,7 @@ fn spawn_published_fixture(
     let record = std::fs::read_to_string(publication).expect("read fixture endpoint");
     let addr = record
         .lines()
-        .find_map(|line| line.strip_prefix("tcp_listen_addr = \"")?.strip_suffix('"'))
+        .find_map(|line| line.strip_prefix("endpoint = \"")?.strip_suffix('"'))
         .expect("fixture endpoint field")
         .parse()
         .expect("parse fixture endpoint");

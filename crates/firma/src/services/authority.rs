@@ -78,8 +78,11 @@ async fn run_server(config: AuthorityConfig, startup_report: Option<&Path>) -> R
         .await
         .context("failed to initialize authority server")?;
     if let Some(path) = startup_report {
-        firma_stack::publish_startup_report(path, server.listen_addr())
-            .with_context(|| format!("failed to write startup report to {}", path.display()))?;
+        firma_stack::publish_startup_report(
+            path,
+            &firma_stack::ComponentEndpoint::Tcp(server.listen_addr()),
+        )
+        .with_context(|| format!("failed to write startup report to {}", path.display()))?;
     }
     server
         .run()

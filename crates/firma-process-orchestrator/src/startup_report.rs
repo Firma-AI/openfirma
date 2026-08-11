@@ -5,13 +5,12 @@
 //! [`crate::component::OwnedComponent`] that authorizes liveness decisions.
 
 use std::io::{Read as _, Write as _};
-use std::net::SocketAddr;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 /// Startup-report protocol understood by this orchestrator version.
-const STARTUP_REPORT_PROTOCOL_VERSION: u32 = 1;
+const STARTUP_REPORT_PROTOCOL_VERSION: u32 = 2;
 /// Bound structured state reads so a faulty child cannot force unbounded allocation.
 const MAX_STARTUP_REPORT_BYTES: u64 = 4_096;
 
@@ -20,7 +19,7 @@ const MAX_STARTUP_REPORT_BYTES: u64 = 4_096;
 #[serde(deny_unknown_fields)]
 struct StartupReport {
     protocol_version: u32,
-    tcp_listen_addr: SocketAddr,
+    endpoint: crate::ComponentEndpoint,
 }
 
 /// Atomically publish a startup report without replacing state.
@@ -33,11 +32,14 @@ struct StartupReport {
 ///
 /// Returns an I/O error when serialization, staging, or no-clobber publication
 /// fails.
-pub fn publish_startup_report(path: &Path, tcp_listen_addr: SocketAddr) -> std::io::Result<()> {
+pub fn publish_startup_report(
+    path: &Path,
+    endpoint: &crate::ComponentEndpoint,
+) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let record = toml::to_string(&StartupReport {
         protocol_version: STARTUP_REPORT_PROTOCOL_VERSION,
-        tcp_listen_addr,
+        endpoint: endpoint.clone(),
     })
     .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
@@ -47,7 +49,7 @@ pub fn publish_startup_report(path: &Path, tcp_listen_addr: SocketAddr) -> std::
 }
 
 /// Read and validate a complete child startup report.
-pub fn read_startup_report(path: &Path) -> std::io::Result<Option<SocketAddr>> {
+pub fn read_startup_report(path: &Path) -> std::io::Result<Option<crate::ComponentEndpoint>> {
     let file = match open_startup_report(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -79,7 +81,7 @@ pub fn read_startup_report(path: &Path) -> std::io::Result<Option<SocketAddr>> {
             format!("unsupported protocol version {}", report.protocol_version),
         ));
     }
-    Ok(Some(report.tcp_listen_addr))
+    Ok(Some(report.endpoint))
 }
 
 /// Open one record handle without following a final symlink or reparse point.

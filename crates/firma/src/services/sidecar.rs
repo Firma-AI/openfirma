@@ -213,7 +213,11 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     let health_readiness_mirror = if wait_for_streams_ready(&pipeline_runtime, exit.clone()).await
         == StreamReadinessOutcome::Hydrated
     {
-        write_startup_report(args.startup_report.as_deref(), &interceptor.listen_addr)?;
+        write_startup_report(
+            args.startup_report.as_deref(),
+            &config.interceptor,
+            &interceptor.listen_addr,
+        )?;
         startup::log_ready_line();
         health::mark_ready(&health_ready);
         Some(spawn_health_readiness_mirror(
@@ -261,14 +265,37 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     Ok(ExitCode::SUCCESS)
 }
 
-fn write_startup_report(path: Option<&Path>, listen_addr: &str) -> anyhow::Result<()> {
+fn write_startup_report(
+    path: Option<&Path>,
+    interceptor: &config::InterceptorConfig,
+    listen_addr: &str,
+) -> anyhow::Result<()> {
     let Some(path) = path else {
         return Ok(());
     };
-    let effective_addr = listen_addr
-        .parse()
-        .with_context(|| format!("interceptor reported a non-TCP listen address: {listen_addr}"))?;
-    firma_stack::publish_startup_report(path, effective_addr)
+    let endpoint = match interceptor.mode {
+        config::InterceptorMode::HttpProxy | config::InterceptorMode::Grpc => {
+            firma_stack::ComponentEndpoint::Tcp(listen_addr.parse().with_context(|| {
+                format!("interceptor reported an invalid TCP listen address: {listen_addr}")
+            })?)
+        }
+        #[cfg(unix)]
+        config::InterceptorMode::UnixSocket => {
+            let socket_path = interceptor
+                .socket_path
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("validated Unix interceptor has no socket path"))?;
+            firma_stack::UnixEndpoint::new(socket_path)
+                .map(firma_stack::ComponentEndpoint::Unix)
+                .map_err(|path| {
+                    anyhow::anyhow!(
+                        "Unix interceptor socket path is invalid: {}",
+                        path.display()
+                    )
+                })?
+        }
+    };
+    firma_stack::publish_startup_report(path, &endpoint)
         .with_context(|| format!("failed to write startup report to {}", path.display()))
 }
 

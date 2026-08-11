@@ -19,7 +19,7 @@ use super::CONFIG_FILE_NAME;
 #[derive(serde::Deserialize)]
 struct StartupReport {
     protocol_version: u32,
-    tcp_listen_addr: SocketAddr,
+    endpoint: firma_stack::ComponentEndpoint,
 }
 
 struct RunningSidecar(Child);
@@ -64,9 +64,30 @@ fn bind_failure_does_not_publish_an_endpoint() -> anyhow::Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn non_tcp_endpoint_does_not_publish_an_endpoint() -> anyhow::Result<()> {
+fn unix_endpoint_publishes_connectable_endpoint() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let socket_path = root.path().join("sidecar.sock");
+    let fixture = SidecarFixture::new_unix(root, &socket_path)?;
+    let mut sidecar = fixture.spawn()?;
+
+    let published = wait_for_publication(&mut sidecar.0, &fixture.startup_report_path)?;
+
+    assert_eq!(
+        published,
+        firma_stack::ComponentEndpoint::Unix(
+            firma_stack::UnixEndpoint::new(socket_path.clone()).expect("valid Unix socket path")
+        )
+    );
+    std::os::unix::net::UnixStream::connect(socket_path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_bind_failure_does_not_publish_an_endpoint() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let socket_path = root.path().join("occupied");
+    std::fs::create_dir(&socket_path)?;
     let fixture = SidecarFixture::new_unix(root, &socket_path)?;
     let mut sidecar = fixture.spawn()?;
 
@@ -82,7 +103,14 @@ fn assert_dynamic_publication(mode: &str) -> anyhow::Result<()> {
     let fixture = SidecarFixture::new(mode, requested)?;
     let mut sidecar = fixture.spawn()?;
 
-    let published = wait_for_publication(&mut sidecar.0, &fixture.startup_report_path)?;
+    let endpoint = wait_for_publication(&mut sidecar.0, &fixture.startup_report_path)?;
+    let published = match endpoint {
+        firma_stack::ComponentEndpoint::Tcp(published) => published,
+        #[cfg(unix)]
+        firma_stack::ComponentEndpoint::Unix(_) => {
+            anyhow::bail!("Sidecar published a non-TCP endpoint");
+        }
+    };
 
     assert_eq!(published.ip(), requested.ip());
     assert_ne!(published.port(), 0);
@@ -90,14 +118,17 @@ fn assert_dynamic_publication(mode: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn wait_for_publication(child: &mut Child, path: &Path) -> anyhow::Result<SocketAddr> {
+fn wait_for_publication(
+    child: &mut Child,
+    path: &Path,
+) -> anyhow::Result<firma_stack::ComponentEndpoint> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match std::fs::read_to_string(path) {
             Ok(contents) => {
                 let report: StartupReport = toml::from_str(&contents)?;
-                assert_eq!(report.protocol_version, 1);
-                return Ok(report.tcp_listen_addr);
+                assert_eq!(report.protocol_version, 2);
+                return Ok(report.endpoint);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),

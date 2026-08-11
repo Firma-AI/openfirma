@@ -119,6 +119,16 @@ impl serde::Serialize for ComponentEndpoint {
     }
 }
 
+impl<'de> serde::Deserialize<'de> for ComponentEndpoint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// Opaque identity of a managed process in the local stack.
 ///
 /// The name determines command selection and runtime-state file names; it does
@@ -265,11 +275,11 @@ impl<'a> ComponentPlanContext<'a> {
 
     /// Describe child-published readiness for the component being planned.
     #[must_use]
-    pub const fn child_published_tcp(
+    pub fn child_published(
         &self,
-        requested_addr: SocketAddr,
-    ) -> ChildPublishedTcpContext<'a> {
-        self.component.child_published_tcp(requested_addr)
+        expected_endpoint: ComponentEndpoint,
+    ) -> ChildPublishedContext<'a> {
+        self.component.child_published(expected_endpoint)
     }
 
     /// Find a prior validated endpoint by topology identity.
@@ -298,25 +308,22 @@ impl<'a> ComponentContext<'a> {
 
     /// Describe child-published readiness using this component's startup report.
     #[must_use]
-    const fn child_published_tcp(
-        &self,
-        requested_addr: SocketAddr,
-    ) -> ChildPublishedTcpContext<'a> {
-        ChildPublishedTcpContext {
-            requested_addr,
+    fn child_published(&self, expected_endpoint: ComponentEndpoint) -> ChildPublishedContext<'a> {
+        ChildPublishedContext {
+            expected_endpoint,
             startup_report_path: self.startup_report_path,
         }
     }
 }
 
 /// Borrowed child-report inputs available during post-lock plan building.
-#[derive(Debug, Clone, Copy)]
-pub struct ChildPublishedTcpContext<'a> {
-    requested_addr: SocketAddr,
+#[derive(Debug, Clone)]
+pub struct ChildPublishedContext<'a> {
+    expected_endpoint: ComponentEndpoint,
     startup_report_path: &'a Path,
 }
 
-impl<'a> ChildPublishedTcpContext<'a> {
+impl<'a> ChildPublishedContext<'a> {
     /// Return the generation-scoped path for the child's startup report.
     #[must_use]
     pub const fn startup_report_path(&self) -> &'a Path {
@@ -326,16 +333,16 @@ impl<'a> ChildPublishedTcpContext<'a> {
     /// Convert the borrowed planning context into owned readiness evidence.
     #[must_use]
     pub fn into_readiness(self) -> Readiness {
-        Readiness::ChildPublishedTcp(ChildPublishedTcpReadiness {
-            requested_addr: self.requested_addr,
+        Readiness::ChildPublished(ChildPublishedReadiness {
+            expected_endpoint: self.expected_endpoint,
         })
     }
 }
 
 /// Owned child-publication evidence retained after the plan callback returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChildPublishedTcpReadiness {
-    pub(crate) requested_addr: SocketAddr,
+pub struct ChildPublishedReadiness {
+    pub(crate) expected_endpoint: ComponentEndpoint,
 }
 
 /// Endpoint evidence required from a component during startup.
@@ -344,7 +351,7 @@ pub enum Readiness {
     /// Probe the configured endpoint directly.
     Configured(ComponentEndpoint),
     /// Require the child to publish its effective bound endpoint before probing.
-    ChildPublishedTcp(ChildPublishedTcpReadiness),
+    ChildPublished(ChildPublishedReadiness),
 }
 
 /// Exclusive process capabilities for one managed stack component.
