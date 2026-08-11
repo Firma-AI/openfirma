@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 
 use std::io::Write as _;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 
 use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
 use firma_protobuf::v1::WatchPolicyBundleRequest;
@@ -207,8 +207,6 @@ impl MtlsTestServer {
             server.run().await.expect("server failed");
         });
 
-        wait_for_tcp_listen(SocketAddr::from(([127, 0, 0, 1], port))).await;
-
         Self {
             port,
             _temp_dir: temp_dir,
@@ -232,20 +230,6 @@ impl MtlsTestServer {
     fn url(&self) -> String {
         format!("https://127.0.0.1:{}", self.port)
     }
-}
-
-async fn wait_for_tcp_listen(addr: SocketAddr) {
-    let start = std::time::Instant::now();
-    let deadline = tokio::time::Duration::from_secs(2);
-
-    while start.elapsed() < deadline {
-        match tokio::net::TcpStream::connect(addr).await {
-            Ok(_) => return,
-            Err(_) => tokio::time::sleep(tokio::time::Duration::from_millis(10)).await,
-        }
-    }
-
-    panic!("mTLS test server did not start listening on {addr} within {deadline:?}");
 }
 
 /// Build a gRPC channel with mTLS client identity to the test server.
