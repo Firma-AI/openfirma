@@ -69,7 +69,7 @@ fn sigterm_during_foreground_readiness_rolls_back_components() {
     std::fs::write(
         &config_path,
         "[authority]\nlisten_addr = \"127.0.0.1:9\"\n\
-         [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n",
+         [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n",
     )
     .expect("write config");
 

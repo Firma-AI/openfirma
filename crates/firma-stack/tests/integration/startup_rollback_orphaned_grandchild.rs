@@ -61,7 +61,7 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
         &config_path,
         format!(
             "[authority]\nlisten_addr = \"{port}\"\n\
-             [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n"
+             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n"
         ),
     )
     .expect("write config");
