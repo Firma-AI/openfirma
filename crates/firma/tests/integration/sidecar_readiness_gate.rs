@@ -5,8 +5,8 @@
 //!
 //! 1. lines 1-6 of the contract appear (config / mapping / policy bundle /
 //!    authority stream / connector / interceptor), and
-//! 2. line 7 (`ready`) does NOT appear within a quiet observation
-//!    window, because the readiness flag never flips.
+//! 2. neither the startup report nor line 7 (`ready`) appears within a quiet
+//!    observation window, because the readiness flag never flips.
 //!
 //! Pairs with `sidecar_startup_contract.rs`, which exercises the
 //! no-Authority happy path where readiness is pre-seeded as true.
@@ -26,6 +26,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use super::CONFIG_FILE_NAME;
+use wait_timeout::ChildExt as _;
 
 const PRE_READY_PREFIXES: &[&str] = &[
     "config loaded",
@@ -147,11 +148,14 @@ signing_key_path = '{audit_key}'
     let stdout_file = File::create(tmp.path().join("sidecar.stdout.log")).unwrap();
     let stderr_log = tmp.path().join("sidecar.stderr.log");
     let stderr_file = File::create(&stderr_log).unwrap();
+    let startup_report = tmp.path().join("sidecar.startup.toml");
 
     let mut child = Command::new(firma_bin())
         .args(["sidecar", "--config"])
         .arg(&sidecar_toml)
         .args(["--health-bind-addr", health_bind_addr])
+        .arg("--startup-report")
+        .arg(&startup_report)
         .env("NO_COLOR", "1")
         .stdout(stdout_file)
         .stderr(stderr_file)
@@ -196,21 +200,43 @@ signing_key_path = '{audit_key}'
     // Observe a quiet window: `ready` must not appear while the
     // Authority streams never hydrate.
     std::thread::sleep(Duration::from_secs(2));
+    #[cfg(unix)]
+    {
+        firma_runtime_state::UserProcessId::new(child.id())
+            .expect("sidecar PID is nonzero")
+            .send_sigterm_signal()
+            .expect("send termination signal to firma sidecar");
+    }
+    #[cfg(windows)]
+    child.kill().expect("terminate firma sidecar");
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("wait for firma sidecar")
+        .unwrap_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("firma sidecar did not exit after SIGTERM");
+        });
+    #[cfg(unix)]
+    assert!(status.success(), "firma sidecar exited uncleanly: {status}");
+    #[cfg(windows)]
+    let _ = status;
+
     let lines: Vec<String> = BufReader::new(File::open(&stderr_log).unwrap())
         .lines()
         .map_while(Result::ok)
         .collect();
-    let ready_visible = lines.iter().any(|line| {
-        let trimmed = line.trim_end();
-        trimmed.contains("sidecar ready")
-    });
-
-    let _ = child.kill();
-    let _ = child.wait();
+    let ready_visible = lines
+        .iter()
+        .any(|line| line.trim_end().contains("sidecar ready"));
 
     assert!(
         !ready_visible,
-        "sidecar emitted 'ready' before Authority streams hydrated; captured stderr:\n{}",
+        "sidecar emitted 'ready' before exiting without Authority hydration; captured stderr:\n{}",
         lines.join("\n"),
+    );
+    assert!(
+        !startup_report.exists(),
+        "sidecar published its startup report before exiting without Authority hydration"
     );
 }
