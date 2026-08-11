@@ -1560,6 +1560,7 @@ name = "firma-http"
 version = "0.1.6"
 dependencies = [
  "arbitrary",
+ "either",
  "http",
  "serde",
  "serde_json",

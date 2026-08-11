@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use firma_http::{HeaderName, Method};
+use firma_http::{Authority, Method};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
@@ -93,26 +93,36 @@ impl InterceptorHook for GrpcInterceptor {
         };
 
         // Fail-closed: reject requests without a resolvable host.
-        if req.host.is_empty() {
-            return Ok(tonic::Response::new(InterceptResponse {
-                allowed: false,
-                reason: "MALFORMED_REQUEST: missing host".to_string(),
-            }));
-        }
+        let host = match Authority::from_str(&req.host) {
+            Ok(host) => host,
+            Err(err) => {
+                return Ok(tonic::Response::new(InterceptResponse {
+                    allowed: false,
+                    reason: format!("MALFORMED_REQUEST: malformed host: {err}"),
+                }));
+            }
+        };
 
         let raw = RawRequest {
-            method: Method(http::Method::from_str(&req.method).map_err(|err| {
+            method: Method::from_str(&req.method).map_err(|err| {
                 tonic::Status::invalid_argument(format!("Invalid method {}: {err}", req.method))
-            })?),
-            host: req.host,
+            })?,
+            host,
             path: req.path,
             headers: req
                 .headers
                 .into_iter()
                 .map(|(k, v)| {
-                    HeaderName::from_str(&k).map(|k| (k, v)).map_err(|err| {
-                        tonic::Status::invalid_argument(format!("Invalid header {k}: {err}"))
-                    })
+                    Ok::<_, tonic::Status>((
+                        http::HeaderName::from_str(&k).map_err(|err| {
+                            tonic::Status::invalid_argument(format!("Invalid header {k}: {err}"))
+                        })?,
+                        http::HeaderValue::from_str(&v).map_err(|err| {
+                            tonic::Status::invalid_argument(format!(
+                                "Invalid value for header {k}: {err}"
+                            ))
+                        })?,
+                    ))
                 })
                 .collect::<Result<_, _>>()?,
             body: if req.body.is_empty() {

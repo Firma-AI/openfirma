@@ -76,10 +76,10 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use firma_http::HeaderMap;
 
 use crate::transport::TransportView;
 
@@ -147,7 +147,7 @@ pub struct ConnectorResponse {
     /// agent.
     pub status: u16,
     /// Response headers returned by the target.
-    pub headers: HashMap<String, String>,
+    pub headers: HeaderMap,
     /// Raw response body bytes returned by the target.
     pub body: Vec<u8>,
     /// Wall-clock latency measured around the dispatch call.
@@ -232,7 +232,7 @@ mod tests {
     fn test_connector_response_debug() {
         let resp = ConnectorResponse {
             status: 200,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: Vec::new(),
             dispatch_latency: Duration::from_millis(0),
             response_size: 0,
@@ -245,7 +245,10 @@ mod tests {
     fn test_connector_response_clone() {
         let resp = ConnectorResponse {
             status: 201,
-            headers: HashMap::from([("X-Test".to_string(), "1".to_string())]),
+            headers: HeaderMap::from([(
+                http::HeaderName::from_static("X-Test"),
+                http::HeaderValue::from_static("1"),
+            )]),
             body: vec![1, 2, 3],
             dispatch_latency: Duration::from_millis(5),
             response_size: 3,

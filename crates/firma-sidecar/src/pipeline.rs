@@ -1204,8 +1204,11 @@ mod tests {
     use crate::normalizer::MappingTable;
     use chrono::Utc;
     use firma_core::*;
-    use firma_http::HeaderName;
+    use firma_http::{Authority, HeaderMap, HeaderName};
+    use http::HeaderValue;
+    use http::uri::InvalidUri;
     use std::collections::HashMap;
+    use std::str::FromStr;
     use std::time::Duration;
 
     struct AllowAllPolicy;
@@ -1363,19 +1366,19 @@ mod tests {
         })
     }
 
-    fn test_request(method: Method, host_and_path: &str) -> RawRequest {
+    fn test_request(method: Method, host_and_path: &str) -> Result<RawRequest, InvalidUri> {
         let (host, path) = host_and_path.split_once('/').map_or_else(
-            || (host_and_path.to_string(), "/".to_string()),
-            |(h, p)| (h.to_string(), format!("/{p}")),
+            || (host_and_path, "/".to_string()),
+            |(h, p)| (h, format!("/{p}")),
         );
-        RawRequest {
+        Ok(RawRequest {
             method,
-            host,
+            host: Authority::from_str(host)?,
             path,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
-        }
+        })
     }
 
     #[tokio::test]
@@ -1383,9 +1386,9 @@ mod tests {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1425,9 +1428,9 @@ mod tests {
         let pipeline = test_pipeline().with_readiness(readiness);
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1451,9 +1454,9 @@ mod tests {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: Method::DELETE,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/files/abc".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1498,9 +1501,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::GET,
-            host: "not-protected.example.com".to_string(),
+            host: Authority::from_static("not-protected.example.com"),
             path: "/any".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1573,9 +1576,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::DELETE,
-            host: "api.example.com".to_string(),
+            host: Authority::from_static("api.example.com"),
             path: "/data".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1638,9 +1641,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: Some(b"{}".to_vec()),
             is_https: true,
         };
@@ -1711,9 +1714,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1764,9 +1767,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1783,9 +1786,9 @@ mod tests {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1804,9 +1807,9 @@ mod tests {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: Method::DELETE,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/files/abc".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1825,9 +1828,9 @@ mod tests {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: Some(b"{\"model\":\"gpt-4\"}".to_vec()),
             is_https: true,
         };
@@ -1933,9 +1936,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1981,9 +1984,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2030,9 +2033,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::GET,
-            host: "api.example.com".to_string(),
+            host: Authority::from_static("api.example.com"),
             path: "/data".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2045,19 +2048,19 @@ mod tests {
     #[tokio::test]
     async fn test_enforce_sensitive_headers_stripped_in_allow() {
         let pipeline = test_pipeline();
-        let mut headers = HashMap::new();
+        let mut headers = HeaderMap::new();
         headers.insert(
-            HeaderName::from_static("authorization"),
-            "Bearer secret".to_string(),
+            http::HeaderName::from_static("authorization"),
+            HeaderValue::from_static("Bearer secret"),
         );
         headers.insert(
-            HeaderName::from_static("content-type"),
-            "application/json".to_string(),
+            http::HeaderName::from_static("content-type"),
+            HeaderValue::from_static("application/json"),
         );
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
             headers,
             body: None,
@@ -2073,13 +2076,13 @@ mod tests {
             assert!(
                 !params
                     .headers
-                    .contains_key(&HeaderName::from_static("authorization")),
+                    .contains_key(http::HeaderName::from_static("authorization")),
                 "authorization header must not leak into envelope"
             );
             assert!(
                 params
                     .headers
-                    .contains_key(&HeaderName::from_static("content-type"))
+                    .contains_key(http::HeaderName::from_static("content-type"))
             );
         }
     }
@@ -2140,9 +2143,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2183,9 +2186,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2230,9 +2233,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2280,9 +2283,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::GET,
-            host: "not-protected.example.com".to_string(),
+            host: Authority::from_static("not-protected.example.com"),
             path: "/any".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2325,9 +2328,9 @@ mod tests {
         // Unclassified intent — denied at normalization stage
         let request = RawRequest {
             method: Method::DELETE,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/files/abc".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2382,9 +2385,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2429,9 +2432,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2486,9 +2489,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -2532,7 +2535,8 @@ mod tests {
         let store: Arc<dyn SessionStateStore> = Arc::new(LruSessionStateStore::new(16));
 
         let pipeline = test_pipeline_with_session_store(Arc::clone(&store));
-        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions")
+            .expect("valid request");
 
         // First call: action_count should be 1.
         let (decision, _) = pipeline.enforce(&request, "sess_001").await;
@@ -2565,7 +2569,8 @@ mod tests {
         // Pipeline configured so Stage 1 denies (no valid capability for
         // this session).
         let pipeline = test_pipeline_stage1_denies_with_session_store(Arc::clone(&store));
-        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions")
+            .expect("valid request");
 
         let (decision, _) = pipeline.enforce(&request, "sess_denied").await;
         assert!(matches!(decision, EnforcementDecision::Deny { .. }));
@@ -2583,7 +2588,8 @@ mod tests {
     async fn monitor_mode_converts_deny_to_passthrough() {
         // Unclassified intent would DENY in enforce mode.
         let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
-        let request = test_request(Method::DELETE, "api.openai.com/v1/files/abc");
+        let request =
+            test_request(Method::DELETE, "api.openai.com/v1/files/abc").expect("valid request");
 
         let (decision, payload) = pipeline.enforce(&request, "sess_monitor").await;
 
@@ -2603,7 +2609,8 @@ mod tests {
     async fn monitor_mode_audit_reason_contains_original_deny_reason() {
         let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
         // Unclassified intent → DenyReason::UnclassifiedIntent in enforce mode.
-        let request = test_request(Method::DELETE, "api.openai.com/v1/files/abc");
+        let request =
+            test_request(Method::DELETE, "api.openai.com/v1/files/abc").expect("valid request");
 
         let (_, payload) = pipeline.enforce(&request, "sess_monitor").await;
 
@@ -2618,7 +2625,8 @@ mod tests {
     async fn monitor_mode_allows_normal_allows_unchanged() {
         // Requests that would ALLOW in enforce mode stay ALLOW in monitor mode.
         let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
-        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions")
+            .expect("valid request");
 
         let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
 
@@ -2634,7 +2642,8 @@ mod tests {
     async fn enforce_mode_still_denies() {
         // Sanity: enforce mode (default) must still produce DENY.
         let pipeline = test_pipeline();
-        let request = test_request(Method::DELETE, "api.openai.com/v1/files/abc");
+        let request =
+            test_request(Method::DELETE, "api.openai.com/v1/files/abc").expect("valid request");
 
         let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
 
@@ -2659,7 +2668,7 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com"),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::POST,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),
@@ -2682,7 +2691,8 @@ mod tests {
 
     #[test]
     fn audit_modify_carries_modify_decision_and_description() {
-        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions")
+            .expect("valid request");
         let claims = test_claims();
         let modify = EnforcementDecision::Modify {
             claims: claims.clone(),
@@ -2702,7 +2712,8 @@ mod tests {
 
     #[test]
     fn audit_step_up_carries_step_up_decision_and_challenge_reason() {
-        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions")
+            .expect("valid request");
         let identity = DenyIdentity {
             token_id: "tok".to_string(),
             agent_id: "agent".to_string(),
@@ -2735,7 +2746,8 @@ mod tests {
 
     #[test]
     fn audit_defer_carries_defer_decision_and_retry_reason() {
-        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions")
+            .expect("valid request");
         let defer = EnforcementDecision::Defer {
             claims: None,
             envelope: None,

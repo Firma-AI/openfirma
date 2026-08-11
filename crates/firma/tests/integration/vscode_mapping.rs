@@ -1,7 +1,7 @@
 //! End-to-end classification coverage for the shipped vscode mapping
 //! template, exercised through the sidecar's real `MappingTable`.
 
-use firma_http::Method;
+use firma_http::{Authority, Method};
 use firma_sidecar::config::MappingRulesFile;
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
 use firma_sidecar::normalizer::{MappingTable, MatchResult};
@@ -16,7 +16,11 @@ fn vscode_mapping_classifies_copilot_chat_connect() {
     let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true)
         .unwrap_or_else(|e| panic!("vscode mapping must build a table: {e}"));
 
-    match table.find_match(&Method::CONNECT, "api.individual.githubcopilot.com", "/") {
+    match table.find_match(
+        &Method::CONNECT,
+        &Authority::from_static("api.individual.githubcopilot.com"),
+        "/",
+    ) {
         MatchResult::Matched(rule) => {
             assert_eq!(rule.action_class, "communication.external.send");
         }

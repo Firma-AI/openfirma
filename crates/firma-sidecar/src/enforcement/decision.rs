@@ -279,6 +279,8 @@ impl EnforcementDecision {
 
 #[cfg(test)]
 mod tests {
+    use firma_http::HeaderMap;
+
     use super::*;
 
     #[test]
@@ -343,7 +345,7 @@ mod tests {
                     resource: firma_core::ExecutionIntent::resource_map_from("example.com"),
                     params: firma_core::ActionParams::Http(firma_core::HttpParams {
                         method: firma_core::HttpMethod::GET,
-                        headers: std::collections::HashMap::new(),
+                        headers: HeaderMap::new(),
                         body: None,
                         query: std::collections::HashMap::new(),
                     }),

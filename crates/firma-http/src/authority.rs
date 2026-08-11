@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    fmt,
     hash::{Hash, Hasher},
     ops::Deref,
     str::FromStr,
@@ -8,13 +9,25 @@ use std::{
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A wrapped version of `http::uri::Authority` that allows (de)serialization
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Authority(pub http::uri::Authority);
 
 impl Authority {
     #[must_use]
     pub const fn from_static(src: &'static str) -> Self {
         Self(http::uri::Authority::from_static(src))
+    }
+}
+
+impl fmt::Debug for Authority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl fmt::Display for Authority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

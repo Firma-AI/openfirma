@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use firma_http::Method;
+use firma_http::{Authority, HeaderMap, Method};
 use firma_sidecar::composio::{ComposioCatalogs, DecodeResult, decode};
 use firma_sidecar::normalizer::RawRequest;
 
@@ -63,16 +61,16 @@ fn catalogs() -> anyhow::Result<ComposioCatalogs> {
     ])?)
 }
 
-fn request(host: &str, path: &str, body: &serde_json::Value) -> RawRequest {
+fn request(host: Authority, path: &str, body: &serde_json::Value) -> RawRequest {
     request_with_body(host, path, body.to_string().into_bytes())
 }
 
-fn request_with_body(host: &str, path: &str, body: Vec<u8>) -> RawRequest {
+fn request_with_body(host: Authority, path: &str, body: Vec<u8>) -> RawRequest {
     RawRequest {
         method: Method::POST,
-        host: host.to_string(),
+        host,
         path: path.to_string(),
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body: Some(body),
         is_https: true,
     }
@@ -88,7 +86,7 @@ fn actions(result: DecodeResult) -> anyhow::Result<Vec<firma_sidecar::composio::
 #[test]
 fn direct_execution_requires_and_uses_the_pinned_version() -> anyhow::Result<()> {
     let request = request(
-        "backend.composio.dev",
+        Authority::from_static("backend.composio.dev"),
         "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
         &serde_json::json!({
             "version": "20251111_00",
@@ -130,12 +128,12 @@ fn direct_execution_requires_and_uses_the_pinned_version() -> anyhow::Result<()>
 #[test]
 fn host_spellings_still_hit_the_protected_hosts() -> anyhow::Result<()> {
     for host in [
-        "backend.composio.dev:8443",
-        "backend.composio.dev.:443",
-        " backend.composio.dev ",
+        Authority::from_static("backend.composio.dev:8443"),
+        Authority::from_static("backend.composio.dev.:443"),
+        Authority::from_static("backend.composio.dev"),
     ] {
         let request = request(
-            host,
+            host.clone(),
             "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
             &serde_json::json!({"version": "20251111_00"}),
         );
@@ -170,7 +168,7 @@ fn governed_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
         ),
     ] {
         let mut governed = request(
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             path,
             &body.clone().unwrap_or_else(|| serde_json::json!({})),
         );
@@ -185,7 +183,7 @@ fn governed_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
     }
 
     let mut listing = request(
-        "backend.composio.dev",
+        Authority::from_static("backend.composio.dev"),
         "/api/v3/connected_accounts?cursor=abc",
         &serde_json::json!({}),
     );
@@ -205,27 +203,39 @@ fn non_read_methods_on_recognized_routes_fail_closed() -> anyhow::Result<()> {
     for (method, host, path) in [
         (
             Method::TRACE,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/connected_accounts/ca_1",
         ),
         (
             Method::TRACE,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3.1/auth_configs/ac_1",
         ),
         (
             Method::TRACE,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/tool_router/session/trs_1/link",
         ),
         (
             Method::TRACE,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/tool_router/session/trs_1",
         ),
-        (Method::TRACE, "backend.composio.dev", "/api/v3/tools"),
-        (Method::PATCH, "backend.composio.dev", "/api/v3/toolkits"),
-        (Method::PUT, "app.composio.dev", "/tool_router/v3/trs_1/mcp"),
+        (
+            Method::TRACE,
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/tools",
+        ),
+        (
+            Method::PATCH,
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/toolkits",
+        ),
+        (
+            Method::PUT,
+            Authority::from_static("app.composio.dev"),
+            "/tool_router/v3/trs_1/mcp",
+        ),
     ] {
         let mut unsupported = request(host, path, &serde_json::json!({}));
         unsupported.method = method.clone();
@@ -246,19 +256,19 @@ fn session_creation_and_mcp_teardown_remain_passthrough() -> anyhow::Result<()> 
     for (method, host, path, has_body) in [
         (
             Method::POST,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/tool_router/session",
             true,
         ),
         (
             Method::POST,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/tool_router/session/trs_1",
             true,
         ),
         (
             Method::DELETE,
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             false,
         ),
@@ -282,12 +292,12 @@ fn session_creation_and_mcp_teardown_remain_passthrough() -> anyhow::Result<()> 
 #[test]
 fn mcp_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
     let discovery = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_1/mcp?flag=1",
         &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
     );
     let mut stream = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_1/mcp?flag=1",
         &serde_json::json!({}),
     );
@@ -310,7 +320,7 @@ fn direct_execution_rejects_missing_or_wrong_versions() -> anyhow::Result<()> {
         serde_json::json!({"version": "latest", "arguments": {}}),
     ] {
         let request = request(
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/tools/execute/GMAIL_SEND_EMAIL",
             &body,
         );
@@ -325,7 +335,7 @@ fn direct_execution_rejects_missing_or_wrong_versions() -> anyhow::Result<()> {
 #[test]
 fn session_execution_uses_the_pinned_local_slug_allowlist() -> anyhow::Result<()> {
     let request = request(
-        "backend.composio.dev",
+        Authority::from_static("backend.composio.dev"),
         "/api/v3.1/tool_router/session/trs_1/execute",
         &serde_json::json!({
             "tool_slug": "GOOGLECALENDAR_CREATE_EVENT",
@@ -348,7 +358,7 @@ fn session_execution_uses_the_pinned_local_slug_allowlist() -> anyhow::Result<()
 #[test]
 fn hosted_mcp_decodes_directly_exposed_provider_tools() -> anyhow::Result<()> {
     let request = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_mcp/mcp",
         &serde_json::json!({
             "jsonrpc": "2.0",
@@ -379,7 +389,7 @@ fn hosted_mcp_decodes_directly_exposed_provider_tools() -> anyhow::Result<()> {
 #[test]
 fn backend_host_hosted_mcp_decodes_calls_and_passes_session_verbs() -> anyhow::Result<()> {
     let call = request(
-        "backend.composio.dev",
+        Authority::from_static("backend.composio.dev"),
         "/api/v3.1/mcp/mcp_session_1",
         &serde_json::json!({
             "jsonrpc": "2.0",
@@ -403,7 +413,11 @@ fn backend_host_hosted_mcp_decodes_calls_and_passes_session_verbs() -> anyhow::R
 
     let stream = RawRequest {
         method: Method::GET,
-        ..request_with_body("backend.composio.dev", "/api/v3/mcp/mcp_session_1", vec![])
+        ..request_with_body(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/mcp/mcp_session_1",
+            vec![],
+        )
     };
 
     assert!(matches!(
@@ -416,7 +430,7 @@ fn backend_host_hosted_mcp_decodes_calls_and_passes_session_verbs() -> anyhow::R
 #[test]
 fn multi_execute_expands_ordered_children_without_arguments() -> anyhow::Result<()> {
     let request = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_batch/mcp",
         &serde_json::json!({
             "jsonrpc": "2.0",
@@ -455,7 +469,7 @@ fn multi_execute_expands_ordered_children_without_arguments() -> anyhow::Result<
 #[test]
 fn protocol_failures_are_secret_safe() -> anyhow::Result<()> {
     let mut request = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_batch/mcp",
         &serde_json::json!({"secret": "do-not-log"}),
     );
@@ -473,7 +487,7 @@ fn protocol_failures_are_secret_safe() -> anyhow::Result<()> {
 #[test]
 fn json_rpc_batches_and_remote_execution_fail_closed() -> anyhow::Result<()> {
     let batch = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_1/mcp",
         &serde_json::json!([]),
     );
@@ -483,7 +497,7 @@ fn json_rpc_batches_and_remote_execution_fail_closed() -> anyhow::Result<()> {
     ));
 
     let shell = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_1/mcp",
         &serde_json::json!({
             "jsonrpc": "2.0",
@@ -505,7 +519,7 @@ fn json_rpc_batches_and_remote_execution_fail_closed() -> anyhow::Result<()> {
 #[test]
 fn recognized_mcp_discovery_passes_through_but_other_hosts_are_unrelated() -> anyhow::Result<()> {
     let list = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_1/mcp",
         &serde_json::json!({
             "jsonrpc": "2.0",
@@ -522,7 +536,7 @@ fn recognized_mcp_discovery_passes_through_but_other_hosts_are_unrelated() -> an
     ));
 
     let unrelated = request(
-        "app.composio.dev.evil.test",
+        Authority::from_static("app.composio.dev.evil.test"),
         "/tool_router/v3/trs_1/mcp",
         &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
     );
@@ -537,27 +551,27 @@ fn recognized_mcp_discovery_passes_through_but_other_hosts_are_unrelated() -> an
 fn duplicate_json_keys_fail_closed_at_every_execution_selector_level() -> anyhow::Result<()> {
     for (host, path, body) in [
         (
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/tools/execute/GMAIL_SEND_EMAIL",
             r#"{"version":"20251111_00","version":"latest","arguments":{}}"#,
         ),
         (
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","method":"tools/call"}"#,
         ),
         (
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"GMAIL_FETCH_EMAILS","name":"GMAIL_SEND_EMAIL","arguments":{}}}"#,
         ),
         (
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"GMAIL_FETCH_EMAILS","arguments":{"account":"one","account":"two"}}}"#,
         ),
         (
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"COMPOSIO_MULTI_EXECUTE_TOOL","arguments":{"tools":[{"tool_slug":"GMAIL_FETCH_EMAILS","tool_slug":"GMAIL_SEND_EMAIL"}]}}}"#,
         ),
@@ -575,7 +589,7 @@ fn duplicate_json_keys_fail_closed_at_every_execution_selector_level() -> anyhow
 fn mcp_resource_methods_fail_closed() -> anyhow::Result<()> {
     for method in ["resources/list", "resources/read"] {
         let request = request(
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method}),
         );
@@ -657,7 +671,11 @@ fn lifecycle_writes_are_governed_as_account_permission_change() -> anyhow::Resul
             Some("trs_9"),
         ),
     ] {
-        let mut lifecycle = request("backend.composio.dev", path, &serde_json::json!({}));
+        let mut lifecycle = request(
+            Authority::from_static("backend.composio.dev"),
+            path,
+            &serde_json::json!({}),
+        );
         lifecycle.method = method.clone();
         if method != Method::POST {
             lifecycle.body = None;
@@ -685,34 +703,39 @@ fn lifecycle_writes_are_governed_as_account_permission_change() -> anyhow::Resul
 #[test]
 fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Result<()> {
     for (method, host, path, expected_passthrough) in [
-        (Method::GET, "backend.composio.dev", "/api/v3/tools", true),
         (
             Method::GET,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/tools",
+            true,
+        ),
+        (
+            Method::GET,
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/connected_accounts",
             true,
         ),
         (
             Method::GET,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/execute",
             false,
         ),
         (
             Method::GET,
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             true,
         ),
         (
             Method::POST,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/toolkits",
             true,
         ),
         (
             Method::POST,
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/unsupported",
             false,
         ),
@@ -731,7 +754,7 @@ fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Res
 #[test]
 fn missing_and_scalar_payloads_fail_closed() -> anyhow::Result<()> {
     let mut missing = request(
-        "backend.composio.dev",
+        Authority::from_static("backend.composio.dev"),
         "/api/v3/tools/execute/GMAIL_SEND_EMAIL",
         &serde_json::json!({}),
     );
@@ -740,7 +763,7 @@ fn missing_and_scalar_payloads_fail_closed() -> anyhow::Result<()> {
     for request in [
         missing,
         request_with_body(
-            "backend.composio.dev",
+            Authority::from_static("backend.composio.dev"),
             "/api/v3/tools/execute/GMAIL_SEND_EMAIL",
             b"true".to_vec(),
         ),
@@ -777,7 +800,7 @@ fn unsupported_backend_execution_shapes_fail_closed() -> anyhow::Result<()> {
             "malformed_payload",
         ),
     ] {
-        let request = request("backend.composio.dev", path, &body);
+        let request = request(Authority::from_static("backend.composio.dev"), path, &body);
         let DecodeResult::Deny(denial) = decode(&request, &catalogs()?) else {
             anyhow::bail!("unsupported backend execution shape must fail closed");
         };
@@ -790,7 +813,7 @@ fn unsupported_backend_execution_shapes_fail_closed() -> anyhow::Result<()> {
 fn meta_tool_control_and_execution_routes_are_explicit() -> anyhow::Result<()> {
     for slug in ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS"] {
         let request = request(
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             &serde_json::json!({
                 "jsonrpc": "2.0",
@@ -806,7 +829,7 @@ fn meta_tool_control_and_execution_routes_are_explicit() -> anyhow::Result<()> {
     }
 
     let execute = request(
-        "app.composio.dev",
+        Authority::from_static("app.composio.dev"),
         "/tool_router/v3/trs_1/mcp",
         &serde_json::json!({
             "jsonrpc": "2.0",
@@ -847,7 +870,7 @@ fn meta_tool_control_and_execution_routes_are_explicit() -> anyhow::Result<()> {
         ),
     ] {
         let request = request(
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             &serde_json::json!({
                 "jsonrpc": "2.0",
@@ -886,7 +909,7 @@ fn invalid_multi_execute_shapes_fail_closed() -> anyhow::Result<()> {
         ),
     ] {
         let request = request(
-            "app.composio.dev",
+            Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
             &serde_json::json!({
                 "jsonrpc": "2.0",

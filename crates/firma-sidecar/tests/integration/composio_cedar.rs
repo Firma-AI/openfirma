@@ -6,6 +6,7 @@ use firma_core::policy::PolicyBundle;
 use firma_core::{
     ActionParams, CapabilityClaims, DenyReason, ExecutionIntent, HttpMethod, HttpParams,
 };
+use firma_http::HeaderMap;
 use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::session::RuntimeSignals;
 use firma_sidecar::normalizer::NormalizedEnvelope;
@@ -70,7 +71,7 @@ fn intent() -> ExecutionIntent {
         resource,
         params: ActionParams::Http(HttpParams {
             method: HttpMethod::POST,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             query: HashMap::new(),
         }),

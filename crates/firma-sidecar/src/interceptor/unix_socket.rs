@@ -12,9 +12,10 @@
 //! making it well suited for containerized environments.
 
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 
-use firma_http::{HeaderName, Method};
+use firma_http::{Authority, HeaderMap, Method};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -136,17 +137,17 @@ async fn serve_connection(
 async fn handle_request(
     req: Request<Incoming>,
     handler: &RequestHandler,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> anyhow::Result<Response<Full<Bytes>>> {
     let raw = match build_raw_request(req).await {
         Ok(r) => r,
-        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail.to_string())),
     };
 
     let session_id = raw
         .headers
-        .get(&HeaderName::from_static("x-firma-session-id"))
-        .cloned()
-        .unwrap_or_default();
+        .get_firma_session_id()?
+        .unwrap_or_default()
+        .to_owned();
 
     let outcome = handler.handle(raw, &session_id).await;
 
@@ -176,7 +177,7 @@ async fn handle_request(
 
 fn dispatched_response(response: DispatchedResponse) -> Response<Full<Bytes>> {
     let mut builder = Response::builder().status(response.status);
-    for (name, value) in response.headers {
+    for (name, value) in response.headers.iter() {
         builder = builder.header(name, value);
     }
     builder
@@ -190,9 +191,9 @@ fn dispatched_response(response: DispatchedResponse) -> Response<Full<Bytes>> {
 ///
 /// # Errors
 ///
-/// Returns a detail string suitable for a `MALFORMED_REQUEST` denial when the
-/// host cannot be resolved or the body cannot be read.
-async fn build_raw_request(req: Request<Incoming>) -> Result<RawRequest, String> {
+/// Returns an error describing why the request is a `MALFORMED_REQUEST` when
+/// the host cannot be resolved or the body cannot be read.
+async fn build_raw_request(req: Request<Incoming>) -> anyhow::Result<RawRequest> {
     let method = Method(req.method().clone());
     let path = req
         .uri()
@@ -202,26 +203,18 @@ async fn build_raw_request(req: Request<Incoming>) -> Result<RawRequest, String>
     let host = req
         .headers()
         .get("host")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string)
-        .or_else(|| req.uri().authority().map(ToString::to_string))
-        .unwrap_or_default();
+        .map(|v| Ok::<_, anyhow::Error>(Authority::from_str(v.to_str()?)?))
+        .transpose()?
+        .or_else(|| req.uri().authority().map(Authority::from))
+        .ok_or_else(|| anyhow::anyhow!("MALFORMED_REQUEST: missing host"))?;
 
-    if host.is_empty() {
-        return Err("MALFORMED_REQUEST: missing host".to_string());
-    }
-
-    let headers = req
-        .headers()
-        .iter()
-        .filter_map(|(k, v)| Some((HeaderName::from(k), v.to_str().ok()?.to_string())))
-        .collect();
+    let headers = HeaderMap(req.headers().clone());
 
     let body_bytes = req
         .into_body()
         .collect()
         .await
-        .map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?
+        .map_err(|e| anyhow::anyhow!("MALFORMED_REQUEST: failed to read body: {e}"))?
         .to_bytes();
 
     let body = if body_bytes.is_empty() {

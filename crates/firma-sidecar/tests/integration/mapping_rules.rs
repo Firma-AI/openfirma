@@ -1,8 +1,6 @@
 //! Load-time normalization of mapping-rule host patterns.
 
-use std::collections::HashMap;
-
-use firma_http::Method;
+use firma_http::{Authority, HeaderMap, Method};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::normalizer::MatchResult;
 use firma_sidecar::pipeline::{ActionClassRegistry, IntentNormalizer, MappingTable, RawRequest};
@@ -30,7 +28,11 @@ fn rule_hosts_are_normalized_at_load_time() -> anyhow::Result<()> {
     )?;
 
     assert!(matches!(
-        table.find_match(&Method::GET, "api.github.com", "/repos/x"),
+        table.find_match(
+            &Method::GET,
+            &Authority::from_static("api.github.com"),
+            "/repos/x"
+        ),
         MatchResult::Matched(_)
     ));
     Ok(())
@@ -49,7 +51,11 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
         false,
     )?;
     assert!(matches!(
-        default_port.find_match(&Method::GET, "api.github.com", "/repos/x"),
+        default_port.find_match(
+            &Method::GET,
+            &Authority::from_static("api.github.com"),
+            "/repos/x"
+        ),
         MatchResult::Matched(_)
     ));
 
@@ -61,11 +67,19 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
         false,
     )?;
     assert!(matches!(
-        nonstandard_port.find_match(&Method::GET, "api.github.com:8443", "/repos/x"),
+        nonstandard_port.find_match(
+            &Method::GET,
+            &Authority::from_static("api.github.com:8443"),
+            "/repos/x"
+        ),
         MatchResult::Matched(_)
     ));
     assert!(matches!(
-        nonstandard_port.find_match(&Method::GET, "api.github.com", "/repos/x"),
+        nonstandard_port.find_match(
+            &Method::GET,
+            &Authority::from_static("api.github.com"),
+            "/repos/x"
+        ),
         MatchResult::NotProtected
     ));
     Ok(())
@@ -85,7 +99,7 @@ fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
         false,
     )?;
     assert!(matches!(
-        default_port.find_match(&Method::GET, "[::1]", "/repos/x"),
+        default_port.find_match(&Method::GET, &Authority::from_static("[::1]"), "/repos/x"),
         MatchResult::Matched(_)
     ));
 
@@ -93,13 +107,16 @@ fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
     // it matches a default-port rule host whether or not it repeats the
     // port, exactly like an IPv4/hostname request.
     let normalizer = IntentNormalizer::new(default_port);
-    for request_host in ["[::1]", "[::1]:443"] {
+    for request_host in [
+        Authority::from_static("[::1]"),
+        Authority::from_static("[::1]:443"),
+    ] {
         let envelope = normalizer
             .normalize(&RawRequest {
                 method: Method::GET,
-                host: request_host.to_string(),
+                host: request_host.clone(),
                 path: "/repos/x".to_string(),
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 is_https: true,
             })
@@ -120,11 +137,19 @@ fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
         false,
     )?;
     assert!(matches!(
-        nonstandard_port.find_match(&Method::GET, "[fe80::1]:8443", "/repos/x"),
+        nonstandard_port.find_match(
+            &Method::GET,
+            &Authority::from_static("[fe80::1]:8443"),
+            "/repos/x"
+        ),
         MatchResult::Matched(_)
     ));
     assert!(matches!(
-        nonstandard_port.find_match(&Method::GET, "[fe80::1]", "/repos/x"),
+        nonstandard_port.find_match(
+            &Method::GET,
+            &Authority::from_static("[fe80::1]"),
+            "/repos/x"
+        ),
         MatchResult::NotProtected
     ));
     Ok(())
@@ -136,10 +161,13 @@ fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
 #[test]
 fn ipv6_rule_hosts_match_ipv6_request_hosts_on_any_port() -> anyhow::Result<()> {
     let registry = ActionClassRegistry::v0_1();
-    for host in ["[::1]:443", "[fe80::1]:8443"] {
+    for host in [
+        Authority::from_static("[::1]:443"),
+        Authority::from_static("[fe80::1]:8443"),
+    ] {
         let table = MappingTable::from_config(
             &MappingRulesFile {
-                rules: vec![rule(host)],
+                rules: vec![rule(&host.to_string())],
             },
             &registry,
             false,
@@ -149,9 +177,9 @@ fn ipv6_rule_hosts_match_ipv6_request_hosts_on_any_port() -> anyhow::Result<()> 
         let envelope = normalizer
             .normalize(&RawRequest {
                 method: Method::GET,
-                host: host.to_string(),
+                host: host.clone(),
                 path: "/repos/x".to_string(),
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 is_https: true,
             })
@@ -184,9 +212,9 @@ fn ipv6_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
     let envelope = normalizer
         .normalize(&RawRequest {
             method: Method::GET,
-            host: "[::1]:443".to_string(),
+            host: Authority::from_static("[::1]:443"),
             path: "/repos/x".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             // Key detail: not using HTTPS, so default port would be `80`
             is_https: false,
@@ -218,9 +246,9 @@ fn ipv4_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
     let envelope = normalizer
         .normalize(&RawRequest {
             method: Method::GET,
-            host: "api.example.com:443".to_string(),
+            host: Authority::from_static("api.example.com:443"),
             path: "/repos/x".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             // Key detail: not using HTTPS, so default port would be `80`
             is_https: false,
@@ -242,8 +270,14 @@ fn ipv4_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
 #[test]
 fn trailing_dots_around_ports_cannot_evade_rules() -> anyhow::Result<()> {
     for (rule_host, request_host) in [
-        ("api.github.com:8443", "API.GitHub.COM.:8443"),
-        ("api.github.com", "api.github.com:443."),
+        (
+            "api.github.com:8443",
+            Authority::from_static("API.GitHub.COM.:8443"),
+        ),
+        (
+            "api.github.com",
+            Authority::from_static("api.github.com:443."),
+        ),
     ] {
         let table = MappingTable::from_config(
             &MappingRulesFile {
@@ -257,9 +291,9 @@ fn trailing_dots_around_ports_cannot_evade_rules() -> anyhow::Result<()> {
         let envelope = normalizer
             .normalize(&RawRequest {
                 method: Method::GET,
-                host: request_host.to_string(),
+                host: request_host.clone(),
                 path: "/repos/x".to_string(),
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 is_https: true,
             })
@@ -312,11 +346,19 @@ fn explicit_port_scoped_catch_all_still_loads_and_matches() -> anyhow::Result<()
     )?;
 
     assert!(matches!(
-        table.find_match(&Method::GET, "anything.example:8443", "/x"),
+        table.find_match(
+            &Method::GET,
+            &Authority::from_static("anything.example:8443"),
+            "/x"
+        ),
         MatchResult::Matched(_)
     ));
     assert!(matches!(
-        table.find_match(&Method::GET, "anything.example", "/x"),
+        table.find_match(
+            &Method::GET,
+            &Authority::from_static("anything.example"),
+            "/x"
+        ),
         MatchResult::NotProtected
     ));
     Ok(())

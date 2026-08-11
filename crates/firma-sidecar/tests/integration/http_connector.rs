@@ -5,7 +5,7 @@ use firma_core::{
     ActionParams, Connector, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
     HttpParams, InjectedCredentials, TransportView,
 };
-use firma_http::Method;
+use firma_http::{Authority, HeaderMap, Method};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::connector::provider::{GenericHttpConnector, HttpConnectorConfig};
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
@@ -20,7 +20,7 @@ fn view_for(resource: &str, query: HashMap<String, String>) -> anyhow::Result<Tr
         resource: ExecutionIntent::resource_map_from(resource),
         params: ActionParams::Http(HttpParams {
             method: HttpMethod::GET,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             query,
         }),
@@ -153,9 +153,9 @@ async fn connector_restores_redacted_query_from_http_params() -> anyhow::Result<
 fn multiple_receive_pack_updates_fail_closed() -> anyhow::Result<()> {
     let request = RawRequest {
         method: Method::POST,
-        host: "github.com".to_string(),
+        host: Authority::from_static("github.com"),
         path: "/owner/repo.git/git-receive-pack".to_string(),
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body: Some(receive_pack_body(&[
             (
                 "1111111111111111111111111111111111111111",

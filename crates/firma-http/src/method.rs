@@ -58,6 +58,14 @@ impl Hash for Method {
     }
 }
 
+impl FromStr for Method {
+    type Err = <http::Method as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(http::Method::from_str(s)?))
+    }
+}
+
 impl Deref for Method {
     type Target = http::Method;
 

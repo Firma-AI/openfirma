@@ -44,6 +44,12 @@ impl From<&HeaderName> for http::HeaderName {
     }
 }
 
+impl From<HeaderName> for http::HeaderName {
+    fn from(value: HeaderName) -> Self {
+        value.0
+    }
+}
+
 impl From<&http::HeaderName> for HeaderName {
     fn from(value: &http::HeaderName) -> Self {
         Self(value.clone())

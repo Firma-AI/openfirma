@@ -14,6 +14,7 @@ use firma_core::{
     ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
     InjectedCredentials, SessionId, TransportView,
 };
+use firma_http::HeaderMap;
 use tokio::sync::mpsc;
 
 use crate::audit::{AuditPayload, Decision};
@@ -298,7 +299,7 @@ pub struct DispatchedResponse {
     /// Target HTTP status code.
     pub(crate) status: u16,
     /// Target response headers.
-    pub(crate) headers: HashMap<String, String>,
+    pub(crate) headers: HeaderMap,
     /// Target response body.
     pub(crate) body: Vec<u8>,
 }
@@ -1006,7 +1007,7 @@ impl RequestHandler {
 
 fn handle_error(err: impl Display) -> HandledResponse {
     HandledResponse::Aborted {
-        reason: firma_core::AbortReason::ConnectorInvalidRequest,
+        reason: AbortReason::ConnectorInvalidRequest,
         detail: err.to_string(),
     }
 }
@@ -1065,13 +1066,16 @@ fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawR
     let ActionParams::Http(http) = &mut envelope.intent.params else {
         return;
     };
-    http.headers.clone_from(&request.headers);
-    strip_firma_headers(&mut http.headers);
+    http.headers = strip_firma_headers(&http.headers);
     http.body.clone_from(&request.body);
 }
 
-fn strip_firma_headers(headers: &mut HashMap<firma_http::HeaderName, String>) {
-    headers.retain(|name, _| !name.as_str().starts_with("x-firma-"));
+fn strip_firma_headers(headers: &HeaderMap) -> HeaderMap {
+    headers
+        .iter()
+        .filter(|(k, _v)| !k.as_str().starts_with("x-firma-"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// Apply a [`ModificationSpec`] redaction to the raw request headers before
@@ -1105,10 +1109,9 @@ fn passthrough_envelope<'a>(
     let method = HttpMethod::try_from(&request.method)?;
     let scheme = if request.is_https { "https" } else { "http" };
     let mut resource = std::collections::BTreeMap::new();
-    resource.insert("host".to_string(), request.host.clone());
+    resource.insert("host".to_string(), request.host.as_str().to_owned());
     resource.insert("path".to_string(), request.path.clone());
-    let mut headers = request.headers.clone();
-    strip_firma_headers(&mut headers);
+    let headers = strip_firma_headers(&request.headers);
     let intent = ExecutionIntent {
         action_class: "passthrough".to_string(),
         resource,
@@ -1164,6 +1167,7 @@ fn passthrough_session_id() -> SessionId {
 pub(crate) mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
+    use std::str::FromStr;
     use std::time::Duration;
 
     use crate::config::TenancyMode;
@@ -1173,7 +1177,7 @@ pub(crate) mod tests {
         CapabilityClaims, Connector, RevocationStore, TokenError, TokenId, TokenVerifier,
         TransportView,
     };
-    use firma_http::Method;
+    use firma_http::{Authority, Method};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio_util::sync::CancellationToken;
@@ -1399,12 +1403,12 @@ pub(crate) mod tests {
         (addr, cancel)
     }
 
-    fn raw_request(host: String, method: Method) -> RawRequest {
+    fn raw_request(host: Authority, method: Method) -> RawRequest {
         RawRequest {
             method,
             host,
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: Some(b"{}".to_vec()),
             is_https: false,
         }
@@ -1422,7 +1426,11 @@ pub(crate) mod tests {
 
         let response = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), Method::POST),
+                raw_request(
+                    Authority::from_str(&format!("127.0.0.1:{}", upstream_addr.port()))
+                        .expect("valid authority"),
+                    Method::POST,
+                ),
                 "sess_allow",
             )
             .await;
@@ -1431,7 +1439,10 @@ pub(crate) mod tests {
             HandledResponse::Ok(dispatched) => {
                 assert_eq!(dispatched.status, 201);
                 assert_eq!(dispatched.body, b"OK");
-                assert_eq!(dispatched.headers.get("x-test"), Some(&"ok".to_string()));
+                assert_eq!(
+                    dispatched.headers.get("x-test"),
+                    Some(&http::HeaderValue::from_static("ok"))
+                );
             }
             other => panic!("expected ok response, got {other:?}"),
         }
@@ -1456,7 +1467,7 @@ pub(crate) mod tests {
 
         let response = handler
             .handle(
-                raw_request("127.0.0.1:9".to_string(), Method::POST),
+                raw_request(Authority::from_static("127.0.0.1:9"), Method::POST),
                 "sess_deny",
             )
             .await;
@@ -1497,7 +1508,11 @@ pub(crate) mod tests {
 
         let _ = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), Method::POST),
+                raw_request(
+                    Authority::from_str(&format!("127.0.0.1:{}", upstream_addr.port()))
+                        .expect("valid authority"),
+                    Method::POST,
+                ),
                 "sess_audit",
             )
             .await;
@@ -1526,7 +1541,10 @@ pub(crate) mod tests {
         );
 
         let _ = handler
-            .handle(raw_request("127.0.0.1:9".to_string(), Method::POST), "sess")
+            .handle(
+                raw_request(Authority::from_static("127.0.0.1:9"), Method::POST),
+                "sess",
+            )
             .await;
 
         let payload = rx
@@ -1550,7 +1568,7 @@ pub(crate) mod tests {
         let response = handler
             .handle(
                 // Port 1 is reserved — connect attempt fails reliably.
-                raw_request("127.0.0.1:1".to_string(), Method::POST),
+                raw_request(Authority::from_static("127.0.0.1:1"), Method::POST),
                 "sess_net",
             )
             .await;
@@ -1637,7 +1655,7 @@ pub(crate) mod tests {
 
         let modifications =
             ModificationSpec::parse("redact_header:x-sensitive").expect("valid redact_header spec");
-        let request = raw_request("127.0.0.1:9".to_string(), Method::POST);
+        let request = raw_request(Authority::from_static("127.0.0.1:9"), Method::POST);
 
         let response = handler
             .dispatch_modify(
@@ -1702,7 +1720,8 @@ pub(crate) mod tests {
         )));
 
         let addr = server.address();
-        let host = format!("127.0.0.1:{}", addr.port());
+        let host =
+            Authority::from_str(&format!("127.0.0.1:{}", addr.port())).expect("valid authority");
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
@@ -1748,7 +1767,10 @@ pub(crate) mod tests {
 
         let response = handler
             .handle(
-                raw_request("api.invalid-request.test".to_string(), Method::POST),
+                raw_request(
+                    Authority::from_static("api.invalid-request.test"),
+                    Method::POST,
+                ),
                 "sess_invalid",
             )
             .await;
@@ -1792,7 +1814,11 @@ pub(crate) mod tests {
         let addr = server.address();
         let response = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", addr.port()), Method::POST),
+                raw_request(
+                    Authority::from_str(&format!("127.0.0.1:{}", addr.port()))
+                        .expect("valid authority"),
+                    Method::POST,
+                ),
                 "sess_5xx",
             )
             .await;
@@ -1906,7 +1932,7 @@ pub(crate) mod tests {
                 ),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),
@@ -1995,7 +2021,11 @@ pub(crate) mod tests {
 
         let response = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), Method::GET),
+                raw_request(
+                    Authority::from_str(&format!("127.0.0.1:{}", upstream_addr.port()))
+                        .expect("valid authority"),
+                    Method::GET,
+                ),
                 "sess_passthrough",
             )
             .await;
@@ -2140,9 +2170,9 @@ pub(crate) mod tests {
             .handle_connect(
                 RawRequest {
                     method: Method::CONNECT,
-                    host: "api.openai.com:443".to_string(),
+                    host: Authority::from_static("api.openai.com:443"),
                     path: "/".to_string(),
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     is_https: true,
                 },
@@ -2181,9 +2211,9 @@ pub(crate) mod tests {
             .handle_connect(
                 RawRequest {
                     method: Method::CONNECT,
-                    host: "api.openai.com:443".to_string(),
+                    host: Authority::from_static("api.openai.com:443"),
                     path: "/".to_string(),
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     is_https: true,
                 },
@@ -2226,9 +2256,9 @@ pub(crate) mod tests {
             .handle_connect(
                 RawRequest {
                     method: Method::CONNECT,
-                    host: "api.openai.com:443".to_string(),
+                    host: Authority::from_static("api.openai.com:443"),
                     path: "/".to_string(),
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     is_https: true,
                 },
@@ -2270,7 +2300,7 @@ pub(crate) mod tests {
 
         let authorization = handler
             .authorize_upgrade(
-                raw_request("api.openai.com".to_string(), Method::POST),
+                raw_request(Authority::from_static("api.openai.com"), Method::POST),
                 "sess_upgrade_abort",
             )
             .await;

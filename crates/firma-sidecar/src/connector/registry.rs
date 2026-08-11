@@ -82,6 +82,7 @@ mod tests {
 
     use async_trait::async_trait;
     use firma_core::{Connector, ConnectorError, ConnectorResponse, TransportView};
+    use firma_http::HeaderMap;
 
     use super::*;
 
@@ -99,7 +100,7 @@ mod tests {
         ) -> Result<ConnectorResponse, ConnectorError> {
             Ok(ConnectorResponse {
                 status: self.label,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: Vec::new(),
                 dispatch_latency: Duration::from_millis(0),
                 response_size: 0,
@@ -177,7 +178,7 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("https://api.example.com"),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),

@@ -11,7 +11,7 @@ use firma_core::{
     ConnectorResponse, DenyReason, ExecutionEnvelope, InjectedCredentials, ModificationSpec,
     RevocationStore, StepUpSpec, TokenError, TokenId, TokenVerifier, TransportView,
 };
-use firma_http::{HeaderName, Method};
+use firma_http::{Authority, HeaderMap, HeaderName, Method};
 use firma_sidecar::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode};
 use firma_sidecar::config::{
     HttpsMitmConfig, MappingRuleConfig, MappingRulesFile, SidecarMode, TenancyMode,
@@ -180,7 +180,7 @@ impl Connector for CountingConnector {
         );
         Ok(ConnectorResponse {
             status: 201,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: b"ok".to_vec(),
             dispatch_latency: Duration::from_millis(2),
             response_size: 2,
@@ -225,7 +225,7 @@ impl Connector for MockTlsConnector {
         }
         Ok(ConnectorResponse {
             status: 200,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: b"ok".to_vec(),
             dispatch_latency: started.elapsed(),
             response_size: 2,
@@ -319,9 +319,9 @@ fn pipeline(
 fn request_and_actions() -> anyhow::Result<(RawRequest, Vec<ComposioAction>)> {
     let request = RawRequest {
         method: Method::POST,
-        host: "app.composio.dev".to_string(),
+        host: Authority::from_static("app.composio.dev"),
         path: "/tool_router/v3/trs_batch/mcp".to_string(),
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body: Some(
             serde_json::json!({
                 "jsonrpc": "2.0",
@@ -358,9 +358,9 @@ fn catalogs() -> anyhow::Result<Arc<ComposioCatalogs>> {
 fn direct_request(tool_slug: &str) -> RawRequest {
     RawRequest {
         method: Method::POST,
-        host: "backend.composio.dev".to_string(),
+        host: Authority::from_static("backend.composio.dev"),
         path: format!("/api/v3.1/tools/execute/{tool_slug}"),
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body: Some(
             serde_json::json!({
                 "version": "20251111_00",
@@ -656,17 +656,17 @@ async fn protected_composio_hosts_reject_protocol_upgrades() -> anyhow::Result<(
     );
 
     for host in [
-        "app.composio.dev:443",
-        "backend.composio.dev.",
-        "backend.composio.dev:8443",
+        Authority::from_static("app.composio.dev:443"),
+        Authority::from_static("backend.composio.dev."),
+        Authority::from_static("backend.composio.dev:8443"),
     ] {
         let authorization = handler
             .authorize_upgrade(
                 RawRequest {
                     method: Method::POST,
-                    host: host.to_string(),
+                    host,
                     path: "/upgrade".to_string(),
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: Some(b"{}".to_vec()),
                     is_https: true,
                 },
@@ -755,9 +755,9 @@ async fn monitor_observes_composio_protocol_upgrade() -> anyhow::Result<()> {
         .authorize_upgrade(
             RawRequest {
                 method: Method::POST,
-                host: "backend.composio.dev".to_string(),
+                host: Authority::from_static("backend.composio.dev"),
                 path: "/upgrade".to_string(),
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: Some(b"{}".to_vec()),
                 is_https: true,
             },
@@ -780,8 +780,8 @@ async fn monitor_observes_composio_protocol_upgrade() -> anyhow::Result<()> {
 async fn handler_dispatches_original_batch_once_and_audits_every_child() -> anyhow::Result<()> {
     let (mut request, _) = request_and_actions()?;
     request.headers.insert(
-        HeaderName::from_static("x-firma-internal"),
-        "must-not-leave".to_string(),
+        http::HeaderName::from_static("x-firma-internal"),
+        http::HeaderValue::from_static("must-not-leave"),
     );
     let connector = Arc::new(CountingConnector {
         dispatches: AtomicUsize::new(0),

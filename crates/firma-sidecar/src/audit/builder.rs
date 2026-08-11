@@ -200,7 +200,7 @@ mod tests {
         ActionParams, CapabilityClaims, DenyReason, ExecutionEnvelope, ExecutionIntent,
         ExecutionMetadata, HttpMethod, HttpParams,
     };
-    use firma_http::Method;
+    use firma_http::{Authority, HeaderMap, Method};
     use p256::ecdsa::VerifyingKey;
 
     use crate::audit::Decision;
@@ -243,7 +243,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
                 ),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),
@@ -275,7 +275,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
                 ),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),
@@ -295,9 +295,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
     ) -> AuditPayload {
         let request = crate::normalizer::RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };

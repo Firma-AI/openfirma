@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use firma_config_loader::{AgentProfile, CONFIG_FILE_NAME};
-use firma_http::Method;
+use firma_http::{Authority, Method};
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
 use firma_sidecar::normalizer::{MappingTable, MatchResult};
@@ -518,21 +518,21 @@ fn vscode_minimal_mapping_covers_github_sign_in_hosts() {
 
     let table = synthesized_mapping_table(&tmp.path().join("mapping-rules.toml"));
     for host in [
-        "github.com",
-        "api.github.com",
-        "vscode.dev",
-        "insiders.vscode.dev",
-        "default.exp-tas.com",
-        "acme.ghe.com",
-        "api.acme.ghe.com",
-        "accounts.google.com",
-        "ssl.gstatic.com",
-        "avatars.githubusercontent.com",
-        "appleid.apple.com",
-        "idmsa.apple.com",
-        "appleid.cdn-apple.com",
+        Authority::from_static("github.com"),
+        Authority::from_static("api.github.com"),
+        Authority::from_static("vscode.dev"),
+        Authority::from_static("insiders.vscode.dev"),
+        Authority::from_static("default.exp-tas.com"),
+        Authority::from_static("acme.ghe.com"),
+        Authority::from_static("api.acme.ghe.com"),
+        Authority::from_static("accounts.google.com"),
+        Authority::from_static("ssl.gstatic.com"),
+        Authority::from_static("avatars.githubusercontent.com"),
+        Authority::from_static("appleid.apple.com"),
+        Authority::from_static("idmsa.apple.com"),
+        Authority::from_static("appleid.cdn-apple.com"),
     ] {
-        match table.find_match(&Method::CONNECT, host, "/") {
+        match table.find_match(&Method::CONNECT, &host, "/") {
             MatchResult::Matched(rule) => {
                 assert_eq!(rule.action_class, "communication.external.send", "{host}");
             }

@@ -633,6 +633,7 @@ mod tests {
     use crate::enforcement::session::{ActionOutcome, Outcome, RuntimeSignals};
     use chrono::Utc;
     use firma_core::*;
+    use firma_http::HeaderMap;
     use std::collections::HashMap;
 
     struct AllowAllPolicy;
@@ -766,7 +767,7 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from(resource),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),

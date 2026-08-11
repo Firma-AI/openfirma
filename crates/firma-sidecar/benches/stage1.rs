@@ -10,7 +10,7 @@ use std::time::Duration;
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
-use firma_http::Method;
+use firma_http::{Authority, HeaderMap, Method};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use firma_sidecar::enforcement::capability_validation::CapabilityValidator;
@@ -68,9 +68,9 @@ fn bench_stage1_validate(c: &mut Criterion) {
     let normalizer = IntentNormalizer::new(mapping_table());
     let request = RawRequest {
         method: Method::POST,
-        host: "api.openai.com".to_string(),
+        host: Authority::from_static("api.openai.com"),
         path: "/v1/chat/completions".to_string(),
-        headers: std::collections::HashMap::new(),
+        headers: HeaderMap::new(),
         body: None,
         is_https: true,
     };
