@@ -102,7 +102,7 @@ hyper-util = { version = "0.1", default-features = false }
 insta = { version = "1", features = ["filters", "json", "redactions"] }
 jiff = "0.2"
 libc = "0.2"
-lru = "0.17"
+lru = "0.18.2"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
 mime = "0.3"
 nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
