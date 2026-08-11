@@ -10,8 +10,6 @@
 //! `STOP_GRACE`, then `SIGKILL`, and joins the tee thread.
 
 use std::io::{BufRead, Write};
-#[cfg(unix)]
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
@@ -138,209 +136,121 @@ impl SidecarSupervisor {
     #[cfg(unix)]
     #[expect(
         clippy::too_many_lines,
-        reason = "single linear spawn-then-scrape sequence reads more clearly inline than split"
+        reason = "linear guarded startup is easier to audit"
     )]
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
         use firma_runtime_state::ChildExt as _;
 
-        firma_fs::create_private_dir_all(&req.marker_dir).map_err(|error| {
-            RunError::Internal(format!("mkdir {}: {error}", req.marker_dir.display()))
-        })?;
-
-        let sock_path = req.marker_dir.join("sidecar.sock");
-        let use_http_proxy_interceptor = req.use_http_proxy_interceptor;
-        let max_attempts = if use_http_proxy_interceptor { 3 } else { 1 };
-        let cfg_path = req.marker_dir.join("sidecar.toml");
-        let log_path = req.marker_dir.join("sidecar.log");
-        let pid_path = req.marker_dir.join("sidecar.pid");
-        let metadata_path = req.marker_dir.join("metadata.toml");
-        #[cfg(unix)]
-        let audit_sock_path = firma_sidecar::run_audit::socket_path_in(&req.marker_dir);
-        #[cfg(not(unix))]
-        let audit_sock_path = req.marker_dir.join("run-audit.sock");
-
-        // Pre-clean any leftover socket file from a crashed run.
-        let _ = std::fs::remove_file(&sock_path);
-        let mut last_error: Option<RunError> = None;
-        let mut ready: Option<(Child, JoinHandle<()>, UserProcessId, ReadyCapture)> = None;
-        for attempt in 0..max_attempts {
-            let proxy_listen_addr = if use_http_proxy_interceptor {
-                Some(select_loopback_port())
-            } else {
-                None
-            };
-            crate::sidecar::config::synthesize(crate::sidecar::config::SynthesizeRequest {
+        let startup_timeout = req.startup_timeout;
+        let mut prepared =
+            crate::sidecar::prepare::prepare(crate::sidecar::prepare::PrepareRequest {
+                sandbox_id: req.sandbox_id,
                 agent_id: req.agent_id,
                 execution_profile: req.execution_profile,
                 session_id: req.session_id,
-                explicit_template: req.template_path,
+                marker_dir: req.marker_dir,
+                template_path: req.template_path,
                 env_template: req.env_template.clone(),
                 cwd_template: req.cwd_template.clone(),
-                socket_path: &sock_path,
-                listen_addr: proxy_listen_addr,
-                out_path: &cfg_path,
+                firma_exe: req.firma_exe,
                 authority_url: req.authority_url,
-                authority_ca_cert: req.authority_ca_cert.as_deref(),
-                authority_pub_key: req.authority_pub_key.as_deref(),
-                authority_credentials: req.authority_credentials.as_ref(),
-                capability_seed_path: req.capability_seed_path.as_deref(),
-                audit_fallback_path: req.audit_fallback_path.as_deref(),
+                authority_ca_cert: req.authority_ca_cert,
+                authority_pub_key: req.authority_pub_key,
+                authority_credentials: req.authority_credentials,
+                capability_seed_path: req.capability_seed_path,
+                use_http_proxy_interceptor: req.use_http_proxy_interceptor,
+                audit_fallback_path: req.audit_fallback_path,
                 monitor_mode: req.monitor_mode,
             })?;
-
-            let mut cmd = std::process::Command::new(&req.firma_exe);
-            cmd.args(["sidecar", "--config"])
-                .arg(&cfg_path)
-                .env_remove("FIRMA_LOG_FILE")
-                // Avoid cross-run collisions when multiple autostarted sidecars
-                // run concurrently on the same host.
-                .env("FIRMA_SIDECAR_HEALTH_BIND_ADDR", "127.0.0.1:0")
-                // Per-run identity stamped on every audit ExecutionEvent
-                // (FIR-185). Matches the marker directory name.
-                .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id.to_string())
-                // Control socket for the `firma run` audit channel: out-of-band
-                // reports (e.g. loopback blocks) the Sidecar turns into signed
-                // audit events. Derived via `socket_path_in` so the guard and
-                // the Sidecar agree on the filename.
-                .env("FIRMA_RUN_AUDIT_SOCK", &audit_sock_path)
-                .env("NO_COLOR", "1")
-                .env("CLICOLOR", "0");
-            // The CLI `--monitor` flag is an explicit opt-in. Forward it to
-            // the sidecar as the env-var opt-in that monitor mode now
-            // requires, so `firma run --monitor` keeps honoring observe-only
-            // mode while a stray `mode = "monitor"` in a hand-written config
-            // still downgrades to enforce at startup.
-            if req.monitor_mode {
-                cmd.env("FIRMA_ALLOW_MONITOR_MODE", "1");
-            }
-            let mut child = cmd
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|error| RunError::SidecarStartupFailed {
-                    reason: format!("spawn firma sidecar: {error}"),
-                    log_path: log_path.clone(),
-                })?;
-            let pid = child.process_id();
-
-            let stderr = child
+        let mut command = prepared.take_command()?;
+        let child = command
+            .spawn()
+            .map_err(|error| RunError::SidecarStartupFailed {
+                reason: format!("spawn firma sidecar: {error}"),
+                log_path: prepared.log_path.clone(),
+            })?;
+        let pid = child.process_id();
+        let mut startup = StartupOwner::new(child);
+        let stderr =
+            startup
+                .child_mut()
                 .stderr
                 .take()
                 .ok_or_else(|| RunError::SidecarStartupFailed {
                     reason: "stderr pipe missing".into(),
-                    log_path: log_path.clone(),
+                    log_path: prepared.log_path.clone(),
                 })?;
-
-            let log_file = std::fs::File::create(&log_path).map_err(|error| {
-                RunError::SidecarStartupFailed {
-                    reason: format!("create log {}: {error}", log_path.display()),
-                    log_path: log_path.clone(),
-                }
+        let log_file = std::fs::File::create(&prepared.log_path).map_err(|error| {
+            RunError::SidecarStartupFailed {
+                reason: format!("create log {}: {error}", prepared.log_path.display()),
+                log_path: prepared.log_path.clone(),
+            }
+        })?;
+        let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
+        let mirror_child_logs = child_log_mirroring_enabled();
+        let tee_handle = std::thread::Builder::new()
+            .name("firma-sidecar-tee".into())
+            .spawn(move || {
+                run_scraper_with_mirror(
+                    std::io::BufReader::new(stderr),
+                    log_file,
+                    std::io::stderr(),
+                    mirror_child_logs,
+                    tx,
+                );
+            })
+            .map_err(|error| RunError::SidecarStartupFailed {
+                reason: format!("spawn scraper thread: {error}"),
+                log_path: prepared.log_path.clone(),
             })?;
-
-            let reader = std::io::BufReader::new(stderr);
-            let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-            let mirror_child_logs = child_log_mirroring_enabled();
-            let tee_handle = std::thread::Builder::new()
-                .name("firma-sidecar-tee".into())
-                .spawn(move || {
-                    run_scraper_with_mirror(
-                        reader,
-                        log_file,
-                        std::io::stderr(),
-                        mirror_child_logs,
-                        tx,
-                    );
-                })
-                .map_err(|error| RunError::SidecarStartupFailed {
-                    reason: format!("spawn scraper thread: {error}"),
-                    log_path: log_path.clone(),
-                })?;
-
-            match rx.recv_timeout(req.startup_timeout) {
-                Ok(ScrapeResult::Ready(capture)) => {
-                    ready = Some((child, tee_handle, pid, capture));
-                    break;
-                }
-                Ok(ScrapeResult::Eof) => {
-                    let _ = child.wait();
-                    let _ = tee_handle.join();
-                    last_error = Some(RunError::SidecarStartupFailed {
-                        reason: "sidecar stderr closed before 'ready'".into(),
-                        log_path: log_path.clone(),
-                    });
-                }
-                Ok(ScrapeResult::Error(reason)) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = tee_handle.join();
-                    last_error = Some(RunError::SidecarStartupFailed {
-                        reason,
-                        log_path: log_path.clone(),
-                    });
-                }
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = tee_handle.join();
-                    last_error = Some(RunError::SidecarReadyTimeout {
-                        timeout_secs: req.startup_timeout.as_secs(),
-                        log_path: log_path.clone(),
-                    });
-                }
+        startup.tee_handle = Some(tee_handle);
+        let capture = match rx.recv_timeout(startup_timeout) {
+            Ok(ScrapeResult::Ready(capture)) => capture,
+            Ok(ScrapeResult::Eof) => {
+                return Err(RunError::SidecarStartupFailed {
+                    reason: "sidecar stderr closed before 'ready'".into(),
+                    log_path: prepared.log_path.clone(),
+                });
             }
-            if attempt + 1 < max_attempts {
-                std::thread::sleep(Duration::from_millis(120));
+            Ok(ScrapeResult::Error(reason)) => {
+                return Err(RunError::SidecarStartupFailed {
+                    reason,
+                    log_path: prepared.log_path.clone(),
+                });
             }
-        }
-        let Some((child, tee_handle, pid, capture)) = ready else {
-            return Err(
-                last_error.unwrap_or_else(|| RunError::SidecarStartupFailed {
-                    reason: "sidecar autostart failed".into(),
-                    log_path: log_path.clone(),
-                }),
-            );
+            Err(_) => {
+                return Err(RunError::SidecarReadyTimeout {
+                    timeout_secs: startup_timeout.as_secs(),
+                    log_path: prepared.log_path.clone(),
+                });
+            }
         };
-        firma_runtime_state::pidfile::write(&pid_path, pid)
-            .map_err(|error| RunError::Internal(format!("write sidecar.pid: {error}")))?;
-        crate::sidecar::metadata::write(
-            &metadata_path,
-            &crate::sidecar::metadata::Metadata {
-                sandbox_id: *req.sandbox_id,
-                agent_id: req.agent_id.to_string(),
-                session_id: req.session_id.to_string(),
-                authority_url: capture.authority_url,
-                policy_bundle_version: capture.policy_bundle_version,
-                pid,
-                started_at: chrono::Utc::now().to_rfc3339(),
-                // Persist the real interceptor endpoint so `firma sidecar
-                // status` probes the correct transport (FIR-195): a TCP port
-                // for `http_proxy`, the UDS path otherwise.
-                listen: capture.interceptor_addr.clone(),
-            },
+        let endpoint =
+            validate_captured_endpoint(&prepared.expected_endpoint, &capture.interceptor_addr)
+                .map_err(|reason| RunError::SidecarStartupFailed {
+                    reason,
+                    log_path: prepared.log_path.clone(),
+                })?;
+        crate::sidecar::prepare::publish_metadata(
+            &prepared,
+            &endpoint,
+            pid,
+            Some((&capture.authority_url, &capture.policy_bundle_version)),
         )?;
 
         info!(
-            sandbox_id = %req.sandbox_id,
+            sandbox_id = %prepared.sandbox_id,
             pid = %pid,
             endpoint = %capture.interceptor_addr,
             "sidecar started"
         );
-
-        let endpoint = capture.interceptor_addr.parse::<SocketAddr>().map_or_else(
-            |_| SidecarEndpoint::Unix {
-                path: sock_path.clone(),
-            },
-            |addr| SidecarEndpoint::Tcp { addr },
-        );
-
+        let (child, tee_handle) = startup.disarm();
         Ok(Self {
             endpoint,
-            marker_dir: req.marker_dir,
+            marker_dir: prepared.marker_dir,
             pid,
             child: Some(child),
-            tee_handle: Some(tee_handle),
+            tee_handle,
         })
     }
 
@@ -404,11 +314,73 @@ impl Drop for SidecarSupervisor {
 }
 
 #[cfg(unix)]
-fn select_loopback_port() -> SocketAddr {
-    // Ask kernel for an ephemeral loopback port. Sidecar startup now logs
-    // the actual bound address from the active listener, so run-side scraping
-    // can consume the real endpoint without fixed/random port guessing.
-    SocketAddr::from(([127, 0, 0, 1], 0))
+fn validate_captured_endpoint(
+    expected: &SidecarEndpoint,
+    captured: &str,
+) -> Result<SidecarEndpoint, String> {
+    match expected {
+        SidecarEndpoint::Tcp { addr: expected } => {
+            let actual = captured.parse::<std::net::SocketAddr>().map_err(|error| {
+                format!("invalid captured TCP interceptor endpoint '{captured}': {error}")
+            })?;
+            if actual.port() == 0 {
+                return Err("captured TCP interceptor endpoint has port 0 after bind".into());
+            }
+            if actual.ip() != expected.ip()
+                || (expected.port() != 0 && actual.port() != expected.port())
+            {
+                return Err(format!(
+                    "captured interceptor endpoint {actual} does not match expected {expected}"
+                ));
+            }
+            Ok(SidecarEndpoint::Tcp { addr: actual })
+        }
+        SidecarEndpoint::Unix { path } if captured == path.to_string_lossy() => {
+            Ok(SidecarEndpoint::Unix { path: path.clone() })
+        }
+        SidecarEndpoint::Unix { path } => Err(format!(
+            "captured interceptor endpoint '{captured}' does not match expected {}",
+            path.display()
+        )),
+    }
+}
+
+#[cfg(unix)]
+struct StartupOwner {
+    child: Option<Child>,
+    tee_handle: Option<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl StartupOwner {
+    fn new(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            tee_handle: None,
+        }
+    }
+    fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().unwrap_or_else(|| unreachable!())
+    }
+    fn disarm(mut self) -> (Child, Option<JoinHandle<()>>) {
+        (
+            self.child.take().unwrap_or_else(|| unreachable!()),
+            self.tee_handle.take(),
+        )
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StartupOwner {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(handle) = self.tee_handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// Substring matched on the third info line in the ready contract.
