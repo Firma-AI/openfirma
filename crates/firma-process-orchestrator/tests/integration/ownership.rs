@@ -466,6 +466,32 @@ fn explicit_detach_transfers_real_children_to_reaper() {
 }
 
 #[test]
+fn persistent_collector_does_not_starve_later_children() {
+    let long_lived_dir = tempfile::tempdir().expect("long-lived state dir");
+    let short_lived_dir = tempfile::tempdir().expect("short-lived state dir");
+    let (mut long_lived, long_lived_pids) = spawn_stack(long_lived_dir.path(), &["authority"]);
+    long_lived.detach().expect("detach long-lived stack");
+
+    let (short_lived, short_lived_pids) = spawn_stack(short_lived_dir.path(), &["authority"]);
+    drop(short_lived);
+
+    assert_all_absent(&short_lived_pids);
+    stop_components(
+        short_lived_dir.path(),
+        Duration::ZERO,
+        &topology(&["authority"]),
+    )
+    .expect("clean short-lived stack state");
+    stop_components(
+        long_lived_dir.path(),
+        Duration::ZERO,
+        &topology(&["authority"]),
+    )
+    .expect("stop long-lived stack");
+    assert_all_absent(&long_lived_pids);
+}
+
+#[test]
 fn dropping_owner_hard_terminates_children_and_retains_state() {
     let dir = tempfile::tempdir().expect("state dir");
     let (stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
