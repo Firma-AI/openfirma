@@ -1,9 +1,8 @@
 //! Standalone-startup log contract for the Mini Authority.
 //!
-//! Locks the four-line INFO sequence the Authority emits on every
-//! successful start. `firma run`'s `AuthoritySupervisor` scrapes these
-//! lines to determine readiness, so order, prefix, and field surface are
-//! stable.
+//! Locks the human-readable INFO sequence the Authority emits on every
+//! successful standalone start. `firma run` uses the machine-readable startup
+//! report for readiness; these lines remain a stable operator-facing contract.
 //!
 //! Lines, in order:
 //!

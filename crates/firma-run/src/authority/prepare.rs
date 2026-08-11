@@ -27,8 +27,6 @@ pub struct PreparedAuthorityLaunch {
     command: Option<Command>,
     pub expected_endpoint: SocketAddr,
     pub pub_key_path: PathBuf,
-    pub marker_dir: PathBuf,
-    pub log_path: PathBuf,
     pub pid_path: PathBuf,
     pub metadata_path: PathBuf,
     pub sandbox_id: crate::identity::SandboxId,
@@ -46,6 +44,28 @@ impl PreparedAuthorityLaunch {
     }
 }
 
+/// Publish the effective Authority process identity and endpoint after readiness.
+pub fn publish_metadata(
+    prepared: &PreparedAuthorityLaunch,
+    listen_addr: SocketAddr,
+    pid: firma_runtime_state::UserProcessId,
+) -> Result<(), RunError> {
+    firma_runtime_state::pidfile::write(&prepared.pid_path, pid)
+        .map_err(|error| RunError::Internal(format!("write authority.pid: {error}")))?;
+    crate::authority::metadata::write(
+        &prepared.metadata_path,
+        &crate::authority::metadata::Metadata {
+            sandbox_id: prepared.sandbox_id,
+            agent_id: prepared.agent_id,
+            session_id: prepared.session_id.clone(),
+            profile: prepared.profile_name.clone(),
+            listen_addr: listen_addr.to_string(),
+            pid,
+            started_at: chrono::Utc::now().to_rfc3339(),
+        },
+    )
+}
+
 /// Inputs needed to validate and materialize an Authority launch.
 pub struct PrepareRequest<'a> {
     pub sandbox_id: &'a crate::identity::SandboxId,
@@ -58,7 +78,7 @@ pub struct PrepareRequest<'a> {
 }
 
 /// Validate and materialize everything needed to launch a local Authority.
-pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunError> {
+pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunError> {
     firma_authority::cedar_for(req.profile_name).map_err(|_| {
         RunError::AuthorityUnknownProfile {
             name: req.profile_name.to_string(),
@@ -68,14 +88,13 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunEr
     firma_fs::create_private_dir_all(&req.marker_dir)
         .map_err(|error| RunError::Internal(error.to_string()))?;
     let authority_toml = req.marker_dir.join("authority.toml");
-    let log_path = req.marker_dir.join("authority.log");
     let pid_path = req.marker_dir.join("authority.pid");
     let metadata_path = req.marker_dir.join("metadata.toml");
 
     let authority_config = if let Some(ref user_config) = req.user_config_path {
         persisted_authority_config(user_config)?
     } else {
-        ephemeral_authority_config(&req, &log_path)?
+        ephemeral_authority_config(req)?
     };
     let pub_key_path = authority_config.key_file.with_extension("pub");
     let inner = toml::to_string_pretty(&authority_config).map_err(|error| {
@@ -104,8 +123,6 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunEr
         command: Some(command),
         expected_endpoint: LOOPBACK_EPHEMERAL,
         pub_key_path,
-        marker_dir: req.marker_dir,
-        log_path,
         pid_path,
         metadata_path,
         sandbox_id: *req.sandbox_id,
@@ -150,10 +167,7 @@ fn ensure_authority_key(key_path: &Path) -> Result<(), RunError> {
         })
 }
 
-fn ephemeral_authority_config(
-    req: &PrepareRequest<'_>,
-    log_path: &Path,
-) -> Result<AuthorityConfig, RunError> {
+fn ephemeral_authority_config(req: &PrepareRequest<'_>) -> Result<AuthorityConfig, RunError> {
     let policy_dir = req.marker_dir.join("policy_dir");
     let keys_dir = req.marker_dir.join("keys");
     let cedar_path = policy_dir.join(format!("{}.cedar", req.profile_name));
@@ -178,10 +192,10 @@ fn ephemeral_authority_config(
         RunError::Internal(format!("write {}: {error}", revocation_file.display()))
     })?;
     firma_authority::write_keypair(&key_path).map_err(|error| {
-        RunError::AuthorityStartupFailed {
-            reason: format!("generate authority key: {error}"),
-            log_path: log_path.to_path_buf(),
-        }
+        RunError::Internal(format!(
+            "generate authority key for {}: {error}",
+            key_path.display()
+        ))
     })?;
     Ok(AuthorityConfig {
         listen_addr: LOOPBACK_EPHEMERAL.to_string(),

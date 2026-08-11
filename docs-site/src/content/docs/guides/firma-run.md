@@ -204,8 +204,9 @@ Precedence:
 3. `[sidecar.authority].url` set — connect to that remote Authority.
 4. Nothing configured — `firma run` falls back to local autostart so
    zero-config works. The spawned Authority uses an ephemeral signing
-   key and a per-run loopback listen address; it is killed on
-   `firma run` exit. `--no-autostart` overrides this to fail with
+   key and a per-run loopback listen address. The process orchestrator owns
+   the local Authority and shuts it down with the rest of the run stack.
+   `--no-autostart` overrides this to fail with
    `MissingAuthority`.
 
 Flags:
@@ -239,6 +240,9 @@ If a local authority was already reachable before the run, you see an `INFO` ins
 ```
 
 On exit, the process orchestrator shuts down the autostarted component stack.
+Readiness comes from each child's startup report; `firma run` does not infer
+readiness by scraping human-readable Authority or Sidecar stderr. Their
+standalone log messages remain useful when either component is run directly.
 
 **Key fields:**
 

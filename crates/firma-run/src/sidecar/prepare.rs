@@ -33,7 +33,7 @@ pub struct PreparedSidecarLaunch {
     session_id: String,
     /// Version computed during preparation, not evidence of the running child.
     pub planned_policy_bundle_version: String,
-    /// Configured authority value, used when no runtime scrape is available.
+    /// Configured Authority URL published after the launch becomes ready.
     pub planned_authority_url: String,
 }
 
@@ -185,15 +185,7 @@ pub fn publish_metadata(
     prepared: &PreparedSidecarLaunch,
     endpoint: &SidecarEndpoint,
     pid: firma_runtime_state::UserProcessId,
-    runtime_metadata: Option<(&str, &str)>,
 ) -> Result<(), RunError> {
-    // Legacy supervision has runtime evidence from the readiness scrape and
-    // must publish it verbatim. Planned values support future lifecycle owners
-    // that do not consume stderr.
-    let (authority_url, policy_bundle_version) = runtime_metadata.unwrap_or((
-        &prepared.planned_authority_url,
-        &prepared.planned_policy_bundle_version,
-    ));
     firma_runtime_state::pidfile::write(&prepared.pid_path, pid)
         .map_err(|error| RunError::Internal(format!("write sidecar.pid: {error}")))?;
     crate::sidecar::metadata::write(
@@ -202,8 +194,8 @@ pub fn publish_metadata(
             sandbox_id: prepared.sandbox_id,
             agent_id: prepared.agent_id.to_string(),
             session_id: prepared.session_id.clone(),
-            authority_url: authority_url.to_string(),
-            policy_bundle_version: policy_bundle_version.to_string(),
+            authority_url: prepared.planned_authority_url.clone(),
+            policy_bundle_version: prepared.planned_policy_bundle_version.clone(),
             pid,
             started_at: chrono::Utc::now().to_rfc3339(),
             listen: endpoint_text(endpoint),
