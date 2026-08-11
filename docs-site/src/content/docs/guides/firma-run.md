@@ -222,14 +222,13 @@ Flags:
 
 ### Autostart startup notices
 
-`firma run` logs a structured `INFO` line to stderr for every autostart and reuse event so you can see exactly what was started, at what address, and under which run ID. With the default log filter (`info`), you will see lines like:
+`firma run` logs a structured `INFO` line to stderr when its local component
+stack is ready. The component handles identify each process and its validated
+endpoint. With the default log filter (`info`), you will see a line like:
 
 ```
-2026-05-27T10:00:01Z  INFO firma_run::authority::supervisor: authority started
-    sandbox_id="sbx_01j0000000e008000000000001" pid=84231 listen_addr="[::1]:54321"
-
-2026-05-27T10:00:02Z  INFO firma_run::sidecar::supervisor: sidecar started
-    sandbox_id="sbx_01j0000000e008000000000001" pid=84235 endpoint="127.0.0.1:18080"
+2026-05-27T10:00:02Z  INFO firma_process_orchestrator::start: stack ready
+    components=[ComponentHandle { name: "authority", ... }, ComponentHandle { name: "sidecar", ... }]
 ```
 
 If a local authority was already reachable before the run, you see an `INFO` instead:
@@ -239,12 +238,7 @@ If a local authority was already reachable before the run, you see an `INFO` ins
     sandbox_id="sbx_01j0000000e008000000000001" url="http://[::1]:50051"
 ```
 
-On exit, each autostarted component logs a stopping notice:
-
-```
-2026-05-27T10:00:10Z  INFO firma_run::sidecar::supervisor: sidecar stopped pid=84235
-2026-05-27T10:00:10Z  INFO firma_run::authority::supervisor: authority stopped pid=84231
-```
+On exit, the process orchestrator shuts down the autostarted component stack.
 
 **Key fields:**
 

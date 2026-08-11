@@ -1,7 +1,6 @@
 //! Best-effort removal of the per-session capability seed file on drop.
 //!
-//! Mirrors the kill-on-Drop discipline used by `SidecarSupervisor` (FIR-102):
-//! the seed lives at `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`
+//! The seed lives at `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`
 //! and must not outlive the run that minted it.
 
 use std::path::{Path, PathBuf};
@@ -29,7 +28,7 @@ impl CapabilityFileGuard {
 
 impl Drop for CapabilityFileGuard {
     fn drop(&mut self) {
-        // Honor the same keep-markers escape hatch as the sidecar supervisor.
+        // Honor the run marker keep-markers escape hatch.
         if std::env::var("FIRMA_RUN_KEEP_MARKERS").is_ok() {
             return;
         }
