@@ -483,8 +483,9 @@ When autostart fires, `firma run`:
 
 When the `firma run` process exits — by clean exit, `SIGINT`, or
 `SIGTERM` — the process orchestrator shuts down the component stack. The
-marker directory is removed on a best-effort basis (FIR-103's
-`firma sidecar status` also garbage-collects stale entries).
+marker directory is removed after shutdown is confirmed. If rollback cannot
+prove that every owned process stopped, Firma retains the markers and capability
+inputs for recovery. Set `FIRMA_RUN_KEEP_MARKERS` to retain them deliberately.
 
 ### Flags
 
@@ -503,6 +504,7 @@ marker directory is removed on a best-effort basis (FIR-103's
 | `SidecarLocalNoAutostart`   | `--sidecar local` combined with `--no-autostart`.                                                                                                   |
 | `MissingSidecar`            | `--sidecar` omitted, no persisted endpoint, and `--no-autostart` set.                                                                               |
 | `RunComponentOrchestration` | The orchestrator could not start the local component stack or receive startup publication within the configured budget.                             |
+| `RunMarkerCleanup`          | Component rollback succeeded, but Firma could not remove the run marker directory; the error retains both failures.                                 |
 | `UnsupportedPlatform`       | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar <url>` with a pre-started sidecar instead. |
 
 ### Operator caveats
@@ -533,18 +535,19 @@ launches the per-run Sidecar. Decision precedence:
    zero-config works. `--no-autostart` overrides this to fail with
    `MissingAuthority`.
 
-On `local` selection, `firma run` probes `[::1]:50051` first. If
-reachable, no autostart fires. Otherwise the per-run Mini Authority is
-spawned with an ephemeral signing key and the embedded `developer`
+On `local` selection, `firma run` probes the configured reuse endpoint,
+which defaults to `[::1]:50051`. If reachable, no autostart fires. Otherwise
+the per-run Mini Authority binds an ephemeral loopback port communicated via
+startup publication and its component handle. It uses an ephemeral signing key and the embedded `developer`
 policy profile materialised under
 `<runtime>/firma/run/<sandbox_id>/authority/`. The Authority is killed
-on `firma run` exit (`SIGTERM` then `SIGKILL` after a 5s grace).
+on `firma run` exit.
 
 ### Authority flags
 
 | Flag                         | Default     | Description                                                                                                                                      |
 | ---------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--authority <local\|url>`   | unset       | Override config. `local` autostarts on `[::1]:50051`; any other value is treated as a remote Authority URL.                                      |
+| `--authority <local\|url>`   | unset       | Override config. `local` probes the configured/default `[::1]:50051` reuse endpoint, then autostarts on an ephemeral loopback port if needed.    |
 | `--authority-profile <name>` | `developer` | Profile materialised by the autostarted Mini Authority. Currently only `developer` ships. Ignored when Authority is remote or already reachable. |
 
 `--no-autostart` suppresses Authority autostart. With
