@@ -106,7 +106,7 @@ pub use component::{
     ChildPublishedContext, ChildPublishedReadiness, ComponentEndpoint, ComponentName,
     ComponentPlanContext, ComponentSpec, Readiness,
 };
-pub use error::{OrchestratorError, StartError};
+pub use error::{OrchestratorError, ShutdownError, StartError};
 pub use start::{
     RunningStack, StackHandle, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
     supervise_owned_generation_from_plan,

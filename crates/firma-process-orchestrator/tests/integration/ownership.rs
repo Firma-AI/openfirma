@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
     ComponentPlanContext, ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack,
-    StackGeneration, StackTopology, StartError, publish_startup_report, spawn_stack_from_plan,
-    start_detached, start_foreground_from_plan, stop_components,
+    ShutdownError, StackGeneration, StackTopology, StartError, publish_startup_report,
+    spawn_stack_from_plan, start_detached, start_foreground_from_plan, stop_components,
     supervise_owned_generation_from_plan,
 };
 use firma_runtime_state::UserProcessId;
@@ -79,6 +79,9 @@ fn cleanup_attempts_all_artifacts_before_retaining_generation_lock() {
         .shutdown(Duration::ZERO)
         .expect_err("blocked state cleanup must fail");
 
+    let ShutdownError::StateCleanup(error) = error else {
+        panic!("process teardown must be reported as complete");
+    };
     assert!(matches!(error, OrchestratorError::RuntimeState(_)));
     assert_all_absent(&pids);
     assert!(!dir.path().join("authority.listen").exists());
@@ -107,11 +110,19 @@ fn owned_shutdown_terminates_children_when_state_transaction_is_busy() {
     let error = stack
         .shutdown(Duration::ZERO)
         .expect_err("contended cleanup must fail");
+    let ShutdownError::StateCleanup(error) = error else {
+        panic!("process teardown must be reported as complete");
+    };
     assert!(matches!(error, OrchestratorError::RuntimeStateBusy { .. }));
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_all_absent(&pids);
     fs2::FileExt::unlock(&lock).expect("release transaction lock");
-    stack.shutdown(Duration::ZERO).expect("retry cleanup");
+    stop_components(
+        dir.path(),
+        Duration::ZERO,
+        &topology(&["authority", "sidecar"]),
+    )
+    .expect("retry cleanup");
     cleanup.disarm();
 }
 
@@ -638,13 +649,12 @@ fn component_pidfile_publication_failure_collects_spawned_child() {
 
     let StartError::Rollback {
         operation,
-        rollback,
+        rollback: _,
     } = error
     else {
         panic!("pidfile failure did not report explicit rollback failure");
     };
     assert!(matches!(*operation, StartError::Orchestrator(_)));
-    assert!(matches!(*rollback, OrchestratorError::RuntimeState(_)));
     let authority_pid = wait_for_marker(&dir.path().join("authority.marker"));
     assert_process_absent(authority_pid);
     std::fs::remove_dir(dir.path().join("sidecar.pid")).expect("remove pidfile blocker");

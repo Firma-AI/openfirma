@@ -13,6 +13,8 @@ mod forced_termination;
 mod ownership;
 mod startup_contract;
 mod status_state_machine;
+#[cfg(unix)]
+mod stop_dependency_order;
 mod stop_forced_grandchildren;
 mod stop_grandchildren;
 #[cfg(unix)]

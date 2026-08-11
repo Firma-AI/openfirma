@@ -22,7 +22,7 @@ use tracing::{debug, info};
 
 use crate::StackTopology;
 use crate::component::OwnedComponent;
-use crate::error::OrchestratorError;
+use crate::error::{OrchestratorError, ShutdownError};
 use crate::platform::TerminationTarget;
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use firma_runtime_state::pidfile;
@@ -111,14 +111,14 @@ struct StopTargets<'a> {
 }
 
 impl<'a> StopTargets<'a> {
-    /// Yield targets in the single uniform teardown order used by every phase.
+    /// Yield targets in the single teardown order used by the state machine.
     ///
     /// The order is the reverse of startup: components in reverse of their
     /// startup order, then the supervisor last. Dependents are torn down before
     /// their dependencies (the sidecar client drains before the authority
     /// server it talks to), and the supervisor that manages the components is
-    /// stopped last. The same iterator drives the soft-signal loop, the
-    /// hard-kill loop, and both target-absence checks so no phase can diverge.
+    /// stopped last. Each yielded target must settle before the iterator
+    /// advances, so no dependency is signalled while its dependent may remain.
     fn teardown_order(&self) -> impl Iterator<Item = &'a TerminationTarget> {
         self.components.iter().rev().copied().chain(self.supervisor)
     }
@@ -228,6 +228,7 @@ fn stop_expected_generation(
         cleanup_lock,
         || Ok(()),
     )
+    .map_err(ShutdownError::into_orchestrator_error)
 }
 
 /// Run [`stop_inner`] while retaining direct-child collection authority.
@@ -246,7 +247,7 @@ pub(crate) fn stop_owned(
     topology: &StackTopology,
     components: &mut [OwnedComponent],
     state_lease: StateLease,
-) -> Result<StopOutcome, OrchestratorError> {
+) -> Result<StopOutcome, ShutdownError> {
     let (mut children, targets): (Vec<&mut std::process::Child>, Vec<&TerminationTarget>) =
         components
             .iter_mut()
@@ -273,13 +274,14 @@ pub(crate) fn stop_owned(
 
 /// Apply the common graceful-to-forced teardown state machine.
 ///
-/// Components receive [`TerminationTarget::signal_soft`] in reverse startup
-/// order so dependents can close before their dependencies. Soft signalling
-/// failure does not prevent a later forced request. Probe or child
-/// collection errors retain the first failure while teardown continues
-/// conservatively. A forced request is a normal timeout outcome, but [`cleanup`]
-/// remains forbidden until [`targets_absent`] proves every recorded target gone
-/// within [`HARD_TERMINATION_SETTLEMENT`].
+/// Components are settled one at a time in reverse startup order, so a
+/// dependency receives no signal until its dependent is proven absent. One
+/// graceful deadline and one hard-settlement deadline are shared by the whole
+/// stack. Soft signalling failure does not prevent a later forced request.
+/// Probe or child collection errors retain the first failure while teardown
+/// continues only where ordering remains safe. A forced request is a normal
+/// timeout outcome, but [`cleanup`] remains forbidden until every target is
+/// proven absent.
 fn stop_inner(
     state_dir: &Path,
     timeout: Duration,
@@ -288,7 +290,7 @@ fn stop_inner(
     state_lease: Option<StateLease>,
     cleanup_lock: CleanupLock<'_>,
     mut collect_owned: impl FnMut() -> Result<(), OrchestratorError>,
-) -> Result<StopOutcome, OrchestratorError> {
+) -> Result<StopOutcome, ShutdownError> {
     info!(state_dir = %state_dir.display(), timeout_secs = timeout.as_secs(), "stopping stack");
     debug!(
         supervisor_target = ?targets.supervisor,
@@ -296,76 +298,85 @@ fn stop_inner(
         "loaded termination targets"
     );
 
-    // Signal everything we know about in the uniform teardown order (reverse of
-    // startup, supervisor last; see `StopTargets::teardown_order`).
     let mut teardown_error = FirstError::default();
-    if let Err(error) = collect_owned() {
-        teardown_error.record(error);
-    }
-    for target in targets.teardown_order() {
-        if target_may_exist(target, &mut teardown_error) {
-            debug!(id = %target.stored_id(), "sending soft signal");
-            if let Err(e) = target.signal_soft() {
-                // Not fatal: hard-kill will still run after the grace window.
-                // Common when a child crashed before installing its shutdown
-                // listener; log so the failure isn't silent.
-                debug!(id = %target.stored_id(), error = %e, "soft signal failed");
-            }
-        }
-    }
-
-    // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
-    while !teardown_error.is_set() && Instant::now() < deadline {
-        if let Err(error) = collect_owned() {
-            teardown_error.record(error);
-            break;
-        }
-        if targets_absent(targets.teardown_order(), &mut teardown_error) {
-            info!("all component targets exited cleanly");
-            cleanup(state_dir, topology, state_lease, cleanup_lock)?;
-            return Ok(StopOutcome { forced: false });
-        }
-        std::thread::sleep(TARGET_POLL_INTERVAL);
-    }
-
-    // Hard-kill survivors. This is the expected path for components that
-    // hang in their own graceful-shutdown logic; not an error.
-    if let Err(error) = collect_owned() {
-        teardown_error.record(error);
-    }
+    let mut settlement_deadline = None;
     let mut forced = false;
     let mut hard_termination_error = FirstError::default();
+    let mut targets_disappeared = true;
+    let mut collection_uncertain = false;
+
     for target in targets.teardown_order() {
-        if target_may_exist(target, &mut teardown_error) {
-            info!(id = %target.stored_id(), "soft-signal grace exceeded; hard-killing");
-            match target.signal_hard() {
-                Ok(()) => forced = true,
-                Err(error) => {
-                    if let Err(collect_error) = collect_owned() {
-                        teardown_error.record(collect_error);
-                    }
-                    if !matches!(target.exists(), Ok(false)) {
-                        info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
-                        hard_termination_error.record(error);
-                    }
+        if let Err(error) = collect_owned() {
+            teardown_error.record(error);
+            collection_uncertain = true;
+        }
+        if !target_may_exist(target, &mut teardown_error) {
+            if collection_uncertain {
+                targets_disappeared = false;
+                break;
+            }
+            continue;
+        }
+
+        debug!(id = %target.stored_id(), "sending soft signal");
+        if let Err(error) = target.signal_soft() {
+            debug!(id = %target.stored_id(), %error, "soft signal failed");
+        }
+        while !teardown_error.is_set() && Instant::now() < deadline {
+            if let Err(error) = collect_owned() {
+                teardown_error.record(error);
+                collection_uncertain = true;
+                break;
+            }
+            if !target_may_exist(target, &mut teardown_error) {
+                break;
+            }
+            sleep_until(deadline);
+        }
+        if !target_may_exist(target, &mut teardown_error) {
+            if collection_uncertain {
+                targets_disappeared = false;
+                break;
+            }
+            continue;
+        }
+
+        info!(id = %target.stored_id(), "soft-signal grace exceeded; hard-killing");
+        match target.signal_hard() {
+            Ok(()) => forced = true,
+            Err(error) => {
+                if !matches!(target.exists(), Ok(false)) {
+                    info!(id = %target.stored_id(), %error, "hard termination failed; retaining runtime state");
+                    hard_termination_error.record(error);
                 }
             }
         }
+        let hard_deadline = *settlement_deadline
+            .get_or_insert_with(|| Instant::now() + HARD_TERMINATION_SETTLEMENT);
+        loop {
+            if let Err(error) = collect_owned() {
+                teardown_error.record(error);
+                collection_uncertain = true;
+            }
+            if !target_may_exist(target, &mut teardown_error) {
+                if collection_uncertain {
+                    targets_disappeared = false;
+                }
+                break;
+            }
+            if Instant::now() >= hard_deadline {
+                targets_disappeared = false;
+                break;
+            }
+            sleep_until(hard_deadline);
+        }
+        if !targets_disappeared {
+            // Advancing would risk signalling a dependency while this target
+            // remains live or uncertain. Retain state and stop here.
+            break;
+        }
     }
-    let settlement_deadline = Instant::now() + HARD_TERMINATION_SETTLEMENT;
-    let targets_disappeared = loop {
-        if let Err(error) = collect_owned() {
-            teardown_error.record(error);
-        }
-        if targets_absent(targets.teardown_order(), &mut teardown_error) {
-            break true;
-        }
-        if Instant::now() >= settlement_deadline {
-            break false;
-        }
-        std::thread::sleep(TARGET_POLL_INTERVAL);
-    };
     let final_error = resolve(
         teardown_error.into_inner(),
         hard_termination_error.into_inner(),
@@ -376,25 +387,18 @@ fn stop_inner(
     );
     if let Some(error) = final_error {
         info!(%error, "teardown incomplete; retaining runtime state");
-        return Err(error);
+        return Err(ShutdownError::TeardownUncertain(error));
     }
-    cleanup(state_dir, topology, state_lease, cleanup_lock)?;
+    cleanup(state_dir, topology, state_lease, cleanup_lock).map_err(ShutdownError::StateCleanup)?;
     info!(forced, "stop complete");
     Ok(StopOutcome { forced })
 }
 
-/// Prove that every recorded target is absent under [`target_may_exist`] policy.
-fn targets_absent<'a>(
-    targets: impl Iterator<Item = &'a TerminationTarget>,
-    teardown_error: &mut FirstError,
-) -> bool {
-    let mut all_absent = true;
-    for target in targets {
-        if target_may_exist(target, teardown_error) {
-            all_absent = false;
-        }
-    }
-    all_absent
+/// Sleep for at most one polling interval without overshooting a shared deadline.
+fn sleep_until(deadline: Instant) {
+    std::thread::sleep(
+        TARGET_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+    );
 }
 
 /// Conservatively classify target presence for teardown decisions.

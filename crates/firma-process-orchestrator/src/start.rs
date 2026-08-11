@@ -43,7 +43,7 @@ use crate::component::{
     Readiness, ReadyComponent,
 };
 use crate::detach::spawn_supervisor;
-use crate::error::{OrchestratorError, StartError};
+use crate::error::{OrchestratorError, ShutdownError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
 use crate::readiness::{wait_for_child_published, wait_for_endpoint};
 use crate::spawn::{SpawnRequest, spawn_component};
@@ -640,8 +640,10 @@ impl RunningStack {
     ///
     /// # Errors
     ///
-    /// Returns process-probe, termination, or runtime-state cleanup errors.
-    pub fn shutdown(&mut self, timeout: Duration) -> Result<StopOutcome, OrchestratorError> {
+    /// Returns [`ShutdownError::TeardownUncertain`] when process absence cannot
+    /// be proven, or [`ShutdownError::StateCleanup`] when only durable state
+    /// cleanup fails after every process is confirmed absent.
+    pub fn shutdown(&mut self, timeout: Duration) -> Result<StopOutcome, ShutdownError> {
         let RunningStackState::Owned(owned) = &mut self.state else {
             return Ok(StopOutcome { forced: false });
         };
@@ -657,7 +659,7 @@ impl RunningStack {
             &mut owned.components,
             state_lease,
         );
-        if result.is_ok() {
+        if matches!(result.as_ref(), Ok(_) | Err(ShutdownError::StateCleanup(_))) {
             for component in owned.components.iter_mut().rev() {
                 let _ = component.wait();
             }
@@ -947,7 +949,9 @@ pub fn start_foreground_from_plan<E>(
         block_until_owned_exit_with(&stop_signal, &mut owned.components)
     };
     info!("foreground supervisor exiting; tearing down stack");
-    let teardown_result = stack.shutdown(timeouts.graceful_teardown);
+    let teardown_result = stack
+        .shutdown(timeouts.graceful_teardown)
+        .map_err(ShutdownError::into_orchestrator_error);
     if let Err(error) = supervision_result {
         return Err(StartError::Orchestrator(with_rollback(
             error,
@@ -1183,7 +1187,9 @@ fn supervise_running_stack_with_signal(
     })();
     if let Err(error) = attachment_result {
         let _ = stack.mark_ready();
-        let rollback = stack.shutdown(timeouts.graceful_teardown);
+        let rollback = stack
+            .shutdown(timeouts.graceful_teardown)
+            .map_err(ShutdownError::into_orchestrator_error);
         return Err(with_rollback(error, rollback));
     }
 
@@ -1193,7 +1199,9 @@ fn supervise_running_stack_with_signal(
         block_until_owned_exit_with(stop_signal, &mut owned.components)
     };
     info!("detached supervisor tearing down owned components");
-    let teardown_result = stack.shutdown(timeouts.graceful_teardown);
+    let teardown_result = stack
+        .shutdown(timeouts.graceful_teardown)
+        .map_err(ShutdownError::into_orchestrator_error);
     if let Err(error) = supervision_result {
         return Err(with_rollback(error, teardown_result));
     }
