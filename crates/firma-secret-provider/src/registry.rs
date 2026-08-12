@@ -32,7 +32,7 @@
 //! shape may emit secret material this registry has no way to extract or
 //! redact. See the comments on each built-in's individual rules below for
 //! the specific retrieval paths explicitly blocked or implicitly closed off
-//! for that tool, and for the remaining gaps that `args_match` alone can't
+//! for that tool, and for the remaining gaps that command matching alone can't
 //! close (a subcommand whose *shape* is recognized but whose output doesn't
 //! fit the matcher, e.g. `vault kv get` against a KV v1 mount).
 
@@ -44,7 +44,7 @@ use crate::{
     non_empty::vec::non_empty_vec,
     spec::{
         MatcherRule,
-        cli::{ArgsAndMatcher, ArgsOnly, CliIntegrationSpec, FlagValue, StripFlag},
+        cli::{CliIntegrationSpec, CommandAndMatcher, CommandPattern, FlagSpec},
     },
 };
 
@@ -91,18 +91,19 @@ fn bws_spec() -> CliIntegrationSpec {
         binary_name: String::from("bws"),
         provider_id: String::from("bitwarden"),
         credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
+        skip_flags: vec![],
         // `--server-url` (short `-u`) redirects the CLI at an arbitrary
         // server, which would send `BWS_ACCESS_TOKEN` to a host of the
-        // agent's choosing on the very next request — stripped
+        // agent's choosing on the very next request — rejected
         // unconditionally regardless of which rule below matches. `bws` is
         // a clap-based CLI, so its short `-u` alias accepts a value
         // concatenated directly onto it with no separator (e.g.
         // `-uhttps://attacker.example`); a bare-string entry only catches
         // `-u https://...`/`-u=https://...`, so this needs the explicit
-        // `Concatenated` shape to close that gap too.
+        // attached-value form to close that gap too.
         //
         // `--config-file` (short `-f`) is a second, independent way to reach
-        // the same outcome even with `--server-url`/`-u` stripped: per
+        // the same outcome even with `--server-url`/`-u` forbidden: per
         // `bws`'s own docs, `bws config server-base <url> --config-file
         // <path>` persists a server URL into that file, and any later
         // invocation naming the same `--config-file` uses it as the default
@@ -110,26 +111,29 @@ fn bws_spec() -> CliIntegrationSpec {
         // filesystem access (the very thing this sidecar is meant to
         // mediate) can write such a file itself, with no `bws` invocation of
         // its own required, then pass `--config-file`/`-f` to an
-        // otherwise-permitted command — so this must be stripped too,
+        // otherwise-permitted command — so this must be forbidden too,
         // clap-concatenated short form included.
-        strip_arg_flags: vec![
-            StripFlag::shaped("--server-url", Some("-u"), FlagValue::Concatenated),
-            StripFlag::shaped("--config-file", Some("-f"), FlagValue::Concatenated),
+        forbidden_flags: vec![
+            FlagSpec::attached_value(&["--server-url", "-u"], &["-u"]),
+            FlagSpec::attached_value(&["--config-file", "-f"], &["-f"]),
+            FlagSpec::attached_value(&["--profile", "-p"], &["-p"]),
         ],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("run")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "run"
+            )])),
             // `secret create`/`edit` echo the secret value back, but there's
             // no matcher shape for it here.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secret"), String::from("create")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secret"), String::from("edit")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secret"),
+                String::from("create")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secret"),
+                String::from("edit")
+            ])),
             // `secret delete`/`project create`/`project edit`/`project
             // delete` are writes with no secret-value output, but are
             // blocked explicitly rather than left to the implicit
@@ -137,24 +141,31 @@ fn bws_spec() -> CliIntegrationSpec {
             // this registry has no matcher for, and an explicit rule
             // documents that deliberately rather than leaving it
             // indistinguishable from a genuinely unrecognized invocation.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secret"), String::from("delete")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("project"), String::from("create")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("project"), String::from("edit")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("project"), String::from("delete")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secret"),
+                String::from("delete")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("project"),
+                String::from("create")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("project"),
+                String::from("edit")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("project"),
+                String::from("delete")
+            ])),
             // `bws secret list` returns a JSON array of secret records;
             // `bws secret get <id>` returns a single record, unwrapped. Same
             // binary, same flat record shape, but the matcher's record_path
             // depends on which subcommand was invoked.
-            MatcherRule::SensitiveCommand(ArgsAndMatcher {
-                args_match: vec![String::from("secret"), String::from("list")],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: CommandPattern::prefix(non_empty_vec![
+                    String::from("secret"),
+                    String::from("list")
+                ]),
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$[*]"),
                     value_path: String::from("$.value"),
@@ -171,15 +182,14 @@ fn bws_spec() -> CliIntegrationSpec {
                 // (e.g. `-otsv`); `Concatenated` closes that gap here too, so
                 // an unstripped `-otsv` can't survive alongside the forced
                 // `--output json` and skew or defeat it.
-                strip_arg_flags: vec![StripFlag::shaped(
-                    "--output",
-                    Some("-o"),
-                    FlagValue::Concatenated,
-                )],
-                forced_args: vec![String::from("--output"), String::from("json")],
+                remove_flags: vec![FlagSpec::attached_value(&["--output", "-o"], &["-o"])],
+                append_args: vec![String::from("--output"), String::from("json")],
             }),
-            MatcherRule::SensitiveCommand(ArgsAndMatcher {
-                args_match: vec![String::from("secret"), String::from("get")],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: CommandPattern::prefix(non_empty_vec![
+                    String::from("secret"),
+                    String::from("get")
+                ]),
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$"),
                     value_path: String::from("$.value"),
@@ -189,22 +199,20 @@ fn bws_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                strip_arg_flags: vec![StripFlag::shaped(
-                    "--output",
-                    Some("-o"),
-                    FlagValue::Concatenated,
-                )],
-                forced_args: vec![String::from("--output"), String::from("json")],
+                remove_flags: vec![FlagSpec::attached_value(&["--output", "-o"], &["-o"])],
+                append_args: vec![String::from("--output"), String::from("json")],
             }),
             // `project list`/`project get` return only project
             // id/name/organizationId — no secret material — so they pass
             // through unredacted rather than needing a matcher.
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("project"), String::from("list")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("project"), String::from("get")],
-            }),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("project"),
+                String::from("list")
+            ])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("project"),
+                String::from("get")
+            ])),
         ],
     }
 }
@@ -214,6 +222,7 @@ fn op_spec() -> CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
         credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
+        skip_flags: vec![],
         // `op` has no documented flag that sets an API host directly — a
         // service-account token is generally understood to be self-routing
         // (it authenticates against 1Password's own cloud API regardless of
@@ -224,24 +233,24 @@ fn op_spec() -> CliIntegrationSpec {
         // service-account auth. Given that uncertainty, `--config` is
         // stripped defensively rather than assumed safe — same fail-closed
         // bias as the rest of this registry.
-        strip_arg_flags: vec![StripFlag::from("--config")],
+        forbidden_flags: vec![FlagSpec::from("--config")],
         matchers: vec![
             // Prints the raw secret as plain text, not JSON.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("read")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("inject")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "read"
+            )])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "inject"
+            )])),
             // `document get <id>` prints a document's raw file bytes to
             // stdout (or writes them to disk via `-o/--out-file`) with no
             // JSON structure either; `document create` uploads a new
             // document. Both are explicitly blocked rather than left to the
             // implicit fail-closed default, since they are real, documented
             // retrieval (or write) paths.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("document")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "document"
+            )])),
             // `op item get <item> --format json` returns a single item
             // object. Field types 1Password documents as non-secret
             // metadata (ADDRESS, CREDIT_CARD_TYPE, DATE, EMAIL, GENDER,
@@ -254,7 +263,7 @@ fn op_spec() -> CliIntegrationSpec {
             // through the exclusion and is treated as a secret and
             // redacted, even if it turns out not to need it.
             //
-            // Remaining gap `args_match` can't close: `op item get <id>
+            // Remaining gap command matching can't close: `op item get <id>
             // --fields ...` (and `--otp`, `--share-link`) still match the
             // `item get` prefix and reach this matcher, but change the
             // output shape away from the full item object `record_path`
@@ -262,8 +271,11 @@ fn op_spec() -> CliIntegrationSpec {
             // `{"fields": [...]}`. Same category as vault's KV v1 gap: it
             // surfaces a `MatcherError` at extraction time rather than
             // being pre-blocked or leaking unredacted.
-            MatcherRule::SensitiveCommand(ArgsAndMatcher {
-                args_match: vec![String::from("item"), String::from("get")],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: CommandPattern::prefix(non_empty_vec![
+                    String::from("item"),
+                    String::from("get")
+                ]),
                 matcher: SecretMatcher::Json {
                     record_path: String::from(concat!(
                         "$.fields[?(",
@@ -298,25 +310,28 @@ fn op_spec() -> CliIntegrationSpec {
                         scope: SecretJsonSelectorScope::Document,
                     }),
                 },
-                strip_arg_flags: vec![StripFlag::from("--format")],
-                forced_args: vec![String::from("--format"), String::from("json")],
+                remove_flags: vec![FlagSpec::from("--format")],
+                append_args: vec![String::from("--format"), String::from("json")],
             }),
             // `whoami`/`account list`/`vault list`/`item list` return
             // account, vault, or item metadata (ids, titles, categories)
             // with no field values, so they pass through unredacted rather
             // than needing a matcher.
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("whoami")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("account"), String::from("list")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("vault"), String::from("list")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("item"), String::from("list")],
-            }),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "whoami"
+            )])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("account"),
+                String::from("list")
+            ])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("vault"),
+                String::from("list")
+            ])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("item"),
+                String::from("list")
+            ])),
         ],
     }
 }
@@ -330,6 +345,10 @@ fn vault_spec() -> CliIntegrationSpec {
             String::from("VAULT_ADDR"),
             String::from("VAULT_NAMESPACE"),
         ],
+        // Namespace selects a logical tenant on the same Vault server. It is
+        // retained for execution, but its value must not be mistaken for a
+        // command word when it appears before or between subcommands.
+        skip_flags: vec![FlagSpec::value(&["-namespace", "--namespace"])],
         // `-address`/`--address` (Vault's Go flag parser accepts either
         // dash style for the same flag) redirect the CLI at an arbitrary
         // server, which would send `VAULT_TOKEN` there on the next request.
@@ -341,46 +360,27 @@ fn vault_spec() -> CliIntegrationSpec {
         // creds) — combined with `-address`, or with DNS/network-level
         // redirection the sidecar can't see from here, that's the same
         // token-exfiltration path. `-tls-server-name` overrides the SNI/cert
-        // hostname checked during that handshake and is stripped alongside
-        // them for the same reason. All are stripped unconditionally
+        // hostname checked during that handshake and is forbidden alongside
+        // them for the same reason. All reject the invocation unconditionally
         // regardless of which rule below matches. `-tls-skip-verify` takes
-        // no value at all (`FlagValue::None`): without that, the arity-blind
-        // default would treat the very next positional as its value and
-        // silently drop it too — e.g. `vault kv get -tls-skip-verify
-        // secret/foo` would lose `secret/foo` rather than merely stripping
-        // the flag.
-        strip_arg_flags: vec![
-            StripFlag::shaped("-address", Some("--address"), FlagValue::SeparateOrEquals),
-            StripFlag::shaped(
-                "-tls-skip-verify",
-                Some("--tls-skip-verify"),
-                FlagValue::None,
-            ),
-            StripFlag::shaped("-ca-cert", Some("--ca-cert"), FlagValue::SeparateOrEquals),
-            StripFlag::shaped("-ca-path", Some("--ca-path"), FlagValue::SeparateOrEquals),
-            StripFlag::shaped(
-                "-client-cert",
-                Some("--client-cert"),
-                FlagValue::SeparateOrEquals,
-            ),
-            StripFlag::shaped(
-                "-client-key",
-                Some("--client-key"),
-                FlagValue::SeparateOrEquals,
-            ),
-            StripFlag::shaped(
-                "-tls-server-name",
-                Some("--tls-server-name"),
-                FlagValue::SeparateOrEquals,
-            ),
+        // no value at all, so the following secret path is not consumed as
+        // though it were the flag's value.
+        forbidden_flags: vec![
+            FlagSpec::value(&["-address", "--address"]),
+            FlagSpec::valueless(&["-tls-skip-verify", "--tls-skip-verify"]),
+            FlagSpec::value(&["-ca-cert", "--ca-cert"]),
+            FlagSpec::value(&["-ca-path", "--ca-path"]),
+            FlagSpec::value(&["-client-cert", "--client-cert"]),
+            FlagSpec::value(&["-client-key", "--client-key"]),
+            FlagSpec::value(&["-tls-server-name", "--tls-server-name"]),
         ],
         matchers: vec![
             // Any non-`kv` `vault read` target (policies, transit keys, auth
             // config, etc.) uses this subcommand, not `kv get`, so there is
             // no matcher shape for it here.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("read")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "read"
+            )])),
             // `kv put`/`patch`/`delete`/`destroy`/`rollback`/`undelete` are
             // writes with no secret-value output; `kv metadata` returns
             // version and custom-metadata JSON, not secret values. None of
@@ -389,27 +389,34 @@ fn vault_spec() -> CliIntegrationSpec {
             // implicit fail-closed default: each is a real, documented
             // subcommand this registry has no matcher for, and an explicit
             // rule documents that deliberately.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("put")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("patch")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("delete")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("destroy")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("rollback")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("undelete")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("metadata")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("put")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("patch")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("delete")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("destroy")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("rollback")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("undelete")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("metadata")
+            ])),
             // `vault kv get -format=json` on a KV v2 mount returns
             // `{"data":{"data":{<name>: <value>, ...},"metadata":{...}}}`.
             // Unlike `bws`/`op`, the secret's name here is the JSON object
@@ -419,7 +426,7 @@ fn vault_spec() -> CliIntegrationSpec {
             // record's own location instead. We force JSON output (as `op`
             // does) so the record-key extraction always sees this shape.
             //
-            // Remaining gaps `args_match` can't close: `vault kv get` on a
+            // Remaining gaps command matching can't close: `vault kv get` on a
             // KV v1 mount uses the same subcommand as v2 but returns `data`
             // without the nested `data` wrapper, so `record_path` selects
             // no records there; `vault kv get -field=<name> ...` matches
@@ -430,8 +437,11 @@ fn vault_spec() -> CliIntegrationSpec {
             // get` and reach the matcher, so all surface a `MatcherError`
             // at extraction time rather than being blocked upfront or
             // leaking unredacted.
-            MatcherRule::SensitiveCommand(ArgsAndMatcher {
-                args_match: vec![String::from("kv"), String::from("get")],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: CommandPattern::prefix(non_empty_vec![
+                    String::from("kv"),
+                    String::from("get")
+                ]),
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$.data.data.*"),
                     value_path: String::from("$"),
@@ -441,29 +451,25 @@ fn vault_spec() -> CliIntegrationSpec {
                 },
                 // Strip any -format/-format= flag and force JSON, regardless
                 // of what the agent requested.
-                strip_arg_flags: vec![StripFlag::shaped(
-                    "-format",
-                    Some("--format"),
-                    FlagValue::SeparateOrEquals,
-                )],
-                forced_args: vec![String::from("-format"), String::from("json")],
+                remove_flags: vec![FlagSpec::value(&["-format", "--format"])],
+                append_args: vec![String::from("-format"), String::from("json")],
             }),
             // `kv list`/`list`/`status`/`policy list` return key names,
             // path listings, or cluster/policy metadata — no secret
             // values — so they pass through unredacted rather than needing
             // a matcher.
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("kv"), String::from("list")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("list")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("status")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("policy"), String::from("list")],
-            }),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("kv"),
+                String::from("list")
+            ])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![String::from("list")])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "status"
+            )])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("policy"),
+                String::from("list")
+            ])),
         ],
     }
 }
@@ -473,84 +479,75 @@ fn doppler_spec() -> CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),
         credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
+        skip_flags: vec![],
         // `--api-host` redirects the CLI at an arbitrary API host, which
         // would send `DOPPLER_TOKEN` there on the next request;
         // `--no-verify-tls` disables TLS certificate verification, letting
         // that redirected host present a spoofed certificate. Both are
-        // stripped unconditionally regardless of which rule below matches.
-        // `--no-verify-tls` takes no value (`FlagValue::None`) so the
-        // arity-blind default doesn't swallow whatever positional follows it.
+        // rejected unconditionally regardless of which rule below matches.
+        // `--no-verify-tls` takes no value, so the following positional is
+        // not consumed as though it were the flag's value.
         //
         // `--config-dir` is a second, independent redirection path even with
-        // `--api-host`/`--no-verify-tls` stripped: Doppler persists
+        // `--api-host`/`--no-verify-tls` forbidden: Doppler persists
         // `api-host`/`verify-tls` per scope in that directory's
         // `.doppler.yaml`, so an agent with filesystem access (the very
         // thing this sidecar mediates) can write its own config directory
         // and point an otherwise-permitted command at it, with no `doppler`
         // invocation of its own required to set it up first. No documented
         // short alias, per the CLI's own `root.go` flag registration.
-        strip_arg_flags: vec![
-            StripFlag::from("--api-host"),
-            StripFlag::shaped("--no-verify-tls", None, FlagValue::None),
-            StripFlag::from("--config-dir"),
+        forbidden_flags: vec![
+            FlagSpec::from("--api-host"),
+            FlagSpec::valueless(&["--no-verify-tls"]),
+            FlagSpec::from("--config-dir"),
+            FlagSpec::from("--configuration"),
         ],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("run")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
+                "run"
+            )])),
             // `secrets get <name>` (with or without `--plain`) either
             // prints a bare value with no structure for the matcher to
             // anchor on, or a table with no forced structured format —
             // there's no shape here for a matcher to extract from.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secrets"), String::from("get")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secrets"),
+                String::from("get")
+            ])),
             // `secrets substitute <template> --output <file>` renders
             // secret values into an arbitrary template file, writing into a
             // caller-chosen file rather than stdout.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secrets"), String::from("substitute")],
-            }),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secrets"),
+                String::from("substitute")
+            ])),
             // `secrets set`/`secrets upload`/`secrets delete` mutate secrets
             // (write real state to Doppler) rather than just reading them.
-            // None of the three are blocked as an artifact of the implicit
-            // fail-closed default — they must be listed explicitly, because
-            // without an explicit block they'd match the bare `secrets`
-            // `SensitiveCommand` rule below (a single-token `args_match`
-            // that matches any `secrets ...` invocation not already claimed
-            // by a more specific rule) and be routed through
-            // Sensitive-command execution: the subprocess call — and the
-            // mutation it performs — happens before extraction gets a
-            // chance to fail closed on the mismatched output shape.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secrets"), String::from("set")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secrets"), String::from("upload")],
-            }),
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secrets"), String::from("delete")],
-            }),
+            // Explicit rules document that these known commands are denied;
+            // unrecognized future subcommands also fail closed because the
+            // sensitive bare-`secrets` rule below is exact, not a prefix.
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secrets"),
+                String::from("set")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secrets"),
+                String::from("upload")
+            ])),
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secrets"),
+                String::from("delete")
+            ])),
             // `secrets notes` (per the CLI's own `secrets_notes.go`) has
             // exactly one real subcommand today, `set` — also a mutation —
-            // but is blocked here as the two-token *prefix* `["secrets",
-            // "notes"]` rather than the three-token `["secrets", "notes",
-            // "set"]` this used to be: anything else under `notes` (a
-            // version adds later, or simply a typo/unsupported invocation
-            // like `notes get`) would otherwise fall through to the same
-            // bare-`secrets` catch-all described above — that command
-            // shape doesn't exist in the CLI today, so it fails at the
-            // CLI's own argument-count validation before any HTTP call is
-            // made, but relying on that rather than blocking here would tie
-            // this registry's safety to the *current* absence of a `notes
-            // get`/`notes delete` command instead of stating outright that
-            // nothing under `notes` should ever reach Sensitive-command
-            // execution.
-            MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("secrets"), String::from("notes")],
-            }),
+            // but the whole two-word prefix is blocked to state that nothing
+            // under `notes`, including future subcommands, is permitted.
+            MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("secrets"),
+                String::from("notes")
+            ])),
             // `doppler secrets download --format json --no-file` outputs a
             // flat JSON object of `{name: value, ...}` pairs, the same
             // shape `vault kv get` extracts via `RecordKey` naming (minus
@@ -589,15 +586,11 @@ fn doppler_spec() -> CliIntegrationSpec {
             // `--fallback-readonly`), `--fallback-readonly`, and `--offline`
             // (an alias for `--fallback-only`) are all stripped so none of
             // them can survive alongside the forced flag.
-            //
-            // Ordering matters: `resolve_args` picks the *first* matching
-            // `SensitiveCommand` rule, so this longer, more specific match
-            // must stay listed before bare `secrets` below — otherwise the
-            // shorter matcher, which is always contained in the longer one
-            // (see `args_matches`), would shadow it and route `secrets
-            // download` through the wrong matcher.
-            MatcherRule::SensitiveCommand(ArgsAndMatcher {
-                args_match: vec![String::from("secrets"), String::from("download")],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: CommandPattern::prefix(non_empty_vec![
+                    String::from("secrets"),
+                    String::from("download")
+                ]),
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$.*"),
                     value_path: String::from("$"),
@@ -605,15 +598,15 @@ fn doppler_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                strip_arg_flags: vec![
-                    StripFlag::from("--format"),
-                    StripFlag::from("--fallback"),
-                    StripFlag::from("--fallback-passphrase"),
-                    StripFlag::shaped("--fallback-only", None, FlagValue::None),
-                    StripFlag::shaped("--fallback-readonly", None, FlagValue::None),
-                    StripFlag::shaped("--offline", None, FlagValue::None),
+                remove_flags: vec![
+                    FlagSpec::from("--format"),
+                    FlagSpec::from("--fallback"),
+                    FlagSpec::from("--fallback-passphrase"),
+                    FlagSpec::valueless(&["--fallback-only"]),
+                    FlagSpec::valueless(&["--fallback-readonly"]),
+                    FlagSpec::valueless(&["--offline"]),
                 ],
-                forced_args: vec![
+                append_args: vec![
                     String::from("--format"),
                     String::from("json"),
                     String::from("--no-file"),
@@ -629,7 +622,9 @@ fn doppler_spec() -> CliIntegrationSpec {
             // ...}, ...}` — so this is a `SensitiveCommand` too, not
             // blocked: `record_path: "$.*"` selects each per-secret object,
             // `value_path: "$.computed"` its value, name from the record's
-            // own key. `--json` is forced (it's a persistent root flag, not
+            // own key. The exact match ensures an unknown future `secrets`
+            // subcommand cannot inherit this permission. `--json` is forced
+            // (it's a persistent root flag, not
             // `secrets`-specific — this command has no `--format`); `--raw`
             // is stripped unconditionally, since passing it adds a second,
             // un-extracted secret-bearing `raw` field to every record that
@@ -645,8 +640,8 @@ fn doppler_spec() -> CliIntegrationSpec {
             // closed (`MatcherError::NonStringNode`), same as everywhere
             // else in this registry that a single bad record voids the
             // batch rather than silently redacting only the good ones.
-            MatcherRule::SensitiveCommand(ArgsAndMatcher {
-                args_match: vec![String::from("secrets")],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: CommandPattern::exact(non_empty_vec![String::from("secrets")]),
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$.*"),
                     value_path: String::from("$.computed"),
@@ -654,28 +649,29 @@ fn doppler_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                strip_arg_flags: vec![
-                    StripFlag::shaped("--json", None, FlagValue::None),
-                    StripFlag::shaped("--raw", None, FlagValue::None),
+                remove_flags: vec![
+                    FlagSpec::valueless(&["--json"]),
+                    FlagSpec::valueless(&["--raw"]),
                 ],
-                forced_args: vec![String::from("--json")],
+                append_args: vec![String::from("--json")],
             }),
             // `me`/`projects list`/`environments list`/`configs list`
             // return account or project/environment/config metadata — no
             // secret values — so they pass through unredacted rather than
             // needing a matcher.
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("me")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("projects"), String::from("list")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("environments"), String::from("list")],
-            }),
-            MatcherRule::SafeCommand(ArgsOnly {
-                args_match: non_empty_vec![String::from("configs"), String::from("list")],
-            }),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![String::from("me")])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("projects"),
+                String::from("list")
+            ])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("environments"),
+                String::from("list")
+            ])),
+            MatcherRule::SafeCommand(CommandPattern::prefix(non_empty_vec![
+                String::from("configs"),
+                String::from("list")
+            ])),
         ],
     }
 }
