@@ -1,0 +1,61 @@
+name: Setup protoc
+description: Restore protoc from cache or install it on a cache miss
+
+inputs:
+  version:
+    description: Exact protoc version to install
+    required: true
+  repo-token:
+    description: GitHub token used by the upstream installer on a cache miss
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: Installed protoc version
+    value: ${{ steps.paths.outputs.version }}
+  path:
+    description: Path to the protoc installation
+    value: ${{ steps.install.outputs.path || steps.paths.outputs.tool-path }}
+  cache-hit:
+    description: Whether protoc was restored from cache
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve protoc paths
+      id: paths
+      shell: bash
+      env:
+        PROTOC_VERSION: ${{ inputs.version }}
+      run: |
+        version="${PROTOC_VERSION#v}"
+        architecture="${RUNNER_ARCH,,}"
+        cache_path="$RUNNER_TOOL_CACHE/protoc/v$version"
+
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "cache-path=$cache_path" >> "$GITHUB_OUTPUT"
+        echo "tool-path=$cache_path/$architecture" >> "$GITHUB_OUTPUT"
+
+    - name: Restore protoc
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.cache-path }}
+        key: protoc-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.version }}
+
+    - name: Install protoc
+      id: install
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+      with:
+        version: ${{ inputs.version }}
+        repo-token: ${{ inputs.repo-token }}
+
+    - name: Add cached protoc to PATH
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      env:
+        PROTOC_BIN: ${{ steps.paths.outputs.tool-path }}/bin
+      run: echo "$PROTOC_BIN" >> "$GITHUB_PATH"
