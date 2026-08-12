@@ -51,6 +51,7 @@
 //! use firma_core::{
 //!     ActionParams, Connector, ConnectorError, ConnectorResponse, TransportView,
 //! };
+//! use firma_http::HeaderMap;
 //!
 //! struct EchoConnector;
 //!
@@ -67,7 +68,7 @@
 //!         let response_size = body.len();
 //!         Ok(ConnectorResponse {
 //!             status: 200,
-//!             headers: HashMap::new(),
+//!             headers: HeaderMap::new(),
 //!             body,
 //!             dispatch_latency: Duration::from_millis(0),
 //!             response_size,
