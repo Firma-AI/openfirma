@@ -52,10 +52,16 @@ disclosure rather than discovery. These reads are the one governed shape that
 keeps a query string: a cursor selects a page of the same listing rather than
 changing which action is classified, so pagination keeps working and the
 cursor is restored onto the dispatch clone. The logical resource stays
-query-free. Session creation (`POST` to the session collection) and `POST` to
-an existing `session/{id}` stay recognized passthroughs, and tearing down the
-hosted MCP transport session via `DELETE` on the MCP path remains
-transport-level passthrough. Every recognized route carries a method
+query-free. Session creation (`POST` to the session collection) is governed
+as well: it binds the connected accounts every later session call executes
+within, and Composio resolves an omitted downstream account selector from
+that stored state, so the creation decodes into one
+`COMPOSIO_CREATE_SESSION` action per selected account (a single unbound
+action when the payload selects none) and account policy meets each account
+before the perimeter exists. A `POST` to an existing `session/{id}` — a
+route Composio does not define — fails closed. Tearing down the hosted MCP
+transport session via `DELETE` on the MCP path remains transport-level
+passthrough. Every recognized route carries a method
 allowlist: reads (`GET`/`HEAD`/`OPTIONS`) pass through everywhere except the
 two governed lifecycle families above, MCP session paths additionally allow
 `DELETE` for teardown, lifecycle requests are governed, and any other method

@@ -116,6 +116,15 @@ action with a synthetic resource:
 composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT
 ```
 
+Creating a Tool Router session (`POST` to the session collection) is governed
+the same way. The creation payload binds the connected accounts every later
+session call executes within, and Composio resolves an omitted downstream
+account selector from that stored state, so the creation decodes into one
+`account.permission.change` action per selected account (resource
+`composio://composio/COMPOSIO_CREATE_SESSION`); a creation that selects no
+accounts decodes into a single unbound action. Account policy therefore meets
+each account before the session perimeter exists.
+
 A capability must grant `account.permission.change` for these requests to
 succeed, and Cedar can deny them like any other action. Grant that class to
 the backend session that runs OAuth flows and withhold it from agent
@@ -194,8 +203,9 @@ admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
 included, so a query-carrying MCP URL fails at the handshake with a clear
 denial instead of breaking only on tool calls. Recognized routes accept only
 read methods (plus `DELETE` for MCP session teardown and `POST` on the Tool
-Router session routes); anything else fails closed, including a `POST` to a
-discovery route such as `/api/v3/toolkits`.
+Router session execution routes); anything else fails closed, including a
+`POST` to a discovery route such as `/api/v3/toolkits` or to an existing
+`session/{id}` resource.
 
 Three sharp edges are worth knowing before writing policy.
 

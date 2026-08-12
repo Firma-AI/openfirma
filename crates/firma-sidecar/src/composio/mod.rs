@@ -228,7 +228,7 @@ fn decode_backend(
 ) -> DecodeResult {
     // Lifecycle writes are checked first; execution routes never classify as
     // lifecycle, and a lifecycle route the write decoder declines (POST to
-    // `session/{id}`) falls through to the explicit passthrough arms below.
+    // `session/{id}`) falls through to the fail-closed arm below.
     if let Some(result) = decode_lifecycle_write(request, BACKEND_HOST) {
         return result;
     }
@@ -254,14 +254,17 @@ fn decode_backend(
             session_id,
             "execute_meta",
         ] => decode_meta_route(request, payload, Some(session_id), catalogs),
-        // Only Tool Router session creation and the ungoverned write to an
-        // existing session are admitted POST passthroughs. The read-route
-        // recognizer is deliberately not reused here: it enumerates GET
-        // shapes, and treating it as a POST allowlist would admit writes to
-        // toolkits, tools, and session sub-collections with no capability
-        // check and no policy evaluation.
-        ["api", "v3" | "v3.1", "tool_router", "session"]
-        | ["api", "v3" | "v3.1", "tool_router", "session", _] => DecodeResult::Passthrough,
+        // Session creation binds the connected accounts every later call
+        // executes within, so it decodes into governed lifecycle actions
+        // rather than passing through. The read-route recognizer is
+        // deliberately not reused as a POST allowlist: it enumerates GET
+        // shapes, and admitting writes through it would skip capability
+        // checks and policy evaluation — a POST to an existing session
+        // resource (a route Composio does not define) falls through to the
+        // fail-closed arm below.
+        ["api", "v3" | "v3.1", "tool_router", "session"] => {
+            decode_session_creation(request, payload)
+        }
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
 }
@@ -362,9 +365,9 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
             ))
         }
         LifecycleRoute::Session { session_id } => {
-            // Session creation targets the collection and stays a recognized
-            // POST passthrough; deleting or mutating an existing session
-            // changes the agent's reachable surface and is governed.
+            // Session creation targets the collection and is decoded by
+            // `decode_session_creation`; a POST to an existing session
+            // resource is declined here so `decode_backend` fails it closed.
             if request.method == Method::POST {
                 return None;
             }
@@ -447,6 +450,80 @@ fn lifecycle_action(
         envelope: logical_envelope(request, action_class, &context, method),
         context,
     }])
+}
+
+/// Decode a Tool Router session creation into governed lifecycle actions.
+///
+/// Session creation is the perimeter-defining write: Composio stores the
+/// selected accounts on the session, and a later call may omit the account
+/// selector entirely, leaving the server to resolve it from that stored
+/// state. Policy therefore meets each selected account here or never. One
+/// `COMPOSIO_CREATE_SESSION` action is emitted per selected account, and a
+/// creation that selects none still decodes into a single unbound action
+/// because it reshapes the agent's reachable surface.
+fn decode_session_creation(request: &RawRequest, payload: &Map<String, Value>) -> DecodeResult {
+    let Ok(method) = HttpMethod::try_from(&request.method) else {
+        return deny("unsupported_route", "unsupported Composio route");
+    };
+    let mut accounts: Vec<&str> = Vec::new();
+    if let Some(selected) = payload.get("connected_accounts") {
+        let Some(by_toolkit) = selected.as_object() else {
+            return deny(
+                "malformed_payload",
+                "invalid Composio session creation payload",
+            );
+        };
+        for ids in by_toolkit.values() {
+            let Some(ids) = ids.as_array() else {
+                return deny(
+                    "malformed_payload",
+                    "invalid Composio session creation payload",
+                );
+            };
+            for id in ids {
+                let Some(id) = id.as_str() else {
+                    return deny(
+                        "malformed_payload",
+                        "invalid Composio session creation payload",
+                    );
+                };
+                if !accounts.contains(&id) {
+                    accounts.push(id);
+                }
+            }
+        }
+    }
+    let user_id = string_field(payload, "user_id");
+    let bound_accounts: Vec<Option<&str>> = if accounts.is_empty() {
+        vec![None]
+    } else {
+        accounts.into_iter().map(Some).collect()
+    };
+    DecodeResult::Actions(
+        bound_accounts
+            .into_iter()
+            .map(|account| {
+                let context = ComposioContext {
+                    toolkit: LIFECYCLE_TOOLKIT.to_string(),
+                    tool_slug: "COMPOSIO_CREATE_SESSION".to_string(),
+                    user_id: user_id.map(str::to_string),
+                    connected_account_id: account.map(str::to_string),
+                    session_id: None,
+                    batch_index: None,
+                    batch_size: None,
+                };
+                ComposioAction {
+                    envelope: logical_envelope(
+                        request,
+                        LIFECYCLE_WRITE_ACTION_CLASS,
+                        &context,
+                        method,
+                    ),
+                    context,
+                }
+            })
+            .collect(),
+    )
 }
 
 fn decode_direct(

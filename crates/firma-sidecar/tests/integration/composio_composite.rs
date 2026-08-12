@@ -75,6 +75,7 @@ const MAPPING: &str = r#"{
 enum PolicyMode {
     Allow,
     DenySend,
+    DenyExecutiveAccount,
     ModifyRead,
     StepUpRead,
     DeferRead,
@@ -98,8 +99,16 @@ impl PolicyEvaluation for TestPolicy {
         _agent_id: &AgentId,
         action: &str,
         _resource: &str,
-        _context: serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<PolicyVerdict, String> {
+        if matches!(self.0, PolicyMode::DenyExecutiveAccount)
+            && context
+                .get("composio_account")
+                .and_then(serde_json::Value::as_str)
+                == Some("ca_executive")
+        {
+            return Ok(PolicyVerdict::Deny);
+        }
         let verdict = match (self.0, action) {
             (PolicyMode::DenySend, "communication.external.send") => PolicyVerdict::Deny,
             (PolicyMode::ModifyRead, "communication.external.read") => PolicyVerdict::Modify {
@@ -337,6 +346,7 @@ fn claims() -> anyhow::Result<CapabilityClaims> {
             "communication.external.read".to_string(),
             "communication.external.send".to_string(),
             "credential.read".to_string(),
+            "account.permission.change".to_string(),
         ],
         resource_scope: "composio://*".to_string(),
         issued_at: Utc::now(),
@@ -925,6 +935,77 @@ async fn handler_atomic_denial_dispatches_zero_times() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("missing second child audit"))?;
     assert_eq!(*first.decision(), firma_sidecar::audit::Decision::Abort);
     assert_eq!(*second.decision(), firma_sidecar::audit::Decision::Deny);
+    Ok(())
+}
+
+/// Composio stores the accounts selected at session creation server-side,
+/// and a later hosted-MCP call may omit the selector entirely, so account
+/// policy meets the account at creation or never. A creation that binds a
+/// denied account must be refused before it establishes the perimeter.
+#[tokio::test]
+async fn session_creation_binding_a_denied_account_is_refused() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::DenyExecutiveAccount,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    )
+    .with_composio_catalogs(catalogs()?);
+
+    let creation = |account: &str| RawRequest {
+        method: Method::POST,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3.1/tool_router/session".to_string(),
+        headers: HeaderMap::new(),
+        body: Some(
+            serde_json::json!({
+                "user_id": "user_attacker",
+                "toolkits": ["gmail"],
+                "connected_accounts": {"gmail": [account]},
+                "tools": {"gmail": {"enable": ["GMAIL_SEND_EMAIL"]}}
+            })
+            .to_string()
+            .into_bytes(),
+        ),
+        is_https: true,
+    };
+
+    let refused = handler
+        .handle(creation("ca_executive"), "sess_composite")
+        .await;
+    assert!(matches!(refused, HandledResponse::Deny { .. }));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 0);
+    let refused_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing refused-creation audit"))?;
+    assert_eq!(
+        *refused_audit.decision(),
+        firma_sidecar::audit::Decision::Deny
+    );
+
+    let admitted = handler
+        .handle(creation("ca_mailbox"), "sess_composite")
+        .await;
+    assert!(matches!(admitted, HandledResponse::Ok(_)));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
+    let admitted_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing admitted-creation audit"))?;
+    assert_eq!(
+        *admitted_audit.decision(),
+        firma_sidecar::audit::Decision::Allow
+    );
     Ok(())
 }
 

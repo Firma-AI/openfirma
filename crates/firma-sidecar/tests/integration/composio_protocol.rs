@@ -401,37 +401,126 @@ fn post_to_read_only_routes_fails_closed() -> anyhow::Result<()> {
 /// session teardown keeps its DELETE: the method allowlists must not break
 /// either flow.
 #[test]
-fn session_creation_and_mcp_teardown_remain_passthrough() -> anyhow::Result<()> {
-    for (method, host, path, has_body) in [
-        (
-            Method::POST,
-            Authority::from_static("backend.composio.dev"),
-            "/api/v3/tool_router/session",
-            true,
-        ),
-        (
-            Method::POST,
-            Authority::from_static("backend.composio.dev"),
-            "/api/v3/tool_router/session/trs_1",
-            true,
-        ),
-        (
-            Method::DELETE,
-            Authority::from_static("app.composio.dev"),
-            "/tool_router/v3/trs_1/mcp",
-            false,
-        ),
-    ] {
-        let mut recognized = request(host, path, &serde_json::json!({}));
-        recognized.method = method.clone();
-        if !has_body {
-            recognized.body = None;
-        }
-        assert!(
-            matches!(decode(&recognized, &catalogs()?), DecodeResult::Passthrough),
-            "{method} {path} must stay passthrough"
+fn mcp_teardown_remains_passthrough() -> anyhow::Result<()> {
+    let mut teardown = request(
+        Authority::from_static("app.composio.dev"),
+        "/tool_router/v3/trs_1/mcp",
+        &serde_json::json!({}),
+    );
+    teardown.method = Method::DELETE;
+    teardown.body = None;
+    assert!(matches!(
+        decode(&teardown, &catalogs()?),
+        DecodeResult::Passthrough
+    ));
+    Ok(())
+}
+
+/// Session creation binds the connected accounts, toolkits, and tools that
+/// every later call executes within, so it is the perimeter-defining write.
+/// It must decode into governed lifecycle actions, one per selected account,
+/// so account policy can refuse the perimeter instead of meeting it as
+/// server-side session state that later calls no longer mention.
+#[test]
+fn session_creation_is_governed_per_selected_account() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({
+            "user_id": "user_1",
+            "toolkits": ["gmail", "googlecalendar"],
+            "connected_accounts": {
+                "gmail": ["ca_mailbox"],
+                "googlecalendar": ["ca_work", "ca_personal"]
+            }
+        }),
+    );
+
+    let decoded = actions(decode(&creation, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 3);
+    let mut accounts: Vec<Option<&str>> = decoded
+        .iter()
+        .map(|action| action.context.connected_account_id.as_deref())
+        .collect();
+    accounts.sort_unstable();
+    assert_eq!(
+        accounts,
+        [Some("ca_mailbox"), Some("ca_personal"), Some("ca_work")]
+    );
+    for action in &decoded {
+        assert_eq!(
+            action.envelope.intent().action_class,
+            "account.permission.change"
         );
+        assert_eq!(
+            action.envelope.intent().policy_resource_display(),
+            "composio://composio/COMPOSIO_CREATE_SESSION"
+        );
+        assert_eq!(action.context.user_id.as_deref(), Some("user_1"));
+        assert_eq!(action.context.session_id, None);
     }
+    Ok(())
+}
+
+/// A session created without account selectors still reshapes the reachable
+/// surface, so it decodes into a single governed action instead of passing
+/// through.
+#[test]
+fn session_creation_without_accounts_is_a_single_governed_action() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({"user_id": "user_1", "toolkits": ["gmail"]}),
+    );
+
+    let decoded = actions(decode(&creation, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_CREATE_SESSION"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// A `connected_accounts` value that is not a map of string lists cannot be
+/// bound to per-account actions, so it fails closed instead of creating a
+/// perimeter policy never saw.
+#[test]
+fn session_creation_with_malformed_accounts_fails_closed() -> anyhow::Result<()> {
+    for connected_accounts in [
+        serde_json::json!("ca_mailbox"),
+        serde_json::json!({"gmail": "ca_mailbox"}),
+        serde_json::json!({"gmail": [42]}),
+    ] {
+        let creation = request(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session",
+            &serde_json::json!({"connected_accounts": connected_accounts}),
+        );
+        let DecodeResult::Deny(denial) = decode(&creation, &catalogs()?) else {
+            anyhow::bail!("malformed session creation must fail closed");
+        };
+        assert_eq!(denial.code, "malformed_payload");
+    }
+    Ok(())
+}
+
+/// Composio defines no POST on a session resource; a write-shaped request to
+/// one is neither a read nor a governed lifecycle write and must fail closed.
+#[test]
+fn post_to_a_session_resource_fails_closed() -> anyhow::Result<()> {
+    let write = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3/tool_router/session/trs_1",
+        &serde_json::json!({}),
+    );
+    let DecodeResult::Deny(denial) = decode(&write, &catalogs()?) else {
+        anyhow::bail!("POST to a session resource must fail closed");
+    };
+    assert_eq!(denial.code, "unsupported_route");
     Ok(())
 }
 
