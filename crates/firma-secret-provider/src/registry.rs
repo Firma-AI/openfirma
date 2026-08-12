@@ -91,6 +91,11 @@ fn bws_spec() -> CliIntegrationSpec {
         binary_name: String::from("bws"),
         provider_id: String::from("bitwarden"),
         credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
+        // `--server-url` (short `-u`) redirects the CLI at an arbitrary
+        // server, which would send `BWS_ACCESS_TOKEN` to a host of the
+        // agent's choosing on the very next request — stripped
+        // unconditionally regardless of which rule below matches.
+        always_stripped_arg_flags: vec![String::from("--server-url"), String::from("-u")],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.
@@ -176,6 +181,11 @@ fn op_spec() -> CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
         credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
+        // No backend-override flag to strip here: a service-account token
+        // (unlike the other three built-ins' credentials) only ever
+        // authenticates against 1Password's own cloud API — `op` has no
+        // per-invocation flag to point it at a different host.
+        always_stripped_arg_flags: vec![],
         matchers: vec![
             // Prints the raw secret as plain text, not JSON.
             MatcherRule::BlockedCommand(ArgsOnly {
@@ -281,6 +291,36 @@ fn vault_spec() -> CliIntegrationSpec {
             String::from("VAULT_ADDR"),
             String::from("VAULT_NAMESPACE"),
         ],
+        // `-address`/`--address` (Vault's Go flag parser accepts either
+        // dash style for the same flag) redirect the CLI at an arbitrary
+        // server, which would send `VAULT_TOKEN` there on the next request.
+        // `-tls-skip-verify`, `-ca-cert`, `-ca-path`, `-client-cert`, and
+        // `-client-key` don't change the target host by themselves, but let
+        // an agent make the CLI accept a spoofed TLS identity for whatever
+        // host it's later redirected to (skip verification outright, trust
+        // an attacker-supplied CA, or present attacker-supplied client
+        // creds) — combined with `-address`, or with DNS/network-level
+        // redirection the sidecar can't see from here, that's the same
+        // token-exfiltration path. `-tls-server-name` overrides the SNI/cert
+        // hostname checked during that handshake and is stripped alongside
+        // them for the same reason. All are stripped unconditionally
+        // regardless of which rule below matches.
+        always_stripped_arg_flags: vec![
+            String::from("-address"),
+            String::from("--address"),
+            String::from("-tls-skip-verify"),
+            String::from("--tls-skip-verify"),
+            String::from("-ca-cert"),
+            String::from("--ca-cert"),
+            String::from("-ca-path"),
+            String::from("--ca-path"),
+            String::from("-client-cert"),
+            String::from("--client-cert"),
+            String::from("-client-key"),
+            String::from("--client-key"),
+            String::from("-tls-server-name"),
+            String::from("--tls-server-name"),
+        ],
         matchers: vec![
             // Any non-`kv` `vault read` target (policies, transit keys, auth
             // config, etc.) uses this subcommand, not `kv get`, so there is
@@ -376,6 +416,15 @@ fn doppler_spec() -> CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),
         credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
+        // `--api-host` redirects the CLI at an arbitrary API host, which
+        // would send `DOPPLER_TOKEN` there on the next request;
+        // `--no-verify-tls` disables TLS certificate verification, letting
+        // that redirected host present a spoofed certificate. Both are
+        // stripped unconditionally regardless of which rule below matches.
+        always_stripped_arg_flags: vec![
+            String::from("--api-host"),
+            String::from("--no-verify-tls"),
+        ],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.

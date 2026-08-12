@@ -14,6 +14,19 @@ pub struct CliIntegrationSpec {
     /// Names of env vars that carry vault credentials. The broker forwards any
     /// that are present in its own environment to the subprocess.
     pub credential_env_vars: Vec<String>,
+    /// Arg flags stripped from every resolved invocation, regardless of which
+    /// rule matched — unlike [`ArgsAndMatcher::strip_arg_flags`], which only
+    /// applies when its own `SensitiveCommand` rule is selected, these apply
+    /// to `SensitiveCommand` and `SafeCommand` resolutions alike (see
+    /// [`Self::rewrite_args`]). Meant for flags that let the invocation
+    /// redirect the CLI at a different backend or bypass TLS verification
+    /// (e.g. Doppler's `--api-host`/`--no-verify-tls`, Vault's
+    /// `-address`/`-tls-skip-verify`) — an agent could otherwise use one of
+    /// these on an *otherwise-permitted* command to make the subprocess send
+    /// the forwarded `credential_env_vars` token to a host of its choosing,
+    /// regardless of how well-redacted that command's own stdout is.
+    #[serde(default)]
+    pub always_stripped_arg_flags: Vec<String>,
     /// Candidate rules, tried against the invocation's args via
     /// [`CliIntegrationSpec::resolve_args`]. A single binary can emit
     /// different output shapes for different subcommands (e.g. `bws secret
@@ -79,59 +92,93 @@ impl CliIntegrationSpec {
     }
 
     /// Rewrites the shim-requested args for the actual subprocess
-    /// invocation, for whichever `SensitiveCommand` rule [`Self::resolve_args`]
-    /// would select for `args`: strips any of that rule's `strip_arg_flags`
-    /// entries (both `--flag value` and `--flag=value` forms) and appends
-    /// its `forced_args`. Different sensitive commands on the same binary
-    /// can require different forced output shapes (e.g. `doppler secrets
-    /// download` forces `--format json --no-file`, while bare `doppler
-    /// secrets` forces `--json` and strips `--raw`), so these live on the
-    /// rule rather than the spec.
+    /// invocation, for whichever rule [`Self::resolve_args`] would select for
+    /// `args`.
+    ///
+    /// For a `SensitiveCommand` match: strips [`Self::always_stripped_arg_flags`]
+    /// and the rule's own `strip_arg_flags` entries (both `--flag value` and
+    /// `--flag=value` forms), then appends its `forced_args`. Different
+    /// sensitive commands on the same binary can require different forced
+    /// output shapes (e.g. `doppler secrets download` forces `--format json
+    /// --no-file`, while bare `doppler secrets` forces `--json` and strips
+    /// `--raw`), so those live on the rule rather than the spec.
+    ///
+    /// For a `SafeCommand` match: strips [`Self::always_stripped_arg_flags`]
+    /// only — a pass-through command has no `forced_args`/`strip_arg_flags`
+    /// of its own, but still must not let a backend-override or
+    /// TLS-bypass flag through unstripped just because its own output needs
+    /// no redaction.
+    ///
+    /// Returns `args` unchanged if no `SensitiveCommand` or `SafeCommand`
+    /// rule matches — there's nothing to rewrite for a blocked invocation,
+    /// since it's never executed.
     ///
     /// A stripped `--flag value` pair's trailing token is only consumed as
     /// the flag's value when it doesn't itself look like a flag (start with
-    /// `-`) and isn't one of `rule.args_match`'s own tokens, so stripping a
-    /// valueless flag never swallows an unrelated flag, nor a subcommand
-    /// word that `resolve_args` relied on to select this very rule, that
-    /// happens to follow it — mirroring the same protection [`args_matches`]
-    /// already applies while matching. `strip_arg_flags` carries no
-    /// per-flag arity, though, so this is a syntactic heuristic, not true
-    /// arity awareness: a valueless flag immediately followed by a plain
-    /// positional that is neither a flag nor an `args_match` token is still
-    /// treated as if that positional were its value, and both are removed.
-    ///
-    /// Returns `args` unchanged if no `SensitiveCommand` rule matches —
-    /// there's nothing to rewrite for a pass-through or blocked invocation.
+    /// `-`) and isn't one of the matched rule's own `args_match` tokens, so
+    /// stripping a valueless flag never swallows an unrelated flag, nor a
+    /// subcommand word that `resolve_args` relied on to select this very
+    /// rule, that happens to follow it — mirroring the same protection
+    /// [`args_matches`] already applies while matching. The flags-to-strip
+    /// list carries no per-flag arity, though, so this is a syntactic
+    /// heuristic, not true arity awareness: a valueless flag immediately
+    /// followed by a plain positional that is neither a flag nor an
+    /// `args_match` token is still treated as if that positional were its
+    /// value, and both are removed.
     #[must_use]
     pub fn rewrite_args(&self, args: &[String]) -> Vec<String> {
-        let Some(rule) = self
+        if let Some(rule) = self
             .matchers
             .iter()
             .filter_map(MatcherRule::as_sensitive_command)
             .find(|rule| args_matches(args, &rule.args_match))
-        else {
-            return args.to_vec();
-        };
-
-        let mut rewritten = Vec::with_capacity(args.len() + rule.forced_args.len());
-        let mut iter = args.iter().peekable();
-        while let Some(arg) = iter.next() {
-            let flag = arg.split('=').next().unwrap_or(arg.as_str());
-            if rule.strip_arg_flags.iter().any(|f| f == flag) {
-                if !arg.contains('=')
-                    && iter.peek().is_some_and(|next| {
-                        !next.starts_with('-') && !rule.args_match.contains(next)
-                    })
-                {
-                    iter.next();
-                }
-                continue;
-            }
-            rewritten.push(arg.clone());
+        {
+            let mut strip_flags = self.always_stripped_arg_flags.clone();
+            strip_flags.extend(rule.strip_arg_flags.iter().cloned());
+            let mut rewritten = strip_flags_from_args(args, &strip_flags, &rule.args_match);
+            rewritten.extend(rule.forced_args.iter().cloned());
+            return rewritten;
         }
-        rewritten.extend(rule.forced_args.iter().cloned());
-        rewritten
+
+        if let Some(rule) = self
+            .matchers
+            .iter()
+            .filter_map(MatcherRule::as_safe_command)
+            .find(|rule| args_matches(args, &rule.args_match))
+        {
+            return strip_flags_from_args(args, &self.always_stripped_arg_flags, &rule.args_match);
+        }
+
+        args.to_vec()
     }
+}
+
+/// Removes every occurrence of any flag in `flags_to_strip` from `args` (both
+/// `--flag value` and `--flag=value` forms). `protected_tokens` (a matched
+/// rule's own `args_match`) is never consumed as a stripped flag's value —
+/// see [`CliIntegrationSpec::rewrite_args`] for why.
+fn strip_flags_from_args(
+    args: &[String],
+    flags_to_strip: &[String],
+    protected_tokens: &[String],
+) -> Vec<String> {
+    let mut rewritten = Vec::with_capacity(args.len());
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        let flag = arg.split('=').next().unwrap_or(arg.as_str());
+        if flags_to_strip.iter().any(|f| f == flag) {
+            if !arg.contains('=')
+                && iter
+                    .peek()
+                    .is_some_and(|next| !next.starts_with('-') && !protected_tokens.contains(next))
+            {
+                iter.next();
+            }
+            continue;
+        }
+        rewritten.push(arg.clone());
+    }
+    rewritten
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
