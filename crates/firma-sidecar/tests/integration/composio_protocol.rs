@@ -481,11 +481,13 @@ fn direct_execution_rejects_missing_or_wrong_versions() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Every route that has a native `version` field must carry one, so Composio
-/// can only run the version the local snapshot classified. Hosted MCP is the
-/// documented exception and is covered separately.
+/// Composio's Tool Router session API defines no `version` field
+/// (`SessionExecuteParams` in the published `OpenAPI` schema), so demanding one
+/// would deny every stock SDK client. Session routes therefore share the
+/// hosted MCP exemption: an absent version classifies from the pinned
+/// snapshot, and a stated version is still checked against the pin.
 #[test]
-fn versioned_execution_routes_without_a_pin_fail_closed() -> anyhow::Result<()> {
+fn session_routes_share_the_version_exemption_and_honor_a_stated_pin() -> anyhow::Result<()> {
     for (path, body) in [
         (
             "/api/v3.1/tool_router/session/trs_1/execute",
@@ -506,16 +508,28 @@ fn versioned_execution_routes_without_a_pin_fail_closed() -> anyhow::Result<()> 
             }),
         ),
     ] {
-        let unpinned = request(
-            Authority::from_static("backend.composio.dev"),
-            path,
-            &body,
+        let unversioned = request(Authority::from_static("backend.composio.dev"), path, &body);
+        let decoded = actions(decode(&unversioned, &catalogs()?))?;
+        assert_eq!(
+            decoded[0].envelope.intent().action_class,
+            "communication.external.send",
+            "unversioned session execution on {path} must classify from the pin"
         );
-        let DecodeResult::Deny(denial) = decode(&unpinned, &catalogs()?) else {
-            anyhow::bail!("unpinned execution on {path} must fail closed");
-        };
-        assert_eq!(denial.code, "unpinned_tool");
     }
+
+    let mismatched = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session/trs_1/execute",
+        &serde_json::json!({
+            "tool_slug": "GMAIL_SEND_EMAIL",
+            "version": "latest",
+            "arguments": {}
+        }),
+    );
+    let DecodeResult::Deny(denial) = decode(&mismatched, &catalogs()?) else {
+        anyhow::bail!("a stated session version must still be checked");
+    };
+    assert_eq!(denial.code, "version_mismatch");
     Ok(())
 }
 

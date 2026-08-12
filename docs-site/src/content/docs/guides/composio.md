@@ -181,13 +181,13 @@ Refreshing a toolkit is a maintainer task, not an operator one: see
 [Composio enforcement](https://github.com/Firma-AI/openfirma/blob/main/docs/architecture/composio-enforcement.md)
 for the refresh and review loop.
 
-Unknown toolkits, missing slugs, unpinned or mismatched versions, malformed
-execution payloads, custom tools, raw proxy execution, and shell or workbench
-tools fail closed. Direct execution, Tool Router `execute`, and `execute_meta`
-each require the toolkit version in the payload and deny `unpinned_tool`
-without one. Hosted MCP is the exception: JSON-RPC has no version field, so a
-`tools/call` without one is admitted and classified from the pinned snapshot,
-while a version a client does attach as a tool argument is still checked
+Unknown toolkits, missing slugs, mismatched versions, malformed execution
+payloads, custom tools, raw proxy execution, and shell or workbench tools
+fail closed. Direct execution requires the toolkit version in the payload and
+denies `unpinned_tool` without one. The Tool Router session routes
+(`execute`, `execute_meta`) and hosted MCP define no version field in
+Composio's API, so a call without one is admitted and classified from the
+pinned snapshot, while a version a client does attach is still checked
 against the pin. Governed requests carrying a query string are also denied: the query
 never participates in the policy decision, so it must not ride along on an
 admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery

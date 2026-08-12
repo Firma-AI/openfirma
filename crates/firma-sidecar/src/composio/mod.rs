@@ -49,11 +49,12 @@ const LIFECYCLE_TOOLKIT: &str = "composio";
 
 /// Whether an execution route must carry the pinned toolkit version.
 ///
-/// Routes with a native `version` field require one, so Composio can only run
-/// the version the local snapshot classified. Hosted MCP JSON-RPC has no such
-/// field; demanding one there would deny every stock MCP client, so the pin is
-/// honored when a client attaches it as a tool argument and the route falls
-/// back to the pinned slug allowlist when it does not.
+/// Direct execution has a native `version` field and requires one, so
+/// Composio can only run the version the local snapshot classified. Tool
+/// Router session routes and hosted MCP JSON-RPC define no version field in
+/// Composio's API; demanding one there would deny every stock client, so on
+/// those routes the pin is honored when a client chooses to attach one and
+/// the pinned slug allowlist stays the guarantee when it does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VersionPolicy {
     /// Deny `unpinned_tool` when the request carries no version.
@@ -497,7 +498,7 @@ fn decode_session(
             slug,
             payload.get("arguments").and_then(Value::as_object),
             session_id,
-            VersionPolicy::Required,
+            VersionPolicy::Optional,
             catalogs,
         );
     }
@@ -509,7 +510,7 @@ fn decode_session(
         string_field(payload, "account"),
         session_id,
         None,
-        VersionPolicy::Required,
+        VersionPolicy::Optional,
         catalogs,
     )
 }
@@ -528,7 +529,7 @@ fn decode_meta_route(
         slug,
         payload.get("arguments").and_then(Value::as_object),
         session_id,
-        VersionPolicy::Required,
+        VersionPolicy::Optional,
         catalogs,
     )
 }

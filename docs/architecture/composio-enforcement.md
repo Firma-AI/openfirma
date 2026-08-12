@@ -126,18 +126,18 @@ One gate checks the version for every route, but whether a version is
 _required_ depends on whether the route has somewhere to put one. A stated
 version that differs from the pin is always denied `version_mismatch`.
 
-Direct execution, Tool Router `execute`, and `execute_meta` all carry the
-version as a payload field, and all three deny `unpinned_tool` when it is
-absent. Composio therefore cannot run a version other than the one the local
-snapshot classified on any of them.
+Direct execution carries the version as a native payload field and denies
+`unpinned_tool` without one, so Composio cannot run a version other than the
+one the local snapshot classified on that route.
 
-Hosted MCP is the one documented exception. JSON-RPC `tools/call` has no
-native version field, and requiring callers to invent one as a tool argument
-would deny every stock MCP client, so that route keeps the pinned-slug
-allowlist as its guarantee: a version a client does choose to attach is
-honored and checked against the pin, and a call without one is admitted and
-classified from the snapshot. A server-side toolkit release can therefore
-change a slug's behavior over hosted MCP before a maintainer reviews the new
+The Tool Router session routes (`execute`, `execute_meta`) and hosted MCP
+JSON-RPC define no version field in Composio's API — the session execute
+schema has no such parameter, and demanding an invented one would deny every
+stock SDK and MCP client. Those routes keep the pinned-slug allowlist as
+their guarantee: a version a client does choose to attach is honored and
+checked against the pin, and a call without one is admitted and classified
+from the snapshot. A server-side toolkit release can therefore change a
+slug's behavior on those routes before a maintainer reviews the new
 snapshot. This is a deliberate tradeoff, not an oversight; refresh pins
 promptly when Composio announces toolkit updates.
 
