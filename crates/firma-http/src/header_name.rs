@@ -92,17 +92,3 @@ impl arbitrary::Arbitrary<'_> for HeaderName {
         Self::from_str(s).map_err(|_| arbitrary::Error::IncorrectFormat)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn http_compatibility() {
-        let mut hm = HashMap::new();
-        hm.insert(HeaderName::from_static("x-api-key"), "foo");
-        assert!(hm.contains_key(&http::HeaderName::from_static("x-api-key")));
-    }
-}

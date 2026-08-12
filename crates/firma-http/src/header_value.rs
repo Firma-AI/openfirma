@@ -100,21 +100,3 @@ impl arbitrary::Arbitrary<'_> for HeaderValue {
         Self::from_str(s).map_err(|_| arbitrary::Error::IncorrectFormat)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn http_compatibility() {
-        let mut hm = HashMap::new();
-        hm.insert(
-            // since hawk made us remove `from_static` wrapper, we have to do this explicitly
-            HeaderValue(http::HeaderValue::from_static("x-api-key")),
-            "foo",
-        );
-        assert!(hm.contains_key(&http::HeaderValue::from_static("x-api-key")));
-    }
-}

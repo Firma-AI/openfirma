@@ -8,7 +8,7 @@ use either::Either;
 use http::header::ToStrError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-const FIRMA_SESSION_ID_HEADER_NAME: &str = "x-firma-session-id";
+pub const FIRMA_SESSION_ID_HEADER_NAME: &str = "x-firma-session-id";
 
 /// A wrapped version of `http::HeaderMap` that allows (de)serialization
 #[derive(Debug, Clone, PartialEq, Eq)]
