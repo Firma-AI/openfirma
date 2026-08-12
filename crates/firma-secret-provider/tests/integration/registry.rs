@@ -1,7 +1,7 @@
 use firma_core::{SecretMatcher, SecretNameSource};
 use firma_secret_provider::{
     CompiledMatcher, IntegrationRegistry, MatcherRule, MatchingResolution, SecretPlaceholder,
-    spec::cli::{ArgsAndMatcher, CliIntegrationSpec},
+    spec::cli::{ArgsAndMatcher, CliIntegrationSpec, FlagValue, StripFlag},
 };
 
 use crate::support::{Entry, rewrite_mint_placeholders};
@@ -532,6 +532,10 @@ fn builtins_force_expected_output_formats() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "data table, one entry per backend-override/config-redirection case"
+)]
 fn builtins_strip_backend_override_flags_from_sensitive_commands() {
     // A flag that redirects the CLI at a different backend (or disables its
     // TLS verification) would exfiltrate that spec's forwarded
@@ -558,6 +562,40 @@ fn builtins_strip_backend_override_flags_from_sensitive_commands() {
             &["secret", "get", "id", "--output", "json"],
         ),
         (
+            // `bws` (clap-based) lets a short option's value be concatenated
+            // directly onto it with no separator — a form a plain
+            // exact-token match can't recognize. Regression coverage for the
+            // exfiltration path this would otherwise leave open.
+            "bws",
+            &["secret", "get", "id", "-uhttps://evil.example"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            // `--config-file`/`-f` is a second, independent redirection
+            // path: `bws`'s own config file can persist a server URL that's
+            // used whenever `--server-url` isn't passed, so this must be
+            // stripped even though it isn't a "server URL" flag itself.
+            "bws",
+            &[
+                "secret",
+                "get",
+                "id",
+                "--config-file",
+                "/tmp/evil-bws-config",
+            ],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            "bws",
+            &["secret", "get", "id", "-f/tmp/evil-bws-config"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            "op",
+            &["item", "get", "id", "--config", "/tmp/evil-op-config"],
+            &["item", "get", "id", "--format", "json"],
+        ),
+        (
             "vault",
             &["kv", "get", "secret/foo", "-address=https://evil.example"],
             &["kv", "get", "secret/foo", "-format", "json"],
@@ -565,6 +603,14 @@ fn builtins_strip_backend_override_flags_from_sensitive_commands() {
         (
             "vault",
             &["kv", "get", "secret/foo", "-tls-skip-verify"],
+            &["kv", "get", "secret/foo", "-format", "json"],
+        ),
+        (
+            // `-tls-skip-verify` takes no value at all. Regression coverage
+            // for the arity-blind default previously swallowing whatever
+            // positional followed it — here, the secret path itself.
+            "vault",
+            &["kv", "get", "-tls-skip-verify", "secret/foo"],
             &["kv", "get", "secret/foo", "-format", "json"],
         ),
         (
@@ -582,6 +628,22 @@ fn builtins_strip_backend_override_flags_from_sensitive_commands() {
         (
             "doppler",
             &["secrets", "download", "--no-verify-tls"],
+            &[
+                "secrets",
+                "download",
+                "--format",
+                "json",
+                "--no-file",
+                "--no-fallback",
+            ],
+        ),
+        (
+            // `--config-dir` is a second, independent redirection path:
+            // Doppler persists `api-host`/`verify-tls` per scope in that
+            // directory's `.doppler.yaml`, so this must be stripped even
+            // though it isn't an "api host" flag itself.
+            "doppler",
+            &["secrets", "download", "--config-dir", "/tmp/evil-doppler"],
             &[
                 "secrets",
                 "download",
@@ -619,6 +681,16 @@ fn builtins_strip_backend_override_flags_from_safe_commands() {
             &["project", "list"],
         ),
         (
+            "bws",
+            &["project", "list", "-f/tmp/evil-bws-config"],
+            &["project", "list"],
+        ),
+        (
+            "op",
+            &["whoami", "--config", "/tmp/evil-op-config"],
+            &["whoami"],
+        ),
+        (
             "vault",
             &["status", "-address=https://evil.example"],
             &["status"],
@@ -637,6 +709,11 @@ fn builtins_strip_backend_override_flags_from_safe_commands() {
             "doppler",
             &["projects", "list", "--no-verify-tls"],
             &["projects", "list"],
+        ),
+        (
+            "doppler",
+            &["configs", "list", "--config-dir", "/tmp/evil-doppler"],
+            &["configs", "list"],
         ),
     ];
 
@@ -693,7 +770,7 @@ fn rewrite_args_leaves_args_untouched_when_no_strip_flags_configured() {
 /// isolation from any built-in's other rules.
 fn registry_with_strip_flags(
     args_match: Vec<String>,
-    strip_arg_flags: Vec<String>,
+    strip_arg_flags: Vec<StripFlag>,
     forced_args: Vec<String>,
 ) -> IntegrationRegistry {
     let mut registry = IntegrationRegistry::with_builtins();
@@ -761,7 +838,10 @@ fn rewrite_args_does_not_swallow_a_flag_following_a_stripped_valueless_flag() {
     ];
 
     for (strip_arg_flags, requested, expected) in cases {
-        let strip_arg_flags = strip_arg_flags.iter().map(|s| String::from(*s)).collect();
+        let strip_arg_flags = strip_arg_flags
+            .iter()
+            .map(|s| StripFlag::from(*s))
+            .collect();
         let registry = registry_with_strip_flags(vec![], strip_arg_flags, vec![]);
         let spec = registry.for_binary("foo").expect("foo spec");
         assert_eq!(
@@ -781,7 +861,7 @@ fn rewrite_args_does_not_swallow_an_args_match_token_following_a_stripped_valuel
     // than the one whose output shape the selected matcher expects.
     let registry = registry_with_strip_flags(
         vec![String::from("secrets"), String::from("download")],
-        vec![String::from("--offline")],
+        vec![StripFlag::from("--offline")],
         vec![String::from("--no-fallback")],
     );
     let spec = registry.for_binary("foo").expect("foo spec");
@@ -828,8 +908,11 @@ fn rewrite_args_does_not_strip_a_flag_value_that_looks_like_a_flag() {
     // passphrase starting with `-`) survives the strip and is left in the
     // rewritten args as its own token, rather than being silently merged
     // into the removed flag.
-    let registry =
-        registry_with_strip_flags(vec![], vec![String::from("--fallback-passphrase")], vec![]);
+    let registry = registry_with_strip_flags(
+        vec![],
+        vec![StripFlag::from("--fallback-passphrase")],
+        vec![],
+    );
     let spec = registry.for_binary("foo").expect("foo spec");
 
     let rewritten = spec.rewrite_args(&args(&["--fallback-passphrase", "-x", "positional"]));
@@ -848,11 +931,71 @@ fn rewrite_args_still_swallows_a_non_flag_token_after_a_stripped_valueless_flag(
     // or `args_match` token; it does not, and cannot, restore per-flag
     // arity awareness for arbitrary positionals.
     let registry =
-        registry_with_strip_flags(vec![], vec![String::from("--valueless-flag")], vec![]);
+        registry_with_strip_flags(vec![], vec![StripFlag::from("--valueless-flag")], vec![]);
     let spec = registry.for_binary("foo").expect("foo spec");
 
     let rewritten = spec.rewrite_args(&args(&["--valueless-flag", "positional"]));
     assert_eq!(rewritten, args(&[]));
+}
+
+#[test]
+fn rewrite_args_shaped_none_value_does_not_swallow_the_following_positional() {
+    // Contrast case for the test above: a `Shaped` entry with `FlagValue::None`
+    // opts out of the arity-blind default entirely, so the token after it —
+    // e.g. a path argument the agent still wants to reach the CLI — survives.
+    let registry = registry_with_strip_flags(
+        vec![],
+        vec![StripFlag::shaped("--valueless-flag", None, FlagValue::None)],
+        vec![],
+    );
+    let spec = registry.for_binary("foo").expect("foo spec");
+
+    let rewritten = spec.rewrite_args(&args(&["--valueless-flag", "positional"]));
+    assert_eq!(rewritten, args(&["positional"]));
+}
+
+#[test]
+fn rewrite_args_concatenated_short_flag_value_is_stripped() {
+    // A `Shaped` entry with `FlagValue::Concatenated` recognizes a `short`
+    // alias's value fused directly onto it with no separator at all
+    // (getopt-style, e.g. `-uVALUE`) — a form the default, exact-token-only
+    // matching can't recognize and would otherwise let survive unstripped.
+    let registry = registry_with_strip_flags(
+        vec![],
+        vec![StripFlag::shaped(
+            "--server-url",
+            Some("-u"),
+            FlagValue::Concatenated,
+        )],
+        vec![],
+    );
+    let spec = registry.for_binary("foo").expect("foo spec");
+
+    let cases: &[(&[&str], &[&str])] = &[
+        (
+            &["-uhttps://attacker.example", "positional"],
+            &["positional"],
+        ),
+        (
+            &["--server-url", "https://attacker.example", "positional"],
+            &["positional"],
+        ),
+        (
+            &["--server-url=https://attacker.example", "positional"],
+            &["positional"],
+        ),
+        (
+            &["-u", "https://attacker.example", "positional"],
+            &["positional"],
+        ),
+    ];
+    for (requested, expected) in cases {
+        assert_eq!(
+            spec.rewrite_args(&args(requested)),
+            args(expected),
+            "unexpected rewritten args for {requested:?}",
+        );
+    }
 }
 
 #[test]

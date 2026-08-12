@@ -44,7 +44,7 @@ use crate::{
     non_empty::vec::non_empty_vec,
     spec::{
         MatcherRule,
-        cli::{ArgsAndMatcher, ArgsOnly, CliIntegrationSpec},
+        cli::{ArgsAndMatcher, ArgsOnly, CliIntegrationSpec, FlagValue, StripFlag},
     },
 };
 
@@ -94,8 +94,28 @@ fn bws_spec() -> CliIntegrationSpec {
         // `--server-url` (short `-u`) redirects the CLI at an arbitrary
         // server, which would send `BWS_ACCESS_TOKEN` to a host of the
         // agent's choosing on the very next request — stripped
-        // unconditionally regardless of which rule below matches.
-        strip_arg_flags: vec![String::from("--server-url"), String::from("-u")],
+        // unconditionally regardless of which rule below matches. `bws` is
+        // a clap-based CLI, so its short `-u` alias accepts a value
+        // concatenated directly onto it with no separator (e.g.
+        // `-uhttps://attacker.example`); a bare-string entry only catches
+        // `-u https://...`/`-u=https://...`, so this needs the explicit
+        // `Concatenated` shape to close that gap too.
+        //
+        // `--config-file` (short `-f`) is a second, independent way to reach
+        // the same outcome even with `--server-url`/`-u` stripped: per
+        // `bws`'s own docs, `bws config server-base <url> --config-file
+        // <path>` persists a server URL into that file, and any later
+        // invocation naming the same `--config-file` uses it as the default
+        // whenever `--server-url` isn't passed. An agent that already has
+        // filesystem access (the very thing this sidecar is meant to
+        // mediate) can write such a file itself, with no `bws` invocation of
+        // its own required, then pass `--config-file`/`-f` to an
+        // otherwise-permitted command — so this must be stripped too,
+        // clap-concatenated short form included.
+        strip_arg_flags: vec![
+            StripFlag::shaped("--server-url", Some("-u"), FlagValue::Concatenated),
+            StripFlag::shaped("--config-file", Some("-f"), FlagValue::Concatenated),
+        ],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.
@@ -146,7 +166,11 @@ fn bws_spec() -> CliIntegrationSpec {
                 },
                 // Strip both the long and short forms of the output flag
                 // (`bws` declares `-o` as a documented alias for `--output`).
-                strip_arg_flags: vec![String::from("--output"), String::from("-o")],
+                strip_arg_flags: vec![StripFlag::shaped(
+                    "--output",
+                    Some("-o"),
+                    FlagValue::SeparateOrEquals,
+                )],
                 forced_args: vec![String::from("--output"), String::from("json")],
             }),
             MatcherRule::SensitiveCommand(ArgsAndMatcher {
@@ -160,7 +184,11 @@ fn bws_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                strip_arg_flags: vec![String::from("--output"), String::from("-o")],
+                strip_arg_flags: vec![StripFlag::shaped(
+                    "--output",
+                    Some("-o"),
+                    FlagValue::SeparateOrEquals,
+                )],
                 forced_args: vec![String::from("--output"), String::from("json")],
             }),
             // `project list`/`project get` return only project
@@ -181,11 +209,17 @@ fn op_spec() -> CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
         credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
-        // No backend-override flag to strip here: a service-account token
-        // (unlike the other three built-ins' credentials) only ever
-        // authenticates against 1Password's own cloud API — `op` has no
-        // per-invocation flag to point it at a different host.
-        strip_arg_flags: vec![],
+        // `op` has no documented flag that sets an API host directly — a
+        // service-account token is generally understood to be self-routing
+        // (it authenticates against 1Password's own cloud API regardless of
+        // local state), unlike the other three built-ins' credentials. That
+        // said, `op`'s own docs describe connection configuration as
+        // "managed through the `--config` directory", and we could not fully
+        // rule out that directory influencing request routing even under
+        // service-account auth. Given that uncertainty, `--config` is
+        // stripped defensively rather than assumed safe — same fail-closed
+        // bias as the rest of this registry.
+        strip_arg_flags: vec![StripFlag::from("--config")],
         matchers: vec![
             // Prints the raw secret as plain text, not JSON.
             MatcherRule::BlockedCommand(ArgsOnly {
@@ -259,7 +293,7 @@ fn op_spec() -> CliIntegrationSpec {
                         scope: SecretJsonSelectorScope::Document,
                     }),
                 },
-                strip_arg_flags: vec![String::from("--format")],
+                strip_arg_flags: vec![StripFlag::from("--format")],
                 forced_args: vec![String::from("--format"), String::from("json")],
             }),
             // `whoami`/`account list`/`vault list`/`item list` return
@@ -304,22 +338,36 @@ fn vault_spec() -> CliIntegrationSpec {
         // token-exfiltration path. `-tls-server-name` overrides the SNI/cert
         // hostname checked during that handshake and is stripped alongside
         // them for the same reason. All are stripped unconditionally
-        // regardless of which rule below matches.
+        // regardless of which rule below matches. `-tls-skip-verify` takes
+        // no value at all (`FlagValue::None`): without that, the arity-blind
+        // default would treat the very next positional as its value and
+        // silently drop it too — e.g. `vault kv get -tls-skip-verify
+        // secret/foo` would lose `secret/foo` rather than merely stripping
+        // the flag.
         strip_arg_flags: vec![
-            String::from("-address"),
-            String::from("--address"),
-            String::from("-tls-skip-verify"),
-            String::from("--tls-skip-verify"),
-            String::from("-ca-cert"),
-            String::from("--ca-cert"),
-            String::from("-ca-path"),
-            String::from("--ca-path"),
-            String::from("-client-cert"),
-            String::from("--client-cert"),
-            String::from("-client-key"),
-            String::from("--client-key"),
-            String::from("-tls-server-name"),
-            String::from("--tls-server-name"),
+            StripFlag::shaped("-address", Some("--address"), FlagValue::SeparateOrEquals),
+            StripFlag::shaped(
+                "-tls-skip-verify",
+                Some("--tls-skip-verify"),
+                FlagValue::None,
+            ),
+            StripFlag::shaped("-ca-cert", Some("--ca-cert"), FlagValue::SeparateOrEquals),
+            StripFlag::shaped("-ca-path", Some("--ca-path"), FlagValue::SeparateOrEquals),
+            StripFlag::shaped(
+                "-client-cert",
+                Some("--client-cert"),
+                FlagValue::SeparateOrEquals,
+            ),
+            StripFlag::shaped(
+                "-client-key",
+                Some("--client-key"),
+                FlagValue::SeparateOrEquals,
+            ),
+            StripFlag::shaped(
+                "-tls-server-name",
+                Some("--tls-server-name"),
+                FlagValue::SeparateOrEquals,
+            ),
         ],
         matchers: vec![
             // Any non-`kv` `vault read` target (policies, transit keys, auth
@@ -388,7 +436,11 @@ fn vault_spec() -> CliIntegrationSpec {
                 },
                 // Strip any -format/-format= flag and force JSON, regardless
                 // of what the agent requested.
-                strip_arg_flags: vec![String::from("-format"), String::from("--format")],
+                strip_arg_flags: vec![StripFlag::shaped(
+                    "-format",
+                    Some("--format"),
+                    FlagValue::SeparateOrEquals,
+                )],
                 forced_args: vec![String::from("-format"), String::from("json")],
             }),
             // `kv list`/`list`/`status`/`policy list` return key names,
@@ -421,7 +473,22 @@ fn doppler_spec() -> CliIntegrationSpec {
         // `--no-verify-tls` disables TLS certificate verification, letting
         // that redirected host present a spoofed certificate. Both are
         // stripped unconditionally regardless of which rule below matches.
-        strip_arg_flags: vec![String::from("--api-host"), String::from("--no-verify-tls")],
+        // `--no-verify-tls` takes no value (`FlagValue::None`) so the
+        // arity-blind default doesn't swallow whatever positional follows it.
+        //
+        // `--config-dir` is a second, independent redirection path even with
+        // `--api-host`/`--no-verify-tls` stripped: Doppler persists
+        // `api-host`/`verify-tls` per scope in that directory's
+        // `.doppler.yaml`, so an agent with filesystem access (the very
+        // thing this sidecar mediates) can write its own config directory
+        // and point an otherwise-permitted command at it, with no `doppler`
+        // invocation of its own required to set it up first. No documented
+        // short alias, per the CLI's own `root.go` flag registration.
+        strip_arg_flags: vec![
+            StripFlag::from("--api-host"),
+            StripFlag::shaped("--no-verify-tls", None, FlagValue::None),
+            StripFlag::from("--config-dir"),
+        ],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.
@@ -524,12 +591,12 @@ fn doppler_spec() -> CliIntegrationSpec {
                     domain_selector: None,
                 },
                 strip_arg_flags: vec![
-                    String::from("--format"),
-                    String::from("--fallback"),
-                    String::from("--fallback-passphrase"),
-                    String::from("--fallback-only"),
-                    String::from("--fallback-readonly"),
-                    String::from("--offline"),
+                    StripFlag::from("--format"),
+                    StripFlag::from("--fallback"),
+                    StripFlag::from("--fallback-passphrase"),
+                    StripFlag::shaped("--fallback-only", None, FlagValue::None),
+                    StripFlag::shaped("--fallback-readonly", None, FlagValue::None),
+                    StripFlag::shaped("--offline", None, FlagValue::None),
                 ],
                 forced_args: vec![
                     String::from("--format"),
@@ -572,7 +639,10 @@ fn doppler_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                strip_arg_flags: vec![String::from("--json"), String::from("--raw")],
+                strip_arg_flags: vec![
+                    StripFlag::shaped("--json", None, FlagValue::None),
+                    StripFlag::shaped("--raw", None, FlagValue::None),
+                ],
                 forced_args: vec![String::from("--json")],
             }),
             // `me`/`projects list`/`environments list`/`configs list`

