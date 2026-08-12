@@ -558,17 +558,22 @@ fn mcp_server_management_routes_fail_closed() -> anyhow::Result<()> {
     };
     assert_eq!(denial.code, "unsupported_route");
 
-    let mut listing = request(
-        Authority::from_static("backend.composio.dev"),
-        "/api/v3.1/mcp/servers",
-        &serde_json::json!({}),
-    );
-    listing.method = Method::GET;
-    listing.body = None;
-    let DecodeResult::Deny(denial) = decode(&listing, &catalogs()?) else {
-        anyhow::bail!("MCP server listing must fail closed");
-    };
-    assert_eq!(denial.code, "unsupported_route");
+    // The exclusion must not be dodged by case: a variant like `SERVERS`
+    // re-entering the transport shape would turn a management read into an
+    // ungoverned passthrough.
+    for path in ["/api/v3.1/mcp/servers", "/api/v3.1/mcp/SERVERS"] {
+        let mut listing = request(
+            Authority::from_static("backend.composio.dev"),
+            path,
+            &serde_json::json!({}),
+        );
+        listing.method = Method::GET;
+        listing.body = None;
+        let DecodeResult::Deny(denial) = decode(&listing, &catalogs()?) else {
+            anyhow::bail!("MCP server listing on {path} must fail closed");
+        };
+        assert_eq!(denial.code, "unsupported_route");
+    }
     Ok(())
 }
 

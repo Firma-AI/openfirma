@@ -1158,17 +1158,17 @@ fn path_only(path: &str) -> &str {
 
 fn is_mcp_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
-    // `mcp/servers` is the MCP server-management collection, which shares
-    // this path shape with hosted MCP transport sessions; management is not
-    // transport and must fail closed instead of being mistaken for a
-    // JSON-RPC session.
-    matches!(
-        parts.as_slice(),
-        ["tool_router", "v3" | "v3.1", _, "mcp"]
-            | ["api", "v3" | "v3.1", "mcp", _]
-                if parts != ["api", "v3", "mcp", "servers"]
-                    && parts != ["api", "v3.1", "mcp", "servers"]
-    )
+    match parts.as_slice() {
+        ["tool_router", "v3" | "v3.1", _, "mcp"] => true,
+        // `mcp/servers` is the MCP server-management collection, which
+        // shares this path shape with hosted MCP transport sessions;
+        // management is not transport and must fail closed instead of being
+        // mistaken for a JSON-RPC session. The comparison ignores case so a
+        // variant like `SERVERS` cannot re-enter the transport shape, where
+        // a read would pass through ungoverned.
+        ["api", "v3" | "v3.1", "mcp", id] => !id.eq_ignore_ascii_case("servers"),
+        _ => false,
+    }
 }
 
 fn mcp_session_id(path: &str) -> Option<&str> {
