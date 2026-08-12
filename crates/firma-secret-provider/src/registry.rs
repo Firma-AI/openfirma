@@ -95,7 +95,7 @@ fn bws_spec() -> CliIntegrationSpec {
         // server, which would send `BWS_ACCESS_TOKEN` to a host of the
         // agent's choosing on the very next request — stripped
         // unconditionally regardless of which rule below matches.
-        always_stripped_arg_flags: vec![String::from("--server-url"), String::from("-u")],
+        strip_arg_flags: vec![String::from("--server-url"), String::from("-u")],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.
@@ -185,7 +185,7 @@ fn op_spec() -> CliIntegrationSpec {
         // (unlike the other three built-ins' credentials) only ever
         // authenticates against 1Password's own cloud API — `op` has no
         // per-invocation flag to point it at a different host.
-        always_stripped_arg_flags: vec![],
+        strip_arg_flags: vec![],
         matchers: vec![
             // Prints the raw secret as plain text, not JSON.
             MatcherRule::BlockedCommand(ArgsOnly {
@@ -305,7 +305,7 @@ fn vault_spec() -> CliIntegrationSpec {
         // hostname checked during that handshake and is stripped alongside
         // them for the same reason. All are stripped unconditionally
         // regardless of which rule below matches.
-        always_stripped_arg_flags: vec![
+        strip_arg_flags: vec![
             String::from("-address"),
             String::from("--address"),
             String::from("-tls-skip-verify"),
@@ -421,10 +421,7 @@ fn doppler_spec() -> CliIntegrationSpec {
         // `--no-verify-tls` disables TLS certificate verification, letting
         // that redirected host present a spoofed certificate. Both are
         // stripped unconditionally regardless of which rule below matches.
-        always_stripped_arg_flags: vec![
-            String::from("--api-host"),
-            String::from("--no-verify-tls"),
-        ],
+        strip_arg_flags: vec![String::from("--api-host"), String::from("--no-verify-tls")],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
             // prints them.

@@ -202,7 +202,7 @@ fn args_matches_tolerates_interspersed_flags() {
         binary_name: String::from("synthetic"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        always_stripped_arg_flags: vec![],
+        strip_arg_flags: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
             args_match: vec![String::from("get"), String::from("secret")],
             matcher: SecretMatcher::Json {
@@ -295,7 +295,7 @@ fn push_custom_spec_takes_precedence_over_builtin() {
         binary_name: String::from("bws"),
         provider_id: String::from("custom"),
         credential_env_vars: vec![],
-        always_stripped_arg_flags: vec![],
+        strip_arg_flags: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
             args_match: vec![],
             matcher: SecretMatcher::Json {
@@ -536,7 +536,7 @@ fn builtins_strip_backend_override_flags_from_sensitive_commands() {
     // A flag that redirects the CLI at a different backend (or disables its
     // TLS verification) would exfiltrate that spec's forwarded
     // `credential_env_vars` to a host of the agent's choosing on the very
-    // next request. `always_stripped_arg_flags` must strip these even from
+    // next request. `strip_arg_flags` must strip these even from
     // an otherwise-legitimate `SensitiveCommand` invocation, alongside its
     // own `strip_arg_flags`.
     let registry = IntegrationRegistry::with_builtins();
@@ -610,7 +610,7 @@ fn builtins_strip_backend_override_flags_from_safe_commands() {
     // Same exfiltration risk as the `SensitiveCommand` case above, but for a
     // known-safe pass-through command: `SafeCommand` rules carry no
     // `strip_arg_flags` of their own (their output needs no rewriting), so
-    // this coverage is only exercised by `always_stripped_arg_flags`.
+    // this coverage is only exercised by `strip_arg_flags`.
     let registry = IntegrationRegistry::with_builtins();
     let cases: &[(&str, &[&str], &[&str])] = &[
         (
@@ -664,7 +664,7 @@ fn rewrite_args_leaves_args_untouched_when_no_strip_flags_configured() {
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        always_stripped_arg_flags: vec![],
+        strip_arg_flags: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
             args_match: vec![],
             matcher: SecretMatcher::Json {
@@ -701,7 +701,7 @@ fn registry_with_strip_flags(
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        always_stripped_arg_flags: vec![],
+        strip_arg_flags: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
             args_match,
             matcher: SecretMatcher::Json {

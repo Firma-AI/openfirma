@@ -26,7 +26,7 @@ pub struct CliIntegrationSpec {
     /// the forwarded `credential_env_vars` token to a host of its choosing,
     /// regardless of how well-redacted that command's own stdout is.
     #[serde(default)]
-    pub always_stripped_arg_flags: Vec<String>,
+    pub strip_arg_flags: Vec<String>,
     /// Candidate rules, tried against the invocation's args via
     /// [`CliIntegrationSpec::resolve_args`]. A single binary can emit
     /// different output shapes for different subcommands (e.g. `bws secret
@@ -95,7 +95,7 @@ impl CliIntegrationSpec {
     /// invocation, for whichever rule [`Self::resolve_args`] would select for
     /// `args`.
     ///
-    /// For a `SensitiveCommand` match: strips [`Self::always_stripped_arg_flags`]
+    /// For a `SensitiveCommand` match: strips [`Self::strip_arg_flags`]
     /// and the rule's own `strip_arg_flags` entries (both `--flag value` and
     /// `--flag=value` forms), then appends its `forced_args`. Different
     /// sensitive commands on the same binary can require different forced
@@ -103,7 +103,7 @@ impl CliIntegrationSpec {
     /// --no-file`, while bare `doppler secrets` forces `--json` and strips
     /// `--raw`), so those live on the rule rather than the spec.
     ///
-    /// For a `SafeCommand` match: strips [`Self::always_stripped_arg_flags`]
+    /// For a `SafeCommand` match: strips [`Self::strip_arg_flags`]
     /// only — a pass-through command has no `forced_args`/`strip_arg_flags`
     /// of its own, but still must not let a backend-override or
     /// TLS-bypass flag through unstripped just because its own output needs
@@ -133,7 +133,7 @@ impl CliIntegrationSpec {
             .filter_map(MatcherRule::as_sensitive_command)
             .find(|rule| args_matches(args, &rule.args_match))
         {
-            let mut strip_flags = self.always_stripped_arg_flags.clone();
+            let mut strip_flags = self.strip_arg_flags.clone();
             strip_flags.extend(rule.strip_arg_flags.iter().cloned());
             let mut rewritten = strip_flags_from_args(args, &strip_flags, &rule.args_match);
             rewritten.extend(rule.forced_args.iter().cloned());
@@ -146,7 +146,7 @@ impl CliIntegrationSpec {
             .filter_map(MatcherRule::as_safe_command)
             .find(|rule| args_matches(args, &rule.args_match))
         {
-            return strip_flags_from_args(args, &self.always_stripped_arg_flags, &rule.args_match);
+            return strip_flags_from_args(args, &self.strip_arg_flags, &rule.args_match);
         }
 
         args.to_vec()
