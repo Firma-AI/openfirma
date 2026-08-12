@@ -141,6 +141,16 @@ class from agent runtimes entirely denies every session they try to create;
 constrain them with Cedar conditions on `composio_account` instead, so an
 agent can open sessions but only over the accounts it is allowed to use.
 
+One sharp edge: a session write that selects no accounts carries no
+`composio_account` at all, so a condition that only matches the attribute's
+value admits it. For the "only these accounts" guarantee, also forbid
+session writes whose context lacks `composio_account` (a
+`forbid ... unless context has composio_account` pattern). Even then,
+Composio resolves an omitted account selector on a later session execution
+from server-side state such as the user's default account, which no
+per-call policy sees; the account decision is made at the governed session
+writes or not at all.
+
 Reads of the same two families are governed too. `GET`, `HEAD`, and `OPTIONS`
 on `connected_accounts` and `auth_configs` disclose which integrations exist
 and how they authenticate, so they decode into one `credential.read` action
@@ -238,6 +248,32 @@ favor of generic file tools. Those replacements —
 `communication.external.*` because they act on Slack files in general, not
 canvases. A policy meant to block canvas access entirely must name those three
 as well; Composio exposes no canvas-only equivalent of them.
+
+## Known coverage limits
+
+Several Composio API families the SDK can call are not yet decoded and fail
+closed as `unsupported_route`. This is deliberate — an unrecognized route
+must never pass — but it means enabling these SDK features breaks against
+the Sidecar today:
+
+- automatic file upload and download (`POST /api/v3/files/upload/request`
+  and the `files` routes), used whenever a tool parameter is file-backed;
+- session file mounts (`session/{id}/mounts/...`);
+- the manual Tool Router discovery call (`POST session/{id}/search`) — the
+  equivalent `COMPOSIO_SEARCH_TOOLS` meta-tool through `execute_meta` or
+  hosted MCP passes through instead;
+- inline custom tools (`POST session/{id}/attach`), consistent with custom
+  tools being unsupported on the execution routes;
+- triggers (`trigger_instances`, `triggers_types`), including their
+  read-only listings;
+- MCP server management (`/api/{v3,v3.1}/mcp/servers` and related routes).
+  One consequence: `DELETE /api/{v3,v3.1}/mcp/{id}` is indistinguishable by
+  shape from hosted MCP transport teardown, so an MCP server-configuration
+  delete passes through with the teardown allowance. Deleting only narrows
+  the reachable surface, but treat MCP server management as an
+  operator-side task outside agent traffic. Standalone MCP servers on
+  `mcp.composio.dev` are outside the protected hosts entirely and fall to
+  generic mapping.
 
 ## Audit safety
 

@@ -208,6 +208,24 @@ it to the snapshot or error output. Every new slug remains unmapped until a
 reviewer assigns a canonical class. Validation rejects missing mappings,
 unknown classes, version drift, and source/mapping differences.
 
+## Coverage limits
+
+Composio API families the decoder does not recognize fail closed as
+`unsupported_route`. SDK features that break against the Sidecar today:
+automatic file upload/download (`files` routes), session file mounts
+(`session/{id}/mounts/...`), the manual Tool Router discovery call
+(`POST session/{id}/search`; the `COMPOSIO_SEARCH_TOOLS` meta-tool via
+`execute_meta` or hosted MCP passes through instead), inline custom tools
+(`POST session/{id}/attach`), triggers (including read-only listings), and
+MCP server management (`/api/{v3,v3.1}/mcp/servers` fails closed on every
+method). One shape collision is inherent:
+`DELETE /api/{v3,v3.1}/mcp/{id}` is indistinguishable from hosted MCP
+transport teardown, so an MCP server-configuration delete passes through
+with the teardown allowance — deletion only narrows the reachable surface,
+but MCP server management should be treated as operator-side traffic.
+Standalone MCP servers on `mcp.composio.dev` are outside the protected
+hosts and fall to generic mapping.
+
 ## Classification caveats
 
 Single-class mapping cannot express every provider nuance. Reviewed
