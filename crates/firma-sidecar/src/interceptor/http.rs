@@ -370,10 +370,22 @@ async fn handle_request(
         .await;
     }
 
+    let session_hint = header_session_id(&req);
     // Capture host + session before `req` is consumed so a malformed
     // request can still emit an attributable deny audit event (FIR-208).
-    let malformed_host = host_with_default_port(&req, false)?;
-    let session_hint = header_session_id(&req);
+    let host = match host_with_default_port(&req, false) {
+        Ok(host) => host,
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                &session_hint,
+                "raw.http",
+                "",
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
     let (raw, body_guard) =
         match build_raw_request(req, max_request_body_bytes, budget.clone()).await {
             Ok(result) => result,
@@ -382,7 +394,7 @@ async fn handle_request(
                     &handler,
                     &session_hint,
                     "raw.http",
-                    malformed_host.as_str(),
+                    host.as_str(),
                     &detail.to_string(),
                 )
                 .await);
