@@ -30,7 +30,7 @@ The decoder recognizes:
 
 Recognized read-only discovery requests (tool listings, toolkit metadata,
 session reads, MCP session streams and teardown) can pass without tool-action
-evaluation. Account-lifecycle writes are governed, not passed through:
+evaluation. Account-lifecycle requests are governed, not passed through:
 `POST`/`PATCH`/`PUT`/`DELETE` on the `connected_accounts` and `auth_configs`
 routes, writes to the Tool Router session `link` route, and
 `PATCH`/`PUT`/`DELETE` on a Tool Router `session/{id}` resource (all under
@@ -97,6 +97,8 @@ loaded at startup:
 | --------------- | ------------- | ----- |
 | Gmail           | `20260721_00` | 63    |
 | Google Calendar | `20260721_00` | 49    |
+| Slack           | `20260721_00` | 167   |
+| Notion          | `20260730_00` | 56    |
 
 A tool outside those snapshots is denied with `unknown_tool`, so a Composio
 release that adds tools cannot widen what an agent may do until a maintainer
@@ -110,9 +112,10 @@ carry none, so on those routes Composio executes whatever version its
 server currently serves while classification still comes from the pinned
 snapshot. A server-side toolkit release can therefore change a slug's
 behavior on the session routes before a maintainer reviews the new
-snapshot; refresh pins promptly when Composio announces toolkit updates. Slack and Notion have no reviewed catalog yet
-(tracked separately as FIR-458), so every Slack or Notion tool call is denied
-at the boundary.
+snapshot; refresh pins promptly when Composio announces toolkit updates.
+
+Pins are per pair, so Notion sitting on a later snapshot date than the other
+three toolkits is expected; each pair is validated independently at startup.
 
 Refreshes are maintenance operations, never hot-path network calls:
 
@@ -124,8 +127,27 @@ python3 scripts/composio_catalog.py refresh \
   --mapping crates/firma-sidecar/config/composio/gmail-20260721_00.mapping.json
 ```
 
-The refresh keeps existing reviewed decisions and leaves every new slug
-unmapped. Classify each one, then validate the pair before rebuilding:
+Refreshing in place, onto the same version, keeps the existing reviewed
+decisions and leaves only new slugs unmapped. A version bump writes a
+new file name, so the reviewed decisions must be carried across explicitly
+with `--previous-mapping`:
+
+```bash
+python3 scripts/composio_catalog.py refresh \
+  --toolkit gmail \
+  --version 20260801_00 \
+  --snapshot crates/firma-sidecar/config/composio/gmail-20260801_00.json \
+  --mapping crates/firma-sidecar/config/composio/gmail-20260801_00.mapping.json \
+  --previous-mapping crates/firma-sidecar/config/composio/gmail-20260721_00.mapping.json
+```
+
+Without that flag every slug in the new pin starts unmapped. Known
+limitation: the script matches on slug only. When Composio changes a tool's
+description while keeping its slug, the carried-forward class is reused and
+no re-review is triggered, so read the descriptions of already-classified
+slugs periodically rather than trusting the diff to surface the change.
+
+Classify each unmapped slug, then validate the pair before rebuilding:
 
 ```bash
 python3 scripts/composio_catalog.py validate \
@@ -156,7 +178,30 @@ judgement calls worth knowing when authoring policies:
 - `GOOGLECALENDAR_BATCH_EVENTS` multiplexes create, update, and delete in
   one call. It is pinned to `calendar.delete`, the highest-risk operation it
   can perform, so a capability that excludes deletes can never reach it —
-  but a delete-only grant does let it create or update events.
+  but a delete-only grant does let it create or update events. The decoder
+  does not split it per operation the way it splits
+  `COMPOSIO_MULTI_EXECUTE_TOOL`, because the batch shape is provider-specific
+  and its children are not individually addressable tools.
+- Slack's canvas-specific read, list, and delete tools are deprecated
+  upstream in favor of generic file tools. Those replacements —
+  `SLACK_RETRIEVE_DETAILED_INFORMATION_ABOUT_A_FILE`,
+  `SLACK_LIST_FILES_WITH_FILTERS_IN_SLACK`, and `SLACK_DELETE_FILE` — stay
+  under `communication.external.*` because they act on Slack files in
+  general, not canvases, and raising them to `document.*` would
+  over-classify routine attachment access. A policy meant to block canvas
+  access entirely must name those three as well; Composio exposes no
+  canvas-only equivalent, and the Sidecar cannot tell a canvas from an
+  attachment without inspecting the file at runtime.
+- `GMAIL_CREATE_PROMPT_POST` and `GMAIL_UPDATE_USER_ATTRIBUTES_VALUES` are
+  Sanity CMS tools that Composio files under the `gmail` toolkit. Their
+  descriptions mention the Sanity Content Agent and SAML value precedence,
+  nothing Gmail-specific. They keep conservative classes and a
+  `composio://gmail/...` resource, so the surprising toolkit is an upstream
+  data-quality artifact rather than a classification gap.
+- The Notion catalog has no `account.permission.change` entry. None of its
+  56 tools manages sharing or permissions directly; Notion permissions
+  inherit from the parent page. The absence reflects the toolkit surface,
+  not an unreviewed area.
 
 ## Cedar policy
 

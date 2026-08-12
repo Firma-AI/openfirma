@@ -339,7 +339,8 @@ with the original reason preserved in the audit record prefixed with
 `monitor_mode:`. Composio protocol-level denials (malformed payloads,
 unknown tools, protocol upgrades on the protected hosts) receive the same
 override, so monitor mode never blocks on policy or protocol grounds.
-Operational aborts (connector failures, credential-injection errors) still
+Operational aborts (connector failures, credential-injection errors, and a
+batch whose admitted children disagree on the credentials to inject) still
 block in both modes.
 
 Monitor mode is gated behind the `FIRMA_ALLOW_MONITOR_MODE=1` environment

@@ -10,6 +10,12 @@ tool action.
 
 ## Configure the mapping
 
+Composio governance is not opt-in: the pinned catalogs and the protocol
+decoder load with every Sidecar, whether or not the `composio` mapping pack is
+installed. Installing the pack adds the HTTPS interception hosts and the
+startup coverage warning below; removing it does not turn Composio decoding
+off.
+
 Add the built-in mapping to an existing project:
 
 ```bash
@@ -22,10 +28,15 @@ The generated configuration enables strict HTTPS interception for
 
 The Sidecar cross-checks this at startup: when the mapping rules reference
 the Composio hosts but the HTTPS MITM configuration leaves them bypassed,
-unintercepted, or non-strict, it logs one warning per gap so a
-misconfiguration cannot silently downgrade governance to opaque tunnels.
-Wildcard and catch-all rule hosts count as referencing the Composio hosts,
-because such rules do govern that traffic at runtime.
+unintercepted, or non-strict, it logs a warning per affected host so a
+misconfiguration cannot silently downgrade governance to opaque tunnels. When
+HTTPS MITM is off altogether, that becomes a single combined warning naming
+both hosts. Wildcard and catch-all rule hosts count as referencing the
+Composio hosts, because such rules do govern that traffic at runtime.
+
+The check only runs in the HTTP-proxy interceptor mode. Under any other
+`interceptor.mode` it is silently skipped, so verify interception coverage
+by hand there.
 
 Continue to run your chosen command:
 
@@ -131,20 +142,26 @@ OpenFirma never splits, reorders, or partially forwards the batch.
 
 ## Catalog pins and unsupported tools
 
-The Sidecar ships reviewed catalogs for Gmail (63 tools) and Google Calendar
-(49), both pinned at toolkit version `20260721_00`. They are compiled into the
-binary, so enforcement never queries Composio on the hot path and a tool is
-governed the same way on every host.
+The Sidecar ships reviewed catalogs for Gmail (63 tools), Google Calendar (49),
+and Slack (167), pinned at toolkit version `20260721_00`, plus Notion (56)
+pinned at `20260730_00`. They are compiled into the binary, so enforcement never
+queries Composio on the hot path and a tool is governed the same way on every
+host.
 
 Each slug carries a manually assigned canonical class, so policies stay
 transport-independent:
 
-| Tool                          | Action class                  |
-| ----------------------------- | ----------------------------- |
-| `GMAIL_FETCH_EMAILS`          | `communication.external.read` |
-| `GMAIL_SEND_EMAIL`            | `communication.external.send` |
-| `GOOGLECALENDAR_FIND_EVENT`   | `calendar.read`               |
-| `GOOGLECALENDAR_DELETE_EVENT` | `calendar.delete`             |
+| Tool                           | Action class                  |
+| ------------------------------ | ----------------------------- |
+| `GMAIL_FETCH_EMAILS`           | `communication.external.read` |
+| `GMAIL_SEND_EMAIL`             | `communication.external.send` |
+| `GOOGLECALENDAR_FIND_EVENT`    | `calendar.read`               |
+| `GOOGLECALENDAR_DELETE_EVENT`  | `calendar.delete`             |
+| `SLACK_SEND_MESSAGE`           | `communication.external.send` |
+| `SLACK_INVITE_USER_TO_CHANNEL` | `account.permission.change`   |
+| `SLACK_CREATE_CANVAS`          | `document.write`              |
+| `NOTION_CREATE_NOTION_PAGE`    | `document.write`              |
+| `NOTION_ARCHIVE_NOTION_PAGE`   | `document.delete`             |
 
 Refreshing a toolkit is a maintainer task, not an operator one: see
 [Composio enforcement](https://github.com/Firma-AI/openfirma/blob/main/docs/architecture/composio-enforcement.md)
@@ -158,9 +175,28 @@ admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
 included, so a query-carrying MCP URL fails at the handshake with a clear
 denial instead of breaking only on tool calls. Recognized routes accept only
 read methods (plus `DELETE` for MCP session teardown); anything else fails
-closed. Slack and Notion remain unsupported until each has a complete
-reviewed catalog, so every Slack or Notion tool call is denied at the
-boundary.
+closed.
+
+Three sharp edges are worth knowing before writing policy.
+
+`NOTION_REPLACE_PAGE_CONTENT` overwrites a whole page but is classified
+`document.write`, matching how `filesystem.write` covers "create or
+overwrite". A policy meant to block destructive edits must cover
+`document.write` or name that slug; `document.delete` alone does not catch it.
+
+`GOOGLECALENDAR_BATCH_EVENTS` performs a mixed batch of create, update, and
+delete operations in one call. It is classified at the highest applicable
+tier, `calendar.delete`, rather than split per operation, so granting that
+class for this slug also permits event creation and modification in the same
+call.
+
+Slack's canvas-specific read, list, and delete tools are deprecated upstream in
+favor of generic file tools. Those replacements —
+`SLACK_RETRIEVE_DETAILED_INFORMATION_ABOUT_A_FILE`,
+`SLACK_LIST_FILES_WITH_FILTERS_IN_SLACK`, and `SLACK_DELETE_FILE` — stay under
+`communication.external.*` because they act on Slack files in general, not
+canvases. A policy meant to block canvas access entirely must name those three
+as well; Composio exposes no canvas-only equivalent of them.
 
 ## Audit safety
 

@@ -125,16 +125,17 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 
 **Mapping packs**, add one per service your agent calls:
 
-| Mapping     | Covers                                       |
-| ----------- | -------------------------------------------- |
-| `anthropic` | `api.anthropic.com`                          |
-| `openai`    | `api.openai.com`                             |
-| `github`    | GitHub REST + smart HTTP → 12 action classes |
-| `gmail`     | 41 Gmail REST endpoints → 7 action classes   |
-| `stripe`    | 88 Stripe REST endpoints → 14 action classes |
-| `npm`       | `registry.npmjs.org`                         |
-| `pypi`      | `pypi.org`, `files.pythonhosted.org`         |
-| `cargo`     | `crates.io`                                  |
+| Mapping     | Covers                                                               |
+| ----------- | -------------------------------------------------------------------- |
+| `anthropic` | `api.anthropic.com`                                                  |
+| `openai`    | `api.openai.com`                                                     |
+| `github`    | GitHub REST + smart HTTP → 12 action classes                         |
+| `gmail`     | 41 Gmail REST endpoints → 7 action classes                           |
+| `stripe`    | 88 Stripe REST endpoints → 14 action classes                         |
+| `composio`  | `app.composio.dev`, `backend.composio.dev` — governed tool execution |
+| `npm`       | `registry.npmjs.org`                                                 |
+| `pypi`      | `pypi.org`, `files.pythonhosted.org`                                 |
+| `cargo`     | `crates.io`                                                          |
 
 ```bash
 firma policy list                                        # browse all available packs

@@ -1,0 +1,398 @@
+{
+  "toolkit": "notion",
+  "tools": [
+    {
+      "description": "Bulk-add content blocks to Notion. Text >2000 chars auto-splits. Parses markdown formatting. ⚠️ PARENT BLOCK TYPES: Content is added AS CHILDREN of parent_block_id. - To add content AFTER a heading, use PAGE ID as parent + heading ID in 'after' param. - Headings CANNOT have children unless is_toggleable=True. Simplified format: {'content': 'text', 'block_property': 'paragraph'} Full format for code: {'type': 'code', 'code': {'rich_text': [...], 'language': 'python'}} Array format also supported (auto-normalized): [{\"parent_block_id\": \"...\"}, {block1}, {block2}] => proper request structure",
+      "name": "Add multiple content blocks (bulk, user-friendly)",
+      "slug": "NOTION_ADD_MULTIPLE_PAGE_CONTENT",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "DEPRECATED: Use 'add_multiple_page_content' for better performance. Adds a single content block to a Notion page/block. CRITICAL: Notion API enforces a HARD LIMIT of 2000 characters per text.content field. Content exceeding 2000 chars is AUTOMATICALLY SPLIT into multiple sequential blocks. REQUIRED 'content' field for text blocks: paragraph, heading_1-3, callout, to_do, toggle, quote, list items. Parent blocks MUST be: Page, Toggle, To-do, Bulleted/Numbered List Item, Callout, or Quote. Common errors: - \"content.length should be ≤ 2000\": Text exceeds API limit (should be auto-handled) - \"Content is required for paragraph blocks\": Missing 'content' field for text blocks - \"object_not_found\": Invalid parent_block_id or no integration access For bulk operations, use 'add_multiple_page_content' instead.",
+      "name": "Add single content block to Notion page (Deprecated)",
+      "slug": "NOTION_ADD_PAGE_CONTENT",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "DEPRECATED: Use NOTION_APPEND_TEXT_BLOCKS, NOTION_APPEND_TASK_BLOCKS, NOTION_APPEND_CODE_BLOCKS, NOTION_APPEND_MEDIA_BLOCKS, NOTION_APPEND_LAYOUT_BLOCKS, or NOTION_APPEND_TABLE_BLOCKS instead. Appends raw Notion API blocks to parent. Text limited to 2000 chars per text.content field. Each block MUST have 'object':'block' and 'type'. Use rich_text arrays for text blocks.",
+      "name": "Append raw Notion blocks (advanced API)",
+      "slug": "NOTION_APPEND_BLOCK_CHILDREN",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Append code and technical blocks (code, quote, equation) to a Notion page. Use for: - Code snippets and programming examples (code) - Citations and highlighted quotes (quote) - Mathematical formulas and equations (equation) Supported block types: - code: Code with syntax highlighting (70+ languages including Python, JavaScript, Go, Rust, etc.) - quote: Block quotes for citations - equation: LaTeX/KaTeX mathematical expressions ⚠️ Code content is limited to 2000 characters per text.content field. For longer code, split into multiple code blocks. For other block types, use specialized actions: - append_text_blocks: paragraphs, headings, lists - append_task_blocks: to-do, toggle, callout - append_media_blocks: image, video, audio, files - append_layout_blocks: divider, columns, TOC - append_table_blocks: tables",
+      "name": "Append code blocks (code, quote, equation)",
+      "slug": "NOTION_APPEND_CODE_BLOCKS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Append layout blocks (divider, TOC, breadcrumb, columns) to a Notion page. Supported types: - divider: Horizontal line separator - table_of_contents: Auto-generated from headings - breadcrumb: Page hierarchy navigation - column_list: Multi-column layout (requires 2+ columns, each with 1+ child block) For multi-column layouts, create column_list with column children in one request. Each column must contain at least 1 child block. For other blocks, use: append_text_blocks, append_task_blocks, append_code_blocks, append_media_blocks, or append_table_blocks.",
+      "name": "Append layout blocks (divider, TOC, columns)",
+      "slug": "NOTION_APPEND_LAYOUT_BLOCKS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Append media blocks (image, video, audio, file, pdf, embed, bookmark) to a Notion page. Use for: - Images and screenshots (image) - YouTube/Vimeo videos or direct video URLs (video) - Audio files and podcasts (audio) - File downloads (file) - PDF documents (pdf) - Embedded content from Twitter, Figma, CodePen, etc. (embed) - Link previews with metadata (bookmark) All media blocks require external URLs. For other block types, use specialized actions: - append_text_blocks: paragraphs, headings, lists - append_task_blocks: to-do, toggle, callout - append_code_blocks: code, quote, equation - append_layout_blocks: divider, columns, TOC - append_table_blocks: tables",
+      "name": "Append media blocks (image, video, audio, files)",
+      "slug": "NOTION_APPEND_MEDIA_BLOCKS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Append table blocks to a Notion page. Use for structured tabular data like spreadsheets, comparison charts, and status trackers. Example: { \"table_width\": 3, \"has_column_header\": true, \"rows\": [ {\"cells\": [[{\"type\": \"text\", \"text\": {\"content\": \"Col1\"}}], [...], [...]]} ] } ⚠️ Cell content limited to 2000 chars per text.content field.",
+      "name": "Append table blocks",
+      "slug": "NOTION_APPEND_TABLE_BLOCKS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Append task blocks (to-do, toggle, callout) to a Notion page or block. Supported block types: - to_do: Checkbox items (checkable/uncheckable) - toggle: Collapsible sections - callout: Highlighted boxes with emoji icons All three types support nested children (up to 2 levels of nesting). block_id must be a page or block that supports children (e.g., page, toggle, paragraph, list items, quote, callout, to_do). Blocks like divider, breadcrumb, equation do NOT support children. Limits: 2000 chars per text.content, max 100 blocks per request. For other blocks: append_text_blocks, append_code_blocks, append_media_blocks, append_layout_blocks, append_table_blocks.",
+      "name": "Append task blocks (to-do, toggle, callout)",
+      "slug": "NOTION_APPEND_TASK_BLOCKS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Append text blocks (paragraphs, headings, lists) to a Notion page. This is the most commonly used action for adding content to Notion. Use for: documentation, notes, articles, outlines, lists. Supported block types: - paragraph: Regular text - heading_1, heading_2, heading_3: Section headers - bulleted_list_item: Bullet points - numbered_list_item: Numbered lists ⚠️ Text content is limited to 2000 characters per text.content field. For other block types, use specialized actions: - append_task_blocks: to-do, toggle, callout - append_code_blocks: code, quote, equation - append_media_blocks: image, video, audio, files - append_layout_blocks: divider, columns, TOC - append_table_blocks: tables",
+      "name": "Append text blocks (paragraphs, headings, lists)",
+      "slug": "NOTION_APPEND_TEXT_BLOCKS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Archives (moves to trash) or unarchives (restores from trash) a specified Notion page. Limitation: Workspace-level pages (top-level pages with no parent page or database) cannot be archived via the API and must be archived manually in the Notion UI.",
+      "name": "Archive Notion Page",
+      "slug": "NOTION_ARCHIVE_NOTION_PAGE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Adds a comment to a Notion page (via `parent_page_id`) OR to an existing discussion thread (via `discussion_id`); cannot create new discussion threads on specific blocks (inline comments).",
+      "name": "Create comment",
+      "slug": "NOTION_CREATE_COMMENT",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Creates a new Notion database as a subpage under a specified parent page with a defined properties schema. IMPORTANT NOTES: - The parent page MUST be shared with your integration, otherwise you'll get a 404 error - If you encounter conflict errors (409), retry the request as Notion may experience temporary save conflicts - For relation properties, you MUST provide the database_id of the related database - Parent ID must be a valid UUID format (with or without hyphens), not a template variable Use this action exclusively for creating new databases.",
+      "name": "Create Notion Database",
+      "slug": "NOTION_CREATE_DATABASE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to create a Notion FileUpload object and retrieve an upload URL. Use when you need to automate attaching local or external files directly into Notion without external hosting.",
+      "name": "Create Notion file upload",
+      "slug": "NOTION_CREATE_FILE_UPLOAD",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Creates a new page in a Notion workspace under a specified parent page or database. Supports creating pages with markdown content using the native markdown parameter, or as an empty page that can be populated later. PREREQUISITES: - Parent page/database must exist and be accessible in your Notion workspace - Use search_pages or list_databases first to obtain valid parent IDs LIMITATIONS: - Cannot create root-level pages (must have a parent) - May encounter conflicts if creating pages too quickly - Title-based parent search is less reliable than using UUIDs - The markdown parameter is mutually exclusive with children/content parameters",
+      "name": "Create Notion page",
+      "slug": "NOTION_CREATE_NOTION_PAGE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Create a Notion view.",
+      "name": "Create Notion view",
+      "slug": "NOTION_CREATE_VIEW",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Create a Notion view query and return the first page of page references.",
+      "name": "Create Notion view query",
+      "slug": "NOTION_CREATE_VIEW_QUERY",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Archives a Notion block, page, or database using its ID, which sets its 'archived' property to true (like moving to \"Trash\" in the UI) and allows it to be restored later. Note: This operation will fail if the block has an archived parent or ancestor in the hierarchy. You must unarchive the ancestor before archiving/deleting its descendants. IMPORTANT LIMITATION: Workspace-level pages (top-level pages that are direct children of the workspace, not contained within other pages or databases) cannot be archived via the Notion API. This is a documented Notion API restriction. Only pages that are children of other pages or databases can be deleted through this action.",
+      "name": "Delete a block",
+      "slug": "NOTION_DELETE_BLOCK",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Delete a Notion view.",
+      "name": "Delete Notion view",
+      "slug": "NOTION_DELETE_VIEW",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Delete a cached Notion view query.",
+      "name": "Delete Notion view query",
+      "slug": "NOTION_DELETE_VIEW_QUERY",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Duplicates a Notion page, including all its content, properties, and nested blocks, under a specified parent page or workspace.",
+      "name": "Duplicate page",
+      "slug": "NOTION_DUPLICATE_PAGE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to fetch all child blocks for a given Notion block. Use when you need a complete listing of a block's children beyond a single page; supports optional recursive expansion of nested blocks.",
+      "name": "Fetch All Notion Block Contents",
+      "slug": "NOTION_FETCH_ALL_BLOCK_CONTENTS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Retrieves a paginated list of direct, first-level child block objects along with contents for a given parent Notion block or page ID; use block IDs from the response for subsequent calls to access deeply nested content.",
+      "name": "Fetch Notion Block Children",
+      "slug": "NOTION_FETCH_BLOCK_CONTENTS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Fetches metadata for a Notion block (including pages, which are special blocks) using its UUID. Returns block type, properties, and basic info but not child content. Prerequisites: 1) Block/page must be shared with your integration, 2) Use valid block_id from API responses (not URLs). For child blocks, use fetch_block_contents instead. Common 404 errors mean the block isn't accessible to your integration.",
+      "name": "Fetch Notion block metadata",
+      "slug": "NOTION_FETCH_BLOCK_METADATA",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Fetches unresolved comments for a specified Notion block or page ID. The block/page must be shared with your Notion integration and the integration must have 'Read comments' capability enabled, otherwise a 404 error will be returned.",
+      "name": "Fetch comments",
+      "slug": "NOTION_FETCH_COMMENTS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Fetches Notion items (pages and/or databases) from the Notion workspace, use this to get minimal data about the items in the workspace with a query or list all items in the workspace with minimal data",
+      "name": "Fetch Notion Data",
+      "slug": "NOTION_FETCH_DATA",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Fetches a Notion database's structural metadata (properties, title, etc.) via its `database_id`, not the data entries; `database_id` must reference an existing database.",
+      "name": "Fetch Database",
+      "slug": "NOTION_FETCH_DATABASE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Retrieves a Notion database row's properties and metadata; use fetch_block_contents for page content blocks.",
+      "name": "Fetch database row",
+      "slug": "NOTION_FETCH_ROW",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "DEPRECATED: Use GetAboutUser instead. Retrieves the User object for the bot associated with the current Notion integration token, typically to obtain the bot's user ID for other API operations.",
+      "name": "Get About Me (Deprecated)",
+      "slug": "NOTION_GET_ABOUT_ME",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Retrieves detailed information about a specific Notion user, such as their name, avatar, and email, based on their unique user ID.",
+      "name": "Get about user",
+      "slug": "NOTION_GET_ABOUT_USER",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Retrieve a Notion page's full content rendered as Notion-flavored Markdown in a single API call. Use when you need the readable content of a page without recursive block-children fetching.",
+      "name": "Get page markdown",
+      "slug": "NOTION_GET_PAGE_MARKDOWN",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Call this to get a specific property from a Notion page when you have a valid `page_id` and `property_id`; handles pagination for properties returning multiple items.",
+      "name": "Get page property",
+      "slug": "NOTION_GET_PAGE_PROPERTY_ACTION",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Get a page of results from a cached Notion view query.",
+      "name": "Get Notion view query results",
+      "slug": "NOTION_GET_VIEW_QUERY_RESULTS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Creates a new page (row) in a specified Notion database. Prerequisites: - Database must be shared with your integration - Property names AND types must match schema exactly (case-sensitive) - Use NOTION_FETCH_DATA with fetch_type='databases' first to get exact property names and types - Each database has ONE 'title' property; other text fields are 'rich_text' - Database must NOT have multiple data sources (synced databases are not supported) Common Errors: - 404: Database not shared with integration - 400 \"not a property\": Wrong property name - 400 \"expected to be X\": Wrong property type - 400 \"multiple_data_sources\": Database uses multiple data sources (not supported) Note: Rich text content in child_blocks is automatically truncated to 2000 characters per Notion API limits.",
+      "name": "Insert row database",
+      "slug": "NOTION_INSERT_ROW_DATABASE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Creates a new row (page) in a Notion database from a natural language description. Fetches the database schema at runtime, uses an LLM to generate the correctly-formatted property payload, and creates the page.",
+      "name": "Insert Row From Natural Language",
+      "slug": "NOTION_INSERT_ROW_FROM_NL",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to list all templates for a Notion data source. Use when needing to discover template IDs/names for bulk page creation. Use after confirming the data_source_id.",
+      "name": "List data source templates",
+      "slug": "NOTION_LIST_DATA_SOURCE_TEMPLATES",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to retrieve file uploads for the current bot integration, sorted by most recent first. Use when you need to list all file uploads or paginate through file upload history.",
+      "name": "List Notion file uploads",
+      "slug": "NOTION_LIST_FILE_UPLOADS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Retrieves a paginated list of users (excluding guests) from the Notion workspace; the number of users returned per page may be less than the requested `page_size`.",
+      "name": "List users",
+      "slug": "NOTION_LIST_USERS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "List Notion views for a database or data source.",
+      "name": "List Notion views",
+      "slug": "NOTION_LIST_VIEWS",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to move a Notion page to a new parent (page or database). Use when you need to reorganize page hierarchy. Important: To move to a database, use data_source_id (NOT database_id). Get the data source ID from the database object using NOTION_FETCH_DATABASE.",
+      "name": "Move Page",
+      "slug": "NOTION_MOVE_PAGE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Queries a Notion database to retrieve pages (rows). In Notion, databases are collections where each row is a page and columns are properties. Returns paginated results with metadata. Important requirements: - The database must be shared with your integration - Property names in sorts must match existing database properties exactly (case-sensitive) - For timestamp sorting, use 'created_time' or 'last_edited_time' (case-insensitive) - The start_cursor must be the opaque value from a previous response's next_cursor field - Database IDs must be valid 32-character UUIDs (with or without hyphens) Use this action to: - Retrieve all or filtered database entries - Sort results by database properties or page timestamps - Paginate through large result sets - Get database content for processing or display",
+      "name": "Query database",
+      "slug": "NOTION_QUERY_DATABASE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to query a Notion database with server-side filtering, sorting, and pagination. Use when you need to retrieve a subset of rows by property, date, status, or other conditions.",
+      "name": "Query database with filter",
+      "slug": "NOTION_QUERY_DATABASE_WITH_FILTER",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to query a Notion data source. Use when you need to retrieve pages or child data sources with filters, sorts, and pagination. Make paginated requests using cursors and optional property filters for efficient data retrieval.",
+      "name": "Query data source",
+      "slug": "NOTION_QUERY_DATA_SOURCE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Safely replaces a page's child blocks by optionally backing up current content, deleting existing children, then appending new children in batches. Use when you need to rebuild a page without leaving partial states. Notion does not provide atomic transactions; this tool orchestrates a multi-step workflow with optional backup to reduce risk.",
+      "name": "Replace page content (with backup)",
+      "slug": "NOTION_REPLACE_PAGE_CONTENT",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to retrieve a specific comment by its ID. Use when you have a comment ID and need to fetch its details.",
+      "name": "Retrieve Comment",
+      "slug": "NOTION_RETRIEVE_COMMENT",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to retrieve a specific property object of a Notion database. Use when you need to get details about a single database column/property.",
+      "name": "Retrieve Database Property",
+      "slug": "NOTION_RETRIEVE_DATABASE_PROPERTY",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to retrieve details of a Notion File Upload object by its identifier. Use when you need to check the status or details of an existing file upload.",
+      "name": "Retrieve Notion file upload",
+      "slug": "NOTION_RETRIEVE_FILE_UPLOAD",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Retrieve a Notion page's properties/metadata (not block content) by page_id. Use when you have a page URL/ID and need to access its properties; for page content use block-children tools.",
+      "name": "Retrieve page",
+      "slug": "NOTION_RETRIEVE_PAGE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Retrieve a Notion view and its configuration.",
+      "name": "Retrieve Notion view",
+      "slug": "NOTION_RETRIEVE_VIEW",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Searches Notion pages and databases by title. Use specific search terms to find items by title (primary approach). KNOWN LIMITATIONS: (1) Search indexing is not immediate - recently shared items may not appear. (2) Search is not exhaustive - results may be incomplete. (3) Database pages return all custom properties with full nested structures, which can create large responses for databases with many properties - use filter_properties to reduce response size. FALLBACK STRATEGY: If a specific title search returns empty results despite knowing items exist, try an empty query to list all accessible items and filter client-side.",
+      "name": "Search Notion pages and databases",
+      "slug": "NOTION_SEARCH_NOTION_PAGE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to transmit file contents to Notion for a file upload object. Use after creating a file upload object to send the actual file data.",
+      "name": "Send file upload",
+      "slug": "NOTION_SEND_FILE_UPLOAD",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Updates existing Notion block's text content. ⚠️ CRITICAL: Content limited to 2000 chars. Cannot change block type or archive blocks. Content exceeding 2000 chars will fail with validation error. For longer content, split across multiple blocks using add_multiple_page_content.",
+      "name": "Update block",
+      "slug": "NOTION_UPDATE_BLOCK",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Update page properties, icon, cover, or archive status. IMPORTANT: Property names are workspace-specific and case-sensitive. Use NOTION_FETCH_ROW or NOTION_FETCH_DATABASE first to discover exact property names and valid select/status options. Common errors: - \"X is not a property that exists\": Discover properties with NOTION_FETCH_ROW - \"Invalid status option\": Check valid options with NOTION_FETCH_DATABASE - \"should be defined\": Wrap values: {'Field': {'type': value}} Property formats: title/rich_text use {'text': {'content': 'value'}}, select/status use {'name': 'option'}",
+      "name": "Update Page",
+      "slug": "NOTION_UPDATE_PAGE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Updates a specific row/page within a Notion database by its page UUID (row_id). IMPORTANT CLARIFICATION: This action updates INDIVIDUAL ROWS (pages) in a database, NOT the database structure. - To update a ROW/PAGE: Use THIS action with `row_id` (the page UUID) - To update DATABASE SCHEMA (columns, properties, title): Use NOTION_UPDATE_SCHEMA_DATABASE with `database_id` REQUIRED: `row_id` is MANDATORY. This is the UUID of the specific page/row to update. Do NOT pass `database_id` to this action - that parameter does not exist here. Common issues: (1) Use UUID from page URL, not the full URL (2) Ensure page is shared with integration (3) Match property names exactly as in database (4) Use 'status' type for Status properties, not 'select' (5) Retry on 409 Conflict errors (concurrent updates) Supports updating properties, icon, cover, or archiving the row.",
+      "name": "Update Database Row (Page)",
+      "slug": "NOTION_UPDATE_ROW_DATABASE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Updates an existing Notion database's schema including title, description, and/or properties (columns). IMPORTANT NOTES: - At least one update (title, description, or properties) must be provided - The database must be shared with your integration - Property names are case-sensitive and must match exactly - When changing a property to 'relation' type, you MUST provide the database_id of the target database - Removing properties will permanently delete that column and its data - Use NOTION_FETCH_DATA first to get the exact property names and database structure Common errors: - 'database_id' missing: Ensure you're passing the database_id parameter (not page_id) - 'data_source_id' undefined: When changing to relation type, database_id is required in PropertySchemaUpdate - Property name mismatch: Names must match exactly including case and special characters",
+      "name": "Update database schema",
+      "slug": "NOTION_UPDATE_SCHEMA_DATABASE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Update a Notion view.",
+      "name": "Update Notion view",
+      "slug": "NOTION_UPDATE_VIEW",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    },
+    {
+      "description": "Tool to upsert rows in a Notion database by querying for existing rows and creating or updating them. Use when you need to sync data to Notion without creating duplicates. Each item is matched by a filter, then either created (if no match) or updated (if match found). Supports bulk operations with per-item error handling.",
+      "name": "Upsert database rows",
+      "slug": "NOTION_UPSERT_ROW_DATABASE",
+      "toolkit": "notion",
+      "version": "20260730_00"
+    }
+  ],
+  "version": "20260730_00"
+}

@@ -1,6 +1,7 @@
 //! Canonical Action Class Registry v0.1.
 //!
-//! Contains the 15 canonical action classes defined by FEP v0.1 §2.3.5.
+//! Contains the 52 action classes of registry v0.1: the 15 canonical classes
+//! defined by FEP v0.1 §2.3.5 plus 37 in-place provider-surface additions.
 //! Every `intent.action_class` field in an `ExecutionEnvelope` MUST be one
 //! of these identifiers. Unknown protected actions that cannot be
 //! deterministically mapped to a registry entry fail closed with
@@ -40,17 +41,18 @@ pub struct ActionClassDefinition {
 
 /// The v0.1 Canonical Action Class Registry.
 ///
-/// Contains all 15 action classes defined by FEP v0.1 §2.3.5. Immutable
-/// after construction — runtime extension is not permitted by the spec.
+/// Contains all 52 classes: the 15 defined by FEP v0.1 §2.3.5 plus the 37
+/// in-place provider-surface additions. Immutable after construction —
+/// runtime extension is not permitted by the spec.
 #[derive(Debug, Clone)]
 pub struct ActionClassRegistry {
     classes: HashMap<&'static str, ActionClassDefinition>,
 }
 
 impl ActionClassRegistry {
-    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 33
-    /// in-place additions covering the GitHub (12), Stripe (12), and
-    /// Gmail (5) and Google Calendar (4) surfaces.
+    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 37
+    /// in-place additions covering the GitHub (12), Stripe (12), Gmail (5),
+    /// Google Calendar (4), and Notion (4) surfaces.
     #[must_use]
     #[expect(
         clippy::too_many_lines,
@@ -304,6 +306,27 @@ impl ActionClassRegistry {
                 domain: "calendar",
                 risk_level: High,
             },
+            // ----- Notion coverage additions -----
+            ActionClassDefinition {
+                name: "document.read",
+                domain: "document",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "document.write",
+                domain: "document",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "document.delete",
+                domain: "document",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "document.schema.write",
+                domain: "document",
+                risk_level: High,
+            },
         ];
 
         let mut classes = HashMap::with_capacity(entries.len());
@@ -347,9 +370,9 @@ mod tests {
 
     /// Registry identifiers.
     ///
-    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The remaining 33
-    /// cover GitHub (12), Stripe (12), Gmail (5), and Calendar (4), appended
-    /// in-place without a registry version bump.
+    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The remaining 37
+    /// cover GitHub (12), Stripe (12), Gmail (5), Calendar (4), and Notion
+    /// (4), appended in-place without a registry version bump.
     const FEP_V0_1_CLASSES: &[&str] = &[
         "account.permission.change",
         "browser.purchase",
@@ -403,12 +426,17 @@ mod tests {
         "calendar.create",
         "calendar.update",
         "calendar.delete",
+        // Notion coverage additions.
+        "document.read",
+        "document.write",
+        "document.delete",
+        "document.schema.write",
     ];
 
     #[test]
-    fn test_v0_1_registry_has_48_classes() {
+    fn test_v0_1_registry_has_52_classes() {
         let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 48);
+        assert_eq!(registry.len(), 52);
     }
 
     #[test]
@@ -498,6 +526,30 @@ mod tests {
             assert_eq!(
                 registry.get(name).map(|definition| definition.risk_level),
                 Some(risk_level)
+            );
+        }
+    }
+
+    /// The document domain carries the risk levels policy authors rely on.
+    ///
+    /// Read is Low, ordinary content writes are Medium, and both destruction
+    /// and structural mutation are High, so a template that grants everything
+    /// below High cannot archive a page or rewrite a database schema.
+    #[test]
+    fn document_classes_have_fixed_risk_levels() {
+        let registry = ActionClassRegistry::v0_1();
+        let expected = [
+            ("document.read", RiskLevel::Low),
+            ("document.write", RiskLevel::Medium),
+            ("document.delete", RiskLevel::High),
+            ("document.schema.write", RiskLevel::High),
+        ];
+
+        for (name, risk_level) in expected {
+            assert_eq!(
+                registry.get(name).map(|definition| definition.risk_level),
+                Some(risk_level),
+                "{name} is missing or has the wrong risk level"
             );
         }
     }

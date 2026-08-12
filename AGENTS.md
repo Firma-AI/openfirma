@@ -165,6 +165,7 @@ Shipped mapping files live under `crates/firma-sidecar/config/mappings/`:
 - `github.toml`
 - `stripe.toml`
 - `gmail.toml`
+- `composio.toml`
 
 ## Documentation
 

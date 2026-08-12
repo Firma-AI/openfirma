@@ -409,4 +409,29 @@ namespace Firma {
         resource: [Resource],
         context: EnforcementContext
     };
+
+    // Notion coverage additions.
+    action "document.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "document.write" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "document.delete" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "document.schema.write" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
 }
