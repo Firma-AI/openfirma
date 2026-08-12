@@ -314,6 +314,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             sidecar_endpoint: effective_endpoint,
             seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
             identity_mode: profile.identity_mode,
+            config_file: user_config_path.clone(),
         };
 
         let child = {

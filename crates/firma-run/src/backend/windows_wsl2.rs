@@ -276,6 +276,7 @@ mod tests {
             },
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
+            config_file: None,
         }
     }
 
