@@ -166,6 +166,16 @@ fn documented_secret_paths_are_explicitly_blocked() {
         ("doppler", &["secrets", "upload", "secrets.env"]),
         ("doppler", &["secrets", "delete", "SOME_NAME"]),
         ("doppler", &["secrets", "notes", "set", "SOME_NAME", "note"]),
+        (
+            // `secrets notes` is blocked as a whole prefix, not just its one
+            // real subcommand (`set`): `notes get`/`notes delete` aren't
+            // real Doppler CLI commands today, but must still be blocked
+            // here rather than left to fall through to the bare `secrets`
+            // catch-all below.
+            "doppler",
+            &["secrets", "notes", "get", "SOME_NAME"],
+        ),
+        ("doppler", &["secrets", "notes", "delete", "SOME_NAME"]),
     ];
 
     for (binary, case_args) in cases {
@@ -342,6 +352,15 @@ fn builtins_force_expected_output_formats() {
         (
             "bws",
             &["secret", "get", "id", "--output=yaml"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            // `bws` (clap-based) lets `-o`'s value be concatenated directly
+            // onto it with no separator, same as `-u`/`--server-url` — an
+            // unstripped `-otsv` here would sit right next to the forced
+            // `--output json` instead of being removed.
+            "bws",
+            &["secret", "get", "id", "-otsv"],
             &["secret", "get", "id", "--output", "json"],
         ),
         (

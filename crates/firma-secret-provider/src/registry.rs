@@ -166,10 +166,15 @@ fn bws_spec() -> CliIntegrationSpec {
                 },
                 // Strip both the long and short forms of the output flag
                 // (`bws` declares `-o` as a documented alias for `--output`).
+                // Like `-u`/`--server-url` above, `bws`'s short `-o` accepts
+                // a value concatenated directly onto it with no separator
+                // (e.g. `-otsv`); `Concatenated` closes that gap here too, so
+                // an unstripped `-otsv` can't survive alongside the forced
+                // `--output json` and skew or defeat it.
                 strip_arg_flags: vec![StripFlag::shaped(
                     "--output",
                     Some("-o"),
-                    FlagValue::SeparateOrEquals,
+                    FlagValue::Concatenated,
                 )],
                 forced_args: vec![String::from("--output"), String::from("json")],
             }),
@@ -187,7 +192,7 @@ fn bws_spec() -> CliIntegrationSpec {
                 strip_arg_flags: vec![StripFlag::shaped(
                     "--output",
                     Some("-o"),
-                    FlagValue::SeparateOrEquals,
+                    FlagValue::Concatenated,
                 )],
                 forced_args: vec![String::from("--output"), String::from("json")],
             }),
@@ -508,18 +513,17 @@ fn doppler_spec() -> CliIntegrationSpec {
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("secrets"), String::from("substitute")],
             }),
-            // `secrets set`/`secrets upload`/`secrets delete`/`secrets notes
-            // set` mutate secrets (write real state to Doppler) rather than
-            // just reading them. None of the four are blocked as an
-            // artifact of the implicit fail-closed default — they must be
-            // listed explicitly, because without an explicit block they'd
-            // match the bare `secrets` `SensitiveCommand` rule below (a
-            // single-token `args_match` that matches any `secrets ...`
-            // invocation not already claimed by a more specific rule) and
-            // be routed through Sensitive-command execution: the
-            // subprocess call — and the mutation it performs — happens
-            // before extraction gets a chance to fail closed on the
-            // mismatched output shape.
+            // `secrets set`/`secrets upload`/`secrets delete` mutate secrets
+            // (write real state to Doppler) rather than just reading them.
+            // None of the three are blocked as an artifact of the implicit
+            // fail-closed default — they must be listed explicitly, because
+            // without an explicit block they'd match the bare `secrets`
+            // `SensitiveCommand` rule below (a single-token `args_match`
+            // that matches any `secrets ...` invocation not already claimed
+            // by a more specific rule) and be routed through
+            // Sensitive-command execution: the subprocess call — and the
+            // mutation it performs — happens before extraction gets a
+            // chance to fail closed on the mismatched output shape.
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("secrets"), String::from("set")],
             }),
@@ -529,12 +533,23 @@ fn doppler_spec() -> CliIntegrationSpec {
             MatcherRule::BlockedCommand(ArgsOnly {
                 args_match: non_empty_vec![String::from("secrets"), String::from("delete")],
             }),
+            // `secrets notes` (per the CLI's own `secrets_notes.go`) has
+            // exactly one real subcommand today, `set` — also a mutation —
+            // but is blocked here as the two-token *prefix* `["secrets",
+            // "notes"]` rather than the three-token `["secrets", "notes",
+            // "set"]` this used to be: anything else under `notes` (a
+            // version adds later, or simply a typo/unsupported invocation
+            // like `notes get`) would otherwise fall through to the same
+            // bare-`secrets` catch-all described above — that command
+            // shape doesn't exist in the CLI today, so it fails at the
+            // CLI's own argument-count validation before any HTTP call is
+            // made, but relying on that rather than blocking here would tie
+            // this registry's safety to the *current* absence of a `notes
+            // get`/`notes delete` command instead of stating outright that
+            // nothing under `notes` should ever reach Sensitive-command
+            // execution.
             MatcherRule::BlockedCommand(ArgsOnly {
-                args_match: non_empty_vec![
-                    String::from("secrets"),
-                    String::from("notes"),
-                    String::from("set")
-                ],
+                args_match: non_empty_vec![String::from("secrets"), String::from("notes")],
             }),
             // `doppler secrets download --format json --no-file` outputs a
             // flat JSON object of `{name: value, ...}` pairs, the same
