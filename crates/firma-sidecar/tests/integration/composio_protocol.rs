@@ -397,9 +397,8 @@ fn post_to_read_only_routes_fails_closed() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tool Router session creation stays a recognized passthrough, and MCP
-/// session teardown keeps its DELETE: the method allowlists must not break
-/// either flow.
+/// MCP session teardown keeps its DELETE: the method allowlists must not
+/// break the transport-level teardown flow.
 #[test]
 fn mcp_teardown_remains_passthrough() -> anyhow::Result<()> {
     let mut teardown = request(
@@ -485,15 +484,115 @@ fn session_creation_without_accounts_is_a_single_governed_action() -> anyhow::Re
     Ok(())
 }
 
-/// A `connected_accounts` value that is not a map of string lists cannot be
-/// bound to per-account actions, so it fails closed instead of creating a
-/// perimeter policy never saw.
+/// A session update can rebind the session's connected accounts
+/// (`SessionPatchParams.connected_accounts` in Composio's published schema),
+/// so it is the same perimeter-defining write as creation and must expose
+/// each selected account to policy instead of decoding unbound.
+#[test]
+fn session_update_rebinding_accounts_is_governed_per_account() -> anyhow::Result<()> {
+    let mut update = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session/trs_9",
+        &serde_json::json!({
+            "connected_accounts": {"gmail": ["ca_first", "ca_second"]}
+        }),
+    );
+    update.method = Method::PATCH;
+
+    let decoded = actions(decode(&update, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 2);
+    for action in &decoded {
+        assert_eq!(
+            action.envelope.intent().policy_resource_display(),
+            "composio://composio/COMPOSIO_UPDATE_SESSION"
+        );
+        assert_eq!(action.context.session_id.as_deref(), Some("trs_9"));
+    }
+    let accounts: Vec<Option<&str>> = decoded
+        .iter()
+        .map(|action| action.context.connected_account_id.as_deref())
+        .collect();
+    assert_eq!(accounts, [Some("ca_first"), Some("ca_second")]);
+    Ok(())
+}
+
+/// A session update whose body cannot be inspected could smuggle an account
+/// rebinding past policy, so it fails closed instead of decoding unbound.
+#[test]
+fn session_update_with_uninspectable_body_fails_closed() -> anyhow::Result<()> {
+    for body in [
+        b"not json".to_vec(),
+        serde_json::json!({"connected_accounts": {"gmail": "ca_first"}})
+            .to_string()
+            .into_bytes(),
+    ] {
+        let mut update = request_with_body(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_9",
+            body,
+        );
+        update.method = Method::PATCH;
+        let DecodeResult::Deny(denial) = decode(&update, &catalogs()?) else {
+            anyhow::bail!("uninspectable session update must fail closed");
+        };
+        assert_eq!(denial.code, "malformed_payload");
+    }
+    Ok(())
+}
+
+/// The per-account expansion shares the multi-execute bound, so one request
+/// cannot fan out into an unbounded number of policy evaluations.
+#[test]
+fn session_creation_selecting_too_many_accounts_fails_closed() -> anyhow::Result<()> {
+    let ids: Vec<String> = (0..51).map(|index| format!("ca_{index}")).collect();
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({"connected_accounts": {"gmail": ids}}),
+    );
+    let DecodeResult::Deny(denial) = decode(&creation, &catalogs()?) else {
+        anyhow::bail!("oversized account selection must fail closed");
+    };
+    assert_eq!(denial.code, "invalid_batch_size");
+    Ok(())
+}
+
+/// The same account selected under several toolkits is one policy subject,
+/// so it decodes into one action instead of duplicate evaluations.
+#[test]
+fn session_creation_deduplicates_repeated_accounts() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({
+            "connected_accounts": {
+                "gmail": ["ca_shared"],
+                "googlecalendar": ["ca_shared"]
+            }
+        }),
+    );
+
+    let decoded = actions(decode(&creation, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].context.connected_account_id.as_deref(),
+        Some("ca_shared")
+    );
+    Ok(())
+}
+
+/// A `connected_accounts` value that is not a map of non-empty string lists
+/// cannot be bound to per-account actions, so it fails closed instead of
+/// creating a perimeter policy never saw.
 #[test]
 fn session_creation_with_malformed_accounts_fails_closed() -> anyhow::Result<()> {
     for connected_accounts in [
         serde_json::json!("ca_mailbox"),
         serde_json::json!({"gmail": "ca_mailbox"}),
         serde_json::json!({"gmail": [42]}),
+        serde_json::json!({"gmail": [""]}),
     ] {
         let creation = request(
             Authority::from_static("backend.composio.dev"),

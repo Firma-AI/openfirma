@@ -371,18 +371,21 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
             if request.method == Method::POST {
                 return None;
             }
-            let verb = if request.method == Method::DELETE {
-                "DELETE"
-            } else {
-                "UPDATE"
-            };
-            Some(lifecycle_action(
-                request,
-                LIFECYCLE_WRITE_ACTION_CLASS,
-                &format!("COMPOSIO_{verb}_SESSION"),
-                Some(session_id),
-                None,
-            ))
+            if request.method == Method::DELETE {
+                return Some(lifecycle_action(
+                    request,
+                    LIFECYCLE_WRITE_ACTION_CLASS,
+                    "COMPOSIO_DELETE_SESSION",
+                    Some(session_id),
+                    None,
+                ));
+            }
+            // A session update can rebind the session's connected accounts
+            // (`connected_accounts` in Composio's patch schema), making it
+            // the same perimeter-defining write as creation, so a body it
+            // carries must be inspected and each selected account exposed
+            // to policy; an uninspectable body fails closed.
+            Some(decode_session_update(request, session_id))
         }
         LifecycleRoute::SessionLink { session_id } => Some(lifecycle_action(
             request,
@@ -462,53 +465,130 @@ fn lifecycle_action(
 /// creation that selects none still decodes into a single unbound action
 /// because it reshapes the agent's reachable surface.
 fn decode_session_creation(request: &RawRequest, payload: &Map<String, Value>) -> DecodeResult {
-    let Ok(method) = HttpMethod::try_from(&request.method) else {
-        return deny("unsupported_route", "unsupported Composio route");
+    session_perimeter_actions(
+        request,
+        "COMPOSIO_CREATE_SESSION",
+        None,
+        string_field(payload, "user_id"),
+        payload,
+    )
+}
+
+/// Decode a Tool Router session update into governed lifecycle actions.
+///
+/// Composio's session patch schema accepts a `connected_accounts` selection
+/// that rebinds the accounts the session executes with, so an update is the
+/// same perimeter-defining write as creation. A body that cannot be parsed
+/// fails closed rather than decoding unbound, because it could smuggle a
+/// rebinding past policy; an update without a body (or without an account
+/// selection) decodes into a single unbound `COMPOSIO_UPDATE_SESSION`
+/// action.
+fn decode_session_update(request: &RawRequest, session_id: &str) -> DecodeResult {
+    let Some(body) = request.body.as_deref() else {
+        return lifecycle_action(
+            request,
+            LIFECYCLE_WRITE_ACTION_CLASS,
+            "COMPOSIO_UPDATE_SESSION",
+            Some(session_id),
+            None,
+        );
+    };
+    let Ok(payload) = parse_json_without_duplicate_keys(body) else {
+        return deny("malformed_payload", "invalid Composio session payload");
+    };
+    let Some(payload) = payload.as_object() else {
+        return deny("malformed_payload", "invalid Composio session payload");
+    };
+    session_perimeter_actions(
+        request,
+        "COMPOSIO_UPDATE_SESSION",
+        Some(session_id),
+        None,
+        payload,
+    )
+}
+
+/// Extract the deduplicated account selection from a session payload's
+/// `connected_accounts` map.
+///
+/// Returns `None` when the payload selects no accounts. The selection must
+/// be a map of non-empty string lists; anything else fails closed, and a
+/// selection larger than the shared multi-action bound is refused so one
+/// request cannot fan out into an unbounded number of policy evaluations.
+fn selected_session_accounts(
+    payload: &Map<String, Value>,
+) -> Result<Option<Vec<&str>>, DecodeResult> {
+    let Some(selected) = payload.get("connected_accounts") else {
+        return Ok(None);
+    };
+    let Some(by_toolkit) = selected.as_object() else {
+        return Err(deny(
+            "malformed_payload",
+            "invalid Composio session account selection",
+        ));
     };
     let mut accounts: Vec<&str> = Vec::new();
-    if let Some(selected) = payload.get("connected_accounts") {
-        let Some(by_toolkit) = selected.as_object() else {
-            return deny(
+    let mut total = 0_usize;
+    for ids in by_toolkit.values() {
+        let Some(ids) = ids.as_array() else {
+            return Err(deny(
                 "malformed_payload",
-                "invalid Composio session creation payload",
-            );
+                "invalid Composio session account selection",
+            ));
         };
-        for ids in by_toolkit.values() {
-            let Some(ids) = ids.as_array() else {
-                return deny(
+        for id in ids {
+            let Some(id) = id.as_str().filter(|value| !value.is_empty()) else {
+                return Err(deny(
                     "malformed_payload",
-                    "invalid Composio session creation payload",
-                );
+                    "invalid Composio session account selection",
+                ));
             };
-            for id in ids {
-                let Some(id) = id.as_str() else {
-                    return deny(
-                        "malformed_payload",
-                        "invalid Composio session creation payload",
-                    );
-                };
-                if !accounts.contains(&id) {
-                    accounts.push(id);
-                }
+            total += 1;
+            if total > MAX_MULTI_ACTIONS {
+                return Err(deny(
+                    "invalid_batch_size",
+                    "Composio session account selections are limited to 50 accounts",
+                ));
+            }
+            if !accounts.contains(&id) {
+                accounts.push(id);
             }
         }
     }
-    let user_id = string_field(payload, "user_id");
-    let bound_accounts: Vec<Option<&str>> = if accounts.is_empty() {
-        vec![None]
-    } else {
-        accounts.into_iter().map(Some).collect()
+    Ok((!accounts.is_empty()).then_some(accounts))
+}
+
+/// Build the governed lifecycle actions for a perimeter-defining session
+/// write, one per selected account or a single unbound action when the
+/// payload selects none.
+fn session_perimeter_actions(
+    request: &RawRequest,
+    slug: &str,
+    session_id: Option<&str>,
+    user_id: Option<&str>,
+    payload: &Map<String, Value>,
+) -> DecodeResult {
+    let Ok(method) = HttpMethod::try_from(&request.method) else {
+        return deny("unsupported_route", "unsupported Composio route");
     };
+    let accounts = match selected_session_accounts(payload) {
+        Ok(accounts) => accounts,
+        Err(denial) => return denial,
+    };
+    let bound_accounts: Vec<Option<&str>> = accounts.map_or_else(
+        || vec![None],
+        |accounts| accounts.into_iter().map(Some).collect(),
+    );
     DecodeResult::Actions(
         bound_accounts
             .into_iter()
             .map(|account| {
                 let context = ComposioContext {
                     toolkit: LIFECYCLE_TOOLKIT.to_string(),
-                    tool_slug: "COMPOSIO_CREATE_SESSION".to_string(),
+                    tool_slug: slug.to_string(),
                     user_id: user_id.map(str::to_string),
                     connected_account_id: account.map(str::to_string),
-                    session_id: None,
+                    session_id: session_id.map(str::to_string),
                     batch_index: None,
                     batch_size: None,
                 };

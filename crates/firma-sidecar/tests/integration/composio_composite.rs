@@ -1009,6 +1009,78 @@ async fn session_creation_binding_a_denied_account_is_refused() -> anyhow::Resul
     Ok(())
 }
 
+/// An unbound session creation is admitted by an account-keyed policy, so a
+/// later session update must not be able to bind the denied account through
+/// a body the policy never inspects.
+#[tokio::test]
+async fn session_update_binding_a_denied_account_is_refused() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::DenyExecutiveAccount,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    )
+    .with_composio_catalogs(catalogs()?);
+
+    let unbound_creation = RawRequest {
+        method: Method::POST,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3.1/tool_router/session".to_string(),
+        headers: HeaderMap::new(),
+        body: Some(
+            serde_json::json!({"user_id": "user_attacker", "toolkits": ["gmail"]})
+                .to_string()
+                .into_bytes(),
+        ),
+        is_https: true,
+    };
+    let created = handler.handle(unbound_creation, "sess_composite").await;
+    assert!(matches!(created, HandledResponse::Ok(_)));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
+    let creation_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing creation audit"))?;
+    assert_eq!(
+        *creation_audit.decision(),
+        firma_sidecar::audit::Decision::Allow
+    );
+
+    let rebinding_update = RawRequest {
+        method: Method::PATCH,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3.1/tool_router/session/trs_1".to_string(),
+        headers: HeaderMap::new(),
+        body: Some(
+            serde_json::json!({"connected_accounts": {"gmail": ["ca_executive"]}})
+                .to_string()
+                .into_bytes(),
+        ),
+        is_https: true,
+    };
+    let refused = handler.handle(rebinding_update, "sess_composite").await;
+    assert!(matches!(refused, HandledResponse::Deny { .. }));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
+    let refused_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing refused-update audit"))?;
+    assert_eq!(
+        *refused_audit.decision(),
+        firma_sidecar::audit::Decision::Deny
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn handler_monitor_override_still_dispatches_only_once() -> anyhow::Result<()> {
     let (request, _) = request_and_actions()?;

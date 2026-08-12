@@ -58,10 +58,15 @@ within, and Composio resolves an omitted downstream account selector from
 that stored state, so the creation decodes into one
 `COMPOSIO_CREATE_SESSION` action per selected account (a single unbound
 action when the payload selects none) and account policy meets each account
-before the perimeter exists. A `POST` to an existing `session/{id}` — a
-route Composio does not define — fails closed. Tearing down the hosted MCP
-transport session via `DELETE` on the MCP path remains transport-level
-passthrough. Every recognized route carries a method
+before the perimeter exists. A session update (`PATCH`/`PUT` on
+`session/{id}`) can rebind those accounts through the same
+`connected_accounts` field, so its selection decodes into per-account
+`COMPOSIO_UPDATE_SESSION` actions the same way; an update body that cannot
+be parsed fails closed rather than decoding unbound, and one request may
+select at most 50 accounts (the shared multi-action bound). A `POST` to an
+existing `session/{id}` — a route Composio does not define — fails closed.
+Tearing down the hosted MCP transport session via `DELETE` on the MCP path
+remains transport-level passthrough. Every recognized route carries a method
 allowlist: reads (`GET`/`HEAD`/`OPTIONS`) pass through everywhere except the
 two governed lifecycle families above, MCP session paths additionally allow
 `DELETE` for teardown, lifecycle requests are governed, and any other method

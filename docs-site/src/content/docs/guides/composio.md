@@ -122,13 +122,23 @@ session call executes within, and Composio resolves an omitted downstream
 account selector from that stored state, so the creation decodes into one
 `account.permission.change` action per selected account (resource
 `composio://composio/COMPOSIO_CREATE_SESSION`); a creation that selects no
-accounts decodes into a single unbound action. Account policy therefore meets
-each account before the session perimeter exists.
+accounts decodes into a single unbound action. A session update (`PATCH` on
+`session/{id}`) can rebind those accounts through the same
+`connected_accounts` field, so its selection decodes into per-account
+`COMPOSIO_UPDATE_SESSION` actions the same way, and an update body that
+cannot be parsed fails closed. Account policy therefore meets each account
+before the session perimeter exists or changes. One request may select at
+most 50 accounts.
 
 A capability must grant `account.permission.change` for these requests to
-succeed, and Cedar can deny them like any other action. Grant that class to
-the backend session that runs OAuth flows and withhold it from agent
-runtimes.
+succeed, and Cedar can deny them like any other action. Grant it in two
+scopes: the backend session that runs OAuth flows needs it for the
+`connected_accounts` and `auth_configs` writes, and whichever principal
+creates Tool Router sessions — often the agent runtime itself in the stock
+Composio flow — needs it for session creation and updates. Withholding the
+class from agent runtimes entirely denies every session they try to create;
+constrain them with Cedar conditions on `composio_account` instead, so an
+agent can open sessions but only over the accounts it is allowed to use.
 
 Reads of the same two families are governed too. `GET`, `HEAD`, and `OPTIONS`
 on `connected_accounts` and `auth_configs` disclose which integrations exist
