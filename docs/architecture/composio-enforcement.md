@@ -61,9 +61,18 @@ action when the payload selects none) and account policy meets each account
 before the perimeter exists. A session update (`PATCH`/`PUT` on
 `session/{id}`) can rebind those accounts through the same
 `connected_accounts` field, so its selection decodes into per-account
-`COMPOSIO_UPDATE_SESSION` actions the same way; an update body that cannot
-be parsed fails closed rather than decoding unbound, and one request may
-select at most 50 accounts (the shared multi-action bound). A `POST` to an
+`COMPOSIO_UPDATE_SESSION` actions the same way; an explicit
+`connected_accounts: null` clears the selection and decodes unbound, an
+update body that cannot be parsed fails closed rather than decoding
+unbound, and one request may select at most 50 account entries (the shared
+multi-action bound). The Connect Link route
+(`POST /api/{v3,v3.1}/connected_accounts/link`) initiates OAuth for an
+account that does not exist yet, so it decodes as
+`COMPOSIO_CREATE_CONNECTED_ACCOUNT` with no account selector rather than
+capturing the literal `link` segment as an account id. A session write that
+selects no accounts carries no `composio_account` context at all; a policy
+that must guarantee "only these accounts" has to forbid session writes
+lacking the attribute in addition to matching its value. A `POST` to an
 existing `session/{id}` — a route Composio does not define — fails closed.
 Tearing down the hosted MCP transport session via `DELETE` on the MCP path
 remains transport-level passthrough. Every recognized route carries a method

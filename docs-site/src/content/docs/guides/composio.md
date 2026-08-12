@@ -122,13 +122,14 @@ session call executes within, and Composio resolves an omitted downstream
 account selector from that stored state, so the creation decodes into one
 `account.permission.change` action per selected account (resource
 `composio://composio/COMPOSIO_CREATE_SESSION`); a creation that selects no
-accounts decodes into a single unbound action. A session update (`PATCH` on
-`session/{id}`) can rebind those accounts through the same
+accounts decodes into a single unbound action. A session update (`PATCH` or
+`PUT` on `session/{id}`) can rebind those accounts through the same
 `connected_accounts` field, so its selection decodes into per-account
-`COMPOSIO_UPDATE_SESSION` actions the same way, and an update body that
-cannot be parsed fails closed. Account policy therefore meets each account
-before the session perimeter exists or changes. One request may select at
-most 50 accounts.
+`COMPOSIO_UPDATE_SESSION` actions the same way, an explicit
+`connected_accounts: null` clears the selection and decodes unbound, and an
+update body that cannot be parsed fails closed. Account policy therefore
+meets each account before the session perimeter exists or changes. One
+request may select at most 50 accounts.
 
 A capability must grant `account.permission.change` for these requests to
 succeed, and Cedar can deny them like any other action. Grant it in two

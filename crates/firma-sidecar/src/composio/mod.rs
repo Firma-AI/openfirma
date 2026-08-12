@@ -306,17 +306,24 @@ fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute<'_>> {
             "v3" | "v3.1",
             family @ ("connected_accounts" | "auth_configs"),
             rest @ ..,
-        ] => Some(LifecycleRoute::Family {
-            noun: if *family == "connected_accounts" {
-                "CONNECTED_ACCOUNT"
-            } else {
-                "AUTH_CONFIG"
-            },
-            account_id: (*family == "connected_accounts")
-                .then(|| rest.first().copied())
-                .flatten(),
-            is_collection: rest.is_empty(),
-        }),
+        ] => {
+            // The Connect Link route initiates OAuth for an account that
+            // does not exist yet, so it classifies as a collection-level
+            // creation; capturing the literal `link` segment as an account
+            // id would leak a bogus selector into policy context.
+            let is_link = *family == "connected_accounts" && rest == ["link"];
+            Some(LifecycleRoute::Family {
+                noun: if *family == "connected_accounts" {
+                    "CONNECTED_ACCOUNT"
+                } else {
+                    "AUTH_CONFIG"
+                },
+                account_id: (*family == "connected_accounts" && !is_link)
+                    .then(|| rest.first().copied())
+                    .flatten(),
+                is_collection: rest.is_empty() || is_link,
+            })
+        }
         ["api", "v3" | "v3.1", "tool_router", "session", session_id] => {
             Some(LifecycleRoute::Session { session_id })
         }
@@ -518,7 +525,13 @@ fn decode_session_update(request: &RawRequest, session_id: &str) -> DecodeResult
 fn selected_session_accounts(
     payload: &Map<String, Value>,
 ) -> Result<Option<Vec<&str>>, DecodeResult> {
-    let Some(selected) = payload.get("connected_accounts") else {
+    // An explicit `connected_accounts: null` is schema-valid on the patch
+    // route and clears the pinned selection; clearing shrinks the perimeter,
+    // so it decodes like an absent selection rather than failing closed.
+    let Some(selected) = payload
+        .get("connected_accounts")
+        .filter(|value| !value.is_null())
+    else {
         return Ok(None);
     };
     let Some(by_toolkit) = selected.as_object() else {
@@ -547,7 +560,7 @@ fn selected_session_accounts(
             if total > MAX_MULTI_ACTIONS {
                 return Err(deny(
                     "invalid_batch_size",
-                    "Composio session account selections are limited to 50 accounts",
+                    "Composio session account selections are limited to 50 account entries",
                 ));
             }
             if !accounts.contains(&id) {
@@ -1145,9 +1158,16 @@ fn path_only(path: &str) -> &str {
 
 fn is_mcp_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
+    // `mcp/servers` is the MCP server-management collection, which shares
+    // this path shape with hosted MCP transport sessions; management is not
+    // transport and must fail closed instead of being mistaken for a
+    // JSON-RPC session.
     matches!(
         parts.as_slice(),
-        ["tool_router", "v3" | "v3.1", _, "mcp"] | ["api", "v3" | "v3.1", "mcp", _]
+        ["tool_router", "v3" | "v3.1", _, "mcp"]
+            | ["api", "v3" | "v3.1", "mcp", _]
+                if parts != ["api", "v3", "mcp", "servers"]
+                    && parts != ["api", "v3.1", "mcp", "servers"]
     )
 }
 

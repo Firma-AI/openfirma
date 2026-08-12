@@ -490,30 +490,130 @@ fn session_creation_without_accounts_is_a_single_governed_action() -> anyhow::Re
 /// each selected account to policy instead of decoding unbound.
 #[test]
 fn session_update_rebinding_accounts_is_governed_per_account() -> anyhow::Result<()> {
+    for method in [Method::PATCH, Method::PUT] {
+        let mut update = request(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_9",
+            &serde_json::json!({
+                "connected_accounts": {"gmail": ["ca_first", "ca_second"]}
+            }),
+        );
+        update.method = method;
+
+        let decoded = actions(decode(&update, &catalogs()?))?;
+
+        assert_eq!(decoded.len(), 2);
+        for action in &decoded {
+            assert_eq!(
+                action.envelope.intent().policy_resource_display(),
+                "composio://composio/COMPOSIO_UPDATE_SESSION"
+            );
+            assert_eq!(action.context.session_id.as_deref(), Some("trs_9"));
+        }
+        let accounts: Vec<Option<&str>> = decoded
+            .iter()
+            .map(|action| action.context.connected_account_id.as_deref())
+            .collect();
+        assert_eq!(accounts, [Some("ca_first"), Some("ca_second")]);
+    }
+    Ok(())
+}
+
+/// The Connect Link route initiates OAuth for an account that does not exist
+/// yet, so it decodes as an account creation with no account selector; the
+/// literal `link` path segment must never leak into policy context as an
+/// account id.
+#[test]
+fn connected_account_link_is_governed_as_account_creation() -> anyhow::Result<()> {
+    let link = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/connected_accounts/link",
+        &serde_json::json!({"auth_config_id": "ac_1", "user_id": "user_1"}),
+    );
+
+    let decoded = actions(decode(&link, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// MCP server management shares a path shape with hosted MCP transport
+/// sessions; the `servers` collection is management, not transport, and must
+/// fail closed as an unsupported route on every method instead of being
+/// mistaken for a JSON-RPC session.
+#[test]
+fn mcp_server_management_routes_fail_closed() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/mcp/servers",
+        &serde_json::json!({"name": "shadow", "toolkits": ["gmail"]}),
+    );
+    let DecodeResult::Deny(denial) = decode(&creation, &catalogs()?) else {
+        anyhow::bail!("MCP server creation must fail closed");
+    };
+    assert_eq!(denial.code, "unsupported_route");
+
+    let mut listing = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/mcp/servers",
+        &serde_json::json!({}),
+    );
+    listing.method = Method::GET;
+    listing.body = None;
+    let DecodeResult::Deny(denial) = decode(&listing, &catalogs()?) else {
+        anyhow::bail!("MCP server listing must fail closed");
+    };
+    assert_eq!(denial.code, "unsupported_route");
+    Ok(())
+}
+
+/// Composio's patch schema allows an explicit `connected_accounts: null` to
+/// clear the pinned selection. Clearing shrinks the perimeter, so it decodes
+/// into the single unbound update action instead of failing closed.
+#[test]
+fn session_update_clearing_accounts_is_a_single_governed_action() -> anyhow::Result<()> {
     let mut update = request(
         Authority::from_static("backend.composio.dev"),
         "/api/v3.1/tool_router/session/trs_9",
-        &serde_json::json!({
-            "connected_accounts": {"gmail": ["ca_first", "ca_second"]}
-        }),
+        &serde_json::json!({"connected_accounts": null}),
     );
     update.method = Method::PATCH;
 
     let decoded = actions(decode(&update, &catalogs()?))?;
 
-    assert_eq!(decoded.len(), 2);
-    for action in &decoded {
-        assert_eq!(
-            action.envelope.intent().policy_resource_display(),
-            "composio://composio/COMPOSIO_UPDATE_SESSION"
-        );
-        assert_eq!(action.context.session_id.as_deref(), Some("trs_9"));
-    }
-    let accounts: Vec<Option<&str>> = decoded
-        .iter()
-        .map(|action| action.context.connected_account_id.as_deref())
-        .collect();
-    assert_eq!(accounts, [Some("ca_first"), Some("ca_second")]);
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_UPDATE_SESSION"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// A stock session patch that touches only tools or toolkits still reshapes
+/// the reachable surface, so it decodes into one unbound governed action.
+#[test]
+fn session_update_without_account_selection_is_a_single_governed_action() -> anyhow::Result<()> {
+    let mut update = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session/trs_9",
+        &serde_json::json!({"toolkits": {"enable": ["gmail"]}}),
+    );
+    update.method = Method::PUT;
+
+    let decoded = actions(decode(&update, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_UPDATE_SESSION"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
     Ok(())
 }
 
