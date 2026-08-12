@@ -19,7 +19,11 @@ use firma_sidecar::config::{
 use firma_sidecar::connector::ConnectorRegistry;
 use firma_sidecar::credential::{CredentialInjectionError, CredentialInjector};
 use firma_sidecar::handler::{HandledResponse, RequestHandler, UpgradeAuthorization};
+#[cfg(unix)]
+use firma_sidecar::interceptor::Interceptor;
 use firma_sidecar::interceptor::http::HttpInterceptor;
+#[cfg(unix)]
+use firma_sidecar::interceptor::unix_socket::UnixSocketInterceptor;
 use firma_sidecar::pipeline::{
     ActionClassRegistry, CapabilityMap, CapabilityValidator, CompositeDisposition,
     ConstraintEnforcer, EnforcementDecision, EnforcementPipeline, IntentNormalizer, MappingTable,
@@ -30,6 +34,8 @@ use rcgen::{CertifiedKey, generate_simple_self_signed};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
+use tokio::net::UnixStream;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_util::sync::CancellationToken;
@@ -215,7 +221,7 @@ impl Connector for HeaderCapturingConnector {
         );
         Ok(ConnectorResponse {
             status: 201,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: b"ok".to_vec(),
             dispatch_latency: Duration::from_millis(2),
             response_size: 2,
@@ -927,6 +933,12 @@ async fn handler_monitor_override_still_dispatches_only_once() -> anyhow::Result
 }
 
 async fn read_headers(stream: &mut TcpStream) -> anyhow::Result<String> {
+    read_response_headers(stream).await
+}
+
+async fn read_response_headers(
+    stream: &mut (impl tokio::io::AsyncRead + Unpin),
+) -> anyhow::Result<String> {
     let mut collected = Vec::new();
     let mut buf = [0_u8; 256];
     loop {
@@ -1008,6 +1020,37 @@ async fn proxy_preserves_agent_cookie_after_allow() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn proxy_returns_structured_denial_for_malformed_host() -> anyhow::Result<()> {
+    proxy_returns_structured_denial_for_request(
+        b"GET / HTTP/1.1\r\nHost: bad host\r\nConnection: close\r\n\r\n",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn proxy_returns_structured_denial_for_malformed_connect_host() -> anyhow::Result<()> {
+    proxy_returns_structured_denial_for_request(
+        b"CONNECT example.test:443 HTTP/1.1\r\nHost: bad host\r\nConnection: close\r\n\r\n",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn proxy_returns_structured_denial_for_non_text_session_id() -> anyhow::Result<()> {
+    proxy_returns_structured_denial_for_request(
+        b"GET / HTTP/1.1\r\nHost: example.test\r\nX-Firma-Session-Id: \xff\r\nConnection: close\r\n\r\n",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn proxy_returns_structured_denial_for_non_text_connect_session_id() -> anyhow::Result<()> {
+    proxy_returns_structured_denial_for_request(
+        b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Firma-Session-Id: \xff\r\nConnection: close\r\n\r\n",
+    )
+    .await
+}
+
+async fn proxy_returns_structured_denial_for_request(request: &[u8]) -> anyhow::Result<()> {
     let connector = Arc::new(CountingConnector {
         dispatches: AtomicUsize::new(0),
         firma_header_seen: AtomicBool::new(false),
@@ -1035,9 +1078,7 @@ async fn proxy_returns_structured_denial_for_malformed_host() -> anyhow::Result<
         }
     });
     let mut stream = TcpStream::connect(proxy_addr).await?;
-    stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: bad host\r\nConnection: close\r\n\r\n")
-        .await?;
+    stream.write_all(request).await?;
 
     let response = read_headers(&mut stream).await?;
     assert!(
@@ -1048,6 +1089,165 @@ async fn proxy_returns_structured_denial_for_malformed_host() -> anyhow::Result<
 
     cancel.cancel();
     server.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_socket_returns_structured_denial_for_non_text_session_id() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = Arc::new(RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::Allow,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    ));
+    let socket_dir = tempfile::tempdir()?;
+    let socket_path = socket_dir.path().join("sidecar.sock");
+    let cancel = CancellationToken::new();
+    let interceptor = UnixSocketInterceptor::from(socket_path.as_path());
+    let server = tokio::spawn({
+        let cancel = cancel.clone();
+        async move { interceptor.run(handler, cancel).await }
+    });
+    let mut stream = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match UnixStream::connect(&socket_path).await {
+                Ok(stream) => break stream,
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await?;
+    stream
+        .write_all(
+            b"GET / HTTP/1.1\r\nHost: example.test\r\nX-Firma-Session-Id: \xff\r\nConnection: close\r\n\r\n",
+        )
+        .await?;
+
+    let response = read_response_headers(&mut stream).await?;
+    assert!(
+        response.starts_with("HTTP/1.1 403"),
+        "malformed requests must receive a fail-closed 403, got: {response:?}"
+    );
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 0);
+
+    cancel.cancel();
+    server.await??;
+    Ok(())
+}
+
+async fn connect_to_mitm_proxy(
+    websocket: bool,
+) -> anyhow::Result<(
+    tokio_rustls::client::TlsStream<TcpStream>,
+    CancellationToken,
+    tokio::task::JoinHandle<()>,
+    Arc<CountingConnector>,
+    tempfile::TempDir,
+)> {
+    let ca_dir = tempfile::tempdir()?;
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(8);
+    let handler = Arc::new(RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::Allow,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_addr = listener.local_addr()?;
+    let cancel = CancellationToken::new();
+    let interceptor = HttpInterceptor::new(proxy_addr).with_https_mitm(
+        HttpsMitmConfig::default()
+            .with_enabled(true)
+            .with_intercept_hosts(vec!["example.test".to_string()])
+            .with_strict_hosts(vec!["example.test".to_string()])
+            .with_bypass_hosts(Vec::new()),
+        ca_dir.path().to_path_buf(),
+    );
+    let server = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            let _ = interceptor
+                .run_with_listener(listener, handler, cancel)
+                .await;
+        }
+    });
+    let mut stream = TcpStream::connect(proxy_addr).await?;
+    stream
+        .write_all(
+            b"CONNECT example.test:443 HTTP/1.1\r\n\
+              Host: example.test:443\r\n\
+              X-Firma-Session-Id: sess_composite\r\n\r\n",
+        )
+        .await?;
+    let connect_response = read_headers(&mut stream).await?;
+    anyhow::ensure!(
+        connect_response.starts_with("HTTP/1.1 200"),
+        "expected CONNECT 200, got: {connect_response:?}"
+    );
+    let tls = firma_ca_client(ca_dir.path()).await?;
+    let mut tls_stream = tls
+        .connect(ServerName::try_from("example.test".to_string())?, stream)
+        .await?;
+    let upgrade_headers = if websocket {
+        "Connection: Upgrade\r\nUpgrade: websocket\r\n"
+    } else {
+        "Connection: close\r\n"
+    };
+    let mut request =
+        b"GET /unused HTTP/1.1\r\nHost: example.test\r\nX-Firma-Session-Id: ".to_vec();
+    request.push(0xff);
+    request.extend_from_slice(b"\r\n");
+    request.extend_from_slice(upgrade_headers.as_bytes());
+    request.extend_from_slice(b"\r\n");
+    tls_stream.write_all(&request).await?;
+    Ok((tls_stream, cancel, server, connector, ca_dir))
+}
+
+#[tokio::test]
+async fn mitm_http_returns_structured_denial_for_non_text_session_id() -> anyhow::Result<()> {
+    let (mut stream, cancel, server, connector, _ca_dir) = connect_to_mitm_proxy(false).await?;
+
+    let response = read_response_headers(&mut stream).await?;
+    assert!(
+        response.starts_with("HTTP/1.1 403"),
+        "malformed requests must receive a fail-closed 403, got: {response:?}"
+    );
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 0);
+    cancel.cancel();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mitm_websocket_returns_structured_denial_for_non_text_session_id() -> anyhow::Result<()> {
+    let (mut stream, cancel, server, connector, _ca_dir) = connect_to_mitm_proxy(true).await?;
+
+    let response = read_response_headers(&mut stream).await?;
+    assert!(
+        response.starts_with("HTTP/1.1 403"),
+        "malformed requests must receive a fail-closed 403, got: {response:?}"
+    );
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 0);
+    cancel.cancel();
+    let _ = server.await;
     Ok(())
 }
 
