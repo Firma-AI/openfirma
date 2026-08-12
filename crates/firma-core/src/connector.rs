@@ -246,7 +246,7 @@ mod tests {
         let resp = ConnectorResponse {
             status: 201,
             headers: HeaderMap::from([(
-                http::HeaderName::from_static("X-Test"),
+                http::HeaderName::from_static("x-test"),
                 http::HeaderValue::from_static("1"),
             )]),
             body: vec![1, 2, 3],

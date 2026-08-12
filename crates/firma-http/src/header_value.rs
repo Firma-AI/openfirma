@@ -57,6 +57,13 @@ impl FromStr for HeaderValue {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StringOrBytes<'a, T> {
+    Str(#[serde(borrow)] crate::Str<'a>),
+    Bytes(T),
+}
+
 impl Serialize for HeaderValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -64,7 +71,10 @@ impl Serialize for HeaderValue {
     {
         self.0
             .to_str()
-            .map_err(serde::ser::Error::custom)?
+            .map_or_else(
+                |_| StringOrBytes::Bytes(self.0.as_bytes()),
+                |s| StringOrBytes::Str(crate::Str::from(s)),
+            )
             .serialize(serializer)
     }
 }
@@ -74,10 +84,12 @@ impl<'de> Deserialize<'de> for HeaderValue {
     where
         D: Deserializer<'de>,
     {
-        let temp = crate::Str::deserialize(deserializer)?;
-        http::HeaderValue::from_str(temp.0.as_ref())
-            .map(HeaderValue)
-            .map_err(serde::de::Error::custom)
+        match StringOrBytes::<Vec<u8>>::deserialize(deserializer)? {
+            StringOrBytes::Str(s) => http::HeaderValue::from_str(s.0.as_ref()),
+            StringOrBytes::Bytes(b) => http::HeaderValue::from_bytes(&b),
+        }
+        .map(HeaderValue)
+        .map_err(serde::de::Error::custom)
     }
 }
 
