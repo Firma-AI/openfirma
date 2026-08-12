@@ -234,26 +234,17 @@ fn decode_backend(
     }
     let path = path_only(&request.path);
     let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
-    match components.as_slice() {
-        ["api", "v3" | "v3.1", "tools", "execute", slug] => {
-            decode_direct(request, payload, slug, catalogs)
+    let ["api", "v3" | "v3.1", rest @ ..] = components.as_slice() else {
+        return deny("unsupported_route", "unsupported Composio route");
+    };
+    match rest {
+        ["tools", "execute", slug] => decode_direct(request, payload, slug, catalogs),
+        ["tool_router", "session", session_id, "execute"] => {
+            decode_session(request, payload, Some(session_id), catalogs)
         }
-        [
-            "api",
-            "v3" | "v3.1",
-            "tool_router",
-            "session",
-            session_id,
-            "execute",
-        ] => decode_session(request, payload, Some(session_id), catalogs),
-        [
-            "api",
-            "v3" | "v3.1",
-            "tool_router",
-            "session",
-            session_id,
-            "execute_meta",
-        ] => decode_meta_route(request, payload, Some(session_id), catalogs),
+        ["tool_router", "session", session_id, "execute_meta"] => {
+            decode_meta_route(request, payload, Some(session_id), catalogs)
+        }
         // Session creation binds the connected accounts every later call
         // executes within, so it decodes into governed lifecycle actions
         // rather than passing through. The read-route recognizer is
@@ -262,9 +253,7 @@ fn decode_backend(
         // checks and policy evaluation — a POST to an existing session
         // resource (a route Composio does not define) falls through to the
         // fail-closed arm below.
-        ["api", "v3" | "v3.1", "tool_router", "session"] => {
-            decode_session_creation(request, payload)
-        }
+        ["tool_router", "session"] => decode_session_creation(request, payload),
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
 }
@@ -1156,9 +1145,8 @@ fn path_only(path: &str) -> &str {
     path.split_once('?').map_or(path, |(path, _)| path)
 }
 
-fn is_mcp_path(path: &str) -> bool {
-    let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
-    match parts.as_slice() {
+fn is_mcp_route(parts: &[&str]) -> bool {
+    match parts {
         ["tool_router", "v3" | "v3.1", _, "mcp"] => true,
         // `mcp/servers` is the MCP server-management collection, which
         // shares this path shape with hosted MCP transport sessions;
@@ -1171,6 +1159,11 @@ fn is_mcp_path(path: &str) -> bool {
     }
 }
 
+fn is_mcp_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
+    is_mcp_route(&parts)
+}
+
 fn mcp_session_id(path: &str) -> Option<&str> {
     let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
     match parts.as_slice() {
@@ -1181,9 +1174,10 @@ fn mcp_session_id(path: &str) -> Option<&str> {
 }
 
 fn is_recognized_non_execution_path(host: &str, path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
     // Hosted MCP sessions use GET for the event stream and DELETE for
     // teardown; neither carries a tool call.
-    if is_mcp_path(path) {
+    if is_mcp_route(&parts) {
         return true;
     }
     if host == APP_HOST {
@@ -1193,7 +1187,6 @@ fn is_recognized_non_execution_path(host: &str, path: &str) -> bool {
     // reads are governed as `credential.read` by `decode_lifecycle_read` and
     // their writes by `decode_lifecycle_write`, so any method that reaches
     // here on those routes is neither and must fail closed.
-    let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
     matches!(
         parts.as_slice(),
         ["api", "v3" | "v3.1", "tools"]
