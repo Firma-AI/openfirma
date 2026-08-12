@@ -141,8 +141,8 @@ fn spawn_ordered_stack(
         LifecycleTimeouts::default(),
     )
     .expect("spawn ordered stack");
-    wait_for_file(&authority_ready);
-    wait_for_file(&sidecar_ready);
+    assert_eq!(read_marker(&authority_ready), "ready");
+    assert_eq!(read_marker(&sidecar_ready), "ready");
     drop(listeners);
     stack
 }
