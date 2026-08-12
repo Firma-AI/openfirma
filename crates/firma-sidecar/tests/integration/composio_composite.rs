@@ -158,6 +158,11 @@ struct CountingConnector {
     firma_header_seen: AtomicBool,
 }
 
+struct HeaderCapturingConnector {
+    cookie_seen: AtomicBool,
+    firma_header_seen: AtomicBool,
+}
+
 struct MockTlsConnector {
     address: SocketAddr,
     certificate: CertificateDer<'static>,
@@ -181,6 +186,36 @@ impl Connector for CountingConnector {
         Ok(ConnectorResponse {
             status: 201,
             headers: HeaderMap::new(),
+            body: b"ok".to_vec(),
+            dispatch_latency: Duration::from_millis(2),
+            response_size: 2,
+        })
+    }
+}
+
+#[async_trait]
+impl Connector for HeaderCapturingConnector {
+    async fn dispatch(&self, view: &TransportView) -> Result<ConnectorResponse, ConnectorError> {
+        let ActionParams::Http(http) = &view.envelope().intent().params else {
+            return Err(ConnectorError::InvalidRequest(
+                "expected HTTP params".to_string(),
+            ));
+        };
+        self.cookie_seen.store(
+            http.headers
+                .get("cookie")
+                .is_some_and(|value| value == "session=agent-secret"),
+            Ordering::SeqCst,
+        );
+        self.firma_header_seen.store(
+            http.headers
+                .keys()
+                .any(|name| name.as_str().starts_with("x-firma-")),
+            Ordering::SeqCst,
+        );
+        Ok(ConnectorResponse {
+            status: 201,
+            headers: HashMap::new(),
             body: b"ok".to_vec(),
             dispatch_latency: Duration::from_millis(2),
             response_size: 2,
@@ -902,6 +937,118 @@ async fn read_headers(stream: &mut TcpStream) -> anyhow::Result<String> {
             return Ok(String::from_utf8_lossy(&collected).to_string());
         }
     }
+}
+
+#[tokio::test]
+async fn proxy_preserves_agent_cookie_after_allow() -> anyhow::Result<()> {
+    let connector = Arc::new(HeaderCapturingConnector {
+        cookie_seen: AtomicBool::new(false),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = Arc::new(
+        RequestHandler::new(
+            Arc::new(pipeline(
+                PolicyMode::Allow,
+                CredentialMode::Shared,
+                SidecarMode::Enforce,
+            )?),
+            registry,
+            audit_tx,
+        )
+        .with_composio_catalogs(catalogs()?),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_addr = listener.local_addr()?;
+    let cancel = CancellationToken::new();
+    let server = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            HttpInterceptor::new(proxy_addr)
+                .run_with_listener(listener, handler, cancel)
+                .await
+        }
+    });
+    let (request, _) = request_and_actions()?;
+    let body = request
+        .body
+        .ok_or_else(|| anyhow::anyhow!("Composio fixture must have a body"))?;
+    let mut stream = TcpStream::connect(proxy_addr).await?;
+    let head = format!(
+        "POST /tool_router/v3/trs_batch/mcp HTTP/1.1\r\n\
+         Host: app.composio.dev\r\n\
+         Cookie: session=agent-secret\r\n\
+         X-Firma-Session-Id: sess_composite\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\r\n",
+        body.len(),
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(&body).await?;
+
+    let response = read_headers(&mut stream).await?;
+    assert!(
+        response.starts_with("HTTP/1.1 201"),
+        "expected dispatched response, got: {response:?}"
+    );
+    assert!(
+        connector.cookie_seen.load(Ordering::SeqCst),
+        "the allowed upstream dispatch must preserve the agent's Cookie header"
+    );
+    assert!(
+        !connector.firma_header_seen.load(Ordering::SeqCst),
+        "internal Firma headers must still be removed before dispatch"
+    );
+
+    cancel.cancel();
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_returns_structured_denial_for_malformed_host() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = Arc::new(RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::Allow,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_addr = listener.local_addr()?;
+    let cancel = CancellationToken::new();
+    let server = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            HttpInterceptor::new(proxy_addr)
+                .run_with_listener(listener, handler, cancel)
+                .await
+        }
+    });
+    let mut stream = TcpStream::connect(proxy_addr).await?;
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: bad host\r\nConnection: close\r\n\r\n")
+        .await?;
+
+    let response = read_headers(&mut stream).await?;
+    assert!(
+        response.starts_with("HTTP/1.1 403"),
+        "malformed requests must receive a fail-closed 403, got: {response:?}"
+    );
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 0);
+
+    cancel.cancel();
+    server.await??;
+    Ok(())
 }
 
 /// Build a TLS connector that trusts the interceptor's generated Firma CA,
