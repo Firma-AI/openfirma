@@ -22,12 +22,23 @@ use tempfile::TempDir;
 // `exec sleep 60` replaces sh with sleep so the supervisor's SIGTERM in
 // Drop kills the actual descendant rather than an orphaned grandchild.
 const READY_SCRIPT: &str = "#!/bin/sh\n\
+sock=$(sed -n 's/^socket_path = \"\\(.*\\)\"/\\1/p' \"$3\")\n\
 echo 'INFO firma_sidecar::startup::log_contract: config loaded path=\"/x.toml\"' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: mapping table loaded rules=44' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: policy bundle loaded version=\"ab12cd34\" policies=3' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: authority stream connected endpoint=\"(disabled)\"' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: connector registry built hosts=12 default_timeout_ms=5000' 1>&2\n\
-echo 'INFO firma_sidecar::startup::log_contract: interceptor listening addr=\"x.sock\"' 1>&2\n\
+echo \"INFO firma_sidecar::startup::log_contract: interceptor listening addr=\\\"$sock\\\"\" 1>&2\n\
+echo 'INFO firma_sidecar::startup::log_contract: sidecar ready' 1>&2\n\
+exec sleep 60\n";
+
+const ZERO_PORT_SCRIPT: &str = "#!/bin/sh\n\
+echo 'INFO firma_sidecar::startup::log_contract: config loaded path=\"/x.toml\"' 1>&2\n\
+echo 'INFO firma_sidecar::startup::log_contract: mapping table loaded rules=44' 1>&2\n\
+echo 'INFO firma_sidecar::startup::log_contract: policy bundle loaded version=\"ab12cd34\" policies=3' 1>&2\n\
+echo 'INFO firma_sidecar::startup::log_contract: authority stream connected endpoint=\"(disabled)\"' 1>&2\n\
+echo 'INFO firma_sidecar::startup::log_contract: connector registry built hosts=12 default_timeout_ms=5000' 1>&2\n\
+echo 'INFO firma_sidecar::startup::log_contract: interceptor listening addr=\"127.0.0.1:0\"' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: sidecar ready' 1>&2\n\
 exec sleep 60\n";
 
@@ -38,6 +49,85 @@ fn write_fake_sidecar(dir: &std::path::Path, body: &str) -> PathBuf {
     perm.set_mode(0o755);
     fs::set_permissions(&path, perm).expect("chmod");
     path
+}
+
+#[test]
+fn rejects_zero_port_reported_after_tcp_bind() {
+    let tmp = TempDir::new().expect("tmp");
+    let exe = write_fake_sidecar(tmp.path(), ZERO_PORT_SCRIPT);
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let result = SidecarSupervisor::spawn(SpawnRequest {
+        sandbox_id: &sandbox_id,
+        agent_id: super::helper::agent_id(),
+        execution_profile: firma_config_loader::AgentProfile::Generic,
+        session_id: "session-zero-port",
+        marker_dir: tmp.path().join("marker"),
+        template_path: None,
+        env_template: None,
+        cwd_template: None,
+        firma_exe: exe,
+        startup_timeout: Duration::from_secs(5),
+        authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
+        authority_credentials: None,
+        capability_seed_path: None,
+        use_http_proxy_interceptor: true,
+        audit_fallback_path: None,
+        monitor_mode: false,
+    });
+    let Err(error) = result else {
+        panic!("port zero is not a bound TCP endpoint");
+    };
+
+    assert!(error.to_string().contains("port 0 after bind"));
+}
+
+#[test]
+fn pidfile_publication_failure_reaps_started_sidecar() {
+    let tmp = TempDir::new().expect("tmp");
+    let observed_pid = tmp.path().join("observed.pid");
+    let script = READY_SCRIPT.replace(
+        "sock=$(sed",
+        &format!(
+            "mkdir \"$(dirname \"$3\")/sidecar.pid\"\necho $$ > '{}'\nsock=$(sed",
+            observed_pid.display()
+        ),
+    );
+    let exe = write_fake_sidecar(tmp.path(), &script);
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let result = SidecarSupervisor::spawn(SpawnRequest {
+        sandbox_id: &sandbox_id,
+        agent_id: super::helper::agent_id(),
+        execution_profile: firma_config_loader::AgentProfile::Generic,
+        session_id: "session-pidfile-failure",
+        marker_dir: tmp.path().join("marker"),
+        template_path: None,
+        env_template: None,
+        cwd_template: None,
+        firma_exe: exe,
+        startup_timeout: Duration::from_secs(5),
+        authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
+        authority_credentials: None,
+        capability_seed_path: None,
+        use_http_proxy_interceptor: false,
+        audit_fallback_path: None,
+        monitor_mode: false,
+    });
+
+    assert!(result.is_err(), "pidfile publication must fail");
+    let pid: i32 = fs::read_to_string(observed_pid)
+        .expect("fixture recorded pid")
+        .trim()
+        .parse()
+        .expect("parse pid");
+    assert_eq!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+        Err(nix::errno::Errno::ESRCH),
+        "startup owner must synchronously kill and reap the child"
+    );
 }
 
 #[test]
@@ -175,7 +265,13 @@ fn marker_files_present_between_ready_and_drop() {
     // `firma sidecar status` can health-probe the right transport (FIR-195).
     assert_eq!(
         table.get("listen").and_then(|v| v.as_str()),
-        Some("x.sock"),
+        Some(
+            supervisor
+                .marker_dir()
+                .join("sidecar.sock")
+                .to_string_lossy()
+                .as_ref()
+        ),
         "listen endpoint from the ready log must be recorded in metadata"
     );
 }

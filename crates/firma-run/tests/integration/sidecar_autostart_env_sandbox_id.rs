@@ -22,13 +22,14 @@ use tempfile::TempDir;
 fn write_fake_sidecar(dir: &std::path::Path, capture_path: &std::path::Path) -> PathBuf {
     let script = format!(
         "#!/bin/sh\n\
+sock=$(sed -n 's/^socket_path = \"\\(.*\\)\"/\\1/p' \"$3\")\n\
 printf '%s' \"$FIRMA_RUN_SANDBOX_ID\" > {captured}\n\
 echo 'INFO firma_sidecar::startup::log_contract: config loaded path=\"/x.toml\"' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: mapping table loaded rules=44' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: policy bundle loaded version=\"ab12cd34\" policies=3' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: authority stream connected endpoint=\"(disabled)\"' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: connector registry built hosts=12 default_timeout_ms=5000' 1>&2\n\
-echo 'INFO firma_sidecar::startup::log_contract: interceptor listening addr=\"x.sock\"' 1>&2\n\
+echo \"INFO firma_sidecar::startup::log_contract: interceptor listening addr=\\\"$sock\\\"\" 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: sidecar ready' 1>&2\n\
 exec sleep 60\n",
         captured = capture_path.display(),
