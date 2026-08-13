@@ -121,6 +121,38 @@ pub enum OrchestratorError {
     Platform(String),
 }
 
+/// Failure returned when shutting down an in-process owned stack.
+///
+/// The variants distinguish uncertain process teardown from failures that
+/// occur after every process target is confirmed absent. Callers that own
+/// dependencies of the stack must retain them only for
+/// [`Self::TeardownUncertain`].
+#[derive(Debug, Error)]
+pub enum ShutdownError {
+    /// One or more process targets may still be live or uncollected.
+    #[error(transparent)]
+    TeardownUncertain(OrchestratorError),
+    /// All process targets are absent, but durable runtime-state cleanup failed.
+    #[error(transparent)]
+    StateCleanup(OrchestratorError),
+}
+
+impl ShutdownError {
+    /// Whether all owned process targets were confirmed absent.
+    #[must_use]
+    pub const fn processes_stopped(&self) -> bool {
+        matches!(self, Self::StateCleanup(_))
+    }
+
+    /// Discard the shutdown phase while preserving the underlying error.
+    #[must_use]
+    pub(crate) fn into_orchestrator_error(self) -> OrchestratorError {
+        match self {
+            Self::TeardownUncertain(error) | Self::StateCleanup(error) => error,
+        }
+    }
+}
+
 /// Distinguishes caller-owned plan resolution failures from orchestration failures.
 #[derive(Debug, Error)]
 pub enum StartError<E> {
