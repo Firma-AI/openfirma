@@ -1,3 +1,4 @@
+use std::io::Read as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -330,8 +331,44 @@ async fn sensitive_provider_without_gateway_fails_closed() -> anyhow::Result<()>
     Ok(())
 }
 
+/// A fake secret-gateway push endpoint that acknowledges the push, unlike
+/// [`gateway_contact_probe`] which only observes that a connection was made.
+/// Returns the decoded push request body alongside the client, so callers
+/// can assert on what was actually pushed.
+async fn fake_push_gateway() -> anyhow::Result<(
+    GatewayClient,
+    tokio::sync::oneshot::Receiver<serde_json::Value>,
+    tokio::task::JoinHandle<()>,
+)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (pushed_tx, pushed_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            let mut buf = vec![0_u8; 8192];
+            if let Ok(n) = stream.read(&mut buf).await
+                && let Ok(request) = serde_json::from_str::<serde_json::Value>(
+                    String::from_utf8_lossy(&buf[..n]).trim(),
+                )
+            {
+                let placeholder = request["placeholder"].clone();
+                let _ = pushed_tx.send(request);
+                let response = serde_json::json!({ "type": "ok", "placeholder": placeholder })
+                    .to_string()
+                    + "\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        }
+    });
+    let client = GatewayClient::new(
+        GatewayEndpoint::parse(&format!("tcp:{address}"))?,
+        GatewayClientConfig::default(),
+    );
+    Ok((client, pushed_rx, server))
+}
+
 #[tokio::test]
-async fn compressed_sensitive_response_is_not_forwarded_verbatim() -> anyhow::Result<()> {
+async fn compressed_sensitive_response_is_decoded_masked_and_recompressed() -> anyhow::Result<()> {
     let host = "vault.example.test";
     let (handler, _requests) = fixed_handler(
         GZIP_SECRET_RESPONSE.to_vec(),
@@ -346,6 +383,58 @@ async fn compressed_sensitive_response_is_not_forwarded_verbatim() -> anyhow::Re
             ),
         ]),
     )?;
+    let (gateway, pushed, gateway_server) = fake_push_gateway().await?;
+    let handler = handler
+        .with_gateway_client(gateway)
+        .with_http_secret_providers(vec![sensitive_provider(host)]);
+
+    let response = proxy_request(handler, host, b"{}").await?;
+    let pushed = tokio::time::timeout(Duration::from_secs(1), pushed).await??;
+    gateway_server.abort();
+
+    assert_eq!(response.status, 200);
+    assert_ne!(
+        response.body, GZIP_SECRET_RESPONSE,
+        "the rewritten body must not equal the verbatim secret-bearing gzip payload"
+    );
+
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(response.body.as_slice()).read_to_end(&mut decoded)?;
+    assert!(
+        !decoded
+            .windows(SECRET.len())
+            .any(|window| window == SECRET.as_bytes()),
+        "the raw secret must not appear in the decompressed forwarded body"
+    );
+
+    let pushed_secret_b64 = pushed["value_b64"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("push request missing value_b64: {pushed}"))?;
+    let pushed_secret = base64::engine::general_purpose::STANDARD.decode(pushed_secret_b64)?;
+    assert_eq!(
+        pushed_secret,
+        SECRET.as_bytes(),
+        "the gateway must receive the real decompressed secret"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_content_encoding_fails_closed() -> anyhow::Result<()> {
+    let host = "vault.example.test";
+    let (handler, _requests) = fixed_handler(
+        b"opaque-bytes-this-layer-cannot-decode".to_vec(),
+        HeaderMap::from([
+            (
+                http::HeaderName::from_static("content-type"),
+                http::HeaderValue::from_static("application/json"),
+            ),
+            (
+                http::HeaderName::from_static("content-encoding"),
+                http::HeaderValue::from_static("br"),
+            ),
+        ]),
+    )?;
     let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
     let handler = handler
         .with_gateway_client(gateway)
@@ -357,13 +446,9 @@ async fn compressed_sensitive_response_is_not_forwarded_verbatim() -> anyhow::Re
 
     assert!(
         gateway_contact.is_err(),
-        "compressed content must be rejected before extraction or gateway access"
+        "an encoding this layer cannot decode must be rejected before gateway access"
     );
     response.assert_abort(AbortReason::CredentialInjectionFailed)?;
-    assert_ne!(
-        response.body, GZIP_SECRET_RESPONSE,
-        "the secret-bearing gzip payload must never be forwarded verbatim"
-    );
     Ok(())
 }
 

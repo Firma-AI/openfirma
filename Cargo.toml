@@ -96,6 +96,7 @@ firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.5" }
 firma-stack = { path = "crates/firma-stack", version = "0.1.5" }
 firma-test-helpers = { path = "crates/firma-test-helpers", version = "0.1.5" }
 firma-tui = { path = "crates/firma-tui", version = "0.1.5" }
+flate2 = "1"
 form_urlencoded = "1"
 fs-err = "3.3"
 fs2 = "0.4.3"
