@@ -846,8 +846,6 @@ fn spawn_stack_inner<E>(
     stop_signal: Option<&StopSignal>,
     readiness_timeout: Duration,
 ) -> Result<(), StartError<E>> {
-    let group = SystemPlatform::new_group()?;
-    SystemPlatform::arm_group_termination(&group)?;
     let mut ready_components = Vec::with_capacity(topology.components().len());
 
     for (name, startup_report_path) in topology
@@ -867,6 +865,10 @@ fn spawn_stack_inner<E>(
             startup_report_path.clone(),
             state_dir.join(name.listen_file_name()),
         );
+        // Each component needs an independently probeable and terminable scope
+        // so dependency-sequential shutdown can settle it before advancing.
+        let group = SystemPlatform::new_group()?;
+        SystemPlatform::arm_group_termination(&group)?;
         let pid = startup.spawn_component(&group, &name, &mut command)?;
         info!(component = %name.as_str(), pid = %pid, "component spawned");
         let endpoint = match readiness {
@@ -905,12 +907,6 @@ fn spawn_stack_inner<E>(
         info!(component = %name.as_str(), endpoint = %endpoint, "component listening");
         ready_components.push(publication.commit(&name, endpoint));
     }
-
-    // The Group goes out of scope at the end of this function. On Unix that is
-    // a no-op because children sit in their own process groups. On Windows,
-    // each OwnedComponent retains a duplicate of the shared Job Object handle,
-    // so closing the original handle does not terminate the ready stack.
-    let _ = group;
 
     Ok(())
 }
