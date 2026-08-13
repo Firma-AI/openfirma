@@ -29,6 +29,7 @@ type-safe-id = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = false, features = ["macros"] }
+toml = { workspace = true }
 
 [lints]
 workspace = true

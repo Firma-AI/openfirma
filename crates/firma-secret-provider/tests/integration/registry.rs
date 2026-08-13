@@ -1,13 +1,241 @@
 use firma_core::{SecretMatcher, SecretNameSource};
 use firma_secret_provider::{
     CompiledMatcher, IntegrationRegistry, MatcherRule, MatchingResolution, SecretPlaceholder,
-    spec::cli::{ArgsAndMatcher, CliIntegrationSpec, FlagValue, StripFlag},
+    non_empty::{NonEmptyVec, vec::EmptyError},
+    spec::cli::{
+        CliIntegrationConfig, CliIntegrationConfigError, CliIntegrationSpec, CommandAndMatcher,
+        CommandMatch, CommandPattern, FlagSpec,
+    },
 };
 
 use crate::support::{Entry, rewrite_mint_placeholders};
 
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| String::from(*word)).collect()
+}
+
+fn command(words: &[&str], match_kind: CommandMatch) -> Result<CommandPattern, EmptyError> {
+    Ok(CommandPattern {
+        argv: NonEmptyVec::new(args(words))?,
+        match_kind,
+    })
+}
+
+fn validated_config(
+    config: CliIntegrationConfig,
+) -> Result<CliIntegrationSpec, CliIntegrationConfigError> {
+    CliIntegrationSpec::try_from(config)
+}
+
+#[test]
+fn cli_schema_has_readable_explicit_option_toml() {
+    let input = r#"
+binary_name = "bws"
+provider_id = "bitwarden"
+credential_env_vars = ["BWS_ACCESS_TOKEN"]
+stripped_options = [{ name = "--organization-id", takes_value = true }]
+forbidden_options = [
+  { name = "--server-url", takes_value = true },
+  { name = "-u", takes_value = true, allow_attached_value = true },
+  { name = "--quiet", takes_value = false },
+]
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+match = "prefix"
+stripped_options = [{ name = "--output", takes_value = true }]
+append_options = ["--output", "json"]
+
+[matchers.matcher]
+type = "json"
+record_path = "$"
+value_path = "$.value"
+
+[matchers.matcher.name]
+source = "path"
+path = "$.key"
+"#;
+
+    let config: CliIntegrationConfig =
+        toml::from_str(input).unwrap_or_else(|error| panic!("valid CLI schema TOML: {error}"));
+    assert_eq!(
+        config.stripped_options,
+        vec![FlagSpec::value("--organization-id")]
+    );
+    assert_eq!(
+        config.forbidden_options,
+        vec![
+            FlagSpec::value("--server-url"),
+            FlagSpec::attached_value("-u"),
+            FlagSpec::valueless("--quiet"),
+        ]
+    );
+
+    let serialized =
+        toml::to_string(&config).unwrap_or_else(|error| panic!("serialize CLI schema: {error}"));
+    let round_trip: CliIntegrationConfig = toml::from_str(&serialized)
+        .unwrap_or_else(|error| panic!("round-trip CLI schema TOML: {error}"));
+    assert_eq!(round_trip, config);
+    let spec = validated_config(round_trip)
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}"));
+    assert_eq!(spec.binary_name(), "bws");
+}
+
+#[test]
+fn cli_schema_rejects_invalid_option_definitions() {
+    let invalid_options = [
+        r#""""#,
+        r#"{"names":["-u"],"takes_value":true,"attached_value_names":["-u"]}"#,
+    ];
+
+    for invalid_option in invalid_options {
+        let Err(error) = serde_json::from_str::<FlagSpec>(invalid_option) else {
+            panic!("invalid option definition must not deserialize: {invalid_option}");
+        };
+        assert_eq!(error.classify(), serde_json::error::Category::Data);
+    }
+}
+
+#[test]
+fn cli_config_validation_rejects_manually_constructed_invalid_options() {
+    let input = r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+
+[matchers.matcher]
+type = "regex"
+pattern = "(?P<name>.+)=(?P<value>.+)"
+"#;
+    let base: CliIntegrationConfig =
+        toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
+    let invalid_options = [
+        FlagSpec {
+            name: String::new(),
+            takes_value: true,
+            allow_attached_value: false,
+        },
+        FlagSpec {
+            name: String::from("--quiet"),
+            takes_value: false,
+            allow_attached_value: true,
+        },
+    ];
+    let mut rendered = Vec::new();
+
+    for (invalid_index, invalid_option) in invalid_options.into_iter().enumerate() {
+        for scope in 0..3 {
+            let mut config = base.clone();
+            match scope {
+                0 => config.stripped_options.push(invalid_option.clone()),
+                1 => config.forbidden_options.push(invalid_option.clone()),
+                _ => {
+                    let MatcherRule::SensitiveCommand(rule) = &mut config.matchers[0] else {
+                        panic!("fixture must contain a sensitive command");
+                    };
+                    rule.stripped_options.push(invalid_option.clone());
+                }
+            }
+
+            let Err(error) = CliIntegrationSpec::try_from(config) else {
+                panic!("manually constructed invalid option must fail validation");
+            };
+            match invalid_index {
+                0 => std::assert_matches!(&error, CliIntegrationConfigError::EmptyOptionName),
+                _ => std::assert_matches!(
+                    &error,
+                    CliIntegrationConfigError::AttachedValueWithoutValue { name }
+                        if name == "--quiet"
+                ),
+            }
+            rendered.push(error.to_string());
+        }
+    }
+
+    insta::assert_debug_snapshot!(rendered, @r#"
+    [
+        "option name must not be empty",
+        "option name must not be empty",
+        "option name must not be empty",
+        "option `--quiet` sets allow_attached_value but does not take a value",
+        "option `--quiet` sets allow_attached_value but does not take a value",
+        "option `--quiet` sets allow_attached_value but does not take a value",
+    ]
+    "#);
+}
+
+#[test]
+fn cli_schema_rejects_conflicting_stripped_option_definitions() {
+    let conflicting_command_options = [
+        r#"{ name = "--mode", takes_value = false }"#,
+        r#"{ name = "--mode", takes_value = true, allow_attached_value = true }"#,
+        r#"{ name = "--mode", takes_value = true }, { name = "--mode", takes_value = false }"#,
+        r#"{ name = "--mode", takes_value = false }, { name = "--mode", takes_value = true }"#,
+    ];
+
+    for command_option in conflicting_command_options {
+        let input = format!(
+            r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+stripped_options = [{{ name = "--mode", takes_value = true }}]
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+stripped_options = [{command_option}]
+
+[matchers.matcher]
+type = "regex"
+pattern = "(?P<name>.+)=(?P<value>.+)"
+"#
+        );
+
+        let config: CliIntegrationConfig = toml::from_str(&input)
+            .unwrap_or_else(|error| panic!("plain config must deserialize: {error}"));
+        let Err(error) = CliIntegrationSpec::try_from(config) else {
+            panic!("conflicting option definitions must fail validation");
+        };
+        std::assert_matches!(
+            &error,
+            CliIntegrationConfigError::ConflictingStrippedOption { name }
+                if name == "--mode"
+        );
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(error.to_string(), @"option `--mode` has conflicting definitions in integration-level and command-level stripped_options");
+        }
+    }
+}
+
+#[test]
+fn cli_schema_accepts_identical_stripped_option_definitions() {
+    let input = r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+stripped_options = [{ name = "--mode", takes_value = true }]
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+stripped_options = [{ name = "--mode", takes_value = true }]
+
+[matchers.matcher]
+type = "regex"
+pattern = "(?P<name>.+)=(?P<value>.+)"
+"#;
+
+    let config: CliIntegrationConfig =
+        toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
+    let spec = validated_config(config)
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}"));
+    assert_eq!(spec.binary_name(), "example");
 }
 
 fn builtin_matcher(binary: &str, command_args: &[&str]) -> Result<CompiledMatcher, String> {
@@ -206,32 +434,36 @@ fn unrecognized_invocation_falls_back_to_blocked() {
 }
 
 #[test]
-fn args_matches_tolerates_interspersed_flags() {
+fn command_matching_skips_declared_options_and_their_values() -> Result<(), EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
-        binary_name: String::from("synthetic"),
-        provider_id: String::from("test"),
-        credential_env_vars: vec![],
-        strip_arg_flags: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
-            args_match: vec![String::from("get"), String::from("secret")],
-            matcher: SecretMatcher::Json {
-                record_path: String::from("$"),
-                value_path: String::from("$.value"),
-                name: SecretNameSource::Path {
-                    path: String::from("$.key"),
+    registry.push(
+        validated_config(CliIntegrationConfig {
+            binary_name: String::from("synthetic"),
+            provider_id: String::from("test"),
+            credential_env_vars: vec![],
+            stripped_options: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: command(&["get", "secret"], CommandMatch::Exact)?,
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$"),
+                    value_path: String::from("$.value"),
+                    name: SecretNameSource::Path {
+                        path: String::from("$.key"),
+                    },
+                    item_selector: None,
+                    domain_selector: None,
                 },
-                item_selector: None,
-                domain_selector: None,
-            },
-            strip_arg_flags: vec![],
-            forced_args: vec![],
-        })],
-    });
+                stripped_options: vec![],
+                append_options: vec![],
+            })],
+        })
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
+    );
     let spec = registry.for_binary("synthetic").expect("synthetic spec");
 
-    // A leading global flag, and a `-f json`-style flag-value pair between
-    // the matched tokens, must not break the match.
+    // A declared valueless option, and a declared option-value pair between the
+    // command words, must not break the match.
     let matches: &[&[&str]] = &[
         &["get", "secret"],
         &["--verbose", "get", "secret"],
@@ -247,9 +479,14 @@ fn args_matches_tolerates_interspersed_flags() {
         );
     }
 
-    // A positional token that is neither a flag nor the next expected
-    // token is an unexpected argument, not a skippable flag value.
-    let mismatches: &[&[&str]] = &[&["get", "other-secret"], &["list", "secret"]];
+    // An undeclared option's following token is not guessed to be its value.
+    let mismatches: &[&[&str]] = &[
+        &["get", "other-secret"],
+        &["list", "secret"],
+        &["get", "--unknown", "value", "secret"],
+        // After `--`, flag-looking tokens are positional command words.
+        &["get", "secret", "--", "--verbose"],
+    ];
     for case in mismatches {
         assert_eq!(
             spec.resolve_args(&args(case)),
@@ -257,6 +494,7 @@ fn args_matches_tolerates_interspersed_flags() {
             "expected {case:?} not to match",
         );
     }
+    Ok(())
 }
 
 #[test]
@@ -291,44 +529,48 @@ fn bws_spec_has_expected_credential_env_and_provider_id() {
     let registry = IntegrationRegistry::with_builtins();
     let spec = registry.for_binary("bws").expect("bws spec");
     assert!(
-        spec.credential_env_vars
+        spec.credential_env_vars()
             .iter()
             .any(|v| v == "BWS_ACCESS_TOKEN")
     );
-    assert!(spec.provider_id.eq("bitwarden"));
+    assert_eq!(spec.provider_id(), "bitwarden");
 }
 
 #[test]
-fn push_custom_spec_takes_precedence_over_builtin() {
+fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
-        binary_name: String::from("bws"),
-        provider_id: String::from("custom"),
-        credential_env_vars: vec![],
-        strip_arg_flags: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
-            args_match: vec![],
-            matcher: SecretMatcher::Json {
-                record_path: String::from("$[*]"),
-                value_path: String::from("$.value"),
-                name: SecretNameSource::Path {
-                    path: String::from("$.key"),
+    registry.push(
+        validated_config(CliIntegrationConfig {
+            binary_name: String::from("bws"),
+            provider_id: String::from("custom"),
+            credential_env_vars: vec![],
+            stripped_options: vec![],
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: command(&["secret"], CommandMatch::Prefix)?,
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$[*]"),
+                    value_path: String::from("$.value"),
+                    name: SecretNameSource::Path {
+                        path: String::from("$.key"),
+                    },
+                    item_selector: None,
+                    domain_selector: None,
                 },
-                item_selector: None,
-                domain_selector: None,
-            },
-            strip_arg_flags: vec![],
-            forced_args: vec![],
-        })],
-    });
+                stripped_options: vec![],
+                append_options: vec![],
+            })],
+        })
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
+    );
     let spec = registry.for_binary("bws").expect("bws spec after push");
-    assert!(spec.provider_id.eq("custom"));
-    // The custom spec's empty args prefix matches every invocation in the
-    // sensitive-command category.
+    assert_eq!(spec.provider_id(), "custom");
+    // The custom spec's prefix takes precedence over the built-in rule.
     assert!(matches!(
         spec.resolve_args(&args(&["secret", "get"])),
         MatchingResolution::Matcher(_)
     ));
+    Ok(())
 }
 
 #[test]
@@ -551,17 +793,44 @@ fn builtins_force_expected_output_formats() {
 }
 
 #[test]
+fn missing_declared_option_values_fail_closed() {
+    let registry = IntegrationRegistry::with_builtins();
+    let cases: &[(&str, &[&str])] = &[
+        ("bws", &["secret", "get", "id", "--output"]),
+        ("bws", &["secret", "get", "id", "--output", "--"]),
+        ("vault", &["status", "-namespace"]),
+        ("vault", &["status", "-namespace", "--"]),
+    ];
+
+    for (binary, requested) in cases {
+        let spec = registry
+            .for_binary(binary)
+            .unwrap_or_else(|| panic!("missing built-in spec for {binary}"));
+        let requested = args(requested);
+        assert_eq!(
+            spec.resolve_args(&requested),
+            MatchingResolution::Blocked,
+            "expected malformed {binary} invocation to be blocked",
+        );
+        assert_eq!(
+            spec.rewrite_args(&requested),
+            requested,
+            "malformed {binary} invocation must not be normalized",
+        );
+    }
+}
+
+#[test]
 #[expect(
     clippy::too_many_lines,
     reason = "data table, one entry per backend-override/config-redirection case"
 )]
-fn builtins_strip_backend_override_flags_from_sensitive_commands() {
+fn builtins_reject_backend_override_flags_on_sensitive_commands() {
     // A flag that redirects the CLI at a different backend (or disables its
     // TLS verification) would exfiltrate that spec's forwarded
     // `credential_env_vars` to a host of the agent's choosing on the very
-    // next request. `strip_arg_flags` must strip these even from
-    // an otherwise-legitimate `SensitiveCommand` invocation, alongside its
-    // own `strip_arg_flags`.
+    // next request. These flags must reject even an otherwise-legitimate
+    // `SensitiveCommand` invocation rather than silently changing it.
     let registry = IntegrationRegistry::with_builtins();
     let cases: &[(&str, &[&str], &[&str])] = &[
         (
@@ -607,6 +876,16 @@ fn builtins_strip_backend_override_flags_from_sensitive_commands() {
         (
             "bws",
             &["secret", "get", "id", "-f/tmp/evil-bws-config"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            "bws",
+            &["secret", "get", "id", "--profile", "attacker"],
+            &["secret", "get", "id", "--output", "json"],
+        ),
+        (
+            "bws",
+            &["secret", "get", "id", "-pattacker"],
             &["secret", "get", "id", "--output", "json"],
         ),
         (
@@ -672,26 +951,40 @@ fn builtins_strip_backend_override_flags_from_sensitive_commands() {
                 "--no-fallback",
             ],
         ),
+        (
+            "doppler",
+            &[
+                "secrets",
+                "download",
+                "--configuration",
+                "/tmp/evil-doppler.yaml",
+            ],
+            &[
+                "secrets",
+                "download",
+                "--format",
+                "json",
+                "--no-file",
+                "--no-fallback",
+            ],
+        ),
     ];
 
-    for (binary, requested, expected) in cases {
+    for (binary, requested, _) in cases {
         let spec = registry
             .for_binary(binary)
             .unwrap_or_else(|| panic!("missing built-in spec for {binary}"));
         assert_eq!(
-            spec.rewrite_args(&args(requested)),
-            args(expected),
-            "unexpected rewritten args for {binary} {requested:?}",
+            spec.resolve_args(&args(requested)),
+            MatchingResolution::Blocked,
+            "expected {binary} {requested:?} to be rejected",
         );
     }
 }
 
 #[test]
-fn builtins_strip_backend_override_flags_from_safe_commands() {
-    // Same exfiltration risk as the `SensitiveCommand` case above, but for a
-    // known-safe pass-through command: `SafeCommand` rules carry no
-    // `strip_arg_flags` of their own (their output needs no rewriting), so
-    // this coverage is only exercised by `strip_arg_flags`.
+fn builtins_reject_backend_override_flags_on_safe_commands() {
+    // The same exfiltration risk applies to an otherwise-safe command.
     let registry = IntegrationRegistry::with_builtins();
     let cases: &[(&str, &[&str], &[&str])] = &[
         (
@@ -736,70 +1029,70 @@ fn builtins_strip_backend_override_flags_from_safe_commands() {
         ),
     ];
 
-    for (binary, requested, expected) in cases {
+    for (binary, requested, _) in cases {
         let spec = registry
             .for_binary(binary)
             .unwrap_or_else(|| panic!("missing built-in spec for {binary}"));
         assert_eq!(
             spec.resolve_args(&args(requested)),
-            MatchingResolution::PassThrough,
-            "expected {binary} {requested:?} to resolve as a safe pass-through",
-        );
-        assert_eq!(
-            spec.rewrite_args(&args(requested)),
-            args(expected),
-            "unexpected rewritten args for {binary} {requested:?}",
+            MatchingResolution::Blocked,
+            "expected {binary} {requested:?} to be rejected",
         );
     }
 }
 
 #[test]
-fn rewrite_args_leaves_args_untouched_when_no_strip_flags_configured() {
+fn rewrite_args_leaves_args_untouched_when_no_stripped_options_configured() -> Result<(), EmptyError>
+{
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
-        binary_name: String::from("foo"),
-        provider_id: String::from("test"),
-        credential_env_vars: vec![],
-        strip_arg_flags: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
-            args_match: vec![],
-            matcher: SecretMatcher::Json {
-                record_path: String::from("$[*]"),
-                value_path: String::from("$.value"),
-                name: SecretNameSource::Path {
-                    path: String::from("$.key"),
+    registry.push(
+        validated_config(CliIntegrationConfig {
+            binary_name: String::from("foo"),
+            provider_id: String::from("test"),
+            credential_env_vars: vec![],
+            stripped_options: vec![],
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: command(&["secret", "get"], CommandMatch::Prefix)?,
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$[*]"),
+                    value_path: String::from("$.value"),
+                    name: SecretNameSource::Path {
+                        path: String::from("$.key"),
+                    },
+                    item_selector: None,
+                    domain_selector: None,
                 },
-                item_selector: None,
-                domain_selector: None,
-            },
-            strip_arg_flags: vec![],
-            forced_args: vec![],
-        })],
-    });
+                stripped_options: vec![],
+                append_options: vec![],
+            })],
+        })
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
+    );
     let spec = registry.for_binary("foo").expect("foo spec");
 
     let rewritten = spec.rewrite_args(&args(&["secret", "get", "some-id"]));
     assert_eq!(rewritten, args(&["secret", "get", "some-id"]));
+    Ok(())
 }
 
-/// Builds a registry with a single custom `"foo"` spec whose lone
-/// `SensitiveCommand` rule matches `args_match` and uses the given
-/// `strip_arg_flags`/`forced_args`, for pinning
-/// [`CliIntegrationSpec::rewrite_args`]'s flag-stripping behavior in
+/// Builds a registry with one custom sensitive command, for pinning
+/// [`CliIntegrationSpec::rewrite_args`]'s option-stripping behavior in
 /// isolation from any built-in's other rules.
-fn registry_with_strip_flags(
-    args_match: Vec<String>,
-    strip_arg_flags: Vec<StripFlag>,
-    forced_args: Vec<String>,
-) -> IntegrationRegistry {
+fn registry_with_stripped_options(
+    command_words: &[&str],
+    stripped_options: Vec<FlagSpec>,
+    append_options: Vec<String>,
+) -> Result<IntegrationRegistry, Box<dyn std::error::Error>> {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
+    registry.push(validated_config(CliIntegrationConfig {
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        strip_arg_flags: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(ArgsAndMatcher {
-            args_match,
+        stripped_options: vec![],
+        forbidden_options: vec![],
+        matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+            command: command(command_words, CommandMatch::Prefix)?,
             matcher: SecretMatcher::Json {
                 record_path: String::from("$[*]"),
                 value_path: String::from("$.value"),
@@ -809,92 +1102,50 @@ fn registry_with_strip_flags(
                 item_selector: None,
                 domain_selector: None,
             },
-            strip_arg_flags,
-            forced_args,
+            stripped_options,
+            append_options,
         })],
-    });
-    registry
+    })?);
+    Ok(registry)
 }
 
 #[test]
-fn rewrite_args_does_not_swallow_a_flag_following_a_stripped_valueless_flag() {
-    // Regression coverage for a bug where stripping a valueless (boolean)
-    // flag unconditionally consumed whatever token followed it, even when
-    // that token was itself another flag rather than a value — silently
-    // deleting an unrelated flag instead of just the one being stripped.
-    let cases: &[(&[&str], &[&str], &[&str])] = &[
-        (
-            // The flag right after the stripped boolean flag is not itself
-            // stripped, so it and its own value must both survive intact.
-            &["--bool-flag"],
-            &["--bool-flag", "--other-flag", "value"],
-            &["--other-flag", "value"],
-        ),
-        (
-            // Two valueless flags back to back, both configured for
-            // stripping, followed by a third flag that isn't: each of the
-            // first two is removed independently on its own loop iteration
-            // without swallowing the other, and the trailing flag survives.
-            &["--bool-a", "--bool-b"],
-            &["--bool-a", "--bool-b", "--other-flag"],
-            &["--other-flag"],
-        ),
-        (
-            // A stripped valueless flag as the very last token: there is no
-            // following token to (incorrectly) consume.
-            &["--bool-flag"],
-            &["cmd", "--bool-flag"],
-            &["cmd"],
-        ),
-        (
-            // Contrast case: a flag that does take a value still has that
-            // value correctly consumed, since the value doesn't look like a
-            // flag itself. The fix must not regress this.
-            &["--format"],
-            &["--format", "json", "positional"],
-            &["positional"],
-        ),
-    ];
+fn valueless_stripped_option_preserves_following_options_and_positionals()
+-> Result<(), Box<dyn std::error::Error>> {
+    let registry =
+        registry_with_stripped_options(&["cmd"], vec![FlagSpec::valueless("--bool-flag")], vec![])?;
+    let spec = registry.for_binary("foo").expect("foo spec");
 
-    for (strip_arg_flags, requested, expected) in cases {
-        let strip_arg_flags = strip_arg_flags
-            .iter()
-            .map(|s| StripFlag::from(*s))
-            .collect();
-        let registry = registry_with_strip_flags(vec![], strip_arg_flags, vec![]);
-        let spec = registry.for_binary("foo").expect("foo spec");
-        assert_eq!(
-            spec.rewrite_args(&args(requested)),
-            args(expected),
-            "unexpected rewritten args for {requested:?}",
-        );
-    }
-}
-
-#[test]
-fn rewrite_args_does_not_swallow_an_args_match_token_following_a_stripped_valueless_flag() {
-    // A stripped valueless flag immediately followed by one of the rule's
-    // own `args_match` tokens must not swallow that token: it was already
-    // relied on by `resolve_args` to select this very rule, so dropping it
-    // from the rewritten args would execute a different, shorter command
-    // than the one whose output shape the selected matcher expects.
-    let registry = registry_with_strip_flags(
-        vec![String::from("secrets"), String::from("download")],
-        vec![StripFlag::from("--offline")],
-        vec![String::from("--no-fallback")],
+    assert_eq!(
+        spec.rewrite_args(&args(
+            &["cmd", "--bool-flag", "--other-flag", "positional",]
+        )),
+        args(&["cmd", "--other-flag", "positional"]),
     );
+    Ok(())
+}
+
+#[test]
+fn valueless_stripped_option_preserves_following_command_word()
+-> Result<(), Box<dyn std::error::Error>> {
+    let registry = registry_with_stripped_options(
+        &["secrets", "download"],
+        vec![FlagSpec::valueless("--offline")],
+        vec![String::from("--no-fallback")],
+    )?;
     let spec = registry.for_binary("foo").expect("foo spec");
 
     let rewritten = spec.rewrite_args(&args(&["secrets", "--offline", "download"]));
     assert_eq!(rewritten, args(&["secrets", "download", "--no-fallback"]));
+    Ok(())
 }
 
 #[test]
 fn doppler_secrets_download_rewrite_keeps_download_when_offline_precedes_it() {
     // Same scenario as above, against the real built-in doppler spec:
-    // `args_matches` already tolerates a flag placed between `secrets` and
-    // `download` (see `args_matches_tolerates_interspersed_flags`), so this
-    // invocation resolves to the `secrets download` matcher. `rewrite_args`
+    // Command matching tolerates a declared option placed between `secrets`
+    // and `download`, so this invocation resolves to the download matcher.
+    // `rewrite_args`
     // must keep executing that same subcommand rather than silently
     // dropping `download` while stripping `--offline`.
     let registry = IntegrationRegistry::with_builtins();
@@ -920,92 +1171,69 @@ fn doppler_secrets_download_rewrite_keeps_download_when_offline_precedes_it() {
 }
 
 #[test]
-fn rewrite_args_does_not_strip_a_flag_value_that_looks_like_a_flag() {
-    // Documents a known, intentional limitation shared with `args_matches`:
-    // a stripped flag's value is only consumed when it doesn't start with
-    // `-`. A value that itself looks like a flag (e.g. an agent-chosen
-    // passphrase starting with `-`) survives the strip and is left in the
-    // rewritten args as its own token, rather than being silently merged
-    // into the removed flag.
-    let registry = registry_with_strip_flags(
+fn value_taking_stripped_option_consumes_a_value_that_looks_like_an_option()
+-> Result<(), Box<dyn std::error::Error>> {
+    let registry = registry_with_stripped_options(
+        &["cmd"],
+        vec![FlagSpec::value("--fallback-passphrase")],
         vec![],
-        vec![StripFlag::from("--fallback-passphrase")],
-        vec![],
-    );
+    )?;
     let spec = registry.for_binary("foo").expect("foo spec");
 
-    let rewritten = spec.rewrite_args(&args(&["--fallback-passphrase", "-x", "positional"]));
-    assert_eq!(rewritten, args(&["-x", "positional"]));
+    let rewritten = spec.rewrite_args(&args(&["cmd", "--fallback-passphrase", "-x", "positional"]));
+    assert_eq!(rewritten, args(&["cmd", "positional"]));
+    Ok(())
 }
 
 #[test]
-fn rewrite_args_still_swallows_a_non_flag_token_after_a_stripped_valueless_flag() {
-    // Documents a third known, intentional limitation: `strip_arg_flags`
-    // carries no per-flag arity, just a flat list of names, so the stripping
-    // loop cannot tell a genuinely valueless flag apart from one that takes
-    // a value. A token immediately after a stripped flag is still treated
-    // as that flag's value and removed whenever it's neither a flag itself
-    // nor one of `args_match`'s own tokens — even if the stripped flag never
-    // actually takes one. The fix only prevents swallowing a following flag
-    // or `args_match` token; it does not, and cannot, restore per-flag
-    // arity awareness for arbitrary positionals.
-    let registry =
-        registry_with_strip_flags(vec![], vec![StripFlag::from("--valueless-flag")], vec![]);
+fn valueless_stripped_option_does_not_consume_following_positional()
+-> Result<(), Box<dyn std::error::Error>> {
+    let registry = registry_with_stripped_options(
+        &["cmd"],
+        vec![FlagSpec::valueless("--valueless-flag")],
+        vec![],
+    )?;
     let spec = registry.for_binary("foo").expect("foo spec");
 
-    let rewritten = spec.rewrite_args(&args(&["--valueless-flag", "positional"]));
-    assert_eq!(rewritten, args(&[]));
+    let rewritten = spec.rewrite_args(&args(&["cmd", "--valueless-flag", "positional"]));
+    assert_eq!(rewritten, args(&["cmd", "positional"]));
+    Ok(())
 }
 
 #[test]
-fn rewrite_args_shaped_none_value_does_not_swallow_the_following_positional() {
-    // Contrast case for the test above: a `Shaped` entry with `FlagValue::None`
-    // opts out of the arity-blind default entirely, so the token after it —
-    // e.g. a path argument the agent still wants to reach the CLI — survives.
-    let registry = registry_with_strip_flags(
+fn rewrite_args_concatenated_short_option_value_is_stripped()
+-> Result<(), Box<dyn std::error::Error>> {
+    let registry = registry_with_stripped_options(
+        &["cmd"],
+        vec![
+            FlagSpec::value("--server-url"),
+            FlagSpec::attached_value("-u"),
+        ],
         vec![],
-        vec![StripFlag::shaped("--valueless-flag", None, FlagValue::None)],
-        vec![],
-    );
-    let spec = registry.for_binary("foo").expect("foo spec");
-
-    let rewritten = spec.rewrite_args(&args(&["--valueless-flag", "positional"]));
-    assert_eq!(rewritten, args(&["positional"]));
-}
-
-#[test]
-fn rewrite_args_concatenated_short_flag_value_is_stripped() {
-    // A `Shaped` entry with `FlagValue::Concatenated` recognizes a `short`
-    // alias's value fused directly onto it with no separator at all
-    // (getopt-style, e.g. `-uVALUE`) — a form the default, exact-token-only
-    // matching can't recognize and would otherwise let survive unstripped.
-    let registry = registry_with_strip_flags(
-        vec![],
-        vec![StripFlag::shaped(
-            "--server-url",
-            Some("-u"),
-            FlagValue::Concatenated,
-        )],
-        vec![],
-    );
+    )?;
     let spec = registry.for_binary("foo").expect("foo spec");
 
     let cases: &[(&[&str], &[&str])] = &[
         (
-            &["-uhttps://attacker.example", "positional"],
-            &["positional"],
+            &["cmd", "-uhttps://attacker.example", "positional"],
+            &["cmd", "positional"],
         ),
         (
-            &["--server-url", "https://attacker.example", "positional"],
-            &["positional"],
+            &[
+                "cmd",
+                "--server-url",
+                "https://attacker.example",
+                "positional",
+            ],
+            &["cmd", "positional"],
         ),
         (
-            &["--server-url=https://attacker.example", "positional"],
-            &["positional"],
+            &["cmd", "--server-url=https://attacker.example", "positional"],
+            &["cmd", "positional"],
         ),
         (
-            &["-u", "https://attacker.example", "positional"],
-            &["positional"],
+            &["cmd", "-u", "https://attacker.example", "positional"],
+            &["cmd", "positional"],
         ),
     ];
     for (requested, expected) in cases {
@@ -1015,6 +1243,39 @@ fn rewrite_args_concatenated_short_flag_value_is_stripped() {
             "unexpected rewritten args for {requested:?}",
         );
     }
+    Ok(())
+}
+
+#[test]
+fn options_after_end_of_options_are_not_removed_or_forbidden()
+-> Result<(), Box<dyn std::error::Error>> {
+    let registry = registry_with_stripped_options(
+        &["cmd"],
+        vec![FlagSpec::value("--format")],
+        vec![String::from("--format=json")],
+    )?;
+    let spec = registry.for_binary("foo").expect("foo spec");
+    let requested = args(&["cmd", "--", "--format", "text"]);
+
+    assert_eq!(
+        spec.rewrite_args(&requested),
+        args(&["cmd", "--format=json", "--", "--format", "text"]),
+        "required output flags must remain options by being inserted before `--`",
+    );
+
+    let bws = IntegrationRegistry::with_builtins();
+    let spec = bws.for_binary("bws").expect("bws spec");
+    assert_eq!(
+        spec.resolve_args(&args(&[
+            "project",
+            "list",
+            "--",
+            "--server-url",
+            "https://example.invalid",
+        ])),
+        MatchingResolution::PassThrough,
+    );
+    Ok(())
 }
 
 #[test]
@@ -1081,6 +1342,12 @@ fn doppler_bare_secrets_matcher_is_distinct_from_download() {
         bare_matcher,
         SecretMatcher::Json { value_path, .. } if value_path == "$.computed"
     ));
+
+    assert_eq!(
+        spec.resolve_args(&args(&["secrets", "future-command"])),
+        MatchingResolution::Blocked,
+        "the exact bare-secrets rule must not authorize future subcommands",
+    );
 }
 
 #[test]

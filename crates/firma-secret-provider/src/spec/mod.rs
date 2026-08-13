@@ -16,12 +16,43 @@ use crate::non_empty::{NonEmptyString, NonEmptyVec};
 pub mod cli;
 pub mod http;
 
-/// A resolved secret-provider integration: either a CLI vault tool or an
-/// HTTP vault.
+/// Deserializable configuration for either a CLI or HTTP secret provider.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum IntegrationSpec {
-    Cli(cli::CliIntegrationSpec),
+pub enum IntegrationConfig {
+    /// Plain CLI integration configuration requiring validation before use.
+    Cli(cli::CliIntegrationConfig),
+    /// HTTP integration configuration, which has no additional validation
+    /// boundary.
     Http(http::HttpIntegrationSpec),
+}
+
+/// A validated secret-provider integration: either a CLI vault tool or an
+/// HTTP vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegrationSpec {
+    /// Validated CLI integration.
+    Cli(cli::CliIntegrationSpec),
+    /// HTTP integration.
+    Http(http::HttpIntegrationSpec),
+}
+
+/// Error returned when validating an [`IntegrationConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum IntegrationConfigError {
+    /// CLI integration validation failed.
+    #[error(transparent)]
+    Cli(#[from] cli::CliIntegrationConfigError),
+}
+
+impl TryFrom<IntegrationConfig> for IntegrationSpec {
+    type Error = IntegrationConfigError;
+
+    fn try_from(config: IntegrationConfig) -> Result<Self, Self::Error> {
+        match config {
+            IntegrationConfig::Cli(config) => Ok(Self::Cli(config.try_into()?)),
+            IntegrationConfig::Http(config) => Ok(Self::Http(config)),
+        }
+    }
 }
 
 impl IntegrationSpec {
@@ -31,7 +62,7 @@ impl IntegrationSpec {
     #[must_use]
     pub fn provider_id(&self) -> &str {
         match self {
-            Self::Cli(spec) => &spec.provider_id,
+            Self::Cli(spec) => spec.provider_id(),
             Self::Http(spec) => &spec.provider_id,
         }
     }

