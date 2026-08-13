@@ -16,7 +16,7 @@ use firma_process_orchestrator::{
     ComponentEndpoint, ComponentSpec, LifecycleTimeouts, Readiness, RunningStack, StackTopology,
     spawn_stack_from_plan,
 };
-use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
@@ -98,6 +98,11 @@ fn forced_sidecar_job_termination_does_not_kill_authority() {
         .expect("parse Sidecar descendant PID");
     let descendant = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, descendant_pid) };
     assert!(!descendant.is_null(), "open Sidecar descendant process");
+    assert_eq!(
+        unsafe { WaitForSingleObject(descendant, 0) },
+        WAIT_TIMEOUT,
+        "Sidecar descendant exited before shutdown"
+    );
 
     let observation_thread = std::thread::spawn({
         let authority_signal = authority_signal.clone();
