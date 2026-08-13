@@ -1047,7 +1047,7 @@ pub fn start_detached(
             launch.supervisor_mut()?,
             timeouts.detached_handoff,
         )?;
-        let handle = read_stack_handle(state_dir, topology)?;
+        let handle = read_stack_handle(state_dir, topology, generation)?;
         launch.transfer_to_collector()?;
         Ok(handle)
     })();
@@ -1112,11 +1112,19 @@ fn terminate_and_collect_components(mut components: Vec<OwnedComponent>) -> std:
 /// Reconstruct an informational [`StackHandle`] after supervisor-owned startup.
 ///
 /// The caller supplies the topology used for startup; this does not grant
-/// component collection, termination, or cleanup authority.
+/// component collection, termination, or cleanup authority. Reconstruction is
+/// serialized with state mutation and accepts only the launcher's generation.
 fn read_stack_handle(
     state_dir: &Path,
     topology: &StackTopology,
+    generation: StackGeneration,
 ) -> Result<StackHandle, OrchestratorError> {
+    let _transaction = StateTransaction::acquire(state_dir)?;
+    if !StateLease::load(state_dir)?.is_some_and(|lease| lease.belongs_to(generation)) {
+        return Err(OrchestratorError::Platform(
+            "stack generation changed before detached handle reconstruction".into(),
+        ));
+    }
     let mut components = Vec::with_capacity(topology.components().len());
     for name in topology.names() {
         let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {

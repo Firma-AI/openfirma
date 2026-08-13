@@ -667,6 +667,31 @@ fn stale_detached_launcher_rollback_does_not_signal_replacement_target() {
 }
 
 #[test]
+fn detached_handle_reconstruction_rejects_replacement_generation() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let result = start_detached(
+        &topology(&["authority"]),
+        dir.path(),
+        fast_timeouts(),
+        |generation| supervisor_command(dir.path(), generation, "attach-replacement"),
+    );
+
+    let Err(OrchestratorError::Platform(reason)) = result else {
+        panic!("replacement generation must invalidate the detached handle");
+    };
+    assert_eq!(
+        reason,
+        "stack generation changed before detached handle reconstruction"
+    );
+    let replacement = std::fs::read_to_string(dir.path().join("replacement.generation"))
+        .expect("read replacement generation");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("stack.lock")).expect("replacement lock"),
+        replacement
+    );
+}
+
+#[test]
 fn component_pidfile_publication_failure_collects_spawned_child() {
     let dir = tempfile::tempdir().expect("state dir");
     let mut planner = component_planner(dir.path(), &["authority", "sidecar"]);
@@ -723,6 +748,37 @@ fn owned_child_fixture() {
             .to_string_lossy()
             .parse::<StackGeneration>()
             .expect("parse supervisor generation");
+        if std::env::var(SUPERVISOR_MODE).as_deref() == Ok("attach-replacement") {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind replacement endpoint");
+            let endpoint = listener.local_addr().expect("replacement endpoint");
+            let supervisor_pid = UserProcessId::new(std::process::id()).expect("supervisor PID");
+            let replacement = StackGeneration::default();
+            let replacement_state = format!("{replacement}\n");
+            std::fs::write(state_dir.join("stack.lock"), &replacement_state)
+                .expect("publish replacement generation");
+            std::fs::write(state_dir.join("replacement.generation"), &replacement_state)
+                .expect("record replacement generation");
+            firma_runtime_state::pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)
+                .expect("write replacement owner");
+            firma_runtime_state::pidfile::write(&state_dir.join("authority.pid"), supervisor_pid)
+                .expect("write replacement component");
+            std::fs::write(state_dir.join("authority.listen"), format!("{endpoint}\n"))
+                .expect("write replacement endpoint");
+            let ready = state_dir.join(format!("stack.{supervisor_pid}.ready"));
+            firma_runtime_state::pidfile::write(&ready, supervisor_pid)
+                .expect("publish supervisor readiness");
+            while ready.exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            firma_runtime_state::pidfile::write(
+                &state_dir.join(format!("stack.{supervisor_pid}.attached")),
+                supervisor_pid,
+            )
+            .expect("publish supervisor attachment");
+            std::thread::sleep(Duration::from_secs(1));
+            return;
+        }
         if std::env::var(SUPERVISOR_MODE).as_deref() == Ok("replace") {
             let replacement = StackGeneration::default();
             let sentinel = std::env::var(SUPERVISOR_SENTINEL_PID)
