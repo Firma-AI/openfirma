@@ -86,8 +86,6 @@ path = "$.key"
 fn cli_schema_rejects_invalid_option_definitions() {
     let invalid_options = [
         r#""""#,
-        r#"{"name":"","takes_value":true}"#,
-        r#"{"name":"--quiet","takes_value":false,"allow_attached_value":true}"#,
         r#"{"names":["-u"],"takes_value":true,"attached_value_names":["-u"]}"#,
     ];
 
@@ -97,6 +95,78 @@ fn cli_schema_rejects_invalid_option_definitions() {
         };
         assert_eq!(error.classify(), serde_json::error::Category::Data);
     }
+}
+
+#[test]
+fn cli_config_validation_rejects_manually_constructed_invalid_options() {
+    let input = r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+
+[matchers.matcher]
+type = "regex"
+pattern = "(?P<name>.+)=(?P<value>.+)"
+"#;
+    let base: CliIntegrationConfig =
+        toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
+    let invalid_options = [
+        FlagSpec {
+            name: String::new(),
+            takes_value: true,
+            allow_attached_value: false,
+        },
+        FlagSpec {
+            name: String::from("--quiet"),
+            takes_value: false,
+            allow_attached_value: true,
+        },
+    ];
+    let mut rendered = Vec::new();
+
+    for (invalid_index, invalid_option) in invalid_options.into_iter().enumerate() {
+        for scope in 0..3 {
+            let mut config = base.clone();
+            match scope {
+                0 => config.stripped_options.push(invalid_option.clone()),
+                1 => config.forbidden_options.push(invalid_option.clone()),
+                _ => {
+                    let MatcherRule::SensitiveCommand(rule) = &mut config.matchers[0] else {
+                        panic!("fixture must contain a sensitive command");
+                    };
+                    rule.stripped_options.push(invalid_option.clone());
+                }
+            }
+
+            let Err(error) = CliIntegrationSpec::try_from(config) else {
+                panic!("manually constructed invalid option must fail validation");
+            };
+            match invalid_index {
+                0 => std::assert_matches!(&error, CliIntegrationConfigError::EmptyOptionName),
+                _ => std::assert_matches!(
+                    &error,
+                    CliIntegrationConfigError::AttachedValueWithoutValue { name }
+                        if name == "--quiet"
+                ),
+            }
+            rendered.push(error.to_string());
+        }
+    }
+
+    insta::assert_debug_snapshot!(rendered, @r#"
+    [
+        "option name must not be empty",
+        "option name must not be empty",
+        "option name must not be empty",
+        "option `--quiet` sets allow_attached_value but does not take a value",
+        "option `--quiet` sets allow_attached_value but does not take a value",
+        "option `--quiet` sets allow_attached_value but does not take a value",
+    ]
+    "#);
 }
 
 #[test]

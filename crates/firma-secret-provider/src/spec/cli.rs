@@ -10,7 +10,8 @@ pub type CliMatcherRule = MatcherRule<CommandAndMatcher, CommandPattern>;
 /// { name = "--offline", takes_value = false }
 /// { name = "-u", takes_value = true, allow_attached_value = true }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlagSpec {
     /// The option's spelling, such as `--server-url` or `-u`.
     pub name: String,
@@ -20,38 +21,6 @@ pub struct FlagSpec {
     /// `-uhttps://example.com`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_attached_value: bool,
-}
-
-impl<'de> serde::Deserialize<'de> for FlagSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawFlagSpec {
-            name: String,
-            takes_value: bool,
-            #[serde(default)]
-            allow_attached_value: bool,
-        }
-
-        let raw = RawFlagSpec::deserialize(deserializer)?;
-        if raw.name.is_empty() {
-            return Err(serde::de::Error::custom("option name must not be empty"));
-        }
-        if !raw.takes_value && raw.allow_attached_value {
-            return Err(serde::de::Error::custom(
-                "allow_attached_value requires takes_value = true",
-            ));
-        }
-
-        Ok(Self {
-            name: raw.name,
-            takes_value: raw.takes_value,
-            allow_attached_value: raw.allow_attached_value,
-        })
-    }
 }
 
 impl FlagSpec {
@@ -138,6 +107,15 @@ pub struct CliIntegrationSpec {
 /// Error returned when validating a [`CliIntegrationConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CliIntegrationConfigError {
+    /// An option has no spelling.
+    #[error("option name must not be empty")]
+    EmptyOptionName,
+    /// An option permits an attached value but does not take a value.
+    #[error("option `{name}` sets allow_attached_value but does not take a value")]
+    AttachedValueWithoutValue {
+        /// Invalid option spelling.
+        name: String,
+    },
     /// One option spelling has different arity or attachment behavior across
     /// integration and command scopes.
     #[error(
@@ -153,6 +131,30 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
     type Error = CliIntegrationConfigError;
 
     fn try_from(config: CliIntegrationConfig) -> Result<Self, Self::Error> {
+        let command_options = config
+            .matchers
+            .iter()
+            .filter_map(|matcher| match matcher {
+                MatcherRule::SensitiveCommand(rule) => Some(rule),
+                MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
+            })
+            .flat_map(|rule| &rule.stripped_options);
+        for option in config
+            .stripped_options
+            .iter()
+            .chain(&config.forbidden_options)
+            .chain(command_options)
+        {
+            if option.name.is_empty() {
+                return Err(CliIntegrationConfigError::EmptyOptionName);
+            }
+            if !option.takes_value && option.allow_attached_value {
+                return Err(CliIntegrationConfigError::AttachedValueWithoutValue {
+                    name: option.name.clone(),
+                });
+            }
+        }
+
         for rule in config.matchers.iter().filter_map(|matcher| match matcher {
             MatcherRule::SensitiveCommand(rule) => Some(rule),
             MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
