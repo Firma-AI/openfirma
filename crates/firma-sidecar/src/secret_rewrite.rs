@@ -224,8 +224,16 @@ pub(crate) fn find_decoded_secret_spans(
     }
 }
 
-/// Find a JSON string literal (by content span, excluding the surrounding
-/// quotes) that [`serde_json`] decodes to `secret`.
+/// Find a JSON string literal that echoes `secret` — either the whole
+/// decoded string equals `secret` (any escaping), or, for a literal with no
+/// escapes, `secret` occurs as a word-bounded substring of the raw content
+/// (e.g. a natural-language error message that embeds the credential:
+/// `"credential s3cr3t-db-pass is invalid"`).
+///
+/// Escaped literals are restricted to the whole-value case because raw byte
+/// offsets don't line up with decoded character offsets once escapes are
+/// involved, so a decoded-substring match couldn't be mapped back to a raw
+/// byte span to redact.
 fn find_json_string_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize>> {
     let mut out = vec![];
     let mut i = 0;
@@ -236,26 +244,77 @@ fn find_json_string_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize
         }
         let content_start = i;
         let mut j = content_start + 1;
+        let mut has_escape = false;
         while j < body.len() && body[j] != b'"' {
-            j += if body[j] == b'\\' && body.get(j + 1) == Some(&b'u') {
-                6
-            } else if body[j] == b'\\' {
-                2
+            if body[j] == b'\\' {
+                has_escape = true;
+                j += if body.get(j + 1) == Some(&b'u') { 6 } else { 2 };
             } else {
-                1
-            };
+                j += 1;
+            }
         }
         let content_end = j.min(body.len());
-        if body.get(content_end).is_some_and(|byte| *byte == b'"')
-            && let Ok(raw_str) = std::str::from_utf8(&body[content_start..=content_end])
-            && let Ok(decoded) = serde_json::from_str::<String>(raw_str)
-            && decoded == secret.expose_secret()
-        {
-            out.push(content_start + 1..content_end);
+        if body.get(content_end).is_some_and(|byte| *byte == b'"') {
+            if has_escape {
+                if let Ok(raw_str) = std::str::from_utf8(&body[content_start..=content_end])
+                    && let Ok(decoded) = serde_json::from_str::<String>(raw_str)
+                    && decoded == secret.expose_secret()
+                {
+                    out.push(content_start + 1..content_end);
+                }
+            } else {
+                let raw_content = &body[content_start + 1..content_end];
+                out.extend(
+                    find_word_bounded_spans(raw_content, secret.expose_secret())
+                        .into_iter()
+                        .map(|span| {
+                            (content_start + 1 + span.start)..(content_start + 1 + span.end)
+                        }),
+                );
+            }
         }
         i = content_end + 1;
     }
     out
+}
+
+/// Find every non-overlapping, word-bounded occurrence of `needle` in
+/// `haystack`.
+///
+/// A match is accepted only when the byte immediately before and after it
+/// (if any) is not itself alphanumeric, `-`, or `_`. That rejects a `needle`
+/// that is merely a coincidental prefix/suffix of a longer opaque token
+/// (e.g. an unrelated id that happens to start with the same characters as
+/// the secret), while still catching a secret embedded in ordinary text.
+fn find_word_bounded_spans(haystack: &[u8], needle: &str) -> Vec<Range<usize>> {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return vec![];
+    }
+    let mut out = vec![];
+    let mut pos = 0;
+    while pos + needle.len() <= haystack.len() {
+        if &haystack[pos..pos + needle.len()] == needle {
+            let end = pos + needle.len();
+            let left_ok = pos == 0 || !is_word_byte(haystack[pos - 1]);
+            let right_ok = end == haystack.len() || !is_word_byte(haystack[end]);
+            if left_ok && right_ok {
+                out.push(pos..end);
+                pos = end;
+                continue;
+            }
+        }
+        pos += 1;
+    }
+    out
+}
+
+/// Whether `b` is part of a "word" for [`find_word_bounded_spans`]'s
+/// boundary check: alphanumeric or a common token-constituent separator
+/// (`-`, `_`), the characters typically found inside credential-shaped
+/// tokens.
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
 /// Find a form field value (by byte span in `body`) that [`form_urlencoded`]
