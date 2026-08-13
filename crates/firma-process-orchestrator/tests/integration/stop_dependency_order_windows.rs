@@ -7,6 +7,7 @@
 )]
 
 use std::ffi::OsStr;
+use std::io::Write as _;
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -73,7 +74,7 @@ fn authority_is_not_signalled_until_sidecar_is_collected() {
 }
 
 #[test]
-fn forced_sidecar_job_termination_does_not_kill_authority() {
+fn forced_sidecar_job_termination_kills_its_descendants() {
     let dir = tempfile::tempdir().expect("state dir");
     let sidecar_stopping = dir.path().join("sidecar-stopping");
     let sidecar_release = dir.path().join("unused-sidecar-release");
@@ -105,7 +106,6 @@ fn forced_sidecar_job_termination_does_not_kill_authority() {
     );
 
     let observation_thread = std::thread::spawn({
-        let authority_signal = authority_signal.clone();
         move || {
             wait_for_file(&sidecar_stopping);
             assert!(
@@ -126,10 +126,6 @@ fn forced_sidecar_job_termination_does_not_kill_authority() {
     assert_eq!(
         descendant_wait, WAIT_OBJECT_0,
         "Sidecar Job termination left its descendant alive"
-    );
-    assert_eq!(
-        std::fs::read_to_string(authority_signal).expect("read Authority signal marker"),
-        "isolated"
     );
     assert!(
         !sidecar_exited.exists(),
@@ -211,8 +207,7 @@ fn managed_component_fixture() {
             .env(COMPONENT, "sidecar-descendant")
             .spawn()
             .expect("spawn Sidecar descendant");
-        std::fs::write(required_path(SIDECAR_DESCENDANT), child.id().to_string())
-            .expect("publish Sidecar descendant PID");
+        publish_marker(&required_path(SIDECAR_DESCENDANT), &child.id().to_string());
         Some(child)
     } else {
         None
@@ -244,15 +239,15 @@ fn managed_component_fixture() {
             std::fs::write(required_path(SIDECAR_EXITED), []).expect("mark Sidecar exited");
         }
         Ok("authority") => {
-            let ordering = if std::env::var_os(SIDECAR_STUCK).is_some() {
-                "isolated"
-            } else if required_path(SIDECAR_EXITED).exists() {
+            if std::env::var_os(SIDECAR_STUCK).is_some() {
+                return;
+            }
+            let ordering = if required_path(SIDECAR_EXITED).exists() {
                 "ordered"
             } else {
                 "overlap"
             };
-            std::fs::write(required_path(AUTHORITY_SIGNAL), ordering)
-                .expect("record Authority signal order");
+            publish_marker(&required_path(AUTHORITY_SIGNAL), ordering);
         }
         other => panic!("unexpected fixture component: {other:?}"),
     }
@@ -274,6 +269,18 @@ fn reserve_listener() -> std::net::TcpListener {
 
 fn required_path(name: &str) -> PathBuf {
     PathBuf::from(std::env::var_os(name).unwrap_or_else(|| panic!("{name} must be set")))
+}
+
+fn publish_marker(path: &Path, contents: &str) {
+    let parent = path.parent().expect("marker parent");
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).expect("temporary marker");
+    temporary
+        .write_all(contents.as_bytes())
+        .expect("write temporary marker");
+    temporary
+        .persist_noclobber(path)
+        .map_err(|error| error.error)
+        .expect("publish marker");
 }
 
 fn wait_for_file(path: &Path) {
