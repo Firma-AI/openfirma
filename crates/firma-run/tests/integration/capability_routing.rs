@@ -132,7 +132,6 @@ fn resolve_remote_authority(
     resolve_authority(
         ResolveAuthorityRequest {
             identity: &identity,
-            runtime_dir: &config_dir.join("runtime"),
             flags: &AutostartFlags::default(),
             cli: &AuthorityCli::Unset,
             profile_name: "developer",
@@ -211,7 +210,6 @@ fn no_autostart_unreachable_authority_fails_loudly() {
     let result = resolve_authority(
         ResolveAuthorityRequest {
             identity: &identity,
-            runtime_dir,
             flags: &flags,
             cli: &cli,
             profile_name: "developer",

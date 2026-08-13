@@ -72,14 +72,12 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
     )
     .unwrap();
     let identity = firma_run::identity::RunIdentity::new(*super::helper::agent_id(), "test");
-    let runtime_dir = tmp.path().join("runtime");
     let flags = AutostartFlags::default();
     let firma_exe = PathBuf::from("/bin/false");
     let mut prompt = NoPrompt;
     let result = resolve_authority(
         ResolveAuthorityRequest {
             identity: &identity,
-            runtime_dir: &runtime_dir,
             flags: &flags,
             cli: &AuthorityCli::Unset,
             profile_name: "developer",

@@ -73,14 +73,12 @@ fn resolve_test_authority(
     tmp: &tempfile::TempDir,
     cfg: &std::path::Path,
     identity: &RunIdentity,
-    runtime_dir: &std::path::Path,
     cli: &AuthorityCli,
     prompt: &mut dyn AuthorityPromptIo,
 ) -> Result<firma_run::routing::ResolvedAuthority, RunError> {
     resolve_authority(
         ResolveAuthorityRequest {
             identity,
-            runtime_dir,
             flags: &AutostartFlags::default(),
             cli,
             profile_name: "developer",
@@ -100,18 +98,10 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
-    let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, true);
-    let resolved = resolve_test_authority(
-        &tmp,
-        &cfg,
-        &identity,
-        &runtime_dir,
-        &AuthorityCli::Unset,
-        &mut prompt,
-    )
-    .expect("selection must defer local preparation");
+    let resolved = resolve_test_authority(&tmp, &cfg, &identity, &AuthorityCli::Unset, &mut prompt)
+        .expect("selection must defer local preparation");
 
     // Bootstrap path ran: prompt invoked + section persisted before planning.
     assert_eq!(prompt.confirm_calls, 1);
@@ -130,19 +120,11 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
-    let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let err = resolve_test_authority(
-        &tmp,
-        &cfg,
-        &identity,
-        &runtime_dir,
-        &AuthorityCli::Unset,
-        &mut prompt,
-    )
-    .err()
-    .expect("declined prompt must surface a typed error");
+    let err = resolve_test_authority(&tmp, &cfg, &identity, &AuthorityCli::Unset, &mut prompt)
+        .err()
+        .expect("declined prompt must surface a typed error");
 
     assert_eq!(prompt.confirm_calls, 1);
     assert!(
@@ -158,19 +140,11 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
-    let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(false, true);
-    let err = resolve_test_authority(
-        &tmp,
-        &cfg,
-        &identity,
-        &runtime_dir,
-        &AuthorityCli::Unset,
-        &mut prompt,
-    )
-    .err()
-    .expect("no-tty must surface a typed error");
+    let err = resolve_test_authority(&tmp, &cfg, &identity, &AuthorityCli::Unset, &mut prompt)
+        .err()
+        .expect("no-tty must surface a typed error");
 
     assert_eq!(prompt.confirm_calls, 0);
     assert!(matches!(err, RunError::AuthorityBootstrapNoTty), "{err:?}");
@@ -183,18 +157,10 @@ fn cli_local_skips_prompt_even_without_config() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
-    let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let resolved = resolve_test_authority(
-        &tmp,
-        &cfg,
-        &identity,
-        &runtime_dir,
-        &AuthorityCli::Local,
-        &mut prompt,
-    )
-    .expect("selection must defer local preparation");
+    let resolved = resolve_test_authority(&tmp, &cfg, &identity, &AuthorityCli::Local, &mut prompt)
+        .expect("selection must defer local preparation");
 
     // `--authority local` is a commitment: prompt must not be consulted.
     assert_eq!(prompt.confirm_calls, 0);
@@ -208,18 +174,10 @@ fn config_authority_section_skips_prompt() {
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(&cfg, "[authority]\nlisten_addr = \"[::1]:0\"\n").unwrap();
     let identity = RunIdentity::new(*super::helper::agent_id(), "test");
-    let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let resolved = resolve_test_authority(
-        &tmp,
-        &cfg,
-        &identity,
-        &runtime_dir,
-        &AuthorityCli::Unset,
-        &mut prompt,
-    )
-    .expect("selection must defer local preparation");
+    let resolved = resolve_test_authority(&tmp, &cfg, &identity, &AuthorityCli::Unset, &mut prompt)
+        .expect("selection must defer local preparation");
 
     assert_eq!(prompt.confirm_calls, 0);
     assert!(resolved.owned.is_some());

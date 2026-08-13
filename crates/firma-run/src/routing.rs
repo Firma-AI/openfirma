@@ -337,8 +337,6 @@ pub struct OwnedAuthorityPlan {
 pub struct ResolveAuthorityRequest<'a> {
     /// Identity assigned to this run.
     pub identity: &'a RunIdentity,
-    /// Runtime state directory used for Authority process markers.
-    pub runtime_dir: &'a Path,
     /// Autostart behavior selected for this run.
     pub flags: &'a AutostartFlags,
     /// Authority selection supplied by the CLI.
