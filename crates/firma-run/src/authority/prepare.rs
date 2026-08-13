@@ -77,9 +77,13 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunEr
     })?;
 
     let mut command = Command::new(&req.firma_exe);
+    let child_environment = std::env::vars_os()
+        .filter(|(key, _)| !key.to_string_lossy().starts_with("FIRMA_AUTHORITY_"));
     command
         .args(["authority", "--config"])
         .arg(&authority_toml)
+        .env_clear()
+        .envs(child_environment)
         .env_remove("FIRMA_LOG_FILE")
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")

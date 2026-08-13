@@ -159,3 +159,67 @@ fn pidfile_publication_failure_reaps_started_authority() {
         "startup owner must synchronously kill and reap the child"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn authority_environment_overrides_are_not_inherited() {
+    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "authority_autostart_marker::authority_environment_fixture",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("FIRMA_AUTHORITY_LISTEN_ADDR", "0.0.0.0:50051")
+        .env("FIRMA_AUTHORITY_KEY_FILE", "/tmp/unexpected-authority.key")
+        .status()
+        .expect("run environment fixture");
+
+    assert!(status.success(), "environment fixture failed: {status}");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "spawned with Authority environment overrides"]
+fn authority_environment_fixture() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let observed_environment = tmp.path().join("observed-environment");
+    let fake = tmp.path().join("fake-firma.sh");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/usr/bin/env bash\n\
+             env | grep '^FIRMA_AUTHORITY_' > '{}' || true\n\
+             echo 'firma_authority: listening addr=\"[::1]:54321\"' >&2\n\
+             echo 'firma_authority: authority ready' >&2\n\
+             exec sleep 60\n",
+            observed_environment.display()
+        ),
+    )
+    .expect("write fake");
+    let mut permissions = std::fs::metadata(&fake).expect("stat fake").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake, permissions).expect("make fake executable");
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+
+    let supervisor = AuthoritySupervisor::spawn(SpawnRequest {
+        sandbox_id: &sandbox_id,
+        agent_id: super::helper::agent_id(),
+        session_id: "sess",
+        marker_dir: tmp.path().join("marker/authority"),
+        profile_name: "developer",
+        firma_exe: fake,
+        startup_timeout: Duration::from_secs(2),
+        user_config_path: None,
+    })
+    .expect("spawn fixture");
+
+    let inherited = std::fs::read_to_string(observed_environment).expect("read environment");
+    assert!(
+        inherited.is_empty(),
+        "prepared Authority inherited overrides: {inherited}"
+    );
+    drop(supervisor);
+}
