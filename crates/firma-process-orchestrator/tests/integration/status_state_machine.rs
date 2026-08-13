@@ -53,7 +53,7 @@ fn malformed_pidfile_is_reported() {
         panic!("expected pidfile parse error, got {error:?}");
     };
     assert_eq!(error_path, &path);
-    assert_eq!(value, "not-a-pid");
+    assert_eq!(value, "not-a-pid\n");
 }
 
 #[test]

@@ -77,29 +77,15 @@ fn missing_pidfile_is_none() {
 }
 
 #[test]
-fn canonical_read_accepts_writer_output_and_preserves_missing_semantics() {
-    let dir = tempdir().expect("dir");
-    let path = dir.path().join("child.pid");
-    assert_eq!(pidfile::read_canonical(&path).expect("missing read"), None);
-
-    let pid = UserProcessId::new(4242).expect("non-zero pid");
-    pidfile::write(&path, pid).expect("write");
-    assert_eq!(
-        pidfile::read_canonical(&path).expect("canonical read"),
-        Some(pid)
-    );
-}
-
-#[test]
-fn canonical_read_rejects_noncanonical_pid_state() {
+fn read_rejects_noncanonical_pid_state() {
     let dir = tempdir().expect("dir");
     let path = dir.path().join("child.pid");
 
     for value in [
-        "0\n", "04242\n", "+4242\n", " 4242\n", "4242 \n", "4242", "4242\n\n",
+        "04242\n", "+4242\n", " 4242\n", "4242 \n", "4242", "4242\n\n",
     ] {
         std::fs::write(&path, value).expect("write malformed pidfile");
-        let error = pidfile::read_canonical(&path).expect_err("noncanonical pidfile must fail");
+        let error = pidfile::read(&path).expect_err("noncanonical pidfile must fail");
         assert!(matches!(
             error,
             firma_runtime_state::RuntimeStateError::PidfileParse { value: actual, .. }
@@ -122,7 +108,7 @@ fn read_propagates_filesystem_failure() {
 fn malformed_pidfile_is_rejected() {
     let dir = tempdir().expect("dir");
     let path = dir.path().join("bad.pid");
-    std::fs::write(&path, "not-a-pid\n").expect("write bad");
+    std::fs::write(&path, "not-a-pid").expect("write bad");
     let error = pidfile::read(&path).expect_err("malformed pidfile must fail");
     let firma_runtime_state::RuntimeStateError::PidfileParse {
         path: error_path,
@@ -133,7 +119,7 @@ fn malformed_pidfile_is_rejected() {
     };
     assert_eq!(error_path, &path);
     assert_eq!(value, "not-a-pid");
-    insta::assert_snapshot!(error.to_string().replace(&*path.to_string_lossy(), "[PIDFILE]"), @"invalid pidfile '[PIDFILE]': expected a non-zero process ID, got 'not-a-pid'");
+    insta::assert_snapshot!(error.to_string().replace(&*path.to_string_lossy(), "[PIDFILE]"), @"invalid pidfile '[PIDFILE]': expected one canonical non-zero decimal process ID followed by a newline, got \"not-a-pid\"");
 }
 
 #[test]
@@ -144,6 +130,6 @@ fn zero_pidfile_is_rejected() {
     let error = pidfile::read(&path).expect_err("zero pidfile must fail");
     assert!(matches!(
         error,
-        firma_runtime_state::RuntimeStateError::PidfileParse { ref value, .. } if value == "0"
+        firma_runtime_state::RuntimeStateError::PidfileParse { ref value, .. } if value == "0\n"
     ));
 }

@@ -1119,10 +1119,9 @@ fn read_stack_handle(
 ) -> Result<StackHandle, OrchestratorError> {
     let mut components = Vec::with_capacity(topology.components().len());
     for name in topology.names() {
-        let pid =
-            pidfile::read_canonical(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {
-                OrchestratorError::Platform(format!("{name}.pid missing after startup"))
-            })?;
+        let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {
+            OrchestratorError::Platform(format!("{name}.pid missing after startup"))
+        })?;
         let endpoint = read_canonical_endpoint(&state_dir.join(format!("{name}.listen")), name)?;
         components.push(ComponentHandle {
             name: name.to_string(),
