@@ -32,6 +32,8 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
+#[cfg(test)]
+use rustls::pki_types::CertificateDer;
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
@@ -1522,9 +1524,37 @@ fn build_upstream_handshake_request(
 async fn connect_upstream_tls(
     target: &ConnectTargetInfo,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
+    #[cfg(test)]
+    let test_upstream = TEST_WEBSOCKET_UPSTREAM
+        .lock()
+        .ok()
+        .and_then(|upstream| upstream.clone())
+        .filter(|upstream| upstream.authority == target.authority);
+    #[cfg(test)]
+    let upstream = if let Some(upstream) = test_upstream.as_ref() {
+        TcpStream::connect(upstream.address).await
+    } else {
+        TcpStream::connect(target.authority.as_str()).await
+    }
+    .map_err(|e| format!("TCP connect failed for {}: {e}", target.authority))?;
+    #[cfg(not(test))]
     let upstream = TcpStream::connect(target.authority.as_str())
         .await
         .map_err(|e| format!("TCP connect failed for {}: {e}", target.authority))?;
+    #[cfg(test)]
+    let roots = if let Some(upstream) = test_upstream {
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(upstream.certificate)
+            .map_err(|error| format!("invalid test upstream certificate: {error}"))?;
+        roots
+    } else {
+        webpki_roots::TLS_SERVER_ROOTS
+            .iter()
+            .cloned()
+            .collect::<RootCertStore>()
+    };
+    #[cfg(not(test))]
     let roots = webpki_roots::TLS_SERVER_ROOTS
         .iter()
         .cloned()
@@ -1540,6 +1570,18 @@ async fn connect_upstream_tls(
         .await
         .map_err(|e| format!("TLS connect failed for {}: {e}", target.host))
 }
+
+#[cfg(test)]
+#[derive(Clone)]
+struct TestWebsocketUpstream {
+    authority: Authority,
+    address: SocketAddr,
+    certificate: CertificateDer<'static>,
+}
+
+#[cfg(test)]
+static TEST_WEBSOCKET_UPSTREAM: std::sync::Mutex<Option<TestWebsocketUpstream>> =
+    std::sync::Mutex::new(None);
 
 async fn read_http_response_head<S: tokio::io::AsyncRead + Unpin>(
     stream: &mut S,
@@ -1930,9 +1972,9 @@ mod tests {
 
     use chrono::Utc;
     use firma_core::*;
-    use rustls::ClientConfig;
-    use rustls::RootCertStore;
-    use rustls::pki_types::ServerName;
+    use rcgen::{CertifiedKey, generate_simple_self_signed};
+    use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+    use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio_rustls::TlsConnector;
@@ -1956,86 +1998,6 @@ mod tests {
             .and_then(|l| l.local_addr().ok());
         // SAFETY: this is test-only code; binding port 0 always succeeds
         listener.unwrap()
-    }
-
-    async fn captured_websocket_handshake() -> anyhow::Result<Vec<u8>> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let (handshake_tx, mut handshake_rx) = tokio::sync::mpsc::channel(1);
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await?;
-            http1::Builder::new()
-                .serve_connection(
-                    TokioIo::new(stream),
-                    service_fn(move |request: Request<Incoming>| {
-                        let handshake_tx = handshake_tx.clone();
-                        let target = ConnectTargetInfo {
-                            host: "example.test".to_string(),
-                            port: 443,
-                            authority: Authority::from_static("example.test:443"),
-                        };
-                        let handshake = build_upstream_handshake_request(
-                            &request,
-                            &target,
-                            "/socket",
-                            &InjectedCredentials::empty(),
-                        );
-                        async move {
-                            let _ = handshake_tx.send(handshake).await;
-                            Ok::<_, hyper::Error>(Response::new(Full::new(Bytes::new())))
-                        }
-                    }),
-                )
-                .await?;
-            Ok::<_, anyhow::Error>(())
-        });
-
-        let mut client = TcpStream::connect(address).await?;
-        client
-            .write_all(
-                b"GET /socket HTTP/1.1\r\n\
-                  Host: example.test\r\n\
-                  Connection: close\r\n\
-                  Upgrade: websocket\r\n\
-                  X-Firma-Session-Id: session-secret\r\n\
-                  X-Opaque: \xff\r\n\r\n",
-            )
-            .await?;
-
-        let handshake = handshake_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("handshake server exited without a request"))?;
-
-        drop(client);
-        server.await??;
-        Ok(handshake)
-    }
-
-    #[tokio::test]
-    async fn websocket_handshake_strips_internal_headers() -> anyhow::Result<()> {
-        let handshake = captured_websocket_handshake().await?;
-
-        assert!(
-            !handshake
-                .windows(b"x-firma-session-id:".len())
-                .any(|window| window.eq_ignore_ascii_case(b"x-firma-session-id:")),
-            "internal Firma headers must not reach the upstream handshake"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn websocket_handshake_preserves_opaque_header_values() -> anyhow::Result<()> {
-        let handshake = captured_websocket_handshake().await?;
-
-        assert!(
-            handshake
-                .windows(b"x-opaque: \xff\r\n".len())
-                .any(|window| window.eq_ignore_ascii_case(b"x-opaque: \xff\r\n")),
-            "opaque agent header values must survive the upstream handshake"
-        );
-        Ok(())
     }
 
     struct AllowAllPolicy;
@@ -2098,11 +2060,15 @@ mod tests {
     /// Uses a wildcard host pattern (`*`) combined with the concrete path
     /// so the rule matches regardless of port number in the host header.
     fn test_pipeline_allow(path: &str) -> Arc<EnforcementPipeline> {
+        test_pipeline_allow_method(Method::POST, path)
+    }
+
+    fn test_pipeline_allow_method(method: Method, path: &str) -> Arc<EnforcementPipeline> {
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some(Method::POST),
+                method: Some(method),
                 host: "*".to_string(),
                 path: Some(path.to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -2639,6 +2605,159 @@ mod tests {
             .connect(server_name, stream)
             .await
             .unwrap_or_else(|e| panic!("TLS connect failed: {e}"))
+    }
+
+    static TEST_WEBSOCKET_UPSTREAM_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct TestWebsocketUpstreamRegistration;
+
+    impl Drop for TestWebsocketUpstreamRegistration {
+        fn drop(&mut self) {
+            if let Ok(mut upstream) = TEST_WEBSOCKET_UPSTREAM.lock() {
+                *upstream = None;
+            }
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete CONNECT, downstream TLS, WebSocket upgrade, and upstream TLS flow is intentionally exercised in one fixture"
+    )]
+    async fn websocket_handshake_through_mitm_proxy() -> anyhow::Result<Vec<u8>> {
+        let _lock = TEST_WEBSOCKET_UPSTREAM_LOCK.lock().await;
+        let host = "websocket-regression.test";
+        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![host.to_string()])?;
+        let certificate = CertificateDer::from(cert.der().to_vec());
+        let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let tls_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![certificate.clone()], private_key)?;
+        let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await?;
+        let upstream_address = upstream_listener.local_addr()?;
+        let authority = Authority::from_str(&format!("{host}:443"))?;
+        *TEST_WEBSOCKET_UPSTREAM
+            .lock()
+            .map_err(|_| anyhow::anyhow!("test upstream lock poisoned"))? =
+            Some(TestWebsocketUpstream {
+                authority,
+                address: upstream_address,
+                certificate,
+            });
+        let _registration = TestWebsocketUpstreamRegistration;
+        let (handshake_tx, handshake_rx) = tokio::sync::oneshot::channel();
+        let upstream = tokio::spawn(async move {
+            let (stream, _) = upstream_listener.accept().await?;
+            let mut stream = tls_acceptor.accept(stream).await?;
+            let mut handshake = Vec::new();
+            let mut chunk = [0_u8; 512];
+            loop {
+                let read = stream.read(&mut chunk).await?;
+                anyhow::ensure!(read > 0, "upstream closed before receiving the handshake");
+                handshake.extend_from_slice(&chunk[..read]);
+                if handshake.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = handshake_tx.send(handshake);
+            stream
+                .write_all(
+                    b"HTTP/1.1 101 Switching Protocols\r\n\
+                      Connection: Upgrade\r\n\
+                      Upgrade: websocket\r\n\r\n",
+                )
+                .await?;
+            stream.shutdown().await?;
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let ca_dir = tempfile::tempdir()?;
+        let proxy_address = free_addr();
+        let cancel = CancellationToken::new();
+        let proxy = start_proxy_with_mitm(
+            proxy_address,
+            test_handler(test_pipeline_allow_method(Method::GET, "/socket")),
+            cancel.clone(),
+            HttpsMitmConfig {
+                enabled: true,
+                intercept_hosts: vec![host.to_string()],
+                strict_hosts: vec![host.to_string()],
+                cert_ttl_secs: 300,
+                cert_cache_capacity: 16,
+                ..HttpsMitmConfig::default()
+            },
+            ca_dir.path().to_path_buf(),
+        )
+        .await;
+        let mut stream = TcpStream::connect(proxy_address).await?;
+        stream
+            .write_all(
+                format!(
+                    "CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\nx-firma-session-id: _test_\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await?;
+        let response = read_connect_response(&mut stream).await;
+        anyhow::ensure!(
+            response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got {response:?}"
+        );
+        let ca_path = ca_dir.path().join("firma-ca.crt");
+        let mut stream = connect_tls_with_ca(stream, &ca_path, host).await;
+        let mut request = format!(
+            "GET /socket HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             Connection: Upgrade\r\n\
+             Upgrade: websocket\r\n\
+             x-firma-session-id: _test_\r\n\
+             x-opaque: "
+        )
+        .into_bytes();
+        request.push(0xff);
+        request.extend_from_slice(b"\r\n\r\n");
+        stream.write_all(&request).await?;
+        let mut response = [0_u8; 512];
+        let read =
+            tokio::time::timeout(Duration::from_secs(3), stream.read(&mut response)).await??;
+        anyhow::ensure!(
+            response[..read].starts_with(b"HTTP/1.1 101"),
+            "expected WebSocket 101, got {:?}",
+            String::from_utf8_lossy(&response[..read])
+        );
+        let handshake = handshake_rx.await?;
+
+        drop(stream);
+        cancel.cancel();
+        upstream.await??;
+        proxy.await??;
+        Ok(handshake)
+    }
+
+    #[tokio::test]
+    async fn websocket_mitm_strips_internal_headers_from_upstream() -> anyhow::Result<()> {
+        let handshake = websocket_handshake_through_mitm_proxy().await?;
+
+        assert!(
+            !handshake
+                .windows(b"x-firma-session-id:".len())
+                .any(|window| window.eq_ignore_ascii_case(b"x-firma-session-id:")),
+            "internal Firma headers must not reach the upstream handshake"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_mitm_preserves_opaque_headers_upstream() -> anyhow::Result<()> {
+        let handshake = websocket_handshake_through_mitm_proxy().await?;
+
+        assert!(
+            handshake
+                .windows(b"x-opaque: \xff\r\n".len())
+                .any(|window| window.eq_ignore_ascii_case(b"x-opaque: \xff\r\n")),
+            "opaque agent header values must survive the upstream handshake"
+        );
+        Ok(())
     }
 
     // ── extract_path unit tests ─────────────────────────────────────────
