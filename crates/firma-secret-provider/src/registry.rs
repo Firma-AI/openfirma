@@ -91,7 +91,7 @@ fn bws_spec() -> CliIntegrationSpec {
         binary_name: String::from("bws"),
         provider_id: String::from("bitwarden"),
         credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
-        skip_options: vec![],
+        stripped_options: vec![],
         // `--server-url` (short `-u`) redirects the CLI at an arbitrary
         // server, which would send `BWS_ACCESS_TOKEN` to a host of the
         // agent's choosing on the very next request — rejected
@@ -185,7 +185,7 @@ fn bws_spec() -> CliIntegrationSpec {
                 // (e.g. `-otsv`); its attached-value entry closes that gap, so
                 // an unstripped `-otsv` can't survive alongside the forced
                 // `--output json` and skew or defeat it.
-                skip_options: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
+                stripped_options: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
                 append_options: vec![String::from("--output"), String::from("json")],
             }),
             MatcherRule::SensitiveCommand(CommandAndMatcher {
@@ -202,7 +202,7 @@ fn bws_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                skip_options: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
+                stripped_options: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
                 append_options: vec![String::from("--output"), String::from("json")],
             }),
             // `project list`/`project get` return only project
@@ -225,7 +225,7 @@ fn op_spec() -> CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
         credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
-        skip_options: vec![],
+        stripped_options: vec![],
         // `op` has no documented flag that sets an API host directly — a
         // service-account token is generally understood to be self-routing
         // (it authenticates against 1Password's own cloud API regardless of
@@ -313,7 +313,7 @@ fn op_spec() -> CliIntegrationSpec {
                         scope: SecretJsonSelectorScope::Document,
                     }),
                 },
-                skip_options: vec![FlagSpec::value("--format")],
+                stripped_options: vec![FlagSpec::value("--format")],
                 append_options: vec![String::from("--format"), String::from("json")],
             }),
             // `whoami`/`account list`/`vault list`/`item list` return
@@ -351,7 +351,7 @@ fn vault_spec() -> CliIntegrationSpec {
         // Namespace selects a logical tenant on the same Vault server. It is
         // retained for execution, but its value must not be mistaken for a
         // command word when it appears before or between subcommands.
-        skip_options: vec![
+        stripped_options: vec![
             FlagSpec::value("-namespace"),
             FlagSpec::value("--namespace"),
         ],
@@ -464,7 +464,7 @@ fn vault_spec() -> CliIntegrationSpec {
                 },
                 // Strip any -format/-format= flag and force JSON, regardless
                 // of what the agent requested.
-                skip_options: vec![FlagSpec::value("-format"), FlagSpec::value("--format")],
+                stripped_options: vec![FlagSpec::value("-format"), FlagSpec::value("--format")],
                 append_options: vec![String::from("-format"), String::from("json")],
             }),
             // `kv list`/`list`/`status`/`policy list` return key names,
@@ -492,7 +492,7 @@ fn doppler_spec() -> CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),
         credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
-        skip_options: vec![],
+        stripped_options: vec![],
         // `--api-host` redirects the CLI at an arbitrary API host, which
         // would send `DOPPLER_TOKEN` there on the next request;
         // `--no-verify-tls` disables TLS certificate verification, letting
@@ -611,7 +611,7 @@ fn doppler_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                skip_options: vec![
+                stripped_options: vec![
                     FlagSpec::value("--format"),
                     FlagSpec::value("--fallback"),
                     FlagSpec::value("--fallback-passphrase"),
@@ -662,7 +662,7 @@ fn doppler_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                skip_options: vec![FlagSpec::valueless("--json"), FlagSpec::valueless("--raw")],
+                stripped_options: vec![FlagSpec::valueless("--json"), FlagSpec::valueless("--raw")],
                 append_options: vec![String::from("--json")],
             }),
             // `me`/`projects list`/`environments list`/`configs list`

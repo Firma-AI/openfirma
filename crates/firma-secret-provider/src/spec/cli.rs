@@ -102,7 +102,7 @@ pub enum CommandMatch {
 /// Per-CLI-tool behavior: credential forwarding, command classification, and
 /// output normalization.
 ///
-/// Deserialization rejects conflicting definitions of the same skipped option
+/// Deserialization rejects conflicting definitions of the same stripped option
 /// across integration and command scopes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CliIntegrationSpec {
@@ -115,7 +115,7 @@ pub struct CliIntegrationSpec {
     /// Options ignored while identifying command words. Their value arity is
     /// honored, and the options remain unchanged in the executed command.
     #[serde(default)]
-    pub skip_options: Vec<FlagSpec>,
+    pub stripped_options: Vec<FlagSpec>,
     /// Options that make an otherwise permitted invocation unsafe. An
     /// invocation containing one is blocked rather than silently changed.
     #[serde(default)]
@@ -136,7 +136,7 @@ impl<'de> serde::Deserialize<'de> for CliIntegrationSpec {
             provider_id: String,
             credential_env_vars: Vec<String>,
             #[serde(default)]
-            skip_options: Vec<FlagSpec>,
+            stripped_options: Vec<FlagSpec>,
             #[serde(default)]
             forbidden_options: Vec<FlagSpec>,
             matchers: Vec<CliMatcherRule>,
@@ -147,15 +147,15 @@ impl<'de> serde::Deserialize<'de> for CliIntegrationSpec {
             MatcherRule::SensitiveCommand(rule) => Some(rule),
             MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
         }) {
-            for integration_option in &raw.skip_options {
+            for integration_option in &raw.stripped_options {
                 if let Some(command_option) = rule
-                    .skip_options
+                    .stripped_options
                     .iter()
                     .find(|option| option.name == integration_option.name)
                     && command_option != integration_option
                 {
                     return Err(serde::de::Error::custom(format!(
-                        "option `{}` has conflicting definitions in integration-level and command-level skip_options",
+                        "option `{}` has conflicting definitions in integration-level and command-level stripped_options",
                         integration_option.name
                     )));
                 }
@@ -166,7 +166,7 @@ impl<'de> serde::Deserialize<'de> for CliIntegrationSpec {
             binary_name: raw.binary_name,
             provider_id: raw.provider_id,
             credential_env_vars: raw.credential_env_vars,
-            skip_options: raw.skip_options,
+            stripped_options: raw.stripped_options,
             forbidden_options: raw.forbidden_options,
             matchers: raw.matchers,
         })
@@ -187,7 +187,8 @@ impl CliIntegrationSpec {
             .iter()
             .filter_map(MatcherRule::as_blocked_command)
             .any(|rule| {
-                rule.match_args(args, &self.skip_options, &[]) != CommandMatchResult::DoesNotMatch
+                rule.match_args(args, &self.stripped_options, &[])
+                    != CommandMatchResult::DoesNotMatch
             })
         {
             return MatchingResolution::Blocked;
@@ -200,7 +201,7 @@ impl CliIntegrationSpec {
         {
             match rule
                 .command
-                .match_args(args, &self.skip_options, &rule.skip_options)
+                .match_args(args, &self.stripped_options, &rule.stripped_options)
             {
                 CommandMatchResult::Matches => {
                     return MatchingResolution::Matcher(&rule.matcher);
@@ -215,7 +216,7 @@ impl CliIntegrationSpec {
             .iter()
             .filter_map(MatcherRule::as_safe_command)
         {
-            match rule.match_args(args, &self.skip_options, &[]) {
+            match rule.match_args(args, &self.stripped_options, &[]) {
                 CommandMatchResult::Matches => return MatchingResolution::PassThrough,
                 CommandMatchResult::Malformed => return MatchingResolution::Blocked,
                 CommandMatchResult::DoesNotMatch => {}
@@ -235,14 +236,14 @@ impl CliIntegrationSpec {
             .filter_map(MatcherRule::as_sensitive_command)
             .find(|rule| {
                 rule.command
-                    .match_args(args, &self.skip_options, &rule.skip_options)
+                    .match_args(args, &self.stripped_options, &rule.stripped_options)
                     == CommandMatchResult::Matches
             })
         else {
             return args.to_vec();
         };
 
-        let mut rewritten = remove_options(args, &rule.skip_options);
+        let mut rewritten = remove_options(args, &rule.stripped_options);
         let insertion_index = rewritten
             .iter()
             .position(|arg| arg == "--")
@@ -268,7 +269,7 @@ pub struct CommandAndMatcher {
     /// Output-shaping options skipped during matching and removed before
     /// [`Self::append_options`] is applied.
     #[serde(default)]
-    pub skip_options: Vec<FlagSpec>,
+    pub stripped_options: Vec<FlagSpec>,
     /// Options and values added to normalize output into the expected form.
     /// They are inserted before an end-of-options (`--`) marker when present.
     #[serde(default)]

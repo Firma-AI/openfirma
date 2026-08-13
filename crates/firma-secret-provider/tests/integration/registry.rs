@@ -24,7 +24,7 @@ fn cli_schema_has_readable_explicit_option_toml() {
 binary_name = "bws"
 provider_id = "bitwarden"
 credential_env_vars = ["BWS_ACCESS_TOKEN"]
-skip_options = [{ name = "--organization-id", takes_value = true }]
+stripped_options = [{ name = "--organization-id", takes_value = true }]
 forbidden_options = [
   { name = "--server-url", takes_value = true },
   { name = "-u", takes_value = true, allow_attached_value = true },
@@ -35,7 +35,7 @@ forbidden_options = [
 type = "sensitive_command"
 argv = ["secret", "get"]
 match = "prefix"
-skip_options = [{ name = "--output", takes_value = true }]
+stripped_options = [{ name = "--output", takes_value = true }]
 append_options = ["--output", "json"]
 
 [matchers.matcher]
@@ -51,7 +51,7 @@ path = "$.key"
     let spec: CliIntegrationSpec =
         toml::from_str(input).unwrap_or_else(|error| panic!("valid CLI schema TOML: {error}"));
     assert_eq!(
-        spec.skip_options,
+        spec.stripped_options,
         vec![FlagSpec::value("--organization-id")]
     );
     assert_eq!(
@@ -88,7 +88,7 @@ fn cli_schema_rejects_invalid_option_definitions() {
 }
 
 #[test]
-fn cli_schema_rejects_conflicting_skip_option_definitions() {
+fn cli_schema_rejects_conflicting_stripped_option_definitions() {
     let conflicting_command_options = [
         r#"{ name = "--mode", takes_value = false }"#,
         r#"{ name = "--mode", takes_value = true, allow_attached_value = true }"#,
@@ -100,12 +100,12 @@ fn cli_schema_rejects_conflicting_skip_option_definitions() {
 binary_name = "example"
 provider_id = "example"
 credential_env_vars = []
-skip_options = [{{ name = "--mode", takes_value = true }}]
+stripped_options = [{{ name = "--mode", takes_value = true }}]
 
 [[matchers]]
 type = "sensitive_command"
 argv = ["secret", "get"]
-skip_options = [{command_option}]
+stripped_options = [{command_option}]
 
 [matchers.matcher]
 type = "regex"
@@ -118,7 +118,7 @@ pattern = "(?P<name>.+)=(?P<value>.+)"
         };
         assert_eq!(
             error.message(),
-            "option `--mode` has conflicting definitions in integration-level and command-level skip_options"
+            "option `--mode` has conflicting definitions in integration-level and command-level stripped_options"
         );
     }
 }
@@ -325,7 +325,7 @@ fn command_matching_skips_declared_options_and_their_values() -> Result<(), Empt
         binary_name: String::from("synthetic"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        skip_options: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
+        stripped_options: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
         forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(&["get", "secret"], CommandMatch::Exact)?,
@@ -338,7 +338,7 @@ fn command_matching_skips_declared_options_and_their_values() -> Result<(), Empt
                 item_selector: None,
                 domain_selector: None,
             },
-            skip_options: vec![],
+            stripped_options: vec![],
             append_options: vec![],
         })],
     });
@@ -425,7 +425,7 @@ fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
         binary_name: String::from("bws"),
         provider_id: String::from("custom"),
         credential_env_vars: vec![],
-        skip_options: vec![],
+        stripped_options: vec![],
         forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(&["secret"], CommandMatch::Prefix)?,
@@ -438,7 +438,7 @@ fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
                 item_selector: None,
                 domain_selector: None,
             },
-            skip_options: vec![],
+            stripped_options: vec![],
             append_options: vec![],
         })],
     });
@@ -921,13 +921,14 @@ fn builtins_reject_backend_override_flags_on_safe_commands() {
 }
 
 #[test]
-fn rewrite_args_leaves_args_untouched_when_no_skip_options_configured() -> Result<(), EmptyError> {
+fn rewrite_args_leaves_args_untouched_when_no_stripped_options_configured() -> Result<(), EmptyError>
+{
     let mut registry = IntegrationRegistry::with_builtins();
     registry.push(CliIntegrationSpec {
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        skip_options: vec![],
+        stripped_options: vec![],
         forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(&["secret", "get"], CommandMatch::Prefix)?,
@@ -940,7 +941,7 @@ fn rewrite_args_leaves_args_untouched_when_no_skip_options_configured() -> Resul
                 item_selector: None,
                 domain_selector: None,
             },
-            skip_options: vec![],
+            stripped_options: vec![],
             append_options: vec![],
         })],
     });
@@ -954,9 +955,9 @@ fn rewrite_args_leaves_args_untouched_when_no_skip_options_configured() -> Resul
 /// Builds a registry with one custom sensitive command, for pinning
 /// [`CliIntegrationSpec::rewrite_args`]'s option-stripping behavior in
 /// isolation from any built-in's other rules.
-fn registry_with_skip_options(
+fn registry_with_stripped_options(
     command_words: &[&str],
-    skip_options: Vec<FlagSpec>,
+    stripped_options: Vec<FlagSpec>,
     append_options: Vec<String>,
 ) -> Result<IntegrationRegistry, EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
@@ -964,7 +965,7 @@ fn registry_with_skip_options(
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        skip_options: vec![],
+        stripped_options: vec![],
         forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(command_words, CommandMatch::Prefix)?,
@@ -977,7 +978,7 @@ fn registry_with_skip_options(
                 item_selector: None,
                 domain_selector: None,
             },
-            skip_options,
+            stripped_options,
             append_options,
         })],
     });
@@ -985,9 +986,10 @@ fn registry_with_skip_options(
 }
 
 #[test]
-fn valueless_skip_option_preserves_following_options_and_positionals() -> Result<(), EmptyError> {
+fn valueless_stripped_option_preserves_following_options_and_positionals() -> Result<(), EmptyError>
+{
     let registry =
-        registry_with_skip_options(&["cmd"], vec![FlagSpec::valueless("--bool-flag")], vec![])?;
+        registry_with_stripped_options(&["cmd"], vec![FlagSpec::valueless("--bool-flag")], vec![])?;
     let spec = registry.for_binary("foo").expect("foo spec");
 
     assert_eq!(
@@ -1000,8 +1002,8 @@ fn valueless_skip_option_preserves_following_options_and_positionals() -> Result
 }
 
 #[test]
-fn valueless_skip_option_preserves_following_command_word() -> Result<(), EmptyError> {
-    let registry = registry_with_skip_options(
+fn valueless_stripped_option_preserves_following_command_word() -> Result<(), EmptyError> {
+    let registry = registry_with_stripped_options(
         &["secrets", "download"],
         vec![FlagSpec::valueless("--offline")],
         vec![String::from("--no-fallback")],
@@ -1044,8 +1046,9 @@ fn doppler_secrets_download_rewrite_keeps_download_when_offline_precedes_it() {
 }
 
 #[test]
-fn value_taking_skip_option_consumes_a_value_that_looks_like_an_option() -> Result<(), EmptyError> {
-    let registry = registry_with_skip_options(
+fn value_taking_stripped_option_consumes_a_value_that_looks_like_an_option()
+-> Result<(), EmptyError> {
+    let registry = registry_with_stripped_options(
         &["cmd"],
         vec![FlagSpec::value("--fallback-passphrase")],
         vec![],
@@ -1058,8 +1061,8 @@ fn value_taking_skip_option_consumes_a_value_that_looks_like_an_option() -> Resu
 }
 
 #[test]
-fn valueless_skip_option_does_not_consume_following_positional() -> Result<(), EmptyError> {
-    let registry = registry_with_skip_options(
+fn valueless_stripped_option_does_not_consume_following_positional() -> Result<(), EmptyError> {
+    let registry = registry_with_stripped_options(
         &["cmd"],
         vec![FlagSpec::valueless("--valueless-flag")],
         vec![],
@@ -1073,7 +1076,7 @@ fn valueless_skip_option_does_not_consume_following_positional() -> Result<(), E
 
 #[test]
 fn rewrite_args_concatenated_short_option_value_is_stripped() -> Result<(), EmptyError> {
-    let registry = registry_with_skip_options(
+    let registry = registry_with_stripped_options(
         &["cmd"],
         vec![
             FlagSpec::value("--server-url"),
@@ -1118,7 +1121,7 @@ fn rewrite_args_concatenated_short_option_value_is_stripped() -> Result<(), Empt
 
 #[test]
 fn options_after_end_of_options_are_not_removed_or_forbidden() -> Result<(), EmptyError> {
-    let registry = registry_with_skip_options(
+    let registry = registry_with_stripped_options(
         &["cmd"],
         vec![FlagSpec::value("--format")],
         vec![String::from("--format=json")],
