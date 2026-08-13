@@ -4,6 +4,7 @@ mod announcement;
 mod app;
 mod bindings;
 mod command;
+mod editor;
 mod error;
 mod event;
 mod input;
@@ -14,6 +15,9 @@ mod runner;
 mod state;
 mod terminal;
 mod toggle;
+
+#[doc(hidden)]
+pub mod testing;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -32,7 +36,6 @@ pub use input::{command_for_key, handle_key};
 pub use policies::PolicyStateReader;
 pub use render::render;
 pub use rewrite::{PolicyRewriteEvent, PolicyRewriteHandler, RewriteEventProbe};
-pub use runner::{ControlCrankOutcome, EventKind, HeadlessRunner};
 pub use state::{
     AuditDecision, AuditFilter, AuditRow, AuditViewportMode, ControlRuntimeState, ControlStatus,
     Pane, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart, PolicyRow,
@@ -121,7 +124,8 @@ pub fn set_policy_states(
 ///
 /// # Errors
 ///
-/// Returns an error when terminal setup, event polling, or drawing fails.
+/// Returns an error when terminal setup, event polling, drawing, or terminal
+/// suspension around a blocking editor fails.
 pub fn run(options: &ControlOptions) -> anyhow::Result<ExitCode> {
     runner::run(options)
 }

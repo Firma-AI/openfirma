@@ -6,19 +6,21 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Sender},
     },
-    thread,
     time::Duration,
 };
 
 use crossterm::event::KeyCode;
 use firma_tui::control::{
-    App, AuditDecision, AuditRow, ControlCrankOutcome, ControlError, ControlStatus, Event,
-    HeadlessRunner, PolicyRewriteError, PolicyRewriteHandler, PolicyRewriteRequest,
-    PolicyRowStatus, PolicyStateReader, TerminalEventSource, read_policy_states, set_policy_states,
+    App, AuditDecision, AuditRow, ControlError, ControlStatus, EditorError, Event,
+    PolicyRewriteError, PolicyRewriteHandler, PolicyRewriteRequest, PolicyRowStatus,
+    PolicyStateReader, TerminalEventSource, read_policy_states, set_policy_states,
+    testing::{ControlCrankOutcome, HeadlessRunner},
 };
 use ratatui::{Terminal, backend::TestBackend};
+
+pub const CRANK_TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[cfg(unix)]
 pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(1);
@@ -26,8 +28,11 @@ pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(windows)]
 // We give Windows more room because the test waits at the real rewrite worker
 // boundary. Once the blocked handler is released, the worker still needs CPU
-// time to resume, rewrite Cedar and publish it as completed. plus a throttled
-// CI runner can exceed one second here without the queue being broken.
+// time to resume, rewrite Cedar, and publish `Completed`. A throttled CI runner
+// can exceed one second here without the queue being broken.
+//
+// This is not a synchronization delay. The event still decides progress; the
+// timeout only decides when we stop waiting and fail.
 pub const REWRITE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const DEFAULT_POLICY_SOURCE: &str = r#"
@@ -136,6 +141,29 @@ permit (
     )
 }
 
+pub fn app_with_default_policies() -> anyhow::Result<(tempfile::TempDir, App)> {
+    app_with_policy_files(&[("policies.cedar", DEFAULT_POLICY_SOURCE)])
+}
+
+pub fn app_with_policy_files(files: &[(&str, &str)]) -> anyhow::Result<(tempfile::TempDir, App)> {
+    let temp = tempfile::tempdir()?;
+    for (name, source) in files {
+        fs::write(temp.path().join(name), source)?;
+    }
+    let app = App::new(Some(temp.path().to_path_buf()), false);
+
+    assert_eq!(app.policy_error(), None);
+    assert_eq!(
+        app.policies().len(),
+        files
+            .iter()
+            .map(|(_, source)| source.matches("@id(").count())
+            .sum::<usize>()
+    );
+
+    Ok((temp, app))
+}
+
 #[derive(Clone, Default)]
 pub struct PolicyStateReadCounts {
     counts: Arc<Mutex<std::collections::HashMap<PathBuf, usize>>>,
@@ -170,48 +198,13 @@ impl PolicyStateReadCounts {
     }
 }
 
-#[derive(Default)]
-pub struct FakeTerminal {
-    events: RefCell<VecDeque<Event>>,
-}
-
-impl FakeTerminal {
-    pub fn new(events: impl IntoIterator<Item = Event>) -> Self {
-        Self {
-            events: RefCell::new(events.into_iter().collect()),
-        }
-    }
-
-    pub fn with_events(events: impl IntoIterator<Item = Event>) -> Self {
-        Self::new(events)
-    }
-
-    pub fn with_key(key: KeyCode) -> Self {
-        Self::new([Event::Key(key)])
-    }
-}
-
-impl TerminalEventSource for FakeTerminal {
-    fn poll(&self, _timeout: Duration) -> anyhow::Result<bool> {
-        Ok(!self.events.borrow().is_empty())
-    }
-
-    fn read(&self) -> anyhow::Result<Event> {
-        self.events
-            .borrow_mut()
-            .pop_front()
-            .ok_or_else(|| anyhow::anyhow!("terminal event queue is empty"))
-    }
-}
-
-pub fn audit_row(decision: AuditDecision, index: usize) -> AuditRow {
-    AuditRow {
-        time: format!("00:00:{index:02}"),
-        decision,
-        action_class: format!("class-{index}"),
-        resource: format!("resource-{index}"),
-        policy: String::new(),
-    }
+pub fn headless_runner_with_policy_source(
+    source: &str,
+) -> anyhow::Result<(tempfile::TempDir, PathBuf, HeadlessRunner<'static>)> {
+    let temp = tempfile::tempdir()?;
+    let policy_path = write_policy_file(temp.path(), source)?;
+    let runner = HeadlessRunner::new(Some(temp.path().to_path_buf()), None);
+    Ok((temp, policy_path, runner))
 }
 
 pub fn app_with_audit_rows() -> App {
@@ -226,42 +219,29 @@ pub fn audit_channel() -> (mpsc::Sender<AuditRow>, mpsc::Receiver<AuditRow>) {
     mpsc::channel()
 }
 
-pub fn app_with_default_policies() -> anyhow::Result<(tempfile::TempDir, App)> {
-    app_with_policy_files(&[("policies.cedar", DEFAULT_POLICY_SOURCE)])
-}
-
-pub fn app_with_policy_files(files: &[(&str, &str)]) -> anyhow::Result<(tempfile::TempDir, App)> {
-    let temp = tempfile::tempdir()?;
-    for (name, source) in files {
-        fs::write(temp.path().join(name), source)?;
-    }
-    let app = App::new(Some(temp.path().to_path_buf()), false);
-
-    assert_eq!(app.policy_error(), None);
-    assert_eq!(
-        app.policies().len(),
-        files
-            .iter()
-            .map(|(_, source)| source.matches("@id(").count())
-            .sum::<usize>()
-    );
-
-    Ok((temp, app))
-}
-
 pub fn audit_channel_with_rows(
     count: usize,
-) -> anyhow::Result<(Sender<AuditRow>, Receiver<AuditRow>)> {
-    let (tx, rx) = audit_channel();
-    send_audit_rows(&tx, count)?;
-    Ok((tx, rx))
+) -> anyhow::Result<(mpsc::Sender<AuditRow>, mpsc::Receiver<AuditRow>)> {
+    let (audit_tx, audit_rx) = audit_channel();
+    send_audit_rows(&audit_tx, count)?;
+    Ok((audit_tx, audit_rx))
 }
 
-pub fn send_audit_rows(tx: &Sender<AuditRow>, count: usize) -> anyhow::Result<()> {
+pub fn send_audit_rows(audit_tx: &mpsc::Sender<AuditRow>, count: usize) -> anyhow::Result<()> {
     for index in 0..count {
-        tx.send(indexed_audit_row(index))?;
+        audit_tx.send(indexed_audit_row(index))?;
     }
     Ok(())
+}
+
+pub fn audit_row(decision: AuditDecision, index: usize) -> AuditRow {
+    AuditRow {
+        time: format!("00:00:{index:02}"),
+        decision,
+        action_class: format!("class-{index}"),
+        resource: format!("resource-{index}"),
+        policy: String::new(),
+    }
 }
 
 pub fn indexed_audit_row(index: usize) -> AuditRow {
@@ -332,18 +312,106 @@ impl Drop for RewriteRelease {
     }
 }
 
+#[derive(Default)]
+pub struct FakeTerminal {
+    events: RefCell<VecDeque<Event>>,
+}
+
+impl FakeTerminal {
+    pub fn new(events: impl IntoIterator<Item = Event>) -> Self {
+        Self {
+            events: RefCell::new(events.into_iter().collect()),
+        }
+    }
+
+    pub fn with_events(events: impl IntoIterator<Item = Event>) -> Self {
+        Self::new(events)
+    }
+
+    pub fn with_key(key: KeyCode) -> Self {
+        Self::new([Event::Key(key)])
+    }
+}
+
+impl TerminalEventSource for FakeTerminal {
+    fn poll(&self, _timeout: Duration) -> anyhow::Result<bool> {
+        Ok(!self.events.borrow().is_empty())
+    }
+
+    fn read(&self) -> anyhow::Result<Event> {
+        self.events
+            .borrow_mut()
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("terminal event queue is empty"))
+    }
+}
+
+pub fn replace_policy_source_editor(
+    policy_path: PathBuf,
+    source: String,
+) -> impl FnMut(&Path) -> anyhow::Result<Result<(), EditorError>> {
+    move |path| {
+        if path != policy_path.as_path() {
+            return Ok(Err(EditorError::operation(format!(
+                "expected editor path `{}`, got `{}`",
+                policy_path.display(),
+                path.display()
+            ))));
+        }
+
+        Ok(
+            fs::write(&policy_path, &source).map_err(|error| EditorError::Operation {
+                message: error.to_string(),
+            }),
+        )
+    }
+}
+
+pub fn successful_editor() -> impl FnMut(&Path) -> anyhow::Result<Result<(), EditorError>> {
+    |_path| Ok(Ok(()))
+}
+
+pub fn crank_until(
+    runner: &mut HeadlessRunner<'_>,
+    condition: impl FnMut(&App) -> bool,
+    timeout: Duration,
+) -> anyhow::Result<ControlCrankOutcome> {
+    let terminal = FakeTerminal::default();
+    crank_until_with_terminal(runner, &terminal, successful_editor(), condition, timeout)
+}
+
+pub fn crank_until_with_terminal(
+    runner: &mut HeadlessRunner<'_>,
+    terminal: &impl TerminalEventSource,
+    mut open_policy_source: impl FnMut(&Path) -> anyhow::Result<Result<(), EditorError>>,
+    condition: impl FnMut(&App) -> bool,
+    timeout: Duration,
+) -> anyhow::Result<ControlCrankOutcome> {
+    runner.crank_until(terminal, &mut open_policy_source, condition, timeout)
+}
+
+pub fn write_policy_file(dir: &Path, source: &str) -> anyhow::Result<PathBuf> {
+    write_named_policy_file(dir, "policies.cedar", source)
+}
+
+pub fn write_named_policy_file(dir: &Path, name: &str, source: &str) -> anyhow::Result<PathBuf> {
+    let policy_path = dir.join(name);
+    fs::write(&policy_path, source)?;
+    Ok(policy_path)
+}
+
+pub fn temp_policy_file(source: &str) -> anyhow::Result<(tempfile::TempDir, PathBuf)> {
+    let temp = tempfile::tempdir()?;
+    let policy_path = write_policy_file(temp.path(), source)?;
+    Ok((temp, policy_path))
+}
+
 pub fn handle_key(app: &mut App, key: KeyCode) {
     let _outcome = firma_tui::control::handle_key(app, key);
 }
 
 pub fn last_visible_audit_index(app: &App) -> usize {
     app.visible_audit_rows_len().saturating_sub(1)
-}
-
-pub fn selected_audit_resource(app: &App) -> Option<&str> {
-    app.visible_audit_rows()
-        .nth(app.selected_audit_index())
-        .map(|row| row.resource.as_str())
 }
 
 pub fn policy_status(app: &App, id: &str) -> Option<PolicyRowStatus> {
@@ -368,46 +436,10 @@ pub fn rewrite_ids_for_file(
         .map(|request| request.ids.clone())
 }
 
-pub fn write_named_policy_file(
-    dir: &Path,
-    name: &str,
-    source: &str,
-) -> anyhow::Result<std::path::PathBuf> {
-    let policy_path = dir.join(name);
-    fs::write(&policy_path, source)?;
-    Ok(policy_path)
-}
-
-pub fn write_policy_file(dir: &Path, source: &str) -> anyhow::Result<std::path::PathBuf> {
-    write_named_policy_file(dir, "policies.cedar", source)
-}
-
-pub fn temp_policy_file(source: &str) -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
-    let temp = tempfile::tempdir()?;
-    let policy_path = write_policy_file(temp.path(), source)?;
-    Ok((temp, policy_path))
-}
-
-pub fn crank_until(
-    runner: &mut HeadlessRunner<'_>,
-    mut condition: impl FnMut(&App) -> bool,
-    limit: usize,
-) -> anyhow::Result<ControlCrankOutcome> {
-    if condition(runner.app()) {
-        return Ok(ControlCrankOutcome::NoEvent);
-    }
-
-    let terminal = FakeTerminal::default();
-    let mut last_outcome = ControlCrankOutcome::NoEvent;
-    for _attempt in 0..limit {
-        last_outcome = runner.try_crank(&terminal)?;
-        if condition(runner.app()) {
-            return Ok(last_outcome);
-        }
-        thread::yield_now();
-    }
-
-    anyhow::bail!("condition was not met after {limit} cranks; last outcome: {last_outcome:?}");
+pub fn selected_audit_resource(app: &App) -> Option<&str> {
+    app.visible_audit_rows()
+        .nth(app.selected_audit_index())
+        .map(|row| row.resource.as_str())
 }
 
 pub fn render_text(app: &App, width: u16, height: u16) -> anyhow::Result<String> {
