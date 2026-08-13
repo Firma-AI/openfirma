@@ -2,7 +2,7 @@
 //!
 //! Implements the [`Interceptor`] trait over a Unix
 //! domain socket (UDS). The interceptor owns the full socket lifecycle: it
-//! removes any stale socket file, binds a
+//! refuses to replace an existing socket file, binds a
 //! [`tokio::net::UnixListener`], accepts connections, and unlinks the socket
 //! on shutdown.
 //!
@@ -15,7 +15,6 @@ use std::os::unix::fs::FileTypeExt as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use firma_http::{Authority, HeaderMap, Method};
 use http_body_util::{BodyExt, Full};
@@ -61,10 +60,10 @@ impl UnixSocketInterceptor {
         }
     }
 
-    /// Remove stale socket state and bind the configured path.
+    /// Validate existing socket state and bind the configured path.
     pub(crate) fn bind(&self) -> Result<UnixListener, InterceptorError> {
         match std::fs::symlink_metadata(&self.path) {
-            Ok(metadata) if metadata.file_type().is_socket() => self.remove_stale_socket()?,
+            Ok(metadata) if metadata.file_type().is_socket() => self.refuse_existing_socket()?,
             Ok(_) => std::fs::remove_file(&self.path)
                 .map_err(|error| InterceptorError::BindFailed(error.to_string()))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -74,31 +73,18 @@ impl UnixSocketInterceptor {
             .map_err(|error| InterceptorError::BindFailed(error.to_string()))
     }
 
-    fn remove_stale_socket(&self) -> Result<(), InterceptorError> {
-        // A refused connect is the portable evidence that a pathname remains
-        // after its listener exited. Re-probe briefly so a listener in startup
-        // is not unlinked; all ambiguous failures preserve the pathname.
-        for attempt in 0..3 {
-            match std::os::unix::net::UnixStream::connect(&self.path) {
-                Ok(_) => return Err(self.socket_in_use_error()),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-                    if attempt < 2 {
-                        std::thread::sleep(Duration::from_millis(20));
-                    }
-                }
-                Err(error) => {
-                    return Err(InterceptorError::BindFailed(format!(
-                        "refusing to replace socket {} after ambiguous probe error: {error}",
-                        self.path.display()
-                    )));
-                }
-            }
-        }
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
+    fn refuse_existing_socket(&self) -> Result<(), InterceptorError> {
+        match std::os::unix::net::UnixStream::connect(&self.path) {
+            Ok(_) => Err(self.socket_in_use_error()),
+            // The pathname disappeared after metadata inspection, so binding a
+            // new listener cannot unlink another process's socket.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(InterceptorError::BindFailed(error.to_string())),
+            // ConnectionRefused is ambiguous: a live process may have bound the
+            // pathname without listening yet. Preserve all such socket state.
+            Err(error) => Err(InterceptorError::BindFailed(format!(
+                "refusing to replace existing socket {} after probe error: {error}",
+                self.path.display()
+            ))),
         }
     }
 
@@ -992,16 +978,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_uds_replaces_crashed_socket() {
+    async fn test_uds_preserves_socket_left_by_crashed_listener() {
         let sock = temp_socket_path("crashed");
         let crashed = UnixListener::bind(&sock).unwrap();
         drop(crashed);
         let interceptor = UnixSocketInterceptor::new(sock.clone());
 
-        let replacement = interceptor.bind().unwrap();
+        let error = interceptor.bind().unwrap_err();
 
-        assert!(sock.exists(), "replacement socket must be bound");
-        drop(replacement);
+        assert!(matches!(error, InterceptorError::BindFailed(_)));
+        assert!(sock.exists(), "ambiguous socket state must be preserved");
+        std::fs::remove_file(sock).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_uds_preserves_live_socket_before_listen() {
+        let sock = temp_socket_path("bound-not-listening");
+        let live =
+            socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None).unwrap();
+        live.bind(&socket2::SockAddr::unix(&sock).unwrap()).unwrap();
+        let interceptor = UnixSocketInterceptor::new(sock.clone());
+
+        let error = interceptor.bind().unwrap_err();
+
+        assert!(matches!(error, InterceptorError::BindFailed(_)));
+        assert!(sock.exists(), "live socket must not be unlinked");
+        live.listen(1).unwrap();
+        std::os::unix::net::UnixStream::connect(&sock).unwrap();
+        drop(live);
         std::fs::remove_file(sock).unwrap();
     }
 }
