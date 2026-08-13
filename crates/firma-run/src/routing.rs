@@ -243,6 +243,21 @@ impl RunMarkerGuard {
     }
 }
 
+#[cfg(unix)]
+fn cleanup_run_markers_after(operation: RunError, marker_dir: &Path) -> RunError {
+    match (RunMarkerGuard {
+        path: marker_dir.to_path_buf(),
+    })
+    .cleanup()
+    {
+        Ok(()) => operation,
+        Err(cleanup) => RunError::RunMarkerCleanup {
+            operation: Box::new(operation),
+            cleanup: Box::new(cleanup),
+        },
+    }
+}
+
 /// Inputs to [`prepare_network_runtime`] that gate autostart behaviour.
 #[derive(Debug, Clone)]
 #[expect(
@@ -348,7 +363,7 @@ struct RuntimeParts {
     effective_endpoint: SidecarEndpoint,
     autostart_trust_env: BTreeMap<String, String>,
     run_stack: Option<RunningStack>,
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     owned_sidecar_marker: Option<PathBuf>,
     stack_marker: Option<PathBuf>,
     capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
@@ -374,15 +389,20 @@ impl RuntimeParts {
             self.run_stack = None;
             drop(self.capability_refresher.take());
             drop(self.capability_guard.take());
-            return RunError::RunStackPostReadyRollback {
+            let operation = RunError::RunStackPostReadyRollback {
                 operation: Box::new(operation),
                 rollback,
             };
+            if let Some(marker_dir) = self.stack_marker.take() {
+                return cleanup_run_markers_after(operation, &marker_dir);
+            }
+            return operation;
         }
-        if let Some(path) = self.owned_sidecar_marker.take()
-            && let Err(error) = (RunMarkerGuard { path }).cleanup()
-        {
-            tracing::warn!(%error, "post-readiness rollback could not remove run markers");
+        self.run_stack = None;
+        drop(self.capability_refresher.take());
+        drop(self.capability_guard.take());
+        if let Some(marker_dir) = self.stack_marker.take() {
+            return cleanup_run_markers_after(operation, &marker_dir);
         }
         operation
     }
@@ -428,7 +448,7 @@ pub fn prepare_network_runtime(
         autostart_trust_env: sidecar_trust_env_overrides(prepared.sidecar_marker.as_deref()),
         effective_endpoint: prepared.endpoint,
         run_stack: prepared.stack,
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         owned_sidecar_marker: prepared.sidecar_marker,
         stack_marker: prepared.stack_marker,
         capability_guard: prepared.capability_guard,
@@ -499,7 +519,7 @@ fn prepare_flat_runtime(
         effective_endpoint,
         autostart_trust_env: _,
         run_stack,
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
             owned_sidecar_marker: _,
         stack_marker,
         capability_guard,
@@ -592,7 +612,8 @@ fn prepare_structural_runtime(
         effective_endpoint,
         autostart_trust_env: _,
         run_stack,
-        owned_sidecar_marker: _,
+        #[cfg(target_os = "linux")]
+            owned_sidecar_marker: _,
         stack_marker,
         capability_guard,
         capability_refresher,
@@ -1015,20 +1036,19 @@ fn prepare_run_components(
         let stack = match stack_result {
             Ok(stack) => stack,
             Err(error) => {
-                if error.rollback_processes_stopped() == Some(false) {
+                let teardown_uncertain = error.rollback_processes_stopped() == Some(false);
+                let operation = RunError::RunComponentOrchestration(Box::new(error));
+                if teardown_uncertain {
                     // A component may remain alive after uncertain startup rollback.
                     // Preserve the seed dependencies and durable marker evidence for
                     // cross-process recovery rather than invalidating its inputs.
                     std::mem::forget(capability_refresher.take());
                     std::mem::forget(capability_guard.take());
-                } else {
-                    drop(capability_refresher);
-                    drop(capability_guard);
-                    if let Err(cleanup) = (RunMarkerGuard { path: marker_dir }).cleanup() {
-                        tracing::warn!(%cleanup, "run component startup rollback could not remove markers");
-                    }
+                    return Err(operation);
                 }
-                return Err(RunError::RunComponentOrchestration(Box::new(error)));
+                drop(capability_refresher);
+                drop(capability_guard);
+                return Err(cleanup_run_markers_after(operation, &marker_dir));
             }
         };
         let publication = (|| {
@@ -1106,21 +1126,19 @@ fn rollback_ready_stack(
             std::mem::forget(capability_refresher);
             std::mem::forget(capability_guard);
         }
-        return RunError::RunStackPostReadyRollback {
+        let operation = RunError::RunStackPostReadyRollback {
             operation: Box::new(operation),
             rollback,
+        };
+        return if processes_stopped {
+            cleanup_run_markers_after(operation, marker_dir)
+        } else {
+            operation
         };
     }
     drop(capability_refresher);
     drop(capability_guard);
-    if let Err(cleanup) = (RunMarkerGuard {
-        path: marker_dir.to_path_buf(),
-    })
-    .cleanup()
-    {
-        tracing::warn!(%cleanup, "run component rollback could not remove markers");
-    }
-    operation
+    cleanup_run_markers_after(operation, marker_dir)
 }
 
 #[cfg(unix)]

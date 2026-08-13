@@ -29,7 +29,7 @@ impl CapabilityFileGuard {
 impl Drop for CapabilityFileGuard {
     fn drop(&mut self) {
         // Honor the run marker keep-markers escape hatch.
-        if std::env::var("FIRMA_RUN_KEEP_MARKERS").is_ok() {
+        if std::env::var_os("FIRMA_RUN_KEEP_MARKERS").is_some() {
             return;
         }
         let _ = std::fs::remove_file(&self.path);
@@ -50,5 +50,38 @@ mod tests {
             assert!(path.exists());
         }
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn present_non_unicode_keep_markers_value_retains_file() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "capability::guard::tests::keep_markers_fixture",
+                "--ignored",
+            ])
+            .env(
+                "FIRMA_RUN_KEEP_MARKERS",
+                std::ffi::OsString::from_vec(vec![0xFF]),
+            )
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "subprocess fixture"]
+    fn keep_markers_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sandbox.toml");
+        std::fs::write(&path, "x").unwrap();
+        drop(CapabilityFileGuard::new(path.clone()));
+
+        assert!(path.exists());
     }
 }
