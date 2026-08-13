@@ -1499,12 +1499,13 @@ fn build_upstream_handshake_request(
         if name.as_str().eq_ignore_ascii_case("host") {
             has_host = true;
         }
-        if let Ok(v) = value.to_str() {
-            out.extend_from_slice(name.as_str().as_bytes());
-            out.extend_from_slice(b": ");
-            out.extend_from_slice(v.as_bytes());
-            out.extend_from_slice(b"\r\n");
+        if name.as_str().starts_with("x-firma-") {
+            continue;
         }
+        out.extend_from_slice(name.as_str().as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(b"\r\n");
     }
     if !has_host {
         out.extend_from_slice(b"Host: ");

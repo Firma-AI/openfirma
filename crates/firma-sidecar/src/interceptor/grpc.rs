@@ -103,28 +103,44 @@ impl InterceptorHook for GrpcInterceptor {
             }
         };
 
+        let method = match Method::from_str(&req.method) {
+            Ok(method) => method,
+            Err(err) => {
+                return Ok(tonic::Response::new(InterceptResponse {
+                    allowed: false,
+                    reason: format!("MALFORMED_REQUEST: invalid method {}: {err}", req.method),
+                }));
+            }
+        };
+
+        let mut headers = firma_http::HeaderMap::new();
+        for (k, v) in req.headers {
+            let name = match http::HeaderName::from_str(&k) {
+                Ok(name) => name,
+                Err(err) => {
+                    return Ok(tonic::Response::new(InterceptResponse {
+                        allowed: false,
+                        reason: format!("MALFORMED_REQUEST: invalid header {k}: {err}"),
+                    }));
+                }
+            };
+            let value = match http::HeaderValue::from_str(&v) {
+                Ok(value) => value,
+                Err(err) => {
+                    return Ok(tonic::Response::new(InterceptResponse {
+                        allowed: false,
+                        reason: format!("MALFORMED_REQUEST: invalid value for header {k}: {err}"),
+                    }));
+                }
+            };
+            headers.insert(name, value);
+        }
+
         let raw = RawRequest {
-            method: Method::from_str(&req.method).map_err(|err| {
-                tonic::Status::invalid_argument(format!("Invalid method {}: {err}", req.method))
-            })?,
+            method,
             host,
             path: req.path,
-            headers: req
-                .headers
-                .into_iter()
-                .map(|(k, v)| {
-                    Ok::<_, tonic::Status>((
-                        http::HeaderName::from_str(&k).map_err(|err| {
-                            tonic::Status::invalid_argument(format!("Invalid header {k}: {err}"))
-                        })?,
-                        http::HeaderValue::from_str(&v).map_err(|err| {
-                            tonic::Status::invalid_argument(format!(
-                                "Invalid value for header {k}: {err}"
-                            ))
-                        })?,
-                    ))
-                })
-                .collect::<Result<_, _>>()?,
+            headers,
             body: if req.body.is_empty() {
                 None
             } else {
