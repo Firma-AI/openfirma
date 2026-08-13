@@ -253,7 +253,7 @@ pub struct ExecutionEvent {
     response_size: i64,
     /// Per-run identity scoping the event to a single `firma run`
     /// invocation. Matches the marker directory name written by the
-    /// `SidecarSupervisor`. Empty when the sidecar is not autostarted.
+    /// run component orchestrator. Empty when the sidecar is not autostarted.
     sandbox_id: String,
     /// Tamper-evident provenance chain anchor (AARM R2 G2) for admitted
     /// (Allow/Modify) actions. Empty for pre-dispatch outcomes.

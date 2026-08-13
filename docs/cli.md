@@ -472,22 +472,19 @@ When autostart fires, `firma run`:
    rebased to absolute paths anchored on the **template's** config
    directory so they keep pointing at the operator's files after the
    synthesized config is written into `<marker_dir>/`.
-3. Spawns `firma sidecar --config <marker_dir>/sidecar.toml` as a
-   child process with stderr piped.
-4. Reads stderr line by line and waits for the seven-line ready log
-   contract documented under [`firma sidecar`](#firma-sidecar). The third
-   and fourth lines populate `policy_bundle_version` and `authority_url`
-   in the marker `metadata.toml`.
-5. On `ready`, writes `sidecar.pid` and `metadata.toml` and continues to
-   drain stderr into `<marker_dir>/sidecar.log` for the lifetime of the
-   run.
+3. Gives `firma sidecar --config <marker_dir>/sidecar.toml` to the process
+   orchestrator, which owns the child and captures its logs in
+   `<marker_dir>/sidecar.log`.
+4. Waits for the child to publish its bound endpoint through the orchestrator
+   startup-report contract.
+5. On publication, writes `sidecar.pid` and `metadata.toml` from the
+   orchestrator's component handle.
 6. Substitutes `unix://<sock>` as the effective endpoint and proceeds.
 
 When the `firma run` process exits — by clean exit, `SIGINT`, or
-`SIGTERM` — the supervisor sends `SIGTERM` to the spawned sidecar, waits
-up to 5 seconds, then `SIGKILL`. The marker directory is removed on a
-best-effort basis (FIR-103's `firma sidecar status` also garbage-collects
-stale entries).
+`SIGTERM` — the process orchestrator shuts down the component stack. The
+marker directory is removed on a best-effort basis (FIR-103's
+`firma sidecar status` also garbage-collects stale entries).
 
 ### Flags
 
@@ -496,18 +493,17 @@ stale entries).
 | `--sidecar <local\|url>`               | —       | `local` autostarts a per-run sidecar. A `tcp://host:port` / `unix:///path` value targets an external sidecar and never autostarts. Omitted: persisted `sidecar_endpoint` (external) else local autostart. |
 | `--no-autostart`                       | off     | Fail with a typed error instead of autostarting any missing component. CI safety net. Incompatible with `--sidecar local` and `--authority local`.                                                        |
 | `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback.                                                                                                          |
-| `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for the `ready` line. `0` reverts to the built-in default.                                                                                                                                   |
+| `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for startup publication. `0` reverts to the built-in default.                                                                                                                                |
 
 ### Typed errors
 
-| Error                     | Trigger                                                                                                                                             |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SidecarUnreachable`      | An external sidecar (`--sidecar <url>` or persisted endpoint) is unreachable.                                                                       |
-| `SidecarLocalNoAutostart` | `--sidecar local` combined with `--no-autostart`.                                                                                                   |
-| `MissingSidecar`          | `--sidecar` omitted, no persisted endpoint, and `--no-autostart` set.                                                                               |
-| `SidecarReadyTimeout`     | Spawned sidecar did not emit `ready` within the configured budget. Error message points to `<marker_dir>/sidecar.log`.                              |
-| `SidecarStartupFailed`    | Spawn or stderr-pipe setup failed; or stderr closed before `ready`.                                                                                 |
-| `UnsupportedPlatform`     | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar <url>` with a pre-started sidecar instead. |
+| Error                       | Trigger                                                                                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SidecarUnreachable`        | An external sidecar (`--sidecar <url>` or persisted endpoint) is unreachable.                                                                       |
+| `SidecarLocalNoAutostart`   | `--sidecar local` combined with `--no-autostart`.                                                                                                   |
+| `MissingSidecar`            | `--sidecar` omitted, no persisted endpoint, and `--no-autostart` set.                                                                               |
+| `RunComponentOrchestration` | The orchestrator could not start the local component stack or receive startup publication within the configured budget.                             |
+| `UnsupportedPlatform`       | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar <url>` with a pre-started sidecar instead. |
 
 ### Operator caveats
 
