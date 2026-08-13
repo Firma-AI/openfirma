@@ -660,6 +660,34 @@ fn builtins_force_expected_output_formats() {
 }
 
 #[test]
+fn missing_declared_option_values_fail_closed() {
+    let registry = IntegrationRegistry::with_builtins();
+    let cases: &[(&str, &[&str])] = &[
+        ("bws", &["secret", "get", "id", "--output"]),
+        ("bws", &["secret", "get", "id", "--output", "--"]),
+        ("vault", &["status", "-namespace"]),
+        ("vault", &["status", "-namespace", "--"]),
+    ];
+
+    for (binary, requested) in cases {
+        let spec = registry
+            .for_binary(binary)
+            .unwrap_or_else(|| panic!("missing built-in spec for {binary}"));
+        let requested = args(requested);
+        assert_eq!(
+            spec.resolve_args(&requested),
+            MatchingResolution::Blocked,
+            "expected malformed {binary} invocation to be blocked",
+        );
+        assert_eq!(
+            spec.rewrite_args(&requested),
+            requested,
+            "malformed {binary} invocation must not be normalized",
+        );
+    }
+}
+
+#[test]
 #[expect(
     clippy::too_many_lines,
     reason = "data table, one entry per backend-override/config-redirection case"

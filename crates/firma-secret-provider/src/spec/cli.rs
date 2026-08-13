@@ -124,30 +124,40 @@ impl CliIntegrationSpec {
             .matchers
             .iter()
             .filter_map(MatcherRule::as_blocked_command)
-            .any(|rule| rule.matches(args, &self.skip_flags, &[]))
+            .any(|rule| {
+                rule.match_args(args, &self.skip_flags, &[]) != CommandMatchResult::DoesNotMatch
+            })
         {
             return MatchingResolution::Blocked;
         }
 
-        if let Some(rule) = self
+        for rule in self
             .matchers
             .iter()
             .filter_map(MatcherRule::as_sensitive_command)
-            .find(|rule| {
-                rule.command
-                    .matches(args, &self.skip_flags, &rule.remove_flags)
-            })
         {
-            return MatchingResolution::Matcher(&rule.matcher);
+            match rule
+                .command
+                .match_args(args, &self.skip_flags, &rule.remove_flags)
+            {
+                CommandMatchResult::Matches => {
+                    return MatchingResolution::Matcher(&rule.matcher);
+                }
+                CommandMatchResult::Malformed => return MatchingResolution::Blocked,
+                CommandMatchResult::DoesNotMatch => {}
+            }
         }
 
-        if self
+        for rule in self
             .matchers
             .iter()
             .filter_map(MatcherRule::as_safe_command)
-            .any(|rule| rule.matches(args, &self.skip_flags, &[]))
         {
-            return MatchingResolution::PassThrough;
+            match rule.match_args(args, &self.skip_flags, &[]) {
+                CommandMatchResult::Matches => return MatchingResolution::PassThrough,
+                CommandMatchResult::Malformed => return MatchingResolution::Blocked,
+                CommandMatchResult::DoesNotMatch => {}
+            }
         }
 
         MatchingResolution::Blocked
@@ -163,7 +173,8 @@ impl CliIntegrationSpec {
             .filter_map(MatcherRule::as_sensitive_command)
             .find(|rule| {
                 rule.command
-                    .matches(args, &self.skip_flags, &rule.remove_flags)
+                    .match_args(args, &self.skip_flags, &rule.remove_flags)
+                    == CommandMatchResult::Matches
             })
         else {
             return args.to_vec();
@@ -224,9 +235,21 @@ impl CommandPattern {
         }
     }
 
-    fn matches(&self, args: &[String], skip_flags: &[FlagSpec], remove_flags: &[FlagSpec]) -> bool {
+    fn match_args(
+        &self,
+        args: &[String],
+        skip_flags: &[FlagSpec],
+        remove_flags: &[FlagSpec],
+    ) -> CommandMatchResult {
         command_matches(args, &self.argv, self.match_kind, skip_flags, remove_flags)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandMatchResult {
+    Matches,
+    DoesNotMatch,
+    Malformed,
 }
 
 fn contains_any_flag(args: &[String], flags: &[FlagSpec]) -> bool {
@@ -276,10 +299,11 @@ fn command_matches(
     match_kind: CommandMatch,
     skip_flags: &[FlagSpec],
     remove_flags: &[FlagSpec],
-) -> bool {
+) -> CommandMatchResult {
     let mut words = Vec::new();
     let mut iter = args.iter();
     let mut options_ended = false;
+    let mut malformed = false;
     while let Some(arg) = iter.next() {
         if !options_ended && arg == "--" {
             options_ended = true;
@@ -296,7 +320,14 @@ fn command_matches(
                 rest.starts_with('=') || (!rest.is_empty() && flag.allow_attached_value)
             });
             if flag.takes_value && !has_embedded_value {
-                iter.next();
+                match iter.next() {
+                    Some(value) if value != "--" => {}
+                    Some(_) => {
+                        malformed = true;
+                        options_ended = true;
+                    }
+                    None => malformed = true,
+                }
             }
         } else if !options_ended && arg.starts_with('-') {
             // Unknown options are left to the CLI to reject, but cannot become
@@ -306,7 +337,7 @@ fn command_matches(
         }
     }
 
-    match match_kind {
+    let matches = match match_kind {
         CommandMatch::Exact => words.iter().copied().eq(command.iter().map(String::as_str)),
         CommandMatch::Prefix => {
             words
@@ -316,5 +347,13 @@ fn command_matches(
                 .all(|(actual, expected)| actual == expected)
                 && words.len() >= command.len()
         }
+    };
+
+    if !matches {
+        CommandMatchResult::DoesNotMatch
+    } else if malformed {
+        CommandMatchResult::Malformed
+    } else {
+        CommandMatchResult::Matches
     }
 }
