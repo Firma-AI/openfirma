@@ -114,11 +114,11 @@ fn bws_spec() -> CliIntegrationSpec {
         // otherwise-permitted command — so this must be forbidden too,
         // clap-concatenated short form included.
         forbidden_flags: vec![
-            FlagSpec::from("--server-url"),
+            FlagSpec::value("--server-url"),
             FlagSpec::attached_value("-u"),
-            FlagSpec::from("--config-file"),
+            FlagSpec::value("--config-file"),
             FlagSpec::attached_value("-f"),
-            FlagSpec::from("--profile"),
+            FlagSpec::value("--profile"),
             FlagSpec::attached_value("-p"),
         ],
         matchers: vec![
@@ -185,7 +185,7 @@ fn bws_spec() -> CliIntegrationSpec {
                 // (e.g. `-otsv`); its attached-value entry closes that gap, so
                 // an unstripped `-otsv` can't survive alongside the forced
                 // `--output json` and skew or defeat it.
-                remove_flags: vec![FlagSpec::from("--output"), FlagSpec::attached_value("-o")],
+                remove_flags: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
                 append_args: vec![String::from("--output"), String::from("json")],
             }),
             MatcherRule::SensitiveCommand(CommandAndMatcher {
@@ -202,7 +202,7 @@ fn bws_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                remove_flags: vec![FlagSpec::from("--output"), FlagSpec::attached_value("-o")],
+                remove_flags: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
                 append_args: vec![String::from("--output"), String::from("json")],
             }),
             // `project list`/`project get` return only project
@@ -236,7 +236,7 @@ fn op_spec() -> CliIntegrationSpec {
         // service-account auth. Given that uncertainty, `--config` is
         // stripped defensively rather than assumed safe — same fail-closed
         // bias as the rest of this registry.
-        forbidden_flags: vec![FlagSpec::from("--config")],
+        forbidden_flags: vec![FlagSpec::value("--config")],
         matchers: vec![
             // Prints the raw secret as plain text, not JSON.
             MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
@@ -313,7 +313,7 @@ fn op_spec() -> CliIntegrationSpec {
                         scope: SecretJsonSelectorScope::Document,
                     }),
                 },
-                remove_flags: vec![FlagSpec::from("--format")],
+                remove_flags: vec![FlagSpec::value("--format")],
                 append_args: vec![String::from("--format"), String::from("json")],
             }),
             // `whoami`/`account list`/`vault list`/`item list` return
@@ -351,7 +351,10 @@ fn vault_spec() -> CliIntegrationSpec {
         // Namespace selects a logical tenant on the same Vault server. It is
         // retained for execution, but its value must not be mistaken for a
         // command word when it appears before or between subcommands.
-        skip_flags: vec![FlagSpec::from("-namespace"), FlagSpec::from("--namespace")],
+        skip_flags: vec![
+            FlagSpec::value("-namespace"),
+            FlagSpec::value("--namespace"),
+        ],
         // `-address`/`--address` (Vault's Go flag parser accepts either
         // dash style for the same flag) redirect the CLI at an arbitrary
         // server, which would send `VAULT_TOKEN` there on the next request.
@@ -369,20 +372,20 @@ fn vault_spec() -> CliIntegrationSpec {
         // no value at all, so the following secret path is not consumed as
         // though it were the flag's value.
         forbidden_flags: vec![
-            FlagSpec::from("-address"),
-            FlagSpec::from("--address"),
+            FlagSpec::value("-address"),
+            FlagSpec::value("--address"),
             FlagSpec::valueless("-tls-skip-verify"),
             FlagSpec::valueless("--tls-skip-verify"),
-            FlagSpec::from("-ca-cert"),
-            FlagSpec::from("--ca-cert"),
-            FlagSpec::from("-ca-path"),
-            FlagSpec::from("--ca-path"),
-            FlagSpec::from("-client-cert"),
-            FlagSpec::from("--client-cert"),
-            FlagSpec::from("-client-key"),
-            FlagSpec::from("--client-key"),
-            FlagSpec::from("-tls-server-name"),
-            FlagSpec::from("--tls-server-name"),
+            FlagSpec::value("-ca-cert"),
+            FlagSpec::value("--ca-cert"),
+            FlagSpec::value("-ca-path"),
+            FlagSpec::value("--ca-path"),
+            FlagSpec::value("-client-cert"),
+            FlagSpec::value("--client-cert"),
+            FlagSpec::value("-client-key"),
+            FlagSpec::value("--client-key"),
+            FlagSpec::value("-tls-server-name"),
+            FlagSpec::value("--tls-server-name"),
         ],
         matchers: vec![
             // Any non-`kv` `vault read` target (policies, transit keys, auth
@@ -461,7 +464,7 @@ fn vault_spec() -> CliIntegrationSpec {
                 },
                 // Strip any -format/-format= flag and force JSON, regardless
                 // of what the agent requested.
-                remove_flags: vec![FlagSpec::from("-format"), FlagSpec::from("--format")],
+                remove_flags: vec![FlagSpec::value("-format"), FlagSpec::value("--format")],
                 append_args: vec![String::from("-format"), String::from("json")],
             }),
             // `kv list`/`list`/`status`/`policy list` return key names,
@@ -507,10 +510,10 @@ fn doppler_spec() -> CliIntegrationSpec {
         // invocation of its own required to set it up first. No documented
         // short alias, per the CLI's own `root.go` flag registration.
         forbidden_flags: vec![
-            FlagSpec::from("--api-host"),
+            FlagSpec::value("--api-host"),
             FlagSpec::valueless("--no-verify-tls"),
-            FlagSpec::from("--config-dir"),
-            FlagSpec::from("--configuration"),
+            FlagSpec::value("--config-dir"),
+            FlagSpec::value("--configuration"),
         ],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
@@ -609,9 +612,9 @@ fn doppler_spec() -> CliIntegrationSpec {
                     domain_selector: None,
                 },
                 remove_flags: vec![
-                    FlagSpec::from("--format"),
-                    FlagSpec::from("--fallback"),
-                    FlagSpec::from("--fallback-passphrase"),
+                    FlagSpec::value("--format"),
+                    FlagSpec::value("--fallback"),
+                    FlagSpec::value("--fallback-passphrase"),
                     FlagSpec::valueless("--fallback-only"),
                     FlagSpec::valueless("--fallback-readonly"),
                     FlagSpec::valueless("--offline"),

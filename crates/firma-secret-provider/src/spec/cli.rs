@@ -2,124 +2,17 @@ use super::{MatcherRule, MatchingResolution, NonEmptyVec, SecretMatcher};
 
 pub type CliMatcherRule = MatcherRule<CommandAndMatcher, CommandPattern>;
 
-/// A command-line flag that a CLI integration needs to recognize.
-///
-/// A string is shorthand for a value-taking flag with one spelling, for
-/// example `"--format"`. Use the table form when a flag takes no value or
-/// accepts a value attached directly to its name:
+/// A command-line flag or value-taking option that a CLI integration needs to
+/// recognize.
 ///
 /// ```toml
+/// { name = "--format", takes_value = true }
+/// { name = "--offline", takes_value = false }
 /// { name = "-u", takes_value = true, allow_attached_value = true }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(untagged)]
-pub enum FlagSpec {
-    Named(String),
-    Detailed(FlagDefinition),
-}
-
-impl<'de> serde::Deserialize<'de> for FlagSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct FlagSpecVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for FlagSpecVisitor {
-            type Value = FlagSpec;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a flag name string or detailed flag table")
-            }
-
-            fn visit_str<E>(self, name: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                self.visit_string(String::from(name))
-            }
-
-            fn visit_string<E>(self, name: String) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                if name.is_empty() {
-                    return Err(E::custom("flag name must not be empty"));
-                }
-                Ok(FlagSpec::Named(name))
-            }
-
-            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-            where
-                A: serde::de::MapAccess<'de>,
-            {
-                <FlagDefinition as serde::Deserialize>::deserialize(
-                    serde::de::value::MapAccessDeserializer::new(map),
-                )
-                .map(FlagSpec::Detailed)
-            }
-        }
-
-        deserializer.deserialize_any(FlagSpecVisitor)
-    }
-}
-
-impl FlagSpec {
-    #[must_use]
-    pub fn named(name: &str) -> Self {
-        Self::Named(String::from(name))
-    }
-
-    #[must_use]
-    pub fn valueless(name: &str) -> Self {
-        Self::Detailed(FlagDefinition {
-            name: String::from(name),
-            takes_value: false,
-            allow_attached_value: false,
-        })
-    }
-
-    #[must_use]
-    pub fn attached_value(name: &str) -> Self {
-        Self::Detailed(FlagDefinition {
-            name: String::from(name),
-            takes_value: true,
-            allow_attached_value: true,
-        })
-    }
-
-    fn name(&self) -> &str {
-        match self {
-            Self::Named(name) => name,
-            Self::Detailed(definition) => &definition.name,
-        }
-    }
-
-    fn takes_value(&self) -> bool {
-        match self {
-            Self::Named(_) => true,
-            Self::Detailed(definition) => definition.takes_value,
-        }
-    }
-
-    fn allows_attached_value(&self) -> bool {
-        match self {
-            Self::Named(_) => false,
-            Self::Detailed(definition) => definition.allow_attached_value,
-        }
-    }
-}
-
-impl From<&str> for FlagSpec {
-    fn from(name: &str) -> Self {
-        Self::named(name)
-    }
-}
-
-/// Explicit flag syntax used when the string shorthand is insufficient.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct FlagDefinition {
-    /// One spelling, such as `--server-url` or `-u`.
+pub struct FlagSpec {
+    /// The flag's spelling, such as `--server-url` or `-u`.
     pub name: String,
     /// Whether the flag consumes a value.
     pub takes_value: bool,
@@ -129,21 +22,21 @@ pub struct FlagDefinition {
     pub allow_attached_value: bool,
 }
 
-impl<'de> serde::Deserialize<'de> for FlagDefinition {
+impl<'de> serde::Deserialize<'de> for FlagSpec {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct RawFlagDefinition {
+        struct RawFlagSpec {
             name: String,
             takes_value: bool,
             #[serde(default)]
             allow_attached_value: bool,
         }
 
-        let raw = RawFlagDefinition::deserialize(deserializer)?;
+        let raw = RawFlagSpec::deserialize(deserializer)?;
         if raw.name.is_empty() {
             return Err(serde::de::Error::custom("flag name must not be empty"));
         }
@@ -158,6 +51,35 @@ impl<'de> serde::Deserialize<'de> for FlagDefinition {
             takes_value: raw.takes_value,
             allow_attached_value: raw.allow_attached_value,
         })
+    }
+}
+
+impl FlagSpec {
+    #[must_use]
+    pub fn value(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            takes_value: true,
+            allow_attached_value: false,
+        }
+    }
+
+    #[must_use]
+    pub fn valueless(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            takes_value: false,
+            allow_attached_value: false,
+        }
+    }
+
+    #[must_use]
+    pub fn attached_value(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            takes_value: true,
+            allow_attached_value: true,
+        }
     }
 }
 
@@ -314,12 +236,12 @@ fn contains_any_flag(args: &[String], flags: &[FlagSpec]) -> bool {
 }
 
 fn match_flag_token(arg: &str, flag: &FlagSpec) -> bool {
-    let name = flag.name();
+    let name = &flag.name;
     arg == name
         || arg
             .strip_prefix(name)
             .is_some_and(|rest| rest.starts_with('='))
-        || (flag.allows_attached_value()
+        || (flag.allow_attached_value
             && arg.strip_prefix(name).is_some_and(|rest| !rest.is_empty()))
 }
 
@@ -338,10 +260,10 @@ fn remove_flags(args: &[String], flags: &[FlagSpec]) -> Vec<String> {
             continue;
         };
 
-        let has_embedded_value = arg.strip_prefix(flag.name()).is_some_and(|rest| {
-            rest.starts_with('=') || (!rest.is_empty() && flag.allows_attached_value())
+        let has_embedded_value = arg.strip_prefix(&flag.name).is_some_and(|rest| {
+            rest.starts_with('=') || (!rest.is_empty() && flag.allow_attached_value)
         });
-        if flag.takes_value() && !has_embedded_value {
+        if flag.takes_value && !has_embedded_value {
             iter.next();
         }
     }
@@ -370,10 +292,10 @@ fn command_matches(
                 .chain(remove_flags)
                 .find(|flag| match_flag_token(arg, flag))
         {
-            let has_embedded_value = arg.strip_prefix(flag.name()).is_some_and(|rest| {
-                rest.starts_with('=') || (!rest.is_empty() && flag.allows_attached_value())
+            let has_embedded_value = arg.strip_prefix(&flag.name).is_some_and(|rest| {
+                rest.starts_with('=') || (!rest.is_empty() && flag.allow_attached_value)
             });
-            if flag.takes_value() && !has_embedded_value {
+            if flag.takes_value && !has_embedded_value {
                 iter.next();
             }
         } else if !options_ended && arg.starts_with('-') {
