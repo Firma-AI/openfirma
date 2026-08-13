@@ -476,12 +476,12 @@ impl StartupGuard {
     }
 
     /// Roll back an incomplete startup and report any cleanup failure.
-    fn rollback(mut self) -> Result<(), OrchestratorError> {
+    fn rollback(mut self) -> Result<(), ShutdownError> {
         self.rollback_inner()
     }
 
     /// Consume the currently owned startup capabilities exactly once.
-    fn rollback_inner(&mut self) -> Result<(), OrchestratorError> {
+    fn rollback_inner(&mut self) -> Result<(), ShutdownError> {
         let state = std::mem::replace(&mut self.state, StartupState::Finished);
         let StartupState::Building(components) = state else {
             return Ok(());
@@ -494,6 +494,7 @@ impl StartupGuard {
                 self.state_lease,
                 self.transaction.as_ref(),
             )
+            .map_err(ShutdownError::StateCleanup)
         } else {
             rollback_startup_components(
                 components,
@@ -505,7 +506,15 @@ impl StartupGuard {
         };
         match report_result {
             Ok(()) => process_result,
-            Err(error) => Err(with_rollback(error, process_result)),
+            Err(error) => Err(match process_result {
+                Ok(()) => ShutdownError::StateCleanup(error),
+                Err(ShutdownError::TeardownUncertain(rollback)) => {
+                    ShutdownError::TeardownUncertain(with_rollback(error, Err::<(), _>(rollback)))
+                }
+                Err(ShutdownError::StateCleanup(rollback)) => {
+                    ShutdownError::StateCleanup(with_rollback(error, Err::<(), _>(rollback)))
+                }
+            }),
         }
     }
 
@@ -558,7 +567,7 @@ fn rollback_startup_components(
     topology: &StackTopology,
     state_lease: StateLease,
     transaction: Option<&StateTransaction>,
-) -> Result<(), OrchestratorError> {
+) -> Result<(), ShutdownError> {
     debug!(state_dir = %state_dir.display(), "startup failed; collecting owned children");
     for component in &mut components {
         if let Err(error) = component.termination_target().signal_hard() {
@@ -599,7 +608,8 @@ fn rollback_startup_components(
             }
         }
         if all_absent && children_collected {
-            return remove_startup_state(state_dir, topology, state_lease, transaction);
+            return remove_startup_state(state_dir, topology, state_lease, transaction)
+                .map_err(ShutdownError::StateCleanup);
         }
         if probe_error.is_some() || Instant::now() >= deadline {
             debug!("startup rollback retained runtime state for a later cleanup attempt");
@@ -614,7 +624,10 @@ fn rollback_startup_components(
             let rollback_error = probe_error.unwrap_or(OrchestratorError::TerminationTimeout {
                 timeout_secs: CHILD_COLLECTION_TIMEOUT.as_secs(),
             });
-            return Err(with_rollback(rollback_error, collection_result));
+            return Err(ShutdownError::TeardownUncertain(with_rollback(
+                rollback_error,
+                collection_result,
+            )));
         }
         std::thread::sleep(STARTUP_ROLLBACK_POLL_INTERVAL);
     }
@@ -1178,7 +1191,7 @@ fn with_rollback<T>(
 /// Preserve a planning or orchestration failure with explicit startup rollback.
 fn with_start_rollback<E>(
     operation: StartError<E>,
-    rollback: Result<(), OrchestratorError>,
+    rollback: Result<(), ShutdownError>,
 ) -> StartError<E> {
     match rollback {
         Ok(()) => operation,

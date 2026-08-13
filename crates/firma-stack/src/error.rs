@@ -75,7 +75,7 @@ impl From<StartError<Self>> for StackError {
                 rollback,
             } => Self::Rollback {
                 operation: Box::new(Self::from(*operation)),
-                rollback,
+                rollback: Box::new(rollback.into_orchestrator_error()),
             },
         }
     }

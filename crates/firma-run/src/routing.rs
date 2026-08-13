@@ -455,9 +455,16 @@ pub fn prepare_network_runtime(
         match resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags) {
             Ok(resolved) => resolved,
             Err(error) => {
-                if let RunError::SidecarPostReadyRollback { rollback, .. } = &error
-                    && !rollback.processes_stopped()
-                {
+                let teardown_uncertain = match &error {
+                    RunError::SidecarOrchestration(error) => {
+                        error.rollback_processes_stopped() == Some(false)
+                    }
+                    RunError::SidecarPostReadyRollback { rollback, .. } => {
+                        !rollback.processes_stopped()
+                    }
+                    _ => false,
+                };
+                if teardown_uncertain {
                     // The stack retained an incompletely stopped Sidecar. Keep
                     // its Authority and capability inputs alive for
                     // cross-process recovery rather than invalidating them.
