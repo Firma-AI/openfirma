@@ -57,14 +57,14 @@ pub enum RunError {
     #[error("internal runtime error: {0}")]
     Internal(String),
 
-    #[error("sidecar orchestration failed: {0}")]
-    SidecarOrchestration(Box<firma_process_orchestrator::StartError<Self>>),
+    #[error("run component orchestration failed: {0}")]
+    RunComponentOrchestration(Box<firma_process_orchestrator::StartError<Self>>),
 
-    #[error("sidecar shutdown failed: {0}")]
-    SidecarShutdown(firma_process_orchestrator::OrchestratorError),
+    #[error("run component stack shutdown failed: {0}")]
+    RunStackShutdown(firma_process_orchestrator::OrchestratorError),
 
-    #[error("{operation}; sidecar rollback failed: {rollback}")]
-    SidecarPostReadyRollback {
+    #[error("{operation}; run component stack rollback failed: {rollback}")]
+    RunStackPostReadyRollback {
         operation: Box<Self>,
         rollback: firma_process_orchestrator::ShutdownError,
     },

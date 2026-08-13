@@ -13,7 +13,7 @@ pub mod config;
 #[cfg(unix)]
 pub(crate) mod metadata;
 #[cfg(unix)]
-mod prepare;
+pub(crate) mod prepare;
 pub mod prompt;
 pub mod selection;
 pub mod supervisor;

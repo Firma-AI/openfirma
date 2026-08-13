@@ -14,7 +14,6 @@ use std::time::Duration;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::backend::{BackendKind, EnforcementProof, NetworkConfinement, SandboxHandle};
 use firma_run::config::{CapabilityLeaseConfig, CapabilitySource, NetworkPolicy, SidecarEndpoint};
-#[cfg(unix)]
 use firma_run::error::RunError;
 use firma_run::identity::RunIdentity;
 use firma_run::routing::{
@@ -65,6 +64,7 @@ fn authority(public_key_path: Option<PathBuf>) -> ResolvedAuthority {
         credentials: None,
         credentials_config: None,
         supervisor: None,
+        owned: None,
     }
 }
 
@@ -132,7 +132,6 @@ fn resolve_remote_authority(
     resolve_authority(
         ResolveAuthorityRequest {
             identity: &identity,
-            runtime_dir: &config_dir.join("runtime"),
             flags: &AutostartFlags::default(),
             cli: &AuthorityCli::Unset,
             profile_name: "developer",
@@ -211,7 +210,6 @@ fn no_autostart_unreachable_authority_fails_loudly() {
     let result = resolve_authority(
         ResolveAuthorityRequest {
             identity: &identity,
-            runtime_dir,
             flags: &flags,
             cli: &cli,
             profile_name: "developer",
@@ -270,10 +268,13 @@ fn autostart_with_effective_key_attempts_managed_capability_mint() {
     .err()
     .expect("managed mint must fail on missing key");
 
+    #[cfg(unix)]
     assert!(
         error.to_string().contains("read authority public key"),
         "got: {error}"
     );
+    #[cfg(windows)]
+    assert!(matches!(error, RunError::UnsupportedPlatform { .. }));
     assert!(
         !marker_dir(&identity).join("sidecar.toml").exists(),
         "mint must happen before Sidecar synthesis"
@@ -311,7 +312,7 @@ fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
     .expect("test binary cannot autostart as the Sidecar");
 
     assert!(
-        matches!(error, RunError::SidecarOrchestration(_)),
+        matches!(error, RunError::RunComponentOrchestration(_)),
         "got: {error}"
     );
     let sidecar = read_synthesized_sidecar(&identity);
@@ -357,7 +358,7 @@ fn autostart_without_effective_key_preserves_no_mint_behavior() {
     .expect("test binary cannot autostart as the Sidecar");
 
     assert!(
-        matches!(error, RunError::SidecarOrchestration(_)),
+        matches!(error, RunError::RunComponentOrchestration(_)),
         "got: {error}"
     );
     let sidecar = read_synthesized_sidecar(&identity);

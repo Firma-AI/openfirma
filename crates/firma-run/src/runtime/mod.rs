@@ -217,12 +217,10 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         }
         let firma_exe = std::env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
-        let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
             ResolveAuthorityRequest {
                 identity: &identity,
-                runtime_dir: &runtime_dir,
                 flags: &flags,
                 cli: &args.authority_cli,
                 profile_name: &args.authority_profile,

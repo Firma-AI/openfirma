@@ -13,8 +13,7 @@ use firma_process_orchestrator::{
     spawn_stack_from_plan,
 };
 #[cfg(unix)]
-use firma_runtime_state::runtime_paths::default_runtime_dir;
-use firma_runtime_state::runtime_paths::run_entry_from;
+use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
 
 #[cfg(unix)]
 use std::io;
@@ -29,7 +28,9 @@ use std::thread::{self, JoinHandle};
 use crate::backend::{BackendKind, NetworkConfinement};
 use crate::backend::{EnforcementProof, SandboxHandle};
 use crate::capability::refresh::CapabilityRefresher;
-use crate::config::{CapabilityLeaseConfig, CapabilitySource, SidecarEndpoint};
+#[cfg(unix)]
+use crate::config::CapabilitySource;
+use crate::config::{CapabilityLeaseConfig, SidecarEndpoint};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use firma_sidecar::authority_credentials::{ResolvedSidecarCredentials, SidecarCredentialsConfig};
@@ -142,9 +143,9 @@ pub struct NetworkRuntime {
     env_overrides: EnvOverrides,
     sidecar_endpoint: SidecarEndpoint,
     // Drop order matters: the host bridge and adapter hold connections to the
-    // sidecar, so they must drop before the sidecar supervisor.  The sidecar
-    // supervisor streams policy from the authority, so it must drop before the
-    // authority supervisor.  Rust drops fields top-to-bottom, so declaration
+    // Sidecar, so they must drop before the component stack. The orchestrator
+    // stops that stack in reverse topology order (Sidecar before Authority).
+    // Rust drops fields top-to-bottom, so declaration
     // order here is load-bearing.
     #[cfg(unix)]
     host_bridge: Option<crate::proxy_bridge::HostBridgeHandle>,
@@ -157,13 +158,12 @@ pub struct NetworkRuntime {
     /// for the agent's lifetime and is torn down on Drop. Linux-only.
     #[cfg(target_os = "linux")]
     egress_guard: Option<crate::egress_guard::EgressGuardHandle>,
-    sidecar_stack: Option<RunningStack>,
-    authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
+    run_stack: Option<RunningStack>,
     // Stops the background re-mint thread. Declared before the guard so the
     // refresher halts (no further seed writes) before the file is deleted.
     capability_refresher: Option<crate::capability::refresh::CapabilityRefresher>,
-    // Declared last so it drops last: the sidecar reads the seed file, so the
-    // guard that DELETES the file must outlive the sidecar supervisor above.
+    // Declared last so it drops last: the Sidecar reads the seed file, so the
+    // guard that deletes the file must outlive the component stack above.
     capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
     marker_guard: Option<RunMarkerGuard>,
 }
@@ -195,7 +195,7 @@ impl NetworkRuntime {
         #[cfg(target_os = "linux")]
         drop(self.egress_guard.take());
 
-        if let Some(stack) = self.sidecar_stack.as_mut()
+        if let Some(stack) = self.run_stack.as_mut()
             && let Err(error) = stack.shutdown(timeout)
         {
             let processes_stopped = error.processes_stopped();
@@ -205,19 +205,17 @@ impl NetworkRuntime {
                 // alive while process teardown remains uncertain. Dropping
                 // this owner would violate dependency order.
                 std::mem::forget(self);
-                return Err(RunError::SidecarShutdown(error));
+                return Err(RunError::RunStackShutdown(error));
             }
             // Process ownership is discharged. Release capability material but
             // retain the run marker that contains deferred orchestrator state.
-            self.sidecar_stack = None;
-            self.authority_supervisor = None;
+            self.run_stack = None;
             self.capability_refresher = None;
             self.capability_guard = None;
             std::mem::forget(self.marker_guard.take());
-            return Err(RunError::SidecarShutdown(error));
+            return Err(RunError::RunStackShutdown(error));
         }
-        self.sidecar_stack = None;
-        self.authority_supervisor = None;
+        self.run_stack = None;
         self.capability_refresher = None;
         self.capability_guard = None;
         if let Some(guard) = self.marker_guard.take() {
@@ -309,7 +307,29 @@ pub struct ResolvedAuthority {
     pub credentials: Option<ResolvedSidecarCredentials>,
     /// Unresolved credentials config passed to an autostarted Sidecar.
     pub credentials_config: Option<SidecarCredentialsConfig>,
+    /// Legacy test/compatibility ownership. Production run paths no longer set it.
     pub supervisor: Option<crate::authority::AuthoritySupervisor>,
+    #[doc(hidden)]
+    pub owned: Option<OwnedAuthorityPlan>,
+}
+
+#[doc(hidden)]
+pub struct OwnedAuthorityPlan {
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "local Authority autostart is Unix-only")
+    )]
+    profile_name: String,
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "local Authority autostart is Unix-only")
+    )]
+    firma_exe: PathBuf,
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "local Authority autostart is Unix-only")
+    )]
+    user_config_path: Option<PathBuf>,
 }
 
 /// Inputs used to resolve the Authority for one `firma run` invocation.
@@ -317,8 +337,6 @@ pub struct ResolvedAuthority {
 pub struct ResolveAuthorityRequest<'a> {
     /// Identity assigned to this run.
     pub identity: &'a RunIdentity,
-    /// Runtime state directory used for Authority process markers.
-    pub runtime_dir: &'a Path,
     /// Autostart behavior selected for this run.
     pub flags: &'a AutostartFlags,
     /// Authority selection supplied by the CLI.
@@ -343,9 +361,13 @@ pub struct ResolveAuthorityRequest<'a> {
 struct RuntimeParts {
     effective_endpoint: SidecarEndpoint,
     autostart_trust_env: BTreeMap<String, String>,
-    sidecar_stack: Option<RunningStack>,
+    run_stack: Option<RunningStack>,
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "local Sidecar autostart is Unix-only")
+    )]
     owned_sidecar_marker: Option<PathBuf>,
-    authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
+    stack_marker: Option<PathBuf>,
     capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
     capability_refresher: Option<crate::capability::refresh::CapabilityRefresher>,
 }
@@ -353,7 +375,7 @@ struct RuntimeParts {
 impl RuntimeParts {
     #[cfg(unix)]
     fn rollback_after(mut self, operation: RunError) -> RunError {
-        if let Some(stack) = self.sidecar_stack.as_mut()
+        if let Some(stack) = self.run_stack.as_mut()
             && let Err(rollback) = stack.shutdown(Duration::from_secs(10))
         {
             let processes_stopped = rollback.processes_stopped();
@@ -361,16 +383,15 @@ impl RuntimeParts {
                 // Retain dependencies and marker evidence for the incompletely
                 // stopped Sidecar, matching NetworkRuntime's shutdown contract.
                 std::mem::forget(self);
-                return RunError::SidecarPostReadyRollback {
+                return RunError::RunStackPostReadyRollback {
                     operation: Box::new(operation),
                     rollback,
                 };
             }
-            self.sidecar_stack = None;
-            self.authority_supervisor = None;
+            self.run_stack = None;
             drop(self.capability_refresher.take());
             drop(self.capability_guard.take());
-            return RunError::SidecarPostReadyRollback {
+            return RunError::RunStackPostReadyRollback {
                 operation: Box::new(operation),
                 rollback,
             };
@@ -395,7 +416,7 @@ impl RuntimeParts {
 ///
 /// - [`RunError::SidecarUnreachable`] when the endpoint is unreachable and
 ///   autostart is disabled.
-/// - [`RunError::SidecarOrchestration`] when the autostarted Sidecar fails to
+/// - [`RunError::RunComponentOrchestration`] when the autostarted Sidecar fails to
 ///   publish readiness or orchestration otherwise fails.
 /// - [`RunError::UnsupportedPlatform`] when autostart is required on a
 ///   platform that does not support it.
@@ -406,91 +427,33 @@ pub fn prepare_network_runtime(
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     flags: &AutostartFlags,
-    mut authority: ResolvedAuthority,
+    authority: ResolvedAuthority,
     capability_lease: &CapabilityLeaseConfig,
 ) -> Result<NetworkRuntime, RunError> {
     #[cfg(not(unix))]
     let _ = proof;
 
-    // When the user supplied their own capability file, `firma run` must
-    // not mint a per-session seed during autostart.
-    let mut flags = flags.clone();
-    flags.authority_url = Some(authority.url.clone());
-    flags.authority_ca_cert.clone_from(&authority.ca_cert_path);
-    flags.authority_pub_key.clone_from(&authority.pub_key_path);
-    flags
-        .authority_credentials
-        .clone_from(&authority.credentials_config);
-    let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
-    let should_manage_capability =
-        flags.sidecar_autostart && !is_source_file && authority.pub_key_path.is_some();
-
-    // Mint the per-session capability seed before resolving the endpoint so the
-    // synthesized sidecar config can reference it. The guard is moved into the
-    // returned `NetworkRuntime` so the seed file is removed on Drop — declared
-    // last in the struct so it drops AFTER the sidecar supervisor that reads it.
-    //
-    // Only firma-minted runs set `capability_seed_path` here; a user-supplied
-    // `--capability-file` path (already threaded into `flags` by the caller)
-    // must survive, so it is left untouched when `should_manage_capability` is
-    // false.
-    let (capability_guard, capability_refresher) = if should_manage_capability {
-        let capability_seed_path =
-            firma_runtime_state::runtime_paths::capability_seed_path(&identity.sandbox_id);
-        flags.capability_seed_path = Some(capability_seed_path.clone());
-        let guard =
-            crate::capability::guard::CapabilityFileGuard::new(capability_seed_path.clone());
-        let refresher = mint_capability_seed(
-            identity,
-            &capability_seed_path,
-            &authority,
-            capability_lease,
-        )?;
-        (Some(guard), Some(refresher))
-    } else {
-        (None, None)
-    };
-
-    let (effective_endpoint, sidecar_stack, owned_sidecar_marker) =
-        match resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                let teardown_uncertain = match &error {
-                    RunError::SidecarOrchestration(error) => {
-                        error.rollback_processes_stopped() == Some(false)
-                    }
-                    RunError::SidecarPostReadyRollback { rollback, .. } => {
-                        !rollback.processes_stopped()
-                    }
-                    _ => false,
-                };
-                if teardown_uncertain {
-                    // The stack retained an incompletely stopped Sidecar. Keep
-                    // its Authority and capability inputs alive for
-                    // cross-process recovery rather than invalidating them.
-                    std::mem::forget(authority.supervisor.take());
-                    std::mem::forget(capability_refresher);
-                    std::mem::forget(capability_guard);
-                }
-                return Err(error);
-            }
-        };
-    let autostart_trust_env = sidecar_trust_env_overrides(owned_sidecar_marker.as_deref());
-
+    let prepared = prepare_run_components(
+        handle,
+        sidecar_endpoint,
+        identity,
+        flags,
+        authority,
+        capability_lease,
+    )?;
     let parts = RuntimeParts {
-        effective_endpoint,
-        autostart_trust_env,
-        sidecar_stack,
-        owned_sidecar_marker,
-        authority_supervisor: authority.supervisor,
-        capability_guard,
-        capability_refresher,
+        autostart_trust_env: sidecar_trust_env_overrides(prepared.sidecar_marker.as_deref()),
+        effective_endpoint: prepared.endpoint,
+        run_stack: prepared.stack,
+        owned_sidecar_marker: prepared.sidecar_marker,
+        stack_marker: prepared.stack_marker,
+        capability_guard: prepared.capability_guard,
+        capability_refresher: prepared.capability_refresher,
     };
 
     if !handle.network_policy.enforce_network_namespace {
         return prepare_flat_runtime(handle, proof, identity, parts);
     }
-
     #[cfg(not(unix))]
     {
         let _ = parts;
@@ -499,7 +462,6 @@ pub fn prepare_network_runtime(
             reason: "structural network confinement currently requires unix sockets".to_string(),
         })
     }
-
     #[cfg(unix)]
     prepare_structural_runtime(handle, identity, parts)
 }
@@ -552,9 +514,9 @@ fn prepare_flat_runtime(
     let RuntimeParts {
         effective_endpoint,
         autostart_trust_env: _,
-        sidecar_stack,
-        owned_sidecar_marker,
-        authority_supervisor,
+        run_stack,
+        owned_sidecar_marker: _,
+        stack_marker,
         capability_guard,
         capability_refresher,
     } = parts;
@@ -575,11 +537,10 @@ fn prepare_flat_runtime(
         adapter: None,
         #[cfg(target_os = "linux")]
         egress_guard: None,
-        sidecar_stack,
-        authority_supervisor,
+        run_stack,
         capability_refresher,
         capability_guard,
-        marker_guard: owned_sidecar_marker.map(|path| RunMarkerGuard { path }),
+        marker_guard: stack_marker.map(|path| RunMarkerGuard { path }),
     })
 }
 
@@ -645,9 +606,9 @@ fn prepare_structural_runtime(
     let RuntimeParts {
         effective_endpoint,
         autostart_trust_env: _,
-        sidecar_stack,
-        owned_sidecar_marker,
-        authority_supervisor,
+        run_stack,
+        owned_sidecar_marker: _,
+        stack_marker,
         capability_guard,
         capability_refresher,
     } = parts;
@@ -661,11 +622,10 @@ fn prepare_structural_runtime(
         adapter: Some(adapter),
         #[cfg(target_os = "linux")]
         egress_guard,
-        sidecar_stack,
-        authority_supervisor,
+        run_stack,
         capability_refresher,
         capability_guard,
-        marker_guard: owned_sidecar_marker.map(|path| RunMarkerGuard { path }),
+        marker_guard: stack_marker.map(|path| RunMarkerGuard { path }),
     })
 }
 
@@ -742,6 +702,7 @@ fn start_loopback_guard(
 ///
 /// Returns [`RunError`] when the authority public key is missing, the seed
 /// cannot be minted/written, or the refresh thread cannot be spawned.
+#[cfg(unix)]
 fn mint_capability_seed(
     identity: &RunIdentity,
     capability_seed_path: &Path,
@@ -857,171 +818,330 @@ fn sidecar_trust_env_overrides(owned_sidecar_marker: Option<&Path>) -> BTreeMap<
     env
 }
 
-fn resolve_effective_endpoint(
+struct PreparedRunComponents {
+    endpoint: SidecarEndpoint,
+    stack: Option<RunningStack>,
+    sidecar_marker: Option<PathBuf>,
+    stack_marker: Option<PathBuf>,
+    capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
+    capability_refresher: Option<CapabilityRefresher>,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the staged planner keeps topology-dependent preparation and ownership transitions in one auditable sequence"
+)]
+fn prepare_run_components(
     handle: &SandboxHandle,
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     flags: &AutostartFlags,
-) -> Result<(SidecarEndpoint, Option<RunningStack>, Option<PathBuf>), RunError> {
-    // Local selection: autostart unconditionally. `--sidecar local` +
-    // `--no-autostart` was already rejected during selection resolution.
-    if flags.sidecar_autostart {
-        #[cfg(unix)]
-        {
-            let (endpoint, stack, marker) = autostart_sidecar(identity, flags)?;
-            return Ok((endpoint, Some(stack), Some(marker)));
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = identity;
-            return Err(RunError::UnsupportedPlatform {
-                reason: "firma run local Sidecar autostart requires Unix".into(),
-            });
-        }
-    }
-
-    // External selection: never autostart.
-    // `fail_closed = false` is an explicit dev/test escape that disables the
-    // probe. It mirrors the pre-FIR-102 behaviour.
-    if !handle.network_policy.fail_closed {
-        return Ok((sidecar_endpoint.clone(), None, None));
-    }
-
-    match probe_sidecar(sidecar_endpoint) {
-        Ok(()) => Ok((sidecar_endpoint.clone(), None, None)),
-        Err(reason) => Err(RunError::SidecarUnreachable {
+    authority: ResolvedAuthority,
+    capability_lease: &CapabilityLeaseConfig,
+) -> Result<PreparedRunComponents, RunError> {
+    let owns_authority = authority.owned.is_some();
+    let owns_sidecar = flags.sidecar_autostart;
+    if !owns_authority && !owns_sidecar && handle.network_policy.fail_closed {
+        probe_sidecar(sidecar_endpoint).map_err(|reason| RunError::SidecarUnreachable {
             endpoint: format_endpoint(sidecar_endpoint),
             reason,
-        }),
-    }
-}
-
-#[cfg(unix)]
-fn autostart_sidecar(
-    identity: &RunIdentity,
-    flags: &AutostartFlags,
-) -> Result<(SidecarEndpoint, RunningStack, PathBuf), RunError> {
-    let runtime_dir = default_runtime_dir();
-    let marker_dir = run_entry_from(&runtime_dir, &identity.sandbox_id);
-    let firma_exe = std::env::current_exe().map_err(|error| {
-        RunError::Internal(format!(
-            "failed to resolve current executable path: {error}"
-        ))
-    })?;
-    let env_template = std::env::var("FIRMA_SIDECAR_CONFIG_FILE")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from);
-    let cwd_template = std::env::current_dir()
-        .ok()
-        .map(|cwd| cwd.join("firma_sidecar.toml"));
-    let execution_profile =
-        AgentProfile::from_name(&identity.execution_profile).ok_or_else(|| {
-            RunError::Internal(format!(
-                "unsupported resolved execution profile '{}'",
-                identity.execution_profile
-            ))
         })?;
-
-    let orchestrator_dir = marker_dir.join("orchestrator");
-    let topology = StackTopology::new(["sidecar"])
-        .map_err(|error| RunError::Internal(format!("construct run Sidecar topology: {error}")))?;
-    let mut prepared = None;
-    let stack = spawn_stack_from_plan(
-        &topology,
-        |context| {
-            create_sidecar_log_alias(&marker_dir, &orchestrator_dir.join("sidecar.log"))?;
-            let mut launch =
-                crate::sidecar::prepare::prepare(crate::sidecar::prepare::PrepareRequest {
-                    sandbox_id: &identity.sandbox_id,
-                    agent_id: &identity.agent_id,
-                    execution_profile,
-                    session_id: &identity.session_id,
-                    marker_dir: marker_dir.clone(),
-                    template_path: flags.template_path.as_deref(),
-                    env_template: env_template.clone(),
-                    cwd_template: cwd_template.clone(),
-                    firma_exe: firma_exe.clone(),
-                    authority_url: flags.authority_url.as_deref(),
-                    authority_ca_cert: flags.authority_ca_cert.clone(),
-                    authority_pub_key: flags.authority_pub_key.clone(),
-                    authority_credentials: flags.authority_credentials.clone(),
-                    capability_seed_path: flags.capability_seed_path.clone(),
-                    use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
-                    monitor_mode: flags.monitor_mode,
-                    // `runtime_dir` is the state dir `firma monitor` resolves, so a
-                    // per-run sidecar with no configured audit sink still writes a
-                    // monitorable `<state_dir>/audit.jsonl`.
-                    audit_fallback_path: Some(runtime_dir.join("audit.jsonl")),
-                })?;
-            let expected = sidecar_to_component(&launch.expected_endpoint)?;
-            let publication = context.child_published(expected);
-            let mut command = launch.take_command()?;
-            command
-                .arg("--startup-report")
-                .arg(publication.startup_report_path());
-            prepared = Some(launch);
-            Ok(ComponentSpec {
-                command,
-                readiness: publication.into_readiness(),
-            })
-        },
-        &orchestrator_dir,
-        LifecycleTimeouts {
-            component_readiness: flags.startup_timeout,
-            ..LifecycleTimeouts::default()
-        },
-    )
-    .map_err(|error| RunError::SidecarOrchestration(Box::new(error)))?;
-    let Some(component) = stack.handle().component("sidecar") else {
-        return Err(rollback_ready_sidecar(
-            stack,
-            RunError::Internal("ready Sidecar stack omitted its component handle".into()),
-            &marker_dir,
-        ));
-    };
-    let endpoint = component_to_sidecar(component.endpoint());
-    let leader_pid = component.leader_pid();
-    let Some(launch) = prepared.as_ref() else {
-        return Err(rollback_ready_sidecar(
-            stack,
-            RunError::Internal("Sidecar planner completed without retaining its launch".into()),
-            &marker_dir,
-        ));
-    };
-    if let Err(error) =
-        crate::sidecar::prepare::publish_metadata(launch, &endpoint, leader_pid, None)
-    {
-        return Err(rollback_ready_sidecar(stack, error, &marker_dir));
     }
-    Ok((endpoint, stack, marker_dir))
+    if !owns_authority && !owns_sidecar {
+        return Ok(PreparedRunComponents {
+            endpoint: sidecar_endpoint.clone(),
+            stack: None,
+            sidecar_marker: None,
+            stack_marker: None,
+            capability_guard: None,
+            capability_refresher: None,
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (identity, capability_lease);
+        drop(authority);
+        Err(RunError::UnsupportedPlatform {
+            reason: "firma run local component autostart requires Unix".into(),
+        })
+    }
+    #[cfg(unix)]
+    {
+        let mut authority = authority;
+        let runtime_dir = default_runtime_dir();
+        let marker_dir = run_entry_from(&runtime_dir, &identity.sandbox_id);
+        let orchestrator_dir = marker_dir.join("orchestrator");
+        let names: Vec<&str> = match (owns_authority, owns_sidecar) {
+            (true, true) => vec!["authority", "sidecar"],
+            (true, false) => vec!["authority"],
+            (false, true) => vec!["sidecar"],
+            (false, false) => unreachable!(),
+        };
+        let topology = StackTopology::new(names)
+            .map_err(|error| RunError::Internal(format!("construct run topology: {error}")))?;
+        let execution_profile =
+            AgentProfile::from_name(&identity.execution_profile).ok_or_else(|| {
+                RunError::Internal(format!(
+                    "unsupported resolved execution profile '{}'",
+                    identity.execution_profile
+                ))
+            })?;
+        let firma_exe = std::env::current_exe()
+            .map_err(|error| RunError::Internal(format!("resolve current executable: {error}")))?;
+        let env_template = std::env::var("FIRMA_SIDECAR_CONFIG_FILE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
+        let cwd_template = std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join("firma_sidecar.toml"));
+        let mut authority_launch = None;
+        let mut sidecar_launch = None;
+        let mut capability_guard = None;
+        let mut capability_refresher = None;
+        let capability_seed_path =
+            firma_runtime_state::runtime_paths::capability_seed_path(&identity.sandbox_id);
+        let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
+
+        let stack_result = spawn_stack_from_plan(
+            &topology,
+            |context| match context.name() {
+                "authority" => {
+                    let plan = authority
+                        .owned
+                        .as_ref()
+                        .ok_or_else(|| RunError::Internal("owned Authority plan missing".into()))?;
+                    create_log_alias(
+                        &marker_dir,
+                        "authority.log",
+                        &orchestrator_dir.join("authority.log"),
+                    )?;
+                    let mut launch = crate::authority::prepare::prepare(
+                        crate::authority::prepare::PrepareRequest {
+                            sandbox_id: &identity.sandbox_id,
+                            agent_id: &identity.agent_id,
+                            session_id: &identity.session_id,
+                            marker_dir: marker_dir.join("authority"),
+                            profile_name: &plan.profile_name,
+                            firma_exe: plan.firma_exe.clone(),
+                            user_config_path: plan.user_config_path.clone(),
+                        },
+                    )?;
+                    let publication =
+                        context.child_published(ComponentEndpoint::Tcp(launch.expected_endpoint));
+                    let mut command = launch.take_command()?;
+                    command
+                        .arg("--startup-report")
+                        .arg(publication.startup_report_path());
+                    authority_launch = Some(launch);
+                    Ok(ComponentSpec {
+                        command,
+                        readiness: publication.into_readiness(),
+                    })
+                }
+                "sidecar" => {
+                    if let Some(endpoint) = context.ready_endpoint("authority") {
+                        let ComponentEndpoint::Tcp(addr) = endpoint else {
+                            return Err(RunError::Internal(
+                                "Authority published a non-TCP endpoint".into(),
+                            ));
+                        };
+                        authority.url = format!("http://{addr}");
+                        let launch = authority_launch.as_ref().ok_or_else(|| {
+                            RunError::Internal("ready Authority launch missing".into())
+                        })?;
+                        // Preserve the capability-specific verification-key
+                        // override; otherwise use this owned Authority's key.
+                        authority
+                            .pub_key_path
+                            .get_or_insert_with(|| launch.pub_key_path.clone());
+                        authority.ca_cert_path = None;
+                    }
+                    let mut component_flags = flags.clone();
+                    component_flags.authority_url = Some(authority.url.clone());
+                    component_flags
+                        .authority_ca_cert
+                        .clone_from(&authority.ca_cert_path);
+                    component_flags
+                        .authority_pub_key
+                        .clone_from(&authority.pub_key_path);
+                    component_flags
+                        .authority_credentials
+                        .clone_from(&authority.credentials_config);
+                    if !is_source_file && authority.pub_key_path.is_some() {
+                        component_flags.capability_seed_path = Some(capability_seed_path.clone());
+                        capability_guard =
+                            Some(crate::capability::guard::CapabilityFileGuard::new(
+                                capability_seed_path.clone(),
+                            ));
+                        capability_refresher = Some(mint_capability_seed(
+                            identity,
+                            &capability_seed_path,
+                            &authority,
+                            capability_lease,
+                        )?);
+                    }
+                    create_log_alias(
+                        &marker_dir,
+                        "sidecar.log",
+                        &orchestrator_dir.join("sidecar.log"),
+                    )?;
+                    let mut launch = crate::sidecar::prepare::prepare(
+                        crate::sidecar::prepare::PrepareRequest {
+                            sandbox_id: &identity.sandbox_id,
+                            agent_id: &identity.agent_id,
+                            execution_profile,
+                            session_id: &identity.session_id,
+                            marker_dir: marker_dir.clone(),
+                            template_path: component_flags.template_path.as_deref(),
+                            env_template: env_template.clone(),
+                            cwd_template: cwd_template.clone(),
+                            firma_exe: firma_exe.clone(),
+                            authority_url: component_flags.authority_url.as_deref(),
+                            authority_ca_cert: component_flags.authority_ca_cert.clone(),
+                            authority_pub_key: component_flags.authority_pub_key.clone(),
+                            authority_credentials: component_flags.authority_credentials.clone(),
+                            capability_seed_path: component_flags.capability_seed_path.clone(),
+                            use_http_proxy_interceptor: component_flags.use_http_proxy_sidecar,
+                            audit_fallback_path: Some(runtime_dir.join("audit.jsonl")),
+                            monitor_mode: component_flags.monitor_mode,
+                        },
+                    )?;
+                    let publication =
+                        context.child_published(sidecar_to_component(&launch.expected_endpoint)?);
+                    let mut command = launch.take_command()?;
+                    command
+                        .arg("--startup-report")
+                        .arg(publication.startup_report_path());
+                    sidecar_launch = Some(launch);
+                    Ok(ComponentSpec {
+                        command,
+                        readiness: publication.into_readiness(),
+                    })
+                }
+                name => Err(RunError::Internal(format!("unknown run component {name}"))),
+            },
+            &orchestrator_dir,
+            LifecycleTimeouts {
+                component_readiness: flags.startup_timeout,
+                ..LifecycleTimeouts::default()
+            },
+        );
+        let stack = match stack_result {
+            Ok(stack) => stack,
+            Err(error) => {
+                if error.rollback_processes_stopped() == Some(false) {
+                    // A component may remain alive after uncertain startup rollback.
+                    // Preserve the seed dependencies and durable marker evidence for
+                    // cross-process recovery rather than invalidating its inputs.
+                    std::mem::forget(capability_refresher.take());
+                    std::mem::forget(capability_guard.take());
+                }
+                return Err(RunError::RunComponentOrchestration(Box::new(error)));
+            }
+        };
+        let publication = (|| {
+            if let Some(component) = stack.handle().component("authority") {
+                let launch = authority_launch
+                    .as_ref()
+                    .ok_or_else(|| RunError::Internal("ready Authority launch missing".into()))?;
+                let ComponentEndpoint::Tcp(addr) = component.endpoint() else {
+                    return Err(RunError::Internal(
+                        "Authority handle has non-TCP endpoint".into(),
+                    ));
+                };
+                firma_runtime_state::pidfile::write(&launch.pid_path, component.leader_pid())
+                    .map_err(|error| RunError::Internal(format!("write authority.pid: {error}")))?;
+                crate::authority::metadata::write(
+                    &launch.metadata_path,
+                    &crate::authority::metadata::Metadata {
+                        sandbox_id: launch.sandbox_id,
+                        agent_id: launch.agent_id,
+                        session_id: launch.session_id.clone(),
+                        profile: launch.profile_name.clone(),
+                        listen_addr: addr.to_string(),
+                        pid: component.leader_pid(),
+                        started_at: chrono::Utc::now().to_rfc3339(),
+                    },
+                )?;
+            }
+            if let Some(component) = stack.handle().component("sidecar") {
+                let launch = sidecar_launch
+                    .as_ref()
+                    .ok_or_else(|| RunError::Internal("ready Sidecar launch missing".into()))?;
+                crate::sidecar::prepare::publish_metadata(
+                    launch,
+                    &component_to_sidecar(component.endpoint()),
+                    component.leader_pid(),
+                    None,
+                )?;
+            }
+            if owns_authority && !owns_sidecar && handle.network_policy.fail_closed {
+                probe_sidecar(sidecar_endpoint).map_err(|reason| RunError::SidecarUnreachable {
+                    endpoint: format_endpoint(sidecar_endpoint),
+                    reason,
+                })?;
+            }
+            Ok::<_, RunError>(())
+        })();
+        if let Err(operation) = publication {
+            return Err(rollback_ready_stack(
+                stack,
+                operation,
+                &marker_dir,
+                capability_refresher,
+                capability_guard,
+            ));
+        }
+        let effective_endpoint = stack.handle().component("sidecar").map_or_else(
+            || sidecar_endpoint.clone(),
+            |component| component_to_sidecar(component.endpoint()),
+        );
+        Ok(PreparedRunComponents {
+            endpoint: effective_endpoint,
+            stack: Some(stack),
+            sidecar_marker: owns_sidecar.then_some(marker_dir.clone()),
+            stack_marker: Some(marker_dir),
+            capability_guard,
+            capability_refresher,
+        })
+    }
 }
 
 #[cfg(unix)]
-fn rollback_ready_sidecar(
+fn rollback_ready_stack(
     mut stack: RunningStack,
     operation: RunError,
     marker_dir: &Path,
+    capability_refresher: Option<CapabilityRefresher>,
+    capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
 ) -> RunError {
     if let Err(rollback) = stack.shutdown(Duration::from_secs(10)) {
         let processes_stopped = rollback.processes_stopped();
-        if !processes_stopped {
+        if processes_stopped {
+            drop(capability_refresher);
+            drop(capability_guard);
+        } else {
             // Preserve the sole in-process owner and durable state after an
             // uncertain rollback. The caller likewise retains the Authority
             // and capability dependencies.
             std::mem::forget(stack);
+            std::mem::forget(capability_refresher);
+            std::mem::forget(capability_guard);
         }
-        return RunError::SidecarPostReadyRollback {
+        return RunError::RunStackPostReadyRollback {
             operation: Box::new(operation),
             rollback,
         };
     }
+    drop(capability_refresher);
+    drop(capability_guard);
     if let Err(cleanup) = (RunMarkerGuard {
         path: marker_dir.to_path_buf(),
     })
     .cleanup()
     {
-        tracing::warn!(%cleanup, "Sidecar rollback could not remove run markers");
+        tracing::warn!(%cleanup, "run component rollback could not remove markers");
     }
     operation
 }
@@ -1052,7 +1172,7 @@ fn component_to_sidecar(endpoint: &ComponentEndpoint) -> SidecarEndpoint {
 }
 
 #[cfg(unix)]
-fn create_sidecar_log_alias(marker_dir: &Path, target: &Path) -> Result<(), RunError> {
+fn create_log_alias(marker_dir: &Path, alias_name: &str, target: &Path) -> Result<(), RunError> {
     use std::os::unix::fs::symlink;
     firma_fs::create_private_dir_all(marker_dir)
         .map_err(|error| RunError::Internal(format!("mkdir {}: {error}", marker_dir.display())))?;
@@ -1062,7 +1182,7 @@ fn create_sidecar_log_alias(marker_dir: &Path, target: &Path) -> Result<(), RunE
             target.display()
         ))
     })?;
-    let alias = marker_dir.join("sidecar.log");
+    let alias = marker_dir.join(alias_name);
     match std::fs::symlink_metadata(&alias) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             let existing = std::fs::read_link(&alias).map_err(|error| {
@@ -1097,12 +1217,10 @@ fn create_sidecar_log_alias(marker_dir: &Path, target: &Path) -> Result<(), RunE
 /// Step 0: resolve the Authority before any sidecar work.
 ///
 /// CLI > persisted > prompt (only when both empty and TTY). On Local
-/// selection, probe `[authority].listen_addr` (default `[::1]:50051`); on miss, spawn an
-/// `AuthoritySupervisor`. Local mode is a dev convenience path and
-/// intentionally uses plaintext loopback (`http://`), not TLS/mTLS.
-/// EADDRINUSE recovery: on any spawn error, re-probe once; if the port
-/// is now reachable, drop the (failed) supervisor handle and proceed
-/// without one.
+/// selection, probe `[authority].listen_addr` (default `[::1]:50051`); on miss,
+/// retain a lazy owned-Authority plan for the run component orchestrator.
+/// Local mode is a dev convenience path and intentionally uses plaintext
+/// loopback (`http://`), not TLS/mTLS.
 ///
 /// # Errors
 ///
@@ -1175,6 +1293,7 @@ pub fn resolve_authority(
                 credentials,
                 credentials_config,
                 supervisor: None,
+                owned: None,
             })
         }
         crate::authority::AuthoritySelection::Local => {
@@ -1197,6 +1316,7 @@ pub fn resolve_authority(
                     credentials,
                     credentials_config,
                     supervisor: None,
+                    owned: None,
                 });
             }
             if request.flags.no_autostart {
@@ -1213,54 +1333,21 @@ pub fn resolve_authority(
                     crate::authority::bootstrap::resolve_persist_target(request.user_config_path)?;
                 crate::authority::bootstrap::persist_authority_section(&target_path)?;
             }
-            let marker =
-                run_entry_from(request.runtime_dir, &request.identity.sandbox_id).join("authority");
-            match crate::authority::AuthoritySupervisor::spawn(crate::authority::SpawnRequest {
-                sandbox_id: &request.identity.sandbox_id,
-                agent_id: &request.identity.agent_id,
-                session_id: &request.identity.session_id,
-                marker_dir: marker,
-                profile_name: request.profile_name,
-                firma_exe: request.firma_exe.to_path_buf(),
-                startup_timeout: request.flags.startup_timeout,
-                user_config_path: request.user_config_path.map(Path::to_path_buf),
-            }) {
-                Ok(sup) => {
-                    let ephemeral_pub_key = sup.pub_key_path();
-                    Ok(ResolvedAuthority {
-                        url: sup.url(),
-                        ca_cert_path,
-                        pub_key_path: capability_pub_key_path.or(Some(ephemeral_pub_key)),
-                        credentials,
-                        credentials_config,
-                        supervisor: Some(sup),
-                    })
-                }
-                Err(spawn_err) => {
-                    if probe_authority_tcp(target).is_ok() {
-                        if probe_authority_plaintext_h2(target).is_err() {
-                            return Err(RunError::AuthorityTransportAmbiguous {
-                                endpoint: format!("http://{target}"),
-                            });
-                        }
-                        tracing::info!(
-                            sandbox_id = %request.identity.sandbox_id,
-                            url = %format!("http://{target}"),
-                            "authority reused: port became reachable during autostart retry"
-                        );
-                        Ok(ResolvedAuthority {
-                            url: format!("http://{target}"),
-                            ca_cert_path,
-                            pub_key_path,
-                            credentials,
-                            credentials_config,
-                            supervisor: None,
-                        })
-                    } else {
-                        Err(spawn_err)
-                    }
-                }
-            }
+            Ok(ResolvedAuthority {
+                // The effective ephemeral endpoint and key are filled from the
+                // validated Authority component before Sidecar planning.
+                url: "http://[::1]:0".to_string(),
+                ca_cert_path,
+                pub_key_path: capability_pub_key_path,
+                credentials,
+                credentials_config,
+                supervisor: None,
+                owned: Some(OwnedAuthorityPlan {
+                    profile_name: request.profile_name.to_string(),
+                    firma_exe: request.firma_exe.to_path_buf(),
+                    user_config_path: request.user_config_path.map(Path::to_path_buf),
+                }),
+            })
         }
     }
 }
@@ -1896,6 +1983,7 @@ mod non_structural_env_tests {
             credentials: None,
             credentials_config: None,
             supervisor: None,
+            owned: None,
         };
         let proof = crate::backend::EnforcementProof {
             backend: BackendKind::Vz,
@@ -1988,6 +2076,7 @@ mod non_structural_env_tests {
                 credentials: None,
                 credentials_config: None,
                 supervisor: None,
+                owned: None,
             };
             let structural_proof = crate::backend::EnforcementProof {
                 backend: BackendKind::Vz,
@@ -2058,6 +2147,7 @@ mod non_structural_env_tests {
             credentials: None,
             credentials_config: None,
             supervisor: None,
+            owned: None,
         };
         let proof = crate::backend::EnforcementProof {
             backend: BackendKind::Bwrap,

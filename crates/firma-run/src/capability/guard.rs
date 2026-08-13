@@ -15,6 +15,7 @@ pub struct CapabilityFileGuard {
 impl CapabilityFileGuard {
     /// Guard the given seed file path.
     #[must_use]
+    #[cfg(any(unix, test))]
     pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
