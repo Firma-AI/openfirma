@@ -76,7 +76,7 @@ fn audit_inspect_lines(row: &AuditRow) -> Vec<Line<'static>> {
             Span::styled("] move  [", dim_style()),
             Span::styled("a/d/l", accent_style()),
             Span::styled("] filter  [", dim_style()),
-            Span::styled("esc", accent_style()),
+            Span::styled("esc/enter/i", accent_style()),
             Span::styled("] close ", dim_style()),
         ]),
     ]

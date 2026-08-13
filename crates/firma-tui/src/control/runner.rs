@@ -5,6 +5,7 @@
 //! event sources, and rewrite queues. It also lets tests crank one event at a
 //! time without starting an actual terminal session.
 
+use anyhow::Context as _;
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -501,8 +502,12 @@ fn execute_effect_with_editor(
             // The editor runs outside the TUI and reports only whether the
             // process completed. Policy truth is still read from disk after a
             // successful edit, so the UI cannot drift from the Cedar files.
-            let result = open_policy_source(&path)?;
+            let result = open_policy_source(&path);
             app.finish_policy_edit();
+            let result = result.with_context(|| {
+                format!("failed to hand terminal to editor for `{}`", path.display())
+            })?;
+
             Ok(policy_source_edit_effects(app, &path, result))
         }
     }

@@ -195,8 +195,12 @@ impl AuditState {
     /// Appends one audit row, dropping the oldest row at capacity.
     pub fn push_row(&mut self, row: AuditRow) {
         if self.rows.len() == AUDIT_BUFFER_CAPACITY {
-            let _ = self.rows.pop_front();
-            if self.viewport_mode == AuditViewportMode::Manual {
+            let evicted_row_matched_filter = self
+                .rows
+                .pop_front()
+                .is_some_and(|row| self.filter.matches(row.decision));
+
+            if self.viewport_mode == AuditViewportMode::Manual && evicted_row_matched_filter {
                 self.selected_index = self.selected_index.saturating_sub(1);
             }
         }

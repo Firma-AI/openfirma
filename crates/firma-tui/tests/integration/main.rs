@@ -1,8 +1,11 @@
 mod app;
 mod bindings;
+mod command;
+mod editor;
 mod error;
 mod render;
 mod runner;
+mod state;
 mod status;
 mod support;
 mod toggle;
