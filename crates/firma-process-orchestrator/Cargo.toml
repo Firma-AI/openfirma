@@ -25,6 +25,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true }
 serial_test = { workspace = true }
+socket2 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 camino = { workspace = true }

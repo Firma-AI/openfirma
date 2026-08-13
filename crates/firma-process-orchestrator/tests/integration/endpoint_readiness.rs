@@ -350,32 +350,35 @@ fn publication_and_probe_share_the_configured_timeout_budget() {
     let fixture = Fixture::new(ChildBehavior::DelayedPublishWithoutListener(
         loopback_ephemeral(),
     ));
-    let started = std::time::Instant::now();
-    let result = fixture.spawn_endpoint_with_timeouts(
-        &ComponentEndpoint::Tcp(loopback_ephemeral()),
-        LifecycleTimeouts {
-            component_readiness: Duration::from_secs(1),
-            ..LifecycleTimeouts::default()
-        },
-    );
-    let elapsed = started.elapsed();
+    let marker = fixture.marker.clone();
+    let state_dir = fixture.state_dir.clone();
+    let startup = std::thread::spawn(move || {
+        fixture.spawn_endpoint_with_timeouts(
+            &ComponentEndpoint::Tcp(loopback_ephemeral()),
+            LifecycleTimeouts {
+                component_readiness: Duration::from_secs(3),
+                ..LifecycleTimeouts::default()
+            },
+        )
+    });
+
+    wait_for_file(&marker);
+    let published = std::time::Instant::now();
+    let result = startup.join().expect("join startup");
+    let elapsed_after_publication = published.elapsed();
 
     assert!(matches!(
         result,
         Err(StartError::Orchestrator(OrchestratorError::Readiness {
-            timeout_secs: 1,
+            timeout_secs: 3,
             ..
         }))
     ));
     assert!(
-        elapsed >= Duration::from_millis(900),
-        "elapsed: {elapsed:?}"
+        elapsed_after_publication < Duration::from_secs(2),
+        "elapsed after publication: {elapsed_after_publication:?}"
     );
-    assert!(
-        elapsed < Duration::from_millis(1_500),
-        "elapsed: {elapsed:?}"
-    );
-    assert_rollback_clean(&fixture.state_dir);
+    assert_rollback_clean(&state_dir);
 }
 
 #[test]
@@ -748,13 +751,36 @@ fn child_fixture() {
         }
     }
 
-    let listener = TcpListener::bind(
-        std::env::var(CHILD_BIND_ADDR)
-            .expect("child bind address")
-            .parse::<SocketAddr>()
-            .expect("parse child bind address"),
-    )
-    .expect("bind child listener");
+    let bind_addr = std::env::var(CHILD_BIND_ADDR)
+        .expect("child bind address")
+        .parse::<SocketAddr>()
+        .expect("parse child bind address");
+    if mode == "publish-without-listener" || mode == "delayed-publish-without-listener" {
+        // Keep the published port reserved without making it connectable.
+        let socket = socket2::Socket::new(
+            socket2::Domain::for_address(bind_addr),
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .expect("create child socket");
+        socket
+            .bind(&socket2::SockAddr::from(bind_addr))
+            .expect("bind child socket");
+        let effective_addr = socket
+            .local_addr()
+            .expect("effective child socket address")
+            .as_socket()
+            .expect("TCP child socket address");
+        if mode == "delayed-publish-without-listener" {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        publish_child_endpoint(effective_addr);
+        std::thread::sleep(Duration::from_secs(5));
+        drop(socket);
+        return;
+    }
+
+    let listener = TcpListener::bind(bind_addr).expect("bind child listener");
     let effective_addr = listener.local_addr().expect("effective child address");
     if mode == "configured" {
         std::fs::write(std::env::var_os(CHILD_MARKER).expect("child marker"), [])
@@ -763,12 +789,13 @@ fn child_fixture() {
             std::thread::sleep(Duration::from_mins(1));
         }
     }
-    if mode == "delayed-publish-without-listener" {
-        std::thread::sleep(Duration::from_millis(700));
+    publish_child_endpoint(effective_addr);
+    loop {
+        std::thread::sleep(Duration::from_mins(1));
     }
-    if mode == "publish-without-listener" || mode == "delayed-publish-without-listener" {
-        drop(listener);
-    }
+}
+
+fn publish_child_endpoint(effective_addr: SocketAddr) {
     publish_startup_report(
         &startup_report_path(),
         &ComponentEndpoint::Tcp(effective_addr),
@@ -776,13 +803,6 @@ fn child_fixture() {
     .expect("publish startup report");
     std::fs::write(std::env::var_os(CHILD_MARKER).expect("child marker"), [])
         .expect("write child marker");
-    if mode == "publish-without-listener" || mode == "delayed-publish-without-listener" {
-        std::thread::sleep(Duration::from_secs(5));
-        return;
-    }
-    loop {
-        std::thread::sleep(Duration::from_mins(1));
-    }
 }
 
 fn startup_report_path() -> PathBuf {
