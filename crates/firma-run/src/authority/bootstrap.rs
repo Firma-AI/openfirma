@@ -6,8 +6,8 @@
 //!
 //! On `Y` the `[authority]` table is merged into `firma.toml` so subsequent
 //! runs skip the prompt. The persisted section configures an ephemeral port
-//! (`listen_addr = "[::1]:0"`) — the supervisor picks a free port on each
-//! spawn (`select_loopback_v6_port`).
+//! (`listen_addr = "[::1]:0"`) — the Authority kernel picks a free port when
+//! the child binds.
 
 use std::fs;
 use std::io;
@@ -26,8 +26,8 @@ pub const PROMPT_TEXT: &str = "No Authority is configured for this project.\n\
     This is suitable for a single developer on a trusted workstation.\n\n\
     Start a local Mini Authority?";
 
-/// `listen_addr` value persisted on `Y`. `:0` makes the supervisor pick a
-/// free loopback port at every spawn (`select_loopback_v6_port`).
+/// `listen_addr` value persisted on `Y`. `:0` makes the Authority kernel pick
+/// a free loopback port at every spawn.
 const DEFAULT_LISTEN_ADDR: &str = "[::1]:0";
 
 /// Run the y/N prompt and surface the answer as typed errors.
