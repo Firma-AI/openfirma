@@ -204,11 +204,59 @@ pattern = "(?P<name>.+)=(?P<value>.+)"
         };
         std::assert_matches!(
             &error,
-            CliIntegrationConfigError::ConflictingStrippedOption { name }
+            CliIntegrationConfigError::ConflictingOptionDefinition { name }
                 if name == "--mode"
         );
         insta::allow_duplicates! {
-            insta::assert_snapshot!(error.to_string(), @"option `--mode` has conflicting definitions in integration-level and command-level stripped_options");
+            insta::assert_snapshot!(error.to_string(), @"option `--mode` has conflicting definitions");
+        }
+    }
+}
+
+#[test]
+fn cli_schema_rejects_conflicting_stripped_option_definitions_in_one_scope() {
+    let inputs = [
+        r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+stripped_options = [
+  { name = "--mode", takes_value = true },
+  { name = "--mode", takes_value = false },
+]
+matchers = []
+"#,
+        r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+stripped_options = [
+  { name = "--mode", takes_value = true },
+  { name = "--mode", takes_value = false },
+]
+
+[matchers.matcher]
+type = "regex"
+pattern = "(?P<name>.+)=(?P<value>.+)"
+"#,
+    ];
+
+    for input in inputs {
+        let config: CliIntegrationConfig =
+            toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
+        let Err(error) = CliIntegrationSpec::try_from(config) else {
+            panic!("conflicting definitions in one scope must fail validation");
+        };
+        std::assert_matches!(
+            &error,
+            CliIntegrationConfigError::ConflictingOptionDefinition { name } if name == "--mode"
+        );
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(error.to_string(), @"option `--mode` has conflicting definitions");
         }
     }
 }
@@ -900,6 +948,27 @@ fn builtins_reject_backend_override_flags_on_sensitive_commands() {
         ),
         (
             "vault",
+            &[
+                "kv",
+                "get",
+                "secret/foo",
+                "-agent-address",
+                "http://evil.example",
+            ],
+            &["kv", "get", "secret/foo", "-format", "json"],
+        ),
+        (
+            "vault",
+            &[
+                "kv",
+                "get",
+                "secret/foo",
+                "--agent-address=http://evil.example",
+            ],
+            &["kv", "get", "secret/foo", "-format", "json"],
+        ),
+        (
+            "vault",
             &["kv", "get", "secret/foo", "-tls-skip-verify"],
             &["kv", "get", "secret/foo", "-format", "json"],
         ),
@@ -914,6 +983,18 @@ fn builtins_reject_backend_override_flags_on_sensitive_commands() {
         (
             "doppler",
             &["secrets", "download", "--api-host", "https://evil.example"],
+            &[
+                "secrets",
+                "download",
+                "--format",
+                "json",
+                "--no-file",
+                "--no-fallback",
+            ],
+        ),
+        (
+            "doppler",
+            &["secrets", "download", "--print-config"],
             &[
                 "secrets",
                 "download",
@@ -1009,6 +1090,11 @@ fn builtins_reject_backend_override_flags_on_safe_commands() {
         ),
         (
             "vault",
+            &["status", "--agent-address", "http://evil.example"],
+            &["status"],
+        ),
+        (
+            "vault",
             &["policy", "list", "-tls-skip-verify"],
             &["policy", "list"],
         ),
@@ -1017,6 +1103,7 @@ fn builtins_reject_backend_override_flags_on_safe_commands() {
             &["me", "--api-host", "https://evil.example"],
             &["me"],
         ),
+        ("doppler", &["me", "--print-config"], &["me"]),
         (
             "doppler",
             &["projects", "list", "--no-verify-tls"],
@@ -1348,6 +1435,22 @@ fn doppler_bare_secrets_matcher_is_distinct_from_download() {
         MatchingResolution::Blocked,
         "the exact bare-secrets rule must not authorize future subcommands",
     );
+
+    for selector_args in [
+        &["secrets", "--project", "example", "--config", "dev"][..],
+        &["--project", "example", "--config", "dev", "secrets"],
+        &["secrets", "-p", "example", "-c", "dev"],
+        &["secrets", "--project=example", "--config=dev"],
+        &["secrets", "-pexample", "-cdev"],
+    ] {
+        assert!(
+            matches!(
+                spec.resolve_args(&args(selector_args)),
+                MatchingResolution::Matcher(_)
+            ),
+            "expected Doppler selectors to preserve bare-secrets matching: {selector_args:?}",
+        );
+    }
 }
 
 #[test]
@@ -1436,7 +1539,7 @@ fn op_rewrites_multiple_secret_fields() {
 }
 
 #[test]
-fn op_redacts_password_and_leaves_totp_clear() {
+fn op_redacts_password_and_otp_provisioning_uri() {
     let compiled = builtin_matcher("op", &["item", "get", "example"])
         .unwrap_or_else(|error| panic!("{error}"));
     eprintln!("{compiled:?}");
@@ -1445,7 +1548,7 @@ fn op_redacts_password_and_leaves_totp_clear() {
         "urls":[{"href":"https://login.example.com"}],
         "fields":[
             {"id":"password","type":"CONCEALED","label":"password","value":"password-secret"},
-            {"id":"otp","type":"OTP","label":"one-time password","value":"123456"}
+            {"id":"otp","type":"OTP","label":"one-time password","value":"otpauth://totp/Example:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example","totp":"123456"}
         ]
     }"#;
     let (output, entries) = rewrite_mint_placeholders(&compiled, input)
@@ -1453,14 +1556,25 @@ fn op_redacts_password_and_leaves_totp_clear() {
 
     assert_eq!(
         entries,
-        [Entry {
-            name: String::from("password"),
-            value: String::from("password-secret"),
-            domains: vec![String::from("login.example.com")],
-            item: Some(String::from("Production")),
-        }]
+        [
+            Entry {
+                name: String::from("password"),
+                value: String::from("password-secret"),
+                domains: vec![String::from("login.example.com")],
+                item: Some(String::from("Production")),
+            },
+            Entry {
+                name: String::from("one-time password"),
+                value: String::from(
+                    "otpauth://totp/Example:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example"
+                ),
+                domains: vec![String::from("login.example.com")],
+                item: Some(String::from("Production")),
+            },
+        ]
     );
     assert!(output.windows(6).any(|window| window == b"123456"));
+    assert!(!output.windows(10).any(|window| window == b"JBSWY3DPEH"));
     assert!(
         !output
             .windows(15)
