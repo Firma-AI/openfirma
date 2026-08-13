@@ -2,6 +2,9 @@
 
 use std::collections::VecDeque;
 
+// The audit pane is a live view, not durable storage. Keeping the last thousand
+// rows gives enough history for inspection while bounding redraw work and
+// memory use during long-running demos or noisy local stacks.
 const AUDIT_BUFFER_CAPACITY: usize = 1_000;
 
 /// Decision filter applied to the audit pane.
@@ -181,6 +184,12 @@ impl AuditState {
     #[must_use]
     pub fn visible_rows_len(&self) -> usize {
         self.visible_rows().count()
+    }
+
+    /// Selected row in the filtered view, when one exists.
+    #[must_use]
+    pub fn selected_row(&self) -> Option<&AuditRow> {
+        self.visible_rows().nth(self.selected_index)
     }
 
     /// Appends one audit row, dropping the oldest row at capacity.

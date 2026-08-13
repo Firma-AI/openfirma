@@ -13,12 +13,25 @@ use crate::control::{
     state::{AuditRow, PolicyRewriteRequest},
 };
 
+// Audit traffic can be much noisier than terminal input. Drain enough rows per
+// pass to keep the table moving, but cap the batch so a busy sidecar cannot
+// keep the runner inside audit processing while the operator is trying to move,
+// filter, or quit.
 const AUDIT_BATCH_LIMIT: usize = 64;
+
+// Ready sources are checked before the runner waits for terminal input. Input
+// goes first so keystrokes are consumed immediately; rewrite notifications come
+// next because they unblock policy rows; audit rows come last because they are
+// buffered and can safely lag by one pass.
 const READY_EVENT_PRIORITY: &[ControlQueueKind] = &[
     ControlQueueKind::Input,
     ControlQueueKind::Rewrite,
     ControlQueueKind::Audit,
 ];
+
+// After the blocking wait, terminal input has already had its chance to wake
+// the loop. At that point pending rewrite completions still matter more than
+// audit rows, and a tick is only produced when no real source is ready.
 const POST_WAIT_EVENT_PRIORITY: &[ControlQueueKind] = &[
     ControlQueueKind::Rewrite,
     ControlQueueKind::Audit,
