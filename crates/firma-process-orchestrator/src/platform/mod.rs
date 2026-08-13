@@ -31,13 +31,13 @@ use std::process::{Child, Command};
 use crate::error::OrchestratorError;
 use firma_runtime_state::UserProcessId;
 
-/// Setup-time platform resource used to attach managed children to one scope.
+/// Setup-time platform resource used to attach one managed component to its scope.
 ///
 /// On Windows, [`Platform::arm_group_termination`] makes owner loss terminate
-/// that scope. Each resulting [`TerminationTarget`] retains the Job Object, so
-/// dropping this setup handle after startup does not abandon the group.
+/// that component scope. The resulting [`TerminationTarget`] retains the Job
+/// Object, so dropping this setup handle after spawn does not abandon the group.
 pub struct Group {
-    /// Unix process-group identity established before the first spawn.
+    /// Unix process-group identity established during spawn.
     #[cfg(unix)]
     pub pgid: i32,
     /// Owned Windows Job Object used to establish component membership.

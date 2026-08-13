@@ -15,6 +15,8 @@ mod startup_contract;
 mod status_state_machine;
 #[cfg(unix)]
 mod stop_dependency_order;
+#[cfg(windows)]
+mod stop_dependency_order_windows;
 mod stop_forced_grandchildren;
 mod stop_grandchildren;
 #[cfg(unix)]
