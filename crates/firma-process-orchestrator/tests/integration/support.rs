@@ -22,7 +22,9 @@ pub fn spawn_managed_component(
         |_| {
             Ok::<_, std::convert::Infallible>(ComponentSpec {
                 command: command.take().expect("single component planned once"),
-                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(readiness_addr),
+                readiness: firma_process_orchestrator::Readiness::Configured(
+                    firma_process_orchestrator::ComponentEndpoint::Tcp(readiness_addr),
+                ),
             })
         },
         state_dir,

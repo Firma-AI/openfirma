@@ -11,10 +11,113 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus};
+use std::str::FromStr;
+
+#[cfg(unix)]
+use camino::{Utf8Path, Utf8PathBuf};
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use crate::OrchestratorError;
 use crate::platform::{SpawnedChild, TerminationTarget};
 use firma_runtime_state::UserProcessId;
+
+/// A connectable endpoint exposed by a managed component.
+///
+/// TCP endpoints retain their conventional bare `host:port` representation.
+/// On Unix, local sockets use `unix:<path>`; the prefix makes persisted listen
+/// state unambiguous and is shared by display, parsing, and status reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComponentEndpoint {
+    /// An Internet Protocol socket endpoint.
+    Tcp(SocketAddr),
+    /// A Unix-domain socket filesystem path.
+    #[cfg(unix)]
+    Unix(UnixEndpoint),
+}
+
+/// A validated Unix-domain socket filesystem path.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnixEndpoint(Utf8PathBuf);
+
+#[cfg(unix)]
+impl UnixEndpoint {
+    /// Create a Unix endpoint from a UTF-8, single-line filesystem path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original path when it is empty, is not valid UTF-8, or
+    /// contains a NUL or line break.
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, PathBuf> {
+        let path = Utf8PathBuf::from_path_buf(path.into())?;
+        if path.as_str().is_empty() || path.as_str().contains(['\0', '\n', '\r']) {
+            return Err(path.into_std_path_buf());
+        }
+        Ok(Self(path))
+    }
+
+    /// Return the validated UTF-8 socket path.
+    #[must_use]
+    pub(crate) fn as_path(&self) -> &Utf8Path {
+        &self.0
+    }
+
+    /// Consume the endpoint and return its validated UTF-8 socket path.
+    #[must_use]
+    pub fn into_path(self) -> Utf8PathBuf {
+        self.0
+    }
+}
+
+#[cfg(unix)]
+impl std::fmt::Display for UnixEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::fmt::Display for ComponentEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tcp(addr) => addr.fmt(formatter),
+            #[cfg(unix)]
+            Self::Unix(path) => write!(formatter, "unix:{path}"),
+        }
+    }
+}
+
+impl From<SocketAddr> for ComponentEndpoint {
+    fn from(addr: SocketAddr) -> Self {
+        Self::Tcp(addr)
+    }
+}
+
+impl FromStr for ComponentEndpoint {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        #[cfg(unix)]
+        if let Some(path) = value.strip_prefix("unix:") {
+            return UnixEndpoint::new(path)
+                .map(Self::Unix)
+                .map_err(|_| "Unix endpoint path is empty or contains a NUL or line break".into());
+        }
+        value
+            .parse()
+            .map(Self::Tcp)
+            .map_err(|error| format!("invalid component endpoint: {error}"))
+    }
+}
+
+impl serde::Serialize for ComponentEndpoint {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
 
 /// Opaque identity of a managed process in the local stack.
 ///
@@ -96,7 +199,7 @@ fn is_windows_device_name(name: &str) -> bool {
 pub struct ComponentSpec {
     /// Fully configured command used to launch this component.
     pub command: Command,
-    /// Contract used to discover and probe this component's TCP endpoint.
+    /// Contract used to discover and probe this component's endpoint.
     pub readiness: Readiness,
 }
 
@@ -113,21 +216,21 @@ struct ComponentContext<'a> {
 #[derive(Debug)]
 pub struct ReadyComponent {
     name: String,
-    dial_addr: SocketAddr,
+    endpoint: ComponentEndpoint,
 }
 
 impl ReadyComponent {
-    pub(crate) fn new(name: &str, dial_addr: SocketAddr) -> Self {
+    pub(crate) fn new(name: &str, endpoint: ComponentEndpoint) -> Self {
         Self {
             name: name.to_string(),
-            dial_addr,
+            endpoint,
         }
     }
 
     /// Return the endpoint that passed publication validation and probing.
     #[must_use]
-    const fn dial_addr(&self) -> SocketAddr {
-        self.dial_addr
+    const fn endpoint(&self) -> &ComponentEndpoint {
+        &self.endpoint
     }
 }
 
@@ -171,11 +274,11 @@ impl<'a> ComponentPlanContext<'a> {
 
     /// Find a prior validated endpoint by topology identity.
     #[must_use]
-    pub fn ready_endpoint(&self, name: &str) -> Option<SocketAddr> {
+    pub fn ready_endpoint(&self, name: &str) -> Option<&'a ComponentEndpoint> {
         self.ready_components
             .iter()
             .find(|component| component.name == name)
-            .map(ReadyComponent::dial_addr)
+            .map(ReadyComponent::endpoint)
     }
 }
 
@@ -235,11 +338,11 @@ pub struct ChildPublishedTcpReadiness {
     pub(crate) requested_addr: SocketAddr,
 }
 
-/// TCP endpoint evidence required from a component during startup.
+/// Endpoint evidence required from a component during startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Readiness {
     /// Probe the configured endpoint directly.
-    ConfiguredTcp(SocketAddr),
+    Configured(ComponentEndpoint),
     /// Require the child to publish its effective bound endpoint before probing.
     ChildPublishedTcp(ChildPublishedTcpReadiness),
 }

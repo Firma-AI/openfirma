@@ -97,10 +97,14 @@ mod spawn;
 mod startup_report;
 mod state_lease;
 mod supervisor;
+#[cfg(unix)]
+mod unix_connect;
 
+#[cfg(unix)]
+pub use component::UnixEndpoint;
 pub use component::{
-    ChildPublishedTcpContext, ChildPublishedTcpReadiness, ComponentName, ComponentPlanContext,
-    ComponentSpec, Readiness,
+    ChildPublishedTcpContext, ChildPublishedTcpReadiness, ComponentEndpoint, ComponentName,
+    ComponentPlanContext, ComponentSpec, Readiness,
 };
 pub use error::{OrchestratorError, StartError};
 pub use start::{

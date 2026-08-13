@@ -79,7 +79,9 @@ fn component_spec_explicit_executable_is_used() {
         |_| {
             Ok::<_, std::convert::Infallible>(ComponentSpec {
                 command: command.take().expect("single component planned once"),
-                readiness: firma_process_orchestrator::Readiness::ConfiguredTcp(fixture_addr),
+                readiness: firma_process_orchestrator::Readiness::Configured(
+                    firma_process_orchestrator::ComponentEndpoint::Tcp(fixture_addr),
+                ),
             })
         },
         state_dir.path(),

@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
+use crate::ComponentEndpoint;
 use crate::error::OrchestratorError;
 use crate::supervisor::StopSignal;
 
@@ -44,6 +45,45 @@ pub fn wait_for_tcp(
         stop_signal,
         &mut process_status,
     )
+}
+
+/// Wait until a live, owned component accepts a connection at an endpoint.
+pub fn wait_for_endpoint(
+    component: &str,
+    endpoint: &ComponentEndpoint,
+    timeout: Duration,
+    stop_signal: Option<&StopSignal>,
+    process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
+) -> Result<(), OrchestratorError> {
+    match endpoint {
+        ComponentEndpoint::Tcp(addr) => {
+            wait_for_tcp(component, *addr, timeout, stop_signal, process_status)
+        }
+        #[cfg(unix)]
+        ComponentEndpoint::Unix(path) => {
+            let mut process_status = process_status;
+            let deadline = Instant::now() + timeout;
+            loop {
+                check_startup(component, stop_signal, &mut process_status)?;
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(readiness_timeout(component, timeout));
+                }
+                if crate::unix_connect::connect_with_timeout(
+                    path.as_path().as_std_path(),
+                    remaining.min(CONNECT_ATTEMPT_TIMEOUT),
+                ) {
+                    check_startup(component, stop_signal, &mut process_status)?;
+                    return Ok(());
+                }
+                check_startup(component, stop_signal, &mut process_status)?;
+                if Instant::now() >= deadline {
+                    return Err(readiness_timeout(component, timeout));
+                }
+                sleep_until_next_probe(deadline);
+            }
+        }
+    }
 }
 
 /// Wait for a live child to publish, then accept connections on, its bound endpoint.

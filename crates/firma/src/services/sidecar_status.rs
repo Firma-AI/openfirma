@@ -136,12 +136,24 @@ fn collect_daemon() -> anyhow::Result<Vec<SidecarEntry>> {
         pid: c.pid,
         started_at: String::new(),
         state: c.state,
-        listen: c
-            .listen
-            .map(|a| std::path::PathBuf::from(a.to_string()))
-            .unwrap_or_default(),
+        listen: c.listen.map(endpoint_path).unwrap_or_default(),
         uptime_secs: c.uptime_secs,
     }])
+}
+
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::needless_pass_by_value,
+        reason = "Option::map transfers the endpoint and Unix consumes its path"
+    )
+)]
+fn endpoint_path(endpoint: firma_stack::ComponentEndpoint) -> std::path::PathBuf {
+    match endpoint {
+        firma_stack::ComponentEndpoint::Tcp(addr) => std::path::PathBuf::from(addr.to_string()),
+        #[cfg(unix)]
+        firma_stack::ComponentEndpoint::Unix(path) => path.into_path().into_std_path_buf(),
+    }
 }
 
 #[cfg(test)]
@@ -296,6 +308,23 @@ mod tests {
         // tokens: [sandbox_id, agent_id, pid, state, listen, uptime]
         let pid_token = tokens.get(2).copied().unwrap_or("");
         assert_eq!(pid_token, "-", "PID token must be `-`; row: {data_row:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_endpoint_projection_removes_unix_codec_prefix() {
+        let path = PathBuf::from("/tmp/firma sidecar.sock");
+        assert_eq!(
+            endpoint_path(firma_stack::ComponentEndpoint::Unix(
+                firma_stack::UnixEndpoint::new(path.clone()).expect("valid Unix socket path")
+            )),
+            path
+        );
+        let addr = "127.0.0.1:41000".parse().expect("TCP endpoint");
+        assert_eq!(
+            endpoint_path(firma_stack::ComponentEndpoint::Tcp(addr)),
+            PathBuf::from("127.0.0.1:41000")
+        );
     }
 
     #[test]

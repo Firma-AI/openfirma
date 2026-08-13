@@ -5,9 +5,11 @@ use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(unix)]
+use firma_process_orchestrator::UnixEndpoint;
 use firma_process_orchestrator::{
-    ComponentSpec, LifecycleTimeouts, OrchestratorError, Readiness, RunningStack, StackTopology,
-    StartError, publish_startup_report, spawn_stack_from_plan,
+    ComponentEndpoint, ComponentSpec, LifecycleTimeouts, OrchestratorError, Readiness,
+    RunningStack, StackTopology, StartError, publish_startup_report, spawn_stack_from_plan,
 };
 
 use crate::support::wait_for_file;
@@ -17,6 +19,48 @@ const CHILD_BIND_ADDR: &str = "FIRMA_ENDPOINT_CHILD_BIND_ADDR";
 const CHILD_RECORD: &str = "FIRMA_ENDPOINT_CHILD_RECORD";
 const CHILD_MARKER: &str = "FIRMA_ENDPOINT_CHILD_MARKER";
 const CHILD_STARTUP_REPORT_PATH: &str = "FIRMA_ENDPOINT_CHILD_STARTUP_REPORT_PATH";
+
+#[test]
+fn endpoint_state_representation_round_trips_and_preserves_tcp_bytes() {
+    let tcp = ComponentEndpoint::Tcp("127.0.0.1:41000".parse().expect("TCP endpoint"));
+    assert_eq!(tcp.to_string(), "127.0.0.1:41000");
+    assert_eq!(tcp.to_string().parse::<ComponentEndpoint>(), Ok(tcp));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let unix = unix_endpoint("/tmp/firma socket.sock");
+        assert_eq!(unix.to_string(), "unix:/tmp/firma socket.sock");
+        assert_eq!(
+            unix.to_string().parse::<ComponentEndpoint>(),
+            Ok(unix.clone())
+        );
+        assert_eq!(
+            toml::to_string(&EndpointRecord { endpoint: &unix }).expect("serialize Unix endpoint"),
+            "endpoint = \"unix:/tmp/firma socket.sock\"\n"
+        );
+        assert!(UnixEndpoint::new("/tmp/firma\n.sock").is_err());
+        assert!(UnixEndpoint::new("/tmp/firma\0.sock").is_err());
+        assert!(
+            UnixEndpoint::new(PathBuf::from(std::ffi::OsString::from_vec(
+                b"/tmp/firma-\xff.sock".to_vec()
+            )))
+            .is_err()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[derive(serde::Serialize)]
+struct EndpointRecord<'a> {
+    endpoint: &'a ComponentEndpoint,
+}
+
+#[cfg(unix)]
+fn unix_endpoint(path: impl Into<PathBuf>) -> ComponentEndpoint {
+    ComponentEndpoint::Unix(UnixEndpoint::new(path).expect("UTF-8 Unix endpoint path"))
+}
 
 #[test]
 fn dynamic_publication_replaces_stale_canonical_only_after_validation() {
@@ -118,7 +162,7 @@ fn configured_tcp_readiness_preserves_fixed_endpoint_behavior() {
     let requested = reserve_endpoint();
     let fixture = Fixture::new(ChildBehavior::Configured(requested));
     let mut stack = fixture
-        .spawn_with_readiness(Readiness::ConfiguredTcp(requested))
+        .spawn_with_readiness(Readiness::Configured(ComponentEndpoint::Tcp(requested)))
         .expect("configured TCP readiness");
 
     assert_eq!(
@@ -128,6 +172,78 @@ fn configured_tcp_readiness_preserves_fixed_endpoint_behavior() {
     );
     assert_current_publications_absent(&fixture.state_dir);
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_unix_readiness_publishes_canonical_endpoint() {
+    let relative = PathBuf::from("worker% socket.sock");
+    let fixture = Fixture::new(ChildBehavior::ConfiguredUnix(relative.clone()));
+    let socket = fixture.dir.path().join(relative);
+    let mut stack = fixture
+        .spawn_with_readiness(Readiness::Configured(unix_endpoint(socket.clone())))
+        .expect("configured Unix readiness");
+
+    assert_eq!(
+        std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
+            .expect("read configured canonical endpoint"),
+        format!("{}\n", unix_endpoint(socket.clone()))
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
+            .expect("read canonical endpoint")
+            .strip_suffix('\n')
+            .expect("writer newline")
+            .parse::<ComponentEndpoint>(),
+        Ok(unix_endpoint(socket))
+    );
+    stack.shutdown(Duration::ZERO).expect("shutdown fixture");
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_unix_readiness_fails_closed_when_socket_is_unreachable() {
+    let fixture = Fixture::new(ChildBehavior::ConfiguredUnixUnavailable);
+    let endpoint = unix_endpoint(fixture.socket_path());
+    let timeouts = LifecycleTimeouts {
+        component_readiness: Duration::from_millis(150),
+        ..LifecycleTimeouts::default()
+    };
+    let started = std::time::Instant::now();
+    let Err(error) =
+        fixture.spawn_with_readiness_and_timeouts(Readiness::Configured(endpoint), timeouts)
+    else {
+        panic!("unreachable Unix socket must fail readiness");
+    };
+    assert!(matches!(
+        error,
+        StartError::Orchestrator(OrchestratorError::Readiness { .. })
+    ));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_rollback_clean(&fixture.state_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn zero_timeout_does_not_attempt_unavailable_unix_readiness() {
+    let fixture = Fixture::new(ChildBehavior::ConfiguredUnixUnavailable);
+    let endpoint = unix_endpoint(fixture.socket_path());
+    let timeouts = LifecycleTimeouts {
+        component_readiness: Duration::ZERO,
+        ..LifecycleTimeouts::default()
+    };
+    let started = std::time::Instant::now();
+    let result =
+        fixture.spawn_with_readiness_and_timeouts(Readiness::Configured(endpoint), timeouts);
+
+    assert!(matches!(
+        result,
+        Err(StartError::Orchestrator(
+            OrchestratorError::Readiness { .. }
+        ))
+    ));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_rollback_clean(&fixture.state_dir);
 }
 
 #[test]
@@ -222,6 +338,10 @@ fn publication_is_atomic_and_no_clobber() {
 enum ChildBehavior {
     Publish(SocketAddr),
     Configured(SocketAddr),
+    #[cfg(unix)]
+    ConfiguredUnix(PathBuf),
+    #[cfg(unix)]
+    ConfiguredUnixUnavailable,
     Raw(String),
     Symlink,
     Directory,
@@ -230,7 +350,7 @@ enum ChildBehavior {
 }
 
 struct Fixture {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     state_dir: PathBuf,
     executable: PathBuf,
     marker: PathBuf,
@@ -243,7 +363,7 @@ impl Fixture {
         let state_dir = dir.path().join("state");
         let marker = dir.path().join("child.published");
         Self {
-            _dir: dir,
+            dir,
             state_dir,
             executable: std::env::current_exe().expect("test executable"),
             marker,
@@ -255,6 +375,10 @@ impl Fixture {
         let (mode, bind_addr, record) = match &self.behavior {
             ChildBehavior::Publish(addr) => ("publish", Some(*addr), None),
             ChildBehavior::Configured(addr) => ("configured", Some(*addr), None),
+            #[cfg(unix)]
+            ChildBehavior::ConfiguredUnix(_) => ("configured-unix", None, None),
+            #[cfg(unix)]
+            ChildBehavior::ConfiguredUnixUnavailable => ("configured-unix-unavailable", None, None),
             ChildBehavior::Raw(record) => ("raw", None, Some(record.as_str())),
             ChildBehavior::Symlink => ("symlink", None, None),
             ChildBehavior::Directory => ("directory", None, None),
@@ -276,6 +400,10 @@ impl Fixture {
         }
         if let Some(path) = startup_report_path {
             command.env(CHILD_STARTUP_REPORT_PATH, path);
+        }
+        #[cfg(unix)]
+        if let ChildBehavior::ConfiguredUnix(path) = &self.behavior {
+            command.env(CHILD_BIND_ADDR, self.dir.path().join(path));
         }
         command
     }
@@ -358,6 +486,14 @@ impl Fixture {
         &self,
         readiness: Readiness,
     ) -> Result<RunningStack, StartError<std::convert::Infallible>> {
+        self.spawn_with_readiness_and_timeouts(readiness, LifecycleTimeouts::default())
+    }
+
+    fn spawn_with_readiness_and_timeouts(
+        &self,
+        readiness: Readiness,
+        timeouts: LifecycleTimeouts,
+    ) -> Result<RunningStack, StartError<std::convert::Infallible>> {
         let mut readiness = Some(readiness);
         spawn_stack_from_plan(
             &StackTopology::new(["worker"]).expect("valid topology"),
@@ -369,8 +505,13 @@ impl Fixture {
                 })
             },
             &self.state_dir,
-            LifecycleTimeouts::default(),
+            timeouts,
         )
+    }
+
+    #[cfg(unix)]
+    fn socket_path(&self) -> PathBuf {
+        self.dir.path().join("worker.sock")
     }
 }
 
@@ -396,6 +537,9 @@ fn later_plan_failure_sees_prior_endpoint_and_rolls_it_back() {
             let ready = context
                 .ready_endpoint("first")
                 .expect("first endpoint must be available to second planner");
+            let ComponentEndpoint::Tcp(ready) = ready else {
+                panic!("dynamic child publication must remain TCP");
+            };
             assert_ne!(ready.port(), 0);
             assert_eq!(
                 std::fs::read_to_string(fixture.state_dir.join("first.listen"))
@@ -447,6 +591,22 @@ fn child_fixture() {
         std::fs::create_dir(startup_report_path()).expect("publish endpoint directory");
         std::thread::sleep(Duration::from_mins(1));
         return;
+    }
+
+    #[cfg(unix)]
+    if mode == "configured-unix" {
+        let _listener = std::os::unix::net::UnixListener::bind(
+            std::env::var_os(CHILD_BIND_ADDR).expect("Unix child bind path"),
+        )
+        .expect("bind Unix child listener");
+        loop {
+            std::thread::sleep(Duration::from_mins(1));
+        }
+    }
+    if mode == "configured-unix-unavailable" {
+        loop {
+            std::thread::sleep(Duration::from_mins(1));
+        }
     }
 
     let listener = TcpListener::bind(

@@ -24,8 +24,11 @@ pub use start::{spawn_stack, start};
 pub use status::status;
 pub use stop::stop;
 
+#[cfg(unix)]
+pub use firma_process_orchestrator::UnixEndpoint;
 pub use firma_process_orchestrator::{
-    Readiness, RunningStack, StackHandle, StackStatus, State, StopOutcome, publish_startup_report,
+    ComponentEndpoint, Readiness, RunningStack, StackHandle, StackStatus, State, StopOutcome,
+    publish_startup_report,
 };
 #[doc(hidden)]
 pub use firma_process_orchestrator::{StackGeneration, shutdown_event};

@@ -1,13 +1,12 @@
 //! Observational stack status from runtime state and bounded probes.
 //!
 //! [`probe`] classifies a component as [`State::Running`] only when its
-//! persisted [`TerminationTarget`] is live and its recorded TCP endpoint
+//! persisted [`TerminationTarget`] is live and its recorded endpoint
 //! accepts a connection. A live target without a reachable endpoint is
 //! [`State::Unhealthy`]; missing or stale target state is [`State::Stopped`].
 //! Listen-address and uptime metadata are best-effort and never grant lifecycle
 //! authority.
 
-use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -16,9 +15,9 @@ use firma_runtime_state::UserProcessId;
 use serde::Serialize;
 use tracing::{debug, trace};
 
-use crate::StackTopology;
 use crate::error::OrchestratorError;
 use crate::platform::TerminationTarget;
+use crate::{ComponentEndpoint, StackTopology};
 use firma_runtime_state::pidfile;
 
 const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(200);
@@ -33,8 +32,8 @@ pub struct ComponentStatus {
     /// Coarse-grained state. See [`State`].
     pub state: State,
     /// Listen address read from `<state_dir>/<name>.listen` (written at spawn
-    /// time), if the file exists and parses as a [`SocketAddr`].
-    pub listen: Option<SocketAddr>,
+    /// time), if the file exists and parses as a [`ComponentEndpoint`].
+    pub listen: Option<ComponentEndpoint>,
     /// Seconds since the pidfile was written, used as a proxy for process
     /// uptime. Absent when the pidfile is missing or its mtime is in the future
     /// relative to system time.
@@ -107,13 +106,11 @@ fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus, OrchestratorEr
     }
 
     let listen = listen_addr_for(state_dir, name);
-    let port_open = listen
-        .as_ref()
-        .is_some_and(|addr| TcpStream::connect_timeout(addr, CONNECT_ATTEMPT_TIMEOUT).is_ok());
+    let endpoint_open = listen.as_ref().is_some_and(endpoint_is_connectable);
     Ok(ComponentStatus {
         name: name.into(),
         pid: Some(pid),
-        state: if port_open {
+        state: if endpoint_open {
             State::Running
         } else {
             State::Unhealthy
@@ -124,9 +121,27 @@ fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus, OrchestratorEr
 }
 
 /// Read the recorded endpoint as optional status metadata.
-fn listen_addr_for(state_dir: &Path, name: &str) -> Option<SocketAddr> {
-    let text = std::fs::read_to_string(state_dir.join(format!("{name}.listen"))).ok()?;
-    text.trim().parse().ok()
+fn listen_addr_for(state_dir: &Path, name: &str) -> Option<ComponentEndpoint> {
+    let mut text = std::fs::read_to_string(state_dir.join(format!("{name}.listen"))).ok()?;
+    if !text.ends_with('\n') {
+        return None;
+    }
+    text.pop();
+    let endpoint = text.parse::<ComponentEndpoint>().ok()?;
+    (endpoint.to_string() == text).then_some(endpoint)
+}
+
+fn endpoint_is_connectable(endpoint: &ComponentEndpoint) -> bool {
+    match endpoint {
+        ComponentEndpoint::Tcp(addr) => {
+            std::net::TcpStream::connect_timeout(addr, CONNECT_ATTEMPT_TIMEOUT).is_ok()
+        }
+        #[cfg(unix)]
+        ComponentEndpoint::Unix(path) => crate::unix_connect::connect_with_timeout(
+            path.as_path().as_std_path(),
+            CONNECT_ATTEMPT_TIMEOUT,
+        ),
+    }
 }
 
 /// Approximate uptime from pidfile age rather than process creation time.
