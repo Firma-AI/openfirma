@@ -17,13 +17,17 @@ use firma_process_orchestrator::{
     spawn_stack_from_plan,
 };
 use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-use windows_sys::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+};
 
 const COMPONENT: &str = "FIRMA_TEST_WINDOWS_STOP_COMPONENT";
 const READY: &str = "FIRMA_TEST_WINDOWS_STOP_READY";
 const SIDECAR_STOPPING: &str = "FIRMA_TEST_WINDOWS_SIDECAR_STOPPING";
 const SIDECAR_RELEASE: &str = "FIRMA_TEST_WINDOWS_SIDECAR_RELEASE";
 const SIDECAR_EXITED: &str = "FIRMA_TEST_WINDOWS_SIDECAR_EXITED";
+const SIDECAR_STUCK: &str = "FIRMA_TEST_WINDOWS_SIDECAR_STUCK";
+const SIDECAR_DESCENDANT: &str = "FIRMA_TEST_WINDOWS_SIDECAR_DESCENDANT";
 const AUTHORITY_SIGNAL: &str = "FIRMA_TEST_WINDOWS_AUTHORITY_SIGNAL";
 
 #[test]
@@ -32,13 +36,16 @@ fn authority_is_not_signalled_until_sidecar_is_collected() {
     let sidecar_stopping = dir.path().join("sidecar-stopping");
     let sidecar_release = dir.path().join("release-sidecar");
     let sidecar_exited = dir.path().join("sidecar-exited");
+    let sidecar_descendant = dir.path().join("sidecar-descendant");
     let authority_signal = dir.path().join("authority-signal");
     let mut stack = spawn_ordered_stack(
         dir.path(),
         &sidecar_stopping,
         &sidecar_release,
         &sidecar_exited,
+        &sidecar_descendant,
         &authority_signal,
+        false,
     );
 
     let release_thread = std::thread::spawn({
@@ -65,12 +72,74 @@ fn authority_is_not_signalled_until_sidecar_is_collected() {
     assert!(!outcome.forced, "graceful shutdown escalated unexpectedly");
 }
 
+#[test]
+fn forced_sidecar_job_termination_does_not_kill_authority() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let sidecar_stopping = dir.path().join("sidecar-stopping");
+    let sidecar_release = dir.path().join("unused-sidecar-release");
+    let sidecar_exited = dir.path().join("sidecar-exited");
+    let sidecar_descendant = dir.path().join("sidecar-descendant");
+    let authority_signal = dir.path().join("authority-signal");
+    let mut stack = spawn_ordered_stack(
+        dir.path(),
+        &sidecar_stopping,
+        &sidecar_release,
+        &sidecar_exited,
+        &sidecar_descendant,
+        &authority_signal,
+        true,
+    );
+
+    wait_for_file(&sidecar_descendant);
+    let descendant_pid = std::fs::read_to_string(&sidecar_descendant)
+        .expect("read Sidecar descendant PID")
+        .trim()
+        .parse()
+        .expect("parse Sidecar descendant PID");
+    let descendant = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, descendant_pid) };
+    assert!(!descendant.is_null(), "open Sidecar descendant process");
+
+    let observation_thread = std::thread::spawn({
+        let authority_signal = authority_signal.clone();
+        move || {
+            wait_for_file(&sidecar_stopping);
+            assert!(
+                !authority_signal.exists(),
+                "authority was signalled while the stuck Sidecar remained alive"
+            );
+        }
+    });
+
+    let outcome = stack
+        .shutdown(Duration::from_secs(1))
+        .expect("forced ordered shutdown");
+    observation_thread.join().expect("join observation thread");
+    let descendant_wait = unsafe { WaitForSingleObject(descendant, 0) };
+    unsafe { CloseHandle(descendant) };
+
+    assert!(outcome.forced, "stuck Sidecar did not require escalation");
+    assert_eq!(
+        descendant_wait, WAIT_OBJECT_0,
+        "Sidecar Job termination left its descendant alive"
+    );
+    assert_eq!(
+        std::fs::read_to_string(authority_signal).expect("read Authority signal marker"),
+        "isolated"
+    );
+    assert!(
+        !sidecar_exited.exists(),
+        "stuck Sidecar unexpectedly completed graceful shutdown"
+    );
+}
+
 fn spawn_ordered_stack(
     state_dir: &Path,
     sidecar_stopping: &Path,
     sidecar_release: &Path,
     sidecar_exited: &Path,
+    sidecar_descendant: &Path,
     authority_signal: &Path,
+    stuck_sidecar: bool,
 ) -> RunningStack {
     let topology = StackTopology::new(["authority", "sidecar"]).expect("fixture topology");
     let listeners = [reserve_listener(), reserve_listener()];
@@ -93,11 +162,15 @@ fn spawn_ordered_stack(
                 command
                     .env(SIDECAR_STOPPING, sidecar_stopping)
                     .env(SIDECAR_RELEASE, sidecar_release)
-                    .env(SIDECAR_EXITED, sidecar_exited);
+                    .env(SIDECAR_EXITED, sidecar_exited)
+                    .env(SIDECAR_DESCENDANT, sidecar_descendant);
             } else {
                 command
                     .env(SIDECAR_EXITED, sidecar_exited)
                     .env(AUTHORITY_SIGNAL, authority_signal);
+            }
+            if stuck_sidecar {
+                command.env(SIDECAR_STUCK, "1");
             }
             let spec = ComponentSpec {
                 command,
@@ -120,6 +193,26 @@ fn spawn_ordered_stack(
 #[test]
 #[ignore = "spawned as a process-lifecycle fixture"]
 fn managed_component_fixture() {
+    if std::env::var(COMPONENT).as_deref() == Ok("sidecar-descendant") {
+        loop {
+            std::thread::park();
+        }
+    }
+
+    let _descendant = if std::env::var(COMPONENT).as_deref() == Ok("sidecar")
+        && std::env::var_os(SIDECAR_STUCK).is_some()
+    {
+        let child = fixture_command()
+            .env(COMPONENT, "sidecar-descendant")
+            .spawn()
+            .expect("spawn Sidecar descendant");
+        std::fs::write(required_path(SIDECAR_DESCENDANT), child.id().to_string())
+            .expect("publish Sidecar descendant PID");
+        Some(child)
+    } else {
+        None
+    };
+
     let event_name =
         firma_process_orchestrator::shutdown_event::windows_shutdown_event_name(std::process::id());
     let wide: Vec<u16> = OsStr::new(&event_name)
@@ -137,11 +230,18 @@ fn managed_component_fixture() {
     match std::env::var(COMPONENT).as_deref() {
         Ok("sidecar") => {
             std::fs::write(required_path(SIDECAR_STOPPING), []).expect("mark Sidecar stopping");
+            if std::env::var_os(SIDECAR_STUCK).is_some() {
+                loop {
+                    std::thread::park();
+                }
+            }
             wait_for_file(&required_path(SIDECAR_RELEASE));
             std::fs::write(required_path(SIDECAR_EXITED), []).expect("mark Sidecar exited");
         }
         Ok("authority") => {
-            let ordering = if required_path(SIDECAR_EXITED).exists() {
+            let ordering = if std::env::var_os(SIDECAR_STUCK).is_some() {
+                "isolated"
+            } else if required_path(SIDECAR_EXITED).exists() {
                 "ordered"
             } else {
                 "overlap"
