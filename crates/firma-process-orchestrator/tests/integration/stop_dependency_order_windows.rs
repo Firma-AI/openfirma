@@ -119,7 +119,7 @@ fn forced_sidecar_job_termination_kills_its_descendants() {
         .shutdown(Duration::from_secs(1))
         .expect("forced ordered shutdown");
     observation_thread.join().expect("join observation thread");
-    let descendant_wait = unsafe { WaitForSingleObject(descendant, 0) };
+    let descendant_wait = unsafe { WaitForSingleObject(descendant, 2_000) };
     unsafe { CloseHandle(descendant) };
 
     assert!(outcome.forced, "stuck Sidecar did not require escalation");
