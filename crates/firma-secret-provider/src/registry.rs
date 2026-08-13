@@ -91,7 +91,7 @@ fn bws_spec() -> CliIntegrationSpec {
         binary_name: String::from("bws"),
         provider_id: String::from("bitwarden"),
         credential_env_vars: vec![String::from("BWS_ACCESS_TOKEN")],
-        skip_flags: vec![],
+        skip_options: vec![],
         // `--server-url` (short `-u`) redirects the CLI at an arbitrary
         // server, which would send `BWS_ACCESS_TOKEN` to a host of the
         // agent's choosing on the very next request — rejected
@@ -113,7 +113,7 @@ fn bws_spec() -> CliIntegrationSpec {
         // its own required, then pass `--config-file`/`-f` to an
         // otherwise-permitted command — so this must be forbidden too,
         // clap-concatenated short form included.
-        forbidden_flags: vec![
+        forbidden_options: vec![
             FlagSpec::value("--server-url"),
             FlagSpec::attached_value("-u"),
             FlagSpec::value("--config-file"),
@@ -185,8 +185,8 @@ fn bws_spec() -> CliIntegrationSpec {
                 // (e.g. `-otsv`); its attached-value entry closes that gap, so
                 // an unstripped `-otsv` can't survive alongside the forced
                 // `--output json` and skew or defeat it.
-                remove_flags: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
-                append_args: vec![String::from("--output"), String::from("json")],
+                skip_options: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
+                append_options: vec![String::from("--output"), String::from("json")],
             }),
             MatcherRule::SensitiveCommand(CommandAndMatcher {
                 command: CommandPattern::prefix(non_empty_vec![
@@ -202,8 +202,8 @@ fn bws_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                remove_flags: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
-                append_args: vec![String::from("--output"), String::from("json")],
+                skip_options: vec![FlagSpec::value("--output"), FlagSpec::attached_value("-o")],
+                append_options: vec![String::from("--output"), String::from("json")],
             }),
             // `project list`/`project get` return only project
             // id/name/organizationId — no secret material — so they pass
@@ -225,7 +225,7 @@ fn op_spec() -> CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
         credential_env_vars: vec![String::from("OP_SERVICE_ACCOUNT_TOKEN")],
-        skip_flags: vec![],
+        skip_options: vec![],
         // `op` has no documented flag that sets an API host directly — a
         // service-account token is generally understood to be self-routing
         // (it authenticates against 1Password's own cloud API regardless of
@@ -236,7 +236,7 @@ fn op_spec() -> CliIntegrationSpec {
         // service-account auth. Given that uncertainty, `--config` is
         // stripped defensively rather than assumed safe — same fail-closed
         // bias as the rest of this registry.
-        forbidden_flags: vec![FlagSpec::value("--config")],
+        forbidden_options: vec![FlagSpec::value("--config")],
         matchers: vec![
             // Prints the raw secret as plain text, not JSON.
             MatcherRule::BlockedCommand(CommandPattern::prefix(non_empty_vec![String::from(
@@ -313,8 +313,8 @@ fn op_spec() -> CliIntegrationSpec {
                         scope: SecretJsonSelectorScope::Document,
                     }),
                 },
-                remove_flags: vec![FlagSpec::value("--format")],
-                append_args: vec![String::from("--format"), String::from("json")],
+                skip_options: vec![FlagSpec::value("--format")],
+                append_options: vec![String::from("--format"), String::from("json")],
             }),
             // `whoami`/`account list`/`vault list`/`item list` return
             // account, vault, or item metadata (ids, titles, categories)
@@ -351,7 +351,7 @@ fn vault_spec() -> CliIntegrationSpec {
         // Namespace selects a logical tenant on the same Vault server. It is
         // retained for execution, but its value must not be mistaken for a
         // command word when it appears before or between subcommands.
-        skip_flags: vec![
+        skip_options: vec![
             FlagSpec::value("-namespace"),
             FlagSpec::value("--namespace"),
         ],
@@ -371,7 +371,7 @@ fn vault_spec() -> CliIntegrationSpec {
         // regardless of which rule below matches. `-tls-skip-verify` takes
         // no value at all, so the following secret path is not consumed as
         // though it were the flag's value.
-        forbidden_flags: vec![
+        forbidden_options: vec![
             FlagSpec::value("-address"),
             FlagSpec::value("--address"),
             FlagSpec::valueless("-tls-skip-verify"),
@@ -464,8 +464,8 @@ fn vault_spec() -> CliIntegrationSpec {
                 },
                 // Strip any -format/-format= flag and force JSON, regardless
                 // of what the agent requested.
-                remove_flags: vec![FlagSpec::value("-format"), FlagSpec::value("--format")],
-                append_args: vec![String::from("-format"), String::from("json")],
+                skip_options: vec![FlagSpec::value("-format"), FlagSpec::value("--format")],
+                append_options: vec![String::from("-format"), String::from("json")],
             }),
             // `kv list`/`list`/`status`/`policy list` return key names,
             // path listings, or cluster/policy metadata — no secret
@@ -492,7 +492,7 @@ fn doppler_spec() -> CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),
         credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
-        skip_flags: vec![],
+        skip_options: vec![],
         // `--api-host` redirects the CLI at an arbitrary API host, which
         // would send `DOPPLER_TOKEN` there on the next request;
         // `--no-verify-tls` disables TLS certificate verification, letting
@@ -509,7 +509,7 @@ fn doppler_spec() -> CliIntegrationSpec {
         // and point an otherwise-permitted command at it, with no `doppler`
         // invocation of its own required to set it up first. No documented
         // short alias, per the CLI's own `root.go` flag registration.
-        forbidden_flags: vec![
+        forbidden_options: vec![
             FlagSpec::value("--api-host"),
             FlagSpec::valueless("--no-verify-tls"),
             FlagSpec::value("--config-dir"),
@@ -611,7 +611,7 @@ fn doppler_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                remove_flags: vec![
+                skip_options: vec![
                     FlagSpec::value("--format"),
                     FlagSpec::value("--fallback"),
                     FlagSpec::value("--fallback-passphrase"),
@@ -619,7 +619,7 @@ fn doppler_spec() -> CliIntegrationSpec {
                     FlagSpec::valueless("--fallback-readonly"),
                     FlagSpec::valueless("--offline"),
                 ],
-                append_args: vec![
+                append_options: vec![
                     String::from("--format"),
                     String::from("json"),
                     String::from("--no-file"),
@@ -662,8 +662,8 @@ fn doppler_spec() -> CliIntegrationSpec {
                     item_selector: None,
                     domain_selector: None,
                 },
-                remove_flags: vec![FlagSpec::valueless("--json"), FlagSpec::valueless("--raw")],
-                append_args: vec![String::from("--json")],
+                skip_options: vec![FlagSpec::valueless("--json"), FlagSpec::valueless("--raw")],
+                append_options: vec![String::from("--json")],
             }),
             // `me`/`projects list`/`environments list`/`configs list`
             // return account or project/environment/config metadata — no

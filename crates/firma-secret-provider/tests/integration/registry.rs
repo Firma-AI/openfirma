@@ -19,13 +19,13 @@ fn command(words: &[&str], match_kind: CommandMatch) -> Result<CommandPattern, E
 }
 
 #[test]
-fn cli_schema_has_readable_explicit_flag_toml() {
+fn cli_schema_has_readable_explicit_option_toml() {
     let input = r#"
 binary_name = "bws"
 provider_id = "bitwarden"
 credential_env_vars = ["BWS_ACCESS_TOKEN"]
-skip_flags = [{ name = "--organization-id", takes_value = true }]
-forbidden_flags = [
+skip_options = [{ name = "--organization-id", takes_value = true }]
+forbidden_options = [
   { name = "--server-url", takes_value = true },
   { name = "-u", takes_value = true, allow_attached_value = true },
   { name = "--quiet", takes_value = false },
@@ -35,8 +35,8 @@ forbidden_flags = [
 type = "sensitive_command"
 argv = ["secret", "get"]
 match = "prefix"
-remove_flags = [{ name = "--output", takes_value = true }]
-append_args = ["--output", "json"]
+skip_options = [{ name = "--output", takes_value = true }]
+append_options = ["--output", "json"]
 
 [matchers.matcher]
 type = "json"
@@ -50,9 +50,12 @@ path = "$.key"
 
     let spec: CliIntegrationSpec =
         toml::from_str(input).unwrap_or_else(|error| panic!("valid CLI schema TOML: {error}"));
-    assert_eq!(spec.skip_flags, vec![FlagSpec::value("--organization-id")]);
     assert_eq!(
-        spec.forbidden_flags,
+        spec.skip_options,
+        vec![FlagSpec::value("--organization-id")]
+    );
+    assert_eq!(
+        spec.forbidden_options,
         vec![
             FlagSpec::value("--server-url"),
             FlagSpec::attached_value("-u"),
@@ -68,47 +71,20 @@ path = "$.key"
 }
 
 #[test]
-fn cli_schema_rejects_invalid_flag_definitions() {
-    let invalid_flags = [
+fn cli_schema_rejects_invalid_option_definitions() {
+    let invalid_options = [
         r#""""#,
         r#"{"name":"","takes_value":true}"#,
         r#"{"name":"--quiet","takes_value":false,"allow_attached_value":true}"#,
         r#"{"names":["-u"],"takes_value":true,"attached_value_names":["-u"]}"#,
     ];
 
-    for invalid_flag in invalid_flags {
-        let Err(error) = serde_json::from_str::<FlagSpec>(invalid_flag) else {
-            panic!("invalid flag definition must not deserialize: {invalid_flag}");
+    for invalid_option in invalid_options {
+        let Err(error) = serde_json::from_str::<FlagSpec>(invalid_option) else {
+            panic!("invalid option definition must not deserialize: {invalid_option}");
         };
         assert_eq!(error.classify(), serde_json::error::Category::Data);
     }
-}
-
-#[test]
-fn old_cli_rewrite_fields_are_not_silently_accepted() {
-    let old_rule = r#"
-binary_name = "example"
-provider_id = "example"
-credential_env_vars = []
-
-[[matchers]]
-type = "sensitive_command"
-args_match = ["secret", "get"]
-strip_arg_flags = ["--format"]
-forced_args = ["--format", "json"]
-
-[matchers.matcher]
-type = "regex"
-pattern = "(?P<name>.+)=(?P<value>.+)"
-"#;
-
-    let Err(error) = toml::from_str::<CliIntegrationSpec>(old_rule) else {
-        panic!("old CLI rewrite fields must not deserialize successfully");
-    };
-    assert!(
-        error.span().is_some(),
-        "TOML error should identify its source span"
-    );
 }
 
 fn builtin_matcher(binary: &str, command_args: &[&str]) -> Result<CompiledMatcher, String> {
@@ -307,14 +283,14 @@ fn unrecognized_invocation_falls_back_to_blocked() {
 }
 
 #[test]
-fn command_matching_skips_declared_flags_and_their_values() -> Result<(), EmptyError> {
+fn command_matching_skips_declared_options_and_their_values() -> Result<(), EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
     registry.push(CliIntegrationSpec {
         binary_name: String::from("synthetic"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        skip_flags: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
-        forbidden_flags: vec![],
+        skip_options: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
+        forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(&["get", "secret"], CommandMatch::Exact)?,
             matcher: SecretMatcher::Json {
@@ -326,13 +302,13 @@ fn command_matching_skips_declared_flags_and_their_values() -> Result<(), EmptyE
                 item_selector: None,
                 domain_selector: None,
             },
-            remove_flags: vec![],
-            append_args: vec![],
+            skip_options: vec![],
+            append_options: vec![],
         })],
     });
     let spec = registry.for_binary("synthetic").expect("synthetic spec");
 
-    // A declared valueless flag, and a declared flag-value pair between the
+    // A declared valueless option, and a declared option-value pair between the
     // command words, must not break the match.
     let matches: &[&[&str]] = &[
         &["get", "secret"],
@@ -413,8 +389,8 @@ fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
         binary_name: String::from("bws"),
         provider_id: String::from("custom"),
         credential_env_vars: vec![],
-        skip_flags: vec![],
-        forbidden_flags: vec![],
+        skip_options: vec![],
+        forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(&["secret"], CommandMatch::Prefix)?,
             matcher: SecretMatcher::Json {
@@ -426,8 +402,8 @@ fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
                 item_selector: None,
                 domain_selector: None,
             },
-            remove_flags: vec![],
-            append_args: vec![],
+            skip_options: vec![],
+            append_options: vec![],
         })],
     });
     let spec = registry.for_binary("bws").expect("bws spec after push");
@@ -909,14 +885,14 @@ fn builtins_reject_backend_override_flags_on_safe_commands() {
 }
 
 #[test]
-fn rewrite_args_leaves_args_untouched_when_no_remove_flags_configured() -> Result<(), EmptyError> {
+fn rewrite_args_leaves_args_untouched_when_no_skip_options_configured() -> Result<(), EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
     registry.push(CliIntegrationSpec {
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        skip_flags: vec![],
-        forbidden_flags: vec![],
+        skip_options: vec![],
+        forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(&["secret", "get"], CommandMatch::Prefix)?,
             matcher: SecretMatcher::Json {
@@ -928,8 +904,8 @@ fn rewrite_args_leaves_args_untouched_when_no_remove_flags_configured() -> Resul
                 item_selector: None,
                 domain_selector: None,
             },
-            remove_flags: vec![],
-            append_args: vec![],
+            skip_options: vec![],
+            append_options: vec![],
         })],
     });
     let spec = registry.for_binary("foo").expect("foo spec");
@@ -940,20 +916,20 @@ fn rewrite_args_leaves_args_untouched_when_no_remove_flags_configured() -> Resul
 }
 
 /// Builds a registry with one custom sensitive command, for pinning
-/// [`CliIntegrationSpec::rewrite_args`]'s flag-stripping behavior in
+/// [`CliIntegrationSpec::rewrite_args`]'s option-stripping behavior in
 /// isolation from any built-in's other rules.
-fn registry_with_remove_flags(
+fn registry_with_skip_options(
     command_words: &[&str],
-    remove_flags: Vec<FlagSpec>,
-    append_args: Vec<String>,
+    skip_options: Vec<FlagSpec>,
+    append_options: Vec<String>,
 ) -> Result<IntegrationRegistry, EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
     registry.push(CliIntegrationSpec {
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        skip_flags: vec![],
-        forbidden_flags: vec![],
+        skip_options: vec![],
+        forbidden_options: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(command_words, CommandMatch::Prefix)?,
             matcher: SecretMatcher::Json {
@@ -965,17 +941,17 @@ fn registry_with_remove_flags(
                 item_selector: None,
                 domain_selector: None,
             },
-            remove_flags,
-            append_args,
+            skip_options,
+            append_options,
         })],
     });
     Ok(registry)
 }
 
 #[test]
-fn valueless_remove_flag_preserves_following_flags_and_positionals() -> Result<(), EmptyError> {
+fn valueless_skip_option_preserves_following_options_and_positionals() -> Result<(), EmptyError> {
     let registry =
-        registry_with_remove_flags(&["cmd"], vec![FlagSpec::valueless("--bool-flag")], vec![])?;
+        registry_with_skip_options(&["cmd"], vec![FlagSpec::valueless("--bool-flag")], vec![])?;
     let spec = registry.for_binary("foo").expect("foo spec");
 
     assert_eq!(
@@ -988,8 +964,8 @@ fn valueless_remove_flag_preserves_following_flags_and_positionals() -> Result<(
 }
 
 #[test]
-fn valueless_remove_flag_preserves_following_command_word() -> Result<(), EmptyError> {
-    let registry = registry_with_remove_flags(
+fn valueless_skip_option_preserves_following_command_word() -> Result<(), EmptyError> {
+    let registry = registry_with_skip_options(
         &["secrets", "download"],
         vec![FlagSpec::valueless("--offline")],
         vec![String::from("--no-fallback")],
@@ -1004,7 +980,7 @@ fn valueless_remove_flag_preserves_following_command_word() -> Result<(), EmptyE
 #[test]
 fn doppler_secrets_download_rewrite_keeps_download_when_offline_precedes_it() {
     // Same scenario as above, against the real built-in doppler spec:
-    // Command matching tolerates a declared flag placed between `secrets`
+    // Command matching tolerates a declared option placed between `secrets`
     // and `download`, so this invocation resolves to the download matcher.
     // `rewrite_args`
     // must keep executing that same subcommand rather than silently
@@ -1032,8 +1008,8 @@ fn doppler_secrets_download_rewrite_keeps_download_when_offline_precedes_it() {
 }
 
 #[test]
-fn value_taking_remove_flag_consumes_a_value_that_looks_like_a_flag() -> Result<(), EmptyError> {
-    let registry = registry_with_remove_flags(
+fn value_taking_skip_option_consumes_a_value_that_looks_like_an_option() -> Result<(), EmptyError> {
+    let registry = registry_with_skip_options(
         &["cmd"],
         vec![FlagSpec::value("--fallback-passphrase")],
         vec![],
@@ -1046,8 +1022,8 @@ fn value_taking_remove_flag_consumes_a_value_that_looks_like_a_flag() -> Result<
 }
 
 #[test]
-fn valueless_remove_flag_does_not_consume_following_positional() -> Result<(), EmptyError> {
-    let registry = registry_with_remove_flags(
+fn valueless_skip_option_does_not_consume_following_positional() -> Result<(), EmptyError> {
+    let registry = registry_with_skip_options(
         &["cmd"],
         vec![FlagSpec::valueless("--valueless-flag")],
         vec![],
@@ -1060,8 +1036,8 @@ fn valueless_remove_flag_does_not_consume_following_positional() -> Result<(), E
 }
 
 #[test]
-fn rewrite_args_concatenated_short_flag_value_is_stripped() -> Result<(), EmptyError> {
-    let registry = registry_with_remove_flags(
+fn rewrite_args_concatenated_short_option_value_is_stripped() -> Result<(), EmptyError> {
+    let registry = registry_with_skip_options(
         &["cmd"],
         vec![
             FlagSpec::value("--server-url"),
@@ -1105,8 +1081,8 @@ fn rewrite_args_concatenated_short_flag_value_is_stripped() -> Result<(), EmptyE
 }
 
 #[test]
-fn flags_after_end_of_options_are_not_removed_or_forbidden() -> Result<(), EmptyError> {
-    let registry = registry_with_remove_flags(
+fn options_after_end_of_options_are_not_removed_or_forbidden() -> Result<(), EmptyError> {
+    let registry = registry_with_skip_options(
         &["cmd"],
         vec![FlagSpec::value("--format")],
         vec![String::from("--format=json")],

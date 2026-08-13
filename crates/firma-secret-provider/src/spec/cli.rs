@@ -1,9 +1,9 @@
 use super::{MatcherRule, MatchingResolution, NonEmptyVec, SecretMatcher};
 
+/// A command-classification rule for a CLI secret provider.
 pub type CliMatcherRule = MatcherRule<CommandAndMatcher, CommandPattern>;
 
-/// A command-line flag or value-taking option that a CLI integration needs to
-/// recognize.
+/// A command-line option that a CLI integration needs to recognize.
 ///
 /// ```toml
 /// { name = "--format", takes_value = true }
@@ -12,9 +12,9 @@ pub type CliMatcherRule = MatcherRule<CommandAndMatcher, CommandPattern>;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FlagSpec {
-    /// The flag's spelling, such as `--server-url` or `-u`.
+    /// The option's spelling, such as `--server-url` or `-u`.
     pub name: String,
-    /// Whether the flag consumes a value.
+    /// Whether the option consumes the following argument as its value.
     pub takes_value: bool,
     /// Whether the spelling accepts an attached value without `=`, such as
     /// `-uhttps://example.com`.
@@ -38,7 +38,7 @@ impl<'de> serde::Deserialize<'de> for FlagSpec {
 
         let raw = RawFlagSpec::deserialize(deserializer)?;
         if raw.name.is_empty() {
-            return Err(serde::de::Error::custom("flag name must not be empty"));
+            return Err(serde::de::Error::custom("option name must not be empty"));
         }
         if !raw.takes_value && raw.allow_attached_value {
             return Err(serde::de::Error::custom(
@@ -55,6 +55,8 @@ impl<'de> serde::Deserialize<'de> for FlagSpec {
 }
 
 impl FlagSpec {
+    /// Creates a specification for an option whose value is a separate
+    /// argument or follows `=`.
     #[must_use]
     pub fn value(name: &str) -> Self {
         Self {
@@ -64,6 +66,7 @@ impl FlagSpec {
         }
     }
 
+    /// Creates a specification for an option that takes no value.
     #[must_use]
     pub fn valueless(name: &str) -> Self {
         Self {
@@ -73,6 +76,8 @@ impl FlagSpec {
         }
     }
 
+    /// Creates a specification for an option that also accepts a value
+    /// attached directly to its name.
     #[must_use]
     pub fn attached_value(name: &str) -> Self {
         Self {
@@ -87,7 +92,7 @@ impl FlagSpec {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandMatch {
-    /// Only the listed command words may occur. Flags may be interspersed.
+    /// Only the listed command words may occur. Options may be interspersed.
     Exact,
     /// Additional positional arguments may follow the listed command words.
     #[default]
@@ -99,24 +104,30 @@ pub enum CommandMatch {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CliIntegrationSpec {
+    /// Executable basename used to select this integration.
     pub binary_name: String,
+    /// Stable identifier recorded for secrets from this integration.
     pub provider_id: String,
+    /// Environment variables forwarded to authenticate the provider CLI.
     pub credential_env_vars: Vec<String>,
-    /// Flags to skip while identifying command words. Their value arity is
-    /// honored, and the flags remain unchanged in the executed command.
+    /// Options ignored while identifying command words. Their value arity is
+    /// honored, and the options remain unchanged in the executed command.
     #[serde(default)]
-    pub skip_flags: Vec<FlagSpec>,
-    /// Flags that make an otherwise permitted invocation unsafe. An
+    pub skip_options: Vec<FlagSpec>,
+    /// Options that make an otherwise permitted invocation unsafe. An
     /// invocation containing one is blocked rather than silently changed.
     #[serde(default)]
-    pub forbidden_flags: Vec<FlagSpec>,
+    pub forbidden_options: Vec<FlagSpec>,
+    /// Rules that classify invocations and configure secret extraction.
     pub matchers: Vec<CliMatcherRule>,
 }
 
 impl CliIntegrationSpec {
+    /// Classifies an invocation as sensitive, safe to pass through, or
+    /// blocked. Malformed recognized options fail closed.
     #[must_use]
     pub fn resolve_args(&self, args: &[String]) -> MatchingResolution<'_> {
-        if contains_any_flag(args, &self.forbidden_flags) {
+        if contains_any_option(args, &self.forbidden_options) {
             return MatchingResolution::Blocked;
         }
 
@@ -125,7 +136,7 @@ impl CliIntegrationSpec {
             .iter()
             .filter_map(MatcherRule::as_blocked_command)
             .any(|rule| {
-                rule.match_args(args, &self.skip_flags, &[]) != CommandMatchResult::DoesNotMatch
+                rule.match_args(args, &self.skip_options, &[]) != CommandMatchResult::DoesNotMatch
             })
         {
             return MatchingResolution::Blocked;
@@ -138,7 +149,7 @@ impl CliIntegrationSpec {
         {
             match rule
                 .command
-                .match_args(args, &self.skip_flags, &rule.remove_flags)
+                .match_args(args, &self.skip_options, &rule.skip_options)
             {
                 CommandMatchResult::Matches => {
                     return MatchingResolution::Matcher(&rule.matcher);
@@ -153,7 +164,7 @@ impl CliIntegrationSpec {
             .iter()
             .filter_map(MatcherRule::as_safe_command)
         {
-            match rule.match_args(args, &self.skip_flags, &[]) {
+            match rule.match_args(args, &self.skip_options, &[]) {
                 CommandMatchResult::Matches => return MatchingResolution::PassThrough,
                 CommandMatchResult::Malformed => return MatchingResolution::Blocked,
                 CommandMatchResult::DoesNotMatch => {}
@@ -163,7 +174,7 @@ impl CliIntegrationSpec {
         MatchingResolution::Blocked
     }
 
-    /// Normalizes a sensitive command's output arguments. Forbidden flags are
+    /// Normalizes a sensitive command's output options. Forbidden options are
     /// handled by [`Self::resolve_args`] and are never silently removed.
     #[must_use]
     pub fn rewrite_args(&self, args: &[String]) -> Vec<String> {
@@ -173,41 +184,47 @@ impl CliIntegrationSpec {
             .filter_map(MatcherRule::as_sensitive_command)
             .find(|rule| {
                 rule.command
-                    .match_args(args, &self.skip_flags, &rule.remove_flags)
+                    .match_args(args, &self.skip_options, &rule.skip_options)
                     == CommandMatchResult::Matches
             })
         else {
             return args.to_vec();
         };
 
-        let mut rewritten = remove_flags(args, &rule.remove_flags);
+        let mut rewritten = remove_options(args, &rule.skip_options);
         let insertion_index = rewritten
             .iter()
             .position(|arg| arg == "--")
             .unwrap_or(rewritten.len());
         rewritten.splice(
             insertion_index..insertion_index,
-            rule.append_args.iter().cloned(),
+            rule.append_options.iter().cloned(),
         );
         rewritten
     }
 }
 
+/// A sensitive command pattern together with its extraction and output
+/// normalization policy.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandAndMatcher {
+    /// Pattern used to identify the command.
     #[serde(flatten)]
     pub command: CommandPattern,
+    /// Matcher used to extract secrets from the normalized output.
     pub matcher: SecretMatcher,
-    /// Output-shaping flags removed before [`Self::append_args`] is applied.
+    /// Output-shaping options skipped during matching and removed before
+    /// [`Self::append_options`] is applied.
     #[serde(default)]
-    pub remove_flags: Vec<FlagSpec>,
-    /// Arguments added to normalize output into the matcher's expected form.
+    pub skip_options: Vec<FlagSpec>,
+    /// Options and values added to normalize output into the expected form.
     /// They are inserted before an end-of-options (`--`) marker when present.
     #[serde(default)]
-    pub append_args: Vec<String>,
+    pub append_options: Vec<String>,
 }
 
+/// Command words and the rule for matching trailing positional arguments.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandPattern {
@@ -219,6 +236,7 @@ pub struct CommandPattern {
 }
 
 impl CommandPattern {
+    /// Creates a pattern that accepts trailing positional arguments.
     #[must_use]
     pub fn prefix(argv: NonEmptyVec<String>) -> Self {
         Self {
@@ -227,6 +245,7 @@ impl CommandPattern {
         }
     }
 
+    /// Creates a pattern that accepts only the listed command words.
     #[must_use]
     pub fn exact(argv: NonEmptyVec<String>) -> Self {
         Self {
@@ -238,10 +257,16 @@ impl CommandPattern {
     fn match_args(
         &self,
         args: &[String],
-        skip_flags: &[FlagSpec],
-        remove_flags: &[FlagSpec],
+        integration_options: &[FlagSpec],
+        command_options: &[FlagSpec],
     ) -> CommandMatchResult {
-        command_matches(args, &self.argv, self.match_kind, skip_flags, remove_flags)
+        command_matches(
+            args,
+            &self.argv,
+            self.match_kind,
+            integration_options,
+            command_options,
+        )
     }
 }
 
@@ -252,23 +277,23 @@ enum CommandMatchResult {
     Malformed,
 }
 
-fn contains_any_flag(args: &[String], flags: &[FlagSpec]) -> bool {
+fn contains_any_option(args: &[String], options: &[FlagSpec]) -> bool {
     args.iter()
         .take_while(|arg| arg.as_str() != "--")
-        .any(|arg| flags.iter().any(|flag| match_flag_token(arg, flag)))
+        .any(|arg| options.iter().any(|option| match_option_token(arg, option)))
 }
 
-fn match_flag_token(arg: &str, flag: &FlagSpec) -> bool {
-    let name = &flag.name;
+fn match_option_token(arg: &str, option: &FlagSpec) -> bool {
+    let name = &option.name;
     arg == name
         || arg
             .strip_prefix(name)
             .is_some_and(|rest| rest.starts_with('='))
-        || (flag.allow_attached_value
+        || (option.allow_attached_value
             && arg.strip_prefix(name).is_some_and(|rest| !rest.is_empty()))
 }
 
-fn remove_flags(args: &[String], flags: &[FlagSpec]) -> Vec<String> {
+fn remove_options(args: &[String], options: &[FlagSpec]) -> Vec<String> {
     let mut rewritten = Vec::with_capacity(args.len());
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -278,15 +303,18 @@ fn remove_flags(args: &[String], flags: &[FlagSpec]) -> Vec<String> {
             break;
         }
 
-        let Some(flag) = flags.iter().find(|flag| match_flag_token(arg, flag)) else {
+        let Some(option) = options
+            .iter()
+            .find(|option| match_option_token(arg, option))
+        else {
             rewritten.push(arg.clone());
             continue;
         };
 
-        let has_embedded_value = arg.strip_prefix(&flag.name).is_some_and(|rest| {
-            rest.starts_with('=') || (!rest.is_empty() && flag.allow_attached_value)
+        let has_embedded_value = arg.strip_prefix(&option.name).is_some_and(|rest| {
+            rest.starts_with('=') || (!rest.is_empty() && option.allow_attached_value)
         });
-        if flag.takes_value && !has_embedded_value {
+        if option.takes_value && !has_embedded_value {
             iter.next();
         }
     }
@@ -297,8 +325,8 @@ fn command_matches(
     args: &[String],
     command: &[String],
     match_kind: CommandMatch,
-    skip_flags: &[FlagSpec],
-    remove_flags: &[FlagSpec],
+    integration_options: &[FlagSpec],
+    command_options: &[FlagSpec],
 ) -> CommandMatchResult {
     let mut words = Vec::new();
     let mut iter = args.iter();
@@ -311,15 +339,15 @@ fn command_matches(
         }
 
         if !options_ended
-            && let Some(flag) = skip_flags
+            && let Some(option) = integration_options
                 .iter()
-                .chain(remove_flags)
-                .find(|flag| match_flag_token(arg, flag))
+                .chain(command_options)
+                .find(|option| match_option_token(arg, option))
         {
-            let has_embedded_value = arg.strip_prefix(&flag.name).is_some_and(|rest| {
-                rest.starts_with('=') || (!rest.is_empty() && flag.allow_attached_value)
+            let has_embedded_value = arg.strip_prefix(&option.name).is_some_and(|rest| {
+                rest.starts_with('=') || (!rest.is_empty() && option.allow_attached_value)
             });
-            if flag.takes_value && !has_embedded_value {
+            if option.takes_value && !has_embedded_value {
                 match iter.next() {
                     Some(value) if value != "--" => {}
                     Some(_) => {
