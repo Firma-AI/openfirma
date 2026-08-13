@@ -103,7 +103,7 @@ mod unix_connect;
 #[cfg(unix)]
 pub use component::UnixEndpoint;
 pub use component::{
-    ChildPublishedTcpContext, ChildPublishedTcpReadiness, ComponentEndpoint, ComponentName,
+    ChildPublishedContext, ChildPublishedReadiness, ComponentEndpoint, ComponentName,
     ComponentPlanContext, ComponentSpec, Readiness,
 };
 pub use error::{OrchestratorError, StartError};

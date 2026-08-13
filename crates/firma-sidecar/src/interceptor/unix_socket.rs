@@ -57,32 +57,22 @@ impl UnixSocketInterceptor {
             handler: None,
         }
     }
-}
 
-impl From<PathBuf> for UnixSocketInterceptor {
-    fn from(path: PathBuf) -> Self {
-        Self::new(path)
+    /// Remove stale socket state and bind the configured path.
+    pub(crate) fn bind(&self) -> Result<UnixListener, InterceptorError> {
+        let _ = std::fs::remove_file(&self.path);
+        UnixListener::bind(&self.path)
+            .map_err(|error| InterceptorError::BindFailed(error.to_string()))
     }
-}
 
-impl From<&Path> for UnixSocketInterceptor {
-    fn from(path: &Path) -> Self {
-        Self::new(path.to_path_buf())
-    }
-}
-
-impl Interceptor for UnixSocketInterceptor {
-    async fn run(
+    /// Serve using a listener that was bound before the task was spawned.
+    pub(crate) async fn run_with_listener(
         mut self,
+        listener: UnixListener,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), InterceptorError> {
         self.handler = Some(handler);
-        // Remove stale socket if present
-        let _ = std::fs::remove_file(&self.path);
-        let listener = UnixListener::bind(&self.path)
-            .map_err(|_| InterceptorError::BindFailed("Channel closed".to_string()))?;
-
         let handler = self
             .handler
             .as_ref()
@@ -103,9 +93,31 @@ impl Interceptor for UnixSocketInterceptor {
                 () = cancel.cancelled() => break,
             }
         }
-        // Cleanup
         let _ = std::fs::remove_file(&self.path);
         Ok(())
+    }
+}
+
+impl From<PathBuf> for UnixSocketInterceptor {
+    fn from(path: PathBuf) -> Self {
+        Self::new(path)
+    }
+}
+
+impl From<&Path> for UnixSocketInterceptor {
+    fn from(path: &Path) -> Self {
+        Self::new(path.to_path_buf())
+    }
+}
+
+impl Interceptor for UnixSocketInterceptor {
+    async fn run(
+        self,
+        handler: Arc<RequestHandler>,
+        cancel: CancellationToken,
+    ) -> Result<(), InterceptorError> {
+        let listener = self.bind()?;
+        self.run_with_listener(listener, handler, cancel).await
     }
 }
 

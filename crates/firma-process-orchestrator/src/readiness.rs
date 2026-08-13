@@ -54,55 +54,46 @@ pub fn wait_for_endpoint(
     timeout: Duration,
     stop_signal: Option<&StopSignal>,
     process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
-) -> Result<(), OrchestratorError> {
-    match endpoint {
+) -> Result<ComponentEndpoint, OrchestratorError> {
+    let dial_endpoint = dial_endpoint_for_bind_endpoint(endpoint);
+    match &dial_endpoint {
         ComponentEndpoint::Tcp(addr) => {
-            wait_for_tcp(component, *addr, timeout, stop_signal, process_status)
+            wait_for_tcp(component, *addr, timeout, stop_signal, process_status)?;
         }
         #[cfg(unix)]
         ComponentEndpoint::Unix(path) => {
             let mut process_status = process_status;
             let deadline = Instant::now() + timeout;
-            loop {
-                check_startup(component, stop_signal, &mut process_status)?;
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(readiness_timeout(component, timeout));
-                }
-                if crate::unix_connect::connect_with_timeout(
-                    path.as_path().as_std_path(),
-                    remaining.min(CONNECT_ATTEMPT_TIMEOUT),
-                ) {
-                    check_startup(component, stop_signal, &mut process_status)?;
-                    return Ok(());
-                }
-                check_startup(component, stop_signal, &mut process_status)?;
-                if Instant::now() >= deadline {
-                    return Err(readiness_timeout(component, timeout));
-                }
-                sleep_until_next_probe(deadline);
-            }
+            wait_for_unix_until(
+                component,
+                path.as_path().as_std_path(),
+                deadline,
+                timeout,
+                stop_signal,
+                &mut process_status,
+            )?;
         }
     }
+    Ok(dial_endpoint)
 }
 
 /// Wait for a live child to publish, then accept connections on, its bound endpoint.
-pub fn wait_for_child_published_tcp(
+pub fn wait_for_child_published(
     component: &str,
-    requested_bind_addr: SocketAddr,
+    expected_endpoint: &ComponentEndpoint,
     startup_report_path: &Path,
     timeout: Duration,
     stop_signal: Option<&StopSignal>,
     mut process_status: impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
-) -> Result<SocketAddr, OrchestratorError> {
+) -> Result<ComponentEndpoint, OrchestratorError> {
     let deadline = Instant::now() + timeout;
-    let published_bind_addr = loop {
+    let published_endpoint = loop {
         check_startup(component, stop_signal, &mut process_status)?;
         match crate::startup_report::read_startup_report(startup_report_path) {
-            Ok(Some(published_bind_addr)) => {
+            Ok(Some(published_endpoint)) => {
                 check_startup(component, stop_signal, &mut process_status)?;
-                validate_startup_report(component, requested_bind_addr, published_bind_addr)?;
-                break published_bind_addr;
+                validate_startup_report(component, expected_endpoint, &published_endpoint)?;
+                break published_endpoint;
             }
             Ok(None) => {}
             Err(error) => {
@@ -116,16 +107,74 @@ pub fn wait_for_child_published_tcp(
         }
         sleep_until_next_probe(deadline);
     };
-    let dial_addr = dial_addr_for_bind_addr(published_bind_addr);
-    wait_for_tcp_until(
+    let dial_endpoint = dial_endpoint_for_bind_endpoint(&published_endpoint);
+    check_startup(component, stop_signal, &mut process_status)?;
+    wait_for_endpoint_until(
         component,
-        dial_addr,
+        &dial_endpoint,
         deadline,
         timeout,
         stop_signal,
         &mut process_status,
     )?;
-    Ok(dial_addr)
+    check_startup(component, stop_signal, &mut process_status)?;
+    Ok(dial_endpoint)
+}
+
+fn wait_for_endpoint_until(
+    component: &str,
+    endpoint: &ComponentEndpoint,
+    deadline: Instant,
+    timeout: Duration,
+    stop_signal: Option<&StopSignal>,
+    process_status: &mut impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
+) -> Result<(), OrchestratorError> {
+    match endpoint {
+        ComponentEndpoint::Tcp(addr) => wait_for_tcp_until(
+            component,
+            *addr,
+            deadline,
+            timeout,
+            stop_signal,
+            process_status,
+        ),
+        #[cfg(unix)]
+        ComponentEndpoint::Unix(path) => wait_for_unix_until(
+            component,
+            path.as_path().as_std_path(),
+            deadline,
+            timeout,
+            stop_signal,
+            process_status,
+        ),
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_unix_until(
+    component: &str,
+    path: &Path,
+    deadline: Instant,
+    original_timeout: Duration,
+    stop_signal: Option<&StopSignal>,
+    process_status: &mut impl FnMut() -> Result<Option<(String, ExitStatus)>, OrchestratorError>,
+) -> Result<(), OrchestratorError> {
+    loop {
+        check_startup(component, stop_signal, process_status)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(readiness_timeout(component, original_timeout));
+        }
+        if crate::unix_connect::connect_with_timeout(path, remaining.min(CONNECT_ATTEMPT_TIMEOUT)) {
+            check_startup(component, stop_signal, process_status)?;
+            return Ok(());
+        }
+        check_startup(component, stop_signal, process_status)?;
+        if Instant::now() >= deadline {
+            return Err(readiness_timeout(component, original_timeout));
+        }
+        sleep_until_next_probe(deadline);
+    }
 }
 
 /// Convert a successfully validated bind address into an endpoint clients can dial.
@@ -138,6 +187,14 @@ fn dial_addr_for_bind_addr(bind_addr: SocketAddr) -> SocketAddr {
             SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, addr.port()))
         }
         _ => bind_addr,
+    }
+}
+
+fn dial_endpoint_for_bind_endpoint(endpoint: &ComponentEndpoint) -> ComponentEndpoint {
+    match endpoint {
+        ComponentEndpoint::Tcp(addr) => ComponentEndpoint::Tcp(dial_addr_for_bind_addr(*addr)),
+        #[cfg(unix)]
+        ComponentEndpoint::Unix(path) => ComponentEndpoint::Unix(path.clone()),
     }
 }
 
@@ -159,15 +216,63 @@ fn wait_for_tcp_until(
             check_startup(component, stop_signal, process_status)?;
             return Ok(());
         }
+        check_startup(component, stop_signal, process_status)?;
         if Instant::now() >= deadline {
             return Err(readiness_timeout(component, timeout));
         }
-        check_startup_stop(stop_signal)?;
         sleep_until_next_probe(deadline);
     }
 }
 
 fn validate_startup_report(
+    component: &str,
+    expected_endpoint: &ComponentEndpoint,
+    published_endpoint: &ComponentEndpoint,
+) -> Result<(), OrchestratorError> {
+    match (expected_endpoint, published_endpoint) {
+        (ComponentEndpoint::Tcp(requested), ComponentEndpoint::Tcp(published)) => {
+            validate_tcp_startup_report(component, *requested, *published)
+        }
+        #[cfg(unix)]
+        (ComponentEndpoint::Unix(expected), ComponentEndpoint::Unix(published)) => {
+            crate::unix_connect::validate_path(expected.as_path().as_std_path()).map_err(
+                |error| {
+                    invalid_startup_report(
+                        component,
+                        format!("invalid expected Unix endpoint: {error}"),
+                    )
+                },
+            )?;
+            crate::unix_connect::validate_path(published.as_path().as_std_path()).map_err(
+                |error| {
+                    invalid_startup_report(
+                        component,
+                        format!("invalid published Unix endpoint: {error}"),
+                    )
+                },
+            )?;
+            if expected == published {
+                Ok(())
+            } else {
+                Err(invalid_startup_report(
+                    component,
+                    format!(
+                        "published endpoint {published_endpoint} does not match expected {expected_endpoint}"
+                    ),
+                ))
+            }
+        }
+        #[cfg(unix)]
+        _ => Err(invalid_startup_report(
+            component,
+            format!(
+                "published endpoint {published_endpoint} does not match expected transport {expected_endpoint}"
+            ),
+        )),
+    }
+}
+
+fn validate_tcp_startup_report(
     component: &str,
     requested_bind_addr: SocketAddr,
     published_bind_addr: SocketAddr,
@@ -260,8 +365,7 @@ fn check_startup_stop(stop_signal: Option<&StopSignal>) -> Result<(), Orchestrat
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_ips_match, dial_addr_for_bind_addr, validate_startup_report,
-        wait_for_child_published_tcp,
+        bind_ips_match, dial_addr_for_bind_addr, validate_startup_report, wait_for_child_published,
     };
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
     use std::time::Duration;
@@ -300,8 +404,12 @@ mod tests {
         ));
 
         assert!(!bind_ips_match(published, requested));
-        let error = validate_startup_report("worker", requested, published)
-            .expect_err("mismatched IPv6 scope must fail raw bind validation");
+        let error = validate_startup_report(
+            "worker",
+            &crate::ComponentEndpoint::Tcp(requested),
+            &crate::ComponentEndpoint::Tcp(published),
+        )
+        .expect_err("mismatched IPv6 scope must fail raw bind validation");
         assert!(error.to_string().contains("does not match requested IP"));
     }
 
@@ -312,9 +420,9 @@ mod tests {
         std::fs::write(&path, "not = valid = toml").expect("malformed startup report");
         let mut checks = 0;
 
-        let error = wait_for_child_published_tcp(
+        let error = wait_for_child_published(
             "worker",
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            &crate::ComponentEndpoint::Tcp(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
             &path,
             Duration::from_secs(1),
             None,
@@ -344,6 +452,6 @@ mod tests {
     fn fixture_exit_status(code: i32) -> std::process::ExitStatus {
         use std::os::windows::process::ExitStatusExt as _;
 
-        std::process::ExitStatus::from_raw(code as u32)
+        std::process::ExitStatus::from_raw(code.cast_unsigned())
     }
 }

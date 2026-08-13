@@ -14,8 +14,6 @@ use crate::composio::PROTECTED_HOSTS;
 use crate::config::{self, HttpsMitmConfig, InterceptorMode};
 use crate::handler::RequestHandler;
 use crate::interceptor;
-#[cfg(unix)]
-use crate::interceptor::Interceptor as _;
 use crate::interceptor::https_mitm::{host_matches_any, normalize_patterns};
 
 fn is_loopback_addr(addr: SocketAddr) -> bool {
@@ -189,9 +187,13 @@ pub fn spawn_interceptor(
             }
             let interceptor =
                 interceptor::unix_socket::UnixSocketInterceptor::new(socket_path.clone());
+            let listener = interceptor.bind()?;
             tracing::debug!(socket_path = %socket_path.display(), "Unix socket interceptor configured");
             let handle = tokio::spawn(async move {
-                if let Err(e) = interceptor.run(handler, cancel).await {
+                if let Err(e) = interceptor
+                    .run_with_listener(listener, handler, cancel)
+                    .await
+                {
                     tracing::error!(error = %e, "Unix socket interceptor failed");
                 }
             });

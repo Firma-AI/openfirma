@@ -107,7 +107,7 @@ impl<'a> ComponentPlanner<'a> {
                     .arg("--config")
                     .arg(&self.cfg.config_file);
                 let authority_publication =
-                    context.child_published_tcp(prepared.authority_bind_addr);
+                    context.child_published(ComponentEndpoint::Tcp(prepared.authority_bind_addr));
                 authority
                     .arg("--startup-report")
                     .arg(authority_publication.startup_report_path());
@@ -124,7 +124,8 @@ impl<'a> ComponentPlanner<'a> {
                     .ok_or(StackError::MissingReadyEndpoint {
                         component: AUTHORITY_NAME,
                     })?;
-                let sidecar_publication = context.child_published_tcp(prepared.sidecar_bind_addr);
+                let sidecar_publication =
+                    context.child_published(ComponentEndpoint::Tcp(prepared.sidecar_bind_addr));
                 let authority_connect_addr = if prepared.authority_bind_addr.port() == 0
                     && prepared.sidecar_authority_configured
                 {
