@@ -193,7 +193,6 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
-    write_startup_report(args.startup_report.as_deref(), &interceptor.listen_addr)?;
 
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
 
@@ -211,14 +210,20 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     // `wait_until_fully_ready` returns immediately when no Authority is
     // configured because the pipeline pre-seeds both readiness flags as
     // true in that mode.
-    wait_for_streams_ready(&pipeline_runtime, exit.clone()).await;
-    startup::log_ready_line();
-    health::mark_ready(&health_ready);
-    let health_readiness_mirror = spawn_health_readiness_mirror(
-        Arc::clone(&health_ready),
-        Arc::clone(&pipeline_runtime.readiness),
-        exit.clone(),
-    );
+    let health_readiness_mirror = if wait_for_streams_ready(&pipeline_runtime, exit.clone()).await
+        == StreamReadinessOutcome::Hydrated
+    {
+        write_startup_report(args.startup_report.as_deref(), &interceptor.listen_addr)?;
+        startup::log_ready_line();
+        health::mark_ready(&health_ready);
+        Some(spawn_health_readiness_mirror(
+            Arc::clone(&health_ready),
+            Arc::clone(&pipeline_runtime.readiness),
+            exit.clone(),
+        ))
+    } else {
+        None
+    };
 
     let authority_stream_tasks = async {
         if let Some(handle) = authority_handle {
@@ -236,10 +241,15 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
             let _ = handle.await;
         }
     };
+    let health_readiness_task = async {
+        if let Some(handle) = health_readiness_mirror {
+            let _ = handle.await;
+        }
+    };
     let _ = tokio::join!(
         audit_sink,
         health_server,
-        health_readiness_mirror,
+        health_readiness_task,
         interceptor.handle,
         shutdown_handler,
         authority_stream_tasks,
@@ -306,14 +316,27 @@ fn spawn_run_audit_listener(
     }
 }
 
-async fn wait_for_streams_ready(runtime: &startup::PipelineRuntime, cancel: CancellationToken) {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamReadinessOutcome {
+    Hydrated,
+    Cancelled,
+}
+
+async fn wait_for_streams_ready(
+    runtime: &startup::PipelineRuntime,
+    cancel: CancellationToken,
+) -> StreamReadinessOutcome {
+    if cancel.is_cancelled() {
+        return StreamReadinessOutcome::Cancelled;
+    }
     if runtime.readiness.snapshot().fully_ready() {
-        return;
+        return StreamReadinessOutcome::Hydrated;
     }
     debug!("awaiting authority stream hydration before emitting ready");
     tokio::select! {
-        () = runtime.readiness.wait_until_fully_ready() => {}
-        () = cancel.cancelled() => {}
+        biased;
+        () = cancel.cancelled() => StreamReadinessOutcome::Cancelled,
+        () = runtime.readiness.wait_until_fully_ready() => StreamReadinessOutcome::Hydrated,
     }
 }
 
@@ -323,6 +346,10 @@ fn spawn_health_readiness_mirror(
     exit: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        if exit.is_cancelled() {
+            health::mark_not_ready(&ready);
+            return;
+        }
         let mut updates = readiness.subscribe();
         loop {
             if updates.borrow().fully_ready() {
@@ -332,7 +359,11 @@ fn spawn_health_readiness_mirror(
             }
 
             tokio::select! {
-                () = exit.cancelled() => return,
+                biased;
+                () = exit.cancelled() => {
+                    health::mark_not_ready(&ready);
+                    return;
+                },
                 changed = updates.changed() => {
                     if changed.is_err() {
                         return;
@@ -471,8 +502,18 @@ mod tests {
             "health mirror did not clear ready after revocation readiness was lost"
         );
 
+        readiness.set_revocation_ready(true);
+        assert!(
+            wait_for_health(&ready, true).await,
+            "health mirror did not restore ready after revocation readiness recovered"
+        );
+
         cancel.cancel();
         assert!(handle.await.is_ok(), "health mirror task panicked");
+        assert!(
+            !ready.load(Ordering::Acquire),
+            "health mirror left health ready after cancellation"
+        );
     }
 
     async fn wait_for_health(ready: &std::sync::atomic::AtomicBool, expected: bool) -> bool {
