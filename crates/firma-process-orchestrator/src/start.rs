@@ -40,7 +40,7 @@ use crate::StackTopology;
 use crate::collect::{collect_child_in_background, collect_child_until, initialize_collector};
 use crate::component::{
     ComponentEndpoint, ComponentName, ComponentPlanContext, ComponentSpec, OwnedComponent,
-    Readiness, ReadyComponent,
+    Readiness, ReadyComponent, read_endpoint,
 };
 use crate::detach::spawn_supervisor;
 use crate::error::{OrchestratorError, ShutdownError, StartError};
@@ -1122,7 +1122,10 @@ fn read_stack_handle(
         let pid = pidfile::read(&state_dir.join(format!("{name}.pid")))?.ok_or_else(|| {
             OrchestratorError::Platform(format!("{name}.pid missing after startup"))
         })?;
-        let endpoint = read_canonical_endpoint(&state_dir.join(format!("{name}.listen")), name)?;
+        let endpoint =
+            read_endpoint(&state_dir.join(format!("{name}.listen")), name)?.ok_or_else(|| {
+                OrchestratorError::Platform(format!("{name}.listen missing after startup"))
+            })?;
         components.push(ComponentHandle {
             name: name.to_string(),
             leader_pid: pid,
@@ -1130,30 +1133,6 @@ fn read_stack_handle(
         });
     }
     Ok(StackHandle { components })
-}
-
-fn read_canonical_endpoint(
-    path: &Path,
-    name: &str,
-) -> Result<ComponentEndpoint, OrchestratorError> {
-    let mut text = std::fs::read_to_string(path).map_err(|error| {
-        OrchestratorError::Platform(format!("{name}.listen unavailable after startup: {error}"))
-    })?;
-    if !text.ends_with('\n') {
-        return Err(OrchestratorError::Platform(format!(
-            "{name}.listen is not canonical after startup"
-        )));
-    }
-    text.pop();
-    let endpoint = text.parse::<ComponentEndpoint>().map_err(|error| {
-        OrchestratorError::Platform(format!("{name}.listen is invalid after startup: {error}"))
-    })?;
-    if endpoint.to_string() != text {
-        return Err(OrchestratorError::Platform(format!(
-            "{name}.listen is not canonical after startup"
-        )));
-    }
-    Ok(endpoint)
 }
 
 /// Remove rollback-owned state through [`crate::stop::cleanup_generation`].
