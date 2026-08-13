@@ -389,10 +389,14 @@ impl RuntimeParts {
             self.run_stack = None;
             drop(self.capability_refresher.take());
             drop(self.capability_guard.take());
-            return RunError::RunStackPostReadyRollback {
+            let operation = RunError::RunStackPostReadyRollback {
                 operation: Box::new(operation),
                 rollback,
             };
+            if let Some(marker_dir) = self.stack_marker.take() {
+                return cleanup_run_markers_after(operation, &marker_dir);
+            }
+            return operation;
         }
         self.run_stack = None;
         drop(self.capability_refresher.take());
@@ -1122,9 +1126,14 @@ fn rollback_ready_stack(
             std::mem::forget(capability_refresher);
             std::mem::forget(capability_guard);
         }
-        return RunError::RunStackPostReadyRollback {
+        let operation = RunError::RunStackPostReadyRollback {
             operation: Box::new(operation),
             rollback,
+        };
+        return if processes_stopped {
+            cleanup_run_markers_after(operation, marker_dir)
+        } else {
+            operation
         };
     }
     drop(capability_refresher);
