@@ -163,9 +163,11 @@ fn fixed_publication_requires_the_exact_requested_endpoint() {
     );
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
 
-    let requested = reserve_endpoint();
+    let requested_listener = TcpListener::bind(loopback_ephemeral()).expect("reserve endpoint");
+    let requested = requested_listener.local_addr().expect("reserved endpoint");
     let mismatch = Fixture::new(ChildBehavior::Publish(loopback_ephemeral()));
     mismatch.assert_platform_rejection(requested, "does not match requested");
+    drop(requested_listener);
 }
 
 #[test]
