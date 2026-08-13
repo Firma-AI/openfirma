@@ -20,4 +20,6 @@ pub use matcher::{CompiledMatcher, MatcherError};
 pub use placeholder::SecretPlaceholder;
 pub use registry::IntegrationRegistry;
 pub use secrecy::{ExposeSecret, SecretString};
-pub use spec::{IntegrationSpec, MatcherRule, MatchingResolution};
+pub use spec::{
+    IntegrationConfig, IntegrationConfigError, IntegrationSpec, MatcherRule, MatchingResolution,
+};

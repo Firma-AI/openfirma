@@ -2,7 +2,10 @@ use firma_core::{SecretMatcher, SecretNameSource};
 use firma_secret_provider::{
     CompiledMatcher, IntegrationRegistry, MatcherRule, MatchingResolution, SecretPlaceholder,
     non_empty::{NonEmptyVec, vec::EmptyError},
-    spec::cli::{CliIntegrationSpec, CommandAndMatcher, CommandMatch, CommandPattern, FlagSpec},
+    spec::cli::{
+        CliIntegrationConfig, CliIntegrationConfigError, CliIntegrationSpec, CommandAndMatcher,
+        CommandMatch, CommandPattern, FlagSpec,
+    },
 };
 
 use crate::support::{Entry, rewrite_mint_placeholders};
@@ -16,6 +19,12 @@ fn command(words: &[&str], match_kind: CommandMatch) -> Result<CommandPattern, E
         argv: NonEmptyVec::new(args(words))?,
         match_kind,
     })
+}
+
+fn validated_config(
+    config: CliIntegrationConfig,
+) -> Result<CliIntegrationSpec, CliIntegrationConfigError> {
+    CliIntegrationSpec::try_from(config)
 }
 
 #[test]
@@ -48,14 +57,14 @@ source = "path"
 path = "$.key"
 "#;
 
-    let spec: CliIntegrationSpec =
+    let config: CliIntegrationConfig =
         toml::from_str(input).unwrap_or_else(|error| panic!("valid CLI schema TOML: {error}"));
     assert_eq!(
-        spec.stripped_options,
+        config.stripped_options,
         vec![FlagSpec::value("--organization-id")]
     );
     assert_eq!(
-        spec.forbidden_options,
+        config.forbidden_options,
         vec![
             FlagSpec::value("--server-url"),
             FlagSpec::attached_value("-u"),
@@ -64,10 +73,13 @@ path = "$.key"
     );
 
     let serialized =
-        toml::to_string(&spec).unwrap_or_else(|error| panic!("serialize CLI schema: {error}"));
-    let round_trip: CliIntegrationSpec = toml::from_str(&serialized)
+        toml::to_string(&config).unwrap_or_else(|error| panic!("serialize CLI schema: {error}"));
+    let round_trip: CliIntegrationConfig = toml::from_str(&serialized)
         .unwrap_or_else(|error| panic!("round-trip CLI schema TOML: {error}"));
-    assert_eq!(round_trip, spec);
+    assert_eq!(round_trip, config);
+    let spec = validated_config(round_trip)
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}"));
+    assert_eq!(spec.binary_name(), "bws");
 }
 
 #[test]
@@ -113,14 +125,45 @@ pattern = "(?P<name>.+)=(?P<value>.+)"
 "#
         );
 
-        let Err(error) = toml::from_str::<CliIntegrationSpec>(&input) else {
-            panic!("conflicting option definitions must not deserialize: {command_option}");
+        let config: CliIntegrationConfig = toml::from_str(&input)
+            .unwrap_or_else(|error| panic!("plain config must deserialize: {error}"));
+        let Err(error) = CliIntegrationSpec::try_from(config) else {
+            panic!("conflicting option definitions must fail validation");
         };
-        assert_eq!(
-            error.message(),
-            "option `--mode` has conflicting definitions in integration-level and command-level stripped_options"
+        std::assert_matches!(
+            &error,
+            CliIntegrationConfigError::ConflictingStrippedOption { name }
+                if name == "--mode"
         );
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(error.to_string(), @"option `--mode` has conflicting definitions in integration-level and command-level stripped_options");
+        }
     }
+}
+
+#[test]
+fn cli_schema_accepts_identical_stripped_option_definitions() {
+    let input = r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+stripped_options = [{ name = "--mode", takes_value = true }]
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+stripped_options = [{ name = "--mode", takes_value = true }]
+
+[matchers.matcher]
+type = "regex"
+pattern = "(?P<name>.+)=(?P<value>.+)"
+"#;
+
+    let config: CliIntegrationConfig =
+        toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
+    let spec = validated_config(config)
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}"));
+    assert_eq!(spec.binary_name(), "example");
 }
 
 fn builtin_matcher(binary: &str, command_args: &[&str]) -> Result<CompiledMatcher, String> {
@@ -321,27 +364,30 @@ fn unrecognized_invocation_falls_back_to_blocked() {
 #[test]
 fn command_matching_skips_declared_options_and_their_values() -> Result<(), EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
-        binary_name: String::from("synthetic"),
-        provider_id: String::from("test"),
-        credential_env_vars: vec![],
-        stripped_options: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
-        forbidden_options: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
-            command: command(&["get", "secret"], CommandMatch::Exact)?,
-            matcher: SecretMatcher::Json {
-                record_path: String::from("$"),
-                value_path: String::from("$.value"),
-                name: SecretNameSource::Path {
-                    path: String::from("$.key"),
+    registry.push(
+        validated_config(CliIntegrationConfig {
+            binary_name: String::from("synthetic"),
+            provider_id: String::from("test"),
+            credential_env_vars: vec![],
+            stripped_options: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: command(&["get", "secret"], CommandMatch::Exact)?,
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$"),
+                    value_path: String::from("$.value"),
+                    name: SecretNameSource::Path {
+                        path: String::from("$.key"),
+                    },
+                    item_selector: None,
+                    domain_selector: None,
                 },
-                item_selector: None,
-                domain_selector: None,
-            },
-            stripped_options: vec![],
-            append_options: vec![],
-        })],
-    });
+                stripped_options: vec![],
+                append_options: vec![],
+            })],
+        })
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
+    );
     let spec = registry.for_binary("synthetic").expect("synthetic spec");
 
     // A declared valueless option, and a declared option-value pair between the
@@ -411,39 +457,42 @@ fn bws_spec_has_expected_credential_env_and_provider_id() {
     let registry = IntegrationRegistry::with_builtins();
     let spec = registry.for_binary("bws").expect("bws spec");
     assert!(
-        spec.credential_env_vars
+        spec.credential_env_vars()
             .iter()
             .any(|v| v == "BWS_ACCESS_TOKEN")
     );
-    assert!(spec.provider_id.eq("bitwarden"));
+    assert_eq!(spec.provider_id(), "bitwarden");
 }
 
 #[test]
 fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
-        binary_name: String::from("bws"),
-        provider_id: String::from("custom"),
-        credential_env_vars: vec![],
-        stripped_options: vec![],
-        forbidden_options: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
-            command: command(&["secret"], CommandMatch::Prefix)?,
-            matcher: SecretMatcher::Json {
-                record_path: String::from("$[*]"),
-                value_path: String::from("$.value"),
-                name: SecretNameSource::Path {
-                    path: String::from("$.key"),
-                },
-                item_selector: None,
-                domain_selector: None,
-            },
+    registry.push(
+        validated_config(CliIntegrationConfig {
+            binary_name: String::from("bws"),
+            provider_id: String::from("custom"),
+            credential_env_vars: vec![],
             stripped_options: vec![],
-            append_options: vec![],
-        })],
-    });
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: command(&["secret"], CommandMatch::Prefix)?,
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$[*]"),
+                    value_path: String::from("$.value"),
+                    name: SecretNameSource::Path {
+                        path: String::from("$.key"),
+                    },
+                    item_selector: None,
+                    domain_selector: None,
+                },
+                stripped_options: vec![],
+                append_options: vec![],
+            })],
+        })
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
+    );
     let spec = registry.for_binary("bws").expect("bws spec after push");
-    assert!(spec.provider_id.eq("custom"));
+    assert_eq!(spec.provider_id(), "custom");
     // The custom spec's prefix takes precedence over the built-in rule.
     assert!(matches!(
         spec.resolve_args(&args(&["secret", "get"])),
@@ -924,27 +973,30 @@ fn builtins_reject_backend_override_flags_on_safe_commands() {
 fn rewrite_args_leaves_args_untouched_when_no_stripped_options_configured() -> Result<(), EmptyError>
 {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
-        binary_name: String::from("foo"),
-        provider_id: String::from("test"),
-        credential_env_vars: vec![],
-        stripped_options: vec![],
-        forbidden_options: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
-            command: command(&["secret", "get"], CommandMatch::Prefix)?,
-            matcher: SecretMatcher::Json {
-                record_path: String::from("$[*]"),
-                value_path: String::from("$.value"),
-                name: SecretNameSource::Path {
-                    path: String::from("$.key"),
-                },
-                item_selector: None,
-                domain_selector: None,
-            },
+    registry.push(
+        validated_config(CliIntegrationConfig {
+            binary_name: String::from("foo"),
+            provider_id: String::from("test"),
+            credential_env_vars: vec![],
             stripped_options: vec![],
-            append_options: vec![],
-        })],
-    });
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+                command: command(&["secret", "get"], CommandMatch::Prefix)?,
+                matcher: SecretMatcher::Json {
+                    record_path: String::from("$[*]"),
+                    value_path: String::from("$.value"),
+                    name: SecretNameSource::Path {
+                        path: String::from("$.key"),
+                    },
+                    item_selector: None,
+                    domain_selector: None,
+                },
+                stripped_options: vec![],
+                append_options: vec![],
+            })],
+        })
+        .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
+    );
     let spec = registry.for_binary("foo").expect("foo spec");
 
     let rewritten = spec.rewrite_args(&args(&["secret", "get", "some-id"]));
@@ -959,9 +1011,9 @@ fn registry_with_stripped_options(
     command_words: &[&str],
     stripped_options: Vec<FlagSpec>,
     append_options: Vec<String>,
-) -> Result<IntegrationRegistry, EmptyError> {
+) -> Result<IntegrationRegistry, Box<dyn std::error::Error>> {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(CliIntegrationSpec {
+    registry.push(validated_config(CliIntegrationConfig {
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
@@ -981,13 +1033,13 @@ fn registry_with_stripped_options(
             stripped_options,
             append_options,
         })],
-    });
+    })?);
     Ok(registry)
 }
 
 #[test]
-fn valueless_stripped_option_preserves_following_options_and_positionals() -> Result<(), EmptyError>
-{
+fn valueless_stripped_option_preserves_following_options_and_positionals()
+-> Result<(), Box<dyn std::error::Error>> {
     let registry =
         registry_with_stripped_options(&["cmd"], vec![FlagSpec::valueless("--bool-flag")], vec![])?;
     let spec = registry.for_binary("foo").expect("foo spec");
@@ -1002,7 +1054,8 @@ fn valueless_stripped_option_preserves_following_options_and_positionals() -> Re
 }
 
 #[test]
-fn valueless_stripped_option_preserves_following_command_word() -> Result<(), EmptyError> {
+fn valueless_stripped_option_preserves_following_command_word()
+-> Result<(), Box<dyn std::error::Error>> {
     let registry = registry_with_stripped_options(
         &["secrets", "download"],
         vec![FlagSpec::valueless("--offline")],
@@ -1047,7 +1100,7 @@ fn doppler_secrets_download_rewrite_keeps_download_when_offline_precedes_it() {
 
 #[test]
 fn value_taking_stripped_option_consumes_a_value_that_looks_like_an_option()
--> Result<(), EmptyError> {
+-> Result<(), Box<dyn std::error::Error>> {
     let registry = registry_with_stripped_options(
         &["cmd"],
         vec![FlagSpec::value("--fallback-passphrase")],
@@ -1061,7 +1114,8 @@ fn value_taking_stripped_option_consumes_a_value_that_looks_like_an_option()
 }
 
 #[test]
-fn valueless_stripped_option_does_not_consume_following_positional() -> Result<(), EmptyError> {
+fn valueless_stripped_option_does_not_consume_following_positional()
+-> Result<(), Box<dyn std::error::Error>> {
     let registry = registry_with_stripped_options(
         &["cmd"],
         vec![FlagSpec::valueless("--valueless-flag")],
@@ -1075,7 +1129,8 @@ fn valueless_stripped_option_does_not_consume_following_positional() -> Result<(
 }
 
 #[test]
-fn rewrite_args_concatenated_short_option_value_is_stripped() -> Result<(), EmptyError> {
+fn rewrite_args_concatenated_short_option_value_is_stripped()
+-> Result<(), Box<dyn std::error::Error>> {
     let registry = registry_with_stripped_options(
         &["cmd"],
         vec![
@@ -1120,7 +1175,8 @@ fn rewrite_args_concatenated_short_option_value_is_stripped() -> Result<(), Empt
 }
 
 #[test]
-fn options_after_end_of_options_are_not_removed_or_forbidden() -> Result<(), EmptyError> {
+fn options_after_end_of_options_are_not_removed_or_forbidden()
+-> Result<(), Box<dyn std::error::Error>> {
     let registry = registry_with_stripped_options(
         &["cmd"],
         vec![FlagSpec::value("--format")],

@@ -66,7 +66,7 @@ impl IntegrationRegistry {
         Self {
             specs: [bws_spec(), op_spec(), vault_spec(), doppler_spec()]
                 .into_iter()
-                .map(|spec| (spec.binary_name.clone(), spec))
+                .map(|spec| (String::from(spec.binary_name()), spec))
                 .collect(),
         }
     }
@@ -80,8 +80,8 @@ impl IntegrationRegistry {
     /// Add a custom spec. If a spec with the same binary name already exists
     /// (e.g. a built-in), the custom one replaces it.
     pub fn push(&mut self, spec: CliIntegrationSpec) {
-        if let Some(old_spec) = self.specs.insert(spec.binary_name.clone(), spec) {
-            tracing::warn!("replacing {} secret manager specs", old_spec.binary_name);
+        if let Some(old_spec) = self.specs.insert(String::from(spec.binary_name()), spec) {
+            tracing::warn!("replacing {} secret manager specs", old_spec.binary_name());
         }
     }
 }

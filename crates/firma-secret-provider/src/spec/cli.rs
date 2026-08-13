@@ -99,13 +99,13 @@ pub enum CommandMatch {
     Prefix,
 }
 
-/// Per-CLI-tool behavior: credential forwarding, command classification, and
-/// output normalization.
+/// Deserializable configuration for a CLI secret-provider integration.
 ///
-/// Deserialization rejects conflicting definitions of the same stripped option
-/// across integration and command scopes.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct CliIntegrationSpec {
+/// Convert this plain representation into [`CliIntegrationSpec`] to validate
+/// relationships between its option policies before use.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CliIntegrationConfig {
     /// Executable basename used to select this integration.
     pub binary_name: String,
     /// Stable identifier recorded for secrets from this integration.
@@ -124,56 +124,83 @@ pub struct CliIntegrationSpec {
     pub matchers: Vec<CliMatcherRule>,
 }
 
-impl<'de> serde::Deserialize<'de> for CliIntegrationSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawCliIntegrationSpec {
-            binary_name: String,
-            provider_id: String,
-            credential_env_vars: Vec<String>,
-            #[serde(default)]
-            stripped_options: Vec<FlagSpec>,
-            #[serde(default)]
-            forbidden_options: Vec<FlagSpec>,
-            matchers: Vec<CliMatcherRule>,
-        }
+/// A CLI integration configuration that has passed cross-field validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliIntegrationSpec {
+    pub(crate) binary_name: String,
+    pub(crate) provider_id: String,
+    pub(crate) credential_env_vars: Vec<String>,
+    pub(crate) stripped_options: Vec<FlagSpec>,
+    pub(crate) forbidden_options: Vec<FlagSpec>,
+    pub(crate) matchers: Vec<CliMatcherRule>,
+}
 
-        let raw = RawCliIntegrationSpec::deserialize(deserializer)?;
-        for rule in raw.matchers.iter().filter_map(|matcher| match matcher {
+/// Error returned when validating a [`CliIntegrationConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliIntegrationConfigError {
+    /// One option spelling has different arity or attachment behavior across
+    /// integration and command scopes.
+    #[error(
+        "option `{name}` has conflicting definitions in integration-level and command-level stripped_options"
+    )]
+    ConflictingStrippedOption {
+        /// Conflicting option spelling.
+        name: String,
+    },
+}
+
+impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
+    type Error = CliIntegrationConfigError;
+
+    fn try_from(config: CliIntegrationConfig) -> Result<Self, Self::Error> {
+        for rule in config.matchers.iter().filter_map(|matcher| match matcher {
             MatcherRule::SensitiveCommand(rule) => Some(rule),
             MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
         }) {
-            for integration_option in &raw.stripped_options {
+            for integration_option in &config.stripped_options {
                 if let Some(command_option) = rule
                     .stripped_options
                     .iter()
                     .find(|option| option.name == integration_option.name)
                     && command_option != integration_option
                 {
-                    return Err(serde::de::Error::custom(format!(
-                        "option `{}` has conflicting definitions in integration-level and command-level stripped_options",
-                        integration_option.name
-                    )));
+                    return Err(CliIntegrationConfigError::ConflictingStrippedOption {
+                        name: integration_option.name.clone(),
+                    });
                 }
             }
         }
 
         Ok(Self {
-            binary_name: raw.binary_name,
-            provider_id: raw.provider_id,
-            credential_env_vars: raw.credential_env_vars,
-            stripped_options: raw.stripped_options,
-            forbidden_options: raw.forbidden_options,
-            matchers: raw.matchers,
+            binary_name: config.binary_name,
+            provider_id: config.provider_id,
+            credential_env_vars: config.credential_env_vars,
+            stripped_options: config.stripped_options,
+            forbidden_options: config.forbidden_options,
+            matchers: config.matchers,
         })
     }
 }
 
 impl CliIntegrationSpec {
+    /// Returns the executable basename used to select this integration.
+    #[must_use]
+    pub fn binary_name(&self) -> &str {
+        &self.binary_name
+    }
+
+    /// Returns the stable provider identifier recorded for extracted secrets.
+    #[must_use]
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the environment variables forwarded to authenticate the CLI.
+    #[must_use]
+    pub fn credential_env_vars(&self) -> &[String] {
+        &self.credential_env_vars
+    }
+
     /// Classifies an invocation as sensitive, safe to pass through, or
     /// blocked. Malformed recognized options fail closed.
     #[must_use]
