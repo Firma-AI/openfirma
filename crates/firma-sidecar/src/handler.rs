@@ -28,7 +28,10 @@ use crate::{
     audit::{AuditPayload, Decision},
     composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode, is_protected_host},
     connector::ConnectorRegistry,
-    normalizer::{NormalizedEnvelope, mapping::glob_match},
+    normalizer::{
+        NormalizedEnvelope,
+        mapping::{glob_match, normalize_host_pattern},
+    },
     pipeline::{
         CompositeActionResult, CompositeDisposition, EnforcementDecision, EnforcementPipeline,
         RawRequest, audit_payload_from_decision, monitor_override,
@@ -515,6 +518,18 @@ fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
     result
 }
 
+/// Whether `headers` declares a `Content-Encoding` other than `identity`.
+///
+/// A compressed (or otherwise transformed) body can't be scanned by the
+/// plaintext secret matcher, so callers must treat it as opaque rather than
+/// silently forwarding it unexamined.
+fn is_content_encoded(headers: &HeaderMap) -> bool {
+    headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| !value.trim().eq_ignore_ascii_case("identity"))
+}
+
 /// Masks `dispatched.body` against `store`'s known secrets.
 ///
 /// Resolves the response's content type from its `Content-Type` header,
@@ -884,8 +899,9 @@ impl RequestHandler {
         request: &RawRequest,
     ) -> Option<(&'a str, MatchingResolution<'a>)> {
         let mediation = self.http_secret_mediation.as_ref()?;
+        let host = normalize_host_pattern(request.host.as_str());
         mediation.providers.iter().find_map(|p| {
-            glob_match(&p.host, request.host.as_str())
+            glob_match(&normalize_host_pattern(&p.host), &host)
                 .then(|| (p.provider_id.as_str(), p.matcher_for(&request.path)))
         })
     }
@@ -905,12 +921,20 @@ impl RequestHandler {
     ///
     /// A no-op — `response` passes through unchanged — when no HTTP secret
     /// providers are configured, no entry matches `request`, the entry
-    /// resolves to `PassThrough`/`Blocked`, or the matcher fails to compile
-    /// or extract. Those failures fall back to forwarding the response as
+    /// resolves to `PassThrough`/`Blocked`, or `response` was never
+    /// dispatched (the pipeline denied/aborted before reaching the
+    /// connector, so no vault body exists to mediate). A matcher that fails
+    /// to compile or extract also falls back to forwarding the response as
     /// dispatched (fail-open on the interception layer itself — the
     /// underlying request was already permitted by the main enforcement
-    /// pipeline). A failure to *push* an already-extracted secret to the
-    /// broker is different: see [`Self::rewrite_with_http_intercept`].
+    /// pipeline, and nothing sensitive was actually found).
+    ///
+    /// A `Matcher` entry that *did* match but has no gateway configured is
+    /// different: the response was dispatched from a provider explicitly
+    /// flagged as sensitive, so a body that can't be mediated must not reach
+    /// the agent — this aborts rather than forwards. A failure to *push* an
+    /// already-extracted secret to the broker is handled the same way: see
+    /// [`Self::rewrite_with_http_intercept`].
     async fn intercept_http_secrets(
         &self,
         request: &RawRequest,
@@ -926,13 +950,31 @@ impl RequestHandler {
             MatchingResolution::PassThrough | MatchingResolution::Blocked => return response,
         };
 
-        let Some(gateway_client) = self.gateway_client.as_ref() else {
-            tracing::warn!(
-                provider_id = %provider_id,
-                "HTTP secret provider matched but no secret gateway is configured; not \
-                 intercepting"
-            );
+        // Only `Ok`/`Passthrough` carry a body that actually reached the
+        // vault; anything else (deny/abort/step-up/defer) never dispatched,
+        // so there's nothing here to mediate or fail closed on.
+        if !matches!(
+            response,
+            HandledResponse::Ok(_) | HandledResponse::Passthrough(_)
+        ) {
             return response;
+        }
+
+        let Some(gateway_client) = self.gateway_client.as_ref() else {
+            let detail = format!(
+                "HTTP secret provider \"{provider_id}\" matched but no secret gateway is \
+                 configured"
+            );
+            tracing::error!(
+                provider_id = %provider_id,
+                "HTTP secret provider matched but no secret gateway is configured; aborting \
+                 rather than forward a possibly sensitive response unmediated"
+            );
+            return http_secret_push_failed_response(
+                audit_payload,
+                AbortReason::CredentialInjectionFailed,
+                detail,
+            );
         };
 
         let rewrite = async |dispatched: DispatchedResponse| {
@@ -981,6 +1023,19 @@ impl RequestHandler {
         matcher: &SecretMatcher,
         gateway: &GatewayClient,
     ) -> Result<DispatchedResponse, (AbortReason, String)> {
+        if is_content_encoded(&dispatched.headers) {
+            tracing::error!(
+                provider_id = %provider_id,
+                "HTTP secret intercept: response body is content-encoded; aborting rather than \
+                 forward a body the matcher cannot inspect for secrets"
+            );
+            let detail = format!(
+                "HTTP secret provider \"{provider_id}\" response uses a content-encoding that \
+                 cannot be inspected for secrets before forwarding"
+            );
+            return Err((AbortReason::CredentialInjectionFailed, detail));
+        }
+
         let matcher = match CompiledMatcher::compile(matcher) {
             Ok(m) => m,
             Err(error) => {
@@ -3435,12 +3490,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_http_secret_provider_matched_without_gateway_forwards_unmodified() {
+    async fn test_handle_http_secret_provider_matched_without_gateway_fails_closed() {
         // A provider is configured (mediation matches), but no secret
-        // gateway was ever wired up via `with_gateway_client`. This is the
-        // "misconfiguration" branch that only logs a warning: the response
-        // must forward unmodified rather than panicking or silently
-        // dropping it.
+        // gateway was ever wired up via `with_gateway_client`. The response
+        // was dispatched from a provider explicitly flagged as sensitive, so
+        // a body that can't be mediated must abort rather than reach the
+        // agent unexamined.
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/v1/chat/completions"))
@@ -3469,12 +3524,14 @@ pub(crate) mod tests {
             .await;
 
         match response {
-            HandledResponse::Ok(dispatched) => {
-                let body: serde_json::Value =
-                    serde_json::from_slice(&dispatched.body).expect("json body");
-                assert_eq!(body["SecretString"], "s3cr3t-db-pass");
+            HandledResponse::Aborted { reason, detail } => {
+                assert_eq!(reason, AbortReason::CredentialInjectionFailed);
+                assert!(
+                    detail.contains("aws-secrets-manager"),
+                    "detail should name the provider, got: {detail}"
+                );
             }
-            other => panic!("expected ok, got {other:?}"),
+            other => panic!("expected abort, got {other:?}"),
         }
     }
 
