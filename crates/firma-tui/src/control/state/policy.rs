@@ -58,11 +58,29 @@ pub struct PolicyRewriteCompletion {
 #[derive(Debug)]
 pub struct PoliciesState {
     selected_index: usize,
-    error: Option<ControlError>,
-    last_error: Option<ControlError>,
+    health: PolicyHealth,
     dir: Option<PathBuf>,
     rows: Vec<PolicyRow>,
     state_reader: PolicyStateReader,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PolicyHealth {
+    Ready,
+    Degraded { error: ControlError },
+}
+
+impl PolicyHealth {
+    fn from_error(error: Option<ControlError>) -> Self {
+        error.map_or(Self::Ready, |error| Self::Degraded { error })
+    }
+
+    const fn error(&self) -> Option<&ControlError> {
+        match self {
+            Self::Ready => None,
+            Self::Degraded { error } => Some(error),
+        }
+    }
 }
 
 impl PoliciesState {
@@ -76,8 +94,7 @@ impl PoliciesState {
         let loaded = load_rows(policy_dir, &state_reader);
         Self {
             selected_index: 0,
-            error: loaded.error.clone(),
-            last_error: loaded.error,
+            health: PolicyHealth::from_error(loaded.error),
             dir: loaded.dir,
             rows: loaded.rows,
             state_reader,
@@ -113,16 +130,11 @@ impl PoliciesState {
 
     #[must_use]
     pub fn error(&self) -> Option<&ControlError> {
-        self.error.as_ref()
-    }
-
-    #[must_use]
-    pub fn last_error(&self) -> Option<&ControlError> {
-        self.last_error.as_ref()
+        self.health.error()
     }
 
     pub fn set_error(&mut self, error: ControlError) {
-        self.error = Some(error);
+        self.health = PolicyHealth::Degraded { error };
     }
 
     #[must_use]
@@ -157,7 +169,7 @@ impl PoliciesState {
                 return false;
             };
 
-            self.error = Some(ControlError::editor(file, EditorError::PendingRewrite));
+            self.set_error(ControlError::editor(file, EditorError::PendingRewrite));
             return false;
         }
 
@@ -173,15 +185,13 @@ impl PoliciesState {
     pub fn reload(&mut self) {
         match load_rows_from_dir(self.dir.clone(), &self.state_reader) {
             Ok(loaded) => {
-                self.error = None;
-                self.last_error = None;
+                self.health = PolicyHealth::Ready;
                 self.dir = loaded.dir;
                 self.rows = loaded.rows;
                 self.clamp_selected_index();
             }
             Err(error) => {
-                self.error = Some(error.clone());
-                self.last_error = Some(error);
+                self.set_error(error);
             }
         }
     }
@@ -202,13 +212,15 @@ impl PoliciesState {
         self.refresh_states_for_file(&completion.file, &completion.ids);
 
         match &completion.result {
-            Ok(()) if self.mark_state_mismatches(completion).is_empty() => self.error = None,
+            Ok(()) if self.mark_state_mismatches(completion).is_empty() => {
+                self.health = PolicyHealth::Ready;
+            }
             Ok(()) => {
-                self.error = Some(policy_state_mismatch_error(completion));
+                self.set_error(policy_state_mismatch_error(completion));
             }
             Err(error) => {
                 self.mark_rewrite_error(&completion.file, &completion.ids);
-                self.error = Some(error.clone());
+                self.set_error(error.clone());
             }
         }
     }

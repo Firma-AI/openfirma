@@ -90,7 +90,7 @@ impl App {
             audit_rows: self.audit.rows_len(),
             rewrite_queue_len: self.rewrite_queue_len,
             pending_rewrites: self.policies.pending_rewrites(),
-            last_policy_error: self.policies.last_error().cloned(),
+            policy_error: self.policies.error().cloned(),
         }
     }
 

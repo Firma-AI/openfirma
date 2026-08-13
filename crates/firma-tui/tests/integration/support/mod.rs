@@ -457,7 +457,7 @@ pub fn render_text(app: &App, width: u16, height: u16) -> anyhow::Result<String>
 
 pub fn status_snapshot(status: &ControlStatus, expected_policy_dir: Option<&Path>) -> String {
     let policy_dir = policy_dir_snapshot(status.policy_dir.as_deref(), expected_policy_dir);
-    let last_policy_error = policy_error_snapshot(status.last_policy_error.as_ref());
+    let policy_error = policy_error_snapshot(status.policy_error.as_ref());
 
     format!(
         "runtime_state: {}\n\
@@ -467,7 +467,7 @@ pub fn status_snapshot(status: &ControlStatus, expected_policy_dir: Option<&Path
          audit_rows: {}\n\
          rewrite_queue_len: {}\n\
          pending_rewrites: {}\n\
-         last_policy_error: {last_policy_error}",
+         policy_error: {policy_error}",
         status.runtime_state.label(),
         status.policy_count,
         status.audit_connected,

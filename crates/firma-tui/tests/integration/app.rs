@@ -446,6 +446,7 @@ fn rewrite_completion_stores_structured_policy_rewrite_error() -> anyhow::Result
     });
 
     assert_eq!(app.policy_error(), Some(&rewrite_error));
+    assert_eq!(app.status().policy_error.as_ref(), Some(&rewrite_error));
 
     Ok(())
 }
