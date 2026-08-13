@@ -646,6 +646,10 @@ fn editing_is_rejected_while_rewrite_is_pending() -> anyhow::Result<()> {
     };
     assert_eq!(path, &policy_path);
     assert_eq!(error.as_ref(), &EditorError::PendingRewrite);
+    assert_eq!(
+        runner.app().status().policy_error.as_ref(),
+        runner.app().policy_error()
+    );
 
     release_rewrite.release()?;
     drop(runner);
@@ -1072,14 +1076,14 @@ fn crank_until_waits_for_policy_reload_error() -> anyhow::Result<()> {
         &mut runner,
         &terminal,
         replace_policy_source_editor(policy_path, "@id(\"broken\")\npermit (".to_string()),
-        |app| app.status().last_policy_error.is_some(),
+        |app| app.status().policy_error.is_some(),
         CRANK_TEST_TIMEOUT,
     )?;
 
     assert_eq!(outcome, ControlCrankOutcome::Processed(EventKind::Input));
     assert_eq!(runner.app().policies().len(), 1);
     assert_eq!(
-        runner.app().status().last_policy_error.as_ref(),
+        runner.app().status().policy_error.as_ref(),
         runner.app().policy_error()
     );
 
@@ -1112,6 +1116,10 @@ fn editor_failure_does_not_reload_policies() -> anyhow::Result<()> {
     };
     assert_eq!(path, &policy_path);
     assert_eq!(error.as_ref(), &EditorError::operation("editor failed"));
+    assert_eq!(
+        runner.app().status().policy_error.as_ref(),
+        runner.app().policy_error()
+    );
 
     Ok(())
 }

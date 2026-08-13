@@ -8,7 +8,7 @@ use crate::control::error::ControlError;
 /// Snapshot of runtime information rendered by the UI.
 ///
 /// The runner refreshes this from app state before drawing so the frame can
-/// show queue length, audit connectivity, and the latest policy error
+/// show queue length, audit connectivity, and the current policy error
 /// without querying event sources directly. Treat this as a display contract:
 /// background sources update the app, the app produces one snapshot, and the
 /// renderer stays a pure view over that snapshot.
@@ -28,6 +28,6 @@ pub struct ControlStatus {
     pub rewrite_queue_len: usize,
     /// Number of policy rows that are queued or being written.
     pub pending_rewrites: usize,
-    /// Most recent policy-side error.
-    pub last_policy_error: Option<ControlError>,
+    /// Current policy-side error.
+    pub policy_error: Option<ControlError>,
 }

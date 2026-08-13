@@ -21,7 +21,7 @@ fn initial_status_with_no_policy_dir() {
     assert_eq!(status.audit_rows, 0);
     assert_eq!(status.rewrite_queue_len, 0);
     assert_eq!(status.pending_rewrites, 0);
-    assert_eq!(status.last_policy_error, None);
+    assert_eq!(status.policy_error, None);
     insta::assert_snapshot!(status_snapshot(&status, None), @"
 runtime_state: running
 policy_dir: <none>
@@ -30,7 +30,7 @@ audit_connected: false
 audit_rows: 0
 rewrite_queue_len: 0
 pending_rewrites: 0
-last_policy_error: none
+policy_error: none
 ");
 }
 
@@ -53,7 +53,7 @@ audit_connected: false
 audit_rows: 0
 rewrite_queue_len: 0
 pending_rewrites: 0
-last_policy_error: none
+policy_error: none
 ");
 
     Ok(())
@@ -74,7 +74,7 @@ audit_connected: true
 audit_rows: 0
 rewrite_queue_len: 0
 pending_rewrites: 0
-last_policy_error: none
+policy_error: none
 ");
 }
 
@@ -95,7 +95,7 @@ audit_connected: true
 audit_rows: 2
 rewrite_queue_len: 0
 pending_rewrites: 0
-last_policy_error: none
+policy_error: none
 ");
 }
 
@@ -144,7 +144,7 @@ audit_connected: false
 audit_rows: 0
 rewrite_queue_len: 1
 pending_rewrites: 0
-last_policy_error: none
+policy_error: none
 ");
 
     release_rewrite.release()?;
@@ -171,7 +171,7 @@ audit_connected: false
 audit_rows: 0
 rewrite_queue_len: 0
 pending_rewrites: 1
-last_policy_error: none
+policy_error: none
 ");
 
     set_policy_states(&request.file, &request.ids, request.requested)?;
@@ -193,7 +193,7 @@ audit_connected: false
 audit_rows: 0
 rewrite_queue_len: 0
 pending_rewrites: 0
-last_policy_error: none
+policy_error: none
 ");
 
     Ok(())
@@ -229,18 +229,18 @@ fn runtime_state_labels_are_stable() {
 }
 
 #[test]
-fn status_preserves_and_clears_last_policy_error() -> anyhow::Result<()> {
+fn status_preserves_and_clears_policy_error() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let policy_path =
         write_named_policy_file(temp.path(), "policies.cedar", &permit_policy("one"))?;
     let mut app = App::new(Some(temp.path().to_path_buf()), false);
-    assert_eq!(app.status().last_policy_error, None);
+    assert_eq!(app.status().policy_error, None);
 
     std::fs::write(&policy_path, "@id(\"broken\")\npermit (")?;
     app.reload_policies();
     let error_status = app.status();
     let reload_error = error_status
-        .last_policy_error
+        .policy_error
         .clone()
         .ok_or_else(|| anyhow::anyhow!("policy reload error was not recorded"))?;
     let ControlError::PolicyDiscovery { path, error } = &reload_error else {
@@ -261,11 +261,11 @@ audit_connected: false
 audit_rows: 0
 rewrite_queue_len: 0
 pending_rewrites: 0
-last_policy_error: present
+policy_error: present
 ");
 
     app.push_audit_row(audit_row(AuditDecision::Deny, 3));
-    assert_eq!(app.status().last_policy_error.as_ref(), Some(&reload_error));
+    assert_eq!(app.status().policy_error.as_ref(), Some(&reload_error));
 
     std::fs::write(
         &policy_path,
@@ -274,7 +274,7 @@ last_policy_error: present
     app.reload_policies();
     let recovered_status = app.status();
 
-    assert_eq!(recovered_status.last_policy_error, None);
+    assert_eq!(recovered_status.policy_error, None);
     assert_eq!(recovered_status.policy_count, 2);
     insta::assert_snapshot!(status_snapshot(&recovered_status, Some(temp.path())), @"
 runtime_state: running
@@ -284,7 +284,7 @@ audit_connected: false
 audit_rows: 1
 rewrite_queue_len: 0
 pending_rewrites: 0
-last_policy_error: none
+policy_error: none
 ");
 
     Ok(())
