@@ -73,7 +73,7 @@ pub struct InitArgs {
     pub workspace: Option<PathBuf>,
 
     /// Config directory — where firma.toml, policies, and mappings are written.
-    /// Defaults to `.firma` in the current directory.
+    /// Defaults to the trusted config directory (`~/.firma`, or `%USERPROFILE%\.firma` on Windows).
     #[arg(long, short = 'o')]
     pub output_dir: Option<PathBuf>,
 
