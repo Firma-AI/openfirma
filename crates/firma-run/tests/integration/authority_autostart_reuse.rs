@@ -1,6 +1,5 @@
 //! When a plaintext H2 listener is already up on the configured listen address,
-//! `resolve_authority` must take the reuse path: return `supervisor: None` and
-//! not attempt autostart.
+//! `resolve_authority` must take the reuse path and not plan autostart.
 
 #![allow(
     clippy::unwrap_used,
@@ -51,7 +50,7 @@ fn spawn_plaintext_h2_stub(listener: TcpListener) {
 }
 
 #[test]
-fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
+fn existing_plaintext_h2_authority_is_reused_without_autostart_plan() {
     let listener = TcpListener::bind("[::1]:0").unwrap();
     let authority_address = listener.local_addr().unwrap();
     spawn_plaintext_h2_stub(listener);
@@ -92,8 +91,8 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
 
     let resolved = result.expect("reuse path should succeed");
     assert!(
-        resolved.supervisor.is_none(),
-        "reuse path must not spawn a supervisor"
+        resolved.owned.is_none(),
+        "reuse path must not plan autostart"
     );
     assert_eq!(resolved.url, format!("http://{authority_address}"));
     assert_eq!(

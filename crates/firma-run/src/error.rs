@@ -93,18 +93,6 @@ pub enum RunError {
     )]
     MissingAuthority,
 
-    #[error(
-        "authority autostart did not emit 'ready' within {timeout_secs}s; see logs at {}",
-        log_path.display()
-    )]
-    AuthorityReadyTimeout {
-        timeout_secs: u64,
-        log_path: PathBuf,
-    },
-
-    #[error("authority autostart failed: {reason}; see logs at {}", log_path.display())]
-    AuthorityStartupFailed { reason: String, log_path: PathBuf },
-
     #[error("authority unreachable at {url}: {reason}")]
     AuthorityUnreachable { url: String, reason: String },
 

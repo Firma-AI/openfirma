@@ -131,7 +131,7 @@ fn publication_writes_effective_endpoint_and_complete_marker_schema() {
     };
     let pid = firma_runtime_state::UserProcessId::new(4242).expect("nonzero user PID");
 
-    publish_metadata(&prepared, &endpoint, pid, None).expect("publish Sidecar metadata");
+    publish_metadata(&prepared, &endpoint, pid).expect("publish Sidecar metadata");
 
     assert_eq!(
         firma_runtime_state::pidfile::read(&prepared.pid_path).expect("read sidecar.pid"),

@@ -7,8 +7,8 @@ pub(super) fn in_range_for_platform(raw: u32) -> bool {
 impl UserProcessId {
     /// Return this process ID as a `nix` PID.
     #[must_use]
-    pub fn as_nix_pid(&self) -> nix::unistd::Pid {
-        (*self).into()
+    fn as_nix_pid(self) -> nix::unistd::Pid {
+        self.into()
     }
 
     /// Return whether this process ID identifies an existing process.

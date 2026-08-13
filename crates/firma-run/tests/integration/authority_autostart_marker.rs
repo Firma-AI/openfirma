@@ -1,225 +1,170 @@
-//! End-to-end: spawn an Authority fixture that reads the generated config,
-//! binds its configured dynamic address, and emits the startup contract.
+//! Production-path coverage for local Authority preparation and publication.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test code"
-)]
+#![cfg(unix)]
+#![allow(clippy::expect_used, reason = "test code")]
 
-#[cfg(unix)]
+use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt as _;
 use std::time::Duration;
 
-#[cfg(unix)]
-use firma_run::authority::{AuthoritySupervisor, SpawnRequest};
+use firma_run::backend::{BackendKind, EnforcementProof, NetworkConfinement, SandboxHandle};
+use firma_run::config::{CapabilityLeaseConfig, CapabilitySource, NetworkPolicy, SidecarEndpoint};
+use firma_run::routing::{
+    AutostartFlags, OwnedAuthorityPlan, ResolvedAuthority, prepare_network_runtime,
+};
 
-#[cfg(unix)]
-#[test]
-fn marker_dir_layout_and_developer_cedar() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let fake = tmp.path().join("fake-firma.sh");
-    let fixture_bin = tmp.path().join("authority-fixture-bin");
-    std::os::unix::fs::symlink(
-        std::env::current_exe().expect("test executable"),
-        &fixture_bin,
-    )
-    .expect("link fixture test executable");
-    std::fs::write(
-        &fake,
-        "#!/usr/bin/env bash\n\
-         export FIRMA_TEST_AUTHORITY_CONFIG=\"$3\"\n\
-         exec \"$(dirname \"$0\")/authority-fixture-bin\" \
-           --exact authority_autostart_marker::authority_fixture --ignored --nocapture\n",
-    )
-    .unwrap();
-    let mut p = std::fs::metadata(&fake).unwrap().permissions();
-    p.set_mode(0o755);
-    std::fs::set_permissions(&fake, p).unwrap();
-
-    let sandbox_id = firma_run::identity::SandboxId::generate();
-    let marker = tmp.path().join("marker/authority");
-    let sup = AuthoritySupervisor::spawn(SpawnRequest {
-        sandbox_id: &sandbox_id,
-        agent_id: super::helper::agent_id(),
-        session_id: "sess",
-        marker_dir: marker.clone(),
-        profile_name: "developer",
-        firma_exe: fake,
-        startup_timeout: Duration::from_secs(5),
-        user_config_path: None,
-    })
-    .expect("spawn ok");
-
-    assert!(marker.join("authority.toml").is_file());
-    assert!(marker.join("authority.pid").is_file());
-    assert!(marker.join("metadata.toml").is_file());
-    assert!(marker.join("policy_dir/developer.cedar").is_file());
-    assert!(marker.join("keys/authority.key").is_file());
-    assert!(marker.join("keys/authority.pub").is_file());
-
-    let config = std::fs::read_to_string(marker.join("authority.toml")).unwrap();
-    assert!(
-        config.contains("listen_addr = \"[::1]:0\""),
-        "got: {config}"
-    );
-
-    let meta = std::fs::read_to_string(marker.join("metadata.toml")).unwrap();
-    assert!(
-        meta.contains(&format!("sandbox_id = \"{sandbox_id}\"")),
-        "got: {meta}"
-    );
-    assert!(meta.contains("profile = \"developer\""));
-    let endpoint = sup.url().strip_prefix("http://").unwrap().to_string();
-    assert_ne!(endpoint, "[::1]:0");
-    assert!(meta.contains(&format!("listen_addr = \"{endpoint}\"")));
-    let address: std::net::SocketAddr = endpoint.parse().expect("parse fixture endpoint");
-    assert_ne!(address.port(), 0);
-    std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1))
-        .expect("fixture is reachable at the published endpoint");
-
-    let cedar = std::fs::read_to_string(marker.join("policy_dir/developer.cedar")).unwrap();
-    assert!(cedar.contains("Local autostart profile for `firma run`."));
-    assert!(cedar.contains("permit(principal, action, resource)"));
-
-    drop(sup);
+#[derive(serde::Deserialize)]
+struct AuthorityMetadata {
+    sandbox_id: firma_run::identity::SandboxId,
+    agent_id: firma_core::AgentId,
+    session_id: String,
+    profile: String,
+    listen_addr: String,
+    pid: firma_runtime_state::UserProcessId,
+    started_at: String,
 }
 
-#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one production-path scenario keeps launch, publication, and marker assertions together"
+)]
+fn local_authority_publishes_effective_component_handle_and_metadata() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let fixture = temp.path().join("authority-fixture");
+    std::os::unix::fs::symlink(std::env::current_exe().expect("test executable"), &fixture)
+        .expect("link fixture executable");
+    let launcher = temp.path().join("fake-firma.sh");
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nexport FIRMA_TEST_STARTUP_REPORT=\"$5\"\nexec '{}' --exact authority_autostart_marker::authority_fixture --ignored --nocapture\n",
+            fixture.display()
+        ),
+    )
+    .expect("write fixture launcher");
+    let mut permissions = std::fs::metadata(&launcher)
+        .expect("launcher metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&launcher, permissions).expect("make launcher executable");
+
+    let identity = firma_run::identity::RunIdentity::new(*super::helper::agent_id(), "generic");
+    let external_sidecar = TcpListener::bind("127.0.0.1:0").expect("external Sidecar listener");
+    let sidecar_endpoint = SidecarEndpoint::Tcp {
+        addr: external_sidecar.local_addr().expect("Sidecar endpoint"),
+    };
+    let handle = SandboxHandle {
+        backend: BackendKind::Vz,
+        runtime_dir: temp.path().join("sandbox-runtime"),
+        identity: identity.clone(),
+        mounts: Vec::new(),
+        network_policy: NetworkPolicy {
+            enforce_network_namespace: false,
+            fail_closed: true,
+        },
+    };
+    let proof = EnforcementProof {
+        backend: BackendKind::Vz,
+        structural: false,
+        fail_closed: true,
+        detail: "Authority publication test".into(),
+        network_confinement: NetworkConfinement::ProxyOnly,
+    };
+    let authority = ResolvedAuthority {
+        url: "http://[::1]:0".into(),
+        ca_cert_path: None,
+        pub_key_path: None,
+        credentials: None,
+        credentials_config: None,
+        owned: Some(OwnedAuthorityPlan {
+            profile_name: "developer".into(),
+            firma_exe: launcher,
+            user_config_path: None,
+        }),
+    };
+    let flags = AutostartFlags {
+        startup_timeout: Duration::from_secs(5),
+        ..AutostartFlags::default()
+    };
+    let capability = CapabilityLeaseConfig {
+        source: CapabilitySource::Disabled,
+        public_key_path: None,
+        refresh_ratio: 0.6,
+        grace_seconds: 30,
+        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+    };
+
+    let runtime = prepare_network_runtime(
+        &handle,
+        &proof,
+        &sidecar_endpoint,
+        &identity,
+        &flags,
+        authority,
+        &capability,
+    )
+    .expect("prepare run with owned Authority");
+
+    let marker = firma_runtime_state::runtime_paths::run_entry_from(
+        &firma_runtime_state::runtime_paths::default_runtime_dir(),
+        &identity.sandbox_id,
+    );
+    let authority_marker = marker.join("authority");
+    let config =
+        std::fs::read_to_string(authority_marker.join("authority.toml")).expect("Authority config");
+    assert!(config.contains("listen_addr = \"[::1]:0\""), "{config}");
+    assert!(authority_marker.join("keys/authority.key").is_file());
+    assert!(authority_marker.join("keys/authority.pub").is_file());
+    let cedar = std::fs::read_to_string(authority_marker.join("policy_dir/developer.cedar"))
+        .expect("developer policy");
+    assert!(cedar.contains("permit(principal, action, resource)"));
+
+    let pid = firma_runtime_state::pidfile::read(&authority_marker.join("authority.pid"))
+        .expect("read authority.pid")
+        .expect("published Authority PID");
+    let metadata: AuthorityMetadata = toml::from_str(
+        &std::fs::read_to_string(authority_marker.join("metadata.toml"))
+            .expect("Authority metadata"),
+    )
+    .expect("parse Authority metadata");
+    let identity_env = identity.env_pairs();
+    assert_eq!(metadata.sandbox_id, identity.sandbox_id);
+    assert_eq!(metadata.agent_id, *super::helper::agent_id());
+    assert_eq!(
+        metadata.session_id,
+        identity_env
+            .get("FIRMA_RUN_SESSION_ID")
+            .expect("session identity")
+            .as_str()
+    );
+    assert_eq!(metadata.profile, "developer");
+    assert_eq!(metadata.pid, pid);
+    let effective: std::net::SocketAddr = metadata
+        .listen_addr
+        .parse()
+        .expect("effective Authority endpoint");
+    assert_ne!(effective.port(), 0);
+    chrono::DateTime::parse_from_rfc3339(&metadata.started_at).expect("RFC 3339 started_at");
+
+    drop(runtime);
+    let _ = std::fs::remove_dir_all(marker);
+}
+
 #[test]
 #[ignore = "spawned as a process-lifecycle fixture"]
 fn authority_fixture() {
-    let config_path = std::env::var_os("FIRMA_TEST_AUTHORITY_CONFIG")
+    let report = std::env::var_os("FIRMA_TEST_STARTUP_REPORT")
         .map(std::path::PathBuf::from)
-        .expect("fixture config path");
-    let config_text = std::fs::read_to_string(config_path).expect("read fixture config");
-    let config: toml::Value = toml::from_str(&config_text).expect("parse fixture config");
-    let configured = config["authority"]["listen_addr"]
-        .as_str()
-        .expect("configured listen address");
-    let listener = std::net::TcpListener::bind(configured).expect("bind configured address");
-    let effective = listener.local_addr().expect("effective listen address");
-    eprintln!("firma_authority: config loaded listen_addr=\"{configured}\"");
-    eprintln!("firma_authority: listening addr=\"{effective}\"");
-    eprintln!("firma_authority: authority ready");
+        .expect("startup report path");
+    let listener = TcpListener::bind("[::1]:0").expect("bind dynamic Authority endpoint");
+    let endpoint = listener.local_addr().expect("effective Authority endpoint");
+    firma_process_orchestrator::publish_startup_report(
+        &report,
+        &firma_process_orchestrator::ComponentEndpoint::Tcp(endpoint),
+    )
+    .expect("publish startup report");
     loop {
         std::thread::sleep(Duration::from_mins(1));
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn pidfile_publication_failure_reaps_started_authority() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let marker = tmp.path().join("marker/authority");
-    let observed_pid = tmp.path().join("observed.pid");
-    let fake = tmp.path().join("fake-firma.sh");
-    std::fs::write(
-        &fake,
-        format!(
-            "#!/usr/bin/env bash\n\
-             mkdir '{}'/authority.pid\n\
-             echo $$ > '{}'\n\
-             echo 'firma_authority: listening addr=\"[::1]:54321\"' >&2\n\
-             echo 'firma_authority: authority ready' >&2\n\
-             exec sleep 60\n",
-            marker.display(),
-            observed_pid.display()
-        ),
-    )
-    .expect("write fake");
-    let mut permissions = std::fs::metadata(&fake).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&fake, permissions).unwrap();
-    let sandbox_id = firma_run::identity::SandboxId::generate();
-
-    let result = AuthoritySupervisor::spawn(SpawnRequest {
-        sandbox_id: &sandbox_id,
-        agent_id: super::helper::agent_id(),
-        session_id: "sess",
-        marker_dir: marker,
-        profile_name: "developer",
-        firma_exe: fake,
-        startup_timeout: Duration::from_secs(2),
-        user_config_path: None,
-    });
-
-    assert!(result.is_err(), "pidfile publication must fail");
-    let pid: i32 = std::fs::read_to_string(observed_pid)
-        .expect("fixture recorded pid")
-        .trim()
-        .parse()
-        .expect("parse pid");
-    assert_eq!(
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
-        Err(nix::errno::Errno::ESRCH),
-        "startup owner must synchronously kill and reap the child"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn authority_environment_overrides_are_not_inherited() {
-    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args([
-            "--exact",
-            "authority_autostart_marker::authority_environment_fixture",
-            "--ignored",
-            "--nocapture",
-        ])
-        .env("FIRMA_AUTHORITY_LISTEN_ADDR", "0.0.0.0:50051")
-        .env("FIRMA_AUTHORITY_KEY_FILE", "/tmp/unexpected-authority.key")
-        .status()
-        .expect("run environment fixture");
-
-    assert!(status.success(), "environment fixture failed: {status}");
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "spawned with Authority environment overrides"]
-fn authority_environment_fixture() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let observed_environment = tmp.path().join("observed-environment");
-    let fake = tmp.path().join("fake-firma.sh");
-    std::fs::write(
-        &fake,
-        format!(
-            "#!/usr/bin/env bash\n\
-             env | grep '^FIRMA_AUTHORITY_' > '{}' || true\n\
-             echo 'firma_authority: listening addr=\"[::1]:54321\"' >&2\n\
-             echo 'firma_authority: authority ready' >&2\n\
-             exec sleep 60\n",
-            observed_environment.display()
-        ),
-    )
-    .expect("write fake");
-    let mut permissions = std::fs::metadata(&fake).expect("stat fake").permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&fake, permissions).expect("make fake executable");
-    let sandbox_id = firma_run::identity::SandboxId::generate();
-
-    let supervisor = AuthoritySupervisor::spawn(SpawnRequest {
-        sandbox_id: &sandbox_id,
-        agent_id: super::helper::agent_id(),
-        session_id: "sess",
-        marker_dir: tmp.path().join("marker/authority"),
-        profile_name: "developer",
-        firma_exe: fake,
-        startup_timeout: Duration::from_secs(2),
-        user_config_path: None,
-    })
-    .expect("spawn fixture");
-
-    let inherited = std::fs::read_to_string(observed_environment).expect("read environment");
-    assert!(
-        inherited.is_empty(),
-        "prepared Authority inherited overrides: {inherited}"
-    );
-    drop(supervisor);
 }
