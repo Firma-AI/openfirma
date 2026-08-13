@@ -87,6 +87,42 @@ fn cli_schema_rejects_invalid_option_definitions() {
     }
 }
 
+#[test]
+fn cli_schema_rejects_conflicting_skip_option_definitions() {
+    let conflicting_command_options = [
+        r#"{ name = "--mode", takes_value = false }"#,
+        r#"{ name = "--mode", takes_value = true, allow_attached_value = true }"#,
+    ];
+
+    for command_option in conflicting_command_options {
+        let input = format!(
+            r#"
+binary_name = "example"
+provider_id = "example"
+credential_env_vars = []
+skip_options = [{{ name = "--mode", takes_value = true }}]
+
+[[matchers]]
+type = "sensitive_command"
+argv = ["secret", "get"]
+skip_options = [{command_option}]
+
+[matchers.matcher]
+type = "regex"
+pattern = "(?P<name>.+)=(?P<value>.+)"
+"#
+        );
+
+        let Err(error) = toml::from_str::<CliIntegrationSpec>(&input) else {
+            panic!("conflicting option definitions must not deserialize: {command_option}");
+        };
+        assert_eq!(
+            error.message(),
+            "option `--mode` has conflicting definitions in integration-level and command-level skip_options"
+        );
+    }
+}
+
 fn builtin_matcher(binary: &str, command_args: &[&str]) -> Result<CompiledMatcher, String> {
     let registry = IntegrationRegistry::with_builtins();
     let spec = registry

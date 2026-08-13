@@ -101,8 +101,10 @@ pub enum CommandMatch {
 
 /// Per-CLI-tool behavior: credential forwarding, command classification, and
 /// output normalization.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// Deserialization rejects conflicting definitions of the same skipped option
+/// across integration and command scopes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CliIntegrationSpec {
     /// Executable basename used to select this integration.
     pub binary_name: String,
@@ -120,6 +122,55 @@ pub struct CliIntegrationSpec {
     pub forbidden_options: Vec<FlagSpec>,
     /// Rules that classify invocations and configure secret extraction.
     pub matchers: Vec<CliMatcherRule>,
+}
+
+impl<'de> serde::Deserialize<'de> for CliIntegrationSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawCliIntegrationSpec {
+            binary_name: String,
+            provider_id: String,
+            credential_env_vars: Vec<String>,
+            #[serde(default)]
+            skip_options: Vec<FlagSpec>,
+            #[serde(default)]
+            forbidden_options: Vec<FlagSpec>,
+            matchers: Vec<CliMatcherRule>,
+        }
+
+        let raw = RawCliIntegrationSpec::deserialize(deserializer)?;
+        for rule in raw.matchers.iter().filter_map(|matcher| match matcher {
+            MatcherRule::SensitiveCommand(rule) => Some(rule),
+            MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
+        }) {
+            for integration_option in &raw.skip_options {
+                if let Some(command_option) = rule
+                    .skip_options
+                    .iter()
+                    .find(|option| option.name == integration_option.name)
+                    && command_option != integration_option
+                {
+                    return Err(serde::de::Error::custom(format!(
+                        "option `{}` has conflicting definitions in integration-level and command-level skip_options",
+                        integration_option.name
+                    )));
+                }
+            }
+        }
+
+        Ok(Self {
+            binary_name: raw.binary_name,
+            provider_id: raw.provider_id,
+            credential_env_vars: raw.credential_env_vars,
+            skip_options: raw.skip_options,
+            forbidden_options: raw.forbidden_options,
+            matchers: raw.matchers,
+        })
+    }
 }
 
 impl CliIntegrationSpec {
