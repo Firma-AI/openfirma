@@ -12,6 +12,8 @@ const FIXTURE_AUTHORITY_ADDR: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_AUTHORIT
 const FIXTURE_STARTUP_REPORT: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_STARTUP_REPORT";
 #[cfg(unix)]
 const FIXTURE_SIDECAR_ARGS: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_SIDECAR_ARGS";
+#[cfg(unix)]
+const FIXTURE_SIDECAR_SOCKET: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_SIDECAR_SOCKET";
 
 #[test]
 fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
@@ -23,7 +25,7 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
     std::fs::write(
         &config_path,
         "[authority]\nlisten_addr = \"127.0.0.1:9\"\n\
-         [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n",
+         [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n",
     )
     .expect("write config");
     let config = StackConfig {
@@ -94,7 +96,7 @@ fn authority_exit_aborts_sidecar_readiness() {
         &config_path,
         format!(
             "[authority]\nlisten_addr = \"{authority_addr}\"\n\
-             [sidecar.interceptor]\nlisten_addr = \"{sidecar_addr}\"\n"
+             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"{sidecar_addr}\"\n"
         ),
     )
     .expect("write config");
@@ -193,6 +195,69 @@ fn dynamic_authority_does_not_enable_disabled_sidecar_authority_client() {
 
 #[cfg(unix)]
 #[test]
+fn unix_sidecar_publication_matches_planned_endpoint() {
+    use crate::support::write_executable_script;
+
+    let dir = tempfile::tempdir().expect("dir");
+    let root = dir.path();
+    let state_dir = root.join("state");
+    let config_path = root.join("firma.toml");
+    let fixture_path = root.join("fixture.sh");
+    let fixture_test_bin = root.join("fixture-test-bin");
+    let sidecar_socket = root.join("sidecar.sock");
+    let authority_listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
+    let authority_addr = authority_listener.local_addr().expect("authority address");
+
+    std::os::unix::fs::symlink(
+        std::env::current_exe().expect("test executable"),
+        &fixture_test_bin,
+    )
+    .expect("link fixture test executable");
+    write_executable_script(
+        &fixture_path,
+        format!(
+            "#!/bin/sh\n\
+             root=${{0%/*}}\n\
+             export {FIXTURE_STARTUP_REPORT}=\"$5\"\n\
+             if [ \"$1\" = authority ]; then\n\
+               export {FIXTURE_MODE}=authority\n\
+               export {FIXTURE_AUTHORITY_ADDR}={authority_addr}\n\
+             else\n\
+               export {FIXTURE_MODE}=sidecar-unix\n\
+               export {FIXTURE_SIDECAR_SOCKET}=\"{}\"\n\
+             fi\n\
+             exec \"$root/fixture-test-bin\" --exact \
+               readiness_process_exit::lifecycle_fixture --ignored\n",
+            sidecar_socket.display()
+        ),
+    );
+    std::fs::write(
+        &config_path,
+        format!(
+            "[authority]\nlisten_addr = \"{authority_addr}\"\n\
+             [sidecar.interceptor]\nmode = \"unix_socket\"\nsocket_path = \"{}\"\n",
+            sidecar_socket.display()
+        ),
+    )
+    .expect("write config");
+    let config = StackConfig {
+        config_file: config_path,
+        firma_bin: Some(fixture_path),
+    };
+
+    let mut stack = firma_stack::spawn_stack(&config, &state_dir)
+        .expect("Unix Sidecar publication should satisfy readiness");
+    let endpoint = std::fs::read_to_string(state_dir.join("sidecar.listen"))
+        .expect("read canonical Sidecar endpoint");
+    assert_eq!(endpoint, format!("unix:{}\n", sidecar_socket.display()));
+    stack
+        .shutdown(Duration::ZERO)
+        .expect("shut down fixture stack");
+}
+
+#[cfg(unix)]
+#[test]
 #[ignore = "spawned as a process-lifecycle fixture"]
 fn lifecycle_fixture() {
     let mode = std::env::var(FIXTURE_MODE).expect("fixture mode");
@@ -209,6 +274,28 @@ fn lifecycle_fixture() {
             &firma_stack::ComponentEndpoint::Tcp(authority_addr),
         )
         .expect("publish fixture startup report");
+        loop {
+            std::thread::sleep(Duration::from_mins(1));
+        }
+    }
+
+    if mode == "sidecar-unix" {
+        let socket = std::path::PathBuf::from(
+            std::env::var_os(FIXTURE_SIDECAR_SOCKET).expect("fixture Sidecar socket"),
+        );
+        let listener =
+            std::os::unix::net::UnixListener::bind(&socket).expect("bind fixture Sidecar socket");
+        let startup_report = std::path::PathBuf::from(
+            std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
+        );
+        firma_stack::publish_startup_report(
+            &startup_report,
+            &firma_stack::ComponentEndpoint::Unix(
+                firma_stack::UnixEndpoint::new(socket).expect("valid Unix socket path"),
+            ),
+        )
+        .expect("publish fixture startup report");
+        let _listener = listener;
         loop {
             std::thread::sleep(Duration::from_mins(1));
         }
@@ -299,7 +386,7 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
         &config_path,
         format!(
             "[authority]\nlisten_addr = \"{requested_authority_addr}\"\n\
-             [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:9\"\n\
+             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n\
              {sidecar_authority}"
         ),
     )

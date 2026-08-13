@@ -15,10 +15,12 @@ use std::process::Command;
 
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
+#[cfg(unix)]
+use firma_process_orchestrator::UnixEndpoint;
 use firma_process_orchestrator::{
     ComponentEndpoint, ComponentPlanContext, ComponentSpec, OrchestratorError, StackTopology,
 };
-use firma_sidecar::config::SidecarConfig;
+use firma_sidecar::config::{InterceptorMode, SidecarConfig};
 use tracing::debug;
 
 use crate::config::StackConfig;
@@ -74,7 +76,7 @@ pub struct ComponentPlanner<'a> {
 
 struct PreparedPlan {
     authority_bind_addr: SocketAddr,
-    sidecar_bind_addr: SocketAddr,
+    sidecar_endpoint: ComponentEndpoint,
     sidecar_authority_configured: bool,
     executable: PathBuf,
 }
@@ -125,7 +127,7 @@ impl<'a> ComponentPlanner<'a> {
                         component: AUTHORITY_NAME,
                     })?;
                 let sidecar_publication =
-                    context.child_published(ComponentEndpoint::Tcp(prepared.sidecar_bind_addr));
+                    context.child_published(prepared.sidecar_endpoint.clone());
                 let authority_connect_addr = if prepared.authority_bind_addr.port() == 0
                     && prepared.sidecar_authority_configured
                 {
@@ -181,7 +183,29 @@ impl PreparedPlan {
         let config = FirmaToml::read(&cfg.config_file)?;
         let authority_bind_addr = config.authority_listen_addr()?;
         let sidecar_config = config.sidecar_config()?;
-        let sidecar_bind_addr = sidecar_config.interceptor.listen_addr;
+        let sidecar_endpoint = match sidecar_config.interceptor.mode {
+            InterceptorMode::HttpProxy | InterceptorMode::Grpc => {
+                ComponentEndpoint::Tcp(sidecar_config.interceptor.listen_addr)
+            }
+            #[cfg(unix)]
+            InterceptorMode::UnixSocket => {
+                let path = sidecar_config
+                    .interceptor
+                    .socket_path
+                    .clone()
+                    .ok_or_else(|| StackError::ConfigValidation {
+                        source: anyhow::anyhow!("validated Unix interceptor has no socket path"),
+                    })?;
+                ComponentEndpoint::Unix(UnixEndpoint::new(path).map_err(|path| {
+                    StackError::ConfigValidation {
+                        source: anyhow::anyhow!(
+                            "Unix interceptor socket path is not valid UTF-8: {}",
+                            path.display()
+                        ),
+                    }
+                })?)
+            }
+        };
         let sidecar_authority_configured = sidecar_config.authority.url.is_some();
         let executable = match &cfg.firma_bin {
             Some(path) => path.clone(),
@@ -190,7 +214,7 @@ impl PreparedPlan {
         };
         Ok(Self {
             authority_bind_addr,
-            sidecar_bind_addr,
+            sidecar_endpoint,
             sidecar_authority_configured,
             executable,
         })

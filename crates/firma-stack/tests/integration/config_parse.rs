@@ -10,7 +10,7 @@ fn resolves_explicit_override() {
     std::fs::write(
         &cfg_path,
         "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n\
-         [sidecar.interceptor]\nlisten_addr = \"127.0.0.1:8080\"\n",
+         [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:8080\"\n",
     )
     .expect("write");
     let cfg = resolve_stack_config(Some(&cfg_path)).expect("resolve");
