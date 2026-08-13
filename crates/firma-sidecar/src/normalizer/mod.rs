@@ -22,11 +22,12 @@
 pub(crate) mod mapping;
 
 use std::collections::{BTreeMap, HashMap};
-use std::str;
+use std::str::{self, FromStr};
 
 use chrono::{DateTime, Utc};
 use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
-use firma_http::{HeaderName, Method};
+use firma_http::{Authority, HeaderMap, Method};
+use http::uri::InvalidUri;
 use unicode_normalization::UnicodeNormalization;
 
 /// Hosts whose traffic earns the `provider = "github"` resource tag.
@@ -47,12 +48,12 @@ const GMAIL_HOSTS: &[&str] = &["gmail.googleapis.com"];
 /// `intent.resource["provider"]`. Returns `None` for hosts outside the known
 /// allowlist; downstream Cedar policies can still discriminate on
 /// `host`/`path` directly.
-fn provider_for_host(host: &str) -> Option<&'static str> {
-    if GITHUB_HOSTS.contains(&host) {
+fn provider_for_host(host: &Authority) -> Option<&'static str> {
+    if GITHUB_HOSTS.contains(&host.as_str()) {
         Some("github")
-    } else if STRIPE_HOSTS.contains(&host) {
+    } else if STRIPE_HOSTS.contains(&host.as_str()) {
         Some("stripe")
-    } else if GMAIL_HOSTS.contains(&host) {
+    } else if GMAIL_HOSTS.contains(&host.as_str()) {
         Some("gmail")
     } else {
         None
@@ -144,14 +145,14 @@ pub struct RawRequest {
     /// Target host or domain (e.g. `api.stripe.com`).
     ///
     /// Maps to the `resource` sub-field of the normalized intent.
-    pub host: String,
+    pub host: Authority,
     /// Request path including any query string (e.g. `/v1/charges`).
     pub path: String,
     /// HTTP headers as key-value pairs.
     ///
     /// May contain sensitive headers at this stage; the normalizer filters
     /// them before building the [`NormalizedEnvelope`].
-    pub headers: HashMap<HeaderName, String>,
+    pub headers: HeaderMap,
     /// Optional request body as raw bytes.
     ///
     /// Used by the normalizer to extract `parameters` for the intent
@@ -257,7 +258,14 @@ impl IntentNormalizer {
         // the bypass for mapping, Cedar resource UID, scope check, and the
         // outbound connector URL. `raw_action_ref` below still carries the
         // original host for audit observability.
-        let normalized_host = normalize_host(&request.host);
+        let Ok(normalized_host) = normalize_host(&request.host) else {
+            let detail = format!(
+                "invalid HTTP host: {} {} (host: {})",
+                request.method, request.path, request.host
+            );
+            return Err(EnforcementError::NormalizationFailed { detail }
+                .into_deny(EnforcementStage::Normalization));
+        };
 
         let (sanitized_path, query_params) = if query_string.is_empty() {
             (normalized_path.clone(), HashMap::new())
@@ -341,16 +349,16 @@ impl IntentNormalizer {
 )]
 fn enrich_github_git_metadata(
     request: &RawRequest,
-    normalized_host: &str,
+    normalized_host: &Authority,
     normalized_path: &str,
     query_params: &HashMap<String, String>,
     resource: &mut BTreeMap<String, String>,
     action_class: &str,
 ) -> Result<String, EnforcementDecision> {
-    if normalized_host == "github.com" {
+    if normalized_host.as_str() == "github.com" {
         return enrich_github_smart_http_metadata(request, normalized_path, resource, action_class);
     }
-    if normalized_host == "api.github.com" {
+    if normalized_host.as_str() == "api.github.com" {
         return enrich_github_rest_ref_metadata(
             request,
             normalized_path,
@@ -643,7 +651,7 @@ fn git_normalization_deny(request: &RawRequest, detail: &str) -> EnforcementDeci
     EnforcementError::NormalizationFailed { detail }.into_deny(EnforcementStage::Normalization)
 }
 
-fn sanitize_headers(headers: &HashMap<HeaderName, String>) -> HashMap<HeaderName, String> {
+fn sanitize_headers(headers: &HeaderMap) -> HeaderMap {
     headers
         .iter()
         .filter(|(k, _)| !SENSITIVE_HEADERS.contains(&k.as_str()))
@@ -702,8 +710,8 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
 /// Every spelling rule is owned by [`mapping::normalize_host_pattern`], which
 /// also normalizes rule host patterns at load time, so a request host and a
 /// rule host can never disagree in form.
-fn normalize_host(host: &str) -> String {
-    mapping::normalize_host_pattern(host)
+fn normalize_host(host: &Authority) -> Result<Authority, InvalidUri> {
+    Authority::from_str(&mapping::normalize_host_pattern(host.as_str()))
 }
 
 /// Normalize a request host into the authority stored as the intent's
@@ -716,8 +724,8 @@ fn normalize_host(host: &str) -> String {
 /// port naming the opposite scheme's default (`example.com:443` over plain
 /// HTTP) is not this request's default and must be preserved, or the
 /// connector would dispatch to the wrong port.
-fn normalize_dispatch_host(host: &str, is_https: bool) -> String {
-    mapping::normalize_dispatch_host(host, is_https)
+fn normalize_dispatch_host(host: &Authority, is_https: bool) -> String {
+    mapping::normalize_dispatch_host(host.as_str(), is_https)
 }
 
 /// Normalize a request path according to the canonicalization rules:
@@ -807,6 +815,8 @@ fn resolve_dot_segments(path: &str) -> String {
 mod tests {
     use std::str::FromStr;
 
+    use http::{HeaderName, HeaderValue};
+
     use super::*;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::registry::ActionClassRegistry;
@@ -840,23 +850,28 @@ mod tests {
         IntentNormalizer::new(table)
     }
 
-    fn make_request(method: Method, host: &str, path: &str) -> RawRequest {
+    fn make_request(method: Method, host: &Authority, path: &str) -> RawRequest {
         RawRequest {
             method,
-            host: host.to_string(),
+            host: host.clone(),
             path: path.to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         }
     }
 
-    fn make_request_with_body(method: Method, host: &str, path: &str, body: Vec<u8>) -> RawRequest {
+    fn make_request_with_body(
+        method: Method,
+        host: &Authority,
+        path: &str,
+        body: Vec<u8>,
+    ) -> RawRequest {
         RawRequest {
             method,
-            host: host.to_string(),
+            host: host.clone(),
             path: path.to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: Some(body),
             is_https: true,
         }
@@ -967,37 +982,32 @@ mod tests {
 
     #[test]
     fn test_normalize_host_lowercases_mixed_case() {
-        assert_eq!(normalize_host("API.GITHUB.COM"), "api.github.com");
-        assert_eq!(normalize_host("Api.OpenAi.Com"), "api.openai.com");
+        std::assert_matches!(normalize_host(&Authority::from_static("API.GITHUB.COM")), Ok(authority) if authority == Authority::from_static("api.github.com"));
+        std::assert_matches!(normalize_host(&Authority::from_static("Api.OpenAi.Com")), Ok(authority) if authority == Authority::from_static("api.openai.com"));
     }
 
     #[test]
     fn test_normalize_host_strips_trailing_dot() {
-        assert_eq!(normalize_host("api.openai.com."), "api.openai.com");
-        assert_eq!(normalize_host("api.openai.com.."), "api.openai.com");
+        std::assert_matches!(normalize_host(&Authority::from_static("api.openai.com.")), Ok(authority) if authority == Authority::from_static("api.openai.com"));
+        std::assert_matches!(normalize_host(&Authority::from_static("api.openai.com..")), Ok(authority) if authority == Authority::from_static("api.openai.com"));
     }
 
     #[test]
     fn test_normalize_host_strips_default_port() {
-        assert_eq!(normalize_host("api.openai.com:443"), "api.openai.com");
-        assert_eq!(normalize_host("api.openai.com:80"), "api.openai.com");
+        std::assert_matches!(normalize_host(&Authority::from_static("api.openai.com:443")), Ok(authority) if authority == Authority::from_static("api.openai.com"));
+        std::assert_matches!(normalize_host(&Authority::from_static("api.openai.com:80")), Ok(authority) if authority == Authority::from_static("api.openai.com"));
     }
 
     #[test]
     fn test_normalize_host_keeps_nondefault_port() {
-        assert_eq!(normalize_host("api.openai.com:8443"), "api.openai.com:8443");
-    }
-
-    #[test]
-    fn test_normalize_host_trims_whitespace() {
-        assert_eq!(normalize_host("  api.openai.com  "), "api.openai.com");
+        std::assert_matches!(normalize_host(&Authority::from_static("api.openai.com:8443")), Ok(authority) if authority == Authority::from_static("api.openai.com:8443"));
     }
 
     #[test]
     fn test_normalize_host_ipv6_preserved() {
-        assert_eq!(normalize_host("[::1]"), "[::1]");
-        assert_eq!(normalize_host("[FE80::1]:443"), "[fe80::1]");
-        assert_eq!(normalize_host("[FE80::1]:8443"), "[fe80::1]:8443");
+        std::assert_matches!(normalize_host(&Authority::from_static("[::1]")), Ok(authority) if authority == Authority::from_static("[::1]"));
+        std::assert_matches!(normalize_host(&Authority::from_static("[FE80::1]:443")), Ok(authority) if authority == Authority::from_static("[fe80::1]"));
+        std::assert_matches!(normalize_host(&Authority::from_static("[FE80::1]:8443")), Ok(authority) if authority == Authority::from_static("[fe80::1]:8443"));
     }
 
     fn load_mapping_file(filename: &str) -> MappingRulesFile {
@@ -1038,9 +1048,9 @@ mod tests {
         let normalizer = test_normalizer();
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1056,21 +1066,27 @@ mod tests {
     #[test]
     fn test_normalize_strips_sensitive_headers() {
         let normalizer = test_normalizer();
-        let mut headers = HashMap::new();
+        let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::from_static("authorization"),
-            "Bearer secret".to_string(),
+            HeaderValue::from_static("Bearer secret"),
         );
-        headers.insert(HeaderName::from_static("x-api-key"), "sk-123".to_string());
+        headers.insert(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_static("sk-123"),
+        );
         headers.insert(
             HeaderName::from_static("content-type"),
-            "application/json".to_string(),
+            HeaderValue::from_static("application/json"),
         );
-        headers.insert(HeaderName::from_static("cookie"), "session=abc".to_string());
+        headers.insert(
+            HeaderName::from_static("cookie"),
+            HeaderValue::from_static("session=abc"),
+        );
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
             headers,
             body: None,
@@ -1087,10 +1103,7 @@ mod tests {
                 "sensitive headers leaked into envelope"
             );
             assert_eq!(
-                params
-                    .headers
-                    .get(&HeaderName::from_static("content-type"))
-                    .unwrap(),
+                params.headers.get("content-type").unwrap(),
                 "application/json"
             );
         } else {
@@ -1115,9 +1128,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::GET,
-            host: "not-protected.example.com".to_string(),
+            host: Authority::from_static("not-protected.example.com"),
             path: "/any".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1133,9 +1146,9 @@ mod tests {
         let normalizer = test_normalizer();
         let request = RawRequest {
             method: Method::DELETE,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/files/abc".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1155,9 +1168,9 @@ mod tests {
         let normalizer = test_normalizer();
         let request = RawRequest {
             method: Method(http::Method::from_str("FROBNICATE").unwrap()),
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1175,19 +1188,19 @@ mod tests {
     #[test]
     fn test_normalize_strips_set_cookie_header() {
         let normalizer = test_normalizer();
-        let mut headers = HashMap::new();
+        let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::from_static("set-cookie"),
-            "session=abc".to_string(),
+            HeaderValue::from_static("session=abc"),
         );
         headers.insert(
             HeaderName::from_static("content-type"),
-            "application/json".to_string(),
+            HeaderValue::from_static("application/json"),
         );
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
             headers,
             body: None,
@@ -1199,16 +1212,10 @@ mod tests {
             .unwrap_or_else(|_| panic!("expected Ok"));
         if let ActionParams::Http(ref params) = envelope.intent.params {
             assert!(
-                !params
-                    .headers
-                    .contains_key(&HeaderName::from_static("set-cookie")),
+                !params.headers.contains_key("set-cookie"),
                 "set-cookie header must be stripped"
             );
-            assert!(
-                params
-                    .headers
-                    .contains_key(&HeaderName::from_static("content-type"))
-            );
+            assert!(params.headers.contains_key("content-type"));
         } else {
             panic!("expected Http params");
         }
@@ -1217,19 +1224,19 @@ mod tests {
     #[test]
     fn test_normalize_strips_proxy_authorization_header() {
         let normalizer = test_normalizer();
-        let mut headers = HashMap::new();
+        let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::from_static("proxy-authorization"),
-            "Basic abc123".to_string(),
+            HeaderValue::from_static("Basic abc123"),
         );
         headers.insert(
             HeaderName::from_static("accept"),
-            "application/json".to_string(),
+            HeaderValue::from_static("application/json"),
         );
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
             headers,
             body: None,
@@ -1241,16 +1248,10 @@ mod tests {
             .unwrap_or_else(|_| panic!("expected Ok"));
         if let ActionParams::Http(ref params) = envelope.intent.params {
             assert!(
-                !params
-                    .headers
-                    .contains_key(&HeaderName::from_static("proxy-authorization")),
+                !params.headers.contains_key("proxy-authorization"),
                 "proxy-authorization header must be stripped"
             );
-            assert!(
-                params
-                    .headers
-                    .contains_key(&HeaderName::from_static("accept"))
-            );
+            assert!(params.headers.contains_key("accept"));
         } else {
             panic!("expected Http params");
         }
@@ -1263,9 +1264,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: Some(body_bytes.clone()),
             is_https: true,
         };
@@ -1289,9 +1290,9 @@ mod tests {
         let normalizer = test_normalizer();
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: false,
         };
@@ -1307,9 +1308,9 @@ mod tests {
         let normalizer = test_normalizer();
         let request = RawRequest {
             method: Method::POST,
-            host: "api.openai.com".to_string(),
+            host: Authority::from_static("api.openai.com"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1337,7 +1338,7 @@ mod tests {
         let envelope = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/acme/widget",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1358,7 +1359,7 @@ mod tests {
         let envelope = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "api.openai.com",
+                &Authority::from_static("api.openai.com"),
                 "/v1/chat/completions",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1370,7 +1371,7 @@ mod tests {
         let normalizer = test_normalizer();
         if let Ok(envelope) = normalizer.normalize(&make_request(
             Method::GET,
-            "api.github.com.evil.example",
+            &Authority::from_static("api.github.com.evil.example"),
             "/repos/x/y",
         )) {
             assert!(!envelope.intent.resource.contains_key("provider"));
@@ -1388,7 +1389,7 @@ mod tests {
         let envelope = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "API.GITHUB.COM",
+                &Authority::from_static("API.GITHUB.COM"),
                 "/repos/acme/widget",
             ))
             .unwrap_or_else(|_| panic!("mixed-case host must match the github rule"));
@@ -1411,14 +1412,18 @@ mod tests {
     fn test_normalize_trailing_dot_and_default_port_match_rule() {
         let normalizer = github_normalizer();
         let env_dot = normalizer
-            .normalize(&make_request(Method::GET, "api.github.com.", "/repos/x/y"))
+            .normalize(&make_request(
+                Method::GET,
+                &Authority::from_static("api.github.com."),
+                "/repos/x/y",
+            ))
             .unwrap_or_else(|_| panic!("trailing-dot host must match"));
         assert_eq!(env_dot.intent.action_class, "code.read");
 
         let env_port = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "api.github.com:443",
+                &Authority::from_static("api.github.com:443"),
                 "/repos/x/y",
             ))
             .unwrap_or_else(|_| panic!("default-port host must match"));
@@ -1447,9 +1452,9 @@ mod tests {
 
         let request = RawRequest {
             method: Method::POST,
-            host: "API.OPENAI.COM".to_string(),
+            host: Authority::from_static("API.OPENAI.COM"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };
@@ -1495,7 +1500,7 @@ mod tests {
         let envelope = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "api.example.com",
+                &Authority::from_static("api.example.com"),
                 "/v1/chat/../admin/users",
             ))
             .unwrap_or_else(|_| panic!("traversal path must be classified"));
@@ -1531,7 +1536,7 @@ mod tests {
         let envelope = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "api.example.com",
+                &Authority::from_static("api.example.com"),
                 "/v1/chat/../admin/users?x=1",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1557,7 +1562,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/x/y/pulls",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1570,7 +1575,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/x/y/pulls",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1583,7 +1588,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request_with_body(
                 Method::POST,
-                "github.com",
+                &Authority::from_static("github.com"),
                 "/owner/repo.git/git-receive-pack",
                 receive_pack_body(
                     "1111111111111111111111111111111111111111",
@@ -1617,7 +1622,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "github.com",
+                &Authority::from_static("github.com"),
                 "/owner/repo.git/git-upload-pack",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1634,7 +1639,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "github.com",
+                &Authority::from_static("github.com"),
                 "/owner/repo/git-upload-pack",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1659,7 +1664,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "github.com",
+                &Authority::from_static("github.com"),
                 "/owner/repo.git/info/refs?service=git-receive-pack",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1676,7 +1681,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "github.com",
+                &Authority::from_static("github.com"),
                 "/owner/repo/info/refs?service=git-upload-pack",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1697,7 +1702,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request_with_body(
                 Method::POST,
-                "github.com",
+                &Authority::from_static("github.com"),
                 "/owner/repo.git/git-receive-pack",
                 receive_pack_body(
                     "1111111111111111111111111111111111111111",
@@ -1723,7 +1728,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request_with_body(
                 Method::POST,
-                "github.com",
+                &Authority::from_static("github.com"),
                 "/owner/repo/git-receive-pack",
                 receive_pack_body(
                     "1111111111111111111111111111111111111111",
@@ -1748,7 +1753,7 @@ mod tests {
         let normalizer = github_normalizer();
         let result = normalizer.normalize(&make_request_with_body(
             Method::POST,
-            "github.com",
+            &Authority::from_static("github.com"),
             "/owner/repo.git/git-receive-pack",
             b"not-a-pkt-line".to_vec(),
         ));
@@ -1766,7 +1771,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::PATCH,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/owner/repo/git/refs/heads/fir-413",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1786,7 +1791,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request_with_body(
                 Method::POST,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/owner/repo/git/refs",
                 br#"{"ref":"refs/heads/fir-413","sha":"abc"}"#.to_vec(),
             ))
@@ -1804,7 +1809,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::PUT,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/x/y/pulls/1/merge",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1817,7 +1822,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::DELETE,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/x/y/contents/foo.txt",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1830,7 +1835,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "api.github.com",
+                &Authority::from_static("api.github.com"),
                 "/repos/x/y/branches/main/protection/restrictions",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1852,7 +1857,11 @@ mod tests {
     fn test_normalize_stripe_tags_provider() {
         let normalizer = stripe_normalizer();
         let envelope = normalizer
-            .normalize(&make_request(Method::GET, "api.stripe.com", "/v1/balance"))
+            .normalize(&make_request(
+                Method::GET,
+                &Authority::from_static("api.stripe.com"),
+                "/v1/balance",
+            ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(envelope.intent.action_class, "payment.read");
         assert_eq!(
@@ -1867,7 +1876,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "api.stripe.com",
+                &Authority::from_static("api.stripe.com"),
                 "/v1/payment_intents",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1880,7 +1889,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "api.stripe.com",
+                &Authority::from_static("api.stripe.com"),
                 "/v1/payment_intents/pi_123/cancel",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1891,7 +1900,11 @@ mod tests {
     fn test_stripe_post_refund_is_payment_refund() {
         let normalizer = stripe_normalizer();
         let env = normalizer
-            .normalize(&make_request(Method::POST, "api.stripe.com", "/v1/refunds"))
+            .normalize(&make_request(
+                Method::POST,
+                &Authority::from_static("api.stripe.com"),
+                "/v1/refunds",
+            ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "payment.refund");
     }
@@ -1900,7 +1913,11 @@ mod tests {
     fn test_stripe_post_payout_is_payment_payout() {
         let normalizer = stripe_normalizer();
         let env = normalizer
-            .normalize(&make_request(Method::POST, "api.stripe.com", "/v1/payouts"))
+            .normalize(&make_request(
+                Method::POST,
+                &Authority::from_static("api.stripe.com"),
+                "/v1/payouts",
+            ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "payment.payout");
     }
@@ -1911,7 +1928,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "api.stripe.com",
+                &Authority::from_static("api.stripe.com"),
                 "/v1/customers/search",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1924,7 +1941,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "api.stripe.com",
+                &Authority::from_static("api.stripe.com"),
                 "/v1/webhook_endpoints",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1948,7 +1965,7 @@ mod tests {
         let envelope = normalizer
             .normalize(&make_request(
                 Method::GET,
-                "gmail.googleapis.com",
+                &Authority::from_static("gmail.googleapis.com"),
                 "/gmail/v1/users/me/profile",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1965,7 +1982,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "gmail.googleapis.com",
+                &Authority::from_static("gmail.googleapis.com"),
                 "/gmail/v1/users/me/messages/send",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1978,7 +1995,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "gmail.googleapis.com",
+                &Authority::from_static("gmail.googleapis.com"),
                 "/gmail/v1/users/me/drafts",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -1991,7 +2008,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "gmail.googleapis.com",
+                &Authority::from_static("gmail.googleapis.com"),
                 "/gmail/v1/users/me/messages/abc123/modify",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -2004,7 +2021,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::DELETE,
-                "gmail.googleapis.com",
+                &Authority::from_static("gmail.googleapis.com"),
                 "/gmail/v1/users/me/messages/abc123",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -2017,7 +2034,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "gmail.googleapis.com",
+                &Authority::from_static("gmail.googleapis.com"),
                 "/gmail/v1/users/me/settings/filters",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -2030,7 +2047,7 @@ mod tests {
         let env = normalizer
             .normalize(&make_request(
                 Method::POST,
-                "gmail.googleapis.com",
+                &Authority::from_static("gmail.googleapis.com"),
                 "/gmail/v1/users/me/settings/delegates",
             ))
             .unwrap_or_else(|_| panic!("ok"));
@@ -2042,7 +2059,7 @@ mod tests {
         let normalizer = test_normalizer();
         if let Ok(envelope) = normalizer.normalize(&make_request(
             Method::GET,
-            "gmail.googleapis.com.evil.example",
+            &Authority::from_static("gmail.googleapis.com.evil.example"),
             "/gmail/v1/users/me/profile",
         )) {
             assert!(!envelope.intent.resource.contains_key("provider"));
@@ -2054,9 +2071,9 @@ mod tests {
         let normalizer = test_normalizer();
         let request = RawRequest {
             method: Method::GET,
-            host: "api.example.com".to_string(),
+            host: Authority::from_static("api.example.com"),
             path: "/data".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             is_https: true,
         };

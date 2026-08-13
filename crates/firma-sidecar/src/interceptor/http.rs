@@ -16,12 +16,13 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use firma_core::{AbortReason, DenyReason};
-use firma_http::{HeaderName, Method};
+use firma_http::{Authority, HeaderMap, Method};
 use http_body::Body as _;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -31,6 +32,8 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
+#[cfg(test)]
+use rustls::pki_types::CertificateDer;
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
@@ -356,7 +359,7 @@ async fn handle_request(
     max_request_body_bytes: usize,
     connect_relay: ConnectRelayConfig,
     budget: Arc<BodyBudget>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> anyhow::Result<Response<Full<Bytes>>> {
     if req.method() == http::Method::CONNECT {
         return handle_connect_request(
             &mut req,
@@ -369,10 +372,22 @@ async fn handle_request(
         .await;
     }
 
+    let session_hint = header_session_id(&req);
     // Capture host + session before `req` is consumed so a malformed
     // request can still emit an attributable deny audit event (FIR-208).
-    let malformed_host = host_with_default_port(&req, false);
-    let session_hint = header_session_id(&req);
+    let host = match host_with_default_port(&req, false) {
+        Ok(host) => host,
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                &session_hint,
+                "raw.http",
+                "",
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
     let (raw, body_guard) =
         match build_raw_request(req, max_request_body_bytes, budget.clone()).await {
             Ok(result) => result,
@@ -381,17 +396,25 @@ async fn handle_request(
                     &handler,
                     &session_hint,
                     "raw.http",
-                    &malformed_host,
-                    &detail,
+                    host.as_str(),
+                    &detail.to_string(),
                 )
                 .await);
             }
         };
-    let session_id = raw
-        .headers
-        .get(&HeaderName::from_static("x-firma-session-id"))
-        .cloned()
-        .unwrap_or_default();
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id.unwrap_or_default().to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                &session_hint,
+                "raw.http",
+                host.as_str(),
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
     tracing::debug!(
         method = %raw.method,
         host = %raw.host,
@@ -451,12 +474,13 @@ async fn preflight_mitm_acceptor(
         match runtime.tls_acceptor_for_host(&target_info.host).await {
             Ok(acceptor) => prepared_acceptor = Some(acceptor),
             Err(e) => {
-                let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
+                let detail = anyhow::anyhow!("HTTPS_MITM_SETUP_FAILED: {e}");
                 if strict_mitm {
                     tracing::error!(
                         host = %target_info.host,
                         "strict MITM preflight failed: {detail}"
                     );
+                    let detail = detail.to_string();
                     handler
                         .emit_synthetic_deny(
                             session_id,
@@ -489,27 +513,20 @@ async fn handle_connect_request(
     max_request_body_bytes: usize,
     connect_relay: ConnectRelayConfig,
     budget: Arc<BodyBudget>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> anyhow::Result<Response<Full<Bytes>>> {
     let raw = match build_raw_request_head(req, true) {
         Ok(raw) => raw,
         Err(detail) => {
-            let host = host_with_default_port(req, true);
-            return Ok(deny_malformed(
-                &handler,
-                &header_session_id(req),
-                "network.connect",
-                &host,
-                &detail,
-            )
-            .await);
+            return Ok(deny_malformed_connect(req, &handler, &detail.to_string()).await);
         }
     };
-    let session_id = raw
-        .headers
-        .get(&HeaderName::from_static("x-firma-session-id"))
-        .cloned()
-        .unwrap_or_default();
-    let target_info = connect_target_info(&host_with_default_port(req, true));
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id.unwrap_or_default().to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed_connect(req, &handler, &detail.to_string()).await);
+        }
+    };
+    let target_info = connect_target_info(&host_with_default_port(req, true)?)?;
     tracing::debug!(
         host = %target_info.host,
         port = target_info.port,
@@ -732,7 +749,7 @@ fn spawn_connect_relay(
 struct ConnectTargetInfo {
     host: String,
     port: u16,
-    authority: String,
+    authority: Authority,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -741,32 +758,23 @@ struct TunnelRelayStats {
     upstream_to_downstream_bytes: u64,
 }
 
-fn connect_target_info(host: &str) -> ConnectTargetInfo {
-    host.parse::<hyper::http::uri::Authority>().map_or_else(
-        |_| ConnectTargetInfo {
-            host: host.to_ascii_lowercase(),
-            port: 443,
-            authority: host.to_string(),
-        },
-        |authority| {
-            let parsed_host = authority
-                .host()
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .to_ascii_lowercase();
-            let port = authority.port_u16().unwrap_or(443);
-            let auth_str = if parsed_host.contains(':') {
-                format!("[{parsed_host}]:{port}")
-            } else {
-                format!("{parsed_host}:{port}")
-            };
-            ConnectTargetInfo {
-                host: parsed_host,
-                port,
-                authority: auth_str,
-            }
-        },
-    )
+fn connect_target_info(authority: &Authority) -> anyhow::Result<ConnectTargetInfo> {
+    let parsed_host = authority
+        .host()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    let port = authority.port_u16().unwrap_or(443);
+    let auth_str = if parsed_host.contains(':') {
+        format!("[{parsed_host}]:{port}")
+    } else {
+        format!("{parsed_host}:{port}")
+    };
+    Ok(ConnectTargetInfo {
+        host: parsed_host,
+        port,
+        authority: Authority::from_str(&auth_str)?,
+    })
 }
 
 async fn relay_connect_tunnel(
@@ -1059,19 +1067,20 @@ impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PrefetchedStrea
 
 async fn relay_connect_tunnel_from_stream_with_prefetch(
     mut downstream: TokioIo<hyper::upgrade::Upgraded>,
-    target: &str,
+    target: &Authority,
     limits: ConnectRelayLimits,
     prefetched: &[u8],
 ) -> Result<TunnelRelayStats, String> {
-    let mut upstream = tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target))
-        .await
-        .map_err(|_| {
-            format!(
-                "upstream connect timed out after {} seconds for {target}",
-                limits.setup_timeout.as_secs()
-            )
-        })?
-        .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+    let mut upstream =
+        tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target.as_str()))
+            .await
+            .map_err(|_| {
+                format!(
+                    "upstream connect timed out after {} seconds for {target}",
+                    limits.setup_timeout.as_secs()
+                )
+            })?
+            .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
     if !prefetched.is_empty() {
         tokio::time::timeout(limits.setup_timeout, upstream.write_all(prefetched))
             .await
@@ -1145,7 +1154,7 @@ async fn handle_mitm_https_request(
     connect_session_id: &str,
     max_request_body_bytes: usize,
     budget: Arc<BodyBudget>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> anyhow::Result<Response<Full<Bytes>>> {
     if req.method() == http::Method::CONNECT {
         let detail = "MALFORMED_REQUEST: nested CONNECT is not supported";
         handler
@@ -1179,18 +1188,28 @@ async fn handle_mitm_https_request(
                     connect_session_id,
                     "raw.http",
                     &target.host,
-                    &detail,
+                    &detail.to_string(),
                 )
                 .await);
             }
         };
 
-    let session_id = raw
-        .headers
-        .get(&HeaderName::from_static("x-firma-session-id"))
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| connect_session_id.to_string());
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(connect_session_id)
+            .to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                connect_session_id,
+                "raw.http",
+                &target.host,
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
 
     let response = match handler.handle(raw, &session_id).await {
         HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
@@ -1232,7 +1251,7 @@ async fn handle_mitm_websocket_upgrade_request(
     handler: Arc<RequestHandler>,
     target: ConnectTargetInfo,
     connect_session_id: &str,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> anyhow::Result<Response<Full<Bytes>>> {
     let raw = match build_raw_https_request_head(req, &target) {
         Ok(raw) => raw,
         Err(detail) => {
@@ -1241,17 +1260,27 @@ async fn handle_mitm_websocket_upgrade_request(
                 connect_session_id,
                 "raw.http",
                 &target.host,
-                &detail,
+                &detail.to_string(),
             )
             .await);
         }
     };
-    let session_id = raw
-        .headers
-        .get(&HeaderName::from_static("x-firma-session-id"))
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| connect_session_id.to_string());
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(connect_session_id)
+            .to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                connect_session_id,
+                "raw.http",
+                &target.host,
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
 
     let authorization = handler.authorize_upgrade(raw, &session_id).await;
     let (credentials, audit_payload) = match authorization {
@@ -1470,16 +1499,17 @@ fn build_upstream_handshake_request(
         if name.as_str().eq_ignore_ascii_case("host") {
             has_host = true;
         }
-        if let Ok(v) = value.to_str() {
-            out.extend_from_slice(name.as_str().as_bytes());
-            out.extend_from_slice(b": ");
-            out.extend_from_slice(v.as_bytes());
-            out.extend_from_slice(b"\r\n");
+        if name.as_str().starts_with("x-firma-") {
+            continue;
         }
+        out.extend_from_slice(name.as_str().as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(b"\r\n");
     }
     if !has_host {
         out.extend_from_slice(b"Host: ");
-        out.extend_from_slice(target.authority.as_bytes());
+        out.extend_from_slice(target.authority.as_str().as_bytes());
         out.extend_from_slice(b"\r\n");
     }
     for (k, v) in credentials.headers() {
@@ -1495,9 +1525,37 @@ fn build_upstream_handshake_request(
 async fn connect_upstream_tls(
     target: &ConnectTargetInfo,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
-    let upstream = TcpStream::connect(&target.authority)
+    #[cfg(test)]
+    let test_upstream = TEST_WEBSOCKET_UPSTREAM
+        .lock()
+        .ok()
+        .and_then(|upstream| upstream.clone())
+        .filter(|upstream| upstream.authority == target.authority);
+    #[cfg(test)]
+    let upstream = if let Some(upstream) = test_upstream.as_ref() {
+        TcpStream::connect(upstream.address).await
+    } else {
+        TcpStream::connect(target.authority.as_str()).await
+    }
+    .map_err(|e| format!("TCP connect failed for {}: {e}", target.authority))?;
+    #[cfg(not(test))]
+    let upstream = TcpStream::connect(target.authority.as_str())
         .await
         .map_err(|e| format!("TCP connect failed for {}: {e}", target.authority))?;
+    #[cfg(test)]
+    let roots = if let Some(upstream) = test_upstream {
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(upstream.certificate)
+            .map_err(|error| format!("invalid test upstream certificate: {error}"))?;
+        roots
+    } else {
+        webpki_roots::TLS_SERVER_ROOTS
+            .iter()
+            .cloned()
+            .collect::<RootCertStore>()
+    };
+    #[cfg(not(test))]
     let roots = webpki_roots::TLS_SERVER_ROOTS
         .iter()
         .cloned()
@@ -1513,6 +1571,18 @@ async fn connect_upstream_tls(
         .await
         .map_err(|e| format!("TLS connect failed for {}: {e}", target.host))
 }
+
+#[cfg(test)]
+#[derive(Clone)]
+struct TestWebsocketUpstream {
+    authority: Authority,
+    address: SocketAddr,
+    certificate: CertificateDer<'static>,
+}
+
+#[cfg(test)]
+static TEST_WEBSOCKET_UPSTREAM: std::sync::Mutex<Option<TestWebsocketUpstream>> =
+    std::sync::Mutex::new(None);
 
 async fn read_http_response_head<S: tokio::io::AsyncRead + Unpin>(
     stream: &mut S,
@@ -1583,7 +1653,7 @@ async fn build_raw_https_request(
     target: &ConnectTargetInfo,
     max_request_body_bytes: usize,
     budget: Arc<BodyBudget>,
-) -> Result<(RawRequest, BudgetGuard), String> {
+) -> anyhow::Result<(RawRequest, BudgetGuard)> {
     let mut raw = build_raw_https_request_head(&req, target)?;
     let (body, guard) =
         read_body_with_limit(req.into_body(), max_request_body_bytes, budget).await?;
@@ -1594,27 +1664,27 @@ async fn build_raw_https_request(
 fn build_raw_https_request_head(
     req: &Request<Incoming>,
     target: &ConnectTargetInfo,
-) -> Result<RawRequest, String> {
+) -> anyhow::Result<RawRequest> {
     let method = Method(req.method().clone());
     let host_value = req
         .headers()
         .get("host")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string)
-        .or_else(|| req.uri().authority().map(ToString::to_string))
+        .map(|v| v.to_str())
+        .transpose()?
+        .map(Authority::from_str)
+        .transpose()?
+        .or_else(|| req.uri().authority().map(Authority::from))
         .unwrap_or_else(|| target.authority.clone());
-    let host_info = connect_target_info(&host_value);
+    let host_info = connect_target_info(&host_value)?;
 
     if !host_matches_connect_target(&host_info, target) {
-        return Err("MALFORMED_REQUEST: tunneled host mismatch with CONNECT target".to_string());
+        return Err(anyhow::anyhow!(
+            "MALFORMED_REQUEST: tunneled host mismatch with CONNECT target"
+        ));
     }
 
     let path = extract_path(req.uri().to_string().as_bytes());
-    let headers = req
-        .headers()
-        .iter()
-        .filter_map(|(k, v)| Some((HeaderName::from(k), v.to_str().ok()?.to_string())))
-        .collect();
+    let headers = HeaderMap(req.headers().clone());
 
     Ok(RawRequest {
         method,
@@ -1622,7 +1692,7 @@ fn build_raw_https_request_head(
         // expose the same bare hostname to the mapping table that
         // bypass-tunnel HTTP requests do — see the rationale in
         // `build_raw_request_head`.
-        host: strip_default_port(&host_info.authority, true),
+        host: strip_default_port(host_info.authority, true)?,
         headers,
         path,
         body: None,
@@ -1638,7 +1708,7 @@ async fn build_raw_request(
     req: Request<Incoming>,
     max_request_body_bytes: usize,
     budget: Arc<BodyBudget>,
-) -> Result<(RawRequest, BudgetGuard), String> {
+) -> anyhow::Result<(RawRequest, BudgetGuard)> {
     let mut raw = build_raw_request_head(&req, false)?;
     let (body, guard) =
         read_body_with_limit(req.into_body(), max_request_body_bytes, budget).await?;
@@ -1650,11 +1720,11 @@ async fn read_body_with_limit(
     mut body: Incoming,
     max_request_body_bytes: usize,
     budget: Arc<BodyBudget>,
-) -> Result<(Option<Vec<u8>>, BudgetGuard), String> {
+) -> anyhow::Result<(Option<Vec<u8>>, BudgetGuard)> {
     if let Some(upper) = body.size_hint().upper()
         && upper > max_request_body_bytes as u64
     {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
         ));
     }
@@ -1662,21 +1732,24 @@ async fn read_body_with_limit(
     let mut guard = BudgetGuard::new(budget.clone());
     let mut out = Vec::new();
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?;
+        let frame =
+            frame.map_err(|e| anyhow::anyhow!("MALFORMED_REQUEST: failed to read body: {e}"))?;
         if let Ok(data) = frame.into_data() {
             let new_len = out.len().checked_add(data.len()).ok_or_else(|| {
                 guard.release(out.len());
-                "MALFORMED_REQUEST: request body size overflow".to_string()
+                anyhow::anyhow!("MALFORMED_REQUEST: request body size overflow")
             })?;
             if new_len > max_request_body_bytes {
                 guard.release(out.len());
-                return Err(format!(
+                return Err(anyhow::anyhow!(
                     "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
                 ));
             }
             if !budget.try_acquire(data.len()) {
                 guard.release(out.len());
-                return Err("MALFORMED_REQUEST: sidecar body budget exceeded".to_string());
+                return Err(anyhow::anyhow!(
+                    "MALFORMED_REQUEST: sidecar body budget exceeded"
+                ));
             }
             out.extend_from_slice(data.as_ref());
         }
@@ -1686,22 +1759,15 @@ async fn read_body_with_limit(
     Ok((if out.is_empty() { None } else { Some(out) }, guard))
 }
 
-fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<RawRequest, String> {
+fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> anyhow::Result<RawRequest> {
     let method = Method(req.method().clone());
-    let host_with_port = host_with_default_port(req, is_connect);
-    if host_with_port.is_empty() {
-        return Err("MALFORMED_REQUEST: missing host".to_string());
-    }
+    let host_with_port = host_with_default_port(req, is_connect)?;
     let path = if is_connect {
         "/".to_string()
     } else {
         extract_path(req.uri().to_string().as_bytes())
     };
-    let headers = req
-        .headers()
-        .iter()
-        .filter_map(|(k, v)| Some((HeaderName::from(k), v.to_str().ok()?.to_string())))
-        .collect();
+    let headers = firma_http::HeaderMap(req.headers().clone());
     let is_https = is_connect
         || req
             .uri()
@@ -1713,7 +1779,7 @@ fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<R
     // After MITM decryption clients commonly send `Host: paste.rs:443`,
     // and without this normalization the request would miss every
     // mapping rule and silently passthrough enforcement.
-    let host = strip_default_port(&host_with_port, is_https);
+    let host = strip_default_port(host_with_port, is_https)?;
 
     Ok(RawRequest {
         method,
@@ -1725,32 +1791,64 @@ fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<R
     })
 }
 
-fn strip_default_port(host: &str, is_https: bool) -> String {
+fn strip_default_port(host: Authority, is_https: bool) -> anyhow::Result<Authority> {
     let default_port = if is_https { ":443" } else { ":80" };
     // Leave IPv6 bracketed authorities and non-default ports alone.
-    if host.starts_with('[') {
-        return host.to_string();
+    if host.as_str().starts_with('[') {
+        return Ok(host);
     }
-    host.strip_suffix(default_port)
-        .map_or_else(|| host.to_string(), ToString::to_string)
+    let Some(host) = host.as_str().strip_suffix(default_port) else {
+        return Ok(host);
+    };
+    Authority::from_str(host).map_err(anyhow::Error::from)
 }
 
-fn host_with_default_port(req: &Request<Incoming>, is_connect: bool) -> String {
-    req.headers()
+fn host_with_default_port(req: &Request<Incoming>, is_connect: bool) -> anyhow::Result<Authority> {
+    if let Some(authority) = req
+        .headers()
         .get("host")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string)
-        .or_else(|| req.uri().authority().map(ToString::to_string))
-        .or_else(|| {
-            req.uri().host().map(|h| {
-                let port = req
-                    .uri()
-                    .port_u16()
-                    .unwrap_or(if is_connect { 443 } else { 80 });
-                format!("{h}:{port}")
-            })
+        .map(|v| v.to_str())
+        .transpose()?
+        .map(Authority::from_str)
+        .transpose()?
+        .or_else(|| req.uri().authority().map(Authority::from))
+    {
+        return Ok(authority);
+    }
+
+    req.uri()
+        .host()
+        .map(|h| {
+            let port = req
+                .uri()
+                .port_u16()
+                .unwrap_or(if is_connect { 443 } else { 80 });
+            Authority::from_str(&format!("{h}:{port}"))
         })
-        .unwrap_or_default()
+        .transpose()?
+        .ok_or_else(|| anyhow::anyhow!("MALFORMED_REQUEST: missing host"))
+}
+
+/// Builds the fail-closed deny response for a CONNECT request whose head
+/// could not be turned into a `RawRequest` (unparseable host, malformed
+/// session id). Re-deriving the host here would fail identically when the
+/// host itself is the problem, so this falls back to an empty host label.
+async fn deny_malformed_connect(
+    req: &Request<Incoming>,
+    handler: &RequestHandler,
+    detail: &str,
+) -> Response<Full<Bytes>> {
+    let host = host_with_default_port(req, true)
+        .map(|authority| authority.to_string())
+        .unwrap_or_default();
+    deny_malformed(
+        handler,
+        &header_session_id(req),
+        "network.connect",
+        &host,
+        detail,
+    )
+    .await
 }
 
 /// Builds a `host/` resource label for a synthetic deny audit event,
@@ -1799,27 +1897,22 @@ async fn deny_malformed(
     deny_response(StatusCode::FORBIDDEN, detail)
 }
 
-fn connect_target(host: &str) -> String {
-    host.parse::<hyper::http::uri::Authority>().map_or_else(
-        |_| host.to_string(),
-        |authority| {
-            let h = authority
-                .host()
-                .trim_start_matches('[')
-                .trim_end_matches(']');
-            let port = authority.port_u16().unwrap_or(443);
-            if h.contains(':') {
-                format!("[{h}]:{port}")
-            } else {
-                format!("{h}:{port}")
-            }
-        },
-    )
+fn connect_target(authority: &Authority) -> String {
+    let h = authority
+        .host()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let port = authority.port_u16().unwrap_or(443);
+    if h.contains(':') {
+        format!("[{h}]:{port}")
+    } else {
+        format!("{h}:{port}")
+    }
 }
 
 fn dispatched_response(response: DispatchedResponse) -> Response<Full<Bytes>> {
     let mut builder = Response::builder().status(response.status);
-    for (name, value) in response.headers {
+    for (name, value) in response.headers.iter() {
         builder = builder.header(name, value);
     }
     builder
@@ -1874,16 +1967,15 @@ fn extract_path(raw_path: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::io::Cursor;
     use std::sync::Arc;
     use std::time::Duration;
 
     use chrono::Utc;
     use firma_core::*;
-    use rustls::ClientConfig;
-    use rustls::RootCertStore;
-    use rustls::pki_types::ServerName;
+    use rcgen::{CertifiedKey, generate_simple_self_signed};
+    use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+    use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio_rustls::TlsConnector;
@@ -1969,11 +2061,15 @@ mod tests {
     /// Uses a wildcard host pattern (`*`) combined with the concrete path
     /// so the rule matches regardless of port number in the host header.
     fn test_pipeline_allow(path: &str) -> Arc<EnforcementPipeline> {
+        test_pipeline_allow_method(Method::POST, path)
+    }
+
+    fn test_pipeline_allow_method(method: Method, path: &str) -> Arc<EnforcementPipeline> {
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some(Method::POST),
+                method: Some(method),
                 host: "*".to_string(),
                 path: Some(path.to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -2512,6 +2608,159 @@ mod tests {
             .unwrap_or_else(|e| panic!("TLS connect failed: {e}"))
     }
 
+    static TEST_WEBSOCKET_UPSTREAM_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct TestWebsocketUpstreamRegistration;
+
+    impl Drop for TestWebsocketUpstreamRegistration {
+        fn drop(&mut self) {
+            if let Ok(mut upstream) = TEST_WEBSOCKET_UPSTREAM.lock() {
+                *upstream = None;
+            }
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete CONNECT, downstream TLS, WebSocket upgrade, and upstream TLS flow is intentionally exercised in one fixture"
+    )]
+    async fn websocket_handshake_through_mitm_proxy() -> anyhow::Result<Vec<u8>> {
+        let _lock = TEST_WEBSOCKET_UPSTREAM_LOCK.lock().await;
+        let host = "websocket-regression.test";
+        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![host.to_string()])?;
+        let certificate = CertificateDer::from(cert.der().to_vec());
+        let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let tls_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![certificate.clone()], private_key)?;
+        let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await?;
+        let upstream_address = upstream_listener.local_addr()?;
+        let authority = Authority::from_str(&format!("{host}:443"))?;
+        *TEST_WEBSOCKET_UPSTREAM
+            .lock()
+            .map_err(|_| anyhow::anyhow!("test upstream lock poisoned"))? =
+            Some(TestWebsocketUpstream {
+                authority,
+                address: upstream_address,
+                certificate,
+            });
+        let _registration = TestWebsocketUpstreamRegistration;
+        let (handshake_tx, handshake_rx) = tokio::sync::oneshot::channel();
+        let upstream = tokio::spawn(async move {
+            let (stream, _) = upstream_listener.accept().await?;
+            let mut stream = tls_acceptor.accept(stream).await?;
+            let mut handshake = Vec::new();
+            let mut chunk = [0_u8; 512];
+            loop {
+                let read = stream.read(&mut chunk).await?;
+                anyhow::ensure!(read > 0, "upstream closed before receiving the handshake");
+                handshake.extend_from_slice(&chunk[..read]);
+                if handshake.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = handshake_tx.send(handshake);
+            stream
+                .write_all(
+                    b"HTTP/1.1 101 Switching Protocols\r\n\
+                      Connection: Upgrade\r\n\
+                      Upgrade: websocket\r\n\r\n",
+                )
+                .await?;
+            stream.shutdown().await?;
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let ca_dir = tempfile::tempdir()?;
+        let proxy_address = free_addr();
+        let cancel = CancellationToken::new();
+        let proxy = start_proxy_with_mitm(
+            proxy_address,
+            test_handler(test_pipeline_allow_method(Method::GET, "/socket")),
+            cancel.clone(),
+            HttpsMitmConfig {
+                enabled: true,
+                intercept_hosts: vec![host.to_string()],
+                strict_hosts: vec![host.to_string()],
+                cert_ttl_secs: 300,
+                cert_cache_capacity: 16,
+                ..HttpsMitmConfig::default()
+            },
+            ca_dir.path().to_path_buf(),
+        )
+        .await;
+        let mut stream = TcpStream::connect(proxy_address).await?;
+        stream
+            .write_all(
+                format!(
+                    "CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\nx-firma-session-id: _test_\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await?;
+        let response = read_connect_response(&mut stream).await;
+        anyhow::ensure!(
+            response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got {response:?}"
+        );
+        let ca_path = ca_dir.path().join("firma-ca.crt");
+        let mut stream = connect_tls_with_ca(stream, &ca_path, host).await;
+        let mut request = format!(
+            "GET /socket HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             Connection: Upgrade\r\n\
+             Upgrade: websocket\r\n\
+             x-firma-session-id: _test_\r\n\
+             x-opaque: "
+        )
+        .into_bytes();
+        request.push(0xff);
+        request.extend_from_slice(b"\r\n\r\n");
+        stream.write_all(&request).await?;
+        let mut response = [0_u8; 512];
+        let read =
+            tokio::time::timeout(Duration::from_secs(3), stream.read(&mut response)).await??;
+        anyhow::ensure!(
+            response[..read].starts_with(b"HTTP/1.1 101"),
+            "expected WebSocket 101, got {:?}",
+            String::from_utf8_lossy(&response[..read])
+        );
+        let handshake = handshake_rx.await?;
+
+        drop(stream);
+        cancel.cancel();
+        upstream.await??;
+        proxy.await??;
+        Ok(handshake)
+    }
+
+    #[tokio::test]
+    async fn websocket_mitm_strips_internal_headers_from_upstream() -> anyhow::Result<()> {
+        let handshake = websocket_handshake_through_mitm_proxy().await?;
+
+        assert!(
+            !handshake
+                .windows(b"x-firma-session-id:".len())
+                .any(|window| window.eq_ignore_ascii_case(b"x-firma-session-id:")),
+            "internal Firma headers must not reach the upstream handshake"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_mitm_preserves_opaque_headers_upstream() -> anyhow::Result<()> {
+        let handshake = websocket_handshake_through_mitm_proxy().await?;
+
+        assert!(
+            handshake
+                .windows(b"x-opaque: \xff\r\n".len())
+                .any(|window| window.eq_ignore_ascii_case(b"x-opaque: \xff\r\n")),
+            "opaque agent header values must survive the upstream handshake"
+        );
+        Ok(())
+    }
+
     // ── extract_path unit tests ─────────────────────────────────────────
 
     #[test]
@@ -2581,33 +2830,39 @@ mod tests {
 
     #[test]
     fn test_connect_target_info_parses_ipv4_authority() {
-        let info = connect_target_info("api.openai.com:443");
+        let info = connect_target_info(&Authority::from_static("api.openai.com:443"))
+            .expect("valid authority");
         assert_eq!(info.host, "api.openai.com");
         assert_eq!(info.port, 443);
-        assert_eq!(info.authority, "api.openai.com:443");
+        assert_eq!(info.authority, Authority::from_static("api.openai.com:443"));
     }
 
     #[test]
     fn test_connect_target_info_parses_ipv6_authority() {
-        let info = connect_target_info("[::1]:8443");
+        let info =
+            connect_target_info(&Authority::from_static("[::1]:8443")).expect("valid authority");
         assert_eq!(info.host, "::1");
         assert_eq!(info.port, 8443);
-        assert_eq!(info.authority, "[::1]:8443");
+        assert_eq!(info.authority, Authority::from_static("[::1]:8443"));
     }
 
     #[test]
     fn test_host_matches_connect_target_requires_host_and_port_match() {
-        let connect = connect_target_info("api.openai.com:443");
+        let connect = connect_target_info(&Authority::from_static("api.openai.com:443"))
+            .expect("valid authority");
         assert!(host_matches_connect_target(
-            &connect_target_info("api.openai.com:443"),
+            &connect_target_info(&Authority::from_static("api.openai.com:443"))
+                .expect("valid authority"),
             &connect
         ));
         assert!(!host_matches_connect_target(
-            &connect_target_info("api.openai.com:8443"),
+            &connect_target_info(&Authority::from_static("api.openai.com:8443"))
+                .expect("valid authority"),
             &connect
         ));
         assert!(!host_matches_connect_target(
-            &connect_target_info("chat.openai.com:443"),
+            &connect_target_info(&Authority::from_static("chat.openai.com:443"))
+                .expect("valid authority"),
             &connect
         ));
     }
@@ -2641,25 +2896,46 @@ mod tests {
     #[test]
     fn test_strip_default_port() {
         // HTTPS default port stripped, non-default kept.
-        assert_eq!(strip_default_port("paste.rs:443", true), "paste.rs");
-        assert_eq!(strip_default_port("paste.rs:8443", true), "paste.rs:8443");
         assert_eq!(
-            strip_default_port("api.openai.com:443", true),
-            "api.openai.com"
+            strip_default_port(Authority::from_static("paste.rs:443"), true)
+                .expect("valid authority"),
+            Authority::from_static("paste.rs")
+        );
+        assert_eq!(
+            strip_default_port(Authority::from_static("paste.rs:8443"), true)
+                .expect("valid authority"),
+            Authority::from_static("paste.rs:8443")
+        );
+        assert_eq!(
+            strip_default_port(Authority::from_static("api.openai.com:443"), true)
+                .expect("valid authority"),
+            Authority::from_static("api.openai.com")
         );
 
         // HTTP default port stripped, HTTPS port left alone on http path.
-        assert_eq!(strip_default_port("example.com:80", false), "example.com");
         assert_eq!(
-            strip_default_port("example.com:443", false),
-            "example.com:443"
+            strip_default_port(Authority::from_static("example.com:80"), false)
+                .expect("valid authority"),
+            Authority::from_static("example.com")
+        );
+        assert_eq!(
+            strip_default_port(Authority::from_static("example.com:443"), false)
+                .expect("valid authority"),
+            Authority::from_static("example.com:443")
         );
 
         // Bare host left alone.
-        assert_eq!(strip_default_port("example.com", true), "example.com");
+        assert_eq!(
+            strip_default_port(Authority::from_static("example.com"), true)
+                .expect("valid authority"),
+            Authority::from_static("example.com")
+        );
 
         // IPv6 bracketed authorities are left alone.
-        assert_eq!(strip_default_port("[::1]:443", true), "[::1]:443");
+        assert_eq!(
+            strip_default_port(Authority::from_static("[::1]:443"), true).expect("valid authority"),
+            Authority::from_static("[::1]:443")
+        );
     }
 
     #[tokio::test]
@@ -2667,9 +2943,9 @@ mod tests {
         let pipeline = test_pipeline_allow("/v1/chat/completions");
         let raw = RawRequest {
             method: Method::POST,
-            host: "127.0.0.1:9999".to_string(),
+            host: Authority::from_static("127.0.0.1:9999"),
             path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: Some(b"{}".to_vec()),
             is_https: false,
         };

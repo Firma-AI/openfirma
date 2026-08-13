@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use firma_grpc_interceptor_proto::InterceptRequest;
+use firma_grpc_interceptor_proto::interceptor_hook_client::InterceptorHookClient;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::handler::RequestHandler;
 use firma_sidecar::interceptor::grpc::GrpcInterceptor;
@@ -65,6 +68,66 @@ async fn grpc_spawn_reports_connectable_dynamic_endpoint() -> anyhow::Result<()>
     drop(stream);
     cancel.cancel();
     spawned.handle.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn grpc_malformed_request_fields_return_structured_denials() -> anyhow::Result<()> {
+    let requested_addr = "127.0.0.1:0".parse()?;
+    let (config, handler) = grpc_config_and_handler(requested_addr)?;
+    let cancel = CancellationToken::new();
+    let spawned = spawn_interceptor(&config, handler, cancel.clone())?;
+    let mut client =
+        InterceptorHookClient::connect(format!("http://{}", spawned.listen_addr)).await?;
+
+    let malformed_requests = [
+        InterceptRequest {
+            method: "GET /injected".to_string(),
+            host: "example.com".to_string(),
+            path: "/".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            is_https: true,
+            session_id: String::new(),
+        },
+        InterceptRequest {
+            method: "GET".to_string(),
+            host: "example.com".to_string(),
+            path: "/".to_string(),
+            headers: HashMap::from([("bad header".to_string(), "value".to_string())]),
+            body: Vec::new(),
+            is_https: true,
+            session_id: String::new(),
+        },
+        InterceptRequest {
+            method: "GET".to_string(),
+            host: "example.com".to_string(),
+            path: "/".to_string(),
+            headers: HashMap::from([("x-test".to_string(), "bad\r\nvalue".to_string())]),
+            body: Vec::new(),
+            is_https: true,
+            session_id: String::new(),
+        },
+    ];
+
+    let mut results = Vec::new();
+    for request in malformed_requests {
+        results.push(client.intercept(request).await);
+    }
+    cancel.cancel();
+    spawned.handle.await?;
+
+    for result in results {
+        let response = result
+            .map_err(|status| anyhow::anyhow!("malformed request returned gRPC {status}"))?
+            .into_inner();
+        assert!(!response.allowed);
+        assert!(
+            response.reason.starts_with("MALFORMED_REQUEST:"),
+            "unexpected denial reason: {:?}",
+            response.reason
+        );
+    }
     Ok(())
 }
 

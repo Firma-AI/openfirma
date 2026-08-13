@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_http::HeaderMap;
 
 fn intent() -> ExecutionIntent {
     ExecutionIntent {
@@ -10,7 +11,7 @@ fn intent() -> ExecutionIntent {
         ),
         params: ActionParams::Http(HttpParams {
             method: HttpMethod::POST,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             query: HashMap::new(),
         }),

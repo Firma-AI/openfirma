@@ -127,6 +127,7 @@ impl CredentialInjector for VaultCredentialInjector {
 mod tests {
     use super::*;
     use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
+    use firma_http::HeaderMap;
     use std::io::Write as _;
 
     fn sample_envelope() -> ExecutionEnvelope {
@@ -136,7 +137,7 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("https://api.example.com"),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),

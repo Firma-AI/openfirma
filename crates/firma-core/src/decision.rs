@@ -485,6 +485,8 @@ pub enum SecretJsonSelectorScope {
 
 #[cfg(test)]
 mod tests {
+    use firma_http::HeaderMap;
+
     use super::*;
     use std::fmt::Display;
 
@@ -660,14 +662,14 @@ mod tests {
             HttpParams,
         };
 
-        let mut headers = std::collections::HashMap::new();
+        let mut headers = HeaderMap::new();
         headers.insert(
-            firma_http::HeaderName::from_static("authorization"),
-            "Bearer secret".to_string(),
+            http::HeaderName::from_static("authorization"),
+            http::HeaderValue::from_static("Bearer secret"),
         );
         headers.insert(
-            firma_http::HeaderName::from_static("x-trace-id"),
-            "abc".to_string(),
+            http::HeaderName::from_static("x-trace-id"),
+            http::HeaderValue::from_static("abc"),
         );
         let mut envelope = ExecutionEnvelope::new(
             ExecutionIntent {
@@ -704,14 +706,11 @@ mod tests {
             panic!("expected Http params");
         };
         assert!(
-            !http
-                .headers
-                .contains_key(&HeaderName::from_static("authorization")),
+            !http.headers.contains_key("authorization"),
             "Authorization should be stripped"
         );
         assert!(
-            http.headers
-                .contains_key(&HeaderName::from_static("x-trace-id")),
+            http.headers.contains_key("x-trace-id"),
             "X-Trace-Id should survive the redaction"
         );
     }

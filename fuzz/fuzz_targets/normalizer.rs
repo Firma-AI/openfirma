@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use arbitrary::Arbitrary;
-use firma_http::{HeaderName, Method};
+use firma_http::{Authority, HeaderMap, Method};
 use firma_sidecar::{
     config::{MappingRuleConfig, MappingRulesFile},
     enforcement::registry::ActionClassRegistry,
@@ -46,9 +46,9 @@ fn static_normalizer() -> &'static IntentNormalizer {
 #[derive(Arbitrary, Debug)]
 struct FuzzRequest {
     method: Method,
-    host: String,
+    host: Authority,
     path: String,
-    headers: HashMap<HeaderName, String>,
+    headers: HeaderMap,
     body: Option<Vec<u8>>,
     is_https: bool,
 }

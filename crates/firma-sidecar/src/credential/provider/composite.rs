@@ -49,7 +49,7 @@ mod tests {
     use super::*;
     use crate::credential::provider::VaultSecretEntry;
     use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
-    use firma_http::HeaderName;
+    use firma_http::{HeaderMap, HeaderName};
     use std::collections::HashMap;
     use std::io::Write as _;
     use std::path::PathBuf;
@@ -61,7 +61,7 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("https://api.example.com"),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),

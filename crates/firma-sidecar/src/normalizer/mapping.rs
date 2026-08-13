@@ -10,7 +10,7 @@
 //! be deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
 
-use firma_http::Method;
+use firma_http::{Authority, Method};
 
 use crate::config::{MappingRuleConfig, MappingRulesFile};
 use crate::enforcement::registry::ActionClassRegistry;
@@ -193,7 +193,12 @@ impl MappingTable {
 
     /// Find the first (most specific) matching rule for a request.
     #[must_use]
-    pub fn find_match<'a>(&'a self, method: &Method, host: &str, path: &str) -> MatchResult<'a> {
+    pub fn find_match<'a>(
+        &'a self,
+        method: &Method,
+        host: &Authority,
+        path: &str,
+    ) -> MatchResult<'a> {
         for rule in &self.rules {
             if Self::rule_matches(rule, method, host, path) {
                 return MatchResult::Matched(rule);
@@ -207,7 +212,7 @@ impl MappingTable {
         }
     }
 
-    fn rule_matches(rule: &MappingRule, method: &Method, host: &str, path: &str) -> bool {
+    fn rule_matches(rule: &MappingRule, method: &Method, host: &Authority, path: &str) -> bool {
         // Check method (None = any method)
         if rule
             .method
@@ -218,7 +223,7 @@ impl MappingTable {
         }
 
         // Check host pattern
-        if !glob_match(&rule.host_pattern, host) {
+        if !glob_match(&rule.host_pattern, host.as_str()) {
             return false;
         }
 
@@ -444,7 +449,11 @@ mod tests {
         };
         let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
-        match table.find_match(&Method::POST, "api.openai.com", "/v1/chat/completions") {
+        match table.find_match(
+            &Method::POST,
+            &Authority::from_static("api.openai.com"),
+            "/v1/chat/completions",
+        ) {
             MatchResult::Matched(rule) => {
                 assert_eq!(rule.action_class, "communication.external.send");
             }
@@ -472,7 +481,11 @@ mod tests {
         };
         let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
-        match table.find_match(&Method::GET, "api.weather.com", "/forecast") {
+        match table.find_match(
+            &Method::GET,
+            &Authority::from_static("api.weather.com"),
+            "/forecast",
+        ) {
             MatchResult::Matched(rule) => assert_eq!(rule.action_class, "filesystem.read"),
             other => panic!("expected Matched, got {other:?}"),
         }
@@ -492,7 +505,7 @@ mod tests {
         let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
         assert!(matches!(
-            table.find_match(&Method::GET, "unknown.host", "/"),
+            table.find_match(&Method::GET, &Authority::from_static("unknown.host"), "/"),
             MatchResult::UnclassifiedProtected
         ));
     }

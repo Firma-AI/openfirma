@@ -11,7 +11,7 @@ use std::fmt;
 
 use chrono::Utc;
 use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
-use firma_http::Method;
+use firma_http::{Authority, HeaderMap, Method};
 use serde::Deserialize;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
@@ -93,7 +93,7 @@ pub enum DecodeResult {
 /// Decode a raw HTTP request before generic normalization.
 #[must_use]
 pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult {
-    let host = canonical_host(&request.host);
+    let host = canonical_host(request.host.as_str());
     if host != BACKEND_HOST && host != APP_HOST {
         return DecodeResult::Unrelated;
     }
@@ -665,7 +665,7 @@ fn logical_envelope(
     method: HttpMethod,
 ) -> NormalizedEnvelope {
     let mut resource = BTreeMap::from([
-        ("host".to_string(), canonical_host(&request.host)),
+        ("host".to_string(), canonical_host(request.host.as_str())),
         ("path".to_string(), path_only(&request.path).to_string()),
         ("provider".to_string(), "composio".to_string()),
         (
@@ -702,7 +702,7 @@ fn logical_envelope(
             resource,
             params: ActionParams::Http(HttpParams {
                 method,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 query: HashMap::new(),
             }),
@@ -819,8 +819,11 @@ fn parse_json_without_duplicate_keys(body: &[u8]) -> Result<Value, serde_json::E
     Ok(payload.0)
 }
 
-pub(crate) fn is_protected_host(host: &str) -> bool {
-    matches!(canonical_host(host).as_str(), BACKEND_HOST | APP_HOST)
+pub(crate) fn is_protected_host(host: &Authority) -> bool {
+    matches!(
+        canonical_host(host.as_str()).as_str(),
+        BACKEND_HOST | APP_HOST
+    )
 }
 
 /// Trim, lowercase, and strip any trailing `:port` and trailing dot — not

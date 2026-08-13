@@ -11,19 +11,23 @@
 //! authorization decisions, does not modify intent fields, and reads
 //! credentials exclusively from the view.
 
-use std::collections::HashMap;
-use std::num::NonZeroU32;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    num::NonZeroU32,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use firma_core::{
     ActionParams, Connector, ConnectorError, ConnectorResponse, ExecutionIntent, HttpMethod,
     HttpParams, TransportView,
 };
-use governor::clock::DefaultClock;
-use governor::state::{InMemoryState, NotKeyed};
-use governor::{Quota, RateLimiter};
+use firma_http::HeaderMap;
+use governor::{
+    Quota, RateLimiter,
+    clock::DefaultClock,
+    state::{InMemoryState, NotKeyed},
+};
 
 type DirectRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
@@ -163,7 +167,7 @@ impl GenericHttpConnector {
             builder = builder.query(&query);
         }
 
-        for (name, value) in &http.headers {
+        for (name, value) in http.headers.iter() {
             builder = builder.header(name, value);
         }
         for (name, value) in view.credentials().headers() {
@@ -185,7 +189,7 @@ impl GenericHttpConnector {
             .map_err(|err| map_reqwest_error(&err, self.timeout))?;
 
         let status = response.status().as_u16();
-        let headers = extract_headers(response.headers());
+        let headers = HeaderMap(response.headers().clone());
         let body = response
             .bytes()
             .await
@@ -285,18 +289,6 @@ fn to_reqwest_method(method: HttpMethod) -> reqwest::Method {
         HttpMethod::OPTIONS => reqwest::Method::OPTIONS,
         HttpMethod::CONNECT => reqwest::Method::CONNECT,
     }
-}
-
-fn extract_headers(headers: &reqwest::header::HeaderMap) -> HashMap<String, String> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|v| (name.as_str().to_string(), v.to_string()))
-        })
-        .collect()
 }
 
 /// Flag projection of a [`reqwest::Error`] sufficient to choose a
@@ -418,7 +410,7 @@ mod tests {
         ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
         HttpParams, InjectedCredentials,
     };
-    use firma_http::HeaderName;
+    use firma_http::{HeaderMap, HeaderName};
     use tracing_subscriber::fmt::MakeWriter;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -511,7 +503,7 @@ mod tests {
             resource: firma_core::ExecutionIntent::resource_map_from(resource),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 query: HashMap::new(),
             }),
@@ -827,7 +819,7 @@ mod tests {
             )),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 query: HashMap::from([("q".to_string(), "rust".to_string())]),
             }),

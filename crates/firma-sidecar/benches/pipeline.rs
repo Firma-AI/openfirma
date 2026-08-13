@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
-use firma_http::Method;
+use firma_http::{Authority, HeaderMap, Method};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
 use firma_sidecar::credential::NullCredentialInjector;
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -111,9 +111,9 @@ fn build_pipeline() -> EnforcementPipeline {
 fn sample_request() -> RawRequest {
     RawRequest {
         method: Method::POST,
-        host: "api.bench.local".to_string(),
+        host: Authority::from_static("api.bench.local"),
         path: "/invoke".to_string(),
-        headers: std::collections::HashMap::new(),
+        headers: HeaderMap::new(),
         body: None,
         is_https: true,
     }

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use firma_http::{HeaderName, Method};
+use firma_http::{HeaderMap, Method};
 use serde::{Deserialize, Serialize};
 
 use crate::{AgentId, session::SessionId, token::TokenId};
@@ -235,7 +235,7 @@ pub struct HttpParams {
     /// HTTP method.
     pub method: HttpMethod,
     /// HTTP headers — allowlisted keys only.
-    pub headers: HashMap<HeaderName, String>,
+    pub headers: HeaderMap,
     /// Request body as raw bytes (empty for GET/DELETE).
     pub body: Option<Vec<u8>>,
     /// Query parameters.
@@ -334,7 +334,7 @@ mod tests {
                 "params": {
                     "Http": {
                         "method": "GET",
-                        "headers": {"Authorization": "Bearer tok"},
+                        "headers": {"authorization": "Bearer tok"},
                         "body": null,
                         "query": {}
                     }
@@ -363,9 +363,9 @@ mod tests {
                 ]),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::from([(
-                        HeaderName::from_static("authorization"),
-                        "Bearer tok".to_string(),
+                    headers: HeaderMap::from([(
+                        http::HeaderName::from_static("authorization"),
+                        http::HeaderValue::from_static("Bearer tok"),
                     )]),
                     body: None,
                     query: HashMap::new(),
@@ -401,7 +401,7 @@ mod tests {
             resource,
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 query: HashMap::new(),
             }),
@@ -418,7 +418,7 @@ mod tests {
             resource: BTreeMap::new(),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 query: HashMap::new(),
             }),
@@ -439,7 +439,7 @@ mod tests {
             resource,
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 query: HashMap::new(),
             }),

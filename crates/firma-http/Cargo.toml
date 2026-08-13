@@ -13,6 +13,7 @@ fuzz = ["dep:arbitrary"]
 
 [dependencies]
 arbitrary = { workspace = true, optional = true }
+either = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
 

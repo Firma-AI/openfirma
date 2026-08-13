@@ -31,6 +31,7 @@ use crate::credential::InjectedCredentials;
 /// use firma_core::{InjectedCredentials, TransportView};
 /// # use firma_core::{ActionParams, ExecutionEnvelope, ExecutionIntent,
 /// #     ExecutionMetadata, HttpMethod, HttpParams};
+/// # use firma_http::HeaderMap;
 /// # fn envelope() -> ExecutionEnvelope {
 /// #     ExecutionEnvelope::new(
 /// #         ExecutionIntent {
@@ -38,7 +39,7 @@ use crate::credential::InjectedCredentials;
 /// #             resource: ExecutionIntent::resource_map_from("https://api.example.com"),
 /// #             params: ActionParams::Http(HttpParams {
 /// #                 method: HttpMethod::GET,
-/// #                 headers: HashMap::new(),
+/// #                 headers: HeaderMap::new(),
 /// #                 body: None,
 /// #                 query: HashMap::new(),
 /// #             }),
@@ -94,7 +95,7 @@ impl TransportView {
 
 #[cfg(test)]
 mod tests {
-    use firma_http::HeaderName;
+    use firma_http::{HeaderMap, HeaderName};
 
     use super::*;
     use crate::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
@@ -107,7 +108,7 @@ mod tests {
                 resource: crate::ExecutionIntent::resource_map_from("https://api.example.com"),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),

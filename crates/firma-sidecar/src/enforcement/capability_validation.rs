@@ -254,7 +254,11 @@ mod tests {
     use crate::enforcement::capability_map::CapabilityEntry;
     use chrono::Utc;
     use firma_core::CapabilityClaims;
-    use std::sync::{Arc, Mutex};
+    use firma_http::HeaderMap;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     struct MockVerifier {
         claims: CapabilityClaims,
@@ -512,9 +516,9 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com/v1/chat"),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::POST,
-                    headers: std::collections::HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
-                    query: std::collections::HashMap::new(),
+                    query: HashMap::new(),
                 }),
                 raw_transport: "https".to_string(),
                 raw_action_ref: "POST /v1/chat".to_string(),
@@ -549,9 +553,9 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("any.resource"),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::DELETE,
-                    headers: std::collections::HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
-                    query: std::collections::HashMap::new(),
+                    query: HashMap::new(),
                 }),
                 raw_transport: "https".to_string(),
                 raw_action_ref: "DELETE /files".to_string(),
@@ -624,9 +628,9 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com/v1/chat"),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::POST,
-                    headers: std::collections::HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
-                    query: std::collections::HashMap::new(),
+                    query: HashMap::new(),
                 }),
                 raw_transport: "https".to_string(),
                 raw_action_ref: "POST /v1/chat".to_string(),

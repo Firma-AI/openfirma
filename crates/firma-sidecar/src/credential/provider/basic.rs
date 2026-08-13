@@ -82,6 +82,7 @@ mod tests {
     use super::*;
     use crate::credential::provider::{CredentialValueTransform, render_secret_value};
     use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
+    use firma_http::HeaderMap;
 
     fn sample_envelope() -> ExecutionEnvelope {
         ExecutionEnvelope::new(
@@ -90,7 +91,7 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("https://api.example.com"),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),

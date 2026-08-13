@@ -65,7 +65,7 @@ impl CredentialInjector for NullCredentialInjector {
 mod tests {
     use super::*;
     use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
-    use firma_http::HeaderName;
+    use firma_http::{HeaderMap, HeaderName};
     use std::collections::HashMap;
 
     fn sample_envelope() -> ExecutionEnvelope {
@@ -75,7 +75,7 @@ mod tests {
                 resource: firma_core::ExecutionIntent::resource_map_from("https://api.example.com"),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::new(),
+                    headers: HeaderMap::new(),
                     body: None,
                     query: HashMap::new(),
                 }),

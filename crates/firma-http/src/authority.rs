@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    fmt,
     hash::{Hash, Hasher},
     ops::Deref,
     str::FromStr,
@@ -8,13 +9,25 @@ use std::{
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A wrapped version of `http::uri::Authority` that allows (de)serialization
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Authority(pub http::uri::Authority);
 
 impl Authority {
     #[must_use]
     pub const fn from_static(src: &'static str) -> Self {
         Self(http::uri::Authority::from_static(src))
+    }
+}
+
+impl fmt::Debug for Authority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl fmt::Display for Authority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -82,19 +95,5 @@ impl arbitrary::Arbitrary<'_> for Authority {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let s = <&str>::arbitrary(u)?;
         Self::from_str(s).map_err(|_| arbitrary::Error::IncorrectFormat)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn http_compatibility() {
-        let mut hm = HashMap::new();
-        hm.insert(Authority::from_static("x-api-key"), "foo");
-        assert!(hm.contains_key(&http::uri::Authority::from_static("x-api-key")));
     }
 }

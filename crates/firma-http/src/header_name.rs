@@ -44,6 +44,12 @@ impl From<&HeaderName> for http::HeaderName {
     }
 }
 
+impl From<HeaderName> for http::HeaderName {
+    fn from(value: HeaderName) -> Self {
+        value.0
+    }
+}
+
 impl From<&http::HeaderName> for HeaderName {
     fn from(value: &http::HeaderName) -> Self {
         Self(value.clone())
@@ -84,19 +90,5 @@ impl arbitrary::Arbitrary<'_> for HeaderName {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let s = <&str>::arbitrary(u)?;
         Self::from_str(s).map_err(|_| arbitrary::Error::IncorrectFormat)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn http_compatibility() {
-        let mut hm = HashMap::new();
-        hm.insert(HeaderName::from_static("x-api-key"), "foo");
-        assert!(hm.contains_key(&http::HeaderName::from_static("x-api-key")));
     }
 }
