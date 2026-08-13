@@ -9,7 +9,14 @@
 //! [`RequestHandler::with_http_secret_providers`]), it additionally
 //! intercepts and mints placeholders for matching HTTP-vault responses.
 
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fmt::Display,
+    io::{Read as _, Write as _},
+    str::FromStr,
+    sync::Arc,
+};
 
 use firma_core::{
     AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
@@ -494,16 +501,134 @@ fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
     result
 }
 
-/// Whether `headers` declares a `Content-Encoding` other than `identity`.
+/// A `Content-Encoding` this interception layer knows how to reversibly
+/// decode before running the plaintext secret matcher, and re-encode
+/// afterward so a forwarded response's declared encoding still matches its
+/// bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SupportedEncoding {
+    Gzip,
+}
+
+impl SupportedEncoding {
+    /// Reads `headers`' `Content-Encoding`. `Ok(None)` covers both an absent
+    /// header and `identity`. `Err` carries the encoding name when it's
+    /// present but not one this layer can decode — the body must then be
+    /// treated as opaque rather than scanned or forwarded unexamined.
+    fn from_headers(headers: &HeaderMap) -> Result<Option<Self>, String> {
+        let Some(value) = headers
+            .get("content-encoding")
+            .and_then(|v| v.to_str().ok())
+        else {
+            return Ok(None);
+        };
+        match value.trim() {
+            "" | "identity" => Ok(None),
+            "gzip" => Ok(Some(Self::Gzip)),
+            other => Err(other.to_string()),
+        }
+    }
+
+    fn decode(self, body: &[u8]) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Gzip => {
+                let mut out = Vec::new();
+                flate2::read::GzDecoder::new(body).read_to_end(&mut out)?;
+                Ok(out)
+            }
+        }
+    }
+
+    fn encode(self, body: &[u8]) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Gzip => {
+                let mut encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(body)?;
+                encoder.finish()
+            }
+        }
+    }
+}
+
+/// An HTTP secret intercept abort: the reason code plus a human-readable
+/// detail, mirroring the `HandledResponse::Aborted` shape it eventually
+/// becomes.
+type InterceptAbort = (AbortReason, String);
+
+/// The plaintext view of a possibly-decoded response body, paired with the
+/// `Content-Encoding` it was decoded from (if any) so it can be re-encoded
+/// after rewriting.
+type DecodedBody<'a> = (Cow<'a, [u8]>, Option<SupportedEncoding>);
+
+/// Resolves `dispatched.body` to a plaintext view the secret matcher can
+/// scan, decoding a supported `Content-Encoding` first, and returns the
+/// encoding alongside it so the caller can re-encode after rewriting.
 ///
-/// A compressed (or otherwise transformed) body can't be scanned by the
-/// plaintext secret matcher, so callers must treat it as opaque rather than
-/// silently forwarding it unexamined.
-fn is_content_encoded(headers: &HeaderMap) -> bool {
-    headers
-        .get("content-encoding")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| !value.trim().eq_ignore_ascii_case("identity"))
+/// Errs (fail closed) when the encoding isn't one this layer can decode, or
+/// when decoding a supported one fails — either way the body can't be
+/// inspected, so it must not be forwarded unexamined.
+fn decode_for_inspection<'a>(
+    dispatched: &'a DispatchedResponse,
+    provider_id: &str,
+) -> Result<DecodedBody<'a>, InterceptAbort> {
+    let encoding = SupportedEncoding::from_headers(&dispatched.headers).map_err(|unsupported| {
+        tracing::error!(
+            provider_id = %provider_id,
+            content_encoding = %unsupported,
+            "HTTP secret intercept: response uses a content-encoding this layer cannot decode; \
+             aborting rather than forward a body the matcher cannot inspect"
+        );
+        let detail = format!(
+            "HTTP secret provider \"{provider_id}\" response uses content-encoding \
+             \"{unsupported}\" which cannot be inspected for secrets before forwarding"
+        );
+        (AbortReason::CredentialInjectionFailed, detail)
+    })?;
+
+    let plaintext = match encoding {
+        None => Cow::Borrowed(dispatched.body.as_slice()),
+        Some(encoding) => Cow::Owned(encoding.decode(&dispatched.body).map_err(|error| {
+            tracing::error!(
+                provider_id = %provider_id,
+                %error,
+                "HTTP secret intercept: failed to decompress response body; aborting rather \
+                 than forward a body the matcher cannot inspect"
+            );
+            let detail = format!(
+                "HTTP secret provider \"{provider_id}\" response declares a content-encoding \
+                 that failed to decompress: {error}"
+            );
+            (AbortReason::CredentialInjectionFailed, detail)
+        })?),
+    };
+
+    Ok((plaintext, encoding))
+}
+
+/// Re-encodes a rewritten body back to `encoding` (a no-op when `None`) so
+/// the forwarded response's declared `Content-Encoding` still matches its
+/// bytes.
+fn recompress_after_rewrite(
+    rewritten: Vec<u8>,
+    encoding: Option<SupportedEncoding>,
+    provider_id: &str,
+) -> Result<Vec<u8>, InterceptAbort> {
+    let Some(encoding) = encoding else {
+        return Ok(rewritten);
+    };
+    encoding.encode(&rewritten).map_err(|error| {
+        tracing::error!(
+            provider_id = %provider_id,
+            %error,
+            "HTTP secret intercept: failed to re-compress rewritten response body"
+        );
+        let detail = format!(
+            "HTTP secret provider \"{provider_id}\" extracted a secret but failed to \
+             re-compress the response body: {error}"
+        );
+        (AbortReason::CredentialInjectionFailed, detail)
+    })
 }
 
 /// Masks `dispatched.body` against `store`'s known secrets.
@@ -998,19 +1123,8 @@ impl RequestHandler {
         provider_id: &str,
         matcher: &SecretMatcher,
         gateway: &GatewayClient,
-    ) -> Result<DispatchedResponse, (AbortReason, String)> {
-        if is_content_encoded(&dispatched.headers) {
-            tracing::error!(
-                provider_id = %provider_id,
-                "HTTP secret intercept: response body is content-encoded; aborting rather than \
-                 forward a body the matcher cannot inspect for secrets"
-            );
-            let detail = format!(
-                "HTTP secret provider \"{provider_id}\" response uses a content-encoding that \
-                 cannot be inspected for secrets before forwarding"
-            );
-            return Err((AbortReason::CredentialInjectionFailed, detail));
-        }
+    ) -> Result<DispatchedResponse, InterceptAbort> {
+        let (plaintext, encoding) = decode_for_inspection(&dispatched, provider_id)?;
 
         let matcher = match CompiledMatcher::compile(matcher) {
             Ok(m) => m,
@@ -1035,12 +1149,11 @@ impl RequestHandler {
         // useful default here, mirroring a CLI intercept whose matcher has
         // no `domain_selector`.
         let mut pushes = Vec::new();
-        let rewritten =
-            matcher.rewrite(&dispatched.body, &mut |_name, value, item_domain, _item| {
-                let placeholder = SecretPlaceholder::new();
-                pushes.push((placeholder.clone(), value, item_domain));
-                placeholder
-            });
+        let rewritten = matcher.rewrite(&plaintext, &mut |_name, value, item_domain, _item| {
+            let placeholder = SecretPlaceholder::new();
+            pushes.push((placeholder.clone(), value, item_domain));
+            placeholder
+        });
 
         let rewritten = match rewritten {
             Ok(bytes) => bytes,
@@ -1074,12 +1187,14 @@ impl RequestHandler {
             }
         }
 
+        let final_body = recompress_after_rewrite(rewritten, encoding, provider_id)?;
+
         if dispatched.headers.contains_key("content-length") {
             dispatched
                 .headers
-                .insert("content-length", http::HeaderValue::from(rewritten.len()));
+                .insert("content-length", http::HeaderValue::from(final_body.len()));
         }
-        dispatched.body = rewritten;
+        dispatched.body = final_body;
         Ok(dispatched)
     }
 
