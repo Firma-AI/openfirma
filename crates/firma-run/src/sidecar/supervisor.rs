@@ -191,17 +191,10 @@ impl SidecarSupervisor {
             }
         })?;
         let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-        let mirror_child_logs = child_log_mirroring_enabled();
         let tee_handle = std::thread::Builder::new()
             .name("firma-sidecar-tee".into())
             .spawn(move || {
-                run_scraper_with_mirror(
-                    std::io::BufReader::new(stderr),
-                    log_file,
-                    std::io::stderr(),
-                    mirror_child_logs,
-                    tx,
-                );
+                run_scraper(std::io::BufReader::new(stderr), log_file, &tx);
             })
             .map_err(|error| RunError::SidecarStartupFailed {
                 reason: format!("spawn scraper thread: {error}"),
@@ -408,29 +401,10 @@ const INTERCEPTOR_TOKEN: &str = "interceptor listening";
 /// piped). The raw bytes are written to the log file unmodified so a
 /// human `cat`ting the log still sees the colors the subscriber chose.
 #[doc(hidden)]
-pub fn run_scraper<R, W>(mut reader: R, mut log: W, tx: mpsc::SyncSender<ScrapeResult>)
+pub fn run_scraper<R, W>(mut reader: R, mut log: W, tx: &mpsc::SyncSender<ScrapeResult>)
 where
     R: BufRead,
     W: Write,
-{
-    run_scraper_with_mirror(&mut reader, &mut log, std::io::sink(), false, tx);
-}
-
-#[doc(hidden)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "tx is moved into the spawned thread and owns the sender for the thread lifetime"
-)]
-pub fn run_scraper_with_mirror<R, W, M>(
-    mut reader: R,
-    mut log: W,
-    mut mirror: M,
-    mirror_enabled: bool,
-    tx: mpsc::SyncSender<ScrapeResult>,
-) where
-    R: BufRead,
-    W: Write,
-    M: Write,
 {
     let mut capture = ReadyCapture::default();
     let mut signalled = false;
@@ -446,9 +420,6 @@ pub fn run_scraper_with_mirror<R, W, M>(
             }
             Ok(_) => {
                 let _ = log.write_all(buf.as_bytes());
-                if mirror_enabled {
-                    let _ = mirror.write_all(buf.as_bytes());
-                }
                 if !signalled {
                     let plain = strip_ansi(&buf);
                     if plain.contains(POLICY_TOKEN)
@@ -481,56 +452,6 @@ pub fn run_scraper_with_mirror<R, W, M>(
                 }
                 return;
             }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn child_log_mirroring_enabled() -> bool {
-    std::env::var("FIRMA_LOG_FILTER")
-        .or_else(|_| std::env::var("RUST_LOG"))
-        .is_ok_and(|filter| log_filter_requests_child_mirroring(&filter))
-}
-
-#[cfg(unix)]
-fn log_filter_requests_child_mirroring(filter: &str) -> bool {
-    filter
-        .split(',')
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .any(|directive| {
-            directive == "debug"
-                || directive == "trace"
-                || directive.ends_with("=debug")
-                || directive.ends_with("=trace")
-        })
-}
-
-#[cfg(all(test, unix))]
-mod log_filter_tests {
-    #[test]
-    fn debug_and_trace_filters_request_child_log_mirroring() {
-        for filter in [
-            "debug",
-            "trace",
-            "firma_sidecar=debug",
-            "openfirma=trace",
-            " info , firma_run=debug ",
-        ] {
-            assert!(
-                super::log_filter_requests_child_mirroring(filter),
-                "{filter} should mirror child logs"
-            );
-        }
-    }
-
-    #[test]
-    fn less_verbose_filters_do_not_request_child_log_mirroring() {
-        for filter in ["", "info", "warn,firma=info", "firma_sidecar=warn"] {
-            assert!(
-                !super::log_filter_requests_child_mirroring(filter),
-                "{filter} should not mirror child logs"
-            );
         }
     }
 }
@@ -586,5 +507,5 @@ fn extract_kv(line: &str, key: &str) -> Option<String> {
 
 #[doc(hidden)]
 pub mod testing {
-    pub use super::{ReadyCapture, ScrapeResult, run_scraper, run_scraper_with_mirror};
+    pub use super::{ReadyCapture, ScrapeResult, run_scraper};
 }

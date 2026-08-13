@@ -66,7 +66,7 @@ pub enum RunError {
     #[error("{operation}; sidecar rollback failed: {rollback}")]
     SidecarPostReadyRollback {
         operation: Box<Self>,
-        rollback: firma_process_orchestrator::OrchestratorError,
+        rollback: firma_process_orchestrator::ShutdownError,
     },
 
     #[error("sidecar endpoint {endpoint} is unreachable and autostart is disabled ({reason})")]

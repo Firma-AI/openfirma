@@ -15,9 +15,7 @@
 use std::io::Cursor;
 use std::sync::mpsc;
 
-use firma_run::sidecar::supervisor::testing::{
-    ReadyCapture, ScrapeResult, run_scraper, run_scraper_with_mirror,
-};
+use firma_run::sidecar::supervisor::testing::{ReadyCapture, ScrapeResult, run_scraper};
 
 const FULL: &str = "\
 2026-05-13T10:00:00Z  INFO firma_sidecar::startup::log_contract: config loaded path=\"/tmp/firma_sidecar.toml\"\n\
@@ -33,7 +31,7 @@ const FULL: &str = "\
 fn captures_version_and_disabled_authority_then_returns_ready() {
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();
-    run_scraper(Cursor::new(FULL), &mut sink, tx);
+    run_scraper(Cursor::new(FULL), &mut sink, &tx);
 
     let result = rx.try_recv().expect("scraper sent result");
     let capture = match result {
@@ -68,7 +66,7 @@ INFO firma_sidecar::startup::log_contract: sidecar ready\n";
 
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();
-    run_scraper(Cursor::new(lines), &mut sink, tx);
+    run_scraper(Cursor::new(lines), &mut sink, &tx);
 
     let capture = match rx.recv().expect("result") {
         ScrapeResult::Ready(c) => c,
@@ -86,7 +84,7 @@ INFO firma_sidecar::startup::log_contract: config loaded path=\"/tmp.toml\"\n\
 INFO firma_sidecar::startup::log_contract: mapping table loaded rules=1\n";
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();
-    run_scraper(Cursor::new(truncated), &mut sink, tx);
+    run_scraper(Cursor::new(truncated), &mut sink, &tx);
 
     match rx.recv().expect("result") {
         ScrapeResult::Eof => {}
@@ -109,7 +107,7 @@ fn ready_line_detected_through_ansi_escapes() {
 
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();
-    run_scraper(Cursor::new(ansi), &mut sink, tx);
+    run_scraper(Cursor::new(ansi), &mut sink, &tx);
 
     let capture = match rx.recv().expect("result") {
         ScrapeResult::Ready(c) => c,
@@ -139,25 +137,10 @@ INFO firma_sidecar::startup::log_contract: sidecar ready\n";
 
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();
-    run_scraper(Cursor::new(mixed), &mut sink, tx);
+    run_scraper(Cursor::new(mixed), &mut sink, &tx);
 
     match rx.recv().expect("result") {
         ScrapeResult::Ready(_) => {}
         other => panic!("expected Ready, got {other:?}"),
     }
-}
-
-#[test]
-fn scraper_can_mirror_child_logs_to_parent_output() {
-    let (tx, rx) = mpsc::sync_channel(1);
-    let mut log_sink = Vec::<u8>::new();
-    let mut mirror_sink = Vec::<u8>::new();
-
-    run_scraper_with_mirror(Cursor::new(FULL), &mut log_sink, &mut mirror_sink, true, tx);
-
-    assert!(matches!(rx.recv().expect("result"), ScrapeResult::Ready(_)));
-    assert_eq!(
-        String::from_utf8(log_sink).expect("log utf8"),
-        String::from_utf8(mirror_sink).expect("mirror utf8")
-    );
 }

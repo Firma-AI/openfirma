@@ -357,7 +357,6 @@ impl RuntimeParts {
             && let Err(rollback) = stack.shutdown(Duration::from_secs(10))
         {
             let processes_stopped = rollback.processes_stopped();
-            let rollback = rollback.into_orchestrator_error();
             if !processes_stopped {
                 // Retain dependencies and marker evidence for the incompletely
                 // stopped Sidecar, matching NetworkRuntime's shutdown contract.
@@ -455,17 +454,19 @@ pub fn prepare_network_runtime(
     let (effective_endpoint, sidecar_stack, owned_sidecar_marker) =
         match resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags) {
             Ok(resolved) => resolved,
-            Err(error @ RunError::SidecarPostReadyRollback { .. }) => {
-                // The stack retained an incompletely stopped Sidecar. Keep its
-                // Authority and capability inputs alive for cross-process
-                // recovery rather than invalidating them while returning the
-                // structured operation-plus-rollback error.
-                std::mem::forget(authority.supervisor.take());
-                std::mem::forget(capability_refresher);
-                std::mem::forget(capability_guard);
+            Err(error) => {
+                if let RunError::SidecarPostReadyRollback { rollback, .. } = &error
+                    && !rollback.processes_stopped()
+                {
+                    // The stack retained an incompletely stopped Sidecar. Keep
+                    // its Authority and capability inputs alive for
+                    // cross-process recovery rather than invalidating them.
+                    std::mem::forget(authority.supervisor.take());
+                    std::mem::forget(capability_refresher);
+                    std::mem::forget(capability_guard);
+                }
                 return Err(error);
             }
-            Err(error) => return Err(error),
         };
     let autostart_trust_env = sidecar_trust_env_overrides(owned_sidecar_marker.as_deref());
 
@@ -997,7 +998,6 @@ fn rollback_ready_sidecar(
 ) -> RunError {
     if let Err(rollback) = stack.shutdown(Duration::from_secs(10)) {
         let processes_stopped = rollback.processes_stopped();
-        let rollback = rollback.into_orchestrator_error();
         if !processes_stopped {
             // Preserve the sole in-process owner and durable state after an
             // uncertain rollback. The caller likewise retains the Authority
