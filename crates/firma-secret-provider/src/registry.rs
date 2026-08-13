@@ -258,10 +258,11 @@ fn op_spec() -> CliIntegrationSpec {
             // object. Field types 1Password documents as non-secret
             // metadata (ADDRESS, CREDIT_CARD_TYPE, DATE, EMAIL, GENDER,
             // MENU, MONTH_YEAR, PHONE, REFERENCE, URL) are left unchanged.
-            // OTP is also left unchanged so the numeric one-time code
-            // remains usable. STRING fields are redacted because custom
-            // text fields may hold sensitive material such as recovery
-            // codes. Fail closed: an unrecognized `type` — including any
+            // OTP fields are redacted because their `value` is the reusable
+            // `otpauth://` provisioning URI, not merely the current numeric
+            // code. STRING fields are redacted because custom text fields
+            // may hold sensitive material such as recovery codes. Fail
+            // closed: an unrecognized `type` — including any
             // field type 1Password adds after this list was written — falls
             // through the exclusion and is treated as a secret and
             // redacted, even if it turns out not to need it.
@@ -289,7 +290,6 @@ fn op_spec() -> CliIntegrationSpec {
                         " && @.type != \"GENDER\"",
                         " && @.type != \"MENU\"",
                         " && @.type != \"MONTH_YEAR\"",
-                        " && @.type != \"OTP\"",
                         " && @.type != \"PHONE\"",
                         " && @.type != \"REFERENCE\"",
                         " && @.type != \"URL\"",
@@ -355,9 +355,10 @@ fn vault_spec() -> CliIntegrationSpec {
             FlagSpec::value("-namespace"),
             FlagSpec::value("--namespace"),
         ],
-        // `-address`/`--address` (Vault's Go flag parser accepts either
-        // dash style for the same flag) redirect the CLI at an arbitrary
-        // server, which would send `VAULT_TOKEN` there on the next request.
+        // `-address`/`--address` and `-agent-address`/`--agent-address`
+        // (Vault's Go flag parser accepts either dash style) redirect the CLI
+        // at an arbitrary server or agent, which would send `VAULT_TOKEN`
+        // there on the next request.
         // `-tls-skip-verify`, `-ca-cert`, `-ca-path`, `-client-cert`, and
         // `-client-key` don't change the target host by themselves, but let
         // an agent make the CLI accept a spoofed TLS identity for whatever
@@ -374,6 +375,8 @@ fn vault_spec() -> CliIntegrationSpec {
         forbidden_options: vec![
             FlagSpec::value("-address"),
             FlagSpec::value("--address"),
+            FlagSpec::value("-agent-address"),
+            FlagSpec::value("--agent-address"),
             FlagSpec::valueless("-tls-skip-verify"),
             FlagSpec::valueless("--tls-skip-verify"),
             FlagSpec::value("-ca-cert"),
@@ -492,7 +495,15 @@ fn doppler_spec() -> CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),
         credential_env_vars: vec![String::from("DOPPLER_TOKEN")],
-        stripped_options: vec![],
+        // Project and config selectors may appear before or after `secrets`.
+        // Recognizing their arity keeps split values out of exact command
+        // matching while retaining the selectors for execution.
+        stripped_options: vec![
+            FlagSpec::value("--project"),
+            FlagSpec::attached_value("-p"),
+            FlagSpec::value("--config"),
+            FlagSpec::attached_value("-c"),
+        ],
         // `--api-host` redirects the CLI at an arbitrary API host, which
         // would send `DOPPLER_TOKEN` there on the next request;
         // `--no-verify-tls` disables TLS certificate verification, letting
@@ -514,6 +525,9 @@ fn doppler_spec() -> CliIntegrationSpec {
             FlagSpec::valueless("--no-verify-tls"),
             FlagSpec::value("--config-dir"),
             FlagSpec::value("--configuration"),
+            // Prints a partially redacted credential token to stdout even
+            // for otherwise safe metadata commands.
+            FlagSpec::valueless("--print-config"),
         ],
         matchers: vec![
             // Injects secrets as env vars for a child process and never
