@@ -11,3 +11,4 @@ mod mapping_rules;
 mod resource_host_rules;
 mod revocation_token_id;
 mod sandbox_identity;
+mod secret_gateway_regressions;
