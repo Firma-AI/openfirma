@@ -465,6 +465,21 @@ pub struct DispatchedResponse {
 /// be preserved, and `n` is bounded by how many distinct placeholders one
 /// request body plausibly carries (single digits), where the constant
 /// factor of a `Vec` scan beats hashing.
+///
+/// Two placeholders with no separator between them (e.g. `fsp_XXXfsp_YYY`)
+/// put the second one's `fsp_` prefix inside the greedily-consumed
+/// alphanumeric run of the first. Parsing only the maximal run as one token
+/// would fail (it's oversized) and, worse, skipping past it on failure would
+/// skip the embedded second prefix too, dropping both placeholders.
+///
+/// Instead, on a failed parse this shrinks the candidate span one byte at a
+/// time from the right and retries, down to the bare prefix. Crockford-base32
+/// [`SecretPlaceholder`] encoding is fixed-length, so at most one candidate
+/// span can ever parse successfully; shrinking finds it — landing exactly on
+/// the first placeholder's true end, i.e. right where the second one's own
+/// `fsp_` prefix starts — without hardcoding that length here. A body with no
+/// merged placeholders always succeeds on the first (longest) candidate, so
+/// this costs nothing in the common case.
 fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
     let prefix_len = PLACEHOLDER_PREFIX.len();
     let mut result = Vec::new();
@@ -476,14 +491,23 @@ fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
             while end < body.len() && body[end].is_ascii_alphanumeric() {
                 end += 1;
             }
-            if end > path_start
-                && let Ok(token) = std::str::from_utf8(&body[i..end])
-                && let Ok(placeholder) = SecretPlaceholder::from_str(token)
-                && !result.contains(&placeholder)
-            {
-                result.push(placeholder);
+            let found = (path_start..=end).rev().find_map(|candidate_end| {
+                let token = std::str::from_utf8(&body[i..candidate_end]).ok()?;
+                let placeholder = SecretPlaceholder::from_str(token).ok()?;
+                Some((placeholder, candidate_end))
+            });
+            match found {
+                Some((placeholder, consumed_end)) => {
+                    if !result.contains(&placeholder) {
+                        result.push(placeholder);
+                    }
+                    i = consumed_end;
+                }
+                // No candidate span parsed: don't skip past the whole
+                // failed run, it may still contain another prefix's worth
+                // of bytes (see doc comment above).
+                None => i += 1,
             }
-            i = end;
         } else {
             i += 1;
         }
@@ -4035,5 +4059,23 @@ pub(crate) mod tests {
         let body = format!("\"{placeholder}\"");
         let tokens = collect_placeholders(body.as_bytes());
         assert_eq!(tokens, &[placeholder]);
+    }
+
+    #[test]
+    fn collect_placeholders_finds_both_when_adjacent_with_no_separator() {
+        // Regression test: the first placeholder's greedy alphanumeric scan
+        // used to swallow the second placeholder's `fsp_` prefix (its
+        // letters are alphanumeric, only the underscore stops the run),
+        // fail to parse the resulting oversized token, and then resume
+        // scanning past the underscore — never re-aligning with the second
+        // prefix. Both placeholders were silently dropped from the result,
+        // which meant `rehydrate_request` saw an empty placeholder list and
+        // dispatched the request with both tokens still literal in the
+        // body instead of failing closed.
+        let p1 = SecretPlaceholder::new();
+        let p2 = SecretPlaceholder::new();
+        let body = format!("{p1}{p2}");
+        let tokens = collect_placeholders(body.as_bytes());
+        assert_eq!(tokens, &[p1, p2]);
     }
 }
