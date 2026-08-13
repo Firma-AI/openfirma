@@ -29,6 +29,7 @@ firma-identifiers = { workspace = true }
 firma-protobuf = { workspace = true }
 firma-runtime-state = { workspace = true }
 firma-secret-provider = { workspace = true }
+flate2 = { workspace = true }
 form_urlencoded = { workspace = true }
 governor = { workspace = true }
 headers = { workspace = true }
