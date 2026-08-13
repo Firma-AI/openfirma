@@ -108,8 +108,8 @@ pub use component::{
 };
 pub use error::{OrchestratorError, ShutdownError, StartError};
 pub use start::{
-    RunningStack, StackHandle, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
-    supervise_owned_generation_from_plan,
+    ComponentHandle, RunningStack, StackHandle, spawn_stack_from_plan, start_detached,
+    start_foreground_from_plan, supervise_owned_generation_from_plan,
 };
 pub use startup_report::publish_startup_report;
 pub use state_lease::StackGeneration;

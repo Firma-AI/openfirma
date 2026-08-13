@@ -110,6 +110,33 @@ impl FromStr for ComponentEndpoint {
     }
 }
 
+/// Read an endpoint file only when it has the exact format emitted at startup.
+pub fn read_endpoint(
+    path: &Path,
+    name: &str,
+) -> Result<Option<ComponentEndpoint>, OrchestratorError> {
+    let mut text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !text.ends_with('\n') {
+        return Err(OrchestratorError::Platform(format!(
+            "{name}.listen is not canonical"
+        )));
+    }
+    text.pop();
+    let endpoint = text.parse::<ComponentEndpoint>().map_err(|error| {
+        OrchestratorError::Platform(format!("{name}.listen is invalid: {error}"))
+    })?;
+    if endpoint.to_string() != text {
+        return Err(OrchestratorError::Platform(format!(
+            "{name}.listen is not canonical"
+        )));
+    }
+    Ok(Some(endpoint))
+}
+
 impl serde::Serialize for ComponentEndpoint {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -239,7 +266,7 @@ impl ReadyComponent {
 
     /// Return the endpoint that passed publication validation and probing.
     #[must_use]
-    const fn endpoint(&self) -> &ComponentEndpoint {
+    pub(crate) const fn endpoint(&self) -> &ComponentEndpoint {
         &self.endpoint
     }
 }

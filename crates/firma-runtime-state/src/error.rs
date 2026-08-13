@@ -8,12 +8,14 @@ use thiserror::Error;
 /// Error type returned by runtime filesystem state operations.
 #[derive(Debug, Error)]
 pub enum RuntimeStateError {
-    /// A pidfile is present but does not contain a valid non-zero process ID.
-    #[error("invalid pidfile '{path}': expected a non-zero process ID, got '{value}'")]
+    /// A pidfile is present but is not in canonical format.
+    #[error(
+        "invalid pidfile '{path}': expected one canonical non-zero decimal process ID followed by a newline, got {value:?}"
+    )]
     PidfileParse {
         /// Path of the malformed pidfile.
         path: PathBuf,
-        /// Trimmed malformed value read from the file.
+        /// Malformed value read from the file.
         value: String,
     },
 

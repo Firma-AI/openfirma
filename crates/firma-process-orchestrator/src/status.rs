@@ -15,6 +15,7 @@ use firma_runtime_state::UserProcessId;
 use serde::Serialize;
 use tracing::{debug, trace};
 
+use crate::component::read_endpoint;
 use crate::error::OrchestratorError;
 use crate::platform::TerminationTarget;
 use crate::{ComponentEndpoint, StackTopology};
@@ -105,7 +106,9 @@ fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus, OrchestratorEr
         });
     }
 
-    let listen = listen_addr_for(state_dir, name);
+    let listen = read_endpoint(&state_dir.join(format!("{name}.listen")), name)
+        .ok()
+        .flatten();
     let endpoint_open = listen.as_ref().is_some_and(endpoint_is_connectable);
     Ok(ComponentStatus {
         name: name.into(),
@@ -118,17 +121,6 @@ fn probe(state_dir: &Path, name: &str) -> Result<ComponentStatus, OrchestratorEr
         listen,
         uptime_secs: pidfile_uptime(&pidfile_path),
     })
-}
-
-/// Read the recorded endpoint as optional status metadata.
-fn listen_addr_for(state_dir: &Path, name: &str) -> Option<ComponentEndpoint> {
-    let mut text = std::fs::read_to_string(state_dir.join(format!("{name}.listen"))).ok()?;
-    if !text.ends_with('\n') {
-        return None;
-    }
-    text.pop();
-    let endpoint = text.parse::<ComponentEndpoint>().ok()?;
-    (endpoint.to_string() == text).then_some(endpoint)
 }
 
 fn endpoint_is_connectable(endpoint: &ComponentEndpoint) -> bool {

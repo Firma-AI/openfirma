@@ -47,7 +47,8 @@ pub fn wait_for_tcp(
     )
 }
 
-/// Wait until a live, owned component accepts a connection at an endpoint.
+/// Wait until a live, owned component accepts a connection at an endpoint,
+/// returning the effective dial endpoint used by the probe.
 pub fn wait_for_endpoint(
     component: &str,
     endpoint: &ComponentEndpoint,

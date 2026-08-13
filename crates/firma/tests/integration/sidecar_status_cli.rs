@@ -123,6 +123,6 @@ fn malformed_daemon_pidfile_exits_two() {
         "diagnostic omitted pidfile path: {stderr}"
     );
     insta::assert_snapshot!(stderr.replace(&*pidfile.to_string_lossy(), "[PIDFILE]"), @"
-    [ERR]  sidecar status: invalid pidfile '[PIDFILE]': expected a non-zero process ID, got 'not-a-pid'
+    [ERR]  sidecar status: invalid pidfile '[PIDFILE]': expected one canonical non-zero decimal process ID followed by a newline, got \"not-a-pid\\n\"
     ");
 }

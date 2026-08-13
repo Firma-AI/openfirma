@@ -36,19 +36,20 @@ pub fn write(path: &Path, pid: UserProcessId) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns filesystem errors other than not-found, or an error when the file
-/// does not contain a valid non-zero process ID.
+/// Returns filesystem errors other than not-found, or an error unless the file
+/// contains one canonical non-zero decimal process ID followed by one newline.
 pub fn read(path: &Path) -> Result<Option<UserProcessId>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
-            let value = text.trim();
+            let value = text.strip_suffix('\n').unwrap_or(&text);
             let pid = value
                 .parse()
                 .ok()
                 .and_then(UserProcessId::new)
+                .filter(|pid| text == format!("{pid}\n"))
                 .ok_or_else(|| RuntimeStateError::PidfileParse {
                     path: path.to_path_buf(),
-                    value: value.to_string(),
+                    value: text.clone(),
                 })?;
             Ok(Some(pid))
         }

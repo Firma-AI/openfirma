@@ -7,10 +7,10 @@ use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{
-    ComponentPlanContext, ComponentSpec, LifecycleTimeouts, OrchestratorError, RunningStack,
-    ShutdownError, StackGeneration, StackTopology, StartError, publish_startup_report,
-    spawn_stack_from_plan, start_detached, start_foreground_from_plan, stop_components,
-    supervise_owned_generation_from_plan,
+    ComponentEndpoint, ComponentPlanContext, ComponentSpec, LifecycleTimeouts, OrchestratorError,
+    RunningStack, ShutdownError, StackGeneration, StackTopology, StartError,
+    publish_startup_report, spawn_stack_from_plan, start_detached, start_foreground_from_plan,
+    stop_components, supervise_owned_generation_from_plan,
 };
 use firma_runtime_state::UserProcessId;
 use fs2::FileExt as _;
@@ -56,6 +56,21 @@ impl Drop for ProcessCleanup {
 fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let dir = tempfile::tempdir().expect("state dir");
     let (mut stack, pids) = spawn_stack(dir.path(), &["authority", "sidecar"]);
+    let handle = stack.handle().clone();
+    let ordered: Vec<_> = handle
+        .components()
+        .map(firma_process_orchestrator::ComponentHandle::name)
+        .collect();
+    assert_eq!(ordered, ["authority", "sidecar"]);
+    assert_eq!(
+        handle
+            .component("authority")
+            .expect("authority handle")
+            .leader_pid()
+            .get(),
+        pids[0]
+    );
+    assert!(handle.component("missing").is_none());
     std::fs::remove_file(dir.path().join("authority.pid")).expect("remove pidfile");
     std::fs::write(dir.path().join("sidecar.pid"), "not-a-pid\n").expect("corrupt pidfile");
 
@@ -63,6 +78,7 @@ fn owned_shutdown_is_idempotent_and_ignores_pidfiles() {
     let repeated = stack.shutdown(Duration::ZERO).expect("repeated shutdown");
 
     assert!(!repeated.forced);
+    assert_eq!(handle.components().count(), 2);
     assert_all_absent(&pids);
     assert!(!dir.path().join("stack.lock").exists());
 }
@@ -190,6 +206,14 @@ fn wildcard_child_publication_uses_loopback_canonical_endpoint() {
         .trim()
         .parse()
         .expect("parse canonical worker endpoint");
+    assert_eq!(
+        stack
+            .handle()
+            .component("worker")
+            .expect("worker handle")
+            .endpoint(),
+        &firma_process_orchestrator::ComponentEndpoint::Tcp(canonical)
+    );
     assert_eq!(canonical.ip(), std::net::Ipv4Addr::LOCALHOST);
     std::net::TcpStream::connect(canonical).expect("dial canonical worker endpoint");
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
@@ -574,7 +598,7 @@ fn detached_launcher_exit_before_readiness_rolls_back_generation() {
 #[test]
 fn detached_component_exit_tears_down_peer_and_supervisor_state() {
     let dir = tempfile::tempdir().expect("state dir");
-    start_detached(
+    let handle = start_detached(
         &topology(&["authority", "sidecar"]),
         dir.path(),
         fast_timeouts(),
@@ -585,6 +609,23 @@ fn detached_component_exit_tears_down_peer_and_supervisor_state() {
         wait_for_marker(&dir.path().join("authority.marker")),
         wait_for_marker(&dir.path().join("sidecar.marker")),
     ];
+    assert_eq!(
+        handle
+            .components()
+            .map(|component| (component.name(), component.leader_pid().get()))
+            .collect::<Vec<_>>(),
+        [("authority", pids[0]), ("sidecar", pids[1])]
+    );
+    for component in handle.components() {
+        #[cfg(unix)]
+        let endpoint = match component.endpoint() {
+            ComponentEndpoint::Tcp(endpoint) => endpoint,
+            ComponentEndpoint::Unix(_) => unreachable!("fixture publishes TCP endpoints"),
+        };
+        #[cfg(windows)]
+        let ComponentEndpoint::Tcp(endpoint) = component.endpoint();
+        assert_ne!(endpoint.port(), 0);
+    }
     let supervisor_pid = read_pidfile(&dir.path().join("stack.pid"));
     let cleanup = ProcessCleanup::new(pids.into_iter().chain([supervisor_pid]));
 
@@ -623,6 +664,31 @@ fn stale_detached_launcher_rollback_does_not_signal_replacement_target() {
     sentinel.wait().expect("collect sentinel");
     assert_process_absent(sentinel_pid);
     cleanup.disarm();
+}
+
+#[test]
+fn detached_handle_reconstruction_rejects_replacement_generation() {
+    let dir = tempfile::tempdir().expect("state dir");
+    let result = start_detached(
+        &topology(&["authority"]),
+        dir.path(),
+        fast_timeouts(),
+        |generation| supervisor_command(dir.path(), generation, "attach-replacement"),
+    );
+
+    let Err(OrchestratorError::Platform(reason)) = result else {
+        panic!("replacement generation must invalidate the detached handle");
+    };
+    assert_eq!(
+        reason,
+        "stack generation changed before detached handle reconstruction"
+    );
+    let replacement = std::fs::read_to_string(dir.path().join("replacement.generation"))
+        .expect("read replacement generation");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("stack.lock")).expect("replacement lock"),
+        replacement
+    );
 }
 
 #[test]
@@ -682,6 +748,37 @@ fn owned_child_fixture() {
             .to_string_lossy()
             .parse::<StackGeneration>()
             .expect("parse supervisor generation");
+        if std::env::var(SUPERVISOR_MODE).as_deref() == Ok("attach-replacement") {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind replacement endpoint");
+            let endpoint = listener.local_addr().expect("replacement endpoint");
+            let supervisor_pid = UserProcessId::new(std::process::id()).expect("supervisor PID");
+            let replacement = StackGeneration::default();
+            let replacement_state = format!("{replacement}\n");
+            std::fs::write(state_dir.join("stack.lock"), &replacement_state)
+                .expect("publish replacement generation");
+            std::fs::write(state_dir.join("replacement.generation"), &replacement_state)
+                .expect("record replacement generation");
+            firma_runtime_state::pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)
+                .expect("write replacement owner");
+            firma_runtime_state::pidfile::write(&state_dir.join("authority.pid"), supervisor_pid)
+                .expect("write replacement component");
+            std::fs::write(state_dir.join("authority.listen"), format!("{endpoint}\n"))
+                .expect("write replacement endpoint");
+            let ready = state_dir.join(format!("stack.{supervisor_pid}.ready"));
+            firma_runtime_state::pidfile::write(&ready, supervisor_pid)
+                .expect("publish supervisor readiness");
+            while ready.exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            firma_runtime_state::pidfile::write(
+                &state_dir.join(format!("stack.{supervisor_pid}.attached")),
+                supervisor_pid,
+            )
+            .expect("publish supervisor attachment");
+            std::thread::sleep(Duration::from_secs(1));
+            return;
+        }
         if std::env::var(SUPERVISOR_MODE).as_deref() == Ok("replace") {
             let replacement = StackGeneration::default();
             let sentinel = std::env::var(SUPERVISOR_SENTINEL_PID)

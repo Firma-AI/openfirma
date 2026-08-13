@@ -187,6 +187,38 @@ fn configured_tcp_readiness_preserves_fixed_endpoint_behavior() {
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
 }
 
+#[test]
+fn configured_ipv4_wildcard_publishes_and_retains_connectable_endpoint() {
+    let requested = reserve_endpoint_for_ip("0.0.0.0");
+    let fixture = Fixture::new(ChildBehavior::Configured(requested));
+    let mut stack = fixture
+        .spawn_with_readiness(Readiness::Configured(ComponentEndpoint::Tcp(requested)))
+        .expect("configured wildcard readiness");
+    let effective = ComponentEndpoint::Tcp(SocketAddr::from((
+        std::net::Ipv4Addr::LOCALHOST,
+        requested.port(),
+    )));
+
+    assert_eq!(
+        stack
+            .handle()
+            .component("worker")
+            .expect("worker handle")
+            .endpoint(),
+        &effective
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
+            .expect("read configured canonical endpoint"),
+        format!("{effective}\n")
+    );
+    let ComponentEndpoint::Tcp(effective) = effective else {
+        unreachable!("effective endpoint is TCP");
+    };
+    std::net::TcpStream::connect(effective).expect("dial configured wildcard endpoint");
+    stack.shutdown(Duration::ZERO).expect("shutdown fixture");
+}
+
 #[cfg(unix)]
 #[test]
 fn configured_unix_readiness_publishes_canonical_endpoint() {
@@ -227,6 +259,14 @@ fn child_published_unix_readiness_publishes_connectable_canonical_endpoint() {
         std::fs::read_to_string(fixture.state_dir.join("worker.listen"))
             .expect("read canonical Unix endpoint"),
         format!("{expected}\n")
+    );
+    assert_eq!(
+        stack
+            .handle()
+            .component("worker")
+            .expect("worker handle")
+            .endpoint(),
+        &expected
     );
     std::os::unix::net::UnixStream::connect(socket).expect("connect published Unix endpoint");
     stack.shutdown(Duration::ZERO).expect("shutdown fixture");
