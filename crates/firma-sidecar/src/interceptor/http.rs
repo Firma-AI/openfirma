@@ -400,11 +400,19 @@ async fn handle_request(
                 .await);
             }
         };
-    let session_id = raw
-        .headers
-        .get_firma_session_id()?
-        .unwrap_or_default()
-        .to_owned();
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id.unwrap_or_default().to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                &session_hint,
+                "raw.http",
+                host.as_str(),
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
     tracing::debug!(
         method = %raw.method,
         host = %raw.host,
@@ -507,22 +515,15 @@ async fn handle_connect_request(
     let raw = match build_raw_request_head(req, true) {
         Ok(raw) => raw,
         Err(detail) => {
-            let host = host_with_default_port(req, true)?;
-            return Ok(deny_malformed(
-                &handler,
-                &header_session_id(req),
-                "network.connect",
-                host.as_str(),
-                &detail.to_string(),
-            )
-            .await);
+            return Ok(deny_malformed_connect(req, &handler, &detail.to_string()).await);
         }
     };
-    let session_id = raw
-        .headers
-        .get_firma_session_id()?
-        .unwrap_or_default()
-        .to_owned();
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id.unwrap_or_default().to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed_connect(req, &handler, &detail.to_string()).await);
+        }
+    };
     let target_info = connect_target_info(&host_with_default_port(req, true)?)?;
     tracing::debug!(
         host = %target_info.host,
@@ -1191,12 +1192,22 @@ async fn handle_mitm_https_request(
             }
         };
 
-    let session_id = raw
-        .headers
-        .get_firma_session_id()?
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(connect_session_id)
-        .to_owned();
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(connect_session_id)
+            .to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                connect_session_id,
+                "raw.http",
+                &target.host,
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
 
     let response = match handler.handle(raw, &session_id).await {
         HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
@@ -1252,12 +1263,22 @@ async fn handle_mitm_websocket_upgrade_request(
             .await);
         }
     };
-    let session_id = raw
-        .headers
-        .get_firma_session_id()?
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(connect_session_id)
-        .to_owned();
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(connect_session_id)
+            .to_owned(),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                connect_session_id,
+                "raw.http",
+                &target.host,
+                &detail.to_string(),
+            )
+            .await);
+        }
+    };
 
     let authorization = handler.authorize_upgrade(raw, &session_id).await;
     let (credentials, audit_payload) = match authorization {
@@ -1763,6 +1784,28 @@ fn host_with_default_port(req: &Request<Incoming>, is_connect: bool) -> anyhow::
         })
         .transpose()?
         .ok_or_else(|| anyhow::anyhow!("MALFORMED_REQUEST: missing host"))
+}
+
+/// Builds the fail-closed deny response for a CONNECT request whose head
+/// could not be turned into a `RawRequest` (unparseable host, malformed
+/// session id). Re-deriving the host here would fail identically when the
+/// host itself is the problem, so this falls back to an empty host label.
+async fn deny_malformed_connect(
+    req: &Request<Incoming>,
+    handler: &RequestHandler,
+    detail: &str,
+) -> Response<Full<Bytes>> {
+    let host = host_with_default_port(req, true)
+        .map(|authority| authority.to_string())
+        .unwrap_or_default();
+    deny_malformed(
+        handler,
+        &header_session_id(req),
+        "network.connect",
+        &host,
+        detail,
+    )
+    .await
 }
 
 /// Builds a `host/` resource label for a synthetic deny audit event,

@@ -143,11 +143,10 @@ async fn handle_request(
         Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail.to_string())),
     };
 
-    let session_id = raw
-        .headers
-        .get_firma_session_id()?
-        .unwrap_or_default()
-        .to_owned();
+    let session_id = match raw.headers.get_firma_session_id() {
+        Ok(session_id) => session_id.unwrap_or_default().to_owned(),
+        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail.to_string())),
+    };
 
     let outcome = handler.handle(raw, &session_id).await;
 

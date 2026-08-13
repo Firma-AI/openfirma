@@ -1066,7 +1066,13 @@ fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawR
     let ActionParams::Http(http) = &mut envelope.intent.params else {
         return;
     };
-    http.headers = strip_firma_headers(&http.headers);
+    // `envelope.intent.params.http.headers` was built by the normalizer's
+    // `sanitize_headers` for the audit-trail envelope, which strips
+    // sensitive headers like `cookie` and `authorization` so they never
+    // reach logs. Dispatch to the upstream connector must still carry
+    // those headers, so rebuild from the original `request.headers` here
+    // and only strip the internal `x-firma-*` control headers.
+    http.headers = strip_firma_headers(&request.headers);
     http.body.clone_from(&request.body);
 }
 

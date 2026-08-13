@@ -230,7 +230,7 @@ fn document_envelope(toolkit: &str, slug: &str) -> NormalizedEnvelope {
             resource,
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::POST,
-                headers: HashMap::new(),
+                headers: HeaderMap::new(),
                 body: None,
                 query: HashMap::new(),
             }),
