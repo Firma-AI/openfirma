@@ -116,12 +116,9 @@ pub enum CliIntegrationConfigError {
         /// Invalid option spelling.
         name: String,
     },
-    /// One option spelling has different arity or attachment behavior across
-    /// integration and command scopes.
-    #[error(
-        "option `{name}` has conflicting definitions in integration-level and command-level stripped_options"
-    )]
-    ConflictingStrippedOption {
+    /// One option spelling has conflicting arity or attachment definitions.
+    #[error("option `{name}` has conflicting definitions")]
+    ConflictingOptionDefinition {
         /// Conflicting option spelling.
         name: String,
     },
@@ -131,6 +128,8 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
     type Error = CliIntegrationConfigError;
 
     fn try_from(config: CliIntegrationConfig) -> Result<Self, Self::Error> {
+        validate_consistent_options(&config.stripped_options)?;
+        validate_consistent_options(&config.forbidden_options)?;
         let command_options = config
             .matchers
             .iter()
@@ -159,6 +158,7 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
             MatcherRule::SensitiveCommand(rule) => Some(rule),
             MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
         }) {
+            validate_consistent_options(&rule.stripped_options)?;
             for integration_option in &config.stripped_options {
                 if rule
                     .stripped_options
@@ -166,7 +166,7 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
                     .filter(|option| option.name == integration_option.name)
                     .any(|command_option| command_option != integration_option)
                 {
-                    return Err(CliIntegrationConfigError::ConflictingStrippedOption {
+                    return Err(CliIntegrationConfigError::ConflictingOptionDefinition {
                         name: integration_option.name.clone(),
                     });
                 }
@@ -182,6 +182,20 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
             matchers: config.matchers,
         })
     }
+}
+
+fn validate_consistent_options(options: &[FlagSpec]) -> Result<(), CliIntegrationConfigError> {
+    for (index, option) in options.iter().enumerate() {
+        if options[..index]
+            .iter()
+            .any(|previous| previous.name == option.name && previous != option)
+        {
+            return Err(CliIntegrationConfigError::ConflictingOptionDefinition {
+                name: option.name.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 impl CliIntegrationSpec {
