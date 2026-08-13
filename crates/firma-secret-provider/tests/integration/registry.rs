@@ -26,8 +26,9 @@ provider_id = "bitwarden"
 credential_env_vars = ["BWS_ACCESS_TOKEN"]
 skip_flags = ["--organization-id"]
 forbidden_flags = [
-  { names = ["--server-url", "-u"], takes_value = true, attached_value_names = ["-u"] },
-  { names = ["--quiet"], takes_value = false },
+  "--server-url",
+  { name = "-u", takes_value = true, allow_attached_value = true },
+  { name = "--quiet", takes_value = false },
 ]
 
 [[matchers]]
@@ -53,8 +54,9 @@ path = "$.key"
     assert_eq!(
         spec.forbidden_flags,
         vec![
-            FlagSpec::attached_value(&["--server-url", "-u"], &["-u"]),
-            FlagSpec::valueless(&["--quiet"]),
+            FlagSpec::from("--server-url"),
+            FlagSpec::attached_value("-u"),
+            FlagSpec::valueless("--quiet"),
         ]
     );
 
@@ -63,6 +65,25 @@ path = "$.key"
     let round_trip: CliIntegrationSpec = toml::from_str(&serialized)
         .unwrap_or_else(|error| panic!("round-trip CLI schema TOML: {error}"));
     assert_eq!(round_trip, spec);
+}
+
+#[test]
+fn cli_schema_rejects_invalid_flag_definitions() {
+    let invalid_flags = [
+        r#""""#,
+        r#"{"name":"","takes_value":true}"#,
+        r#"{"name":"--quiet","takes_value":false,"allow_attached_value":true}"#,
+        r#"{"names":["-u"],"takes_value":true,"attached_value_names":["-u"]}"#,
+    ];
+
+    for invalid_flag in invalid_flags {
+        let Err(error) = serde_json::from_str::<FlagSpec>(invalid_flag) else {
+            panic!("invalid flag definition must not deserialize: {invalid_flag}");
+        };
+        assert_eq!(error.classify(), serde_json::error::Category::Data);
+        assert!(error.line() > 0);
+        assert!(error.column() > 0);
+    }
 }
 
 #[test]
@@ -294,7 +315,7 @@ fn command_matching_skips_declared_flags_and_their_values() -> Result<(), EmptyE
         binary_name: String::from("synthetic"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
-        skip_flags: vec![FlagSpec::valueless(&["--verbose"]), FlagSpec::from("-f")],
+        skip_flags: vec![FlagSpec::valueless("--verbose"), FlagSpec::from("-f")],
         forbidden_flags: vec![],
         matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
             command: command(&["get", "secret"], CommandMatch::Exact)?,
@@ -927,11 +948,8 @@ fn registry_with_remove_flags(
 
 #[test]
 fn valueless_remove_flag_preserves_following_flags_and_positionals() -> Result<(), EmptyError> {
-    let registry = registry_with_remove_flags(
-        &["cmd"],
-        vec![FlagSpec::valueless(&["--bool-flag"])],
-        vec![],
-    )?;
+    let registry =
+        registry_with_remove_flags(&["cmd"], vec![FlagSpec::valueless("--bool-flag")], vec![])?;
     let spec = registry.for_binary("foo").expect("foo spec");
 
     assert_eq!(
@@ -947,7 +965,7 @@ fn valueless_remove_flag_preserves_following_flags_and_positionals() -> Result<(
 fn valueless_remove_flag_preserves_following_command_word() -> Result<(), EmptyError> {
     let registry = registry_with_remove_flags(
         &["secrets", "download"],
-        vec![FlagSpec::valueless(&["--offline"])],
+        vec![FlagSpec::valueless("--offline")],
         vec![String::from("--no-fallback")],
     )?;
     let spec = registry.for_binary("foo").expect("foo spec");
@@ -1005,7 +1023,7 @@ fn value_taking_remove_flag_consumes_a_value_that_looks_like_a_flag() -> Result<
 fn valueless_remove_flag_does_not_consume_following_positional() -> Result<(), EmptyError> {
     let registry = registry_with_remove_flags(
         &["cmd"],
-        vec![FlagSpec::valueless(&["--valueless-flag"])],
+        vec![FlagSpec::valueless("--valueless-flag")],
         vec![],
     )?;
     let spec = registry.for_binary("foo").expect("foo spec");
@@ -1019,7 +1037,10 @@ fn valueless_remove_flag_does_not_consume_following_positional() -> Result<(), E
 fn rewrite_args_concatenated_short_flag_value_is_stripped() -> Result<(), EmptyError> {
     let registry = registry_with_remove_flags(
         &["cmd"],
-        vec![FlagSpec::attached_value(&["--server-url", "-u"], &["-u"])],
+        vec![
+            FlagSpec::from("--server-url"),
+            FlagSpec::attached_value("-u"),
+        ],
         vec![],
     )?;
     let spec = registry.for_binary("foo").expect("foo spec");
