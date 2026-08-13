@@ -158,11 +158,11 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
             MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
         }) {
             for integration_option in &config.stripped_options {
-                if let Some(command_option) = rule
+                if rule
                     .stripped_options
                     .iter()
-                    .find(|option| option.name == integration_option.name)
-                    && command_option != integration_option
+                    .filter(|option| option.name == integration_option.name)
+                    .any(|command_option| command_option != integration_option)
                 {
                     return Err(CliIntegrationConfigError::ConflictingStrippedOption {
                         name: integration_option.name.clone(),

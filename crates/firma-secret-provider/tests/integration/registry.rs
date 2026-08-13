@@ -104,6 +104,8 @@ fn cli_schema_rejects_conflicting_stripped_option_definitions() {
     let conflicting_command_options = [
         r#"{ name = "--mode", takes_value = false }"#,
         r#"{ name = "--mode", takes_value = true, allow_attached_value = true }"#,
+        r#"{ name = "--mode", takes_value = true }, { name = "--mode", takes_value = false }"#,
+        r#"{ name = "--mode", takes_value = false }, { name = "--mode", takes_value = true }"#,
     ];
 
     for command_option in conflicting_command_options {
