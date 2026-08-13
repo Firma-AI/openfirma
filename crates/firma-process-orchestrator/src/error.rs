@@ -146,7 +146,7 @@ impl ShutdownError {
 
     /// Discard the shutdown phase while preserving the underlying error.
     #[must_use]
-    pub(crate) fn into_orchestrator_error(self) -> OrchestratorError {
+    pub fn into_orchestrator_error(self) -> OrchestratorError {
         match self {
             Self::TeardownUncertain(error) | Self::StateCleanup(error) => error,
         }
@@ -168,6 +168,19 @@ pub enum StartError<E> {
         /// Original planning or orchestration failure.
         operation: Box<Self>,
         /// Failure encountered while rolling back the partial stack.
-        rollback: Box<OrchestratorError>,
+        rollback: Box<ShutdownError>,
     },
+}
+
+impl<E> StartError<E> {
+    /// Whether a failed startup rollback confirmed all process targets absent.
+    ///
+    /// Returns `None` when startup did not report a rollback failure.
+    #[must_use]
+    pub fn rollback_processes_stopped(&self) -> Option<bool> {
+        match self {
+            Self::Rollback { rollback, .. } => Some(rollback.processes_stopped()),
+            Self::Plan(_) | Self::Orchestrator(_) => None,
+        }
+    }
 }

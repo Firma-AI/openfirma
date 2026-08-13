@@ -245,96 +245,104 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             &profile.capability,
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
-        let effective_seccomp = resolve_effective_seccomp(&profile)?;
-        if let Some(materialized) = &effective_seccomp {
-            tracing::info!(
-                policy_id = %materialized.metadata.policy_id,
-                policy_version = %materialized.metadata.policy_version,
-                policy_sha256 = %materialized.metadata.sha256,
-                target_arch = %materialized.metadata.target_arch,
-                compiler_version = %materialized.metadata.compiler_version,
-                seccomp_filter_path = %materialized.bpf_path.display(),
-                "resolved managed static seccomp artifact"
-            );
-        }
-        let mut env = build_execution_env(
-            &profile,
-            &identity,
-            capability_token.as_deref(),
-            &effective_endpoint,
-            network_runtime.env_overrides(),
-        );
-
-        let mut executable = args
-            .command
-            .first()
-            .cloned()
-            .ok_or(RunError::MissingCommand)?;
-        let launch_args = maybe_apply_executable_policy(
-            &profile,
-            &executable,
-            args.command.iter().skip(1).cloned().collect(),
-        );
-        let mut launch_args =
-            maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
-        let vscode_state_dir = if vscode::should_apply_vscode_shim(&profile, &executable) {
-            let state_dir = vscode::resolve_vscode_state_dir(
-                user_config_path.as_deref(),
-                &handle_ref.runtime_dir,
-            )?;
-            let prepared = vscode::prepare_vscode_shim(
-                &handle_ref.runtime_dir,
-                &state_dir,
-                &executable,
-                launch_args,
-                &mut env,
-                std::env::var_os("PATH").as_deref(),
-            )?;
-            executable = prepared.executable.display().to_string();
-            launch_args = prepared.args;
-            Some(state_dir)
-        } else {
-            None
-        };
-        if let Some(mediator) = &profile.sidecar_local_exec {
-            let canonical = resolve_governed_executable(mediator, &executable)?;
-            enforce_local_command_governance(mediator, &identity, &canonical, &launch_args)?;
-        }
-        if let Some(state_dir) = vscode_state_dir {
-            let handle_mut = handle
-                .as_mut()
-                .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
-            vscode::ensure_vscode_state_mount(handle_mut, &state_dir);
-        }
-        let launch = LaunchSpec {
-            executable,
-            args: launch_args,
-            cwd: working_dir,
-            env,
-            sidecar_endpoint: effective_endpoint,
-            seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
-            identity_mode: profile.identity_mode,
-            config_file: user_config_path.clone(),
-        };
-
-        let child = {
+        let _ = handle_ref;
+        let execution_result = (|| {
             let handle_ref = handle
                 .as_ref()
                 .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
-            backend.start_agent(handle_ref, &launch)?
-        };
-        // Per-run marker dir under the persistent runtime root, alongside
-        // `sidecar.log` / `authority.log`. The caller redirects its foreground
-        // logs here while the agent's TUI owns the terminal.
-        let marker_dir = run_entry_from(&default_runtime_dir(), &identity.sandbox_id);
-        if let Some(hook) = hooks.on_agent_launch {
-            hook(&marker_dir);
-        }
-        let wait_result = wait_with_signal_forwarding(child, backend.kind());
-        if let Some(hook) = hooks.on_agent_exit {
-            hook();
-        }
-        wait_result
+            let effective_seccomp = resolve_effective_seccomp(&profile)?;
+            if let Some(materialized) = &effective_seccomp {
+                tracing::info!(
+                    policy_id = %materialized.metadata.policy_id,
+                    policy_version = %materialized.metadata.policy_version,
+                    policy_sha256 = %materialized.metadata.sha256,
+                    target_arch = %materialized.metadata.target_arch,
+                    compiler_version = %materialized.metadata.compiler_version,
+                    seccomp_filter_path = %materialized.bpf_path.display(),
+                    "resolved managed static seccomp artifact"
+                );
+            }
+            let mut env = build_execution_env(
+                &profile,
+                &identity,
+                capability_token.as_deref(),
+                &effective_endpoint,
+                network_runtime.env_overrides(),
+            );
+
+            let mut executable = args
+                .command
+                .first()
+                .cloned()
+                .ok_or(RunError::MissingCommand)?;
+            let launch_args = maybe_apply_executable_policy(
+                &profile,
+                &executable,
+                args.command.iter().skip(1).cloned().collect(),
+            );
+            let mut launch_args =
+                maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
+            let vscode_state_dir = if vscode::should_apply_vscode_shim(&profile, &executable) {
+                let state_dir = vscode::resolve_vscode_state_dir(
+                    user_config_path.as_deref(),
+                    &handle_ref.runtime_dir,
+                )?;
+                let prepared = vscode::prepare_vscode_shim(
+                    &handle_ref.runtime_dir,
+                    &state_dir,
+                    &executable,
+                    launch_args,
+                    &mut env,
+                    std::env::var_os("PATH").as_deref(),
+                )?;
+                executable = prepared.executable.display().to_string();
+                launch_args = prepared.args;
+                Some(state_dir)
+            } else {
+                None
+            };
+            if let Some(mediator) = &profile.sidecar_local_exec {
+                let canonical = resolve_governed_executable(mediator, &executable)?;
+                enforce_local_command_governance(mediator, &identity, &canonical, &launch_args)?;
+            }
+            if let Some(state_dir) = vscode_state_dir {
+                let handle_mut = handle
+                    .as_mut()
+                    .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
+                vscode::ensure_vscode_state_mount(handle_mut, &state_dir);
+            }
+            let launch = LaunchSpec {
+                executable,
+                args: launch_args,
+                cwd: working_dir,
+                env,
+                sidecar_endpoint: effective_endpoint,
+                seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
+                identity_mode: profile.identity_mode,
+                config_file: user_config_path.clone(),
+            };
+
+            let child = {
+                let handle_ref = handle
+                    .as_ref()
+                    .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
+                backend.start_agent(handle_ref, &launch)?
+            };
+            // Per-run marker dir under the persistent runtime root, alongside
+            // `sidecar.log` / `authority.log`. The caller redirects its foreground
+            // logs here while the agent's TUI owns the terminal.
+            let marker_dir = run_entry_from(&default_runtime_dir(), &identity.sandbox_id);
+            if let Some(hook) = hooks.on_agent_launch {
+                hook(&marker_dir);
+            }
+            let wait_result = wait_with_signal_forwarding(child, backend.kind());
+            if let Some(hook) = hooks.on_agent_exit {
+                hook();
+            }
+            wait_result
+        })();
+        let shutdown_result = network_runtime.shutdown(Duration::from_secs(10));
+        combine_run_and_teardown_results(execution_result, shutdown_result)
     })();
 
     let teardown_result = handle

@@ -57,6 +57,18 @@ pub enum RunError {
     #[error("internal runtime error: {0}")]
     Internal(String),
 
+    #[error("sidecar orchestration failed: {0}")]
+    SidecarOrchestration(Box<firma_process_orchestrator::StartError<Self>>),
+
+    #[error("sidecar shutdown failed: {0}")]
+    SidecarShutdown(firma_process_orchestrator::OrchestratorError),
+
+    #[error("{operation}; sidecar rollback failed: {rollback}")]
+    SidecarPostReadyRollback {
+        operation: Box<Self>,
+        rollback: firma_process_orchestrator::ShutdownError,
+    },
+
     #[error("sidecar endpoint {endpoint} is unreachable and autostart is disabled ({reason})")]
     SidecarUnreachable { endpoint: String, reason: String },
 

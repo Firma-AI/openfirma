@@ -1616,6 +1616,7 @@ dependencies = [
  "firma-core",
  "firma-fs",
  "firma-http",
+ "firma-process-orchestrator",
  "firma-protobuf",
  "firma-runtime-state",
  "firma-sidecar",
