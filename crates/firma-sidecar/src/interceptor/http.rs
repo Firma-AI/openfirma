@@ -1958,6 +1958,86 @@ mod tests {
         listener.unwrap()
     }
 
+    async fn captured_websocket_handshake() -> anyhow::Result<Vec<u8>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let (handshake_tx, mut handshake_rx) = tokio::sync::mpsc::channel(1);
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            http1::Builder::new()
+                .serve_connection(
+                    TokioIo::new(stream),
+                    service_fn(move |request: Request<Incoming>| {
+                        let handshake_tx = handshake_tx.clone();
+                        let target = ConnectTargetInfo {
+                            host: "example.test".to_string(),
+                            port: 443,
+                            authority: Authority::from_static("example.test:443"),
+                        };
+                        let handshake = build_upstream_handshake_request(
+                            &request,
+                            &target,
+                            "/socket",
+                            &InjectedCredentials::empty(),
+                        );
+                        async move {
+                            let _ = handshake_tx.send(handshake).await;
+                            Ok::<_, hyper::Error>(Response::new(Full::new(Bytes::new())))
+                        }
+                    }),
+                )
+                .await?;
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let mut client = TcpStream::connect(address).await?;
+        client
+            .write_all(
+                b"GET /socket HTTP/1.1\r\n\
+                  Host: example.test\r\n\
+                  Connection: close\r\n\
+                  Upgrade: websocket\r\n\
+                  X-Firma-Session-Id: session-secret\r\n\
+                  X-Opaque: \xff\r\n\r\n",
+            )
+            .await?;
+
+        let handshake = handshake_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("handshake server exited without a request"))?;
+
+        drop(client);
+        server.await??;
+        Ok(handshake)
+    }
+
+    #[tokio::test]
+    async fn websocket_handshake_strips_internal_headers() -> anyhow::Result<()> {
+        let handshake = captured_websocket_handshake().await?;
+
+        assert!(
+            !handshake
+                .windows(b"x-firma-session-id:".len())
+                .any(|window| window.eq_ignore_ascii_case(b"x-firma-session-id:")),
+            "internal Firma headers must not reach the upstream handshake"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_handshake_preserves_opaque_header_values() -> anyhow::Result<()> {
+        let handshake = captured_websocket_handshake().await?;
+
+        assert!(
+            handshake
+                .windows(b"x-opaque: \xff\r\n".len())
+                .any(|window| window.eq_ignore_ascii_case(b"x-opaque: \xff\r\n")),
+            "opaque agent header values must survive the upstream handshake"
+        );
+        Ok(())
+    }
+
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
