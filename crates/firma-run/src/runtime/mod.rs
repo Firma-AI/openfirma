@@ -106,11 +106,12 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     ensure_required_session_identity()?;
 
     let config_override = args.user_config_path.as_deref().or(args.config.as_deref());
-    let resolved_user_config = firma_config_loader::ConfigResolver::default()
-        .resolve_config(config_override)
-        .map_err(|error| RunError::ConfigParse {
-            path: error.path.clone(),
-            reason: error.to_string(),
+    let resolved_user_config =
+        firma_config_loader::resolve_config(config_override).map_err(|error| {
+            RunError::ConfigParse {
+                path: error.path.clone(),
+                reason: error.to_string(),
+            }
         })?;
     let user_config_path = resolved_user_config
         .as_ref()

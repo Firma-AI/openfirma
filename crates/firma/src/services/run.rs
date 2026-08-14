@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use firma_config_loader::CONFIG_DIR_NAME;
 use firma_core::AgentId;
 use firma_run::authority::AuthorityPromptIo;
 use firma_run::runtime::{LaunchHooks, RunInput, execute_run};
@@ -103,10 +102,10 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
         // let firma-run report the parse/IO error normally.
         return Ok(Some(config.clone()));
     }
-    // Spec §4 step 1 + §5: walk-up `./.firma/firma.toml` is the project-local
-    // tier, picked up by `firma_config_loader::ConfigResolver`. If anything in the
-    // search path resolves, skip implicit init.
-    if let Some(resolved) = firma_config_loader::ConfigResolver::default().resolve_config(None)? {
+    // Trusted-location discovery (`--config` / `$FIRMA_CONFIG` / the trusted
+    // config directory) is the source of truth. If anything resolves, skip
+    // implicit init.
+    if let Some(resolved) = firma_config_loader::resolve_config(None)? {
         return Ok(Some(resolved.config_file().to_path_buf()));
     }
 
@@ -119,11 +118,15 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
 
     let cwd = std::env::current_dir()
         .map_err(|e| anyhow::anyhow!("resolve cwd for implicit init: {e}"))?;
-    let resolved = cwd.join(CONFIG_DIR_NAME);
-    let firma_toml = resolved.join(firma_config_loader::CONFIG_FILE_NAME);
+    // Scaffold into the trusted config directory so the written file is exactly
+    // what discovery picks up on the next run — not a cwd-local `.firma` that a
+    // planted config could shadow (and that discovery no longer reads).
+    let config_dir = firma_config_loader::home_config_dir()
+        .map_err(|e| anyhow::anyhow!("resolve trusted config dir for implicit init: {e}"))?;
+    let firma_toml = config_dir.join(firma_config_loader::CONFIG_FILE_NAME);
     info!(
         path = %firma_toml.display(),
-        "no firma.toml found; running implicit init with defaults into cwd/.firma"
+        "no firma.toml found; running implicit init with defaults into the trusted config directory"
     );
 
     let state_dir = firma_runtime_state::resolve_state_dir(None)
@@ -138,7 +141,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
         .or_else(|| profile_from_command(&args.command));
 
     let plan = ScaffoldPlan {
-        config_dir: resolved,
+        config_dir,
         state_dir,
         workspace: cwd,
         force: false,

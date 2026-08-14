@@ -124,16 +124,11 @@ fn load_composio_catalogs() -> anyhow::Result<Arc<firma_sidecar::composio::Compo
     Ok(Arc::new(catalogs))
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "startup sequencing stays linear so readiness ordering remains auditable"
-)]
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
     let sandbox_id = propagated_sandbox_id()?;
 
-    let resolved = firma_config_loader::ConfigResolver::default()
-        .resolve_config(args.config.as_deref())?
+    let resolved = firma_config_loader::resolve_config(args.config.as_deref())?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `sidecar`"))?;
     info!(
         path = %resolved.config_file().display(),
@@ -229,40 +224,87 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         None
     };
 
-    let authority_stream_tasks = async {
-        if let Some(handle) = authority_handle {
-            let _ = tokio::join!(handle.policy_task, handle.revocation_task);
-        }
-    };
-    let local_exec_task = async {
-        if let Some(handle) = local_exec_handle {
-            let _ = handle.await;
-        }
-    };
-    let run_audit_task = async {
-        #[cfg(unix)]
-        if let Some(handle) = run_audit_handle {
-            let _ = handle.await;
-        }
-    };
-    let health_readiness_task = async {
-        if let Some(handle) = health_readiness_mirror {
-            let _ = handle.await;
-        }
-    };
-    let _ = tokio::join!(
+    SidecarWorkers {
         audit_sink,
         health_server,
-        health_readiness_task,
-        interceptor.handle,
+        interceptor: interceptor.handle,
         shutdown_handler,
-        authority_stream_tasks,
-        local_exec_task,
-        run_audit_task,
-    );
+        authority_handle,
+        local_exec_handle,
+        health_readiness_mirror,
+        #[cfg(unix)]
+        run_audit_handle,
+    }
+    .join_all()
+    .await;
     debug!("firma sidecar exiting");
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// The long-lived tasks a running Sidecar drives to completion.
+struct SidecarWorkers {
+    audit_sink: JoinHandle<Result<(), firma_sidecar::audit::AuditSinkError>>,
+    health_server: JoinHandle<()>,
+    interceptor: JoinHandle<()>,
+    shutdown_handler: JoinHandle<()>,
+    authority_handle: Option<firma_sidecar::authority_client::AuthorityClientHandle>,
+    local_exec_handle: Option<JoinHandle<()>>,
+    health_readiness_mirror: Option<JoinHandle<()>>,
+    #[cfg(unix)]
+    run_audit_handle: Option<JoinHandle<()>>,
+}
+
+impl SidecarWorkers {
+    /// Await every Sidecar worker until shutdown; optional handles are skipped
+    /// when their feature (Authority streams, local-exec endpoint, `firma run`
+    /// audit channel, health mirror) was not provisioned.
+    async fn join_all(self) {
+        let Self {
+            audit_sink,
+            health_server,
+            interceptor,
+            shutdown_handler,
+            authority_handle,
+            local_exec_handle,
+            health_readiness_mirror,
+            #[cfg(unix)]
+            run_audit_handle,
+        } = self;
+
+        // Await an optional worker handle: run it to completion when present,
+        // or resolve immediately (`Ok`) when the feature was not provisioned.
+        // Join errors are ignored either way.
+        let await_optional = |handle: Option<JoinHandle<()>>| async move {
+            let _ = match handle {
+                Some(handle) => handle.await,
+                None => Ok(()),
+            };
+        };
+
+        let authority_stream_tasks = async {
+            if let Some(handle) = authority_handle {
+                let _ = tokio::join!(handle.policy_task, handle.revocation_task);
+            }
+        };
+        // The `firma run` audit channel exists only on Unix; elsewhere there is
+        // nothing to await.
+        #[cfg(unix)]
+        let run_audit_task = await_optional(run_audit_handle);
+        #[cfg(not(unix))]
+        let run_audit_task = std::future::ready(());
+
+        let _ = tokio::join!(
+            audit_sink,
+            health_server,
+            await_optional(health_readiness_mirror),
+            interceptor,
+            shutdown_handler,
+            authority_stream_tasks,
+            await_optional(local_exec_handle),
+            run_audit_task,
+        );
+    }
 }
 
 fn write_startup_report(
@@ -491,8 +533,7 @@ mod tests {
             "[sidecar.authority]\nurl = 'http://localhost:50051'\nconnect_addr = '127.0.0.1:41000'\n",
         )
         .expect("write config");
-        let resolved = firma_config_loader::ConfigResolver::default()
-            .resolve_config(Some(&config_path))
+        let resolved = firma_config_loader::resolve_config(Some(&config_path))
             .expect("resolve config")
             .expect("explicit config exists");
         let cli_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 42000);

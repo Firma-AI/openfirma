@@ -25,7 +25,7 @@ The CA-append behavior comes from the built-in profile, so you do not configure 
 ## Step 1: Scaffold the config
 
 ```bash
-firma config --profile copilot --posture dev
+firma config --profile copilot --posture dev --output-dir .firma
 ```
 
 This selects the `copilot` mapping (CONNECT classification for the Copilot and GitHub hosts) and seeds `https_mitm.bypass_hosts` with `github.com`, `api.github.com`, and `uploads.github.com` so those hosts pass through untouched while firma-ca still covers any intercepted host.

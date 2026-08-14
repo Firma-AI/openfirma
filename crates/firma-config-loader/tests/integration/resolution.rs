@@ -1,7 +1,7 @@
 //! End-to-end: a sectioned firma.toml resolves and the sidecar section
 //! parses through `load_section`.
 
-use firma_config_loader::{CONFIG_FILE_NAME, ConfigResolver, ConfigSource};
+use firma_config_loader::{CONFIG_FILE_NAME, ConfigSource, resolve_config};
 use fs_err as fs;
 use std::assert_matches;
 
@@ -14,8 +14,7 @@ fn explicit_flag_sectioned_file_round_trips() {
         "[sidecar.policy]\ndir = \"x\"\n[authority]\nbar = 1\n",
     )
     .expect("write config");
-    let resolved = ConfigResolver::default()
-        .resolve_config(Some(&path))
+    let resolved = resolve_config(Some(&path))
         .expect("resolve config")
         .expect("config should be found");
     assert_eq!(resolved.source, ConfigSource::Flag);

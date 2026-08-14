@@ -64,8 +64,7 @@ fn resolve_policy_dir(
 fn resolve_control_config(
     config_override: Option<&Path>,
 ) -> Result<Option<firma_config_loader::ResolvedConfig>, PolicyDirResolveError> {
-    firma_config_loader::ConfigResolver::default()
-        .resolve_config(config_override)
+    firma_config_loader::resolve_config(config_override)
         .map_err(|source| PolicyDirResolveError::ResolveConfig { source })
 }
 

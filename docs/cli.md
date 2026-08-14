@@ -27,25 +27,25 @@ firma config [OPTIONS]
 
 ### Options
 
-| Flag                         | Short | Default                  | Description                                                                |
-| ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------------- |
-| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                              |
-| `--profile`                  |       | wizard / `generic`       | Execution profile written to `[run].profile`                               |
-| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`         |
-| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                             |
-| `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
-| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                            |
-| `--workspace`                |       | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
-| `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land                   |
-| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                |
-| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)               |
-| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)        |
-| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                |
-| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                                  |
-| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults                     |
-| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair                  |
-| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                            |
-| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                                 |
+| Flag                         | Short | Default                  | Description                                                                                                          |
+| ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                                                                        |
+| `--profile`                  |       | wizard / `generic`       | Execution profile written to `[run].profile`                                                                         |
+| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`                                                   |
+| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                                                                       |
+| `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                                                                     |
+| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                                                                      |
+| `--workspace`                |       | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount                                           |
+| `--output-dir`               | `-o`  | trusted config dir       | Config dir — where `firma.toml`, policies, mappings land (default: `~/.firma`, or `%USERPROFILE%\.firma` on Windows) |
+| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                                                          |
+| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)                                                         |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)                                                  |
+| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                                                          |
+| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                                                                            |
+| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults                                                               |
+| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair                                                            |
+| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                                                                      |
+| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                                                                           |
 
 An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
 file even without `--force`; other existing generated files are still
@@ -362,16 +362,42 @@ subcommand reads only its own section. The first selected file wins:
 
 1. `--config <path>` flag — always wins. It only relocates the file;
    the file still uses the sectioned schema.
-2. `$FIRMA_CONFIG` env var if set — overrides walk, points directly to file.
-3. **Project-local `.firma/firma.toml`**, found by walking up from
-   `cwd`. The closest ancestor with a `.firma/firma.toml` wins; the
-   walk stops at the filesystem root. This is what `firma config` writes.
+2. `$FIRMA_CONFIG` env var if set — points directly to a file.
+3. **The trusted config directory** — a single, fixed, user-controlled
+   location, holding `firma.toml`. There is **no** directory-tree walk and
+   **no** `$XDG_CONFIG_HOME`.
+
+   | OS      | Trusted config directory |
+   | ------- | ------------------------ |
+   | Unix    | `~/.firma`               |
+   | Windows | `%USERPROFILE%\.firma`   |
+
+   `~/.firma` on every OS, deliberately not the XDG base directory: like other
+   security-sensitive tools (`~/.ssh`, `~/.aws`, `~/.gnupg`) the config lives in
+   one predictable place, giving a single cross-platform mental model.
+
 4. None found and config is required → exit non-zero. Optional flows such as
    zero-config `firma run` may continue without a config.
 
+The config is a security boundary — it carries enforcement policy, action
+mappings, allowlists, Authority/Sidecar endpoints and keys, secret providers,
+sandbox backend selection, and egress/DNS confinement. Discovery therefore
+**never walks up from `cwd`**: a nearest-`.firma`-wins scan (the git/npm
+convention) would let a compromised prompt plant `./.firma/firma.toml` in the
+workspace or any writable ancestor and weaken its own guardrails. The trust
+root is a path the **user** controls, not one the agent or repository controls.
+
+`--config` and `$FIRMA_CONFIG` remain the explicit escapes for CI, tests, and
+multi-config-per-machine workflows. Both are read from the **launcher's**
+environment, which a sandboxed agent cannot set, so they do not widen the trust
+surface — they relocate the file without reintroducing the planting problem.
+
 A selected file must be readable and valid TOML. An explicit `--config`,
-`$FIRMA_CONFIG`, or discovered project-local file that cannot be loaded fails
-closed instead of falling through to another tier or to zero-config defaults.
+`$FIRMA_CONFIG`, or trusted-directory file that cannot be loaded fails closed
+instead of falling through to another tier or to zero-config defaults. When
+discovery reaches the trusted-directory tier and the OS provides no home anchor
+(`HOME` on Unix, `%USERPROFILE%` on Windows), resolution fails closed rather
+than guessing a location.
 
 The resolved path and its source are emitted on startup as a single
 `config resolved` INFO line (with `path` and `source` fields) so operators

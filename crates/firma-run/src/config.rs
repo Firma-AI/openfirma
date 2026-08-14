@@ -218,62 +218,6 @@ pub struct MountSpec {
     pub(crate) read_only: bool,
 }
 
-impl MountSpec {
-    /// True if the mount target sits *strictly inside* a `.firma/` directory —
-    /// a *proper* ancestor is named `.firma` (e.g. the `vscode` profile's
-    /// `.firma/vscode/` state).
-    ///
-    /// The bwrap backend uses this to order profile mounts around the `.firma/`
-    /// config mask: such a mount is an intentional subpath re-expose, emitted
-    /// *after* the mask via last-write-wins. Everything else — a parent of a
-    /// `.firma/` (e.g. the workspace root) *and* a mount whose target *is* a
-    /// `.firma/` — returns `false` and is emitted *before* the mask, so the mask
-    /// always wins and cannot be replaced wholesale by a mount over `.firma/`
-    /// itself.
-    pub(crate) fn reexposes_firma_subpath(&self) -> bool {
-        // Classify the *effective* target the kernel will mount at, not its
-        // lexical spelling: `<ws>/.firma/..` has a `.firma` ancestor on paper but
-        // resolves to `<ws>`, so treating it as a subpath re-expose would emit the
-        // workspace bind after the mask and restore the host `.firma/firma.toml`.
-        let target = lexically_normalize(&self.target);
-        // Skip the target itself (`ancestors()` yields it first): a mount whose
-        // target *is* `.firma` would replace the entire mask, so it is not a
-        // legitimate subpath re-expose.
-        target.ancestors().skip(1).any(|ancestor| {
-            ancestor.file_name().and_then(std::ffi::OsStr::to_str)
-                == Some(firma_config_loader::CONFIG_DIR_NAME)
-        })
-    }
-}
-
-/// Collapse `.` and `..` components lexically, without touching the filesystem.
-///
-/// Mount targets are sandbox destinations, so there are no symlinks to follow;
-/// a purely lexical pass matches how the kernel resolves the mount path. A
-/// leading `..` that would escape the root is dropped, mirroring path traversal
-/// at `/`.
-fn lexically_normalize(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                // Only pop a real directory name; keep root/prefix anchors.
-                if normalized
-                    .components()
-                    .next_back()
-                    .is_some_and(|c| matches!(c, Component::Normal(_)))
-                {
-                    normalized.pop();
-                }
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
-}
-
 /// Network policy toggles used by backend implementations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NetworkPolicy {
@@ -1196,43 +1140,11 @@ mod tests {
     use crate::runtime::RunInput;
 
     use super::{
-        BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource, MountSpec,
+        BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
         SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint, capability_from_patch,
         resolve_profile,
     };
 
-    fn mount_targeting(target: &str) -> MountSpec {
-        MountSpec {
-            source: PathBuf::from(target),
-            target: PathBuf::from(target),
-            read_only: false,
-        }
-    }
-
-    #[test]
-    fn reexposes_firma_subpath_distinguishes_subpath_from_dir_itself() {
-        // Subpath inside a `.firma/` (vscode state): re-exposed after the mask.
-        assert!(mount_targeting("/home/u/work/.firma/vscode").reexposes_firma_subpath());
-        // The `.firma/` directory itself: emitted before the mask so a mount over
-        // it can't replace the mask.
-        assert!(!mount_targeting("/home/u/work/.firma").reexposes_firma_subpath());
-        // Parent of `.firma/` (workspace root): masked, so emitted before it.
-        assert!(!mount_targeting("/home/u/work").reexposes_firma_subpath());
-        // Unrelated path with no `.firma` ancestor.
-        assert!(!mount_targeting("/home/u/other/vscode").reexposes_firma_subpath());
-    }
-
-    #[test]
-    fn reexposes_firma_subpath_normalizes_parent_dir_targets() {
-        // `<ws>/.firma/..` has `.firma` as a lexical ancestor but resolves to
-        // `<ws>`: it is a parent bind, not a subpath re-expose.
-        assert!(!mount_targeting("/home/u/work/.firma/..").reexposes_firma_subpath());
-        // `<ws>/.firma/./vscode` still resolves inside `.firma/`.
-        assert!(mount_targeting("/home/u/work/.firma/./vscode").reexposes_firma_subpath());
-        // `.firma/vscode/..` resolves to `.firma/` itself: replaces the mask, not
-        // a subpath re-expose.
-        assert!(!mount_targeting("/home/u/work/.firma/vscode/..").reexposes_firma_subpath());
-    }
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
 

@@ -23,9 +23,10 @@ the daemon, observe what it's doing, and tear it down cleanly.
 
 ## Scaffold the project
 
-`firma config` writes a fresh project layout. Project-local config goes
-under `<workspace>/.firma/`; keys and revocation state go under the
-user-global state directory.
+`firma config` writes a fresh config layout. The config goes under the
+trusted config directory (`~/.firma`, the same location discovery reads),
+unless you override it with `--output-dir`; keys and revocation state go
+under the user-global state directory.
 
 ```bash
 # Interactive wizard.

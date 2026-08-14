@@ -618,45 +618,11 @@ fn masks_firma_config_under_workspace_mount() {
     );
 }
 
-/// A missing, higher-precedence `.firma/` candidate must not be plantable from
-/// inside the sandbox.
-#[test]
-fn missing_nearer_firma_candidate_cannot_be_planted() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let workspace = tmp.path().join("workspace");
-    let run_cwd = workspace.join("service");
-    let config_dir = workspace.join(".firma");
-    let state_dir = tmp.path().join("state");
-    std::fs::create_dir_all(&run_cwd).expect("mkdir run cwd");
-    scaffold_mask_test_config(&config_dir, &state_dir, &workspace);
-
-    let planted_config = run_cwd.join(".firma/firma.toml");
-    assert!(
-        !planted_config.exists(),
-        "precondition: nearer config candidate must be absent"
-    );
-    let shell = format!(
-        "mkdir -p {candidate_dir} && printf '%s\\n' '# planted by sandbox' > {candidate}; \
-         echo {ran}",
-        candidate_dir = shell_quote(planted_config.parent().expect("candidate parent")),
-        candidate = shell_quote(&planted_config),
-        ran = MASK_TEST_RAN_MARKER,
-    );
-
-    let output = run_structural_shell(None, &run_cwd, &shell);
-    assert_mask_test_ran(&output);
-    assert!(
-        !planted_config.exists(),
-        "sandbox created a higher-precedence host config at {}",
-        planted_config.display()
-    );
-}
-
 /// A symlinked `.firma` directory is rejected before launch.
 ///
-/// Masking the canonical target is not enough: when the lexical `.firma` entry
-/// sits in a writable workspace, an agent could unlink the symlink and replace
-/// it with a real `.firma/firma.toml` for the next run. Fail closed instead.
+/// Masking the canonical target is not enough: when a selected config's `.firma`
+/// entry is a symlink in a writable workspace, an agent could unlink it and
+/// replace it with a real `.firma/firma.toml` mid-run. Fail closed instead.
 #[test]
 fn directory_symlink_config_fails_closed_before_agent_launch() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -668,6 +634,10 @@ fn directory_symlink_config_fails_closed_before_agent_launch() {
     let lexical_firma = workspace.join(".firma");
     std::os::unix::fs::symlink(&external_config_dir, &lexical_firma)
         .expect("symlink workspace .firma to external config directory");
+    // Select the config through the symlinked `.firma` dir via `--config`; home-
+    // only discovery never walks the cwd, so an explicit override is the only way
+    // this path becomes the selected config.
+    let selected_config = lexical_firma.join("firma.toml");
 
     let shell = format!(
         "rm {firma_dir} && mkdir {firma_dir} && printf '%s\\n' '# poisoned' > {config}; \
@@ -676,7 +646,7 @@ fn directory_symlink_config_fails_closed_before_agent_launch() {
         config = shell_quote(&workspace.join(".firma/firma.toml")),
         ran = MASK_TEST_RAN_MARKER,
     );
-    let output = run_structural_shell(None, &workspace, &shell);
+    let output = run_structural_shell(Some(&selected_config), &workspace, &shell);
     assert!(
         !output.status.success(),
         "firma run unexpectedly allowed a symlinked .firma directory"
@@ -720,7 +690,7 @@ fn file_symlink_config_cannot_be_read_or_modified_via_target() {
         target = shell_quote(&canonical_target),
         ran = MASK_TEST_RAN_MARKER,
     );
-    let output = run_structural_shell(None, &workspace, &shell);
+    let output = run_structural_shell(Some(&lexical_config), &workspace, &shell);
     assert_mask_test_ran(&output);
     assert!(
         !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
@@ -762,8 +732,8 @@ fn workspace_mount_alias_does_not_reexpose_firma_config() {
     );
 }
 
-/// A general-purpose mount directly targeting `.firma/` must not be implicitly
-/// authorized to replace the security mask after it has been installed.
+/// A general-purpose mount directly targeting `.firma/` must not re-expose or
+/// replace the config mask, which is always emitted last so it wins.
 #[test]
 fn mount_targeting_firma_dir_does_not_replace_mask() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -783,7 +753,7 @@ fn mount_targeting_firma_dir_does_not_replace_mask() {
     assert_mask_test_ran(&output);
     assert!(
         !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
-        "post-mask mount targeting .firma re-exposed the selected config"
+        "mount targeting .firma re-exposed the selected config"
     );
 }
 
@@ -812,43 +782,6 @@ fn firma_source_mount_alias_does_not_reexpose_config() {
         !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
         "firma source mount re-exposed firma.toml through {}",
         aliased_config.display()
-    );
-}
-
-/// A mount target containing `.firma/..` must not be classified as a trusted
-/// `.firma` subpath re-exposure.
-///
-/// Lexically, `<workspace>/.firma/..` has `.firma` as an ancestor, but the
-/// kernel resolves it to `<workspace>`. If Firma classifies the raw path before
-/// normalizing it, the workspace bind is emitted after the config mask and
-/// restores the host `.firma/firma.toml`.
-#[test]
-fn parent_dir_mount_target_does_not_replace_firma_mask() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let workspace = tmp.path().join("workspace");
-    let config_dir = workspace.join(".firma");
-    let state_dir = tmp.path().join("state");
-    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
-    let config_file = scaffold_mask_test_config(&config_dir, &state_dir, &workspace);
-
-    // Source and effective target are both the workspace, but the target's
-    // unnormalized spelling causes `reexposes_firma_subpath()` to classify it
-    // as a privileged post-mask mount.
-    let parent_dir_target = config_dir.join("..");
-    append_profile_mount(&config_file, &workspace, &parent_dir_target);
-
-    let shell = format!(
-        "cat {config} 2>/dev/null; echo {ran}",
-        config = shell_quote(&config_file),
-        ran = MASK_TEST_RAN_MARKER,
-    );
-    let output = run_structural_shell(Some(&config_file), &workspace, &shell);
-    assert_mask_test_ran(&output);
-
-    assert!(
-        !String::from_utf8_lossy(&output.stdout).contains(MASK_TEST_SENTINEL),
-        "unnormalized .firma/.. mount target was emitted after the mask and \
-         re-exposed the selected config"
     );
 }
 

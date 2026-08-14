@@ -20,13 +20,18 @@ firma config --yes --mode agent-local \
   --mapping anthropic                 # scripted full setup
 ```
 
-Config lands in `.firma/` inside the current directory, or an explicit
-`--output-dir`:
+Config lands in the trusted config directory — the same location discovery
+reads — or an explicit `--output-dir`:
 
-| Form                  | Destination                    |
-| --------------------- | ------------------------------ |
-| _(default)_           | `.firma/` in current directory |
-| `--output-dir <path>` | `<path>` verbatim              |
+| Form                  | Destination                                                    |
+| --------------------- | ------------------------------------------------------------- |
+| _(default)_           | `~/.firma` (or `%USERPROFILE%\.firma` on Windows) |
+| `--output-dir <path>` | `<path>` verbatim                                 |
+
+Writing to the trusted directory by default keeps `firma config` and discovery
+in lockstep: the scaffolded `firma.toml` is exactly what the next `firma run`
+picks up. Use `--output-dir` for CI or multi-config workflows, then point at it
+with `--config` or `$FIRMA_CONFIG`.
 
 ## Modes
 
@@ -57,7 +62,7 @@ firma config [--mode <mode>] [--profile <profile>] [--agent-id <agent-id>]
 | `--mapping`           | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
 | `--extra-hosts`       | none                     | Comma-separated extra hosts the agent may reach                            |
 | `--workspace`         | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
-| `--output-dir` / `-o` | `.firma` in CWD          | Where `firma.toml`, policies, and mappings are written                     |
+| `--output-dir` / `-o` | trusted config dir       | Where `firma.toml`, policies, and mappings are written                     |
 | `--state-dir`         | `$FIRMA_STATE_DIR` / XDG | Keys, revocations, generated CA                                            |
 | `--authority-listen`  | `127.0.0.1:50051`        | gRPC listen address (`agent-local` / `authority` modes only)               |
 | `--authority-url`     | wizard prompt            | Authority URL for `agent-remote` mode                                      |
@@ -103,7 +108,7 @@ firma config --yes --dry-run
 ## Scaffolded layout
 
 ```
-<output-dir>/                    # project-local config dir
+<output-dir>/                    # trusted config dir (default: ~/.firma)
   firma.toml                    # unified config (authority + sidecar + run profiles)
   mapping-rules.toml            # base routing rules
   mappings/<name>.toml          # one file per selected mapping
@@ -164,8 +169,10 @@ ID unless the flag replaces it.
 ## Implicit init on `firma run`
 
 `firma run` checks for a discoverable `firma.toml` at launch. If none is
-found, it scaffolds one with non-interactive defaults and proceeds. This
-keeps `firma run codex` working from a fresh clone without any prior setup.
+found, it scaffolds one with non-interactive defaults into the trusted config
+directory (`~/.firma`, or `%USERPROFILE%\.firma` on Windows) and proceeds. This
+keeps `firma run codex` working from a fresh clone without any prior setup, and
+the scaffolded file lands exactly where discovery reads it on the next run.
 
 ## Common gotchas
 

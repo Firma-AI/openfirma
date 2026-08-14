@@ -105,8 +105,7 @@ async fn build_report(args: Args) -> RenderedReport {
     // 3. config parse — resolves the unified `firma.toml` everyone else
     //    uses, then validates both sections. Runs early so the
     //    reachability probes can reuse the resolved path.
-    let resolved_config =
-        firma_config_loader::ConfigResolver::default().resolve_config(args.config.as_deref());
+    let resolved_config = firma_config_loader::resolve_config(args.config.as_deref());
     let parsed_config = match &resolved_config {
         Ok(Some(resolved)) => {
             report.push(config_parse::check_loaded(&resolved.config));
