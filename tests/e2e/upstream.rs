@@ -17,6 +17,7 @@ pub(crate) struct Capture {
 pub(crate) enum ProbeBehavior {
     /// Capture one request and return a successful response with this body.
     Respond(&'static str),
+    RespondOrStop(&'static str),
     /// Capture one request and close its connection without sending an HTTP response.
     CloseWithoutResponse,
     /// Fail if any connection arrives before the probe is finished.
@@ -53,8 +54,10 @@ impl HttpProbe {
                 match listener.accept() {
                     Ok(connection) => break connection,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        if matches!(behavior, ProbeBehavior::MustNotConnect)
-                            && stopped.try_recv().is_ok()
+                        if matches!(
+                            behavior,
+                            ProbeBehavior::MustNotConnect | ProbeBehavior::RespondOrStop(_)
+                        ) && stopped.try_recv().is_ok()
                         {
                             return None;
                         }
@@ -76,7 +79,7 @@ impl HttpProbe {
                 .expect("set HTTP probe read timeout");
             let capture = read_request(&mut stream);
             match behavior {
-                ProbeBehavior::Respond(body) => {
+                ProbeBehavior::Respond(body) | ProbeBehavior::RespondOrStop(body) => {
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
