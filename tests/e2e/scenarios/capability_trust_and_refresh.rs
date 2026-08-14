@@ -163,7 +163,7 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
         let authority_public_key = world.path("state/authority.pub");
         assert!(
             authority_public_key.is_file(),
-            "owned Authority public key must exist before the first refresh"
+            "owned Authority public key must exist before observing a changed refresh"
         );
 
         let refreshed_seed = wait_for(
@@ -174,8 +174,8 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
                 (seed.token_id != initial_seed.token_id).then_some(seed)
             },
         );
-        // Close the race before inspecting any other evidence: every issuance
-        // after the first changed seed must fail this configured-key check.
+        // Close the race before inspecting any other evidence: every token
+        // returned after the captured changed seed must fail this configured-key check.
         std::fs::write(&authority_public_key, [0xa5; 32])
             .expect("replace Authority public key with mismatched key");
         assert_ne!(refreshed_seed.raw_token, initial_seed.raw_token);
@@ -187,7 +187,7 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
         assert_eq!(
             read_toml::<CapabilitySeed>(&seed_path),
             refreshed_seed,
-            "no later valid token may supersede the first refresh before its proof request"
+            "no later valid token may supersede the captured changed refresh before its proof request"
         );
         std::fs::write(&after_gate, b"continue").expect("release post-refresh request");
         wait_for(
@@ -230,7 +230,7 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
         assert_eq!(
             read_toml::<CapabilitySeed>(&seed_path),
             refreshed_seed,
-            "a rejected refresh must not replace the first refreshed seed"
+            "a rejected refresh must not replace the captured changed seed"
         );
         wait_until_after(refreshed_seed.expiry, Duration::from_secs(10));
         assert_eq!(
