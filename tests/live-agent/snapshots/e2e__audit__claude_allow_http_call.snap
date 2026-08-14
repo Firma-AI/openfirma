@@ -1,5 +1,5 @@
 ---
-source: crates/firma/../../tests/e2e/audit.rs
+source: crates/firma/../../tests/live-agent/audit.rs
 expression: self
 ---
 FirmaAuditTrail(

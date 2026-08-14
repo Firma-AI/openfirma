@@ -1,0 +1,7 @@
+---
+source: crates/firma/../../tests/live-agent/audit.rs
+expression: self
+---
+FirmaAuditTrail(
+    {},
+)

@@ -16,19 +16,16 @@ process.
 | Suite                 | Current location                  | Use it for                                                            |
 | --------------------- | --------------------------------- | --------------------------------------------------------------------- |
 | `firma::cli`          | `crates/firma/tests/integration/` | CLI and component contracts, including structural-sandbox regressions |
-| `firma::e2e`          | `tests/cli-e2e/`                  | Deterministic full-stack tests through real Authority and Sidecar     |
-| `firma::live-agent`   | `tests/e2e/`                      | Claude and Codex behavior that requires a real agent and credentials  |
+| `firma::e2e`          | `tests/e2e/`                      | Deterministic full-stack tests through real Authority and Sidecar     |
+| `firma::live-agent`   | `tests/live-agent/`               | Claude and Codex behavior that requires a real agent and credentials  |
 | `firma::vscode`       | `tests/vscode/`                   | Managed VS Code launch behavior                                       |
 | `firma::architecture` | `tests/architecture/`             | Repository structure and dependency invariants                        |
-
-The Cargo target name is authoritative. Some source directory names predate
-these boundaries and will be migrated separately.
 
 Use a crate integration suite instead when the behavior is a Rust API contract
 rather than user-facing CLI behavior.
 
 Within `firma::e2e`, add each scenario to its own file under
-`tests/cli-e2e/scenarios/` and register it in `scenarios/mod.rs`. Scenarios use
+`tests/e2e/scenarios/` and register it in `scenarios/mod.rs`. Scenarios use
 the shared harness to launch bounded processes and must not import production
 crate APIs to calculate expected behavior. Deterministic scenarios cannot be
 ignored; missing host prerequisites must fail their dedicated CI job.
