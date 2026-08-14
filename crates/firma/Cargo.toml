@@ -94,6 +94,10 @@ name = "cli"
 path = "tests/integration/main.rs"
 
 [[test]]
+name = "e2e"
+path = "../../tests/cli-e2e/main.rs"
+
+[[test]]
 name = "live-agent"
 path = "../../tests/e2e/main.rs"
 
