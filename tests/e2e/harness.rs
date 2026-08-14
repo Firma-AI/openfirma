@@ -122,6 +122,10 @@ impl TestWorld {
         self.path("state/audit.jsonl")
     }
 
+    pub(crate) fn audit_event(&self, nonce: &str) -> AuditEvent {
+        correlated_event(&self.audit_path(), &self.session_id, nonce)
+    }
+
     pub(crate) fn add_policy(&self, name: &str, policy: &str) {
         std::fs::write(self.root.path().join("config/policies").join(name), policy)
             .expect("write scenario policy");
