@@ -21,24 +21,6 @@ final-status-level = "slow"
 failure-output = "immediate-final"
 success-output = "never"
 
-[test-groups.structural-sandbox]
-max-threads = 1
-
-[test-groups.deterministic-e2e]
-max-threads = 1
-
-[[profile.default.overrides]]
-filter = 'binary_id(firma::cli) & test(/^structural_sandbox::/)'
-test-group = "structural-sandbox"
-
-[[profile.default.overrides]]
-filter = 'binary_id(firma::e2e)'
-test-group = "deterministic-e2e"
-
-[[profile.ci.overrides]]
-filter = 'binary_id(firma::e2e)'
-test-group = "deterministic-e2e"
-
 [[profile.default.scripts]]
 filter = 'binary_id(firma::architecture)'
 platform = { host = "cfg(unix)" }
