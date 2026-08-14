@@ -1,5 +1,7 @@
 //! Typed configuration transport for tests that re-execute the integration
-//! test binary as a managed child process.
+//! test binary as a managed child process. Configuration is encoded as JSON,
+//! so fixture configuration must model paths with `camino::Utf8PathBuf` rather
+//! than `std::path::PathBuf`.
 
 use std::process::Command;
 

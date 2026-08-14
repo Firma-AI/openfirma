@@ -5,6 +5,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use camino::Utf8PathBuf;
 #[cfg(unix)]
 use firma_process_orchestrator::UnixEndpoint;
 use firma_process_orchestrator::{
@@ -216,9 +217,9 @@ fn configured_ipv4_wildcard_publishes_and_retains_connectable_endpoint() {
 #[cfg(unix)]
 #[test]
 fn configured_unix_readiness_publishes_canonical_endpoint() {
-    let relative = PathBuf::from("worker% socket.sock");
+    let relative = Utf8PathBuf::from("worker% socket.sock");
     let fixture = Fixture::new(ChildBehavior::ConfiguredUnix(relative.clone()));
-    let socket = fixture.dir.path().join(relative);
+    let socket = fixture.dir.path().join(relative.as_std_path());
     let mut stack = fixture
         .spawn_with_readiness(Readiness::Configured(unix_endpoint(socket.clone())))
         .expect("configured Unix readiness");
@@ -465,7 +466,7 @@ enum ChildBehavior {
     Publish(SocketAddr),
     Configured(SocketAddr),
     #[cfg(unix)]
-    ConfiguredUnix(PathBuf),
+    ConfiguredUnix(Utf8PathBuf),
     #[cfg(unix)]
     ConfiguredUnixUnavailable,
     #[cfg(unix)]
@@ -481,9 +482,9 @@ enum ChildBehavior {
 #[derive(serde::Deserialize, serde::Serialize)]
 struct ChildProcess {
     behavior: ChildBehavior,
-    marker: PathBuf,
-    bind_path: Option<PathBuf>,
-    startup_report_path: Option<PathBuf>,
+    marker: Utf8PathBuf,
+    bind_path: Option<Utf8PathBuf>,
+    startup_report_path: Option<Utf8PathBuf>,
 }
 
 struct Fixture {
@@ -508,15 +509,17 @@ impl Fixture {
 
     fn command(&self, startup_report_path: Option<&Path>) -> std::process::Command {
         let bind_path = match &self.behavior {
-            ChildBehavior::ConfiguredUnix(path) => Some(self.dir.path().join(path)),
+            ChildBehavior::ConfiguredUnix(path) => Some(self.dir.path().join(path.as_std_path())),
             ChildBehavior::PublishUnix => Some(self.socket_path()),
             _ => None,
         };
         child_fixture(ChildProcess {
             behavior: self.behavior.clone(),
-            marker: self.marker.clone(),
-            bind_path,
-            startup_report_path: startup_report_path.map(Path::to_path_buf),
+            marker: utf8_fixture_path(self.marker.clone()),
+            bind_path: bind_path.map(utf8_fixture_path),
+            startup_report_path: startup_report_path
+                .map(Path::to_path_buf)
+                .map(utf8_fixture_path),
         })
     }
 
@@ -706,6 +709,9 @@ impl ChildProcess {
             bind_path,
             startup_report_path,
         } = self;
+        let marker = marker.into_std_path_buf();
+        let bind_path = bind_path.map(Utf8PathBuf::into_std_path_buf);
+        let startup_report_path = startup_report_path.map(Utf8PathBuf::into_std_path_buf);
         match behavior {
             ChildBehavior::ExitBeforePublication => {}
             ChildBehavior::Raw(record) => {
@@ -821,6 +827,10 @@ fn publish_child_endpoint(startup_report_path: &Path, marker: &Path, effective_a
 
 fn required_report_path(path: Option<&Path>) -> &Path {
     path.expect("child startup report path")
+}
+
+fn utf8_fixture_path(path: PathBuf) -> Utf8PathBuf {
+    Utf8PathBuf::from_path_buf(path).expect("process fixture paths must be valid UTF-8")
 }
 
 fn sleep_forever() -> ! {
