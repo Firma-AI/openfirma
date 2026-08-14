@@ -82,12 +82,16 @@ pub enum HttpConnectorBuildError {
 /// The workspace `reqwest` dependency does not enable the `gzip`/`brotli`/
 /// `deflate`/`zstd` features, so this client never automatically decodes a
 /// compressed response body: a `Content-Encoding`-compressed upstream
-/// response is forwarded with its compressed bytes intact. Secret-gateway
-/// response masking and HTTP secret provider interception both scan the raw
-/// body for plaintext content-type structure (JSON/XML/form), so neither
-/// sees anything to redact or extract in a compressed body — a real, if
-/// narrow, sharp edge for any secret-provider host that returns compressed
-/// responses.
+/// response reaches the rest of the pipeline with its compressed bytes
+/// intact. Secret-gateway response masking, HTTP secret provider
+/// interception, and request placeholder rehydration each decode a
+/// supported `Content-Encoding` themselves before scanning for plaintext
+/// content-type structure (JSON/XML/form) and re-encode afterward (see
+/// `crate::body_encoding`), so a compressed body no longer hides a secret
+/// from any of them. The remaining sharp edge is narrower than it used to
+/// be: an encoding `body_encoding` doesn't support is opaque to these
+/// layers, which — for the secret-bearing paths — fail closed rather than
+/// forward or scan it unexamined.
 pub struct GenericHttpConnector {
     client: Arc<reqwest::Client>,
     rate_limiter: Option<Arc<DirectRateLimiter>>,

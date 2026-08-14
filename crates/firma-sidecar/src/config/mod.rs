@@ -365,6 +365,12 @@ pub struct InterceptorConfig {
     /// Maximum request body size accepted by proxy interceptors.
     #[serde(default = "default_max_request_body_bytes")]
     pub(crate) max_request_body_bytes: usize,
+    /// Maximum size a single request or response body may expand to when
+    /// decompressed for secret placeholder rehydration or masking. Bounds
+    /// the memory a decompression bomb (e.g. a small `gzip`/`br`/`zstd`
+    /// payload that expands enormously) can force the Sidecar to allocate.
+    #[serde(default = "default_max_decompressed_body_bytes")]
+    pub max_decompressed_body_bytes: usize,
     /// CONNECT/MITM relay timeout controls.
     #[serde(default)]
     pub(crate) connect_relay: ConnectRelayConfig,
@@ -387,6 +393,9 @@ impl InterceptorConfig {
         }
         if self.max_request_body_bytes == 0 {
             return Err("interceptor.max_request_body_bytes must be > 0".into());
+        }
+        if self.max_decompressed_body_bytes == 0 {
+            return Err("interceptor.max_decompressed_body_bytes must be > 0".into());
         }
         if self.total_body_budget_bytes == 0 {
             return Err("interceptor.total_body_budget_bytes must be > 0".into());
@@ -427,6 +436,7 @@ impl Default for InterceptorConfig {
             socket_path: Some(default_socket_path()),
             drain_timeout_secs: default_drain_timeout(),
             max_request_body_bytes: default_max_request_body_bytes(),
+            max_decompressed_body_bytes: default_max_decompressed_body_bytes(),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
             total_body_budget_bytes: default_total_body_budget_bytes(),
@@ -771,6 +781,10 @@ const fn default_drain_timeout() -> u64 {
 
 const fn default_max_request_body_bytes() -> usize {
     4 * 1024 * 1024
+}
+
+const fn default_max_decompressed_body_bytes() -> usize {
+    16 * 1024 * 1024
 }
 
 const fn default_total_body_budget_bytes() -> usize {
@@ -1273,6 +1287,22 @@ mod tests {
         assert!(
             err.contains("max_request_body_bytes"),
             "error should mention max_request_body_bytes: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_zero_max_decompressed_body_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                max_decompressed_body_bytes: 0,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("max_decompressed_body_bytes"),
+            "error should mention max_decompressed_body_bytes: {err}"
         );
     }
 
