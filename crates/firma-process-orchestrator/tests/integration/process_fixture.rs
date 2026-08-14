@@ -8,6 +8,10 @@ use serde::de::DeserializeOwned;
 
 const CONFIG_ENV: &str = "FIRMA_PROCESS_FIXTURE_CONFIG";
 
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "macro expansions in sibling modules call this helper"
+)]
 pub(crate) fn command<T>(test_name: &str, config: &T) -> Command
 where
     T: Serialize,
@@ -23,6 +27,10 @@ where
     command
 }
 
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "macro expansions in sibling modules call this helper"
+)]
 pub(crate) fn config<T>() -> T
 where
     T: DeserializeOwned,
