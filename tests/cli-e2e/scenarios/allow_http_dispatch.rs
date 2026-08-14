@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use crate::audit::matching_events;
+use crate::audit::AuditDecision;
 use crate::harness::{TestWorld, isolated_command, run_bounded};
-use crate::upstream::Upstream;
+use crate::upstream::{HttpProbe, ProbeBehavior};
 
 const RESPONSE: &str = "firma-e2e-upstream-ok\n";
 
@@ -10,7 +10,7 @@ const RESPONSE: &str = "firma-e2e-upstream-ok\n";
 fn live_minted_capability_allows_http_dispatch() {
     let control_world = TestWorld::new();
     let control_nonce = format!("control-{}", uuid::Uuid::new_v4().simple());
-    let control_server = Upstream::start(&control_nonce, RESPONSE);
+    let control_server = HttpProbe::start(&control_nonce, ProbeBehavior::Respond(RESPONSE));
     let control_url = control_server.url();
     let mut control = isolated_command("curl", &control_world);
     control.args(curl_args(&control_url));
@@ -20,7 +20,9 @@ fn live_minted_capability_allows_http_dispatch() {
         "direct curl control failed:\n{control_output}"
     );
     assert_eq!(control_output.stdout, RESPONSE);
-    let control_capture = control_server.finish();
+    let control_capture = control_server
+        .finish()
+        .expect("control request reached probe");
     assert_eq!(control_capture.method, "GET");
     assert_eq!(control_capture.path, format!("/{control_nonce}"));
 
@@ -28,49 +30,29 @@ fn live_minted_capability_allows_http_dispatch() {
     // upstream capture, so neither audit records nor requests can cross phases.
     let world = TestWorld::new();
     let nonce = format!("enforced-{}", uuid::Uuid::new_v4().simple());
-    world.scaffold();
-    let server = Upstream::start(&nonce, RESPONSE);
+    let server = HttpProbe::start(&nonce, ProbeBehavior::Respond(RESPONSE));
     let url = server.url();
-    let session = format!("sess_e2e_{}", uuid::Uuid::new_v4().simple());
 
-    let mut command = isolated_command(env!("CARGO_BIN_EXE_firma"), &world);
-    command
-        .args([
-            "run",
-            "--profile",
-            "generic",
-            "--authority",
-            "local",
-            "--sidecar",
-            "local",
-            "--config",
-        ])
-        .arg(world.config_path())
-        .args(["--", "curl"])
-        .args(curl_args(&url))
-        .env("FIRMA_RUN_SESSION_ID", &session);
-    let output = run_bounded(&mut command, Duration::from_mins(2));
-    assert!(output.success(), "enforced firma run failed:\n{output}");
+    let run = world.run_governed(&nonce, "curl", curl_args(&url));
     assert!(
-        output.stdout.ends_with(RESPONSE) && output.stdout.matches(RESPONSE).count() == 1,
-        "expected one governed upstream response:\n{output}"
+        run.output.success(),
+        "enforced firma run failed:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.stdout.ends_with(RESPONSE) && run.output.stdout.matches(RESPONSE).count() == 1,
+        "expected one governed upstream response:\n{}",
+        run.output
     );
 
-    let capture = server.finish();
+    let capture = server.finish().expect("governed request reached probe");
     assert_eq!(capture.method, "GET");
     assert_eq!(capture.path, format!("/{nonce}"));
 
-    let events = matching_events(&world.audit_path(), &session, &nonce);
-    assert_eq!(
-        events.len(),
-        1,
-        "expected one correlated audit event: {events:#?}"
-    );
-    let event = &events[0];
-    assert_eq!(event.session_id, session);
+    let event = run.audit_event();
     assert_eq!(event.action, "communication.internal.send");
     assert_eq!(event.resource, server_resource(&url));
-    assert_eq!(event.decision, 1, "serialized ALLOW is numeric value 1");
+    assert_eq!(event.decision, AuditDecision::Allow);
     assert_eq!(event.deny_reason, "");
     assert!(event.token_id.starts_with("ctok_"));
     assert_eq!(event.dispatch_status, 200);
