@@ -65,6 +65,7 @@ async-stream = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
 block2 = "0.6"
+brotli = "8"
 bytesize = "2.7"
 camino = "1.2"
 cedar-policy = "3"
@@ -171,3 +172,4 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 wiremock = "0.6"
 x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zstd = "0.13"

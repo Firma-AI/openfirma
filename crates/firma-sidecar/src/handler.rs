@@ -9,14 +9,7 @@
 //! [`RequestHandler::with_http_secret_providers`]), it additionally
 //! intercepts and mints placeholders for matching HTTP-vault responses.
 
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    fmt::Display,
-    io::{Read as _, Write as _},
-    str::FromStr,
-    sync::Arc,
-};
+use std::{borrow::Cow, collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 
 use firma_core::{
     AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
@@ -33,6 +26,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     audit::{AuditPayload, Decision},
+    body_encoding::{self, SupportedEncoding},
     composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode, is_protected_host},
     connector::ConnectorRegistry,
     normalizer::{
@@ -225,13 +219,17 @@ fn http_secret_blocked_response(
     }
 }
 
-/// Builds the abort for a response whose HTTP secret provider extracted a
-/// secret and substituted its placeholder into the body, but then failed to
-/// push that secret to the broker — overrides `audit_payload` in place of the
-/// dispatched-response outcome, since the response as substituted can no
-/// longer be forwarded (see [`RequestHandler::rewrite_with_http_intercept`]).
+/// Builds the abort for a response whose secret-handling layer (HTTP secret
+/// provider interception or store-based masking) could not safely forward
+/// the body — e.g. a response whose HTTP secret provider extracted a secret
+/// and substituted its placeholder, but then failed to push that secret to
+/// the broker (see [`RequestHandler::rewrite_with_http_intercept`]), or a
+/// response that couldn't be decoded to mask a rehydrated secret's echo (see
+/// [`mask_dispatched`]). Overrides `audit_payload` in place of the
+/// dispatched-response outcome, since the response can no longer be
+/// forwarded as-is.
 #[must_use]
-fn http_secret_push_failed_response(
+fn secret_abort_response(
     audit_payload: &mut AuditPayload,
     reason: AbortReason,
     detail: String,
@@ -525,170 +523,157 @@ fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
     result
 }
 
-/// A `Content-Encoding` this interception layer knows how to reversibly
-/// decode before running the plaintext secret matcher, and re-encode
-/// afterward so a forwarded response's declared encoding still matches its
-/// bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SupportedEncoding {
-    Gzip,
-}
-
-impl SupportedEncoding {
-    /// Reads `headers`' `Content-Encoding`. `Ok(None)` covers both an absent
-    /// header and `identity`. `Err` carries the encoding name when it's
-    /// present but not one this layer can decode — the body must then be
-    /// treated as opaque rather than scanned or forwarded unexamined.
-    fn from_headers(headers: &HeaderMap) -> Result<Option<Self>, String> {
-        let Some(value) = headers
-            .get("content-encoding")
-            .and_then(|v| v.to_str().ok())
-        else {
-            return Ok(None);
-        };
-        match value.trim() {
-            "" | "identity" => Ok(None),
-            "gzip" => Ok(Some(Self::Gzip)),
-            other => Err(other.to_string()),
-        }
-    }
-
-    fn decode(self, body: &[u8]) -> std::io::Result<Vec<u8>> {
-        match self {
-            Self::Gzip => {
-                let mut out = Vec::new();
-                flate2::read::GzDecoder::new(body).read_to_end(&mut out)?;
-                Ok(out)
-            }
-        }
-    }
-
-    fn encode(self, body: &[u8]) -> std::io::Result<Vec<u8>> {
-        match self {
-            Self::Gzip => {
-                let mut encoder =
-                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-                encoder.write_all(body)?;
-                encoder.finish()
-            }
-        }
-    }
-}
-
 /// An HTTP secret intercept abort: the reason code plus a human-readable
 /// detail, mirroring the `HandledResponse::Aborted` shape it eventually
 /// becomes.
 type InterceptAbort = (AbortReason, String);
 
-/// The plaintext view of a possibly-decoded response body, paired with the
-/// `Content-Encoding` it was decoded from (if any) so it can be re-encoded
-/// after rewriting.
-type DecodedBody<'a> = (Cow<'a, [u8]>, Option<SupportedEncoding>);
-
 /// Resolves `dispatched.body` to a plaintext view the secret matcher can
-/// scan, decoding a supported `Content-Encoding` first, and returns the
-/// encoding alongside it so the caller can re-encode after rewriting.
+/// scan, decoding a supported `Content-Encoding` first (see
+/// [`body_encoding`]), and returns the encoding alongside it so the caller
+/// can re-encode after rewriting.
 ///
-/// Errs (fail closed) when the encoding isn't one this layer can decode, or
-/// when decoding a supported one fails — either way the body can't be
-/// inspected, so it must not be forwarded unexamined.
-fn decode_for_inspection<'a>(
+/// Errs (fail closed) when the encoding isn't one [`body_encoding`] can
+/// decode, or when decoding a supported one fails — either way the body
+/// can't be inspected, so it must not be forwarded unexamined.
+async fn decode_for_inspection<'a>(
     dispatched: &'a DispatchedResponse,
     provider_id: &str,
-) -> Result<DecodedBody<'a>, InterceptAbort> {
-    let encoding = SupportedEncoding::from_headers(&dispatched.headers).map_err(|unsupported| {
-        tracing::error!(
-            provider_id = %provider_id,
-            content_encoding = %unsupported,
-            "HTTP secret intercept: response uses a content-encoding this layer cannot decode; \
-             aborting rather than forward a body the matcher cannot inspect"
-        );
-        let detail = format!(
-            "HTTP secret provider \"{provider_id}\" response uses content-encoding \
-             \"{unsupported}\" which cannot be inspected for secrets before forwarding"
-        );
-        (AbortReason::CredentialInjectionFailed, detail)
-    })?;
-
-    let plaintext = match encoding {
-        None => Cow::Borrowed(dispatched.body.as_slice()),
-        Some(encoding) => Cow::Owned(encoding.decode(&dispatched.body).map_err(|error| {
-            tracing::error!(
-                provider_id = %provider_id,
-                %error,
-                "HTTP secret intercept: failed to decompress response body; aborting rather \
-                 than forward a body the matcher cannot inspect"
-            );
-            let detail = format!(
-                "HTTP secret provider \"{provider_id}\" response declares a content-encoding \
-                 that failed to decompress: {error}"
-            );
-            (AbortReason::CredentialInjectionFailed, detail)
-        })?),
-    };
-
-    Ok((plaintext, encoding))
-}
-
-/// Re-encodes a rewritten body back to `encoding` (a no-op when `None`) so
-/// the forwarded response's declared `Content-Encoding` still matches its
-/// bytes.
-fn recompress_after_rewrite(
-    rewritten: Vec<u8>,
-    encoding: Option<SupportedEncoding>,
-    provider_id: &str,
-) -> Result<Vec<u8>, InterceptAbort> {
-    let Some(encoding) = encoding else {
-        return Ok(rewritten);
-    };
-    encoding.encode(&rewritten).map_err(|error| {
+    max_decompressed_body_bytes: usize,
+) -> Result<(Cow<'a, [u8]>, Option<SupportedEncoding>), InterceptAbort> {
+    body_encoding::decode_body(
+        &dispatched.body,
+        &dispatched.headers,
+        max_decompressed_body_bytes,
+    )
+    .await
+    .map_err(|error| {
         tracing::error!(
             provider_id = %provider_id,
             %error,
-            "HTTP secret intercept: failed to re-compress rewritten response body"
+            "HTTP secret intercept: failed to decode response body; aborting rather than \
+             forward a body the matcher cannot inspect"
         );
         let detail = format!(
-            "HTTP secret provider \"{provider_id}\" extracted a secret but failed to \
-             re-compress the response body: {error}"
+            "HTTP secret provider \"{provider_id}\" response body could not be decoded for \
+             secret inspection: {error}"
         );
         (AbortReason::CredentialInjectionFailed, detail)
     })
 }
 
-/// Masks `dispatched.body` against `store`'s known secrets.
-///
-/// Resolves the response's content type from its `Content-Type` header,
-/// falling back to sniffing the body and then to [`ContentType::Raw`] when
-/// neither is conclusive — masking still runs on unrecognized content as a
-/// raw byte scan rather than skipping it outright, since declining to mask
-/// would risk forwarding a secret re-echo unredacted.
-fn mask_dispatched(
-    mut dispatched: DispatchedResponse,
-    store: &SidecarSecretStore,
-) -> DispatchedResponse {
-    if dispatched.body.is_empty() {
-        return dispatched;
-    }
-    let content_type_val = dispatched.headers.typed_get::<headers::ContentType>();
-    let content_type =
-        ContentType::resolve(content_type_val, &dispatched.body).unwrap_or(ContentType::Raw);
-    let ops = store.mask_ops(&dispatched.body, content_type);
-    if !ops.is_empty() {
-        let masked = mask_body(&dispatched.body, &ops);
-        if dispatched.headers.contains_key("content-length") {
-            dispatched
-                .headers
-                .insert("content-length", http::HeaderValue::from(masked.len()));
-        }
-        dispatched.body = masked;
-    }
-    dispatched
+/// Re-encodes a rewritten body back to `encoding` (a no-op when `None`) so
+/// the forwarded response's declared `Content-Encoding` still matches its
+/// bytes.
+async fn recompress_after_rewrite(
+    rewritten: Vec<u8>,
+    encoding: Option<SupportedEncoding>,
+    provider_id: &str,
+) -> Result<Vec<u8>, InterceptAbort> {
+    body_encoding::encode_body(rewritten, encoding)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                provider_id = %provider_id,
+                %error,
+                "HTTP secret intercept: failed to re-compress rewritten response body"
+            );
+            let detail = format!(
+                "HTTP secret provider \"{provider_id}\" extracted a secret but failed to \
+                 re-compress the response body: {error}"
+            );
+            (AbortReason::CredentialInjectionFailed, detail)
+        })
 }
 
-fn mask_handled_response(response: HandledResponse, store: &SidecarSecretStore) -> HandledResponse {
+/// Masks `dispatched.body` against `store`'s known secrets.
+///
+/// Decodes a supported `Content-Encoding` before scanning for an echoed
+/// secret and re-encodes the masked result afterward, so a compressed
+/// response can't defeat masking (see [`body_encoding`]). Resolves the
+/// response's content type from its `Content-Type` header, falling back to
+/// sniffing the decoded body and then to [`ContentType::Raw`] when neither
+/// is conclusive — masking still runs on unrecognized content as a raw byte
+/// scan rather than skipping it outright, since declining to mask would risk
+/// forwarding a secret re-echo unredacted.
+///
+/// Fails closed (`Err`) when the body's declared `Content-Encoding` can't be
+/// decoded or the masked result can't be re-encoded: this function only ever
+/// runs when `store` is non-empty, i.e. a real secret was rehydrated into
+/// this exchange, so a body that can't be inspected here is a genuine leak
+/// risk, not just a missed convenience.
+async fn mask_dispatched(
+    mut dispatched: DispatchedResponse,
+    store: &SidecarSecretStore,
+    max_decompressed_body_bytes: usize,
+) -> Result<DispatchedResponse, InterceptAbort> {
+    if dispatched.body.is_empty() {
+        return Ok(dispatched);
+    }
+    let (plaintext, encoding) = body_encoding::decode_body(
+        &dispatched.body,
+        &dispatched.headers,
+        max_decompressed_body_bytes,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(
+            %error,
+            "secret masking: failed to decode response body; aborting rather than forward a \
+             body that cannot be checked for a rehydrated secret's echo"
+        );
+        let detail = format!("response body could not be decoded for secret masking: {error}");
+        (AbortReason::CredentialInjectionFailed, detail)
+    })?;
+
+    let content_type_val = dispatched.headers.typed_get::<headers::ContentType>();
+    let content_type =
+        ContentType::resolve(content_type_val, &plaintext).unwrap_or(ContentType::Raw);
+    let ops = store.mask_ops(&plaintext, content_type);
+    if ops.is_empty() {
+        return Ok(dispatched);
+    }
+
+    let masked = mask_body(&plaintext, &ops);
+    let final_body = body_encoding::encode_body(masked, encoding)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "secret masking: failed to re-compress masked response body");
+            let detail = format!("masked response body failed to re-compress: {error}");
+            (AbortReason::CredentialInjectionFailed, detail)
+        })?;
+
+    if dispatched.headers.contains_key("content-length") {
+        dispatched
+            .headers
+            .insert("content-length", http::HeaderValue::from(final_body.len()));
+    }
+    dispatched.body = final_body;
+    Ok(dispatched)
+}
+
+/// Applies [`mask_dispatched`] to `response`'s body when it carries one
+/// (`Ok`/`Passthrough`), converting a masking failure into an abort via
+/// [`secret_abort_response`] rather than forwarding an unmaskable body.
+async fn mask_handled_response(
+    response: HandledResponse,
+    store: &SidecarSecretStore,
+    max_decompressed_body_bytes: usize,
+    audit_payload: &mut AuditPayload,
+) -> HandledResponse {
     match response {
-        HandledResponse::Ok(d) => HandledResponse::Ok(mask_dispatched(d, store)),
-        HandledResponse::Passthrough(d) => HandledResponse::Passthrough(mask_dispatched(d, store)),
+        HandledResponse::Ok(d) => {
+            match mask_dispatched(d, store, max_decompressed_body_bytes).await {
+                Ok(d) => HandledResponse::Ok(d),
+                Err((reason, detail)) => secret_abort_response(audit_payload, reason, detail),
+            }
+        }
+        HandledResponse::Passthrough(d) => {
+            match mask_dispatched(d, store, max_decompressed_body_bytes).await {
+                Ok(d) => HandledResponse::Passthrough(d),
+                Err((reason, detail)) => secret_abort_response(audit_payload, reason, detail),
+            }
+        }
         other => other,
     }
 }
@@ -702,6 +687,13 @@ struct HttpSecretMediation {
     providers: Vec<HttpIntegrationSpec>,
 }
 
+/// Default cap on how large a request or response body may grow when
+/// decompressed for secret rehydration/masking, used when the handler isn't
+/// explicitly configured via [`RequestHandler::with_max_decompressed_body_bytes`].
+/// Mirrors [`crate::config::SidecarConfig`]'s own default for
+/// `interceptor.max_decompressed_body_bytes`.
+const DEFAULT_MAX_DECOMPRESSED_BODY_BYTES: usize = 16 * 1024 * 1024;
+
 /// Shared handler used by every interceptor.
 pub struct RequestHandler {
     audit_sink_sender: mpsc::Sender<AuditPayload>,
@@ -710,6 +702,7 @@ pub struct RequestHandler {
     pipeline: Arc<EnforcementPipeline>,
     gateway_client: Option<Arc<GatewayClient>>,
     http_secret_mediation: Option<HttpSecretMediation>,
+    max_decompressed_body_bytes: usize,
 }
 
 impl RequestHandler {
@@ -728,7 +721,18 @@ impl RequestHandler {
             pipeline,
             gateway_client: None,
             http_secret_mediation: None,
+            max_decompressed_body_bytes: DEFAULT_MAX_DECOMPRESSED_BODY_BYTES,
         }
+    }
+
+    /// Overrides the cap on decompressed request/response body size (see
+    /// [`DEFAULT_MAX_DECOMPRESSED_BODY_BYTES`]) applied when decoding a
+    /// `Content-Encoding`'d body for secret rehydration or masking. Guards
+    /// against a decompression bomb forcing an unbounded allocation.
+    #[must_use]
+    pub fn with_max_decompressed_body_bytes(mut self, max_decompressed_body_bytes: usize) -> Self {
+        self.max_decompressed_body_bytes = max_decompressed_body_bytes;
+        self
     }
 
     /// Enable secret placeholder rehydration via the firma-run secret gateway.
@@ -759,6 +763,20 @@ impl RequestHandler {
 
     /// Resolve [`PLACEHOLDER_PREFIX`]-prefixed placeholder tokens in the request body.
     ///
+    /// Decodes a supported `Content-Encoding` before scanning for
+    /// placeholders and re-encodes the rehydrated result afterward, so a
+    /// compressed request body's placeholders are still found and resolved
+    /// (see [`body_encoding`]). When the body's declared encoding can't be
+    /// decoded, falls back to scanning the raw (still-encoded) bytes exactly
+    /// as before this fallback existed — for genuinely compressed data this
+    /// essentially never matches [`PLACEHOLDER_PREFIX`], so unrelated
+    /// traffic in an encoding this layer doesn't support keeps working
+    /// unaffected. Only if that raw scan *does* turn up something
+    /// placeholder-shaped does this fail closed (see below), since at that
+    /// point rehydrating without being able to reliably re-encode the result
+    /// would risk forwarding a mix of real secrets and literal placeholder
+    /// tokens.
+    ///
     /// Queries the secret gateway for each unique placeholder found, builds a
     /// per-request [`SidecarSecretStore`], and rewrites the body with the real
     /// secret bytes. The store is returned for use in response masking.
@@ -784,9 +802,29 @@ impl RequestHandler {
             _ => return (request, Ok(None)),
         };
 
-        let placeholders = collect_placeholders(&body);
+        let (plaintext, encoding, decode_error) = match body_encoding::decode_body(
+            &body,
+            &request.headers,
+            self.max_decompressed_body_bytes,
+        )
+        .await
+        {
+            Ok((plaintext, encoding)) => (plaintext, encoding, None),
+            Err(error) => (Cow::Borrowed(body.as_slice()), None, Some(error)),
+        };
+
+        let placeholders = collect_placeholders(&plaintext);
         if placeholders.is_empty() {
             return (request, Ok(None));
+        }
+
+        if let Some(error) = decode_error {
+            let detail = format!(
+                "secret gateway: request body looks like it contains placeholders but its \
+                 content-encoding could not be decoded to rehydrate them safely: {error}"
+            );
+            tracing::warn!("{detail}");
+            return (request, Err(detail));
         }
 
         let host = request.host.clone();
@@ -827,19 +865,29 @@ impl RequestHandler {
         }
 
         let content_type_val = request.headers.typed_get::<headers::ContentType>();
-        let Ok(ct) = ContentType::resolve(content_type_val, &body) else {
+        let Ok(ct) = ContentType::resolve(content_type_val, &plaintext) else {
             let detail = "secret gateway: unrecognized content type".to_string();
             tracing::warn!("{detail}");
             return (request, Err(detail));
         };
-        let ops = store.rehydrate_ops(&body);
-        let rehydrated = rehydrate_body(&body, ct, &ops);
+        let ops = store.rehydrate_ops(&plaintext);
+        let rehydrated = rehydrate_body(&plaintext, ct, &ops);
+        let final_body = match body_encoding::encode_body(rehydrated, encoding).await {
+            Ok(body) => body,
+            Err(error) => {
+                let detail = format!(
+                    "secret gateway: rehydrated request body failed to re-compress: {error}"
+                );
+                tracing::warn!("{detail}");
+                return (request, Err(detail));
+            }
+        };
         if request.headers.contains_key("content-length") {
             request
                 .headers
-                .insert("content-length", http::HeaderValue::from(rehydrated.len()));
+                .insert("content-length", http::HeaderValue::from(final_body.len()));
         }
-        request.body = Some(rehydrated);
+        request.body = Some(final_body);
 
         (request, Ok(Some(store)))
     }
@@ -914,7 +962,15 @@ impl RequestHandler {
             .await;
 
         let response = match rehydrate_result.ok().flatten() {
-            Some(store) => mask_handled_response(response, &store),
+            Some(store) => {
+                mask_handled_response(
+                    response,
+                    &store,
+                    self.max_decompressed_body_bytes,
+                    &mut audit_payload,
+                )
+                .await
+            }
             None => response,
         };
 
@@ -1095,7 +1151,7 @@ impl RequestHandler {
                 "HTTP secret provider matched but no secret gateway is configured; aborting \
                  rather than forward a possibly sensitive response unmediated"
             );
-            return http_secret_push_failed_response(
+            return secret_abort_response(
                 audit_payload,
                 AbortReason::CredentialInjectionFailed,
                 detail,
@@ -1110,15 +1166,11 @@ impl RequestHandler {
         match response {
             HandledResponse::Ok(dispatched) => match rewrite(dispatched).await {
                 Ok(dispatched) => HandledResponse::Ok(dispatched),
-                Err((reason, detail)) => {
-                    http_secret_push_failed_response(audit_payload, reason, detail)
-                }
+                Err((reason, detail)) => secret_abort_response(audit_payload, reason, detail),
             },
             HandledResponse::Passthrough(dispatched) => match rewrite(dispatched).await {
                 Ok(dispatched) => HandledResponse::Passthrough(dispatched),
-                Err((reason, detail)) => {
-                    http_secret_push_failed_response(audit_payload, reason, detail)
-                }
+                Err((reason, detail)) => secret_abort_response(audit_payload, reason, detail),
             },
             other => other,
         }
@@ -1148,7 +1200,9 @@ impl RequestHandler {
         matcher: &SecretMatcher,
         gateway: &GatewayClient,
     ) -> Result<DispatchedResponse, InterceptAbort> {
-        let (plaintext, encoding) = decode_for_inspection(&dispatched, provider_id)?;
+        let (plaintext, encoding) =
+            decode_for_inspection(&dispatched, provider_id, self.max_decompressed_body_bytes)
+                .await?;
 
         let matcher = match CompiledMatcher::compile(matcher) {
             Ok(m) => m,
@@ -1211,7 +1265,7 @@ impl RequestHandler {
             }
         }
 
-        let final_body = recompress_after_rewrite(rewritten, encoding, provider_id)?;
+        let final_body = recompress_after_rewrite(rewritten, encoding, provider_id).await?;
 
         if dispatched.headers.contains_key("content-length") {
             dispatched
