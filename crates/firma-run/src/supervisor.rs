@@ -7,6 +7,10 @@ use crate::error::RunError;
 use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
 use nix::unistd::Pid;
+#[cfg(unix)]
+use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicI32, Ordering};
 
 /// Wait for the child while forwarding terminal signals to the sandbox.
 ///
@@ -20,8 +24,10 @@ use nix::unistd::Pid;
 /// `signal_hook`'s self-pipe and forwards each into the sandbox. SIGWINCH (TUI
 /// resize) is relayed as-is; the first SIGINT/SIGTERM is forwarded so an
 /// interactive TUI can shut down cleanly, and a second termination signal
-/// escalates to SIGKILL. Once the child is reaped the signal source is closed,
-/// ending the forwarder thread.
+/// escalates to SIGKILL. For bwrap, the supervisor retains the sandbox process
+/// group selected during termination and sends it SIGKILL after bwrap exits,
+/// ensuring TERM-ignoring descendants cannot outlive `firma run`. Once the
+/// child is reaped the signal source is closed, ending the forwarder thread.
 ///
 /// # Errors
 ///
@@ -40,6 +46,8 @@ pub fn wait_with_signal_forwarding(
     let mut signals = Signals::new([SIGINT, SIGTERM, SIGWINCH])
         .map_err(|error| RunError::Wait(format!("failed to install signal handlers: {error}")))?;
     let handle = signals.handle();
+    let terminated_sandbox_group = Arc::new(AtomicI32::new(0));
+    let forwarded_sandbox_group = Arc::clone(&terminated_sandbox_group);
 
     let forwarder = std::thread::spawn(move || {
         let mut termination_requested = false;
@@ -48,7 +56,9 @@ pub fn wait_with_signal_forwarding(
                 continue;
             };
             match signal {
-                Signal::SIGWINCH => forward_signal(child_pid, backend, Signal::SIGWINCH),
+                Signal::SIGWINCH => {
+                    forward_signal(child_pid, backend, Signal::SIGWINCH);
+                }
                 Signal::SIGINT | Signal::SIGTERM => {
                     let forwarded = if termination_requested {
                         Signal::SIGKILL
@@ -56,7 +66,9 @@ pub fn wait_with_signal_forwarding(
                         termination_requested = true;
                         signal
                     };
-                    forward_signal(child_pid, backend, forwarded);
+                    if let Some(group) = forward_signal(child_pid, backend, forwarded) {
+                        forwarded_sandbox_group.store(group.as_raw(), Ordering::Release);
+                    }
                 }
                 _ => {}
             }
@@ -71,6 +83,12 @@ pub fn wait_with_signal_forwarding(
     // Break the forwarder's blocking iterator and reclaim the thread.
     handle.close();
     let _ = forwarder.join();
+    let sandbox_group = terminated_sandbox_group.load(Ordering::Acquire);
+    if sandbox_group != 0
+        && let Err(error) = kill(Pid::from_raw(sandbox_group), Signal::SIGKILL)
+    {
+        tracing::debug!("SIGKILL cleanup of sandbox pgroup {sandbox_group}: {error}");
+    }
     result
 }
 
@@ -149,7 +167,7 @@ pub fn wait_with_signal_forwarding(
 /// command) gets the event. Falls back to a direct send to the outer child for
 /// non-bwrap backends (vz, wsl2) where no session boundary exists.
 #[cfg(unix)]
-fn forward_signal(child_pid: u32, backend: BackendKind, signal: Signal) {
+fn forward_signal(child_pid: u32, backend: BackendKind, signal: Signal) -> Option<Pid> {
     // `backend` only selects the bwrap process-group path on Linux; elsewhere
     // every backend uses the direct fallback below.
     #[cfg(not(target_os = "linux"))]
@@ -167,18 +185,19 @@ fn forward_signal(child_pid: u32, backend: BackendKind, signal: Signal) {
         if let Err(error) = kill(pgid, signal) {
             tracing::debug!("{signal} forward to sandbox pgroup {pgid}: {error}");
         }
-        return;
+        return Some(pgid);
     }
 
     // Fallback: direct send to the outer child (covers vz/wsl2/firecracker and
     // the bwrap case where /proc children are unavailable).
     let Ok(pid) = i32::try_from(child_pid) else {
-        return;
+        return None;
     };
     let outer = Pid::from_raw(pid);
     if let Err(error) = kill(outer, signal) {
         tracing::debug!("{signal} forward to child {outer}: {error}");
     }
+    None
 }
 
 /// Read bwrap's immediate child PID from the Linux process filesystem.
