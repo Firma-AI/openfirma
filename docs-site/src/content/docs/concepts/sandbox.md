@@ -269,6 +269,11 @@ What `firma run` protects against depends on the enforcement mode. The lists bel
 - DNS exfiltration via crafted lookups.
 - Filesystem-mediated leaks across user boundaries (via identity remap).
 - An agent reading host environment variables it shouldn't see.
+- A wrapped process or descendant reading or forging host-side Firma runtime
+  state. Linux masks the runtime root that contains per-run Sidecar and
+  Authority files, sockets, metadata, signing keys, and capability seeds. The
+  separate sandbox-local runtime remains visible because its proxy bridge and
+  egress-guard sockets are part of the structural routing path.
 
 ### Proxy-only backends (vz, wsl2) protect against:
 

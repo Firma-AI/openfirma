@@ -222,6 +222,36 @@ impl TestWorld {
         run_bounded(&mut command, Duration::from_mins(2))
     }
 
+    /// Runs a program through `firma run` with an explicit state directory.
+    ///
+    /// This is equivalent to [`Self::run_firma`] with the `generic` profile and additionally sets
+    /// `FIRMA_STATE_DIR` for scenarios that need to inspect the host-side state after the run.
+    pub(crate) fn run_firma_with_state_dir<I, S>(
+        &self,
+        config_path: &Path,
+        state_dir: &Path,
+        cwd: &Path,
+        run_args: &[&str],
+        program: impl AsRef<OsStr>,
+        args: I,
+    ) -> ProcessOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), cwd);
+        command
+            .args(["run", "--profile", "generic", "--config"])
+            .arg(config_path)
+            .args(run_args)
+            .arg("--")
+            .arg(program)
+            .args(args)
+            .env("FIRMA_STATE_DIR", state_dir)
+            .env("FIRMA_RUN_SESSION_ID", &self.session_id);
+        run_bounded(&mut command, Duration::from_mins(2))
+    }
+
     /// Starts one governed Rust fixture that accepts multiple HTTP requests over standard input.
     ///
     /// The returned run owns the full local Authority, Sidecar, sandbox, and wrapped-process group.

@@ -229,7 +229,7 @@ impl SandboxBackend for BwrapBackend {
             _seccomp_file = Some(file);
         }
 
-        append_filesystem_layout(&mut command, handle, launch, &hardening);
+        append_filesystem_layout(&mut command, handle, launch, &hardening)?;
 
         for (key, value) in &launch.env {
             command.arg("--setenv").arg(key).arg(value);
@@ -463,7 +463,7 @@ fn append_filesystem_layout(
     handle: &SandboxHandle,
     launch: &LaunchSpec,
     hardening: &BwrapHardening,
-) {
+) -> Result<(), RunError> {
     if hardening.readonly_rootfs {
         command.arg("--ro-bind").arg("/").arg("/");
         command.arg("--tmpfs").arg("/tmp");
@@ -505,6 +505,64 @@ fn append_filesystem_layout(
     project_mount_aliases(command, &outside, masked);
 
     emit_mounts(command, inside.iter().copied());
+
+    mask_control_plane_runtime(command, handle, launch)?;
+    Ok(())
+}
+
+/// Hide host-side Firma runtime state from the wrapped process tree.
+///
+/// The read-only host-root bind prevents mutation but not disclosure. The
+/// runtime root contains per-run Sidecar and Authority sockets, configuration,
+/// metadata, signing keys, and capability seeds, none of which the wrapped
+/// process needs. The sandbox-local bwrap runtime remains available separately
+/// because the proxy bridge and egress guard require its sockets.
+fn mask_control_plane_runtime(
+    command: &mut Command,
+    handle: &SandboxHandle,
+    launch: &LaunchSpec,
+) -> Result<(), RunError> {
+    let runtime = firma_runtime_state::runtime_paths::default_runtime_dir();
+    if !runtime.exists() {
+        return Ok(());
+    }
+    let runtime = runtime.canonicalize().map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!(
+            "failed to resolve control-plane runtime {} before masking: {error}",
+            runtime.display()
+        ),
+    })?;
+    let cwd = launch.cwd.canonicalize().map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!(
+            "failed to resolve sandbox working directory {} before masking control-plane runtime: {error}",
+            launch.cwd.display()
+        ),
+    })?;
+    if cwd.starts_with(&runtime) {
+        return Err(RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "sandbox working directory {} is inside the control-plane runtime {}; choose a working directory outside FIRMA_STATE_DIR",
+                cwd.display(),
+                runtime.display()
+            ),
+        });
+    }
+
+    let mut masked = BTreeMap::new();
+    emit_tmpfs(command, runtime.clone(), &mut masked);
+    let mounts = handle.mounts.iter().collect::<Vec<_>>();
+    project_mount_aliases(command, &mounts, masked);
+
+    if handle.runtime_dir.starts_with(&runtime) {
+        command
+            .arg("--bind")
+            .arg(&handle.runtime_dir)
+            .arg(&handle.runtime_dir);
+    }
+    Ok(())
 }
 
 /// Emit each profile/runtime bind mount (`--ro-bind` or `--bind`) in order.
@@ -1145,7 +1203,8 @@ mod tests {
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
         let mut cmd = std::process::Command::new("bwrap");
-        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening);
+        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening)
+            .expect("append filesystem layout");
 
         let rendered = rendered_args(&cmd);
         let cwd_bind = rendered
@@ -1206,7 +1265,8 @@ mod tests {
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
         let mut cmd = std::process::Command::new("bwrap");
-        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening);
+        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening)
+            .expect("append filesystem layout");
 
         let rendered = rendered_args(&cmd);
         // The workspace-parent bind: `--bind <workspace> <workspace>`.
