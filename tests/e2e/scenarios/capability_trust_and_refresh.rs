@@ -32,6 +32,70 @@ struct SidecarIdentity {
     started_at: String,
 }
 
+struct ProbeRequest {
+    nonce: String,
+    probe: HttpProbe,
+    url: String,
+    resource: String,
+    attempted: PathBuf,
+    gate: PathBuf,
+}
+
+struct ObservedRequest {
+    nonce: String,
+    resource: String,
+}
+
+struct InitialBaseline {
+    seed_path: PathBuf,
+    seed: CapabilitySeed,
+    marker_dir: PathBuf,
+    identity: SidecarIdentity,
+    pid: String,
+    authority_public_key: PathBuf,
+    request: ObservedRequest,
+}
+
+impl ProbeRequest {
+    fn start(world: &TestWorld, name: &str, behavior: ProbeBehavior) -> Self {
+        let nonce = format!("{name}-{}", uuid::Uuid::new_v4().simple());
+        let probe = HttpProbe::start(&nonce, behavior);
+        let url = probe.url();
+        Self {
+            resource: server_resource(&url),
+            attempted: world.workspace_path().join(format!("{name}-attempted")),
+            gate: world.workspace_path().join(format!("{name}-gate")),
+            nonce,
+            probe,
+            url,
+        }
+    }
+
+    fn wait_for_attempt(&self, description: &str, timeout: Duration) {
+        wait_for(description, timeout, || {
+            self.attempted.exists().then_some(())
+        });
+    }
+
+    fn release(&self, description: &str) {
+        std::fs::write(&self.gate, b"continue").unwrap_or_else(|error| {
+            panic!("{description}: {error}");
+        });
+    }
+
+    fn observe(self, description: &str, timeout: Duration) -> ObservedRequest {
+        self.wait_for_attempt(description, timeout);
+        let capture = self.probe.finish().unwrap_or_else(|| {
+            panic!("{description} did not reach its probe");
+        });
+        assert_eq!(capture.path, format!("/{}", self.nonce));
+        ObservedRequest {
+            nonce: self.nonce,
+            resource: self.resource,
+        }
+    }
+}
+
 #[test]
 fn issued_capability_must_verify_with_configured_authority_key() {
     let world = TestWorld::new();
@@ -90,37 +154,18 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
     let world = TestWorld::new();
     configure_capability(&world, None);
 
-    let before_nonce = format!("before-{}", uuid::Uuid::new_v4().simple());
-    let after_nonce = format!("after-{}", uuid::Uuid::new_v4().simple());
-    let expired_nonce = format!("expired-{}", uuid::Uuid::new_v4().simple());
-    let before_probe = HttpProbe::start(
-        &before_nonce,
+    let before = ProbeRequest::start(
+        &world,
+        "before",
         ProbeBehavior::Respond(RESPONSE_BEFORE_REFRESH),
     );
-    let after_probe =
-        HttpProbe::start(&after_nonce, ProbeBehavior::Respond(RESPONSE_AFTER_REFRESH));
-    let expired_probe = HttpProbe::start(&expired_nonce, ProbeBehavior::MustNotConnect);
-    let before_url = before_probe.url();
-    let after_url = after_probe.url();
-    let expired_url = expired_probe.url();
-    let before_probe_resource = server_resource(&before_url);
-    let after_probe_resource = server_resource(&after_url);
-    let expired_probe_resource = server_resource(&expired_url);
-    let before_attempt = world.workspace_path().join("before-attempted");
-    let after_gate = world.workspace_path().join("after-gate");
-    let after_attempt = world.workspace_path().join("after-attempted");
-    let expired_gate = world.workspace_path().join("expired-gate");
-    let expired_attempt = world.workspace_path().join("expired-attempted");
-    let script = wrapped_refresh_script(
-        &before_url,
-        &after_url,
-        &expired_url,
-        &before_attempt,
-        &after_gate,
-        &after_attempt,
-        &expired_gate,
-        &expired_attempt,
+    let after = ProbeRequest::start(
+        &world,
+        "after",
+        ProbeBehavior::Respond(RESPONSE_AFTER_REFRESH),
     );
+    let expired = ProbeRequest::start(&world, "expired", ProbeBehavior::MustNotConnect);
+    let script = wrapped_refresh_script(&before, &after, &expired);
 
     std::thread::scope(|scope| {
         let run = scope.spawn(|| {
@@ -134,38 +179,17 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
             )
         });
 
-        let seed_path = wait_for("initial capability seed", Duration::from_secs(15), || {
-            only_file(&world.path("state/capabilities"))
-        });
-        let initial_seed = wait_for_seed(&seed_path, "initial capability seed");
-        assert_eq!(
-            (initial_seed.expiry - initial_seed.issued_at).num_seconds(),
-            SHORT_TTL_SECONDS,
-            "controlled Authority must clamp the capability to the short TTL"
-        );
+        let InitialBaseline {
+            seed_path,
+            seed: initial_seed,
+            marker_dir,
+            identity: identity_before,
+            pid: pid_before,
+            authority_public_key,
+            request: before,
+        } = observe_initial_baseline(&world, before);
 
-        wait_for(
-            "first wrapped request stimulus",
-            Duration::from_secs(15),
-            || before_attempt.exists().then_some(()),
-        );
-        let before_capture = before_probe
-            .finish()
-            .expect("first governed request reached probe");
-        assert_eq!(before_capture.path, format!("/{before_nonce}"));
-
-        let marker_dir = wait_for("Sidecar marker", Duration::from_secs(15), || {
-            only_directory(&world.path("state/run"))
-        });
-        let identity_before = read_toml::<SidecarIdentity>(&marker_dir.join("metadata.toml"));
-        let pid_before = std::fs::read_to_string(marker_dir.join("sidecar.pid"))
-            .expect("read initial Sidecar PID");
-        let authority_public_key = world.path("state/authority.pub");
-        assert!(
-            authority_public_key.is_file(),
-            "owned Authority public key must exist before observing a changed refresh"
-        );
-
+        // Capture one changed refresh, then immediately replace the key so later tokens fail.
         let refreshed_seed = wait_for(
             "different refreshed capability seed",
             Duration::from_secs(15),
@@ -174,8 +198,6 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
                 (seed.token_id != initial_seed.token_id).then_some(seed)
             },
         );
-        // Close the race before inspecting any other evidence: every token
-        // returned after the captured changed seed must fail this configured-key check.
         std::fs::write(&authority_public_key, [0xa5; 32])
             .expect("replace Authority public key with mismatched key");
         assert_ne!(refreshed_seed.raw_token, initial_seed.raw_token);
@@ -183,41 +205,33 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
         assert_eq!(refreshed_seed.agent_id, initial_seed.agent_id);
         assert_eq!(refreshed_seed.session_id, initial_seed.session_id);
 
+        // After the original token expires, the captured refresh must still authorize this request.
         wait_until_after(initial_seed.expiry, Duration::from_secs(10));
         assert_eq!(
             read_toml::<CapabilitySeed>(&seed_path),
             refreshed_seed,
             "no later valid token may supersede the captured changed refresh before its proof request"
         );
-        std::fs::write(&after_gate, b"continue").expect("release post-refresh request");
-        wait_for(
+        after.release("release post-refresh request");
+        let after = after.observe(
             "post-refresh wrapped request stimulus",
             Duration::from_secs(10),
-            || after_attempt.exists().then_some(()),
         );
-        let after_capture = after_probe
-            .finish()
-            .expect("post-refresh governed request reached probe");
-        assert_eq!(after_capture.path, format!("/{after_nonce}"));
         let after_event = wait_for_audit_event(
             &world.audit_path(),
             &initial_seed.session_id,
-            &after_nonce,
+            &after.nonce,
             Duration::from_secs(20),
         );
         assert_allowed_event(
             &after_event,
             &refreshed_seed,
             &identity_before,
-            &after_probe_resource,
+            &after.resource,
         );
-        let identity_after_refresh =
-            read_toml::<SidecarIdentity>(&marker_dir.join("metadata.toml"));
-        let pid_after_refresh = std::fs::read_to_string(marker_dir.join("sidecar.pid"))
-            .expect("read Sidecar PID after refresh");
-        assert_eq!(identity_after_refresh, identity_before);
-        assert_eq!(pid_after_refresh, pid_before);
+        assert_sidecar_unchanged(&marker_dir, &identity_before, &pid_before);
 
+        // Later refreshes must be rejected; once the captured token expires, fail closed.
         wait_for(
             "unverified refresh rejection",
             Duration::from_secs(20),
@@ -238,11 +252,10 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
             refreshed_seed,
             "no later valid token may supersede the rejected refresh before fail-closed proof"
         );
-        std::fs::write(&expired_gate, b"continue").expect("release expired-token request");
-        wait_for(
+        expired.release("release expired-token request");
+        expired.wait_for_attempt(
             "expired-token wrapped request stimulus",
             Duration::from_secs(10),
-            || expired_attempt.exists().then_some(()),
         );
 
         let output = run.join().expect("join governed firma run");
@@ -253,36 +266,65 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
             "both intended requests must return upstream responses:\n{output}"
         );
         assert!(
-            expired_probe.finish().is_none(),
+            expired.probe.finish().is_none(),
             "expired token reached upstream after unverified refresh"
         );
 
         let before_event =
-            correlated_event(&world.audit_path(), &initial_seed.session_id, &before_nonce);
+            correlated_event(&world.audit_path(), &initial_seed.session_id, &before.nonce);
         let expired_event = correlated_event(
             &world.audit_path(),
             &initial_seed.session_id,
-            &expired_nonce,
+            &expired.nonce,
         );
         assert_allowed_event(
             &before_event,
             &initial_seed,
             &identity_before,
-            &before_probe_resource,
+            &before.resource,
         );
-        assert_eq!(expired_event.session_id, identity_before.session_id);
-        assert_eq!(expired_event.sandbox_id, identity_before.sandbox_id);
-        assert_eq!(expired_event.agent_id, "");
-        assert_eq!(expired_event.token_id, "");
-        assert_eq!(expired_event.action, "raw.http.GET");
-        assert_eq!(expired_event.resource, expired_probe_resource);
-        assert_eq!(expired_event.decision, AuditDecision::Deny);
-        assert_eq!(
-            expired_event.deny_reason,
-            format!("token expired: token expired: {}", refreshed_seed.token_id)
+        assert_expired_event(
+            &expired_event,
+            &refreshed_seed,
+            &identity_before,
+            &expired.resource,
         );
-        assert_eq!(expired_event.dispatch_status, 0);
     });
+}
+
+fn observe_initial_baseline(world: &TestWorld, before: ProbeRequest) -> InitialBaseline {
+    let seed_path = wait_for("initial capability seed", Duration::from_secs(15), || {
+        only_file(&world.path("state/capabilities"))
+    });
+    let seed = wait_for_seed(&seed_path, "initial capability seed");
+    assert_eq!(
+        (seed.expiry - seed.issued_at).num_seconds(),
+        SHORT_TTL_SECONDS,
+        "controlled Authority must clamp the capability to the short TTL"
+    );
+    let request = before.observe("first wrapped request stimulus", Duration::from_secs(15));
+
+    let marker_dir = wait_for("Sidecar marker", Duration::from_secs(15), || {
+        only_directory(&world.path("state/run"))
+    });
+    let identity = read_toml::<SidecarIdentity>(&marker_dir.join("metadata.toml"));
+    let pid =
+        std::fs::read_to_string(marker_dir.join("sidecar.pid")).expect("read initial Sidecar PID");
+    let authority_public_key = world.path("state/authority.pub");
+    assert!(
+        authority_public_key.is_file(),
+        "owned Authority public key must exist before observing a changed refresh"
+    );
+
+    InitialBaseline {
+        seed_path,
+        seed,
+        marker_dir,
+        identity,
+        pid,
+        authority_public_key,
+        request,
+    }
 }
 
 fn configure_capability(world: &TestWorld, public_key_path: Option<&Path>) {
@@ -305,19 +347,10 @@ fn configure_capability(world: &TestWorld, public_key_path: Option<&Path>) {
     std::fs::write(config_path, config).expect("write capability test config");
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the script's observable files are explicit test evidence"
-)]
 fn wrapped_refresh_script(
-    before_url: &str,
-    after_url: &str,
-    expired_url: &str,
-    before_attempt: &Path,
-    after_gate: &Path,
-    after_attempt: &Path,
-    expired_gate: &Path,
-    expired_attempt: &Path,
+    before: &ProbeRequest,
+    after: &ProbeRequest,
+    expired: &ProbeRequest,
 ) -> String {
     format!(
         "printf attempted > '{before_attempt}'; \
@@ -330,11 +363,14 @@ fn wrapped_refresh_script(
          [ -f '{expired_gate}' ] || exit 91; \
          printf attempted > '{expired_attempt}'; \
          if curl --fail-with-body --silent --show-error --max-time 10 '{expired_url}'; then exit 92; fi",
-        before_attempt = before_attempt.display(),
-        after_gate = after_gate.display(),
-        after_attempt = after_attempt.display(),
-        expired_gate = expired_gate.display(),
-        expired_attempt = expired_attempt.display(),
+        before_attempt = before.attempted.display(),
+        before_url = before.url,
+        after_gate = after.gate.display(),
+        after_attempt = after.attempted.display(),
+        after_url = after.url,
+        expired_gate = expired.gate.display(),
+        expired_attempt = expired.attempted.display(),
+        expired_url = expired.url,
     )
 }
 
@@ -353,6 +389,38 @@ fn assert_allowed_event(
     assert_eq!(event.decision, AuditDecision::Allow);
     assert_eq!(event.deny_reason, "");
     assert_eq!(event.dispatch_status, 200);
+}
+
+fn assert_expired_event(
+    event: &AuditEvent,
+    seed: &CapabilitySeed,
+    identity: &SidecarIdentity,
+    resource: &str,
+) {
+    assert_eq!(event.session_id, identity.session_id);
+    assert_eq!(event.sandbox_id, identity.sandbox_id);
+    assert_eq!(event.agent_id, "");
+    assert_eq!(event.token_id, "");
+    assert_eq!(event.action, "raw.http.GET");
+    assert_eq!(event.resource, resource);
+    assert_eq!(event.decision, AuditDecision::Deny);
+    assert_eq!(
+        event.deny_reason,
+        format!("token expired: token expired: {}", seed.token_id)
+    );
+    assert_eq!(event.dispatch_status, 0);
+}
+
+fn assert_sidecar_unchanged(marker_dir: &Path, identity: &SidecarIdentity, pid: &str) {
+    assert_eq!(
+        read_toml::<SidecarIdentity>(&marker_dir.join("metadata.toml")),
+        *identity
+    );
+    assert_eq!(
+        std::fs::read_to_string(marker_dir.join("sidecar.pid"))
+            .expect("read Sidecar PID after refresh"),
+        pid
+    );
 }
 
 fn wait_for_audit_event(path: &Path, session: &str, nonce: &str, timeout: Duration) -> AuditEvent {
