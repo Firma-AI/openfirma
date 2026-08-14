@@ -99,7 +99,7 @@ fn spawn_ordered_stack(
     if stuck_sidecar {
         authority
             .arg("-c")
-            .arg("trap '' TERM; printf ready > \"$AUTHORITY_READY.tmp\"; mv \"$AUTHORITY_READY.tmp\" \"$AUTHORITY_READY\"; while :; do sleep 1; done")
+            .arg("trap '' TERM; printf ready > \"$AUTHORITY_READY.tmp\"; mv \"$AUTHORITY_READY.tmp\" \"$AUTHORITY_READY\"; exec sleep 3600")
             .env("AUTHORITY_READY", &authority_ready);
     } else {
         authority
@@ -113,7 +113,7 @@ fn spawn_ordered_stack(
     if stuck_sidecar {
         sidecar
             .arg("-c")
-            .arg("trap '' TERM; printf ready > \"$SIDECAR_READY.tmp\"; mv \"$SIDECAR_READY.tmp\" \"$SIDECAR_READY\"; while :; do sleep 1; done")
+            .arg("trap '' TERM; printf ready > \"$SIDECAR_READY.tmp\"; mv \"$SIDECAR_READY.tmp\" \"$SIDECAR_READY\"; exec sleep 3600")
             .env("SIDECAR_READY", &sidecar_ready);
     } else {
         sidecar
