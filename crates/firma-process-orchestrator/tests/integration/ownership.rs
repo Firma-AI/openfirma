@@ -698,22 +698,33 @@ fn detached_handle_reconstruction_rejects_replacement_generation() {
 #[test]
 fn component_pidfile_publication_failure_collects_spawned_child() {
     let dir = tempfile::tempdir().expect("state dir");
-    let mut planner = component_planner(dir.path(), &["authority", "sidecar"]);
-    let mut index = 0;
-    let Err(error) = spawn_stack_from_plan(
-        &topology(&["authority", "sidecar"]),
-        |context| {
-            let mut spec = planner(context)?;
-            if index == 0 {
-                spec.command
-                    .env(CHILD_BLOCK_PIDFILE, dir.path().join("sidecar.pid"));
-            }
-            index += 1;
-            Ok::<_, std::convert::Infallible>(spec)
-        },
-        dir.path(),
-        fast_timeouts(),
-    ) else {
+    let state_dir = dir.path().to_path_buf();
+    let startup_dir = state_dir.clone();
+    let startup = std::thread::spawn(move || {
+        let mut planner = component_planner(&startup_dir, &["authority", "sidecar"]);
+        let mut index = 0;
+        spawn_stack_from_plan(
+            &topology(&["authority", "sidecar"]),
+            |context| {
+                let mut spec = planner(context)?;
+                if index == 0 {
+                    spec.command
+                        .env(CHILD_RELEASE, startup_dir.join("authority.release"))
+                        .env(CHILD_BLOCK_PIDFILE, startup_dir.join("sidecar.pid"));
+                }
+                index += 1;
+                Ok::<_, std::convert::Infallible>(spec)
+            },
+            &startup_dir,
+            fast_timeouts(),
+        )
+    });
+    wait_for_file(&state_dir.join("authority.pid"));
+    let authority_pid = read_pidfile(&state_dir.join("authority.pid"));
+    let cleanup = ProcessCleanup::new([authority_pid]);
+    std::fs::write(state_dir.join("authority.release"), []).expect("release authority");
+
+    let Err(error) = startup.join().expect("join startup") else {
         panic!("pidfile publication unexpectedly succeeded");
     };
 
@@ -726,19 +737,19 @@ fn component_pidfile_publication_failure_collects_spawned_child() {
     };
     assert!(matches!(*operation, StartError::Orchestrator(_)));
     assert!(rollback.processes_stopped());
-    let authority_pid = wait_for_marker(&dir.path().join("authority.marker"));
     assert_process_absent(authority_pid);
-    std::fs::remove_dir(dir.path().join("sidecar.pid")).expect("remove pidfile blocker");
+    cleanup.disarm();
+    std::fs::remove_dir(state_dir.join("sidecar.pid")).expect("remove pidfile blocker");
     stop_components(
-        dir.path(),
+        &state_dir,
         Duration::ZERO,
         &topology(&["authority", "sidecar"]),
     )
     .expect("clean retained state");
-    assert!(!dir.path().join("stack.lock").exists());
-    assert!(!dir.path().join("authority.pid").exists());
-    assert!(!dir.path().join("authority.listen").exists());
-    assert!(!dir.path().join("sidecar.listen").exists());
+    assert!(!state_dir.join("stack.lock").exists());
+    assert!(!state_dir.join("authority.pid").exists());
+    assert!(!state_dir.join("authority.listen").exists());
+    assert!(!state_dir.join("sidecar.listen").exists());
 }
 
 #[test]
