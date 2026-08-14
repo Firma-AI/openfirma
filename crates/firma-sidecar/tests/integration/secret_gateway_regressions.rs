@@ -734,3 +734,85 @@ async fn oversized_decompressed_response_fails_closed() -> anyhow::Result<()> {
     response.assert_abort(AbortReason::CredentialInjectionFailed)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn compressed_echo_from_non_provider_is_masked() -> anyhow::Result<()> {
+    let host = "api.example.test";
+    let placeholder = SecretPlaceholder::new();
+    let (handler, requests) = fixed_handler(
+        GZIP_SECRET_RESPONSE.to_vec(),
+        HeaderMap::from([
+            (
+                http::HeaderName::from_static("content-type"),
+                http::HeaderValue::from_static("application/json"),
+            ),
+            (
+                http::HeaderName::from_static("content-encoding"),
+                http::HeaderValue::from_static("gzip"),
+            ),
+        ]),
+    )?;
+    let handler = handler.with_gateway_client(fake_resolve_gateway(SECRET).await?);
+    let request_body = serde_json::json!({"credential": placeholder.to_string()})
+        .to_string()
+        .into_bytes();
+
+    let response = proxy_request(handler, host, &request_body).await?;
+
+    assert_eq!(response.status, 200);
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(response.body.as_slice()).read_to_end(&mut decoded)?;
+    assert_eq!(
+        decoded,
+        format!(r#"{{"SecretString":"{placeholder}","Name":"dbpass"}}"#).into_bytes(),
+        "masking must preserve the complete response and replace only the secret"
+    );
+    let dispatched = requests
+        .lock()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(
+        dispatched.as_slice(),
+        &[format!(r#"{{"credential":"{SECRET}"}}"#).into_bytes()],
+        "rehydration must replace the complete placeholder exactly once"
+    );
+    drop(dispatched);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sensitive_provider_schema_mismatch_fails_closed() -> anyhow::Result<()> {
+    let host = "vault.example.test";
+    let response_body = serde_json::json!({"unexpected_secret_field": SECRET})
+        .to_string()
+        .into_bytes();
+    let (handler, requests) = fixed_handler(
+        response_body,
+        HeaderMap::from([(
+            http::HeaderName::from_static("content-type"),
+            http::HeaderValue::from_static("application/json"),
+        )]),
+    )?;
+    let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
+    let handler = handler
+        .with_gateway_client(gateway)
+        .with_http_secret_providers(vec![sensitive_provider(host)]);
+
+    let response = proxy_request(handler, host, b"{}").await?;
+    let gateway_contact = tokio::time::timeout(Duration::from_millis(100), contacted).await;
+    gateway_server.abort();
+
+    assert!(
+        gateway_contact.is_err(),
+        "a response that does not match the configured schema must not push a secret"
+    );
+    assert_eq!(
+        requests
+            .lock()
+            .map_err(|error| anyhow::anyhow!("{error}"))?
+            .len(),
+        1,
+        "the provider response must reach mediation before the schema mismatch aborts it"
+    );
+    response.assert_abort(AbortReason::CredentialInjectionFailed)?;
+    Ok(())
+}
