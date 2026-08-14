@@ -1,6 +1,6 @@
 ---
 name: writing-black-box-tests
-description: Writes and verifies OpenFirma CLI, structural-sandbox, live-agent, and VS Code black-box tests. Use when adding or changing user-facing end-to-end coverage.
+description: Writes and verifies OpenFirma CLI, deterministic E2E, live-agent, and VS Code black-box tests. Use when adding or changing user-facing end-to-end coverage.
 ---
 
 # Writing Black-Box Tests
@@ -13,13 +13,13 @@ collect evidence that proves the behavior under test.
 Choose by the production boundary the test proves, not by whether it starts a
 process.
 
-| Suite                 | Current location                  | Use it for                                                            |
-| --------------------- | --------------------------------- | --------------------------------------------------------------------- |
-| `firma::cli`          | `crates/firma/tests/integration/` | CLI and component contracts, including structural-sandbox regressions |
-| `firma::e2e`          | `tests/e2e/`                      | Deterministic full-stack tests through real Authority and Sidecar     |
-| `firma::live-agent`   | `tests/live-agent/`               | Claude and Codex behavior that requires a real agent and credentials  |
-| `firma::vscode`       | `tests/vscode/`                   | Managed VS Code launch behavior                                       |
-| `firma::architecture` | `tests/architecture/`             | Repository structure and dependency invariants                        |
+| Suite                 | Current location                  | Use it for                                                           |
+| --------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| `firma::cli`          | `crates/firma/tests/integration/` | CLI and component contracts that do not require a structural sandbox |
+| `firma::e2e`          | `tests/e2e/`                      | Deterministic full-stack and structural-sandbox behavior             |
+| `firma::live-agent`   | `tests/live-agent/`               | Claude and Codex behavior that requires a real agent and credentials |
+| `firma::vscode`       | `tests/vscode/`                   | Managed VS Code launch behavior                                      |
+| `firma::architecture` | `tests/architecture/`             | Repository structure and dependency invariants                       |
 
 Use a crate integration suite instead when the behavior is a Rust API contract
 rather than user-facing CLI behavior.
@@ -27,25 +27,22 @@ rather than user-facing CLI behavior.
 Within `firma::e2e`, add each scenario to its own file under
 `tests/e2e/scenarios/` and register it in `scenarios/mod.rs`. Scenarios use
 the shared harness to launch bounded processes and must not import production
-crate APIs to calculate expected behavior. Deterministic scenarios cannot be
-ignored; missing host prerequisites must fail their dedicated CI job.
+crate APIs to calculate expected behavior. Active deterministic scenarios
+cannot be ignored; missing host prerequisites must fail their dedicated CI job.
+Known-failing regression targets remain ignored until their behavior is fixed.
 
 Within `firma::cli`:
 
 - parsing, diagnostics, generated files, and one-component lifecycle tests get
-  a module named after the command or component;
-- tests that run real commands inside a structural sandbox belong in
-  `structural_sandbox.rs`;
-- structural-sandbox regressions belong there even when they are currently
-  expected to fail.
+  a module named after the command or component.
 
 Policy and pipeline changes reachable through `firma run` should have
-`firma::e2e` coverage. Add `firma::cli` structural-sandbox coverage as well only
-when the behavior specifically concerns that sandbox boundary.
+`firma::e2e` coverage.
 
-FIR-366 remains an ignored regression in `structural_sandbox.rs` because it
-documents a structural sandbox weakness. Keep known-failing regression targets
-in the module that owns the behavior, but do not count ignored tests as passing
+FIR-366 remains an ignored regression in
+`tests/e2e/scenarios/child_process_governance.rs` because it documents a
+structural sandbox weakness. Keep known-failing regression targets in the
+module that owns the behavior, but do not count ignored tests as passing
 coverage.
 
 Use `firma::live-agent` only when the claim depends on an actual agent's
@@ -103,15 +100,8 @@ Run deterministic CLI tests selected for a normal development host:
 cargo nextest run -p firma --test cli --no-tests=fail
 ```
 
-Run the active Linux structural-sandbox tests, which the default profile
-excludes:
-
-```sh
-cargo nextest run --profile ci -p firma --test cli --no-tests=fail \
-  -E 'test(/^structural_sandbox::/)'
-```
-
-Run the deterministic full-stack suite (excluded by the default profile):
+Run the deterministic E2E suite, including structural-sandbox scenarios
+(excluded by the default profile):
 
 ```sh
 cargo nextest run --profile ci --ignore-default-filter \
@@ -122,9 +112,9 @@ Run the ignored FIR-366 regression explicitly. It is expected to fail until the
 weakness is fixed:
 
 ```sh
-cargo nextest run --profile ci -p firma --test cli --run-ignored all \
-  --no-tests=fail \
-  -E 'test(=structural_sandbox::child_process_escapes_run_governance)'
+cargo nextest run --profile ci --ignore-default-filter \
+  -p firma --test e2e --run-ignored all --no-tests=fail \
+  -E 'test(=scenarios::child_process_governance::child_process_escapes_run_governance)'
 ```
 
 Run the live-agent suite:

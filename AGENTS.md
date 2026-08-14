@@ -57,7 +57,7 @@ may be stable boundaries regardless of a crate's publish setting.
 Before adding or moving Rust tests, load and follow the
 [`rust-tests-guidelines`](.skills/rust-tests-guidelines/SKILL.md) skill.
 
-Before adding or changing CLI, structural-sandbox, live-agent, or VS Code
+Before adding or changing CLI, deterministic E2E, live-agent, or VS Code
 coverage, load and follow the
 [`writing-black-box-tests`](.skills/writing-black-box-tests/SKILL.md) skill.
 

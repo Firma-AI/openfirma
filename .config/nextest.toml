@@ -9,7 +9,7 @@ command = ["tests/architecture/setup-metadata.sh"]
 command = ["pwsh", "-NoProfile", "-File", "tests/architecture/setup-metadata.ps1"]
 
 [profile.default]
-default-filter = 'not (binary_id(firma::e2e) | (binary_id(firma::cli) & test(/^structural_sandbox::/)))'
+default-filter = "not binary_id(firma::e2e)"
 slow-timeout = { period = "60s", terminate-after = 5 }
 status-level = "fail"
 final-status-level = "slow"
