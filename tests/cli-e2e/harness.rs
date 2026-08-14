@@ -3,14 +3,17 @@ use std::fmt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use wait_timeout::ChildExt;
 
+use crate::audit::{AuditEvent, correlated_event};
+
 pub(crate) struct TestWorld {
     root: tempfile::TempDir,
+    session_id: String,
 }
 
 impl TestWorld {
@@ -31,10 +34,15 @@ impl TestWorld {
             std::fs::create_dir_all(root.path().join(directory))
                 .expect("create isolated directory");
         }
-        Self { root }
+        let world = Self {
+            root,
+            session_id: format!("sess_e2e_{}", uuid::Uuid::new_v4().simple()),
+        };
+        world.scaffold();
+        world
     }
 
-    pub(crate) fn scaffold(&self) {
+    fn scaffold(&self) {
         let mut command = isolated_command(env!("CARGO_BIN_EXE_firma"), self);
         command
             .args([
@@ -66,17 +74,65 @@ impl TestWorld {
         std::fs::write(path, patched).expect("write deterministic config");
     }
 
-    pub(crate) fn config_path(&self) -> PathBuf {
+    fn config_path(&self) -> PathBuf {
         self.root.path().join("config/firma.toml")
     }
 
-    pub(crate) fn audit_path(&self) -> PathBuf {
+    fn audit_path(&self) -> PathBuf {
         self.root.path().join("state/audit.jsonl")
     }
 
     pub(crate) fn add_policy(&self, name: &str, policy: &str) {
         std::fs::write(self.root.path().join("config/policies").join(name), policy)
             .expect("write scenario policy");
+    }
+
+    pub(crate) fn run_governed<I, S>(
+        &self,
+        nonce: &str,
+        program: impl AsRef<OsStr>,
+        args: I,
+    ) -> GovernedRun
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = isolated_command(env!("CARGO_BIN_EXE_firma"), self);
+        command
+            .args([
+                "run",
+                "--profile",
+                "generic",
+                "--authority",
+                "local",
+                "--sidecar",
+                "local",
+                "--config",
+            ])
+            .arg(self.config_path())
+            .arg("--")
+            .arg(program)
+            .args(args)
+            .env("FIRMA_RUN_SESSION_ID", &self.session_id);
+        GovernedRun {
+            output: run_bounded(&mut command, Duration::from_mins(2)),
+            audit_path: self.audit_path(),
+            session_id: self.session_id.clone(),
+            nonce: nonce.to_string(),
+        }
+    }
+}
+
+pub(crate) struct GovernedRun {
+    pub(crate) output: ProcessOutput,
+    audit_path: PathBuf,
+    session_id: String,
+    nonce: String,
+}
+
+impl GovernedRun {
+    pub(crate) fn audit_event(&self) -> AuditEvent {
+        correlated_event(&self.audit_path, &self.session_id, &self.nonce)
     }
 }
 
@@ -136,14 +192,16 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Duration) -> ProcessOu
     let status = status.unwrap_or_else(|| {
         let group = Pid::from_raw(child.id().try_into().expect("pid fits i32"));
         let _ = killpg(group, Signal::SIGTERM);
-        if let Some(status) = child
-            .wait_timeout(Duration::from_secs(2))
-            .expect("wait after SIGTERM")
-        {
-            return status;
+        let grace_period = Duration::from_secs(2);
+        let grace_deadline = Instant::now() + grace_period;
+        let status = child
+            .wait_timeout(grace_period)
+            .expect("wait after SIGTERM");
+        if status.is_some() {
+            std::thread::sleep(grace_deadline.saturating_duration_since(Instant::now()));
         }
         let _ = killpg(group, Signal::SIGKILL);
-        child.wait().expect("reap timed-out process")
+        status.unwrap_or_else(|| child.wait().expect("reap timed-out process"))
     });
     ProcessOutput {
         status,

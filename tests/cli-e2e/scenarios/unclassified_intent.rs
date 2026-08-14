@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use crate::audit::matching_events;
+use crate::audit::AuditDecision;
 use crate::harness::{TestWorld, isolated_command, run_bounded};
-use crate::upstream::{UnreachedUpstream, Upstream};
+use crate::upstream::{HttpProbe, ProbeBehavior};
 
 const HOST: &str = "unmapped.test";
 const RESPONSE: &str = "firma-e2e-unclassified-control-ok\n";
@@ -11,7 +11,7 @@ const RESPONSE: &str = "firma-e2e-unclassified-control-ok\n";
 fn unclassified_http_intent_fails_closed() {
     let control_world = TestWorld::new();
     let control_nonce = format!("control-{}", uuid::Uuid::new_v4().simple());
-    let control_server = Upstream::start(&control_nonce, RESPONSE);
+    let control_server = HttpProbe::start(&control_nonce, ProbeBehavior::Respond(RESPONSE));
     let control_url = control_server.url_for_host(HOST);
     let mut control = isolated_command("curl", &control_world);
     control.args(curl_args(&control_url));
@@ -21,56 +21,37 @@ fn unclassified_http_intent_fails_closed() {
         "direct control failed:\n{control_output}"
     );
     assert_eq!(control_output.stdout, RESPONSE);
-    let control_capture = control_server.finish();
+    let control_capture = control_server
+        .finish()
+        .expect("control request reached probe");
     assert_eq!(control_capture.method, "GET");
     assert_eq!(control_capture.path, format!("/{control_nonce}"));
 
     let world = TestWorld::new();
     let nonce = format!("unclassified-{}", uuid::Uuid::new_v4().simple());
-    world.scaffold();
-    let server = UnreachedUpstream::start(&nonce);
+    let server = HttpProbe::start(&nonce, ProbeBehavior::MustNotConnect);
     let url = server.url_for_host(HOST);
-    let session = format!("sess_e2e_{}", uuid::Uuid::new_v4().simple());
 
-    let mut command = isolated_command(env!("CARGO_BIN_EXE_firma"), &world);
-    command
-        .args([
-            "run",
-            "--profile",
-            "generic",
-            "--authority",
-            "local",
-            "--sidecar",
-            "local",
-            "--config",
-        ])
-        .arg(world.config_path())
-        .args(["--", "curl"])
-        .args(curl_args(&url))
-        .env("FIRMA_RUN_SESSION_ID", &session);
-    let output = run_bounded(&mut command, Duration::from_mins(2));
+    let run = world.run_governed(&nonce, "curl", curl_args(&url));
     assert!(
-        !output.success(),
-        "unclassified request unexpectedly succeeded:\n{output}"
+        !run.output.success(),
+        "unclassified request unexpectedly succeeded:\n{}",
+        run.output
     );
-    server.finish();
+    assert!(
+        server.finish().is_none(),
+        "unclassified request reached probe"
+    );
 
-    let events = matching_events(&world.audit_path(), &session, &nonce);
-    assert_eq!(
-        events.len(),
-        1,
-        "expected one correlated audit event: {events:#?}"
-    );
-    let event = &events[0];
+    let event = run.audit_event();
     let resource = server_resource(&url);
     let port = resource
         .strip_prefix(HOST)
         .and_then(|value| value.split('/').next())
         .expect("resource contains host and port");
-    assert_eq!(event.session_id, session);
     assert_eq!(event.action, "raw.http.GET");
     assert_eq!(event.resource, resource);
-    assert_eq!(event.decision, 2, "serialized DENY is numeric value 2");
+    assert_eq!(event.decision, AuditDecision::Deny);
     assert_eq!(
         event.deny_reason,
         format!(

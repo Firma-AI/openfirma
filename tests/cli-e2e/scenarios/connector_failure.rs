@@ -1,8 +1,6 @@
-use std::time::Duration;
-
-use crate::audit::matching_events;
-use crate::harness::{TestWorld, isolated_command, run_bounded};
-use crate::upstream::FailingUpstream;
+use crate::audit::AuditDecision;
+use crate::harness::TestWorld;
+use crate::upstream::{HttpProbe, ProbeBehavior};
 
 const ACTION: &str = "communication.internal.send";
 
@@ -10,58 +8,41 @@ const ACTION: &str = "communication.internal.send";
 fn connector_failure_returns_gateway_timeout() {
     let world = TestWorld::new();
     let nonce = format!("connector-failure-{}", uuid::Uuid::new_v4().simple());
-    world.scaffold();
-    let server = FailingUpstream::start(&nonce);
+    let server = HttpProbe::start(&nonce, ProbeBehavior::CloseWithoutResponse);
     let url = server.url();
-    let session = format!("sess_e2e_{}", uuid::Uuid::new_v4().simple());
 
-    let mut command = isolated_command(env!("CARGO_BIN_EXE_firma"), &world);
-    command
-        .args([
-            "run",
-            "--profile",
-            "generic",
-            "--authority",
-            "local",
-            "--sidecar",
-            "local",
-            "--config",
-        ])
-        .arg(world.config_path())
-        .args([
-            "--",
-            "curl",
+    let run = world.run_governed(
+        &nonce,
+        "curl",
+        [
             "--silent",
             "--show-error",
             "--include",
             "--max-time",
             "10",
             &url,
-        ])
-        .env("FIRMA_RUN_SESSION_ID", &session);
-    let output = run_bounded(&mut command, Duration::from_mins(2));
-    assert!(output.success(), "governed curl failed:\n{output}");
+        ],
+    );
     assert!(
-        output.stdout.contains("HTTP/1.1 504 Gateway Timeout")
-            && output.stdout.contains("CONNECTOR_FAILURE"),
-        "expected a connector-failure gateway response:\n{output}"
+        run.output.success(),
+        "governed curl failed:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.stdout.contains("HTTP/1.1 504 Gateway Timeout")
+            && run.output.stdout.contains("CONNECTOR_FAILURE"),
+        "expected a connector-failure gateway response:\n{}",
+        run.output
     );
 
-    let capture = server.finish();
+    let capture = server.finish().expect("governed request reached probe");
     assert_eq!(capture.method, "GET");
     assert_eq!(capture.path, format!("/{nonce}"));
 
-    let events = matching_events(&world.audit_path(), &session, &nonce);
-    assert_eq!(
-        events.len(),
-        1,
-        "expected one correlated audit event: {events:#?}"
-    );
-    let event = &events[0];
-    assert_eq!(event.session_id, session);
+    let event = run.audit_event();
     assert_eq!(event.action, ACTION);
     assert_eq!(event.resource, server_resource(&url));
-    assert_eq!(event.decision, 3, "serialized ABORT is numeric value 3");
+    assert_eq!(event.decision, AuditDecision::Abort);
     assert!(event.deny_reason.starts_with("CONNECTOR_FAILURE:"));
     assert!(event.token_id.starts_with("ctok_"));
     assert_eq!(event.dispatch_status, 0);

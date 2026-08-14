@@ -10,171 +10,69 @@ pub(crate) struct Capture {
     pub(crate) path: String,
 }
 
-pub(crate) struct Upstream {
-    address: SocketAddr,
-    nonce: String,
-    task: JoinHandle<Capture>,
+pub(crate) enum ProbeBehavior {
+    Respond(&'static str),
+    CloseWithoutResponse,
+    MustNotConnect,
 }
 
-impl Upstream {
-    pub(crate) fn start(nonce: &str, body: &'static str) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind upstream");
-        listener
-            .set_nonblocking(true)
-            .expect("make upstream accept bounded");
-        let address = listener.local_addr().expect("upstream address");
-        let task = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(30);
-            let (mut stream, _) = loop {
-                match listener.accept() {
-                    Ok(connection) => break connection,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "upstream received no request");
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(error) => panic!("accept upstream request: {error}"),
-                }
-            };
-            stream
-                .set_nonblocking(false)
-                .expect("restore blocking stream reads");
-            stream
-                .set_read_timeout(Some(Duration::from_secs(15)))
-                .expect("set upstream read timeout");
-            let capture = read_request(&mut stream);
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write response");
-            capture
-        });
-        Self {
-            address,
-            nonce: nonce.to_string(),
-            task,
-        }
-    }
-
-    pub(crate) fn url(&self) -> String {
-        format!("http://{}/{nonce}", self.address, nonce = self.nonce)
-    }
-
-    pub(crate) fn url_for_host(&self, host: &str) -> String {
-        format!(
-            "http://{host}:{port}/{nonce}",
-            port = self.address.port(),
-            nonce = self.nonce
-        )
-    }
-
-    pub(crate) fn finish(self) -> Capture {
-        self.task.join().expect("upstream thread")
-    }
-}
-
-pub(crate) struct FailingUpstream {
-    address: SocketAddr,
-    nonce: String,
-    task: JoinHandle<Capture>,
-}
-
-impl FailingUpstream {
-    pub(crate) fn start(nonce: &str) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing upstream");
-        listener
-            .set_nonblocking(true)
-            .expect("make failing upstream accept bounded");
-        let address = listener.local_addr().expect("failing upstream address");
-        let task = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(30);
-            let (mut stream, _) = loop {
-                match listener.accept() {
-                    Ok(connection) => break connection,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(
-                            Instant::now() < deadline,
-                            "failing upstream received no request"
-                        );
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(error) => panic!("accept failing upstream request: {error}"),
-                }
-            };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(15)))
-                .expect("set failing upstream read timeout");
-            let capture = read_request(&mut stream);
-            // Closing without an HTTP response gives the connector a controlled
-            // transport failure while the test retains ownership of the port.
-            drop(stream);
-            capture
-        });
-        Self {
-            address,
-            nonce: nonce.to_string(),
-            task,
-        }
-    }
-
-    pub(crate) fn url(&self) -> String {
-        format!("http://{}/{nonce}", self.address, nonce = self.nonce)
-    }
-
-    pub(crate) fn finish(self) -> Capture {
-        self.task.join().expect("failing upstream thread")
-    }
-}
-
-fn read_request(stream: &mut std::net::TcpStream) -> Capture {
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-        let count = stream.read(&mut chunk).expect("read HTTP request");
-        assert_ne!(count, 0, "client closed before HTTP headers");
-        bytes.extend_from_slice(&chunk[..count]);
-        assert!(bytes.len() < 32 * 1024, "oversized test request");
-    }
-    let request = String::from_utf8(bytes).expect("ASCII HTTP request");
-    let request_line = request.lines().next().expect("HTTP request line");
-    let mut parts = request_line.split_whitespace();
-    let capture = Capture {
-        method: parts.next().expect("HTTP method").to_string(),
-        path: parts.next().expect("HTTP path").to_string(),
-    };
-    assert_eq!(parts.next(), Some("HTTP/1.1"));
-    capture
-}
-
-pub(crate) struct UnreachedUpstream {
+pub(crate) struct HttpProbe {
     address: SocketAddr,
     nonce: String,
     stop: Sender<()>,
-    task: JoinHandle<()>,
+    task: JoinHandle<Option<Capture>>,
 }
 
-impl UnreachedUpstream {
-    pub(crate) fn start(nonce: &str) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind unreachable upstream");
+impl HttpProbe {
+    pub(crate) fn start(nonce: &str, behavior: ProbeBehavior) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP probe");
         listener
             .set_nonblocking(true)
-            .expect("make unreachable upstream bounded");
-        let address = listener.local_addr().expect("unreachable upstream address");
+            .expect("make HTTP probe accept bounded");
+        let address = listener.local_addr().expect("HTTP probe address");
         let (stop, stopped) = channel();
         let task = std::thread::spawn(move || {
-            loop {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let (mut stream, _) = loop {
                 match listener.accept() {
-                    Ok(_) => panic!("denied request reached upstream"),
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(error) => panic!("accept denied request probe: {error}"),
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if matches!(behavior, ProbeBehavior::MustNotConnect)
+                            && stopped.try_recv().is_ok()
+                        {
+                            return None;
+                        }
+                        assert!(Instant::now() < deadline, "HTTP probe received no request");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept HTTP probe request: {error}"),
                 }
-                if stopped.try_recv().is_ok() {
-                    return;
+            };
+            assert!(
+                !matches!(behavior, ProbeBehavior::MustNotConnect),
+                "request reached a must-not-connect HTTP probe"
+            );
+            stream
+                .set_nonblocking(false)
+                .expect("restore blocking HTTP probe reads");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(15)))
+                .expect("set HTTP probe read timeout");
+            let capture = read_request(&mut stream);
+            match behavior {
+                ProbeBehavior::Respond(body) => {
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write HTTP probe response");
                 }
-                std::thread::sleep(Duration::from_millis(10));
+                ProbeBehavior::CloseWithoutResponse => drop(stream),
+                ProbeBehavior::MustNotConnect => unreachable!(),
             }
+            Some(capture)
         });
         Self {
             address,
@@ -196,8 +94,28 @@ impl UnreachedUpstream {
         )
     }
 
-    pub(crate) fn finish(self) {
-        self.stop.send(()).expect("stop unreachable upstream");
-        self.task.join().expect("unreachable upstream thread");
+    pub(crate) fn finish(self) -> Option<Capture> {
+        let _ = self.stop.send(());
+        self.task.join().expect("HTTP probe thread")
     }
+}
+
+fn read_request(stream: &mut std::net::TcpStream) -> Capture {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+        let count = stream.read(&mut chunk).expect("read HTTP request");
+        assert_ne!(count, 0, "client closed before HTTP headers");
+        bytes.extend_from_slice(&chunk[..count]);
+        assert!(bytes.len() < 32 * 1024, "oversized test request");
+    }
+    let request = String::from_utf8(bytes).expect("ASCII HTTP request");
+    let request_line = request.lines().next().expect("HTTP request line");
+    let mut parts = request_line.split_whitespace();
+    let capture = Capture {
+        method: parts.next().expect("HTTP method").to_string(),
+        path: parts.next().expect("HTTP path").to_string(),
+    };
+    assert_eq!(parts.next(), Some("HTTP/1.1"));
+    capture
 }
