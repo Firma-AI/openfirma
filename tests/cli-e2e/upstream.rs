@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
+use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -78,5 +79,51 @@ impl Upstream {
 
     pub(crate) fn finish(self) -> Capture {
         self.task.join().expect("upstream thread")
+    }
+}
+
+pub(crate) struct UnreachedUpstream {
+    address: SocketAddr,
+    nonce: String,
+    stop: Sender<()>,
+    task: JoinHandle<()>,
+}
+
+impl UnreachedUpstream {
+    pub(crate) fn start(nonce: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind unreachable upstream");
+        listener
+            .set_nonblocking(true)
+            .expect("make unreachable upstream bounded");
+        let address = listener.local_addr().expect("unreachable upstream address");
+        let (stop, stopped) = channel();
+        let task = std::thread::spawn(move || {
+            loop {
+                match listener.accept() {
+                    Ok(_) => panic!("denied request reached upstream"),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => panic!("accept denied request probe: {error}"),
+                }
+                if stopped.try_recv().is_ok() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        Self {
+            address,
+            nonce: nonce.to_string(),
+            stop,
+            task,
+        }
+    }
+
+    pub(crate) fn url(&self) -> String {
+        format!("http://{}/{nonce}", self.address, nonce = self.nonce)
+    }
+
+    pub(crate) fn finish(self) {
+        self.stop.send(()).expect("stop unreachable upstream");
+        self.task.join().expect("unreachable upstream thread");
     }
 }
