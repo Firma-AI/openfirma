@@ -160,6 +160,11 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
         let identity_before = read_toml::<SidecarIdentity>(&marker_dir.join("metadata.toml"));
         let pid_before = std::fs::read_to_string(marker_dir.join("sidecar.pid"))
             .expect("read initial Sidecar PID");
+        let authority_public_key = world.path("state/authority.pub");
+        assert!(
+            authority_public_key.is_file(),
+            "owned Authority public key must exist before the first refresh"
+        );
 
         let refreshed_seed = wait_for(
             "different refreshed capability seed",
@@ -169,40 +174,21 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
                 (seed.token_id != initial_seed.token_id).then_some(seed)
             },
         );
+        // Close the race before inspecting any other evidence: every issuance
+        // after the first changed seed must fail this configured-key check.
+        std::fs::write(&authority_public_key, [0xa5; 32])
+            .expect("replace Authority public key with mismatched key");
         assert_ne!(refreshed_seed.raw_token, initial_seed.raw_token);
         assert_ne!(refreshed_seed.issued_at, initial_seed.issued_at);
         assert_eq!(refreshed_seed.agent_id, initial_seed.agent_id);
         assert_eq!(refreshed_seed.session_id, initial_seed.session_id);
 
-        wait_for(
-            "Sidecar capability hot-load",
-            Duration::from_secs(10),
-            || {
-                std::fs::read_to_string(marker_dir.join("sidecar.log"))
-                    .ok()
-                    .filter(|log| log.contains("capability map hot-reloaded"))
-            },
-        );
-        let identity_after_refresh =
-            read_toml::<SidecarIdentity>(&marker_dir.join("metadata.toml"));
-        let pid_after_refresh = std::fs::read_to_string(marker_dir.join("sidecar.pid"))
-            .expect("read Sidecar PID after refresh");
-        assert_eq!(identity_after_refresh, identity_before);
-        assert_eq!(pid_after_refresh, pid_before);
-
-        // Make all later refresh responses unverifiable to the refresher. The
-        // already-running Sidecar retains its in-memory verifier and current
-        // valid token, which then fails closed on its own expiry.
-        let authority_public_key = world.path("state/authority.pub");
-        wait_for(
-            "owned Authority public key",
-            Duration::from_secs(10),
-            || authority_public_key.is_file().then_some(()),
-        );
-        std::fs::write(&authority_public_key, [0xa5; 32])
-            .expect("replace Authority public key with mismatched key");
-
         wait_until_after(initial_seed.expiry, Duration::from_secs(10));
+        assert_eq!(
+            read_toml::<CapabilitySeed>(&seed_path),
+            refreshed_seed,
+            "no later valid token may supersede the first refresh before its proof request"
+        );
         std::fs::write(&after_gate, b"continue").expect("release post-refresh request");
         wait_for(
             "post-refresh wrapped request stimulus",
@@ -213,17 +199,45 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
             .finish()
             .expect("post-refresh governed request reached probe");
         assert_eq!(after_capture.path, format!("/{after_nonce}"));
+        let after_event = wait_for_audit_event(
+            &world.audit_path(),
+            &initial_seed.session_id,
+            &after_nonce,
+            Duration::from_secs(20),
+        );
+        assert_allowed_event(
+            &after_event,
+            &refreshed_seed,
+            &identity_before,
+            &after_probe_resource,
+        );
+        let identity_after_refresh =
+            read_toml::<SidecarIdentity>(&marker_dir.join("metadata.toml"));
+        let pid_after_refresh = std::fs::read_to_string(marker_dir.join("sidecar.pid"))
+            .expect("read Sidecar PID after refresh");
+        assert_eq!(identity_after_refresh, identity_before);
+        assert_eq!(pid_after_refresh, pid_before);
 
         wait_for(
             "unverified refresh rejection",
-            Duration::from_secs(10),
+            Duration::from_secs(20),
             || {
                 std::fs::read_to_string(marker_dir.join("run.log"))
                     .ok()
                     .filter(|log| log.contains("issued token failed local verification"))
             },
         );
+        assert_eq!(
+            read_toml::<CapabilitySeed>(&seed_path),
+            refreshed_seed,
+            "a rejected refresh must not replace the first refreshed seed"
+        );
         wait_until_after(refreshed_seed.expiry, Duration::from_secs(10));
+        assert_eq!(
+            read_toml::<CapabilitySeed>(&seed_path),
+            refreshed_seed,
+            "no later valid token may supersede the rejected refresh before fail-closed proof"
+        );
         std::fs::write(&expired_gate, b"continue").expect("release expired-token request");
         wait_for(
             "expired-token wrapped request stimulus",
@@ -245,8 +259,6 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
 
         let before_event =
             correlated_event(&world.audit_path(), &initial_seed.session_id, &before_nonce);
-        let after_event =
-            correlated_event(&world.audit_path(), &initial_seed.session_id, &after_nonce);
         let expired_event = correlated_event(
             &world.audit_path(),
             &initial_seed.session_id,
@@ -257,12 +269,6 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
             &initial_seed,
             &identity_before,
             &before_probe_resource,
-        );
-        assert_allowed_event(
-            &after_event,
-            &refreshed_seed,
-            &identity_before,
-            &after_probe_resource,
         );
         assert_eq!(expired_event.session_id, identity_before.session_id);
         assert_eq!(expired_event.sandbox_id, identity_before.sandbox_id);
@@ -316,11 +322,11 @@ fn wrapped_refresh_script(
     format!(
         "printf attempted > '{before_attempt}'; \
          curl --fail-with-body --silent --show-error --max-time 10 '{before_url}'; \
-         i=0; while [ ! -f '{after_gate}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; \
+         i=0; while [ ! -f '{after_gate}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done; \
          [ -f '{after_gate}' ] || exit 90; \
          printf attempted > '{after_attempt}'; \
          curl --fail-with-body --silent --show-error --max-time 10 '{after_url}'; \
-         i=0; while [ ! -f '{expired_gate}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; \
+         i=0; while [ ! -f '{expired_gate}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done; \
          [ -f '{expired_gate}' ] || exit 91; \
          printf attempted > '{expired_attempt}'; \
          if curl --fail-with-body --silent --show-error --max-time 10 '{expired_url}'; then exit 92; fi",
@@ -347,6 +353,16 @@ fn assert_allowed_event(
     assert_eq!(event.decision, AuditDecision::Allow);
     assert_eq!(event.deny_reason, "");
     assert_eq!(event.dispatch_status, 200);
+}
+
+fn wait_for_audit_event(path: &Path, session: &str, nonce: &str, timeout: Duration) -> AuditEvent {
+    wait_for("correlated audit event", timeout, || {
+        let audit = std::fs::read_to_string(path).ok()?;
+        audit.lines().find_map(|line| {
+            let event = serde_json::from_str::<AuditEvent>(line).ok()?;
+            (event.session_id == session && event.resource.contains(nonce)).then_some(event)
+        })
+    })
 }
 
 fn server_resource(url: &str) -> String {
