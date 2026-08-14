@@ -1578,6 +1578,7 @@ dependencies = [
  "insta",
  "nix 0.31.3",
  "serde",
+ "serde_json",
  "serial_test",
  "socket2",
  "tempfile",

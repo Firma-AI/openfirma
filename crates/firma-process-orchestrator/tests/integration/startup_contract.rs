@@ -3,7 +3,6 @@ use firma_process_orchestrator::{
     spawn_stack_from_plan,
 };
 use std::net::{SocketAddr, TcpListener};
-use std::process::Command;
 use std::time::Duration;
 
 fn free_fixture_addr() -> SocketAddr {
@@ -63,17 +62,8 @@ fn topology_rejects_unsafe_and_duplicate_names() {
 fn component_spec_explicit_executable_is_used() {
     let state_dir = tempfile::tempdir().expect("state dir");
     let topology = StackTopology::new(["listener"]).expect("valid topology");
-    let executable = std::env::current_exe().expect("integration test executable");
     let fixture_addr = free_fixture_addr();
-    let mut command = Command::new(executable);
-    command
-        .args([
-            "--exact",
-            "startup_contract::explicit_executable_fixture",
-            "--ignored",
-        ])
-        .env("FIRMA_TEST_FIXTURE_ADDR", fixture_addr.to_string());
-    let mut command = Some(command);
+    let mut command = Some(TcpListenerFixture::at(fixture_addr).command());
     let mut stack = spawn_stack_from_plan(
         &topology,
         |_| {
@@ -94,16 +84,31 @@ fn component_spec_explicit_executable_is_used() {
         .expect("running stack shuts fixture down");
 }
 
-#[test]
-#[ignore = "spawned as a process-lifecycle fixture"]
-fn explicit_executable_fixture() {
-    let addr = std::env::var("FIRMA_TEST_FIXTURE_ADDR")
-        .expect("fixture address environment variable")
-        .parse::<SocketAddr>()
-        .expect("valid fixture address");
-    let listener = TcpListener::bind(addr).expect("bind fixture listener");
-    loop {
-        let _connection = listener.accept().expect("accept readiness connection");
+#[derive(serde::Deserialize, serde::Serialize)]
+struct TcpListenerFixture {
+    addr: SocketAddr,
+}
+
+impl TcpListenerFixture {
+    fn at(addr: SocketAddr) -> Self {
+        Self { addr }
+    }
+
+    fn command(self) -> std::process::Command {
+        explicit_executable_fixture(self)
+    }
+
+    fn run(self) {
+        let listener = TcpListener::bind(self.addr).expect("bind fixture listener");
+        loop {
+            let _connection = listener.accept().expect("accept readiness connection");
+        }
+    }
+}
+
+process_fixture! {
+    fn explicit_executable_fixture(fixture: TcpListenerFixture) {
+        fixture.run();
     }
 }
 

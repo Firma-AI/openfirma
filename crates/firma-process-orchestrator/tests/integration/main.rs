@@ -6,6 +6,8 @@ pub(crate) fn topology() -> StackTopology {
     StackTopology::new(["authority", "sidecar"]).expect("valid test topology")
 }
 
+#[macro_use]
+mod process_fixture;
 #[cfg(unix)]
 mod endpoint_readiness;
 mod error_boundary;

@@ -14,12 +14,6 @@ use firma_process_orchestrator::{
 
 use crate::support::wait_for_file;
 
-const CHILD_MODE: &str = "FIRMA_ENDPOINT_CHILD_MODE";
-const CHILD_BIND_ADDR: &str = "FIRMA_ENDPOINT_CHILD_BIND_ADDR";
-const CHILD_RECORD: &str = "FIRMA_ENDPOINT_CHILD_RECORD";
-const CHILD_MARKER: &str = "FIRMA_ENDPOINT_CHILD_MARKER";
-const CHILD_STARTUP_REPORT_PATH: &str = "FIRMA_ENDPOINT_CHILD_STARTUP_REPORT_PATH";
-
 #[test]
 fn endpoint_state_representation_round_trips_and_preserves_tcp_bytes() {
     let tcp = ComponentEndpoint::Tcp("127.0.0.1:41000".parse().expect("TCP endpoint"));
@@ -466,7 +460,7 @@ fn publication_is_atomic_and_no_clobber() {
     );
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 enum ChildBehavior {
     Publish(SocketAddr),
     Configured(SocketAddr),
@@ -484,10 +478,17 @@ enum ChildBehavior {
     DelayedPublishWithoutListener(SocketAddr),
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct ChildProcess {
+    behavior: ChildBehavior,
+    marker: PathBuf,
+    bind_path: Option<PathBuf>,
+    startup_report_path: Option<PathBuf>,
+}
+
 struct Fixture {
     dir: tempfile::TempDir,
     state_dir: PathBuf,
-    executable: PathBuf,
     marker: PathBuf,
     behavior: ChildBehavior,
 }
@@ -500,58 +501,23 @@ impl Fixture {
         Self {
             dir,
             state_dir,
-            executable: std::env::current_exe().expect("test executable"),
             marker,
             behavior,
         }
     }
 
     fn command(&self, startup_report_path: Option<&Path>) -> std::process::Command {
-        let (mode, bind_addr, record) = match &self.behavior {
-            ChildBehavior::Publish(addr) => ("publish", Some(*addr), None),
-            ChildBehavior::Configured(addr) => ("configured", Some(*addr), None),
-            #[cfg(unix)]
-            ChildBehavior::ConfiguredUnix(_) => ("configured-unix", None, None),
-            #[cfg(unix)]
-            ChildBehavior::ConfiguredUnixUnavailable => ("configured-unix-unavailable", None, None),
-            #[cfg(unix)]
-            ChildBehavior::PublishUnix => ("publish-unix", None, None),
-            ChildBehavior::Raw(record) => ("raw", None, Some(record.as_str())),
-            ChildBehavior::Symlink => ("symlink", None, None),
-            ChildBehavior::Directory => ("directory", None, None),
-            ChildBehavior::ExitBeforePublication => ("exit-before", None, None),
-            ChildBehavior::PublishWithoutListener(addr) => {
-                ("publish-without-listener", Some(*addr), None)
-            }
-            ChildBehavior::DelayedPublishWithoutListener(addr) => {
-                ("delayed-publish-without-listener", Some(*addr), None)
-            }
+        let bind_path = match &self.behavior {
+            ChildBehavior::ConfiguredUnix(path) => Some(self.dir.path().join(path)),
+            ChildBehavior::PublishUnix => Some(self.socket_path()),
+            _ => None,
         };
-        let mut command = std::process::Command::new(&self.executable);
-        command
-            .args(["--exact", "endpoint_readiness::child_fixture", "--ignored"])
-            .env(CHILD_MODE, mode)
-            .env(CHILD_MARKER, &self.marker);
-        if let Some(bind_addr) = bind_addr {
-            command.env(CHILD_BIND_ADDR, bind_addr.to_string());
-        }
-        if let Some(record) = record {
-            command.env(CHILD_RECORD, record);
-        }
-        if let Some(path) = startup_report_path {
-            command.env(CHILD_STARTUP_REPORT_PATH, path);
-        }
-        #[cfg(unix)]
-        match &self.behavior {
-            ChildBehavior::ConfiguredUnix(path) => {
-                command.env(CHILD_BIND_ADDR, self.dir.path().join(path));
-            }
-            ChildBehavior::PublishUnix => {
-                command.env(CHILD_BIND_ADDR, self.socket_path());
-            }
-            _ => {}
-        }
-        command
+        child_fixture(ChildProcess {
+            behavior: self.behavior.clone(),
+            marker: self.marker.clone(),
+            bind_path,
+            startup_report_path: startup_report_path.map(Path::to_path_buf),
+        })
     }
 
     fn canonical_endpoint(&self, component: &str) -> SocketAddr {
@@ -726,127 +692,141 @@ fn later_plan_failure_sees_prior_endpoint_and_rolls_it_back() {
     assert_rollback_clean_named(&fixture.state_dir, &["first", "second"]);
 }
 
-#[test]
-#[ignore = "spawned as a process-lifecycle fixture"]
-fn child_fixture() {
-    let mode = std::env::var(CHILD_MODE).expect("child mode");
-    if mode == "exit-before" {
-        return;
+process_fixture! {
+    fn child_fixture(child: ChildProcess) {
+        child.run();
     }
-    if mode == "raw" {
-        publish_raw(
-            &startup_report_path(),
-            &std::env::var(CHILD_RECORD).expect("raw child record"),
-        );
-        std::thread::sleep(Duration::from_mins(1));
-        return;
-    }
-    if mode == "symlink" {
-        let publication_path = startup_report_path();
-        let outside = publication_path
-            .parent()
-            .and_then(Path::parent)
-            .expect("state dir")
-            .join("outside-endpoint.toml");
-        publish_raw(
-            &outside,
-            "protocol_version = 2\nendpoint = \"127.0.0.1:41000\"\n",
-        );
-        std::os::unix::fs::symlink(outside, publication_path).expect("publish endpoint symlink");
-        std::thread::sleep(Duration::from_mins(1));
-        return;
-    }
-    if mode == "directory" {
-        std::fs::create_dir(startup_report_path()).expect("publish endpoint directory");
-        std::thread::sleep(Duration::from_mins(1));
-        return;
-    }
+}
 
-    #[cfg(unix)]
-    if mode == "configured-unix" {
-        let _listener = std::os::unix::net::UnixListener::bind(
-            std::env::var_os(CHILD_BIND_ADDR).expect("Unix child bind path"),
-        )
-        .expect("bind Unix child listener");
-        loop {
-            std::thread::sleep(Duration::from_mins(1));
+impl ChildProcess {
+    fn run(self) {
+        let Self {
+            behavior,
+            marker,
+            bind_path,
+            startup_report_path,
+        } = self;
+        match behavior {
+            ChildBehavior::ExitBeforePublication => {}
+            ChildBehavior::Raw(record) => {
+                publish_raw(
+                    required_report_path(startup_report_path.as_deref()),
+                    &record,
+                );
+                sleep_forever();
+            }
+            ChildBehavior::Symlink => {
+                let publication_path = required_report_path(startup_report_path.as_deref());
+                let outside = publication_path
+                    .parent()
+                    .and_then(Path::parent)
+                    .expect("state dir")
+                    .join("outside-endpoint.toml");
+                publish_raw(
+                    &outside,
+                    "protocol_version = 2\nendpoint = \"127.0.0.1:41000\"\n",
+                );
+                std::os::unix::fs::symlink(outside, publication_path)
+                    .expect("publish endpoint symlink");
+                sleep_forever();
+            }
+            ChildBehavior::Directory => {
+                std::fs::create_dir(required_report_path(startup_report_path.as_deref()))
+                    .expect("publish endpoint directory");
+                sleep_forever();
+            }
+            ChildBehavior::ConfiguredUnix(_) => {
+                let _listener = std::os::unix::net::UnixListener::bind(
+                    bind_path.expect("configured Unix child bind path"),
+                )
+                .expect("bind Unix child listener");
+                sleep_forever();
+            }
+            ChildBehavior::ConfiguredUnixUnavailable => sleep_forever(),
+            ChildBehavior::PublishUnix => {
+                let socket = bind_path.expect("published Unix child bind path");
+                let _listener = std::os::unix::net::UnixListener::bind(&socket)
+                    .expect("bind published Unix child listener");
+                publish_startup_report(
+                    required_report_path(startup_report_path.as_deref()),
+                    &unix_endpoint(socket),
+                )
+                .expect("publish Unix startup report");
+                sleep_forever();
+            }
+            ChildBehavior::Configured(bind_addr) => {
+                let _listener = TcpListener::bind(bind_addr).expect("bind child listener");
+                std::fs::write(marker, []).expect("write child marker");
+                sleep_forever();
+            }
+            ChildBehavior::Publish(bind_addr) => {
+                let listener = TcpListener::bind(bind_addr).expect("bind child listener");
+                let effective_addr = listener.local_addr().expect("effective child address");
+                publish_child_endpoint(
+                    required_report_path(startup_report_path.as_deref()),
+                    &marker,
+                    effective_addr,
+                );
+                sleep_forever();
+            }
+            ChildBehavior::PublishWithoutListener(bind_addr) => publish_without_listener(
+                bind_addr,
+                false,
+                required_report_path(startup_report_path.as_deref()),
+                &marker,
+            ),
+            ChildBehavior::DelayedPublishWithoutListener(bind_addr) => publish_without_listener(
+                bind_addr,
+                true,
+                required_report_path(startup_report_path.as_deref()),
+                &marker,
+            ),
         }
     }
-    if mode == "configured-unix-unavailable" {
-        loop {
-            std::thread::sleep(Duration::from_mins(1));
-        }
-    }
+}
 
-    #[cfg(unix)]
-    if mode == "publish-unix" {
-        let socket =
-            PathBuf::from(std::env::var_os(CHILD_BIND_ADDR).expect("Unix child publication path"));
-        let _listener = std::os::unix::net::UnixListener::bind(&socket)
-            .expect("bind published Unix child listener");
-        publish_startup_report(&startup_report_path(), &unix_endpoint(socket))
-            .expect("publish Unix startup report");
-        loop {
-            std::thread::sleep(Duration::from_mins(1));
-        }
+fn publish_without_listener(
+    bind_addr: SocketAddr,
+    delayed: bool,
+    startup_report_path: &Path,
+    marker: &Path,
+) {
+    // Keep the published port reserved without making it connectable.
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(bind_addr),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .expect("create child socket");
+    socket
+        .bind(&socket2::SockAddr::from(bind_addr))
+        .expect("bind child socket");
+    let effective_addr = socket
+        .local_addr()
+        .expect("effective child socket address")
+        .as_socket()
+        .expect("TCP child socket address");
+    if delayed {
+        std::thread::sleep(Duration::from_secs(2));
     }
+    publish_child_endpoint(startup_report_path, marker, effective_addr);
+    std::thread::sleep(Duration::from_secs(5));
+}
 
-    let bind_addr = std::env::var(CHILD_BIND_ADDR)
-        .expect("child bind address")
-        .parse::<SocketAddr>()
-        .expect("parse child bind address");
-    if mode == "publish-without-listener" || mode == "delayed-publish-without-listener" {
-        // Keep the published port reserved without making it connectable.
-        let socket = socket2::Socket::new(
-            socket2::Domain::for_address(bind_addr),
-            socket2::Type::STREAM,
-            Some(socket2::Protocol::TCP),
-        )
-        .expect("create child socket");
-        socket
-            .bind(&socket2::SockAddr::from(bind_addr))
-            .expect("bind child socket");
-        let effective_addr = socket
-            .local_addr()
-            .expect("effective child socket address")
-            .as_socket()
-            .expect("TCP child socket address");
-        if mode == "delayed-publish-without-listener" {
-            std::thread::sleep(Duration::from_secs(2));
-        }
-        publish_child_endpoint(effective_addr);
-        std::thread::sleep(Duration::from_secs(5));
-        drop(socket);
-        return;
-    }
+fn publish_child_endpoint(startup_report_path: &Path, marker: &Path, effective_addr: SocketAddr) {
+    publish_startup_report(startup_report_path, &ComponentEndpoint::Tcp(effective_addr))
+        .expect("publish startup report");
+    std::fs::write(marker, []).expect("write child marker");
+}
 
-    let listener = TcpListener::bind(bind_addr).expect("bind child listener");
-    let effective_addr = listener.local_addr().expect("effective child address");
-    if mode == "configured" {
-        std::fs::write(std::env::var_os(CHILD_MARKER).expect("child marker"), [])
-            .expect("write child marker");
-        loop {
-            std::thread::sleep(Duration::from_mins(1));
-        }
-    }
-    publish_child_endpoint(effective_addr);
+fn required_report_path(path: Option<&Path>) -> &Path {
+    path.expect("child startup report path")
+}
+
+fn sleep_forever() -> ! {
     loop {
         std::thread::sleep(Duration::from_mins(1));
     }
-}
-
-fn publish_child_endpoint(effective_addr: SocketAddr) {
-    publish_startup_report(
-        &startup_report_path(),
-        &ComponentEndpoint::Tcp(effective_addr),
-    )
-    .expect("publish startup report");
-    std::fs::write(std::env::var_os(CHILD_MARKER).expect("child marker"), [])
-        .expect("write child marker");
-}
-
-fn startup_report_path() -> PathBuf {
-    PathBuf::from(std::env::var_os(CHILD_STARTUP_REPORT_PATH).expect("child startup report path"))
 }
 
 fn publish_raw(path: &Path, record: &str) {
