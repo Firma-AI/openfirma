@@ -316,6 +316,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 cwd: working_dir,
                 env,
                 sidecar_endpoint: effective_endpoint,
+                owned_sidecar_ca: network_runtime.owned_sidecar_ca().cloned(),
                 seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
                 identity_mode: profile.identity_mode,
                 config_file: user_config_path.clone(),
@@ -576,6 +577,8 @@ fn build_execution_env(
         }
     }
 
+    env.extend(network_overrides.clone());
+
     if let Some(ca_cert_path) = resolve_sidecar_ca_cert_path(network_overrides) {
         let effective = match profile.ca_trust_mode {
             CaTrustMode::AppendSystemRoots => {
@@ -584,9 +587,9 @@ fn build_execution_env(
             CaTrustMode::Sole => ca_cert_path,
         };
         inject_sidecar_ca_trust_env(&mut env, &effective);
+    } else {
+        env.remove("FIRMA_SIDECAR_CA_CERT_PATH");
     }
-
-    env.extend(network_overrides.clone());
 
     let attr_headers = build_attribution_headers(profile, identity);
     env.insert(
@@ -728,13 +731,9 @@ fn inject_sidecar_ca_trust_env(env: &mut BTreeMap<String, String>, ca_cert_path:
 }
 
 fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) -> Option<PathBuf> {
-    if let Some(explicit) = network_overrides.get("FIRMA_SIDECAR_CA_CERT_PATH")
-        && !explicit.trim().is_empty()
-    {
+    if let Some(explicit) = network_overrides.get("FIRMA_SIDECAR_CA_CERT_PATH") {
         let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
-        }
+        return path.is_file().then_some(path);
     }
 
     if let Some(ca_dir) = network_overrides.get("FIRMA_SIDECAR_CA_DIR")
@@ -1089,9 +1088,8 @@ mod tests {
         };
 
         // Route resolve_sidecar_ca_cert_path to our temp firma-ca via the
-        // network override. `env.extend(network_overrides)` later clobbers the
-        // injected FIRMA_SIDECAR_CA_CERT_PATH, so assert on a sibling var
-        // (SSL_CERT_FILE) which reflects the effective, mode-selected path.
+        // network override. All advertised trust paths must reflect the
+        // effective, mode-selected path.
         let mut overrides = BTreeMap::new();
         overrides.insert(
             "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
@@ -1119,6 +1117,10 @@ mod tests {
             sole_env.get("SSL_CERT_FILE"),
             Some(&ca_cert.display().to_string())
         );
+        assert_eq!(
+            sole_env.get("FIRMA_SIDECAR_CA_CERT_PATH"),
+            sole_env.get("SSL_CERT_FILE")
+        );
 
         let append_profile = make_profile(crate::config::CaTrustMode::AppendSystemRoots);
         let append_env = build_execution_env(
@@ -1139,6 +1141,10 @@ mod tests {
                 append_env.get("SSL_CERT_FILE"),
                 Some(&bundle_path.display().to_string())
             );
+            assert_eq!(
+                append_env.get("FIRMA_SIDECAR_CA_CERT_PATH"),
+                append_env.get("SSL_CERT_FILE")
+            );
             let body = std::fs::read_to_string(&bundle_path).unwrap_or_else(|e| panic!("{e}"));
             assert!(body.contains("FIRMA CA"));
             assert_ne!(
@@ -1151,6 +1157,10 @@ mod tests {
             assert_eq!(
                 append_env.get("SSL_CERT_FILE"),
                 Some(&ca_cert.display().to_string())
+            );
+            assert_eq!(
+                append_env.get("FIRMA_SIDECAR_CA_CERT_PATH"),
+                append_env.get("SSL_CERT_FILE")
             );
         }
     }

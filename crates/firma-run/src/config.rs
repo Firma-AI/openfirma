@@ -230,6 +230,10 @@ impl MountSpec {
     /// `.firma/` — returns `false` and is emitted *before* the mask, so the mask
     /// always wins and cannot be replaced wholesale by a mount over `.firma/`
     /// itself.
+    #[cfg_attr(
+        all(not(target_os = "linux"), not(test)),
+        expect(dead_code, reason = "config mount ordering is specific to Linux bwrap")
+    )]
     pub(crate) fn reexposes_firma_subpath(&self) -> bool {
         // Classify the *effective* target the kernel will mount at, not its
         // lexical spelling: `<ws>/.firma/..` has a `.firma` ancestor on paper but
@@ -252,6 +256,10 @@ impl MountSpec {
 /// a purely lexical pass matches how the kernel resolves the mount path. A
 /// leading `..` that would escape the root is dropped, mirroring path traversal
 /// at `/`.
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(dead_code, reason = "config mount ordering is specific to Linux bwrap")
+)]
 fn lexically_normalize(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut normalized = PathBuf::new();

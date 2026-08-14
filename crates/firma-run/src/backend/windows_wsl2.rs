@@ -274,6 +274,7 @@ mod tests {
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
+            owned_sidecar_ca: None,
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file: None,

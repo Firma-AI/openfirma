@@ -4,4 +4,5 @@ mod child_process_governance;
 mod config_masking;
 mod connector_failure;
 mod deny_http_dispatch;
+mod https_mitm_dispatch;
 mod unclassified_intent;
