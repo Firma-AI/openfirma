@@ -70,7 +70,7 @@ cargo nextest run -p <crate-name> <test-name>
 
 Load and follow
 [`writing-black-box-tests`](../writing-black-box-tests/SKILL.md) for the
-current CLI, structural-sandbox, live-agent, and VS Code commands.
+current CLI, deterministic E2E, live-agent, and VS Code commands.
 
 If the target is a doctest-specific failure, use:
 

@@ -15,7 +15,7 @@ Write new Rust tests for OpenFirma code.
 ## Instructions
 
 1. Identify the public behavior, branch, or invariant that needs coverage.
-2. For CLI, structural-sandbox, live-agent, or VS Code coverage, load and follow
+2. For CLI, deterministic E2E, live-agent, or VS Code coverage, load and follow
    [`writing-black-box-tests`](../writing-black-box-tests/SKILL.md) before
    choosing a file.
 3. Otherwise, place the test in the owning crate's integration suite.

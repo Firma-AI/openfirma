@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::fmt;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -18,6 +18,19 @@ pub(crate) struct TestWorld {
 
 impl TestWorld {
     pub(crate) fn new() -> Self {
+        let world = Self::isolated();
+        world.scaffold_config(
+            "generic",
+            &world.path("config"),
+            &world.state_path(),
+            Some(&world.workspace_path()),
+            &world.workspace_path(),
+        );
+        Self::disable_host_home_masks(&world.config_path());
+        world
+    }
+
+    pub(crate) fn isolated() -> Self {
         let root = tempfile::tempdir().expect("create isolated test world");
         for directory in [
             "config",
@@ -34,16 +47,44 @@ impl TestWorld {
             std::fs::create_dir_all(root.path().join(directory))
                 .expect("create isolated directory");
         }
-        let world = Self {
+        Self {
             root,
             session_id: format!("sess_e2e_{}", uuid::Uuid::new_v4().simple()),
-        };
-        world.scaffold();
-        world
+        }
     }
 
-    fn scaffold(&self) {
-        let mut command = isolated_command(env!("CARGO_BIN_EXE_firma"), self);
+    pub(crate) fn path(&self, relative: impl AsRef<Path>) -> PathBuf {
+        let relative = relative.as_ref();
+        assert!(
+            relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_) | Component::CurDir)),
+            "world path must be contained and relative"
+        );
+        self.root.path().join(relative)
+    }
+
+    pub(crate) fn workspace_path(&self) -> PathBuf {
+        self.path("workspace")
+    }
+
+    pub(crate) fn state_path(&self) -> PathBuf {
+        self.path("state")
+    }
+
+    pub(crate) fn config_path(&self) -> PathBuf {
+        self.path("config/firma.toml")
+    }
+
+    pub(crate) fn scaffold_config(
+        &self,
+        profile: &str,
+        config_dir: &Path,
+        state_dir: &Path,
+        workspace: Option<&Path>,
+        cwd: &Path,
+    ) {
+        let mut command = self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), cwd);
         command
             .args([
                 "config",
@@ -51,35 +92,34 @@ impl TestWorld {
                 "--mode",
                 "agent-local",
                 "--profile",
-                "generic",
+                profile,
                 "--posture",
                 "dev",
                 "--output-dir",
             ])
-            .arg(self.root.path().join("config"))
+            .arg(config_dir)
             .arg("--state-dir")
-            .arg(self.root.path().join("state"))
-            .args(["--authority-listen", "127.0.0.1:0", "--workspace"])
-            .arg(self.root.path().join("workspace"));
+            .arg(state_dir)
+            .args(["--authority-listen", "127.0.0.1:0"]);
+        if let Some(workspace) = workspace {
+            command.arg("--workspace").arg(workspace);
+        }
         let output = run_bounded(&mut command, Duration::from_secs(30));
         assert!(output.success(), "firma config failed:\n{output}");
+    }
 
-        let path = self.config_path();
-        let config = std::fs::read_to_string(&path).expect("read scaffolded config");
+    pub(crate) fn disable_host_home_masks(config_path: &Path) {
+        let config = std::fs::read_to_string(config_path).expect("read scaffolded config");
         let patched = config.replace(
             r#"FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env""#,
             r#"FIRMA_RUN_BWRAP_MASK_HOME_PATHS = """#,
         );
         assert_ne!(patched, config, "expected generated home-mask setting");
-        std::fs::write(path, patched).expect("write deterministic config");
-    }
-
-    fn config_path(&self) -> PathBuf {
-        self.root.path().join("config/firma.toml")
+        std::fs::write(config_path, patched).expect("write deterministic config");
     }
 
     fn audit_path(&self) -> PathBuf {
-        self.root.path().join("state/audit.jsonl")
+        self.path("state/audit.jsonl")
     }
 
     pub(crate) fn add_policy(&self, name: &str, policy: &str) {
@@ -97,29 +137,59 @@ impl TestWorld {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut command = isolated_command(env!("CARGO_BIN_EXE_firma"), self);
-        command
-            .args([
-                "run",
-                "--profile",
-                "generic",
-                "--authority",
-                "local",
-                "--sidecar",
-                "local",
-                "--config",
-            ])
-            .arg(self.config_path())
-            .arg("--")
-            .arg(program)
-            .args(args)
-            .env("FIRMA_RUN_SESSION_ID", &self.session_id);
         GovernedRun {
-            output: run_bounded(&mut command, Duration::from_mins(2)),
+            output: self.run_firma(
+                "generic",
+                Some(&self.config_path()),
+                &self.workspace_path(),
+                &["--authority", "local", "--sidecar", "local"],
+                program,
+                args,
+            ),
             audit_path: self.audit_path(),
             session_id: self.session_id.clone(),
             nonce: nonce.to_string(),
         }
+    }
+
+    pub(crate) fn run_firma<I, S>(
+        &self,
+        profile: &str,
+        config_path: Option<&Path>,
+        cwd: &Path,
+        run_args: &[&str],
+        program: impl AsRef<OsStr>,
+        args: I,
+    ) -> ProcessOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), cwd);
+        command.args(["run", "--profile", profile]);
+        if let Some(config_path) = config_path {
+            command.arg("--config").arg(config_path);
+        }
+        command
+            .args(run_args)
+            .arg("--")
+            .arg(program)
+            .args(args)
+            .env("FIRMA_RUN_SESSION_ID", &self.session_id);
+        run_bounded(&mut command, Duration::from_mins(2))
+    }
+
+    pub(crate) fn isolated_command_in(&self, program: impl AsRef<OsStr>, cwd: &Path) -> Command {
+        let canonical_cwd = cwd
+            .canonicalize()
+            .expect("canonicalize isolated command cwd");
+        assert!(
+            canonical_cwd.starts_with(self.root.path()),
+            "isolated command cwd must stay inside the test world"
+        );
+        let mut command = isolated_command(program, self);
+        command.current_dir(cwd);
+        command
     }
 }
 
@@ -157,7 +227,7 @@ pub(crate) fn isolated_command(program: impl AsRef<OsStr>, world: &TestWorld) ->
 pub(crate) struct ProcessOutput {
     status: ExitStatus,
     pub(crate) stdout: String,
-    stderr: String,
+    pub(crate) stderr: String,
     timed_out: bool,
 }
 

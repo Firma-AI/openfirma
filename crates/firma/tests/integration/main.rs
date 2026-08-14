@@ -26,5 +26,4 @@ mod sidecar_start_scaffold;
 mod sidecar_startup_contract;
 mod sidecar_status_cli;
 mod stack_lifecycle;
-mod structural_sandbox;
 mod vscode_mapping;
