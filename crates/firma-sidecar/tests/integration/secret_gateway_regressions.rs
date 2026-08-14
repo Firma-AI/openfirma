@@ -1,4 +1,4 @@
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -431,7 +431,7 @@ async fn unsupported_content_encoding_fails_closed() -> anyhow::Result<()> {
             ),
             (
                 http::HeaderName::from_static("content-encoding"),
-                http::HeaderValue::from_static("br"),
+                http::HeaderValue::from_static("compress"),
             ),
         ]),
     )?;
@@ -498,5 +498,239 @@ async fn embedded_secret_echo_is_masked_inside_json_string() -> anyhow::Result<(
             .any(|window| window == SECRET.as_bytes())
     );
     drop(dispatched);
+    Ok(())
+}
+
+fn gzip(plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(plaintext)?;
+    Ok(encoder.finish()?)
+}
+
+fn gunzip(compressed: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(compressed).read_to_end(&mut decoded)?;
+    Ok(decoded)
+}
+
+/// Closes the leak this compression work set out to fix: a gzip-compressed
+/// response that echoes back a just-rehydrated secret must still be masked
+/// by the general response path (no HTTP secret provider matched here —
+/// this is [`embedded_secret_echo_is_masked_inside_json_string`]'s scenario,
+/// but compressed), not forwarded untouched because masking previously never
+/// decompressed the body it was scanning.
+#[tokio::test]
+async fn compressed_embedded_secret_echo_is_masked_by_general_response_path() -> anyhow::Result<()>
+{
+    let host = "api.example.test";
+    let placeholder = SecretPlaceholder::new();
+    let plaintext_response = serde_json::json!({
+        "error": format!("credential {SECRET} is invalid")
+    })
+    .to_string()
+    .into_bytes();
+    let (handler, requests) = fixed_handler(
+        gzip(&plaintext_response)?,
+        HeaderMap::from([
+            (
+                http::HeaderName::from_static("content-type"),
+                http::HeaderValue::from_static("application/json"),
+            ),
+            (
+                http::HeaderName::from_static("content-encoding"),
+                http::HeaderValue::from_static("gzip"),
+            ),
+        ]),
+    )?;
+    let handler = handler.with_gateway_client(fake_resolve_gateway(SECRET).await?);
+    let request_body = serde_json::json!({"credential": placeholder.to_string()})
+        .to_string()
+        .into_bytes();
+
+    let response = proxy_request(handler, host, &request_body).await?;
+
+    assert_eq!(response.status, 200);
+    let decoded = gunzip(&response.body)?;
+    assert!(
+        !decoded
+            .windows(SECRET.len())
+            .any(|window| window == SECRET.as_bytes()),
+        "the raw secret must not appear in the decompressed forwarded response"
+    );
+    assert!(
+        decoded
+            .windows(placeholder.to_string().len())
+            .any(|window| window == placeholder.to_string().as_bytes()),
+        "the response should echo the placeholder instead of the real secret"
+    );
+    let dispatched = requests
+        .lock()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(dispatched.len(), 1);
+    assert!(
+        dispatched[0]
+            .windows(SECRET.len())
+            .any(|window| window == SECRET.as_bytes())
+    );
+    drop(dispatched);
+    Ok(())
+}
+
+/// Closes the matching functional gap on the request side: a gzip-compressed
+/// request body containing a placeholder must still be found, resolved, and
+/// rehydrated, not silently forwarded with the literal placeholder token
+/// still inside it because placeholder collection previously never
+/// decompressed the body it was scanning.
+#[tokio::test]
+async fn compressed_request_body_placeholders_are_rehydrated_and_recompressed() -> anyhow::Result<()>
+{
+    let host = "api.example.test";
+    let (handler, requests) = fixed_handler(b"{}".to_vec(), HeaderMap::new())?;
+    let handler = handler.with_gateway_client(fake_resolve_gateway(SECRET).await?);
+
+    let placeholder = SecretPlaceholder::new();
+    let plaintext_body = serde_json::json!({"credential": placeholder.to_string()})
+        .to_string()
+        .into_bytes();
+    let request = RawRequest {
+        method: Method::POST,
+        host: Authority::from_static(host),
+        path: PATH.to_string(),
+        headers: HeaderMap::from([
+            (
+                http::HeaderName::from_static("content-type"),
+                http::HeaderValue::from_static("application/json"),
+            ),
+            (
+                http::HeaderName::from_static("content-encoding"),
+                http::HeaderValue::from_static("gzip"),
+            ),
+        ]),
+        body: Some(gzip(&plaintext_body)?),
+        is_https: false,
+    };
+
+    let response = handler.handle(request, "sess_secret_regression").await;
+    assert!(
+        matches!(
+            response,
+            HandledResponse::Ok(_) | HandledResponse::Passthrough(_)
+        ),
+        "expected the rehydrated request to dispatch, got {response:?}"
+    );
+
+    let dispatched = requests
+        .lock()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(dispatched.len(), 1);
+    let decoded = gunzip(&dispatched[0])?;
+    assert!(
+        decoded
+            .windows(SECRET.len())
+            .any(|window| window == SECRET.as_bytes()),
+        "the dispatched (recompressed) request body must contain the real rehydrated secret"
+    );
+    assert!(
+        !decoded
+            .windows(placeholder.to_string().len())
+            .any(|window| window == placeholder.to_string().as_bytes()),
+        "the placeholder token must have been replaced before dispatch"
+    );
+    drop(dispatched);
+    Ok(())
+}
+
+/// [`compressed_sensitive_response_is_decoded_masked_and_recompressed`]
+/// covers `gzip`; this sweeps the two newly-supported formats through the
+/// same vault-intercept path.
+#[tokio::test]
+async fn brotli_and_zstd_sensitive_responses_are_decoded_masked_and_recompressed()
+-> anyhow::Result<()> {
+    let plaintext = serde_json::json!({"SecretString": SECRET, "Name": "dbpass"})
+        .to_string()
+        .into_bytes();
+
+    let brotli_body = {
+        let mut out = Vec::new();
+        let mut writer = brotli::CompressorWriter::new(&mut out, 4096, 5, 22);
+        writer.write_all(&plaintext)?;
+        drop(writer);
+        out
+    };
+    let zstd_body = zstd::stream::encode_all(plaintext.as_slice(), 0)?;
+
+    for (encoding, body) in [("br", brotli_body), ("zstd", zstd_body)] {
+        let host = "vault.example.test";
+        let (handler, _requests) = fixed_handler(
+            body,
+            HeaderMap::from([
+                (
+                    http::HeaderName::from_static("content-type"),
+                    http::HeaderValue::from_static("application/json"),
+                ),
+                (
+                    http::HeaderName::from_static("content-encoding"),
+                    http::HeaderValue::from_str(encoding)?,
+                ),
+            ]),
+        )?;
+        let (gateway, pushed, gateway_server) = fake_push_gateway().await?;
+        let handler = handler
+            .with_gateway_client(gateway)
+            .with_http_secret_providers(vec![sensitive_provider(host)]);
+
+        let response = proxy_request(handler, host, b"{}").await?;
+        let pushed = tokio::time::timeout(Duration::from_secs(1), pushed).await??;
+        gateway_server.abort();
+
+        assert_eq!(response.status, 200, "encoding {encoding}");
+        let pushed_secret_b64 = pushed["value_b64"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("push request missing value_b64: {pushed}"))?;
+        let pushed_secret = base64::engine::general_purpose::STANDARD.decode(pushed_secret_b64)?;
+        assert_eq!(
+            pushed_secret,
+            SECRET.as_bytes(),
+            "encoding {encoding}: the gateway must receive the real decoded secret"
+        );
+    }
+    Ok(())
+}
+
+/// A small compressed payload that expands far past a configured
+/// `max_decompressed_body_bytes` must be rejected before it can force an
+/// unbounded allocation, rather than decompressed in full.
+#[tokio::test]
+async fn oversized_decompressed_response_fails_closed() -> anyhow::Result<()> {
+    let host = "vault.example.test";
+    let huge_plaintext = vec![b'a'; 64 * 1024];
+    let (handler, _requests) = fixed_handler(
+        gzip(&huge_plaintext)?,
+        HeaderMap::from([
+            (
+                http::HeaderName::from_static("content-type"),
+                http::HeaderValue::from_static("application/json"),
+            ),
+            (
+                http::HeaderName::from_static("content-encoding"),
+                http::HeaderValue::from_static("gzip"),
+            ),
+        ]),
+    )?;
+    let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
+    let handler = handler
+        .with_gateway_client(gateway)
+        .with_http_secret_providers(vec![sensitive_provider(host)])
+        .with_max_decompressed_body_bytes(1024);
+
+    let response = proxy_request(handler, host, b"{}").await?;
+    let gateway_contact = tokio::time::timeout(Duration::from_millis(100), contacted).await;
+    gateway_server.abort();
+
+    assert!(
+        gateway_contact.is_err(),
+        "a decompression-bomb body must be rejected before gateway access"
+    );
+    response.assert_abort(AbortReason::CredentialInjectionFailed)?;
     Ok(())
 }

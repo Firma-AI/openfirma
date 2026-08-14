@@ -138,7 +138,8 @@ fn build_request_handler(
     config: &config::SidecarConfig,
 ) -> handler::RequestHandler {
     let base = handler::RequestHandler::new(pipeline, connector_registry, audit_sink_sender)
-        .with_composio_catalogs(composio_catalogs);
+        .with_composio_catalogs(composio_catalogs)
+        .with_max_decompressed_body_bytes(config.interceptor.max_decompressed_body_bytes);
     let base = match std::env::var(GATEWAY_ADDR_ENV) {
         Ok(addr) => match GatewayEndpoint::parse(&addr) {
             Ok(ep) => {
