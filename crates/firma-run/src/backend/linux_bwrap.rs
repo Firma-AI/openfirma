@@ -1,3 +1,8 @@
+#![cfg_attr(
+    not(target_os = "linux"),
+    expect(dead_code, reason = "bwrap filesystem projection is Linux-specific")
+)]
+
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -228,7 +233,9 @@ impl SandboxBackend for BwrapBackend {
             _seccomp_file = Some(file);
         }
 
-        append_filesystem_layout(&mut command, handle, launch, &hardening);
+        #[cfg(target_os = "linux")]
+        let _private_ca_mask_file =
+            append_filesystem_layout(&mut command, handle, launch, &hardening)?;
 
         for (key, value) in &launch.env {
             command.arg("--setenv").arg(key).arg(value);
@@ -453,16 +460,21 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[
 ///    above and is also projected through them so an aliased bind can't re-expose
 ///    the config elsewhere;
 /// 4. profile mounts whose target is **strictly inside** a masked `.firma/`,
-///    re-exposed on top of the mask via last-write-wins.
+///    re-exposed on top of the mask via last-write-wins;
+/// 5. owned Sidecar CA private paths masked after all broad and profile mounts,
+///    followed by the effective public trust file projected by itself read-only.
+///    Profile sources intersecting private CA material are rejected instead of
+///    attempting to predict aliases in bwrap's layered mount namespace.
 ///
 /// Reordering would either bury the vscode-style subpath mounts or re-leak
 /// `firma.toml` under a workspace-parent bind.
+#[cfg(target_os = "linux")]
 fn append_filesystem_layout(
     command: &mut Command,
     handle: &SandboxHandle,
     launch: &LaunchSpec,
     hardening: &BwrapHardening,
-) {
+) -> Result<Option<File>, RunError> {
     if hardening.readonly_rootfs {
         command.arg("--ro-bind").arg("/").arg("/");
         command.arg("--tmpfs").arg("/tmp");
@@ -504,6 +516,178 @@ fn append_filesystem_layout(
     project_mount_aliases(command, &outside, masked);
 
     emit_mounts(command, inside.iter().copied());
+    project_ca_trust_file(command, launch, &handle.mounts)
+}
+
+/// Hide private CA material owned by a local Sidecar, then project only the
+/// effective public trust file advertised to the wrapped process.
+#[cfg(target_os = "linux")]
+fn project_ca_trust_file(
+    command: &mut Command,
+    launch: &LaunchSpec,
+    mounts: &[MountSpec],
+) -> Result<Option<File>, RunError> {
+    let Some(advertised) = launch.env.get("FIRMA_SIDECAR_CA_CERT_PATH") else {
+        if launch.owned_sidecar_ca.is_some() {
+            return Err(ca_projection_error(
+                "owned Sidecar did not advertise its effective CA trust file",
+            ));
+        }
+        return Ok(None);
+    };
+    let advertised = launch_path(&launch.cwd, Path::new(advertised));
+
+    if let Some(owned) = &launch.owned_sidecar_ca {
+        project_owned_ca_trust_file(command, &advertised, owned, mounts, &launch.cwd)
+    } else {
+        project_ambient_ca_trust_file(command, &advertised).map(|()| None)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn project_ambient_ca_trust_file(command: &mut Command, path: &Path) -> Result<(), RunError> {
+    let canonical = path.canonicalize().map_err(|error| {
+        ca_projection_error(format!(
+            "cannot resolve advertised CA trust file {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !canonical.is_file() {
+        return Err(ca_projection_error(format!(
+            "advertised CA trust path is not a file: {}",
+            path.display()
+        )));
+    }
+    command.arg("--ro-bind").arg(canonical).arg(path);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn project_owned_ca_trust_file(
+    command: &mut Command,
+    advertised: &Path,
+    owned: &crate::backend::OwnedSidecarCaPaths,
+    mounts: &[MountSpec],
+    cwd: &Path,
+) -> Result<Option<File>, RunError> {
+    let public_trust = canonical_owned_file(advertised, "effective public CA trust")?;
+    let cert_path = launch_path(cwd, &owned.cert_path);
+    let cert = canonical_owned_file(&cert_path, "CA certificate")?;
+    let bundle_path = cert_path.with_file_name("firma-ca-bundle.crt");
+    if public_trust != cert
+        && bundle_path.canonicalize().ok().as_deref() != Some(public_trust.as_path())
+    {
+        return Err(ca_projection_error(format!(
+            "advertised trust file does not match the owned Sidecar CA certificate: {}",
+            advertised.display()
+        )));
+    }
+    let key_path = launch_path(cwd, &owned.key_path);
+    let private_key = canonical_owned_file(&key_path, "CA private key")?;
+    let generated_dir_path = launch_path(cwd, &owned.generated_dir);
+    let generated_dir = prepare_generated_ca_dir(&generated_dir_path)?;
+
+    for mount in mounts {
+        let source = mount.source.canonicalize().map_err(|error| {
+            ca_projection_error(format!(
+                "cannot canonicalize profile mount source {}: {error}",
+                mount.source.display()
+            ))
+        })?;
+        if paths_intersect(&source, &private_key) || paths_intersect(&source, &generated_dir) {
+            return Err(ca_projection_error(format!(
+                "profile mount source intersects owned private CA material: {}",
+                mount.source.display()
+            )));
+        }
+    }
+
+    let private_mask = File::open("/dev/null").map_err(|error| {
+        ca_projection_error(format!("cannot open private CA mask source: {error}"))
+    })?;
+    clear_fd_cloexec(&private_mask)?;
+    command
+        .arg("--perms")
+        .arg("0000")
+        .arg("--ro-bind-data")
+        .arg(private_mask.as_raw_fd().to_string())
+        .arg(&private_key);
+    command.arg("--tmpfs").arg(&generated_dir);
+    command.arg("--chmod").arg("0111").arg(generated_dir);
+    command.arg("--ro-bind").arg(public_trust).arg(advertised);
+    Ok(Some(private_mask))
+}
+
+#[cfg(target_os = "linux")]
+fn canonical_owned_file(path: &Path, label: &str) -> Result<PathBuf, RunError> {
+    let metadata = path.symlink_metadata().map_err(|error| {
+        ca_projection_error(format!(
+            "cannot inspect owned {label} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(ca_projection_error(format!(
+            "owned {label} is not a regular non-symlink file: {}",
+            path.display()
+        )));
+    }
+    path.canonicalize().map_err(|error| {
+        ca_projection_error(format!(
+            "cannot canonicalize owned {label} {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_generated_ca_dir(path: &Path) -> Result<PathBuf, RunError> {
+    firma_fs::create_private_dir_all(path).map_err(|error| {
+        ca_projection_error(format!(
+            "cannot prepare owned generated CA directory {}: {error}",
+            path.display()
+        ))
+    })?;
+    let metadata = path.symlink_metadata().map_err(|error| {
+        ca_projection_error(format!(
+            "cannot inspect owned generated CA directory {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ca_projection_error(format!(
+            "owned generated CA directory is not a non-symlink directory: {}",
+            path.display()
+        )));
+    }
+    path.canonicalize().map_err(|error| {
+        ca_projection_error(format!(
+            "cannot canonicalize owned generated CA directory {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn launch_path(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn paths_intersect(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
+}
+
+#[cfg(target_os = "linux")]
+fn ca_projection_error(reason: impl Into<String>) -> RunError {
+    RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!("cannot safely project CA trust file: {}", reason.into()),
+    }
 }
 
 /// Emit each profile/runtime bind mount (`--ro-bind` or `--bind`) in order.
@@ -989,6 +1173,7 @@ mod tests {
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
+            owned_sidecar_ca: None,
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file: None,
@@ -1038,10 +1223,41 @@ mod tests {
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
+            owned_sidecar_ca: None,
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn owned_ca_launch(
+        root: &std::path::Path,
+    ) -> (
+        crate::backend::LaunchSpec,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let ca_dir = root.join("state/run/sandbox/firma-ca");
+        let cert = ca_dir.join("firma-ca.crt");
+        let key = root.join("private/firma-ca.key");
+        std::fs::create_dir_all(&ca_dir).expect("create CA directory");
+        std::fs::create_dir_all(key.parent().expect("key parent")).expect("create key directory");
+        std::fs::write(&cert, "public CA").expect("write CA certificate");
+        std::fs::write(&key, "private key").expect("write CA private key");
+        let mut env = BTreeMap::new();
+        env.insert(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            cert.display().to_string(),
+        );
+        let mut launch = launch_with_env(root.to_path_buf(), None, env);
+        launch.owned_sidecar_ca = Some(crate::backend::OwnedSidecarCaPaths {
+            generated_dir: ca_dir.clone(),
+            cert_path: cert.clone(),
+            key_path: key.clone(),
+        });
+        (launch, ca_dir, cert, key)
     }
 
     #[cfg(target_os = "linux")]
@@ -1144,7 +1360,8 @@ mod tests {
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
         let mut cmd = std::process::Command::new("bwrap");
-        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening);
+        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening)
+            .expect("append filesystem layout");
 
         let rendered = rendered_args(&cmd);
         let cwd_bind = rendered
@@ -1205,7 +1422,8 @@ mod tests {
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
         let mut cmd = std::process::Command::new("bwrap");
-        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening);
+        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening)
+            .expect("append filesystem layout");
 
         let rendered = rendered_args(&cmd);
         // The workspace-parent bind: `--bind <workspace> <workspace>`.
@@ -1223,6 +1441,246 @@ mod tests {
         assert!(
             workspace_mount < mask,
             "workspace-parent mount must precede the mask so the mask hides firma.toml"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_projects_only_effective_public_ca_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        let runtime_dir = temp.path().join("runtime");
+        let ca_dir = temp.path().join("state/run/sandbox/firma-ca");
+        let private_key = temp.path().join("explicit/firma-ca.key");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        std::fs::create_dir_all(&ca_dir).expect("create CA dir");
+        std::fs::create_dir_all(private_key.parent().expect("private key parent"))
+            .expect("create private key dir");
+        let raw_ca = ca_dir.join("firma-ca.crt");
+        let bundle = ca_dir.join("firma-ca-bundle.crt");
+        std::fs::write(&raw_ca, "public CA").expect("write public CA");
+        std::fs::write(&bundle, "system roots and public CA").expect("write public bundle");
+        std::fs::write(&private_key, "private key").expect("write private key");
+
+        let handle = crate::backend::SandboxHandle {
+            backend: crate::backend::BackendKind::Bwrap,
+            runtime_dir,
+            identity: crate::identity::RunIdentity::new(
+                crate::identity::test_agent_id(),
+                "generic",
+            ),
+            mounts: Vec::new(),
+            network_policy: crate::config::NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+        let mut env = BTreeMap::new();
+        env.insert(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            bundle.display().to_string(),
+        );
+        env.insert(
+            "FIRMA_SIDECAR_CA_DIR".to_string(),
+            ca_dir.display().to_string(),
+        );
+        env.insert(
+            super::BWRAP_ROOTFS_MODE_ENV.to_string(),
+            super::BWRAP_ROOTFS_MODE_READONLY.to_string(),
+        );
+        let mut launch = launch_with_env(workspace, None, env);
+        launch.owned_sidecar_ca = Some(crate::backend::OwnedSidecarCaPaths {
+            generated_dir: ca_dir.clone(),
+            cert_path: raw_ca,
+            key_path: private_key.clone(),
+        });
+        let hardening = super::bwrap_hardening_from_env(&launch.env);
+        let mut command = std::process::Command::new("bwrap");
+
+        super::append_filesystem_layout(&mut command, &handle, &launch, &hardening)
+            .expect("project effective public CA bundle");
+
+        let rendered = rendered_args(&command);
+        let bundle_path = bundle.display().to_string();
+        let private_key_path = private_key.display().to_string();
+        let ca_dir_path = ca_dir.display().to_string();
+        assert!(
+            rendered
+                .windows(2)
+                .any(|args| { args == ["--tmpfs", ca_dir_path.as_str()] })
+        );
+        assert!(
+            rendered
+                .windows(3)
+                .any(|args| { args == ["--chmod", "0111", ca_dir_path.as_str()] })
+        );
+        let private_mask = rendered
+            .windows(5)
+            .position(|args| {
+                args[0] == "--perms"
+                    && args[1] == "0000"
+                    && args[2] == "--ro-bind-data"
+                    && args[4] == private_key_path
+            })
+            .expect("private key mask");
+        let public_projection = rendered
+            .windows(3)
+            .position(|args| args == ["--ro-bind", bundle_path.as_str(), bundle_path.as_str()])
+            .expect("public trust projection");
+        assert!(private_mask < public_projection);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ca_projection_fails_closed_when_advertised_file_is_missing() {
+        let mut command = std::process::Command::new("bwrap");
+        let mut env = BTreeMap::new();
+        env.insert(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            "/tmp/missing-firma-ca.crt".to_string(),
+        );
+        let launch = launch_with_env(std::path::PathBuf::from("/tmp"), None, env);
+
+        let error = super::project_ca_trust_file(&mut command, &launch, &[])
+            .expect_err("missing advertised CA must fail closed");
+
+        assert!(error.to_string().contains(
+            "cannot safely project CA trust file: cannot resolve advertised CA trust file"
+        ));
+        assert!(rendered_args(&command).is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn owned_ca_rejects_intersecting_profile_sources_and_alias_spellings() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (launch, ca_dir, _cert, key) = owned_ca_launch(temp.path());
+        let ca_child = ca_dir.join("child");
+        let unrelated = temp.path().join("unrelated");
+        let source_alias = temp.path().join("ca-alias");
+        std::fs::create_dir_all(&ca_child).expect("create CA descendant");
+        std::fs::create_dir_all(&unrelated).expect("create unrelated source");
+        symlink(&ca_dir, &source_alias).expect("create CA source symlink");
+        let cases = [
+            ("ancestor", temp.path().join("state")),
+            ("equal", ca_dir),
+            ("descendant", ca_child.clone()),
+            ("private-key-equal", key.clone()),
+            (
+                "private-key-ancestor",
+                key.parent().expect("key parent").to_path_buf(),
+            ),
+            ("symlink", source_alias),
+            ("lexical", ca_child.join("..")),
+        ];
+
+        for (name, source) in cases {
+            let mounts = [
+                crate::config::MountSpec {
+                    source: unrelated.clone(),
+                    target: temp.path().join("layered-alias"),
+                    read_only: true,
+                },
+                crate::config::MountSpec {
+                    source,
+                    target: temp.path().join("layered-alias/private"),
+                    read_only: true,
+                },
+            ];
+            let mut command = std::process::Command::new("bwrap");
+            let error = super::project_ca_trust_file(&mut command, &launch, &mounts)
+                .expect_err("intersecting source must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("profile mount source intersects owned private CA material"),
+                "unexpected {name} error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ambient_symlink_ca_trust_file_remains_supported() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cert = temp.path().join("real-ca.crt");
+        let advertised = temp.path().join("current-ca.crt");
+        std::fs::write(&cert, "public CA").expect("write ambient CA");
+        symlink(&cert, &advertised).expect("create ambient CA symlink");
+        let mut env = BTreeMap::new();
+        env.insert(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            advertised.display().to_string(),
+        );
+        let launch = launch_with_env(temp.path().to_path_buf(), None, env);
+        let mut command = std::process::Command::new("bwrap");
+
+        super::project_ca_trust_file(&mut command, &launch, &[])
+            .expect("project ambient symlink trust file");
+
+        let rendered = rendered_args(&command);
+        assert_eq!(
+            rendered,
+            [
+                "--ro-bind".to_string(),
+                cert.canonicalize()
+                    .expect("canonical ambient CA")
+                    .display()
+                    .to_string(),
+                advertised.display().to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn owned_ca_rejects_symlinked_public_and_private_material() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (mut launch, _ca_dir, cert, key) = owned_ca_launch(temp.path());
+        let cert_alias = temp.path().join("cert-alias.crt");
+        let key_alias = temp.path().join("key-alias.key");
+        symlink(&cert, &cert_alias).expect("create cert symlink");
+        symlink(&key, &key_alias).expect("create key symlink");
+
+        launch.env.insert(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            cert_alias.display().to_string(),
+        );
+        launch
+            .owned_sidecar_ca
+            .as_mut()
+            .expect("owned CA paths")
+            .cert_path = cert_alias;
+        let cert_error =
+            super::project_ca_trust_file(&mut std::process::Command::new("bwrap"), &launch, &[])
+                .expect_err("owned certificate symlink must fail closed");
+        assert!(
+            cert_error
+                .to_string()
+                .contains("owned effective public CA trust is not a regular non-symlink file")
+        );
+
+        launch.env.insert(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            cert.display().to_string(),
+        );
+        let owned = launch.owned_sidecar_ca.as_mut().expect("owned CA paths");
+        owned.cert_path = cert;
+        owned.key_path = key_alias;
+        let key_error =
+            super::project_ca_trust_file(&mut std::process::Command::new("bwrap"), &launch, &[])
+                .expect_err("owned private-key symlink must fail closed");
+        assert!(
+            key_error
+                .to_string()
+                .contains("owned CA private key is not a regular non-symlink file")
         );
     }
 

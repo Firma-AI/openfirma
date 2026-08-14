@@ -1012,6 +1012,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             env,
             sidecar_endpoint: test_sidecar_endpoint(),
+            owned_sidecar_ca: None,
             seccomp_filter_path: None,
             identity_mode: SandboxIdentityMode::SandboxUser,
             config_file: None,

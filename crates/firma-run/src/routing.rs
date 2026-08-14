@@ -142,6 +142,7 @@ impl From<BTreeMap<String, String>> for EnvOverrides {
 pub struct NetworkRuntime {
     env_overrides: EnvOverrides,
     sidecar_endpoint: SidecarEndpoint,
+    owned_sidecar_ca: Option<crate::backend::OwnedSidecarCaPaths>,
     // Drop order matters: the host bridge and adapter hold connections to the
     // Sidecar, so they must drop before the component stack. The orchestrator
     // stops that stack in reverse topology order (Sidecar before Authority).
@@ -181,6 +182,11 @@ impl NetworkRuntime {
     #[must_use]
     pub(crate) fn sidecar_endpoint(&self) -> &SidecarEndpoint {
         &self.sidecar_endpoint
+    }
+
+    #[must_use]
+    pub(crate) fn owned_sidecar_ca(&self) -> Option<&crate::backend::OwnedSidecarCaPaths> {
+        self.owned_sidecar_ca.as_ref()
     }
 
     /// Tear down networking before the owned Sidecar, then release its
@@ -362,6 +368,7 @@ pub struct ResolveAuthorityRequest<'a> {
 struct RuntimeParts {
     effective_endpoint: SidecarEndpoint,
     autostart_trust_env: BTreeMap<String, String>,
+    owned_sidecar_ca: Option<crate::backend::OwnedSidecarCaPaths>,
     run_stack: Option<RunningStack>,
     #[cfg(target_os = "linux")]
     owned_sidecar_marker: Option<PathBuf>,
@@ -445,7 +452,8 @@ pub fn prepare_network_runtime(
         capability_lease,
     )?;
     let parts = RuntimeParts {
-        autostart_trust_env: sidecar_trust_env_overrides(prepared.sidecar_marker.as_deref()),
+        autostart_trust_env: sidecar_trust_env_overrides(prepared.owned_sidecar_ca.as_ref()),
+        owned_sidecar_ca: prepared.owned_sidecar_ca,
         effective_endpoint: prepared.endpoint,
         run_stack: prepared.stack,
         #[cfg(target_os = "linux")]
@@ -518,6 +526,7 @@ fn prepare_flat_runtime(
     let RuntimeParts {
         effective_endpoint,
         autostart_trust_env: _,
+        owned_sidecar_ca,
         run_stack,
         #[cfg(target_os = "linux")]
             owned_sidecar_marker: _,
@@ -534,6 +543,7 @@ fn prepare_flat_runtime(
     Ok(NetworkRuntime {
         env_overrides,
         sidecar_endpoint: effective_endpoint,
+        owned_sidecar_ca,
         #[cfg(unix)]
         host_bridge: Some(host_bridge),
         #[cfg(target_os = "macos")]
@@ -611,6 +621,7 @@ fn prepare_structural_runtime(
     let RuntimeParts {
         effective_endpoint,
         autostart_trust_env: _,
+        owned_sidecar_ca,
         run_stack,
         #[cfg(target_os = "linux")]
             owned_sidecar_marker: _,
@@ -622,6 +633,7 @@ fn prepare_structural_runtime(
     Ok(NetworkRuntime {
         env_overrides,
         sidecar_endpoint: effective_endpoint,
+        owned_sidecar_ca,
         host_bridge: None,
         #[cfg(target_os = "macos")]
         host_dns_stub: None,
@@ -806,20 +818,20 @@ fn maybe_start_host_dns_stub(
     Ok(Some(stub))
 }
 
-fn sidecar_trust_env_overrides(owned_sidecar_marker: Option<&Path>) -> BTreeMap<String, String> {
+fn sidecar_trust_env_overrides(
+    owned_ca: Option<&crate::backend::OwnedSidecarCaPaths>,
+) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    let Some(marker) = owned_sidecar_marker else {
+    let Some(owned_ca) = owned_ca else {
         return env;
     };
-    let ca_dir = marker.join("firma-ca");
-    let ca_cert = ca_dir.join("firma-ca.crt");
     env.insert(
         "FIRMA_SIDECAR_CA_DIR".to_string(),
-        ca_dir.display().to_string(),
+        owned_ca.generated_dir.display().to_string(),
     );
     env.insert(
         "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
-        ca_cert.display().to_string(),
+        owned_ca.cert_path.display().to_string(),
     );
     env
 }
@@ -827,7 +839,15 @@ fn sidecar_trust_env_overrides(owned_sidecar_marker: Option<&Path>) -> BTreeMap<
 struct PreparedRunComponents {
     endpoint: SidecarEndpoint,
     stack: Option<RunningStack>,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            dead_code,
+            reason = "owned Sidecar marker projection is Linux-specific"
+        )
+    )]
     sidecar_marker: Option<PathBuf>,
+    owned_sidecar_ca: Option<crate::backend::OwnedSidecarCaPaths>,
     stack_marker: Option<PathBuf>,
     capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
     capability_refresher: Option<CapabilityRefresher>,
@@ -858,6 +878,7 @@ fn prepare_run_components(
             endpoint: sidecar_endpoint.clone(),
             stack: None,
             sidecar_marker: None,
+            owned_sidecar_ca: None,
             stack_marker: None,
             capability_guard: None,
             capability_refresher: None,
@@ -1098,6 +1119,7 @@ fn prepare_run_components(
             endpoint: effective_endpoint,
             stack: Some(stack),
             sidecar_marker: owns_sidecar.then_some(marker_dir.clone()),
+            owned_sidecar_ca: sidecar_launch.and_then(|launch| launch.owned_ca_paths),
             stack_marker: Some(marker_dir),
             capability_guard,
             capability_refresher,

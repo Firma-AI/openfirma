@@ -28,6 +28,7 @@ pub struct PreparedSidecarLaunch {
     pub pid_path: PathBuf,
     pub metadata_path: PathBuf,
     pub audit_socket_path: PathBuf,
+    pub(crate) owned_ca_paths: Option<crate::backend::OwnedSidecarCaPaths>,
     sandbox_id: SandboxId,
     agent_id: AgentId,
     session_id: String,
@@ -146,6 +147,7 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         .and_then(toml::Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let owned_ca_paths = owned_sidecar_ca_paths(sidecar)?;
 
     let mut command = Command::new(&req.firma_exe);
     command
@@ -172,12 +174,54 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         pid_path,
         metadata_path,
         audit_socket_path,
+        owned_ca_paths,
         sandbox_id: *req.sandbox_id,
         agent_id: *req.agent_id,
         session_id: req.session_id.to_string(),
         planned_policy_bundle_version: policy_bundle_version,
         planned_authority_url: authority_url,
     })
+}
+
+fn owned_sidecar_ca_paths(
+    sidecar: &toml::value::Table,
+) -> Result<Option<crate::backend::OwnedSidecarCaPaths>, RunError> {
+    let interceptor = sidecar
+        .get("interceptor")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| RunError::Internal("synthesized config has no interceptor table".into()))?;
+    if interceptor.get("mode").and_then(toml::Value::as_str) != Some("http_proxy") {
+        return Ok(None);
+    }
+    let mitm = interceptor
+        .get("https_mitm")
+        .and_then(toml::Value::as_table);
+    let effective_mitm: firma_sidecar::config::HttpsMitmConfig =
+        toml::Value::Table(mitm.cloned().unwrap_or_default())
+            .try_into()
+            .map_err(|error| {
+                RunError::Internal(format!("parse synthesized HTTPS MITM config: {error}"))
+            })?;
+    if !effective_mitm.is_active() {
+        return Ok(None);
+    }
+    let generated_dir = sidecar
+        .get("ca")
+        .and_then(toml::Value::as_table)
+        .and_then(|ca| ca.get("dir"))
+        .and_then(toml::Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| RunError::Internal("synthesized config has no CA directory".into()))?;
+    let configured_path = |field: &str, default_name: &str| {
+        mitm.and_then(|config| config.get(field))
+            .and_then(toml::Value::as_str)
+            .map_or_else(|| generated_dir.join(default_name), PathBuf::from)
+    };
+    Ok(Some(crate::backend::OwnedSidecarCaPaths {
+        cert_path: configured_path("ca_cert_path", "firma-ca.crt"),
+        key_path: configured_path("ca_key_path", "firma-ca.key"),
+        generated_dir,
+    }))
 }
 
 /// Publish the existing Sidecar marker schema after a prepared launch starts.

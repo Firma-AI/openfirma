@@ -13,21 +13,32 @@ use crate::audit::{AuditEvent, correlated_event};
 
 pub(crate) struct TestWorld {
     root: tempfile::TempDir,
+    state_dir: PathBuf,
     session_id: String,
 }
 
 impl TestWorld {
     pub(crate) fn new() -> Self {
-        let world = Self::isolated();
-        world.scaffold_config(
+        Self::isolated().scaffold_default_config()
+    }
+
+    pub(crate) fn new_with_state_dir(state_dir: PathBuf) -> Self {
+        std::fs::create_dir_all(&state_dir).expect("create external state directory");
+        let mut world = Self::isolated();
+        world.state_dir = state_dir;
+        world.scaffold_default_config()
+    }
+
+    fn scaffold_default_config(self) -> Self {
+        self.scaffold_config(
             "generic",
-            &world.path("config"),
-            &world.state_path(),
-            Some(&world.workspace_path()),
-            &world.workspace_path(),
+            &self.path("config"),
+            &self.state_path(),
+            Some(&self.workspace_path()),
+            &self.workspace_path(),
         );
-        Self::disable_host_home_masks(&world.config_path());
-        world
+        Self::disable_host_home_masks(&self.config_path());
+        self
     }
 
     pub(crate) fn isolated() -> Self {
@@ -47,8 +58,10 @@ impl TestWorld {
             std::fs::create_dir_all(root.path().join(directory))
                 .expect("create isolated directory");
         }
+        let state_dir = root.path().join("state");
         Self {
             root,
+            state_dir,
             session_id: format!("sess_e2e_{}", uuid::Uuid::new_v4().simple()),
         }
     }
@@ -69,7 +82,7 @@ impl TestWorld {
     }
 
     pub(crate) fn state_path(&self) -> PathBuf {
-        self.path("state")
+        self.state_dir.clone()
     }
 
     pub(crate) fn config_path(&self) -> PathBuf {
@@ -119,7 +132,7 @@ impl TestWorld {
     }
 
     fn audit_path(&self) -> PathBuf {
-        self.path("state/audit.jsonl")
+        self.state_dir.join("audit.jsonl")
     }
 
     pub(crate) fn add_policy(&self, name: &str, policy: &str) {
@@ -152,6 +165,37 @@ impl TestWorld {
         }
     }
 
+    pub(crate) fn run_governed_with_outer_env<I, S>(
+        &self,
+        nonce: &str,
+        outer_env: &[(&str, &OsStr)],
+        program: impl AsRef<OsStr>,
+        args: I,
+    ) -> GovernedRun
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = self.firma_run_command(
+            "generic",
+            Some(&self.config_path()),
+            &self.workspace_path(),
+            &["--authority", "local", "--sidecar", "local"],
+        );
+        command
+            .envs(outer_env.iter().copied())
+            .arg("--")
+            .arg(program)
+            .args(args)
+            .env("FIRMA_RUN_SESSION_ID", &self.session_id);
+        GovernedRun {
+            output: run_bounded(&mut command, Duration::from_mins(2)),
+            audit_path: self.audit_path(),
+            session_id: self.session_id.clone(),
+            nonce: nonce.to_string(),
+        }
+    }
+
     pub(crate) fn run_firma<I, S>(
         &self,
         profile: &str,
@@ -165,18 +209,29 @@ impl TestWorld {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut command = self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), cwd);
-        command.args(["run", "--profile", profile]);
-        if let Some(config_path) = config_path {
-            command.arg("--config").arg(config_path);
-        }
+        let mut command = self.firma_run_command(profile, config_path, cwd, run_args);
         command
-            .args(run_args)
             .arg("--")
             .arg(program)
             .args(args)
             .env("FIRMA_RUN_SESSION_ID", &self.session_id);
         run_bounded(&mut command, Duration::from_mins(2))
+    }
+
+    fn firma_run_command(
+        &self,
+        profile: &str,
+        config_path: Option<&Path>,
+        cwd: &Path,
+        run_args: &[&str],
+    ) -> Command {
+        let mut command = self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), cwd);
+        command.args(["run", "--profile", profile]);
+        if let Some(config_path) = config_path {
+            command.arg("--config").arg(config_path);
+        }
+        command.args(run_args);
+        command
     }
 
     pub(crate) fn isolated_command_in(&self, program: impl AsRef<OsStr>, cwd: &Path) -> Command {
@@ -218,7 +273,7 @@ pub(crate) fn isolated_command(program: impl AsRef<OsStr>, world: &TestWorld) ->
         .env("XDG_RUNTIME_DIR", world.root.path().join("xdg/runtime"))
         .env("XDG_STATE_HOME", world.root.path().join("xdg/state"))
         .env("TMPDIR", world.root.path().join("tmp"))
-        .env("FIRMA_STATE_DIR", world.root.path().join("state"))
+        .env("FIRMA_STATE_DIR", world.state_path())
         .env("NO_COLOR", "1")
         .current_dir(world.root.path().join("workspace"));
     command

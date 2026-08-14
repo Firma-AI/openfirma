@@ -146,6 +146,11 @@ pub struct LaunchSpec {
     pub(crate) cwd: PathBuf,
     pub(crate) env: BTreeMap<String, String>,
     pub(crate) sidecar_endpoint: SidecarEndpoint,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "owned CA projection is specific to Linux bwrap")
+    )]
+    pub(crate) owned_sidecar_ca: Option<OwnedSidecarCaPaths>,
     /// Optional static seccomp cBPF artifact path resolved by runtime.
     ///
     /// Backends should treat this as the authoritative source for seccomp
@@ -164,6 +169,18 @@ pub struct LaunchSpec {
     /// run. It can sit outside the workspace cwd because config discovery walks
     /// up parent directories.
     pub(crate) config_file: Option<PathBuf>,
+}
+
+/// Effective CA paths owned by a locally autostarted HTTPS MITM Sidecar.
+#[derive(Debug, Clone)]
+pub(crate) struct OwnedSidecarCaPaths {
+    pub(crate) generated_dir: PathBuf,
+    pub(crate) cert_path: PathBuf,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "private CA masking is specific to Linux bwrap")
+    )]
+    pub(crate) key_path: PathBuf,
 }
 
 /// Backend interface for sandbox runtime implementations.
