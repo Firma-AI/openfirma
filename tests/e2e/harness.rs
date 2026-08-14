@@ -146,7 +146,7 @@ impl TestWorld {
         std::fs::write(config_path, patched).expect("write deterministic config");
     }
 
-    fn audit_path(&self) -> PathBuf {
+    pub(crate) fn audit_path(&self) -> PathBuf {
         self.path("state/audit.jsonl")
     }
 

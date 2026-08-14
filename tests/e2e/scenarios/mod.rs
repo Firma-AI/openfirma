@@ -1,5 +1,6 @@
 mod allow_http_dispatch;
 mod authority_key_regeneration;
+mod capability_trust_and_refresh;
 mod child_process_governance;
 mod config_masking;
 mod connector_failure;
