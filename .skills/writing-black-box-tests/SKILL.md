@@ -40,7 +40,7 @@ Policy and pipeline changes reachable through `firma run` should have
 `firma::e2e` coverage.
 
 FIR-366 remains an ignored regression in
-`tests/e2e/scenarios/child_process_governance.rs` because it documents a
+`tests/e2e/scenarios/child_process_governance/execution.rs` because it documents a
 structural sandbox weakness. Keep known-failing regression targets in the
 module that owns the behavior, but do not count ignored tests as passing
 coverage.
@@ -114,7 +114,7 @@ weakness is fixed:
 ```sh
 cargo nextest run --profile ci --ignore-default-filter \
   -p firma --test e2e --run-ignored all --no-tests=fail \
-  -E 'test(=scenarios::child_process_governance::child_process_escapes_run_governance)'
+  -E 'test(=scenarios::child_process_governance::execution::child_process_escapes_run_governance)'
 ```
 
 Run the live-agent suite:
