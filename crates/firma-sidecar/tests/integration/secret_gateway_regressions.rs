@@ -513,6 +513,18 @@ fn gunzip(compressed: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(decoded)
 }
 
+fn zlib_deflate(plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(plaintext)?;
+    Ok(encoder.finish()?)
+}
+
+fn zlib_inflate(compressed: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut decoded = Vec::new();
+    flate2::read::ZlibDecoder::new(compressed).read_to_end(&mut decoded)?;
+    Ok(decoded)
+}
+
 /// Closes the leak this compression work set out to fix: a gzip-compressed
 /// response that echoes back a just-rehydrated secret must still be masked
 /// by the general response path (no HTTP secret provider matched here —
@@ -814,5 +826,94 @@ async fn sensitive_provider_schema_mismatch_fails_closed() -> anyhow::Result<()>
         "the provider response must reach mediation before the schema mismatch aborts it"
     );
     response.assert_abort(AbortReason::CredentialInjectionFailed)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn sensitive_provider_matcher_compile_failure_fails_closed() -> anyhow::Result<()> {
+    let host = "vault.example.test";
+    let response_body = b"token=plaintext-secret".to_vec();
+    let (handler, requests) = fixed_handler(response_body.clone(), HeaderMap::new())?;
+    let provider = HttpIntegrationSpec {
+        provider_id: "broken-vault".to_string(),
+        host: host.to_string(),
+        matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
+            path: Some(PATH.to_string()),
+            matcher: SecretMatcher::Regex {
+                pattern: "no_named_groups_here".to_string(),
+            },
+        })],
+    };
+    let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
+    let handler = handler
+        .with_gateway_client(gateway)
+        .with_http_secret_providers(vec![provider]);
+
+    let response = proxy_request(handler, host, b"{}").await?;
+    let gateway_contact = tokio::time::timeout(Duration::from_millis(100), contacted).await;
+    gateway_server.abort();
+
+    assert!(
+        gateway_contact.is_err(),
+        "an invalid matcher must be rejected before gateway access"
+    );
+    assert_eq!(
+        requests
+            .lock()
+            .map_err(|error| anyhow::anyhow!("{error}"))?
+            .as_slice(),
+        &[b"{}".to_vec()],
+        "the provider response must reach mediation before the matcher compile failure aborts it"
+    );
+    assert!(
+        !response
+            .body
+            .windows(response_body.len())
+            .any(|window| window == response_body.as_slice()),
+        "the plaintext provider response must not reach the client"
+    );
+    response.assert_abort(AbortReason::CredentialInjectionFailed)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn deflate_response_masking_preserves_zlib_wrapper() -> anyhow::Result<()> {
+    let host = "api.example.test";
+    let placeholder = SecretPlaceholder::new();
+    let plaintext_response = format!(r#"{{"SecretString":"{SECRET}","Name":"dbpass"}}"#);
+    let (handler, requests) = fixed_handler(
+        zlib_deflate(plaintext_response.as_bytes())?,
+        HeaderMap::from([
+            (
+                http::HeaderName::from_static("content-type"),
+                http::HeaderValue::from_static("application/json"),
+            ),
+            (
+                http::HeaderName::from_static("content-encoding"),
+                http::HeaderValue::from_static("deflate"),
+            ),
+        ]),
+    )?;
+    let handler = handler.with_gateway_client(fake_resolve_gateway(SECRET).await?);
+    let request_body = format!(r#"{{"credential":"{placeholder}"}}"#).into_bytes();
+
+    let response = proxy_request(handler, host, &request_body).await?;
+
+    assert_eq!(response.status, 200);
+    let decoded = zlib_inflate(&response.body)?;
+    assert_eq!(
+        decoded,
+        format!(r#"{{"SecretString":"{placeholder}","Name":"dbpass"}}"#).into_bytes(),
+        "masking must preserve the complete response and replace only the secret"
+    );
+    let dispatched = requests
+        .lock()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(
+        dispatched.as_slice(),
+        &[format!(r#"{{"credential":"{SECRET}"}}"#).into_bytes()],
+        "rehydration must replace the complete placeholder exactly once"
+    );
+    drop(dispatched);
     Ok(())
 }
