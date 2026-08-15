@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::audit::{AuditDecision, AuditEvent, correlated_event};
 use crate::harness::TestWorld;
@@ -329,22 +330,30 @@ fn observe_initial_baseline(world: &TestWorld, before: ProbeRequest) -> InitialB
 
 fn configure_capability(world: &TestWorld, public_key_path: Option<&Path>) {
     let config_path = world.config_path();
-    let config = std::fs::read_to_string(&config_path).expect("read generated config");
-    let config = config.replace(
-        "max_ttl_seconds = 3600",
-        &format!("max_ttl_seconds = {SHORT_TTL_SECONDS}"),
-    );
-    assert!(
-        config.contains(&format!("max_ttl_seconds = {SHORT_TTL_SECONDS}")),
-        "expected generated Authority TTL"
-    );
-    let public_key = public_key_path.map_or_else(String::new, |path| {
-        format!("public_key_path = {:?}\n", path.display().to_string())
-    });
-    let config = format!(
-        "{config}\n[run.profiles.generic.capability]\n{public_key}refresh_ratio = 0.5\ngrace_seconds = 1\n"
-    );
-    std::fs::write(config_path, config).expect("write capability test config");
+    let body = std::fs::read_to_string(&config_path).expect("read generated config");
+    let mut config = body.parse::<DocumentMut>().expect("parse generated config");
+
+    let authority = config["authority"]
+        .as_table_mut()
+        .expect("generated config has an Authority table");
+    authority["max_ttl_seconds"] = value(SHORT_TTL_SECONDS);
+
+    let generic = config["run"]["profiles"]["generic"]
+        .as_table_mut()
+        .expect("generated config has the generic run profile");
+    if !generic.contains_key("capability") {
+        generic.insert("capability", Item::Table(Table::new()));
+    }
+    let capability = generic["capability"]
+        .as_table_mut()
+        .expect("generic profile capability is a table");
+    if let Some(path) = public_key_path {
+        capability["public_key_path"] = value(path.display().to_string());
+    }
+    capability["refresh_ratio"] = value(0.5);
+    capability["grace_seconds"] = value(1);
+
+    std::fs::write(config_path, config.to_string()).expect("write capability test config");
 }
 
 fn wrapped_refresh_script(
