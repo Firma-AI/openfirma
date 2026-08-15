@@ -25,7 +25,10 @@ identified dynamically by placeholder, on both sides of a call:
   substitutes the real secret before dispatch.
 - **Masking (inbound):** if a response body echoes a secret the Sidecar
   knows about, the Sidecar rewrites it back to its placeholder before the
-  agent sees it.
+  agent sees it. Matching is content-type aware: a secret re-echoed with
+  JSON escaping, XML entities, or percent-encoding — including one embedded
+  in a longer value such as an error message — is still recognized and
+  masked.
 - **HTTP vault interception:** if a response comes from a configured HTTP
   vault (e.g. a secrets-manager `GetSecret` call), the Sidecar extracts the
   secret directly from the response, mints a placeholder for it, pushes the
