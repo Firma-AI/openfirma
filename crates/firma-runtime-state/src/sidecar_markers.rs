@@ -6,9 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::SandboxId;
 use crate::process_id::UserProcessId;
 use crate::runtime_paths::{run_dir_from, run_entry_from};
+use firma_identifiers::SandboxId;
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
 const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);

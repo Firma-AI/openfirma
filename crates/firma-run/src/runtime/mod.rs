@@ -785,7 +785,7 @@ fn print_effective_config(
 ) -> Result<(), RunError> {
     #[derive(Serialize)]
     struct Snapshot<'a> {
-        agent_id: &'a firma_core::AgentId,
+        agent_id: &'a firma_identifiers::AgentId,
         execution_profile: &'a str,
         profile: &'a ResolvedProfile,
         working_dir: PathBuf,

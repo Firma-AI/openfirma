@@ -26,7 +26,8 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
 use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
-use firma_core::{CapabilityClaims, CapabilitySeed, TokenId, TokenSigner, TokenVerifier};
+use firma_core::{CapabilityClaims, CapabilitySeed, TokenSigner, TokenVerifier};
+use firma_identifiers::TokenId;
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision,

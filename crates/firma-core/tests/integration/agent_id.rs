@@ -1,7 +1,7 @@
 use std::assert_matches;
 use std::str::FromStr as _;
 
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 
 const AGENT_ID: &str = "agt_01j0000000e008000000000001";
 

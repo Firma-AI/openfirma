@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use firma_core::token::paseto::PasetoV4Verifier;
-use firma_core::{ActionClass, AgentId, CapabilitySeed, TokenVerifier};
+use firma_core::{ActionClass, CapabilitySeed, TokenVerifier};
+use firma_identifiers::AgentId;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_protobuf::v1::{IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision};
 use firma_sidecar::authority_client::channel::build_channel;
@@ -308,7 +309,8 @@ fn write_seed(seed: &CapabilitySeed, out_path: &Path) -> Result<(), RunError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_core::{CapabilityClaims, TokenId};
+    use firma_core::CapabilityClaims;
+    use firma_identifiers::TokenId;
 
     fn sample_seed() -> CapabilitySeed {
         let now = chrono::Utc::now();

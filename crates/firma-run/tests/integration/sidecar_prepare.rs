@@ -5,11 +5,12 @@
 
 use std::ffi::OsStr;
 
+use firma_identifiers::SandboxId;
 use firma_run::config::SidecarEndpoint;
 use firma_run::sidecar::prepare::{PrepareRequest, prepare, publish_metadata};
 
 fn request(
-    sandbox_id: &firma_run::identity::SandboxId,
+    sandbox_id: &SandboxId,
     marker_dir: std::path::PathBuf,
     tcp: bool,
 ) -> PrepareRequest<'_> {
@@ -42,7 +43,7 @@ fn preparation_absolutizes_unix_paths_and_materializes_launch_contract() {
         .tempdir_in(&cwd)
         .expect("temporary directory");
     let relative = temp.path().strip_prefix(&cwd).expect("relative temp path");
-    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let sandbox_id = SandboxId::generate();
 
     let prepared =
         prepare(request(&sandbox_id, relative.join("marker"), false)).expect("prepare Sidecar");
@@ -93,7 +94,7 @@ fn preparation_absolutizes_unix_paths_and_materializes_launch_contract() {
 #[test]
 fn prepared_command_can_only_be_taken_once() {
     let temp = tempfile::tempdir().expect("temporary directory");
-    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let sandbox_id = SandboxId::generate();
     let mut prepared =
         prepare(request(&sandbox_id, temp.path().join("marker"), false)).expect("prepare Sidecar");
 
@@ -106,7 +107,7 @@ fn prepared_command_can_only_be_taken_once() {
 #[test]
 fn tcp_preparation_leaves_port_selection_to_child() {
     let temp = tempfile::tempdir().expect("temporary directory");
-    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let sandbox_id = SandboxId::generate();
     let prepared =
         prepare(request(&sandbox_id, temp.path().join("marker"), true)).expect("prepare Sidecar");
 
@@ -123,7 +124,7 @@ fn tcp_preparation_leaves_port_selection_to_child() {
 #[test]
 fn publication_writes_effective_endpoint_and_complete_marker_schema() {
     let temp = tempfile::tempdir().expect("temporary directory");
-    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let sandbox_id = SandboxId::generate();
     let prepared =
         prepare(request(&sandbox_id, temp.path().join("marker"), true)).expect("prepare Sidecar");
     let endpoint = SidecarEndpoint::Tcp {

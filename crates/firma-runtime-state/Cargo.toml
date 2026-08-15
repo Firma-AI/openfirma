@@ -11,14 +11,13 @@ description = "Runtime state contracts and local liveness primitives shared by O
 workspace = true
 
 [dependencies]
+firma-identifiers = { workspace = true }
 insta = { workspace = true }
 serde = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-type-safe-id = { workspace = true }
-uuid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }

@@ -8,7 +8,8 @@
 //! when adding fields.
 
 use anyhow::{Context as _, Result};
-use firma_core::{CapabilityClaims, TokenId};
+use firma_core::CapabilityClaims;
+use firma_identifiers::TokenId;
 use serde::Serialize;
 
 use crate::IssuanceResult;

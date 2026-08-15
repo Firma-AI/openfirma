@@ -12,10 +12,9 @@ use std::fmt;
 
 use ecdsa::SignatureEncoding;
 use ecdsa::signature::Signer;
-use firma_runtime_state::SandboxId;
+use firma_identifiers::{AuditEventId, SandboxId};
 use p256::ecdsa::{DerSignature, SigningKey};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use super::{AuditPayload, ExecutionEvent};
 
@@ -81,7 +80,7 @@ impl EventBuilder {
     /// timestamp in nanoseconds, and signs all fields with ECDSA P-256.
     #[must_use]
     pub(crate) fn build(&self, payload: AuditPayload) -> ExecutionEvent {
-        let event_id = Uuid::now_v7().to_string();
+        let event_id = AuditEventId::generate().to_string();
         let timestamp = timestamp_nanos();
 
         let mut event = ExecutionEvent {

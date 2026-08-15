@@ -17,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::AgentId;
+use firma_identifiers::AgentId;
 
 /// One message on the `firma run` audit channel.
 ///

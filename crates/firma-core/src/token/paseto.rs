@@ -252,7 +252,7 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
 mod tests {
     use super::*;
 
-    use crate::token::TokenId;
+    use firma_identifiers::TokenId;
     use pasetors::keys::{AsymmetricKeyPair, Generate};
 
     fn generate_keypair() -> (Vec<u8>, Vec<u8>) {

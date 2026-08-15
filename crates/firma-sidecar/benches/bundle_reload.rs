@@ -11,7 +11,7 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation;
 use serde_json::json;

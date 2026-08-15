@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint, CommandMediatorHitlMode};
 use crate::error::RunError;
-use crate::identity::{RunIdentity, SandboxId};
+use firma_identifiers::SandboxId;
+
+use crate::identity::RunIdentity;
 
 #[derive(Debug, Serialize)]
 struct MediatorRequest<'a> {
@@ -397,7 +399,7 @@ mod tests {
 
     fn identity() -> RunIdentity {
         RunIdentity {
-            sandbox_id: crate::identity::SandboxId::generate(),
+            sandbox_id: SandboxId::generate(),
             session_id: "sess".to_string(),
             agent_id: crate::identity::test_agent_id(),
             execution_profile: "generic".to_string(),

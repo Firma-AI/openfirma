@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 
 use super::error::{InitError, InitResult};
 use super::log;

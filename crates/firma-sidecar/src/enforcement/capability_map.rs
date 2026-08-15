@@ -13,9 +13,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use firma_core::CapabilityClaims;
-#[cfg(test)]
-use firma_core::TokenId;
 use firma_core::token::matches_resource_scope;
+#[cfg(test)]
+use firma_identifiers::TokenId;
 
 use crate::enforcement::decision::{
     CapabilityValidationStage, EnforcementDecision, EnforcementStage,

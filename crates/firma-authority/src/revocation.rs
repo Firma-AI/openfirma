@@ -9,7 +9,7 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
 
-use firma_core::token::TokenId;
+use firma_identifiers::TokenId;
 
 /// An event representing the revocation of a capability token.
 #[derive(Debug, Clone)]

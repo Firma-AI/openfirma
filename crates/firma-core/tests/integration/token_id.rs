@@ -3,7 +3,8 @@ use std::str::FromStr as _;
 
 use chrono::{Duration, Utc};
 use firma_core::token::paseto::PasetoV4Verifier;
-use firma_core::{CapabilitySeed, TokenError, TokenId, TokenVerifier};
+use firma_core::{CapabilitySeed, TokenError, TokenVerifier};
+use firma_identifiers::TokenId;
 use pasetors::claims::Claims;
 use pasetors::keys::{AsymmetricKeyPair, Generate as _};
 use pasetors::version4::{PublicToken, V4};

@@ -20,7 +20,8 @@ pub(crate) mod lru;
 #[path = "metrics.rs"]
 pub(crate) mod metrics;
 
-use firma_core::{RevocationStore, TokenError, TokenId};
+use firma_core::{RevocationStore, TokenError};
+use firma_identifiers::TokenId;
 
 use self::bloom::AtomicBloom;
 use self::lru::LruSet;

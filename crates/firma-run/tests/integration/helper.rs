@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 

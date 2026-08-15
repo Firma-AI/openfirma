@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use hyper::Uri;
 use serde::Deserialize;
 

@@ -22,7 +22,7 @@ struct CapturePolicy {
 impl PolicyEvaluation for CapturePolicy {
     fn evaluate(
         &self,
-        _agent_id: &firma_core::AgentId,
+        _agent_id: &firma_identifiers::AgentId,
         _action: &str,
         _resource: &str,
         context: serde_json::Value,

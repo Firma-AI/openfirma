@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use firma_http::{HeaderMap, Method};
 use serde::{Deserialize, Serialize};
 
-use crate::{AgentId, session::SessionId, token::TokenId};
+use firma_identifiers::{AgentId, SessionId, TokenId};
 
 /// The core protocol unit wrapping each outbound agent call.
 ///

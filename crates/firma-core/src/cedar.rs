@@ -34,8 +34,8 @@ use cedar_policy::{
     RestrictedExpression, Schema, SourceLocation, ValidationErrorKind, ValidationMode, Validator,
 };
 
-use crate::AgentId;
 use crate::ExecutionIntent;
+use firma_identifiers::AgentId;
 
 /// Canonical Firma Cedar schema, embedded at compile time.
 ///
@@ -273,7 +273,7 @@ impl FirmaEntityUid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgentId;
+    use firma_identifiers::AgentId;
 
     #[test]
     fn agent_uid_roundtrip() {

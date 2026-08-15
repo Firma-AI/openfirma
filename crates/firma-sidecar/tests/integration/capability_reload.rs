@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
-use firma_core::{CapabilityClaims, CapabilitySeed, TokenId, TokenSigner, TokenVerifier};
+use firma_core::{CapabilityClaims, CapabilitySeed, TokenSigner, TokenVerifier};
+use firma_identifiers::TokenId;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use tokio_util::sync::CancellationToken;

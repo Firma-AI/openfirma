@@ -225,6 +225,7 @@ mod tests {
     use chrono::Utc;
     use firma_core::*;
     use firma_grpc_interceptor_proto::interceptor_hook_client::InterceptorHookClient;
+    use firma_identifiers::{AgentId, TokenId};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 

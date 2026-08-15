@@ -23,9 +23,9 @@ use cedar_policy::{
     Authorizer, Context, Decision, Effect, Entities, EntityUid, PolicyId, PolicySet, Request,
     Response, Schema,
 };
-use firma_core::AgentId;
 use firma_core::policy::PolicyBundle;
 use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, StepUpSpec};
+use firma_identifiers::AgentId;
 
 use super::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 

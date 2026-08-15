@@ -3,7 +3,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{CapabilityClaims, TokenId};
+use firma_identifiers::TokenId;
+
+use crate::CapabilityClaims;
 
 /// On-disk shape of a capability seed file.
 ///

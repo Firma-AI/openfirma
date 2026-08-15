@@ -68,7 +68,8 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use firma_core::{AgentId, RunAuditEvent, RunAuditMessage};
+use firma_core::{RunAuditEvent, RunAuditMessage};
+use firma_identifiers::AgentId;
 use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 use nix::unistd::Pid;
 

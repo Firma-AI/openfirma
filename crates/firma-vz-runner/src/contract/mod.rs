@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 use serde::Deserialize;
 
 mod custody;

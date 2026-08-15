@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use firma_authority::{AuthorityConfig, AuthorityTlsConfig};
+use firma_identifiers::{AgentId, SandboxId};
 
 use crate::error::RunError;
 
@@ -29,8 +30,8 @@ pub struct PreparedAuthorityLaunch {
     pub pub_key_path: PathBuf,
     pub pid_path: PathBuf,
     pub metadata_path: PathBuf,
-    pub sandbox_id: crate::identity::SandboxId,
-    pub agent_id: firma_core::AgentId,
+    pub sandbox_id: SandboxId,
+    pub agent_id: AgentId,
     pub session_id: String,
     pub profile_name: String,
 }
@@ -68,8 +69,8 @@ pub fn publish_metadata(
 
 /// Inputs needed to validate and materialize an Authority launch.
 pub struct PrepareRequest<'a> {
-    pub sandbox_id: &'a crate::identity::SandboxId,
-    pub agent_id: &'a firma_core::AgentId,
+    pub sandbox_id: &'a SandboxId,
+    pub agent_id: &'a AgentId,
     pub session_id: &'a str,
     pub marker_dir: PathBuf,
     pub profile_name: &'a str,

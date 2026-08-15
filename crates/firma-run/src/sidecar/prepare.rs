@@ -5,12 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use firma_config_loader::AgentProfile;
-use firma_core::AgentId;
+use firma_identifiers::{AgentId, SandboxId};
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
-use crate::identity::SandboxId;
 
 const LOOPBACK_EPHEMERAL: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
 

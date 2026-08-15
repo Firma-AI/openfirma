@@ -4,7 +4,7 @@ use std::net::{AddrParseError, SocketAddr};
 use std::num::TryFromIntError;
 use std::path::PathBuf;
 
-use firma_runtime_state::{SandboxId, SandboxIdParseError};
+use firma_identifiers::{SandboxId, SandboxIdParseError};
 
 /// Typed failures raised while preparing or running the VZ guest init payload.
 #[derive(Debug)]

@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use firma_core::{RevocationStore, TokenId};
+use firma_core::RevocationStore;
+use firma_identifiers::TokenId;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_protobuf::v1::{RevocationEvent, WatchRevocationsRequest};
 use prost_types::Timestamp;

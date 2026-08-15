@@ -69,7 +69,7 @@ impl<'de> Deserialize<'de> for Expected {
 /// Principal section of a fixture.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FixturePrincipal {
-    /// Agent id; parsed into [`firma_core::AgentId`] downstream.
+    /// Agent id; parsed into [`firma_identifiers::AgentId`] downstream.
     pub agent_id: String,
 }
 

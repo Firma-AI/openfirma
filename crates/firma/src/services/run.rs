@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use firma_config_loader::CONFIG_DIR_NAME;
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use firma_run::authority::AuthorityPromptIo;
 use firma_run::runtime::{LaunchHooks, RunInput, execute_run};
 use tracing::{info, warn};

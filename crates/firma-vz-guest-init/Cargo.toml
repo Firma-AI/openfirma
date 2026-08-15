@@ -13,6 +13,7 @@ name = "firma-vz-guest-init"
 path = "src/main.rs"
 
 [dependencies]
+firma-identifiers = { workspace = true }
 firma-runtime-state = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }

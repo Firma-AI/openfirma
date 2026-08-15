@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args as ClapArgs, Subcommand};
-use firma_core::TokenId;
+use firma_identifiers::TokenId;
 
 #[derive(Debug, clap::Args)]
 pub struct Args {

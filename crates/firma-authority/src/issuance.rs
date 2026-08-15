@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use firma_core::token::paseto::PasetoV4Signer;
-use firma_core::{AgentId, CapabilityClaims, SessionId, TokenId, TokenSigner as _};
+use firma_core::{CapabilityClaims, TokenSigner as _};
+use firma_identifiers::{AgentId, SessionId, TokenId};
 use thiserror::Error;
 
 use crate::cedar_loader::CedarPolicyStore;

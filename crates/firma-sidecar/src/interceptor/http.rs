@@ -1973,6 +1973,7 @@ mod tests {
 
     use chrono::Utc;
     use firma_core::*;
+    use firma_identifiers::{AgentId, TokenId};
     use rcgen::{CertifiedKey, generate_simple_self_signed};
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
     use rustls::{ClientConfig, RootCertStore, ServerConfig};

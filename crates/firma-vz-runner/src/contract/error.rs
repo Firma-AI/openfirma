@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use firma_runtime_state::{SandboxId, SandboxIdParseError};
+use firma_identifiers::{SandboxId, SandboxIdParseError};
 
 use super::InvariantName;
 

@@ -35,7 +35,7 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
 
 use crate::args::config::Mode;

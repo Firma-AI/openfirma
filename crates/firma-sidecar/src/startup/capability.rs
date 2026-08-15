@@ -13,7 +13,8 @@ use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use crate::enforcement::capability_validation::CapabilityMapHandle;
 use anyhow::Context;
 use firma_core::token::paseto::PasetoV4Verifier;
-use firma_core::{AgentId, CapabilityClaims, SessionId, TokenError, TokenVerifier};
+use firma_core::{CapabilityClaims, TokenError, TokenVerifier};
+use firma_identifiers::{AgentId, SessionId};
 use notify::Watcher as _;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -283,8 +284,9 @@ impl CapabilityReloader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firma_core::TokenSigner;
     use firma_core::token::paseto::PasetoV4Signer;
-    use firma_core::{TokenId, TokenSigner};
+    use firma_identifiers::TokenId;
     use pasetors::keys::{AsymmetricKeyPair, Generate};
     use pasetors::version4::V4;
     use std::path::PathBuf;

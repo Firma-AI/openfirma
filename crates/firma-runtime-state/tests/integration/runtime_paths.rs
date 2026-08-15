@@ -61,7 +61,7 @@ fn run_dir_appends_run_segment() {
 #[test]
 fn run_entry_joins_sandbox_id() {
     let base = PathBuf::from("/run/user/1000/firma");
-    let sandbox_id = firma_runtime_state::SandboxId::generate();
+    let sandbox_id = firma_identifiers::SandboxId::generate();
     assert_eq!(
         run_entry_from(&base, &sandbox_id),
         base.join("run").join(sandbox_id.to_string())
@@ -76,7 +76,7 @@ fn capabilities_dir_is_runtime_subdir() {
 
 #[test]
 fn capability_seed_path_uses_only_the_validated_id_as_filename() {
-    let sandbox_id = firma_runtime_state::SandboxId::generate();
+    let sandbox_id = firma_identifiers::SandboxId::generate();
     let path = capability_seed_path(&sandbox_id);
     let expected_filename = format!("{sandbox_id}.toml");
     assert_eq!(

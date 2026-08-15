@@ -299,7 +299,7 @@ fn write_startup_report(
         .with_context(|| format!("failed to write startup report to {}", path.display()))
 }
 
-fn propagated_sandbox_id() -> anyhow::Result<Option<firma_runtime_state::SandboxId>> {
+fn propagated_sandbox_id() -> anyhow::Result<Option<firma_identifiers::SandboxId>> {
     // Per-run identity stamped on every emitted audit event (FIR-185).
     // Set by `firma run`'s prepared Sidecar command; empty in daemon mode.
     let Some(value) = std::env::var_os("FIRMA_RUN_SANDBOX_ID") else {

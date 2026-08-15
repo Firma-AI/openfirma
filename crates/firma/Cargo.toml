@@ -32,6 +32,7 @@ firma-config-loader = { workspace = true, features = ["clap"] }
 firma-core = { workspace = true }
 firma-fs = { workspace = true }
 firma-http = { workspace = true }
+firma-identifiers = { workspace = true }
 firma-run = { workspace = true }
 firma-runtime-state = { workspace = true }
 firma-sidecar = { workspace = true }

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::{Component, Path, PathBuf};
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 
 use crate::contract::{Contract, NetworkMode};
 use crate::vm::{VmPlanError, VmPlanResult};
