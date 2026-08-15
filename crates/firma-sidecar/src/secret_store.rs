@@ -185,8 +185,11 @@ impl SidecarSecretStore {
     /// are resolved by keeping the earliest; spans that start at the same
     /// offset keep the longest instead, so a longer secret that happens to
     /// be a prefix-extension of a shorter one doesn't leave its tail
-    /// unmasked. The result is sorted/non-overlapping as
-    /// [`mask_body`] requires.
+    /// unmasked. A later span that starts after the kept span but extends
+    /// past its end (a "crossing" overlap between two unrelated secrets) is
+    /// clipped to its non-overlapping tail rather than dropped, so no byte of
+    /// a matched secret is ever left unredacted. The result is
+    /// sorted/non-overlapping as [`mask_body`] requires.
     ///
     /// [`mask_body`]: crate::secret_rewrite::mask_body
     #[must_use]
@@ -215,6 +218,18 @@ impl SidecarSecretStore {
                 {
                     last.range = op.range;
                     last.placeholder = op.placeholder;
+                } else if op.range.end > last.range.end {
+                    // Crossing overlap between two different secrets: `op`
+                    // starts inside `last` but its own match extends past
+                    // `last`'s end. Those trailing bytes are real,
+                    // unredacted secret bytes and aren't covered by any
+                    // other op, so keep them as a clipped tail rather than
+                    // dropping `op` outright.
+                    let tail = MaskOp {
+                        range: last.range.end..op.range.end,
+                        placeholder: op.placeholder,
+                    };
+                    kept.push(tail);
                 }
             } else {
                 kept.push(op);
@@ -364,6 +379,27 @@ mod tests {
         let result = mask_body(body, &ops);
 
         assert_eq!(String::from_utf8(result).expect("utf8"), p_long.to_string());
+    }
+
+    #[test]
+    fn mask_ops_clips_crossing_overlap_instead_of_dropping_the_tail() {
+        // Regression: two different secrets whose matched spans overlap with
+        // *different* start offsets (a "crossing" overlap, as opposed to the
+        // same-start case above) used to have the later span dropped
+        // entirely, leaking its non-overlapping tail — real secret bytes —
+        // unmasked into the response.
+        let p1 = SecretPlaceholder::new();
+        let p2 = SecretPlaceholder::new();
+        let store = store_with([(p1.clone(), "AAAA-BBBB"), (p2.clone(), "BBBB-CCCC")]);
+        let body = b"AAAA-BBBB-CCCC";
+
+        let ops = store.mask_ops(body, ContentType::Raw);
+        let result = mask_body(body, &ops);
+
+        assert_eq!(
+            String::from_utf8(result).expect("utf8"),
+            format!("{p1}{p2}")
+        );
     }
 
     #[test]
