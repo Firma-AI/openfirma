@@ -66,10 +66,25 @@ impl SupportedEncoding {
             Self::Gzip => {
                 bounded_read_to_end(flate2::read::GzDecoder::new(body), max_decompressed_bytes)
             }
-            Self::Deflate => bounded_read_to_end(
-                flate2::read::DeflateDecoder::new(body),
-                max_decompressed_bytes,
-            ),
+            Self::Deflate => {
+                // RFC 7230 defines HTTP `deflate` as the zlib format
+                // (RFC 1950), but many servers historically send raw
+                // DEFLATE (RFC 1951). Try the zlib wrapper first, then fall
+                // back to raw DEFLATE, so either server behavior decodes.
+                // A mislabeled payload fails the zlib Adler-32 checksum, so
+                // an accidental zlib decode of raw-DEFLATE data is caught
+                // and retried raw rather than silently trusted.
+                bounded_read_to_end(flate2::read::ZlibDecoder::new(body), max_decompressed_bytes)
+                    .map_or_else(
+                        |_| {
+                            bounded_read_to_end(
+                                flate2::read::DeflateDecoder::new(body),
+                                max_decompressed_bytes,
+                            )
+                        },
+                        Ok,
+                    )
+            }
             Self::Brotli => bounded_read_to_end(
                 brotli::Decompressor::new(body, 4096),
                 max_decompressed_bytes,
@@ -256,6 +271,29 @@ mod tests {
     #[tokio::test]
     async fn deflate_roundtrip() {
         roundtrip(SupportedEncoding::Deflate, "deflate").await;
+    }
+
+    #[tokio::test]
+    async fn deflate_accepts_zlib_wrapped_stream() {
+        // RFC 7230 defines HTTP `deflate` as the zlib format (RFC 1950);
+        // the encoder here emits raw DEFLATE (RFC 1951). Decoding must
+        // accept the conforming zlib-wrapped form, not just the encoder's
+        // own raw output.
+        use flate2::Compression;
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+
+        let plaintext = b"zlib-wrapped deflate payload".repeat(4);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&plaintext).expect("encode succeeds");
+        let compressed = encoder.finish().expect("finish succeeds");
+
+        let (decoded, encoding) =
+            decode_body(&compressed, &headers_with_encoding("deflate"), 1024 * 1024)
+                .await
+                .expect("zlib-wrapped deflate decodes");
+        assert_eq!(decoded.as_ref(), plaintext.as_slice());
+        assert_eq!(encoding, Some(SupportedEncoding::Deflate));
     }
 
     #[tokio::test]

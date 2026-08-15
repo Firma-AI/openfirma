@@ -140,18 +140,29 @@ fn build_request_handler(
     let base = handler::RequestHandler::new(pipeline, connector_registry, audit_sink_sender)
         .with_composio_catalogs(composio_catalogs)
         .with_max_decompressed_body_bytes(config.interceptor.max_decompressed_body_bytes());
-    let base = match std::env::var(GATEWAY_ADDR_ENV) {
-        Ok(addr) => match GatewayEndpoint::parse(&addr) {
+    let gateway = std::env::var(GATEWAY_ADDR_ENV).ok().and_then(|addr| {
+        match GatewayEndpoint::parse(&addr) {
             Ok(ep) => {
                 tracing::info!(%addr, "secret gateway configured; placeholder rehydration enabled");
-                base.with_gateway_client(GatewayClient::new(ep, config.secret_gateway))
+                Some(GatewayClient::new(ep, config.secret_gateway))
             }
             Err(e) => {
                 tracing::warn!(%addr, error = %e, "invalid secret gateway address; placeholder rehydration disabled");
-                base
+                None
             }
-        },
-        Err(_) => base,
+        }
+    });
+    let base = if let Some(client) = gateway {
+        base.with_gateway_client(client)
+    } else {
+        if !config.http_secret_providers.is_empty() {
+            tracing::warn!(
+                providers = config.http_secret_providers.len(),
+                "http_secret_providers configured but no secret gateway is available; \
+                 matched traffic will be aborted fail-closed instead of intercepted"
+            );
+        }
+        base
     };
 
     if config.http_secret_providers.is_empty() {
