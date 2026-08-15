@@ -17,6 +17,7 @@ use firma_process_orchestrator::{
     ComponentEndpoint, ComponentSpec, LifecycleTimeouts, Readiness, RunningStack, StackTopology,
     spawn_stack_from_plan,
 };
+use firma_test_helpers::process_fixture;
 use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
@@ -191,76 +192,73 @@ fn spawn_ordered_stack(
     stack
 }
 
-#[test]
-#[ignore = "spawned as a process-lifecycle fixture"]
-fn managed_component_fixture() {
-    if std::env::var(COMPONENT).as_deref() == Ok("sidecar-descendant") {
-        loop {
-            std::thread::park();
+process_fixture! {
+    fn managed_component_fixture() {
+        if std::env::var(COMPONENT).as_deref() == Ok("sidecar-descendant") {
+            loop {
+                std::thread::park();
+            }
         }
-    }
 
-    let _descendant = if std::env::var(COMPONENT).as_deref() == Ok("sidecar")
-        && std::env::var_os(SIDECAR_STUCK).is_some()
-    {
-        let child = fixture_command()
-            .env(COMPONENT, "sidecar-descendant")
-            .spawn()
-            .expect("spawn Sidecar descendant");
-        publish_marker(&required_path(SIDECAR_DESCENDANT), &child.id().to_string());
-        Some(child)
-    } else {
-        None
-    };
+        let _descendant = if std::env::var(COMPONENT).as_deref() == Ok("sidecar")
+            && std::env::var_os(SIDECAR_STUCK).is_some()
+        {
+            let child = fixture_command()
+                .env(COMPONENT, "sidecar-descendant")
+                .spawn()
+                .expect("spawn Sidecar descendant");
+            publish_marker(&required_path(SIDECAR_DESCENDANT), &child.id().to_string());
+            Some(child)
+        } else {
+            None
+        };
 
-    let event_name =
-        firma_process_orchestrator::shutdown_event::windows_shutdown_event_name(std::process::id());
-    let wide: Vec<u16> = OsStr::new(&event_name)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide.as_ptr()) };
-    assert!(!event.is_null(), "create shutdown event");
-    std::fs::write(required_path(READY), []).expect("publish fixture readiness");
+        let event_name = firma_process_orchestrator::shutdown_event::windows_shutdown_event_name(
+            std::process::id(),
+        );
+        let wide: Vec<u16> = OsStr::new(&event_name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide.as_ptr()) };
+        assert!(!event.is_null(), "create shutdown event");
+        std::fs::write(required_path(READY), []).expect("publish fixture readiness");
 
-    let wait = unsafe { WaitForSingleObject(event, INFINITE) };
-    unsafe { CloseHandle(event) };
-    assert_eq!(wait, WAIT_OBJECT_0, "wait for shutdown event");
+        let wait = unsafe { WaitForSingleObject(event, INFINITE) };
+        unsafe { CloseHandle(event) };
+        assert_eq!(wait, WAIT_OBJECT_0, "wait for shutdown event");
 
-    match std::env::var(COMPONENT).as_deref() {
-        Ok("sidecar") => {
-            std::fs::write(required_path(SIDECAR_STOPPING), []).expect("mark Sidecar stopping");
-            if std::env::var_os(SIDECAR_STUCK).is_some() {
-                loop {
-                    std::thread::park();
+        match std::env::var(COMPONENT).as_deref() {
+            Ok("sidecar") => {
+                std::fs::write(required_path(SIDECAR_STOPPING), [])
+                    .expect("mark Sidecar stopping");
+                if std::env::var_os(SIDECAR_STUCK).is_some() {
+                    loop {
+                        std::thread::park();
+                    }
                 }
+                wait_for_file(&required_path(SIDECAR_RELEASE));
+                std::fs::write(required_path(SIDECAR_EXITED), [])
+                    .expect("mark Sidecar exited");
             }
-            wait_for_file(&required_path(SIDECAR_RELEASE));
-            std::fs::write(required_path(SIDECAR_EXITED), []).expect("mark Sidecar exited");
-        }
-        Ok("authority") => {
-            if std::env::var_os(SIDECAR_STUCK).is_some() {
-                return;
+            Ok("authority") => {
+                if std::env::var_os(SIDECAR_STUCK).is_some() {
+                    return;
+                }
+                let ordering = if required_path(SIDECAR_EXITED).exists() {
+                    "ordered"
+                } else {
+                    "overlap"
+                };
+                publish_marker(&required_path(AUTHORITY_SIGNAL), ordering);
             }
-            let ordering = if required_path(SIDECAR_EXITED).exists() {
-                "ordered"
-            } else {
-                "overlap"
-            };
-            publish_marker(&required_path(AUTHORITY_SIGNAL), ordering);
+            other => panic!("unexpected fixture component: {other:?}"),
         }
-        other => panic!("unexpected fixture component: {other:?}"),
     }
 }
 
 fn fixture_command() -> Command {
-    let mut command = Command::new(std::env::current_exe().expect("test executable"));
-    command.args([
-        "--exact",
-        "stop_dependency_order_windows::managed_component_fixture",
-        "--ignored",
-    ]);
-    command
+    managed_component_fixture()
 }
 
 fn reserve_listener() -> std::net::TcpListener {
