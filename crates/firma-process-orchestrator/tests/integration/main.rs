@@ -1,11 +1,10 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-#[macro_use]
-mod helper;
 #[cfg(unix)]
 mod endpoint_readiness;
 mod error_boundary;
 mod forced_termination;
+mod helper;
 mod ownership;
 mod startup_contract;
 mod status_state_machine;

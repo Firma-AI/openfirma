@@ -18,6 +18,7 @@ use firma_process_orchestrator::{
     ComponentEndpoint, ComponentSpec, LifecycleTimeouts, OrchestratorError, Readiness,
     RunningStack, StackTopology, StartError, publish_startup_report, spawn_stack_from_plan,
 };
+use firma_test_helpers::process_fixture;
 
 use crate::helper::wait_for_file;
 

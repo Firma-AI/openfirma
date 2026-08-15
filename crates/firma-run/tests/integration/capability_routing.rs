@@ -20,6 +20,7 @@ use firma_run::routing::{
     AutostartFlags, ResolveAuthorityRequest, ResolvedAuthority, prepare_network_runtime,
     resolve_authority,
 };
+use firma_test_helpers::process_fixture;
 
 struct NoPrompt;
 
@@ -321,12 +322,7 @@ fn clean_startup_failure_removes_enclosing_run_marker() {
 #[cfg(unix)]
 #[test]
 fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
-    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args([
-            "--exact",
-            "capability_routing::capability_file_synthesis_fixture",
-            "--ignored",
-        ])
+    let status = capability_file_synthesis_fixture()
         .env("FIRMA_RUN_KEEP_MARKERS", "")
         .status()
         .expect("run synthesis fixture");
@@ -334,56 +330,56 @@ fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
     assert!(status.success());
 }
 
-#[cfg(unix)]
-#[test]
-#[ignore = "subprocess fixture"]
-fn capability_file_synthesis_fixture() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
-    let missing_key = dir.path().join("missing-firmateam.pub");
-    let seed_path = dir.path().join("existing-capability.toml");
-    std::fs::write(&seed_path, "existing seed\n").expect("write seed placeholder");
-    let handle = sandbox_handle(&identity, dir.path());
+process_fixture! {
+    #[cfg(unix)]
+    fn capability_file_synthesis_fixture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = RunIdentity::new(*crate::helper::agent_id(), "generic");
+        let missing_key = dir.path().join("missing-firmateam.pub");
+        let seed_path = dir.path().join("existing-capability.toml");
+        std::fs::write(&seed_path, "existing seed\n").expect("write seed placeholder");
+        let handle = sandbox_handle(&identity, dir.path());
 
-    let error = prepare_network_runtime(
-        &handle,
-        &enforcement_proof(),
-        &SidecarEndpoint::Tcp {
-            addr: "127.0.0.1:1".parse().expect("sidecar address"),
-        },
-        &identity,
-        &autostart_flags(Some(seed_path.clone())),
-        authority(Some(missing_key.clone())),
-        &capability(
-            CapabilitySource::File {
-                path: seed_path.clone(),
+        let error = prepare_network_runtime(
+            &handle,
+            &enforcement_proof(),
+            &SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:1".parse().expect("sidecar address"),
             },
-            Some(missing_key.clone()),
-        ),
-    )
-    .err()
-    .expect("test binary cannot autostart as the Sidecar");
+            &identity,
+            &autostart_flags(Some(seed_path.clone())),
+            authority(Some(missing_key.clone())),
+            &capability(
+                CapabilitySource::File {
+                    path: seed_path.clone(),
+                },
+                Some(missing_key.clone()),
+            ),
+        )
+        .err()
+        .expect("test binary cannot autostart as the Sidecar");
 
-    assert!(matches!(error, RunError::RunComponentOrchestration(_)));
-    let sidecar = read_synthesized_sidecar(&identity);
-    let sidecar_table = sidecar.get("sidecar").expect("sidecar table");
-    assert_eq!(
-        sidecar_table
-            .get("authority")
-            .and_then(|authority| authority.get("public_key_path"))
-            .and_then(toml::Value::as_str),
-        Some(missing_key.display().to_string()).as_deref()
-    );
-    assert_eq!(
-        sidecar_table
-            .get("capability_seed")
-            .and_then(|seed| seed.get("paths"))
-            .and_then(toml::Value::as_array)
-            .and_then(|paths| paths.last())
-            .and_then(toml::Value::as_str),
-        Some(seed_path.display().to_string()).as_deref()
-    );
-    remove_marker(&identity);
+        assert!(matches!(error, RunError::RunComponentOrchestration(_)));
+        let sidecar = read_synthesized_sidecar(&identity);
+        let sidecar_table = sidecar.get("sidecar").expect("sidecar table");
+        assert_eq!(
+            sidecar_table
+                .get("authority")
+                .and_then(|authority| authority.get("public_key_path"))
+                .and_then(toml::Value::as_str),
+            Some(missing_key.display().to_string()).as_deref()
+        );
+        assert_eq!(
+            sidecar_table
+                .get("capability_seed")
+                .and_then(|seed| seed.get("paths"))
+                .and_then(toml::Value::as_array)
+                .and_then(|paths| paths.last())
+                .and_then(toml::Value::as_str),
+            Some(seed_path.display().to_string()).as_deref()
+        );
+        remove_marker(&identity);
+    }
 }
 
 #[test]
@@ -444,12 +440,7 @@ fn autostart_without_effective_key_preserves_no_mint_behavior() {
 #[cfg(unix)]
 #[test]
 fn autostart_without_effective_key_synthesizes_no_authority_key() {
-    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args([
-            "--exact",
-            "capability_routing::no_authority_key_synthesis_fixture",
-            "--ignored",
-        ])
+    let status = no_authority_key_synthesis_fixture()
         .env("FIRMA_RUN_KEEP_MARKERS", "1")
         .status()
         .expect("run synthesis fixture");
@@ -457,37 +448,37 @@ fn autostart_without_effective_key_synthesizes_no_authority_key() {
     assert!(status.success());
 }
 
-#[cfg(unix)]
-#[test]
-#[ignore = "subprocess fixture"]
-fn no_authority_key_synthesis_fixture() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
-    let handle = sandbox_handle(&identity, dir.path());
+process_fixture! {
+    #[cfg(unix)]
+    fn no_authority_key_synthesis_fixture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = RunIdentity::new(*crate::helper::agent_id(), "generic");
+        let handle = sandbox_handle(&identity, dir.path());
 
-    let error = prepare_network_runtime(
-        &handle,
-        &enforcement_proof(),
-        &SidecarEndpoint::Tcp {
-            addr: "127.0.0.1:1".parse().expect("sidecar address"),
-        },
-        &identity,
-        &autostart_flags(None),
-        authority(None),
-        &capability(CapabilitySource::Disabled, None),
-    )
-    .err()
-    .expect("test binary cannot autostart as the Sidecar");
+        let error = prepare_network_runtime(
+            &handle,
+            &enforcement_proof(),
+            &SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:1".parse().expect("sidecar address"),
+            },
+            &identity,
+            &autostart_flags(None),
+            authority(None),
+            &capability(CapabilitySource::Disabled, None),
+        )
+        .err()
+        .expect("test binary cannot autostart as the Sidecar");
 
-    assert!(matches!(error, RunError::RunComponentOrchestration(_)));
-    let sidecar = read_synthesized_sidecar(&identity);
-    assert!(
-        sidecar
-            .get("sidecar")
-            .and_then(|sidecar| sidecar.get("authority"))
-            .and_then(|authority| authority.get("public_key_path"))
-            .is_none(),
-        "no key should be synthesized when neither source configures one"
-    );
-    remove_marker(&identity);
+        assert!(matches!(error, RunError::RunComponentOrchestration(_)));
+        let sidecar = read_synthesized_sidecar(&identity);
+        assert!(
+            sidecar
+                .get("sidecar")
+                .and_then(|sidecar| sidecar.get("authority"))
+                .and_then(|authority| authority.get("public_key_path"))
+                .is_none(),
+            "no key should be synthesized when neither source configures one"
+        );
+        remove_marker(&identity);
+    }
 }

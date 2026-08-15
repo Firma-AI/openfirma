@@ -2,6 +2,7 @@ use firma_process_orchestrator::{
     ComponentSpec, LifecycleTimeouts, OrchestratorError, StackTopology, StartError,
     spawn_stack_from_plan,
 };
+use firma_test_helpers::process_fixture;
 use std::net::{SocketAddr, TcpListener};
 use std::time::Duration;
 

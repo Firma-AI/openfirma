@@ -39,6 +39,7 @@ impl Drop for CapabilityFileGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firma_test_helpers::process_fixture;
 
     #[test]
     fn drop_removes_file() {
@@ -57,12 +58,7 @@ mod tests {
     fn present_non_unicode_keep_markers_value_retains_file() {
         use std::os::unix::ffi::OsStringExt as _;
 
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "capability::guard::tests::keep_markers_fixture",
-                "--ignored",
-            ])
+        let status = keep_markers_fixture()
             .env(
                 "FIRMA_RUN_KEEP_MARKERS",
                 std::ffi::OsString::from_vec(vec![0xFF]),
@@ -73,15 +69,15 @@ mod tests {
         assert!(status.success());
     }
 
-    #[cfg(unix)]
-    #[test]
-    #[ignore = "subprocess fixture"]
-    fn keep_markers_fixture() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("sandbox.toml");
-        std::fs::write(&path, "x").unwrap();
-        drop(CapabilityFileGuard::new(path.clone()));
+    process_fixture! {
+        #[cfg(unix)]
+        fn keep_markers_fixture() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("sandbox.toml");
+            std::fs::write(&path, "x").unwrap();
+            drop(CapabilityFileGuard::new(path.clone()));
 
-        assert!(path.exists());
+            assert!(path.exists());
+        }
     }
 }
