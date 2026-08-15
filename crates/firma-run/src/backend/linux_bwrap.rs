@@ -6,6 +6,7 @@ use std::process::{Child, Command};
 use std::{fs::File, os::fd::AsRawFd};
 
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_identifiers::SandboxId;
 #[cfg(target_os = "linux")]
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
@@ -817,7 +818,7 @@ fn command_available(binary: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn create_bwrap_runtime_dir(sandbox_id: &crate::identity::SandboxId) -> Result<PathBuf, RunError> {
+fn create_bwrap_runtime_dir(sandbox_id: &SandboxId) -> Result<PathBuf, RunError> {
     let runtime_root = std::env::temp_dir().join("firma-run");
     firma_fs::create_private_dir_all(&runtime_root).map_err(|error| RunError::Backend {
         backend: BackendKind::Bwrap.to_string(),
@@ -946,7 +947,7 @@ mod tests {
     fn create_bwrap_runtime_dir_creates_private_sandbox_dir() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let sandbox_id = crate::identity::SandboxId::generate();
+        let sandbox_id = super::SandboxId::generate();
 
         let runtime_dir =
             super::create_bwrap_runtime_dir(&sandbox_id).expect("create bwrap runtime dir");

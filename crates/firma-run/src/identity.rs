@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use firma_identifiers::SandboxId;
-use firma_identifiers::{AgentId, SessionId};
+use firma_identifiers::{AgentId, SandboxId, SessionId};
 
 /// Stable identity tuple associated with a `firma run` execution.
 ///
