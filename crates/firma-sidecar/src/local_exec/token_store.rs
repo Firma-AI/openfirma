@@ -32,8 +32,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use firma_identifiers::ApprovalTokenId;
 use firma_runtime_state::SandboxId;
-use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Token state
@@ -231,7 +231,7 @@ impl InMemoryTokenStore {
         sandbox_id: SandboxId,
         agent_id: Option<String>,
     ) -> String {
-        let token_id = Uuid::new_v4().to_string();
+        let token_id = ApprovalTokenId::generate().to_string();
         let token = HitlToken {
             fingerprint,
             session_id,

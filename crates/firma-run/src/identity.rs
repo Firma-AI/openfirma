@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use firma_core::AgentId;
+use firma_core::{AgentId, SessionId};
 pub use firma_runtime_state::SandboxId;
 
 /// Stable identity tuple associated with a `firma run` execution.
@@ -25,7 +24,7 @@ impl RunIdentity {
         Self {
             sandbox_id: SandboxId::generate(),
             session_id: read_identity_override("FIRMA_RUN_SESSION_ID")
-                .unwrap_or_else(|| Uuid::now_v7().to_string()),
+                .unwrap_or_else(|| SessionId::generate().to_string()),
             agent_id,
             execution_profile: execution_profile.into(),
         }

@@ -1482,18 +1482,16 @@ dependencies = [
  "chrono",
  "criterion",
  "firma-http",
+ "firma-identifiers",
  "http",
  "insta",
  "pasetors",
  "pretty_assertions",
- "regex",
  "serde",
  "serde_json",
  "strum",
  "thiserror 2.0.18",
  "toml",
- "type-safe-id",
- "uuid",
 ]
 
 [[package]]
@@ -1564,6 +1562,18 @@ dependencies = [
  "http",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "firma-identifiers"
+version = "0.1.6"
+dependencies = [
+ "insta",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "type-safe-id",
+ "uuid",
 ]
 
 [[package]]
@@ -1649,6 +1659,7 @@ dependencies = [
 name = "firma-runtime-state"
 version = "0.1.6"
 dependencies = [
+ "firma-identifiers",
  "insta",
  "nix 0.31.3",
  "serde",
@@ -1657,8 +1668,6 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
- "type-safe-id",
- "uuid",
  "windows-sys 0.59.0",
 ]
 
@@ -1705,6 +1714,7 @@ dependencies = [
  "firma-fs",
  "firma-grpc-interceptor-proto",
  "firma-http",
+ "firma-identifiers",
  "firma-protobuf",
  "firma-runtime-state",
  "firma-secret-provider",
