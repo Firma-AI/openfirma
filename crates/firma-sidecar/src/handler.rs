@@ -12,11 +12,12 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 
 use firma_core::{
-    AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
-    ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
-    InjectedCredentials, SecretMatcher, SessionId, TransportView, envelope::InvalidMethod,
+    AbortReason, ActionParams, ConnectorError, ConnectorResponse, DenyReason, ExecutionEnvelope,
+    ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams, InjectedCredentials, SecretMatcher,
+    TransportView, envelope::InvalidMethod,
 };
 use firma_http::HeaderMap;
+use firma_identifiers::{AgentId, SessionId};
 use firma_secret_provider::{
     CompiledMatcher, MatchingResolution, PLACEHOLDER_PREFIX, PLACEHOLDER_SUFFIX_LEN,
     SecretPlaceholder, gateway::client::GatewayClient, spec::http::HttpIntegrationSpec,
@@ -2088,10 +2089,11 @@ pub(crate) mod tests {
     use base64::Engine as _;
     use chrono::Utc;
     use firma_core::{
-        CapabilityClaims, Connector, RevocationStore, StepUpSpec, TokenError, TokenId,
-        TokenVerifier, TransportView,
+        CapabilityClaims, Connector, RevocationStore, StepUpSpec, TokenError, TokenVerifier,
+        TransportView,
     };
     use firma_http::{Authority, Method};
+    use firma_identifiers::TokenId;
     use firma_secret_provider::{
         gateway::{client::config::GatewayClientConfig, endpoint::GatewayEndpoint},
         non_empty::NonEmptyString,
