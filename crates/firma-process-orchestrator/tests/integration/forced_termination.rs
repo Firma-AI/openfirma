@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use firma_process_orchestrator::{OrchestratorError, StackTopology, State};
 
-use crate::support::{spawn_managed_component, wait_for_file};
+use crate::helper::{spawn_managed_component, wait_for_file};
 
 #[test]
 fn forced_termination_retains_state_until_target_disappears() {

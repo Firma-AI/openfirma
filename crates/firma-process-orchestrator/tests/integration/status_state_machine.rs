@@ -5,7 +5,7 @@ use firma_process_orchestrator::UnixEndpoint;
 use firma_process_orchestrator::{ComponentEndpoint, OrchestratorError, State, status_components};
 use tempfile::tempdir;
 
-use crate::topology;
+use crate::helper::topology;
 
 #[test]
 fn no_pidfiles_yields_stopped() {

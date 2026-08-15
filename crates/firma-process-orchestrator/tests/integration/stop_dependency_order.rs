@@ -10,7 +10,7 @@ use firma_process_orchestrator::{
     ComponentSpec, LifecycleTimeouts, RunningStack, StackTopology, spawn_stack_from_plan,
 };
 
-use crate::support::wait_for_file;
+use crate::helper::wait_for_file;
 
 #[test]
 fn authority_is_not_signalled_until_sidecar_is_collected() {

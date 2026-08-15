@@ -65,7 +65,7 @@ fn unix_pgrp_kills_grandchild_after_leader_exits() {
     .env("PARENT_READY_MARKER", &parent_ready_marker)
     .env("LEADER_EXITED_MARKER", &leader_exited_marker);
     let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
-    let mut stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
+    let mut stack = crate::helper::spawn_managed_component(state_dir, &topology, cmd);
     let group_pid = firma_runtime_state::pidfile::read(&state_dir.join("authority.pid"))
         .expect("read authority pidfile")
         .expect("authority pid")
