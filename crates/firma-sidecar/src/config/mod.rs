@@ -37,6 +37,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
+use bytesize::ByteSize;
 use firma_http::HeaderName;
 use firma_secret_provider::{
     gateway::client::config::GatewayClientConfig, spec::http::HttpIntegrationSpec,
@@ -369,8 +370,8 @@ pub struct InterceptorConfig {
     /// decompressed for secret placeholder rehydration or masking. Bounds
     /// the memory a decompression bomb (e.g. a small `gzip`/`br`/`zstd`
     /// payload that expands enormously) can force the Sidecar to allocate.
-    #[serde(default = "default_max_decompressed_body_bytes")]
-    pub max_decompressed_body_bytes: usize,
+    #[serde(default = "default_max_decompressed_body_size")]
+    max_decompressed_body_size: ByteSize,
     /// CONNECT/MITM relay timeout controls.
     #[serde(default)]
     pub(crate) connect_relay: ConnectRelayConfig,
@@ -394,8 +395,14 @@ impl InterceptorConfig {
         if self.max_request_body_bytes == 0 {
             return Err("interceptor.max_request_body_bytes must be > 0".into());
         }
-        if self.max_decompressed_body_bytes == 0 {
-            return Err("interceptor.max_decompressed_body_bytes must be > 0".into());
+        if self.max_decompressed_body_size.as_u64() == 0 {
+            return Err("interceptor.max_decompressed_body_size must be > 0".into());
+        }
+        if self.max_decompressed_body_bytes() == usize::MAX {
+            return Err(format!(
+                "interceptor.max_decompressed_body_size can't be >= {}",
+                ByteSize::b(u64::try_from(usize::MAX).unwrap_or(u64::MAX))
+            ));
         }
         if self.total_body_budget_bytes == 0 {
             return Err("interceptor.total_body_budget_bytes must be > 0".into());
@@ -426,6 +433,16 @@ impl InterceptorConfig {
         }
         Ok(())
     }
+
+    #[must_use]
+    pub fn max_decompressed_body_bytes(&self) -> usize {
+        // the only way this conversion can fail is that we're running on a 32bit system and
+        // we're using a max_decompressed_body_size > u32::MAX (or, even worse, on a 16bit system)
+        //
+        // fallback value is usize::MAX, but this value will fail validation, because when we read,
+        // we read one more byte to know if the limit has been overflowed
+        usize::try_from(self.max_decompressed_body_size.as_u64()).unwrap_or(usize::MAX)
+    }
 }
 
 impl Default for InterceptorConfig {
@@ -436,7 +453,7 @@ impl Default for InterceptorConfig {
             socket_path: Some(default_socket_path()),
             drain_timeout_secs: default_drain_timeout(),
             max_request_body_bytes: default_max_request_body_bytes(),
-            max_decompressed_body_bytes: default_max_decompressed_body_bytes(),
+            max_decompressed_body_size: default_max_decompressed_body_size(),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
             total_body_budget_bytes: default_total_body_budget_bytes(),
@@ -783,8 +800,8 @@ const fn default_max_request_body_bytes() -> usize {
     4 * 1024 * 1024
 }
 
-const fn default_max_decompressed_body_bytes() -> usize {
-    16 * 1024 * 1024
+const fn default_max_decompressed_body_size() -> ByteSize {
+    ByteSize::mb(16)
 }
 
 const fn default_total_body_budget_bytes() -> usize {
@@ -1294,15 +1311,15 @@ mod tests {
     fn test_sidecar_config_zero_max_decompressed_body_rejected() {
         let config = SidecarConfig {
             interceptor: InterceptorConfig {
-                max_decompressed_body_bytes: 0,
+                max_decompressed_body_size: ByteSize::b(0),
                 ..InterceptorConfig::default()
             },
             ..SidecarConfig::default()
         };
         let err = config.validate().unwrap_err();
         assert!(
-            err.contains("max_decompressed_body_bytes"),
-            "error should mention max_decompressed_body_bytes: {err}"
+            err.contains("max_decompressed_body_size"),
+            "error should mention max_decompressed_body_size: {err}"
         );
     }
 
