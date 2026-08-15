@@ -1,11 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use firma_process_orchestrator::StackTopology;
-
-pub(crate) fn topology() -> StackTopology {
-    StackTopology::new(["authority", "sidecar"]).expect("valid test topology")
-}
-
+#[macro_use]
+mod helper;
 #[cfg(unix)]
 mod endpoint_readiness;
 mod error_boundary;
@@ -21,5 +17,3 @@ mod stop_forced_grandchildren;
 mod stop_grandchildren;
 #[cfg(unix)]
 mod stop_orphaned_grandchild;
-#[cfg(unix)]
-mod support;

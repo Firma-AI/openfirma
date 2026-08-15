@@ -72,7 +72,7 @@ fn unix_pgrp_force_kills_term_ignoring_grandchild() {
     .env("CHILD_READY_MARKER", &child_ready_marker)
     .env("PARENT_READY_MARKER", &parent_ready_marker);
     let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
-    let mut stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
+    let mut stack = crate::helper::spawn_managed_component(state_dir, &topology, cmd);
     let group_pid = firma_runtime_state::pidfile::read(&state_dir.join("authority.pid"))
         .expect("read authority pidfile")
         .expect("authority pid")

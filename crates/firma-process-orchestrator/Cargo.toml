@@ -24,11 +24,12 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+serde_json = { workspace = true }
 serial_test = { workspace = true }
 socket2 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-camino = { workspace = true }
+camino = { workspace = true, features = ["serde1"] }
 nix = { workspace = true }
 socket2 = { workspace = true }
 

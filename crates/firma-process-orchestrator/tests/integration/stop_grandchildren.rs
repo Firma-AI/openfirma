@@ -36,7 +36,7 @@ fn unix_pgrp_kills_grandchild() {
     .env("PARENT_READY_MARKER", &parent_ready_marker)
     .env("TERMINATED_MARKER", &terminated_marker);
     let topology = StackTopology::new(["authority"]).expect("valid fixture topology");
-    let mut stack = crate::support::spawn_managed_component(state_dir, &topology, cmd);
+    let mut stack = crate::helper::spawn_managed_component(state_dir, &topology, cmd);
 
     // Poll the marker contents rather than its existence: shell redirection
     // creates the file before `printf` writes the readiness payload.
