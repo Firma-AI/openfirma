@@ -4,7 +4,8 @@ use std::sync::OnceLock;
 
 use arbitrary::Arbitrary;
 use chrono::Utc;
-use firma_core::{TokenId, TokenVerifier};
+use firma_core::TokenVerifier;
+use firma_identifiers::TokenId;
 use firma_sidecar::config::SeedFile;
 use libfuzzer_sys::fuzz_target;
 
