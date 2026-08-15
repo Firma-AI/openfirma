@@ -15,6 +15,7 @@ members = [
   "crates/firma-secret-provider",
   "crates/firma-sidecar",
   "crates/firma-stack",
+  "crates/firma-test-helpers",
   "crates/firma-tui",
   "crates/firma-vz-guest-init",
   "crates/firma-vz-runner",
@@ -89,6 +90,7 @@ firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.5" }
 firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.1.5" }
 firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.5" }
 firma-stack = { path = "crates/firma-stack", version = "0.1.5" }
+firma-test-helpers = { path = "crates/firma-test-helpers", version = "0.1.5" }
 firma-tui = { path = "crates/firma-tui", version = "0.1.5" }
 form_urlencoded = "1"
 fs-err = "3.3"

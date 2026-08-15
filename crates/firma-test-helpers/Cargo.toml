@@ -1,0 +1,15 @@
+[package]
+name = "firma-test-helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+description = "Shared test support for OpenFirma crates"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

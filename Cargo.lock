@@ -1574,11 +1574,11 @@ dependencies = [
  "ctrlc",
  "firma-fs",
  "firma-runtime-state",
+ "firma-test-helpers",
  "fs2",
  "insta",
  "nix 0.31.3",
  "serde",
- "serde_json",
  "serial_test",
  "socket2",
  "tempfile",
@@ -1621,6 +1621,7 @@ dependencies = [
  "firma-protobuf",
  "firma-runtime-state",
  "firma-sidecar",
+ "firma-test-helpers",
  "fs-err",
  "hex",
  "libc",
@@ -1775,6 +1776,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "firma-test-helpers"
+version = "0.1.6"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

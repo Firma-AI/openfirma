@@ -100,6 +100,7 @@ changelog_include = [
   "firma-secret-provider",
   "firma-sidecar",
   "firma-stack",
+  "firma-test-helpers",
   "firma-tui",
   "firma-vz-guest-init",
   "firma-vz-runner",

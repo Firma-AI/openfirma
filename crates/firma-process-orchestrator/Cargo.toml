@@ -23,8 +23,8 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+firma-test-helpers = { workspace = true }
 insta = { workspace = true }
-serde_json = { workspace = true }
 serial_test = { workspace = true }
 socket2 = { workspace = true }
 
