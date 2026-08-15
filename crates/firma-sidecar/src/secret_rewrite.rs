@@ -15,6 +15,7 @@
 use std::ops::Range;
 
 use firma_secret_provider::{ExposeSecret, SecretPlaceholder, SecretString};
+use json_escape::token::UnescapedToken;
 
 #[derive(Debug, thiserror::Error)]
 #[error("unrecognized content type")]
@@ -193,16 +194,18 @@ fn encode_secret(secret: &SecretString, content_type: ContentType) -> String {
     }
 }
 
-/// Find the byte range in `body` whose content-type-specific *decoding*
-/// equals `secret`, independent of which equivalent spelling was used to
-/// encode it (e.g. `%2b` vs `%2B`, `"` vs `\"`, an XML numeric character
-/// reference vs the named entity — including arbitrarily zero-padded numeric
-/// references, since decoding rather than enumerating encodings handles that
-/// for free).
+/// Find the raw byte ranges in `body` that decode to `secret` under
+/// `content_type`'s escaping rules — either the whole candidate value, or a
+/// word-bounded substring of one (a secret embedded in longer text, including
+/// when the secret's own bytes were escaped: `\"`, `&amp;`, `%XX`). Decoding
+/// rather than enumerating encodings catches every equivalent spelling for
+/// free (e.g. `%2b` vs `%2B`, `"` vs `\u0022`, a numeric XML character
+/// reference vs the named entity, arbitrarily zero-padded).
 ///
-/// Delegates the actual decoding to the same crates [`encode_secret`] uses
-/// for encoding (`serde_json`, `form_urlencoded`, `quick_xml`), so this only
-/// has to locate the candidate span, not reimplement any escaping rules.
+/// Delegates decoding to the crates [`encode_secret`] uses for encoding
+/// (`json_escape`/`serde_json`, `form_urlencoded`, `quick_xml`); this module
+/// only locates candidate spans and maps decoded byte positions back to raw
+/// bytes ([`DecodedContent`]).
 pub(crate) fn find_decoded_secret_spans(
     body: &[u8],
     content_type: ContentType,
@@ -226,17 +229,95 @@ pub(crate) fn find_decoded_secret_spans(
     }
 }
 
-/// Find a JSON string literal that echoes `secret` — either the whole
-/// decoded string equals `secret` (any escaping), or, for a literal with no
-/// escapes, `secret` occurs as a word-bounded substring of the raw content
-/// (e.g. a natural-language error message that embeds the credential:
-/// `"credential s3cr3t-db-pass is invalid"`).
+/// Decoded content and a byte-for-byte map back to the raw bytes it came
+/// from.
 ///
-/// Escaped literals are restricted to the whole-value case because raw byte
-/// offsets don't line up with decoded character offsets once escapes are
-/// involved, so a decoded-substring match couldn't be mapped back to a raw
-/// byte span to redact.
+/// The per-format decoders split their input into literal runs (which decode
+/// to themselves, 1:1) and escape runs (`\"`, `&amp;`, `%XX`, `+`), recording
+/// for each decoded byte the raw span of the bytes it was encoded in. That
+/// lets a decoded byte range — e.g. a word-bounded secret found in the decoded
+/// plaintext — be translated back to the exact raw bytes to redact, including
+/// the full escape when the secret ends mid-escape.
+struct DecodedContent {
+    decoded: Vec<u8>,
+    /// For each byte in [`Self::decoded`], the raw span of input bytes it was
+    /// encoded in.
+    raw: Vec<Range<usize>>,
+}
+
+impl DecodedContent {
+    fn push(&mut self, byte: u8, raw: Range<usize>) {
+        self.decoded.push(byte);
+        self.raw.push(raw);
+    }
+
+    /// Word-bounded occurrences of `secret` in [`Self::decoded`], translated
+    /// back to raw byte spans relative to the input the content was decoded
+    /// from.
+    fn find_word_bounded_raw_spans(&self, secret: &str) -> Vec<Range<usize>> {
+        find_word_bounded_spans(&self.decoded, secret)
+            .into_iter()
+            .map(|span| self.raw[span.start].start..self.raw[span.end - 1].end)
+            .collect()
+    }
+}
+
+/// Decode the content of a JSON string literal (RFC 8259 §7) into
+/// [`DecodedContent`].
+///
+/// Decoding is delegated to `json_escape`'s token iterator, which yields each
+/// literal run as a borrowed slice and each escape sequence as its decoded
+/// `char`. The raw length of an escape is recovered from that character: a
+/// simple escape (`\n`) spans 2 bytes, a `\uXXXX` escape 6, and a surrogate
+/// pair (`\uD83D\uDE00`) 12 — the character's UTF-8 width distinguishes the
+/// pair from a single `\uXXXX`.
+///
+/// Returns `None` for an invalid escape sequence; the caller treats the
+/// literal as unmatchable.
+fn decode_json_content(content: &[u8]) -> Option<DecodedContent> {
+    let mut out = DecodedContent {
+        decoded: vec![],
+        raw: vec![],
+    };
+    let mut raw_cursor = 0;
+    for token in json_escape::token::unescape(content) {
+        match token.ok()? {
+            UnescapedToken::Literal(literal) => {
+                for (k, &byte) in literal.iter().enumerate() {
+                    out.push(byte, raw_cursor + k..raw_cursor + k + 1);
+                }
+                raw_cursor += literal.len();
+            }
+            UnescapedToken::Unescaped(ch) => {
+                let escape_len = if ch.len_utf8() == 4 {
+                    12
+                } else if content.get(raw_cursor + 1) == Some(&b'u') {
+                    6
+                } else {
+                    2
+                };
+                let mut buf = [0; 4];
+                for &byte in ch.encode_utf8(&mut buf).as_bytes() {
+                    out.push(byte, raw_cursor..raw_cursor + escape_len);
+                }
+                raw_cursor += escape_len;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Find a JSON string literal that contains `secret` as a word-bounded
+/// substring of its decoded content, returned as raw byte spans.
+///
+/// Literals are decoded with `json_escape` ([`decode_json_content`]) so that a
+/// secret whose own bytes were escaped — e.g. `"my \"quoted\" secret"` — is
+/// still found, and the decoded byte span maps back to the raw bytes.
+///
+/// Literals with no escape sequences decode to their own raw bytes, so they
+/// take the allocation-free raw scan directly.
 fn find_json_string_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize>> {
+    let secret = secret.expose_secret();
     let mut out = vec![];
     let mut i = 0;
     while i < body.len() {
@@ -257,23 +338,19 @@ fn find_json_string_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize
         }
         let content_end = j.min(body.len());
         if body.get(content_end).is_some_and(|byte| *byte == b'"') {
-            if has_escape {
-                if let Ok(raw_str) = std::str::from_utf8(&body[content_start..=content_end])
-                    && let Ok(decoded) = serde_json::from_str::<String>(raw_str)
-                    && decoded == secret.expose_secret()
-                {
-                    out.push(content_start + 1..content_end);
-                }
+            let content = &body[content_start + 1..content_end];
+            let spans = if has_escape {
+                decode_json_content(content)
+                    .map(|decoded| decoded.find_word_bounded_raw_spans(secret))
+                    .unwrap_or_default()
             } else {
-                let raw_content = &body[content_start + 1..content_end];
-                out.extend(
-                    find_word_bounded_spans(raw_content, secret.expose_secret())
-                        .into_iter()
-                        .map(|span| {
-                            (content_start + 1 + span.start)..(content_start + 1 + span.end)
-                        }),
-                );
-            }
+                find_word_bounded_spans(content, secret)
+            };
+            out.extend(
+                spans
+                    .into_iter()
+                    .map(|span| (content_start + 1 + span.start)..(content_start + 1 + span.end)),
+            );
         }
         i = content_end + 1;
     }
@@ -319,42 +396,135 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
+/// Decode a form value into [`DecodedContent`] (`+` for a space, `%XX` for a
+/// byte), tracking each byte's raw position. An invalid `%` sequence is
+/// passed through literally, matching `form_urlencoded`.
+fn decode_form_content(value: &[u8]) -> DecodedContent {
+    let mut out = DecodedContent {
+        decoded: vec![],
+        raw: vec![],
+    };
+    let mut i = 0;
+    while i < value.len() {
+        match value[i] {
+            b'+' => {
+                out.push(b' ', i..i + 1);
+                i += 1;
+            }
+            b'%' => {
+                if let (Some(hi), Some(lo)) =
+                    (hex_digit(value.get(i + 1)), hex_digit(value.get(i + 2)))
+                {
+                    out.push(hi << 4 | lo, i..i + 3);
+                    i += 3;
+                } else {
+                    out.push(b'%', i..i + 1);
+                    i += 1;
+                }
+            }
+            byte => {
+                out.push(byte, i..i + 1);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The value of `byte` as a hexadecimal digit, if it is one.
+fn hex_digit(byte: Option<&u8>) -> Option<u8> {
+    match byte {
+        Some(b @ b'0'..=b'9') => Some(b - b'0'),
+        Some(b @ b'a'..=b'f') => Some(b - b'a' + 10),
+        Some(b @ b'A'..=b'F') => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Find a form field value (by byte span in `body`) that contains `secret`.
+///
+/// Values are decoded ([`decode_form_content`]) when they contain any escape
+/// (`%` or `+`) so that a secret whose own bytes were percent-encoded — e.g.
+/// `token=my%20secret%20here` for the secret `my secret here` — is still
+/// found, with the decoded byte span mapped back to the raw bytes. Values
+/// with no escapes decode to themselves and take the allocation-free raw
+/// scan.
 fn find_form_value_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize>> {
+    let secret = secret.expose_secret();
     let mut out = vec![];
     let mut offset = 0;
     for pair in body.split(|&b| b == b'&') {
         let value_start = pair.iter().position(|&b| b == b'=').map_or(0, |p| p + 1);
         let value = &pair[value_start..];
-        let mut spans: Vec<Range<usize>> = find_word_bounded_spans(value, secret.expose_secret())
-            .into_iter()
-            .map(|span| (offset + value_start + span.start)..(offset + value_start + span.end))
-            .collect();
-        if spans.is_empty() {
-            // The value may be percent-encoded, so a raw byte match can't
-            // see the secret; fall back to comparing the *decoded whole
-            // value*. Only the value itself is compared — never a parsed
-            // `name=` prefix of it — so a value like `SECRET=x` (where
-            // `SECRET` is a known secret) is not conflated with the `=x`
-            // suffix, which would otherwise be redacted along with it.
-            let decoded = form_urlencoded::parse(value)
-                .next()
-                .map(|(name, _)| name.into_owned())
-                .unwrap_or_default();
-            if decoded == *secret.expose_secret() {
-                let start = offset + value_start;
-                spans.push(start..start + value.len());
-            }
-        }
-        out.extend(spans);
+        let spans = if value.contains(&b'%') || value.contains(&b'+') {
+            decode_form_content(value).find_word_bounded_raw_spans(secret)
+        } else {
+            find_word_bounded_spans(value, secret)
+        };
+        out.extend(
+            spans
+                .into_iter()
+                .map(|span| (offset + value_start + span.start)..(offset + value_start + span.end)),
+        );
         offset += pair.len() + 1;
     }
     out
 }
 
+/// Decode XML entity references in a text node or attribute value into
+/// [`DecodedContent`], tracking each byte's raw position.
+///
+/// Each `&...;` reference is unescaped with `quick_xml` (the decoder paired
+/// with [`xml_escape`]); a reference that doesn't decode — e.g. an unknown
+/// named entity — is left as a literal `&`, keeping the bytes aligned with
+/// the input.
+fn decode_xml_content(raw: &[u8]) -> DecodedContent {
+    let mut out = DecodedContent {
+        decoded: vec![],
+        raw: vec![],
+    };
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'&' {
+            let Some(rel_end) = raw[i + 1..].iter().position(|&b| b == b';') else {
+                out.push(b'&', i..i + 1);
+                i += 1;
+                continue;
+            };
+            let entity_end = i + 1 + rel_end;
+            let decoded = std::str::from_utf8(&raw[i..=entity_end])
+                .ok()
+                .and_then(|entity| quick_xml::escape::unescape(entity).ok());
+            if let Some(decoded) = decoded
+                && decoded.chars().count() == 1
+            {
+                let bytes = decoded.as_bytes();
+                for &byte in bytes {
+                    out.push(byte, i..entity_end + 1);
+                }
+                i = entity_end + 1;
+            } else {
+                out.push(b'&', i..i + 1);
+                i += 1;
+            }
+        } else {
+            out.push(raw[i], i..i + 1);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Find an XML text node or attribute value (by byte span in `body`) that
-/// [`quick_xml::escape::unescape`] decodes to `secret`.
+/// contains `secret`, returned as raw byte spans.
+///
+/// Spans containing an entity reference are decoded ([`decode_xml_content`])
+/// so that a secret whose own bytes were entity-escaped — e.g. `a&amp;b` for
+/// the secret `a&b` — is still found, with the decoded byte span mapped back
+/// to the raw bytes. Spans with no `&` decode to themselves and take the
+/// allocation-free raw scan.
 fn find_xml_text_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize>> {
+    let secret_bytes = secret.expose_secret();
     let mut out = vec![];
     let mut i = 0;
     while i < body.len() {
@@ -372,33 +542,27 @@ fn find_xml_text_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize>> 
             .position(|&b| b == b'<')
             .map_or(body.len(), |p| i + p);
         let text_span = i..text_end;
-        if let Ok(text) = std::str::from_utf8(&body[text_span.clone()])
-            && let Ok(decoded) = quick_xml::escape::unescape(text)
-            && decoded.as_ref() == secret.expose_secret()
-        {
-            out.push(text_span);
+        let text = &body[text_span.clone()];
+        let spans = if text.contains(&b'&') {
+            decode_xml_content(text).find_word_bounded_raw_spans(secret_bytes)
         } else {
-            // A secret embedded inside a longer text node (e.g. an error
-            // message surrounding the token) is missed by the whole-node
-            // equality above. Catch it with a raw word-bounded substring
-            // scan: the text node's raw bytes are the same plaintext the
-            // decoder would produce (absent entities between the secret's
-            // own bytes), so byte offsets map 1:1.
-            out.extend(
-                find_word_bounded_spans(&body[text_span.clone()], secret.expose_secret())
-                    .into_iter()
-                    .map(|span| (text_span.start + span.start)..(text_span.start + span.end)),
-            );
-        }
+            find_word_bounded_spans(text, secret_bytes)
+        };
+        out.extend(
+            spans
+                .into_iter()
+                .map(|span| (text_span.start + span.start)..(text_span.start + span.end)),
+        );
         i = text_end;
     }
     out
 }
 
 /// Find a quoted attribute value (by byte span within `tag`, a single
-/// `<...>` element's bytes) that [`quick_xml::escape::unescape`] decodes to
-/// `secret`.
+/// `<...>` element's bytes) that contains `secret`, returned as raw byte
+/// spans. Entity references are handled as in [`find_xml_text_spans`].
 fn find_xml_attribute_spans(tag: &[u8], secret: &SecretString, offset: usize) -> Vec<Range<usize>> {
+    let secret = secret.expose_secret();
     let mut out = vec![];
     let mut i = 0;
     while i < tag.len() {
@@ -413,23 +577,15 @@ fn find_xml_attribute_spans(tag: &[u8], secret: &SecretString, offset: usize) ->
         };
         let content_end = content_start + rel_end;
         let content_span = content_start..content_end;
-        if let Ok(text) = std::str::from_utf8(&tag[content_span.clone()])
-            && let Ok(decoded) = quick_xml::escape::unescape(text)
-            && decoded.as_ref() == secret.expose_secret()
-        {
-            out.push(offset + content_start..offset + content_end);
+        let content = &tag[content_span.clone()];
+        let spans = if content.contains(&b'&') {
+            decode_xml_content(content).find_word_bounded_raw_spans(secret)
         } else {
-            // Same embedded-secret case as text nodes: a secret that shares
-            // an attribute value with other text (e.g. `url="...sk-abc123?x"`)
-            // is caught by the raw word-bounded substring scan.
-            out.extend(
-                find_word_bounded_spans(&tag[content_span], secret.expose_secret())
-                    .into_iter()
-                    .map(|span| {
-                        (offset + content_start + span.start)..(offset + content_start + span.end)
-                    }),
-            );
-        }
+            find_word_bounded_spans(content, secret)
+        };
+        out.extend(spans.into_iter().map(|span| {
+            (offset + content_start + span.start)..(offset + content_start + span.end)
+        }));
         i = content_end + 1;
     }
     out
@@ -959,5 +1115,255 @@ mod tests {
             result,
             format!("field={placeholder}=x&other=1").into_bytes()
         );
+    }
+
+    // ── decoded substring matches (escaped secrets in longer content) ───────
+
+    #[test]
+    fn mask_json_matches_secret_with_escaped_bytes_embedded_in_longer_text() {
+        // Regression: a secret whose own bytes are escaped (`\"`) was missed
+        // by the raw word-bounded scan, and escaped literals only matched as
+        // a whole value. The decoded scan maps the decoded span back to the
+        // exact raw bytes, leaving the surrounding text and other escapes
+        // untouched.
+        let secret = SecretString::from("p@ss\"word");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = br#"{"error":"tab\there p@ss\"word x"}"#;
+        let result = mask_one_canonical_spelling(body, ContentType::Json, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!(r#"{{"error":"tab\there {placeholder} x"}}"#).into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_json_matches_secret_with_unicode_escape_embedded() {
+        // `\u0022` is a noncanonical spelling of `"`; the decoded span for
+        // the embedded secret maps to the full 6-byte escape.
+        let secret = SecretString::from("sk-a\"b");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = br#"{"token":"token sk-a\u0022b here"}"#;
+        let result = mask_one_canonical_spelling(body, ContentType::Json, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!(r#"{{"token":"token {placeholder} here"}}"#).into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_json_matches_secret_with_surrogate_pair_escape_embedded() {
+        // `\uD83D\uDE00` is the UTF-16 surrogate pair for `😀` (12 raw
+        // bytes); the decoded span maps back to the whole pair.
+        let secret = SecretString::from("pwd😀x");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = br#"{"token":"cred pwd\uD83D\uDE00x end"}"#;
+        let result = mask_one_canonical_spelling(body, ContentType::Json, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!(r#"{{"token":"cred {placeholder} end"}}"#).into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_json_skips_literal_with_invalid_escape() {
+        // `\q` is not a valid JSON escape; the literal is treated as
+        // unmatchable rather than risking a misaligned raw span, while a
+        // valid escape in another literal still matches.
+        let secret = SecretString::from("x\ny");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = br#"{"ok":"x\ny","bad":"x\qz"}"#;
+        let result = mask_one_canonical_spelling(body, ContentType::Json, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!(r#"{{"ok":"{placeholder}","bad":"x\qz"}}"#).into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_form_matches_percent_encoded_secret_embedded_in_longer_value() {
+        // Regression: a percent-encoded secret embedded in a longer value was
+        // missed entirely; the decoded scan maps the decoded span back to the
+        // `%XX` bytes.
+        let secret = SecretString::from("my secret here");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = b"token=access my%20secret%20here granted&other=1";
+        let result =
+            mask_one_canonical_spelling(body, ContentType::FormEncoded, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!("token=access {placeholder} granted&other=1").into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_form_matches_plus_encoded_secret_embedded() {
+        // `+` is the canonical spelling of a space in form values.
+        let secret = SecretString::from("a b");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = b"token=x a+b y";
+        let result =
+            mask_one_canonical_spelling(body, ContentType::FormEncoded, &secret, &placeholder);
+
+        assert_eq!(result, format!("token=x {placeholder} y").into_bytes());
+    }
+
+    #[test]
+    fn mask_xml_matches_entity_escaped_secret_embedded_in_text_node() {
+        // Regression: `a&amp;b` (the secret `a&b`) embedded in a longer text
+        // node was missed by the raw scan; the decoded span maps back to the
+        // full entity.
+        let secret = SecretString::from("a&b");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = b"<error>invalid token a&amp;b supplied</error>";
+        let result = mask_one_canonical_spelling(body, ContentType::Xml, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!("<error>invalid token {placeholder} supplied</error>").into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_xml_matches_entity_escaped_secret_embedded_in_attribute_value() {
+        // Two entities share the value; only the one the secret spans is
+        // redacted, and only the secret's bytes (not the rest of the entity).
+        let secret = SecretString::from("a&b");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = br#"<link url="x?a&amp;b&amp;c=1"/>"#;
+        let result = mask_one_canonical_spelling(body, ContentType::Xml, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!(r#"<link url="x?{placeholder}&amp;c=1"/>"#).into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_xml_matches_numeric_entity_escaped_secret_embedded() {
+        // Decimal character reference, distinct from the hexadecimal entity
+        // in the whole-value test.
+        let secret = SecretString::from("a&b");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = b"<error>bad token a&#38;b value</error>";
+        let result = mask_one_canonical_spelling(body, ContentType::Xml, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!("<error>bad token {placeholder} value</error>").into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_round_trips_through_canonical_encoder() {
+        // The offset-map decoders must agree with the encoders `encode_secret`
+        // uses: re-encoding the secret and masking the result redacts the
+        // whole value for every content type.
+        let secret = SecretString::from("a\"b&c<d> e+f");
+        let placeholder = SecretPlaceholder::new();
+        let cases = [
+            (
+                ContentType::Json,
+                format!(
+                    "{{\"token\":\"{}\"}}",
+                    encode_secret(&secret, ContentType::Json)
+                ),
+                format!("{{\"token\":\"{placeholder}\"}}").into_bytes(),
+            ),
+            (
+                ContentType::FormEncoded,
+                format!("token={}", encode_secret(&secret, ContentType::FormEncoded)),
+                format!("token={placeholder}").into_bytes(),
+            ),
+            (
+                ContentType::Xml,
+                format!(
+                    "<token>{}</token>",
+                    encode_secret(&secret, ContentType::Xml)
+                ),
+                format!("<token>{placeholder}</token>").into_bytes(),
+            ),
+        ];
+        for (content_type, body, expected) in cases {
+            let result =
+                mask_one_canonical_spelling(body.as_bytes(), content_type, &secret, &placeholder);
+            assert_eq!(result, expected, "content type {content_type:?}");
+        }
+    }
+
+    #[test]
+    fn decode_json_content_matches_serde_json() {
+        for content in [
+            "plain",
+            "with \\\"quotes\\\"",
+            "a\\u0022b",
+            "tab\\t and \\nnewline",
+            "emoji \\uD83D\\uDE00 done",
+            "\\u0000 null",
+        ] {
+            let decoded = decode_json_content(content.as_bytes()).expect("valid escape");
+            let via_serde = serde_json::from_str::<String>(&format!("\"{content}\""))
+                .expect("valid JSON string literal");
+            assert_eq!(
+                std::str::from_utf8(&decoded.decoded).expect("valid utf8"),
+                via_serde,
+                "for {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_xml_content_matches_quick_xml() {
+        for raw in [
+            "plain text",
+            "a&amp;b",
+            "a&#38;b",
+            "a&#x26;b",
+            "both &lt;tag&gt; and &quot;quote&quot;",
+            "&amp;amp; nested",
+        ] {
+            let decoded = decode_xml_content(raw.as_bytes());
+            let via_quick = quick_xml::escape::unescape(raw).expect("valid XML entity fixture");
+            assert_eq!(
+                std::str::from_utf8(&decoded.decoded).expect("valid utf8"),
+                via_quick.as_ref(),
+                "for {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_form_content_matches_form_urlencoded() {
+        for raw in [
+            "plain",
+            "a%20b+c",
+            "%2B plus %2b lower",
+            "100%25 off",
+            "bad %zz kept",
+            "trailing%",
+        ] {
+            let decoded = decode_form_content(raw.as_bytes());
+            let (name, _) = form_urlencoded::parse(raw.as_bytes())
+                .next()
+                .expect("one field");
+            assert_eq!(
+                std::str::from_utf8(&decoded.decoded).expect("valid utf8"),
+                name.as_ref(),
+                "for {raw}"
+            );
+        }
     }
 }
