@@ -12,7 +12,7 @@ use firma_authority::{
     seed::SeedFile,
 };
 use firma_core::token::paseto::PasetoV4Signer;
-use firma_core::{AgentId, SessionId, TokenId};
+use firma_identifiers::{AgentId, SessionId, TokenId};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType,
 };

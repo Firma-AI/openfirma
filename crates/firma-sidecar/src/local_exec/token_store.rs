@@ -32,8 +32,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use firma_identifiers::ApprovalTokenId;
-use firma_runtime_state::SandboxId;
+use firma_identifiers::{ApprovalTokenId, SandboxId};
 
 // ---------------------------------------------------------------------------
 // Token state

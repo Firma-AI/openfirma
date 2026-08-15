@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
-use firma_core::AgentId;
 use firma_core::FirmaEntityUid;
 use firma_core::policy::PolicyBundle;
-use firma_core::session::SessionId;
 use firma_core::token::CapabilityClaims;
 use firma_core::token::paseto::PasetoV4Signer;
+use firma_identifiers::{AgentId, SessionId};
 use firma_protobuf::v1::RevocationEvent;
 use firma_protobuf::v1::authority_service_server::AuthorityService;
 use firma_protobuf::v1::{

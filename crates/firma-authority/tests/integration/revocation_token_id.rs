@@ -1,6 +1,6 @@
 use chrono::Duration;
 use firma_authority::RevocationStore;
-use firma_core::TokenId;
+use firma_identifiers::TokenId;
 
 #[tokio::test]
 async fn persistence_round_trips_canonical_ctok_id() {

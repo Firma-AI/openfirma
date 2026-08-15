@@ -12,8 +12,7 @@ use std::fmt;
 
 use ecdsa::SignatureEncoding;
 use ecdsa::signature::Signer;
-use firma_identifiers::AuditEventId;
-use firma_runtime_state::SandboxId;
+use firma_identifiers::{AuditEventId, SandboxId};
 use p256::ecdsa::{DerSignature, SigningKey};
 use sha2::{Digest, Sha256};
 

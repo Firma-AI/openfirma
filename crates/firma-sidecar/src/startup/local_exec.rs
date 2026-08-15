@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 
 use crate::config::{LocalExecConfig, SidecarConfig};
 use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerConfig};

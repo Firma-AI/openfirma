@@ -79,7 +79,7 @@ mod tests {
     use super::*;
 
     use super::super::decision::{CapabilityValidationStage, ConstraintEnforcementStage};
-    use firma_core::token::TokenId;
+    use firma_identifiers::TokenId;
 
     #[test]
     fn test_normalization_error_maps_to_unclassified() {

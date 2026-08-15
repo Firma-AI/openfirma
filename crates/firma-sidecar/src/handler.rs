@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use firma_core::envelope::InvalidMethod;
 use firma_core::{
-    AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
-    ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
-    InjectedCredentials, SessionId, TransportView,
+    AbortReason, ActionParams, ConnectorError, ConnectorResponse, DenyReason, ExecutionEnvelope,
+    ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams, InjectedCredentials, TransportView,
 };
 use firma_http::HeaderMap;
+use firma_identifiers::{AgentId, SessionId};
 use tokio::sync::mpsc;
 
 use crate::audit::{AuditPayload, Decision};
@@ -1180,10 +1180,10 @@ pub(crate) mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
     use firma_core::{
-        CapabilityClaims, Connector, RevocationStore, TokenError, TokenId, TokenVerifier,
-        TransportView,
+        CapabilityClaims, Connector, RevocationStore, TokenError, TokenVerifier, TransportView,
     };
     use firma_http::{Authority, Method};
+    use firma_identifiers::TokenId;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio_util::sync::CancellationToken;

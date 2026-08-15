@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::SandboxId;
+use firma_identifiers::SandboxId;
 
 /// Return `<runtime>/firma`. Pure resolver with no I/O. Reads
 /// `FIRMA_STATE_DIR` / `XDG_RUNTIME_DIR` / `LOCALAPPDATA` from the current

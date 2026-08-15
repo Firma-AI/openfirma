@@ -34,7 +34,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use firma_core::token::matches_resource_scope;
-use firma_core::{AgentId, CapabilityClaims, DenyReason, ModificationSpec, StepUpSpec};
+use firma_core::{CapabilityClaims, DenyReason, ModificationSpec, StepUpSpec};
+use firma_identifiers::AgentId;
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::enforcement::session::RuntimeSignals;

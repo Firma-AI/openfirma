@@ -7,11 +7,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 use firma_core::{
-    AbortReason, ActionParams, AgentId, CapabilityClaims, Connector, ConnectorError,
-    ConnectorResponse, DenyReason, ExecutionEnvelope, InjectedCredentials, ModificationSpec,
-    RevocationStore, StepUpSpec, TokenError, TokenId, TokenVerifier, TransportView,
+    AbortReason, ActionParams, CapabilityClaims, Connector, ConnectorError, ConnectorResponse,
+    DenyReason, ExecutionEnvelope, InjectedCredentials, ModificationSpec, RevocationStore,
+    StepUpSpec, TokenError, TokenVerifier, TransportView,
 };
 use firma_http::{Authority, HeaderMap, HeaderName, Method};
+use firma_identifiers::{AgentId, TokenId};
 use firma_sidecar::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode};
 use firma_sidecar::config::{
     HttpsMitmConfig, MappingRuleConfig, MappingRulesFile, SidecarMode, TenancyMode,

@@ -37,7 +37,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use firma_core::SessionId;
+use firma_identifiers::SessionId;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
@@ -301,7 +301,7 @@ fn replay(path: &Path, cap: NonZeroUsize) -> std::io::Result<LruCache<SessionId,
 mod tests {
     #![allow(clippy::float_cmp)]
     use super::*;
-    use firma_core::SessionId;
+    use firma_identifiers::SessionId;
 
     fn sid(s: &str) -> SessionId {
         s.parse().expect("valid session id")

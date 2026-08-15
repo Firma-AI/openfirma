@@ -25,7 +25,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 

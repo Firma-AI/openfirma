@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::RunError;
 use firma_config_loader::AgentProfile;
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 const MINIMAL_MAPPING_RULES_TOML: &str = "\

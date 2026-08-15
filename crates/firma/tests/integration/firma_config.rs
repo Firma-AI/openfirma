@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 
 use super::CONFIG_FILE_NAME;
 

@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use firma_core::AgentId;
+use firma_identifiers::{AgentId, SandboxId};
 use serde::Serialize;
 
 use crate::error::RunError;
-use firma_runtime_state::{SandboxId, UserProcessId};
+use firma_runtime_state::UserProcessId;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Metadata {

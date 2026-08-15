@@ -31,7 +31,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use cedar_policy::{Authorizer, Context, Decision, Entities, Entity, EntityUid, Request, Schema};
-use firma_core::{AgentId, FirmaEntityUid};
+use firma_core::FirmaEntityUid;
+use firma_identifiers::AgentId;
 
 use crate::policy::bundle;
 use crate::policy::fixture::{Expected, Fixture};

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 
 use crate::enforcement::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 

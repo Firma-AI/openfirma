@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use firma_run::error::RunError;
 use firma_run::identity::{RunIdentity, read_configured_agent_id};
 

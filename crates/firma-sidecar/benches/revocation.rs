@@ -6,7 +6,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use firma_core::{RevocationStore, TokenId};
+use firma_core::RevocationStore;
+use firma_identifiers::TokenId;
 use firma_sidecar::enforcement::revocation::{BloomLruRevocationStore, RevocationConfig};
 
 fn bench_is_revoked_miss(c: &mut Criterion) {

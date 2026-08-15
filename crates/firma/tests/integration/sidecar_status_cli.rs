@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 
 #[test]
 fn empty_runtime_dir_lists_nothing_and_exits_zero() {

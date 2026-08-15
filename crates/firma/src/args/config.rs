@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 
 static POSTURE_STRICT: &str = include_str!("../../templates/policies/strict.cedar");
 static POSTURE_DEV: &str = include_str!("../../templates/policies/dev.cedar");

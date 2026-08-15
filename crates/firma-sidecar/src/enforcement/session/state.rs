@@ -18,7 +18,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
-use firma_core::SessionId;
+use firma_identifiers::SessionId;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -308,7 +308,7 @@ impl SessionStateStore for LruSessionStateStore {
 mod tests {
     #![allow(clippy::float_cmp)]
     use super::*;
-    use firma_core::SessionId;
+    use firma_identifiers::SessionId;
 
     fn sid(s: &str) -> SessionId {
         s.parse().expect("valid session id")

@@ -9,7 +9,6 @@ pub mod decision;
 pub mod envelope;
 pub mod policy;
 pub mod run_audit;
-pub mod session;
 pub mod token;
 pub mod transport;
 
@@ -26,12 +25,7 @@ pub use envelope::{
     ActionParams, DbQueryParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
     HttpParams, ToolUseParams,
 };
-#[doc(inline)]
-pub use firma_identifiers::AgentId;
 pub use policy::PolicyBundle;
 pub use run_audit::{RunAuditEvent, RunAuditMessage};
-pub use session::SessionId;
-pub use token::{
-    CapabilityClaims, RevocationStore, TokenError, TokenId, TokenSigner, TokenVerifier,
-};
+pub use token::{CapabilityClaims, RevocationStore, TokenError, TokenSigner, TokenVerifier};
 pub use transport::TransportView;

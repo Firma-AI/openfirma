@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use firma_config_loader::AgentProfile;
-use firma_core::AgentId;
+use firma_identifiers::AgentId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 use crate::config::SidecarEndpoint;

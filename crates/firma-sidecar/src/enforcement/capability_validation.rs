@@ -33,9 +33,10 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 
+use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+use firma_identifiers::AgentId;
 #[cfg(test)]
-use firma_core::TokenId;
-use firma_core::{AgentId, CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+use firma_identifiers::TokenId;
 
 use crate::config::TenancyMode;
 use crate::normalizer::NormalizedEnvelope;

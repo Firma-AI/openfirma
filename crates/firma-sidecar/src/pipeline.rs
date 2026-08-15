@@ -1184,7 +1184,7 @@ fn extract_host(resource: &str) -> &str {
 /// independent of the session-state backend. A future version may split
 /// sessions into multiple threads based on intent metadata.
 #[must_use]
-fn derive_thread_id(session_id: &firma_core::SessionId) -> String {
+fn derive_thread_id(session_id: &firma_identifiers::SessionId) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(b"firma:thread:");
@@ -1205,6 +1205,7 @@ mod tests {
     use chrono::Utc;
     use firma_core::*;
     use firma_http::{Authority, HeaderMap, HeaderName};
+    use firma_identifiers::{AgentId, TokenId};
     use http::HeaderValue;
     use http::uri::InvalidUri;
     use std::collections::HashMap;

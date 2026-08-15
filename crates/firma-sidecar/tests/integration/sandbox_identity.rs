@@ -6,7 +6,7 @@
 use std::assert_matches;
 use std::time::Duration;
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 use firma_sidecar::local_exec::handler::{
     DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig, LocalExecRequest,
 };

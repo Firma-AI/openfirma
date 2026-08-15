@@ -18,7 +18,7 @@ use firma_run::routing::{
 #[derive(serde::Deserialize)]
 struct AuthorityMetadata {
     sandbox_id: firma_run::identity::SandboxId,
-    agent_id: firma_core::AgentId,
+    agent_id: firma_identifiers::AgentId,
     session_id: String,
     profile: String,
     listen_addr: String,

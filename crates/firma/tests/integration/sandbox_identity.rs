@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 
 #[test]
 fn firma_run_rejects_preexisting_reserved_sandbox_id() {

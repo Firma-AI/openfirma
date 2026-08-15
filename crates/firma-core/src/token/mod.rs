@@ -3,11 +3,8 @@
 pub mod paseto;
 
 use chrono::{DateTime, Utc};
+use firma_identifiers::{AgentId, SessionId, TokenId};
 use serde::{Deserialize, Serialize};
-
-use crate::AgentId;
-use crate::session::SessionId;
-pub use firma_identifiers::{TokenId, TokenIdParseError};
 
 /// Errors from token signing, verification, and revocation operations.
 #[derive(Debug, thiserror::Error)]

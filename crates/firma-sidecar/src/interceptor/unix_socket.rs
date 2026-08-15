@@ -303,6 +303,7 @@ mod tests {
 
     use chrono::Utc;
     use firma_core::*;
+    use firma_identifiers::{AgentId, TokenId};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::net::UnixStream;

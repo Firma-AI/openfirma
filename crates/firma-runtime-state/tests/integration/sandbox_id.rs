@@ -1,7 +1,7 @@
 use std::assert_matches;
 use std::str::FromStr as _;
 
-use firma_runtime_state::SandboxId;
+use firma_identifiers::SandboxId;
 
 const SANDBOX_ID: &str = "sbx_01j0000000e008000000000001";
 

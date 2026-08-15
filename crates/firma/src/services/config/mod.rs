@@ -13,8 +13,8 @@ use dialoguer::theme::ColorfulTheme;
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 use doc::DocInputs;
 use firma_config_loader::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
-use firma_core::AgentId;
 use firma_fs::create_private_dir_all;
+use firma_identifiers::AgentId;
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
