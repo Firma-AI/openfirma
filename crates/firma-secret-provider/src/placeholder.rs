@@ -12,6 +12,13 @@ use type_safe_id::{StaticType, TypeSafeId};
 // fsp = firma secret placeholder
 pub const PLACEHOLDER_PREFIX: &str = "fsp_";
 
+/// Byte length of [`SecretPlaceholder`]'s base32 UUID suffix (per the
+/// type-safe-id spec, 26 Crockford-base32 characters).
+///
+/// A valid token is exactly `PLACEHOLDER_PREFIX.len() +
+/// PLACEHOLDER_SUFFIX_LEN` bytes.
+pub const PLACEHOLDER_SUFFIX_LEN: usize = 26;
+
 /// Opaque token substituted for a secret value in extraction output.
 ///
 /// Minted per extracted secret and returned to the caller-supplied `mint`
@@ -38,6 +45,15 @@ mod tests {
         assert_eq!(
             <Inner as StaticType>::TYPE,
             &PLACEHOLDER_PREFIX[0..PLACEHOLDER_PREFIX.len() - 1]
+        );
+    }
+
+    #[test]
+    fn placeholder_length_is_correct() {
+        let placeholder = SecretPlaceholder::new();
+        assert_eq!(
+            placeholder.to_string().len(),
+            PLACEHOLDER_PREFIX.len() + PLACEHOLDER_SUFFIX_LEN
         );
     }
 }

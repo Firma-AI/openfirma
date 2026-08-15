@@ -21,8 +21,6 @@
 //! [`MIN_MASKABLE_SECRET_LEN`] to avoid corrupting unrelated response content
 //! that coincidentally equals a short secret value.
 
-#![allow(dead_code, reason = "This code will be used by later PRs")]
-
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -38,7 +36,7 @@ use crate::secret_rewrite::{ContentType, MaskOp, RehydrateOp, find_decoded_secre
 /// positives (masking unrelated content that coincidentally equals the
 /// secret) than true positives. Such secrets pass through the response
 /// unmasked rather than risk corrupting content that was never the secret.
-pub(crate) const MIN_MASKABLE_SECRET_LEN: usize = 8;
+const MIN_MASKABLE_SECRET_LEN: usize = 8;
 
 /// Errors from mutating the [`SidecarSecretStore`].
 #[derive(Debug, thiserror::Error)]
@@ -139,12 +137,6 @@ impl SidecarSecretStore {
         self.by_placeholder.len()
     }
 
-    /// Whether the store holds no secrets.
-    #[must_use]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.by_placeholder.is_empty()
-    }
-
     /// Insert or replace a placeholder → secret mapping and rebuild the
     /// rehydration matcher.
     ///
@@ -163,7 +155,8 @@ impl SidecarSecretStore {
 
     /// Resolve a placeholder token to its secret bytes, if known.
     #[must_use]
-    pub(crate) fn resolve(&self, placeholder: &SecretPlaceholder) -> Option<&SecretString> {
+    #[cfg(test)]
+    fn resolve(&self, placeholder: &SecretPlaceholder) -> Option<&SecretString> {
         self.by_placeholder.get(placeholder)
     }
 
@@ -189,8 +182,11 @@ impl SidecarSecretStore {
     /// secret (see [`find_decoded_secret_spans`]) — catching re-encoded
     /// re-echoes (JSON escaping, percent-encoding, XML entities), not just a
     /// byte-identical occurrence. Overlapping spans across different secrets
-    /// are resolved by keeping the earliest, matching [`mask_body`]'s
-    /// sorted/non-overlapping requirement.
+    /// are resolved by keeping the earliest; spans that start at the same
+    /// offset keep the longest instead, so a longer secret that happens to
+    /// be a prefix-extension of a shorter one doesn't leave its tail
+    /// unmasked. The result is sorted/non-overlapping as
+    /// [`mask_body`] requires.
     ///
     /// [`mask_body`]: crate::secret_rewrite::mask_body
     #[must_use]
@@ -211,10 +207,16 @@ impl SidecarSecretStore {
             .collect();
         ops.sort_by_key(|op| op.range.start);
         ops.into_iter().fold(Vec::new(), |mut kept, op| {
-            let overlaps = kept
-                .last()
-                .is_some_and(|last: &MaskOp<'a>| op.range.start < last.range.end);
-            if !overlaps {
+            if let Some(last) = kept.last_mut()
+                && op.range.start < last.range.end
+            {
+                if op.range.start == last.range.start
+                    && op.range.end - op.range.start > last.range.end - last.range.start
+                {
+                    last.range = op.range;
+                    last.placeholder = op.placeholder;
+                }
+            } else {
                 kept.push(op);
             }
             kept
@@ -344,6 +346,24 @@ mod tests {
             String::from_utf8(result).expect("utf8"),
             format!(r#"{{"echo":"{placeholder}"}}"#)
         );
+    }
+
+    #[test]
+    fn mask_ops_prefers_longer_secret_when_echoes_share_a_start() {
+        // Two distinct, prefix-related secrets echoed at the same offset:
+        // keeping only the earliest span would redact the shorter secret and
+        // leave the longer one's tail unmasked. The longer span must win.
+        let short = "sk-live-abcdef";
+        let long = "sk-live-abcdef123456";
+        let p_short = SecretPlaceholder::new();
+        let p_long = SecretPlaceholder::new();
+        let store = store_with([(p_short, short), (p_long.clone(), long)]);
+
+        let body = long.as_bytes();
+        let ops = store.mask_ops(body, ContentType::Raw);
+        let result = mask_body(body, &ops);
+
+        assert_eq!(String::from_utf8(result).expect("utf8"), p_long.to_string());
     }
 
     #[test]

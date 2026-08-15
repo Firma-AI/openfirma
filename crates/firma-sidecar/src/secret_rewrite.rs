@@ -12,8 +12,6 @@
 //! a `SecretStore`-style scanner). This module only handles the rewrite math
 //! and encoding.
 
-#![allow(dead_code, reason = "This code will be used by later PRs")]
-
 use std::ops::Range;
 
 use firma_secret_provider::{ExposeSecret, SecretPlaceholder, SecretString};
@@ -48,7 +46,7 @@ impl ContentType {
     /// Returns `Ok(None)` when the header is absent, triggering body-sniffing
     /// fallback in the caller. Returns `Err` for a header present but not
     /// recognized as JSON, form-encoded, XML, or raw.
-    pub(crate) fn from_header(
+    fn from_header(
         header: Option<headers::ContentType>,
     ) -> Result<Option<Self>, UnrecognizedContentType> {
         let Some(header) = header else {
@@ -69,7 +67,7 @@ impl ContentType {
     ///
     /// Returns `Err` when the bytes look like neither JSON, XML, nor
     /// form-encoded data.
-    pub(crate) fn sniff(body: &[u8]) -> Result<Self, UnrecognizedContentType> {
+    fn sniff(body: &[u8]) -> Result<Self, UnrecognizedContentType> {
         let first = body.iter().find(|&&b| !b.is_ascii_whitespace()).copied();
         match first {
             Some(b'{' | b'[') => Ok(Self::Json),
@@ -102,21 +100,21 @@ impl ContentType {
 /// One outbound rehydration operation: replace `body[start..end]` (a
 /// placeholder token) with `secret` encoded for the body's content type.
 #[derive(Debug)]
-pub struct RehydrateOp<'a> {
+pub(crate) struct RehydrateOp<'a> {
     /// Byte offset range of the placeholder in the body.
-    pub range: Range<usize>,
+    pub(crate) range: Range<usize>,
     /// Secret string to substitute.
-    pub secret: &'a SecretString,
+    pub(crate) secret: &'a SecretString,
 }
 
 /// One inbound masking operation: replace `body[start..end]` (a raw secret
 /// value) with `placeholder`.
 #[derive(Debug)]
-pub struct MaskOp<'a> {
+pub(crate) struct MaskOp<'a> {
     /// Byte offset range of the secret value in the body.
-    pub range: Range<usize>,
+    pub(crate) range: Range<usize>,
     /// Placeholder token to substitute in place of the secret.
-    pub placeholder: &'a SecretPlaceholder,
+    pub(crate) placeholder: &'a SecretPlaceholder,
 }
 
 /// Apply outbound rehydration to `body`.
@@ -132,7 +130,11 @@ pub struct MaskOp<'a> {
 /// slice range indexing on `body` enforces this unconditionally, in both
 /// debug and release builds.
 #[must_use]
-pub fn rehydrate_body(body: &[u8], content_type: ContentType, ops: &[RehydrateOp]) -> Vec<u8> {
+pub(crate) fn rehydrate_body(
+    body: &[u8],
+    content_type: ContentType,
+    ops: &[RehydrateOp],
+) -> Vec<u8> {
     apply_ops(body, ops, encode_secret, content_type)
 }
 
@@ -148,7 +150,7 @@ pub fn rehydrate_body(body: &[u8], content_type: ContentType, ops: &[RehydrateOp
 /// slice range indexing on `body` enforces this unconditionally, in both
 /// debug and release builds.
 #[must_use]
-pub fn mask_body(body: &[u8], ops: &[MaskOp<'_>]) -> Vec<u8> {
+pub(crate) fn mask_body(body: &[u8], ops: &[MaskOp<'_>]) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len());
     let mut cursor = 0;
     for op in ops {
@@ -317,22 +319,34 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
-/// Find a form field value (by byte span in `body`) that [`form_urlencoded`]
-/// decodes to `secret`.
+/// Find a form field value (by byte span in `body`) that contains `secret`.
 fn find_form_value_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize>> {
     let mut out = vec![];
     let mut offset = 0;
     for pair in body.split(|&b| b == b'&') {
         let value_start = pair.iter().position(|&b| b == b'=').map_or(0, |p| p + 1);
         let value = &pair[value_start..];
-        let decoded = form_urlencoded::parse(value)
-            .next()
-            .map(|(name, _)| name.into_owned())
-            .unwrap_or_default();
-        if decoded == *secret.expose_secret() {
-            let start = offset + value_start;
-            out.push(start..start + value.len());
+        let mut spans: Vec<Range<usize>> = find_word_bounded_spans(value, secret.expose_secret())
+            .into_iter()
+            .map(|span| (offset + value_start + span.start)..(offset + value_start + span.end))
+            .collect();
+        if spans.is_empty() {
+            // The value may be percent-encoded, so a raw byte match can't
+            // see the secret; fall back to comparing the *decoded whole
+            // value*. Only the value itself is compared — never a parsed
+            // `name=` prefix of it — so a value like `SECRET=x` (where
+            // `SECRET` is a known secret) is not conflated with the `=x`
+            // suffix, which would otherwise be redacted along with it.
+            let decoded = form_urlencoded::parse(value)
+                .next()
+                .map(|(name, _)| name.into_owned())
+                .unwrap_or_default();
+            if decoded == *secret.expose_secret() {
+                let start = offset + value_start;
+                spans.push(start..start + value.len());
+            }
         }
+        out.extend(spans);
         offset += pair.len() + 1;
     }
     out
@@ -357,11 +371,24 @@ fn find_xml_text_spans(body: &[u8], secret: &SecretString) -> Vec<Range<usize>> 
             .iter()
             .position(|&b| b == b'<')
             .map_or(body.len(), |p| i + p);
-        if let Ok(text) = std::str::from_utf8(&body[i..text_end])
+        let text_span = i..text_end;
+        if let Ok(text) = std::str::from_utf8(&body[text_span.clone()])
             && let Ok(decoded) = quick_xml::escape::unescape(text)
             && decoded.as_ref() == secret.expose_secret()
         {
-            out.push(i..text_end);
+            out.push(text_span);
+        } else {
+            // A secret embedded inside a longer text node (e.g. an error
+            // message surrounding the token) is missed by the whole-node
+            // equality above. Catch it with a raw word-bounded substring
+            // scan: the text node's raw bytes are the same plaintext the
+            // decoder would produce (absent entities between the secret's
+            // own bytes), so byte offsets map 1:1.
+            out.extend(
+                find_word_bounded_spans(&body[text_span.clone()], secret.expose_secret())
+                    .into_iter()
+                    .map(|span| (text_span.start + span.start)..(text_span.start + span.end)),
+            );
         }
         i = text_end;
     }
@@ -385,11 +412,23 @@ fn find_xml_attribute_spans(tag: &[u8], secret: &SecretString, offset: usize) ->
             break;
         };
         let content_end = content_start + rel_end;
-        if let Ok(text) = std::str::from_utf8(&tag[content_start..content_end])
+        let content_span = content_start..content_end;
+        if let Ok(text) = std::str::from_utf8(&tag[content_span.clone()])
             && let Ok(decoded) = quick_xml::escape::unescape(text)
             && decoded.as_ref() == secret.expose_secret()
         {
             out.push(offset + content_start..offset + content_end);
+        } else {
+            // Same embedded-secret case as text nodes: a secret that shares
+            // an attribute value with other text (e.g. `url="...sk-abc123?x"`)
+            // is caught by the raw word-bounded substring scan.
+            out.extend(
+                find_word_bounded_spans(&tag[content_span], secret.expose_secret())
+                    .into_iter()
+                    .map(|span| {
+                        (offset + content_start + span.start)..(offset + content_start + span.end)
+                    }),
+            );
         }
         i = content_end + 1;
     }
@@ -866,6 +905,59 @@ mod tests {
         assert_eq!(
             result,
             format!("<auth value='{placeholder}'/>").into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_xml_matches_secret_embedded_in_longer_text_node() {
+        // Regression: a secret embedded in a longer text node (e.g. an error
+        // message surrounding the token) used to slip past the whole-node
+        // equality check and stay unmasked.
+        let secret = SecretString::from("sk-abc123def456");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = b"<error>invalid token sk-abc123def456 supplied</error>";
+        let result = mask_one_canonical_spelling(body, ContentType::Xml, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!("<error>invalid token {placeholder} supplied</error>").into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_xml_matches_secret_embedded_in_attribute_value() {
+        // Regression: same embedded-secret gap for attribute values, which
+        // previously matched only when the whole value equaled the secret.
+        let secret = SecretString::from("sk-abc123def456");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = br#"<link url="https://vault.example/x?token=sk-abc123def456&amp;x=1"/>"#;
+        let result = mask_one_canonical_spelling(body, ContentType::Xml, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!(r#"<link url="https://vault.example/x?token={placeholder}&amp;x=1"/>"#)
+                .into_bytes()
+        );
+    }
+
+    #[test]
+    fn mask_form_does_not_redact_suffix_after_secret_in_value() {
+        // Regression: a value like `abcdefgh=x` (where `abcdefgh` is a known
+        // secret) used to be matched by comparing the decoded *name* half of
+        // the value, replacing the whole `abcdefgh=x` span and corrupting the
+        // `=x` suffix. Only the secret bytes themselves may be redacted.
+        let secret = SecretString::from("abcdefgh");
+        let placeholder = SecretPlaceholder::new();
+
+        let body = b"field=abcdefgh=x&other=1";
+        let result =
+            mask_one_canonical_spelling(body, ContentType::FormEncoded, &secret, &placeholder);
+
+        assert_eq!(
+            result,
+            format!("field={placeholder}=x&other=1").into_bytes()
         );
     }
 }
