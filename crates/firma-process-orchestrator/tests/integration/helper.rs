@@ -2,6 +2,7 @@
 
 #[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
