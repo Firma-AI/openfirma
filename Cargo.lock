@@ -1750,6 +1750,7 @@ dependencies = [
  "async-trait",
  "base64",
  "brotli",
+ "bytesize",
  "cedar-policy",
  "chrono",
  "criterion",
