@@ -18,8 +18,8 @@ use firma_core::{
 };
 use firma_http::HeaderMap;
 use firma_secret_provider::{
-    CompiledMatcher, MatchingResolution, PLACEHOLDER_PREFIX, SecretPlaceholder,
-    gateway::client::GatewayClient, spec::http::HttpIntegrationSpec,
+    CompiledMatcher, MatchingResolution, PLACEHOLDER_PREFIX, PLACEHOLDER_SUFFIX_LEN,
+    SecretPlaceholder, gateway::client::GatewayClient, spec::http::HttpIntegrationSpec,
 };
 use headers::HeaderMapExt;
 use tokio::sync::mpsc;
@@ -482,12 +482,15 @@ pub struct DispatchedResponse {
 ///
 /// Instead, on a failed parse this shrinks the candidate span one byte at a
 /// time from the right and retries, down to the bare prefix. Crockford-base32
-/// [`SecretPlaceholder`] encoding is fixed-length, so at most one candidate
-/// span can ever parse successfully; shrinking finds it — landing exactly on
-/// the first placeholder's true end, i.e. right where the second one's own
-/// `fsp_` prefix starts — without hardcoding that length here. A body with no
-/// merged placeholders always succeeds on the first (longest) candidate, so
-/// this costs nothing in the common case.
+/// [`SecretPlaceholder`] encoding is fixed-length — a token is exactly
+/// `PLACEHOLDER_PREFIX.len() + PLACEHOLDER_SUFFIX_LEN` bytes — so at most one
+/// candidate span can ever parse successfully, and it can never extend past
+/// `path_start + PLACEHOLDER_SUFFIX_LEN`. Shrinking only within that bound
+/// still lands on the first placeholder's true end, i.e. right where a second
+/// merged `fsp_` prefix starts, but caps the per-prefix work at O(26)
+/// candidates instead of O(run length): without the bound, an adversarial
+/// body of `fsp_` plus a long alphanumeric run that never forms a valid token
+/// would force a quadratic `from_utf8` scan of every shrink candidate.
 fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
     let prefix_len = PLACEHOLDER_PREFIX.len();
     let mut result = Vec::new();
@@ -499,11 +502,14 @@ fn collect_placeholders(body: &[u8]) -> Vec<SecretPlaceholder> {
             while end < body.len() && body[end].is_ascii_alphanumeric() {
                 end += 1;
             }
-            let found = (path_start..=end).rev().find_map(|candidate_end| {
-                let token = std::str::from_utf8(&body[i..candidate_end]).ok()?;
-                let placeholder = SecretPlaceholder::from_str(token).ok()?;
-                Some((placeholder, candidate_end))
-            });
+            let max_candidate_end = end.min(path_start + PLACEHOLDER_SUFFIX_LEN);
+            let found = (path_start..=max_candidate_end)
+                .rev()
+                .find_map(|candidate_end| {
+                    let token = std::str::from_utf8(&body[i..candidate_end]).ok()?;
+                    let placeholder = SecretPlaceholder::from_str(token).ok()?;
+                    Some((placeholder, candidate_end))
+                });
             match found {
                 Some((placeholder, consumed_end)) => {
                     if !result.contains(&placeholder) {
@@ -750,9 +756,10 @@ impl RequestHandler {
     /// Sidecar's mirror of firma-run's HTTP-shaped `secret_providers`
     /// config, synthesized in at startup). A no-op when `providers` is
     /// empty. Requires [`Self::with_gateway_client`] to have been called
-    /// too — extracted secrets are pushed there; without a gateway
-    /// client, matched responses are never intercepted (logged as a
-    /// misconfiguration).
+    /// too: when a provider's matcher matches a response but no gateway
+    /// client is configured, the extracted secret cannot be pushed to the
+    /// broker, so the response is aborted fail-closed rather than forwarded
+    /// unmediated (see [`RequestHandler::intercept_http_secrets`]).
     #[must_use]
     pub fn with_http_secret_providers(mut self, providers: Vec<HttpIntegrationSpec>) -> Self {
         if !providers.is_empty() {
@@ -865,11 +872,18 @@ impl RequestHandler {
         }
 
         let content_type_val = request.headers.typed_get::<headers::ContentType>();
-        let Ok(ct) = ContentType::resolve(content_type_val, &plaintext) else {
-            let detail = "secret gateway: unrecognized content type".to_string();
-            tracing::warn!("{detail}");
-            return (request, Err(detail));
-        };
+        let ct = ContentType::resolve(content_type_val, &plaintext).unwrap_or_else(|_| {
+            // Unrecognized content type: fall back to raw byte
+            // substitution rather than failing closed, mirroring the
+            // masking side's fallback (a placeholder-bearing plaintext
+            // body that isn't sniffable — no leading `{`/`[`/`<` and no
+            // `=` — still substitutes in place safely, exactly as a Raw
+            // response body does).
+            tracing::warn!(
+                "secret gateway: unrecognized request content type; rehydrating as raw bytes"
+            );
+            ContentType::Raw
+        });
         let ops = store.rehydrate_ops(&plaintext);
         let rehydrated = rehydrate_body(&plaintext, ct, &ops);
         let final_body = match body_encoding::encode_body(rehydrated, encoding).await {
@@ -1245,6 +1259,17 @@ impl RequestHandler {
             }
         };
 
+        // Push every extracted secret to the broker before the rewritten
+        // body is re-encoded and forwarded. A push failure here aborts the
+        // whole response — the agent never sees a placeholder the broker
+        // doesn't know — but secrets pushed earlier in this loop stay
+        // registered in the broker even though the response is discarded:
+        // the gateway protocol has no remove operation to roll them back, so
+        // the error below names them. That is stale dictionary state only
+        // (a random placeholder no agent has ever been handed), never a
+        // forwarded token.
+        let mut pushed_placeholders = Vec::new();
+        let total_pushes = pushes.len();
         for (placeholder, value, item_domain) in pushes {
             if let Err(error) = gateway
                 .push_secret(placeholder.clone(), value, item_domain)
@@ -1254,15 +1279,20 @@ impl RequestHandler {
                     provider_id = %provider_id,
                     %placeholder,
                     %error,
+                    pushed = pushed_placeholders.len(),
                     "HTTP secret intercept: failed to push extracted secret to broker; \
                      aborting rather than hand the agent an unresolvable placeholder"
                 );
                 let detail = format!(
-                    "HTTP secret provider \"{provider_id}\" extracted a secret but failed to \
-                     push it to the broker: {error}"
+                    "HTTP secret provider \"{provider_id}\" extracted {total_pushes} secret(s) \
+                     but failed to push one to the broker ({placeholder}): {error}. {} \
+                     already-pushed placeholder(s) stay registered in the broker because the \
+                     gateway protocol has no remove operation to roll them back.",
+                    pushed_placeholders.len()
                 );
                 return Err((AbortReason::CredentialInjectionFailed, detail));
             }
+            pushed_placeholders.push(placeholder);
         }
 
         let final_body = recompress_after_rewrite(rewritten, encoding, provider_id).await?;
@@ -1296,7 +1326,13 @@ impl RequestHandler {
                     response
                 }
             }
-            Err(err) => handle_error(err),
+            Err(err) => {
+                let detail = err.to_string();
+                audit_payload.decision = Decision::Abort;
+                audit_payload.deny_reason =
+                    format!("{}: {detail}", AbortReason::ConnectorInvalidRequest.code());
+                handle_error(detail)
+            }
         }
     }
 
@@ -2952,6 +2988,18 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_trace");
+        assert_eq!(
+            payload.decision,
+            Decision::Abort,
+            "the audit must record the abort, not the pre-dispatch Allow"
+        );
+        assert!(
+            payload
+                .deny_reason
+                .contains(AbortReason::ConnectorInvalidRequest.code()),
+            "deny_reason should carry the abort reason, got: {}",
+            payload.deny_reason
+        );
     }
 
     /// Minimal fake gateway: accepts one connection, reads one
@@ -3106,6 +3154,59 @@ pub(crate) mod tests {
             }
             other => panic!("expected ok, got {other:?}"),
         }
+
+        let captured = captured_rx.await.expect("upstream captured a request");
+        let captured = String::from_utf8_lossy(&captured);
+        assert!(
+            captured.contains(secret_value),
+            "connector must forward the rehydrated real secret, got: {captured}"
+        );
+        assert!(
+            !captured.contains(&placeholder.to_string()),
+            "the placeholder token must never reach the upstream, got: {captured}"
+        );
+
+        upstream_cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_handle_rehydrates_plaintext_body_with_unrecognized_content_type() {
+        // Regression: a placeholder-bearing body that sniffing can't
+        // classify — no leading `{`/`[`/`<` and no `=` — used to fail the
+        // content-type resolution and deny the request, even though raw byte
+        // substitution is safe (the masking side already falls back to Raw).
+        // It must now rehydrate as Raw and dispatch normally.
+        let secret_value = "sk-real-secret-value";
+        let placeholder = SecretPlaceholder::new();
+        let secret_b64 = base64::engine::general_purpose::STANDARD.encode(secret_value);
+        let gateway_addr = fake_resolve_gateway(secret_b64).await;
+
+        let (upstream_addr, upstream_cancel, captured_rx) =
+            mock_upstream_capturing(Vec::new()).await;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_raw_rehydrate"),
+            test_connector_registry(),
+            tx,
+        )
+        .with_gateway_client(GatewayClient::new(
+            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            GatewayClientConfig::default(),
+        ));
+
+        let mut request = raw_request(
+            Authority::from_str(&format!("127.0.0.1:{}", upstream_addr.port()))
+                .expect("valid authority"),
+            Method::POST,
+        );
+        request.body = Some(format!("Bearer {placeholder}").into_bytes());
+
+        let response = handler.handle(request, "sess_raw_rehydrate").await;
+        assert!(
+            matches!(response, HandledResponse::Ok(_)),
+            "plaintext placeholder body must dispatch, got {response:?}"
+        );
 
         let captured = captured_rx.await.expect("upstream captured a request");
         let captured = String::from_utf8_lossy(&captured);
@@ -4303,5 +4404,21 @@ pub(crate) mod tests {
         let body = format!("{p1}{p2}");
         let tokens = collect_placeholders(body.as_bytes());
         assert_eq!(tokens, &[p1, p2]);
+    }
+
+    #[test]
+    fn collect_placeholders_skips_long_invalid_run_without_quadratic_scan() {
+        // Regression: a body of `fsp_` plus a long alphanumeric run that
+        // never forms a valid token used to shrink the candidate span one
+        // byte at a time across the entire run, running `from_utf8` over an
+        // O(n)-long slice per candidate — a quadratic CPU DoS on the
+        // enforcement hot path. The shrink window is now bounded to the
+        // fixed placeholder length, so the trailing valid token is still
+        // found and the run is skipped in linear time.
+        let placeholder = SecretPlaceholder::new();
+        let mut body = format!("fsp_{}", "a".repeat(1 << 16));
+        body.push_str(&placeholder.to_string());
+        let tokens = collect_placeholders(body.as_bytes());
+        assert_eq!(tokens, &[placeholder]);
     }
 }
