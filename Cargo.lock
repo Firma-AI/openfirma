@@ -1765,13 +1765,16 @@ name = "firma-stack"
 version = "0.1.6"
 dependencies = [
  "anyhow",
+ "camino",
  "firma-authority",
  "firma-config-loader",
  "firma-process-orchestrator",
  "firma-runtime-state",
  "firma-sidecar",
+ "firma-test-helpers",
  "insta",
  "nix 0.31.3",
+ "serde",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",

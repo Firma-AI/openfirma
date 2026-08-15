@@ -1,19 +1,37 @@
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use camino::Utf8PathBuf;
 use firma_stack::{StackConfig, StackError};
+#[cfg(unix)]
+use firma_test_helpers::{process_fixture, unix_fixture_script};
 
 #[cfg(unix)]
 const FIXTURE_MODE: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_MODE";
-#[cfg(unix)]
-const FIXTURE_ROOT: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_ROOT";
-#[cfg(unix)]
-const FIXTURE_AUTHORITY_ADDR: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_AUTHORITY_ADDR";
 #[cfg(unix)]
 const FIXTURE_STARTUP_REPORT: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_STARTUP_REPORT";
 #[cfg(unix)]
 const FIXTURE_SIDECAR_ARGS: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_SIDECAR_ARGS";
 #[cfg(unix)]
-const FIXTURE_SIDECAR_SOCKET: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_SIDECAR_SOCKET";
+#[derive(serde::Deserialize, serde::Serialize)]
+struct LifecycleFixtureConfig {
+    root: Utf8PathBuf,
+    authority_addr: std::net::SocketAddr,
+    sidecar_socket: Option<Utf8PathBuf>,
+}
+
+#[cfg(unix)]
+fn utf8_path(path: &std::path::Path) -> Utf8PathBuf {
+    Utf8PathBuf::from_path_buf(path.to_path_buf()).expect("fixture path is UTF-8")
+}
+
+#[cfg(unix)]
+fn write_lifecycle_fixture(path: &std::path::Path, config: LifecycleFixtureConfig, setup: &str) {
+    crate::support::write_executable_script(
+        path,
+        unix_fixture_script(&lifecycle_fixture(config), setup),
+    );
+}
 
 #[test]
 fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
@@ -196,40 +214,30 @@ fn dynamic_authority_does_not_enable_disabled_sidecar_authority_client() {
 #[cfg(unix)]
 #[test]
 fn unix_sidecar_publication_matches_planned_endpoint() {
-    use crate::support::write_executable_script;
-
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path();
     let state_dir = root.join("state");
     let config_path = root.join("firma.toml");
     let fixture_path = root.join("fixture.sh");
-    let fixture_test_bin = root.join("fixture-test-bin");
     let sidecar_socket = root.join("sidecar.sock");
     let authority_listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
     let authority_addr = authority_listener.local_addr().expect("authority address");
 
-    std::os::unix::fs::symlink(
-        std::env::current_exe().expect("test executable"),
-        &fixture_test_bin,
-    )
-    .expect("link fixture test executable");
-    write_executable_script(
+    write_lifecycle_fixture(
         &fixture_path,
-        format!(
-            "#!/bin/sh\n\
-             root=${{0%/*}}\n\
-             export {FIXTURE_STARTUP_REPORT}=\"$5\"\n\
+        LifecycleFixtureConfig {
+            root: utf8_path(root),
+            authority_addr,
+            sidecar_socket: Some(utf8_path(&sidecar_socket)),
+        },
+        &format!(
+            "export {FIXTURE_STARTUP_REPORT}=\"$5\"\n\
              if [ \"$1\" = authority ]; then\n\
                export {FIXTURE_MODE}=authority\n\
-               export {FIXTURE_AUTHORITY_ADDR}={authority_addr}\n\
              else\n\
                export {FIXTURE_MODE}=sidecar-unix\n\
-               export {FIXTURE_SIDECAR_SOCKET}=\"{}\"\n\
-             fi\n\
-             exec \"$root/fixture-test-bin\" --exact \
-               readiness_process_exit::lifecycle_fixture --ignored\n",
-            sidecar_socket.display()
+             fi"
         ),
     );
     std::fs::write(
@@ -256,61 +264,59 @@ fn unix_sidecar_publication_matches_planned_endpoint() {
         .expect("shut down fixture stack");
 }
 
-#[cfg(unix)]
-#[test]
-#[ignore = "spawned as a process-lifecycle fixture"]
-fn lifecycle_fixture() {
-    let mode = std::env::var(FIXTURE_MODE).expect("fixture mode");
-    if mode == "authority" {
-        let authority_addr = std::env::var(FIXTURE_AUTHORITY_ADDR)
-            .expect("fixture Authority address")
-            .parse()
-            .expect("parse fixture Authority address");
-        let startup_report = std::path::PathBuf::from(
-            std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
-        );
-        firma_stack::publish_startup_report(
-            &startup_report,
-            &firma_stack::ComponentEndpoint::Tcp(authority_addr),
-        )
-        .expect("publish fixture startup report");
-        loop {
-            std::thread::sleep(Duration::from_mins(1));
+process_fixture! {
+    #[cfg(unix)]
+    fn lifecycle_fixture(config: LifecycleFixtureConfig) {
+        let mode = std::env::var(FIXTURE_MODE).expect("fixture mode");
+        if mode == "authority" {
+            let startup_report = std::path::PathBuf::from(
+                std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
+            );
+            firma_stack::publish_startup_report(
+                &startup_report,
+                &firma_stack::ComponentEndpoint::Tcp(config.authority_addr),
+            )
+            .expect("publish fixture startup report");
+            loop {
+                std::thread::sleep(Duration::from_mins(1));
+            }
         }
-    }
 
-    if mode == "sidecar-unix" {
-        let socket = std::path::PathBuf::from(
-            std::env::var_os(FIXTURE_SIDECAR_SOCKET).expect("fixture Sidecar socket"),
-        );
-        let listener =
-            std::os::unix::net::UnixListener::bind(&socket).expect("bind fixture Sidecar socket");
-        let startup_report = std::path::PathBuf::from(
-            std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
-        );
-        firma_stack::publish_startup_report(
-            &startup_report,
-            &firma_stack::ComponentEndpoint::Unix(
-                firma_stack::UnixEndpoint::new(socket).expect("valid Unix socket path"),
-            ),
-        )
-        .expect("publish fixture startup report");
-        let _listener = listener;
-        loop {
-            std::thread::sleep(Duration::from_mins(1));
+        if mode == "sidecar-unix" {
+            let socket = config
+                .sidecar_socket
+                .expect("fixture Sidecar socket")
+                .into_std_path_buf();
+            let listener = std::os::unix::net::UnixListener::bind(&socket)
+                .expect("bind fixture Sidecar socket");
+            let startup_report = std::path::PathBuf::from(
+                std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
+            );
+            firma_stack::publish_startup_report(
+                &startup_report,
+                &firma_stack::ComponentEndpoint::Unix(
+                    firma_stack::UnixEndpoint::new(socket).expect("valid Unix socket path"),
+                ),
+            )
+            .expect("publish fixture startup report");
+            let _listener = listener;
+            loop {
+                std::thread::sleep(Duration::from_mins(1));
+            }
         }
-    }
 
-    assert_eq!(mode, "sidecar");
-    let root = std::path::PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
-    let mut sidecar_args = std::env::var(FIXTURE_SIDECAR_ARGS).expect("fixture Sidecar args");
-    sidecar_args.push('\n');
-    std::fs::write(root.join("sidecar.args"), sidecar_args).expect("capture Sidecar arguments");
-    std::fs::write(root.join("sidecar.args.ready"), []).expect("publish Sidecar arguments");
-    while !root.join("release-sidecar").exists() {
-        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(mode, "sidecar");
+        let mut sidecar_args = std::env::var(FIXTURE_SIDECAR_ARGS).expect("fixture Sidecar args");
+        sidecar_args.push('\n');
+        std::fs::write(config.root.join("sidecar.args"), sidecar_args)
+            .expect("capture Sidecar arguments");
+        std::fs::write(config.root.join("sidecar.args.ready"), [])
+            .expect("publish Sidecar arguments");
+        while !config.root.join("release-sidecar").exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::process::exit(25);
     }
-    std::process::exit(25);
 }
 
 #[cfg(unix)]
@@ -328,18 +334,21 @@ struct StartupOutcome {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one stack lifecycle scenario keeps launch and rollback assertions together"
+)]
 fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutcome {
     use nix::errno::Errno;
     use nix::unistd::Pid;
 
-    use crate::support::{ProcessGroupCleanup, wait_for_pidfile, write_executable_script};
+    use crate::support::{ProcessGroupCleanup, wait_for_pidfile};
 
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path();
     let state_dir = root.join("state");
     let config_path = root.join("firma.toml");
     let fixture_path = root.join("fixture.sh");
-    let fixture_test_bin = root.join("fixture-test-bin");
     let release_sidecar = root.join("release-sidecar");
     let authority_listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
@@ -351,29 +360,22 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
         StackScenario::FixedAuthority => authority_addr,
     };
 
-    std::os::unix::fs::symlink(
-        std::env::current_exe().expect("test executable"),
-        &fixture_test_bin,
-    )
-    .expect("link fixture test executable");
-
-    write_executable_script(
+    write_lifecycle_fixture(
         &fixture_path,
-        format!(
-            "#!/bin/sh\n\
-             root=${{0%/*}}\n\
-             if [ \"$1\" = authority ]; then\n\
+        LifecycleFixtureConfig {
+            root: utf8_path(root),
+            authority_addr,
+            sidecar_socket: None,
+        },
+        &format!(
+            "if [ \"$1\" = authority ]; then\n\
                export {FIXTURE_MODE}=authority\n\
-               export {FIXTURE_AUTHORITY_ADDR}={authority_addr}\n\
                export {FIXTURE_STARTUP_REPORT}=\"$5\"\n\
              fi\n\
              if [ \"$1\" = sidecar ]; then\n\
                export {FIXTURE_MODE}=sidecar\n\
                export {FIXTURE_SIDECAR_ARGS}=\"$(printf '%s\\n' \"$@\")\"\n\
-             fi\n\
-             export {FIXTURE_ROOT}=\"$root\"\n\
-             exec \"$root/fixture-test-bin\" --exact \
-               readiness_process_exit::lifecycle_fixture --ignored\n"
+             fi"
         ),
     );
     let sidecar_authority = match scenario {
