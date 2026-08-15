@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use camino::Utf8PathBuf;
 use firma_stack::{StackConfig, StackError};
+use firma_test_helpers::process_fixture;
 #[cfg(unix)]
-use firma_test_helpers::{process_fixture, unix_fixture_script};
+use firma_test_helpers::unix_fixture_script;
 
 #[cfg(unix)]
 const FIXTURE_MODE: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_MODE";
