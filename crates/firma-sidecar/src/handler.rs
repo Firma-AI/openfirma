@@ -1195,17 +1195,22 @@ impl RequestHandler {
     /// broker via `gateway`. Returns `dispatched` with the body rewritten to
     /// placeholders.
     ///
-    /// Returns `Ok(dispatched)` unmodified when the matcher fails to compile
-    /// or the extraction pass itself fails — fail-open, since no secret has
-    /// been extracted or promised to the agent yet.
+    /// Returns `Ok(dispatched)` unmodified when the matcher fails to
+    /// compile — fail-open, since a misconfigured matcher never touched this
+    /// response's body.
     ///
-    /// Returns `Err` when the matcher successfully extracted a secret and
-    /// substituted its placeholder into the body, but the push to the broker
-    /// that would make the placeholder resolvable failed: the substitution
-    /// already happened in-place as the single-pass rewrite scanned, so at
-    /// that point the only way to avoid handing the agent a placeholder the
-    /// broker never learned (an unresolvable token, indistinguishable from a
-    /// silently lost credential) is to abort the whole response rather than
+    /// Returns `Err` when the extraction pass itself fails (the response
+    /// body does not match the configured schema) or when the matcher
+    /// successfully extracted a secret and substituted its placeholder into
+    /// the body but the push to the broker that would make the placeholder
+    /// resolvable failed. A `SensitiveCommand` host promises every response
+    /// carries a credential matching its schema, so a response that doesn't
+    /// match is treated as a mediation failure rather than forwarded
+    /// unmasked; for the broker-push case the substitution already happened
+    /// in-place as the single-pass rewrite scanned, so at that point the
+    /// only way to avoid handing the agent a placeholder the broker never
+    /// learned (an unresolvable token, indistinguishable from a silently
+    /// lost credential) is likewise to abort the whole response rather than
     /// forward it.
     async fn rewrite_with_http_intercept(
         &self,
@@ -1250,12 +1255,18 @@ impl RequestHandler {
         let rewritten = match rewritten {
             Ok(bytes) => bytes,
             Err(error) => {
-                tracing::warn!(
+                tracing::error!(
                     provider_id = %provider_id,
                     %error,
-                    "HTTP secret intercept: extraction failed; forwarding unmodified"
+                    "HTTP secret intercept: response did not match the configured schema; \
+                     aborting rather than forward an unmediated response from a sensitive \
+                     provider"
                 );
-                return Ok(dispatched);
+                let detail = format!(
+                    "HTTP secret provider \"{provider_id}\" response did not match its \
+                     configured schema: {error}"
+                );
+                return Err((AbortReason::CredentialInjectionFailed, detail));
             }
         };
 
