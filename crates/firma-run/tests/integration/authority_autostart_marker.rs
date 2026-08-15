@@ -14,6 +14,13 @@ use firma_run::error::RunError;
 use firma_run::routing::{
     AutostartFlags, NetworkRuntime, OwnedAuthorityPlan, ResolvedAuthority, prepare_network_runtime,
 };
+use firma_test_helpers::{process_fixture, unix_fixture_script};
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct AuthorityFixtureConfig {
+    block_state_cleanup: bool,
+    block_marker_cleanup: bool,
+}
 
 #[derive(serde::Deserialize)]
 struct AuthorityMetadata {
@@ -33,16 +40,14 @@ struct AuthorityMetadata {
 )]
 fn local_authority_publishes_effective_component_handle_and_metadata() {
     let temp = tempfile::tempdir().expect("temporary directory");
-    let fixture = temp.path().join("authority-fixture");
-    std::os::unix::fs::symlink(std::env::current_exe().expect("test executable"), &fixture)
-        .expect("link fixture executable");
     let launcher = temp.path().join("fake-firma.sh");
+    let fixture = authority_fixture(AuthorityFixtureConfig {
+        block_state_cleanup: false,
+        block_marker_cleanup: false,
+    });
     std::fs::write(
         &launcher,
-        format!(
-            "#!/bin/sh\nexport FIRMA_TEST_STARTUP_REPORT=\"$5\"\nexec '{}' --exact authority_autostart_marker::authority_fixture --ignored --nocapture\n",
-            fixture.display()
-        ),
+        unix_fixture_script(&fixture, "export FIRMA_TEST_STARTUP_REPORT=\"$5\""),
     )
     .expect("write fixture launcher");
     let mut permissions = std::fs::metadata(&launcher)
@@ -235,23 +240,14 @@ fn prepare_failing_runtime(
     block_marker_cleanup: bool,
 ) -> (Result<NetworkRuntime, RunError>, PathBuf) {
     let temp = tempfile::tempdir().expect("temporary directory");
-    let fixture = temp.path().join("authority-fixture");
-    std::os::unix::fs::symlink(std::env::current_exe().expect("test executable"), &fixture)
-        .expect("link fixture executable");
     let launcher = temp.path().join("fake-firma.sh");
+    let fixture = authority_fixture(AuthorityFixtureConfig {
+        block_state_cleanup: true,
+        block_marker_cleanup,
+    });
     std::fs::write(
         &launcher,
-        format!(
-            concat!(
-                "#!/bin/sh\n",
-                "export FIRMA_TEST_STARTUP_REPORT=\"$5\"\n",
-                "export FIRMA_TEST_BLOCK_STATE_CLEANUP=1\n",
-                "export FIRMA_TEST_BLOCK_MARKER_CLEANUP={}\n",
-                "exec '{}' --exact authority_autostart_marker::authority_fixture --ignored --nocapture\n",
-            ),
-            u8::from(block_marker_cleanup),
-            fixture.display(),
-        ),
+        unix_fixture_script(&fixture, "export FIRMA_TEST_STARTUP_REPORT=\"$5\""),
     )
     .expect("write fixture launcher");
     let mut permissions = std::fs::metadata(&launcher)
@@ -333,43 +329,41 @@ fn prepare_failing_runtime(
     (result, marker)
 }
 
-#[test]
-#[ignore = "spawned as a process-lifecycle fixture"]
-fn authority_fixture() {
-    let report = std::env::var_os("FIRMA_TEST_STARTUP_REPORT")
-        .map(std::path::PathBuf::from)
-        .expect("startup report path");
-    let listener = TcpListener::bind("[::1]:0").expect("bind dynamic Authority endpoint");
-    let endpoint = listener.local_addr().expect("effective Authority endpoint");
-    if std::env::var_os("FIRMA_TEST_BLOCK_STATE_CLEANUP").is_some() {
-        let orchestrator_dir = report
-            .parent()
-            .and_then(std::path::Path::parent)
-            .expect("orchestrator state directory");
-        let pidfile = orchestrator_dir.join("authority.pid");
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !pidfile.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
+process_fixture! {
+    fn authority_fixture(config: AuthorityFixtureConfig) {
+        let report = std::env::var_os("FIRMA_TEST_STARTUP_REPORT")
+            .map(std::path::PathBuf::from)
+            .expect("startup report path");
+        let listener = TcpListener::bind("[::1]:0").expect("bind dynamic Authority endpoint");
+        let endpoint = listener.local_addr().expect("effective Authority endpoint");
+        if config.block_state_cleanup {
+            let orchestrator_dir = report
+                .parent()
+                .and_then(std::path::Path::parent)
+                .expect("orchestrator state directory");
+            let pidfile = orchestrator_dir.join("authority.pid");
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !pidfile.exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            std::fs::remove_file(&pidfile).expect("remove Authority pidfile");
+            std::fs::create_dir(&pidfile).expect("block Authority pidfile cleanup");
+            if config.block_marker_cleanup {
+                let marker = orchestrator_dir.parent().expect("run marker directory");
+                let mut permissions = std::fs::metadata(marker)
+                    .expect("run marker metadata")
+                    .permissions();
+                permissions.set_mode(0o500);
+                std::fs::set_permissions(marker, permissions).expect("block marker cleanup");
+            }
         }
-        std::fs::remove_file(&pidfile).expect("remove Authority pidfile");
-        std::fs::create_dir(&pidfile).expect("block Authority pidfile cleanup");
-        if std::env::var_os("FIRMA_TEST_BLOCK_MARKER_CLEANUP").as_deref()
-            == Some(std::ffi::OsStr::new("1"))
-        {
-            let marker = orchestrator_dir.parent().expect("run marker directory");
-            let mut permissions = std::fs::metadata(marker)
-                .expect("run marker metadata")
-                .permissions();
-            permissions.set_mode(0o500);
-            std::fs::set_permissions(marker, permissions).expect("block marker cleanup");
+        firma_process_orchestrator::publish_startup_report(
+            &report,
+            &firma_process_orchestrator::ComponentEndpoint::Tcp(endpoint),
+        )
+        .expect("publish startup report");
+        loop {
+            std::thread::sleep(Duration::from_mins(1));
         }
-    }
-    firma_process_orchestrator::publish_startup_report(
-        &report,
-        &firma_process_orchestrator::ComponentEndpoint::Tcp(endpoint),
-    )
-    .expect("publish startup report");
-    loop {
-        std::thread::sleep(Duration::from_mins(1));
     }
 }

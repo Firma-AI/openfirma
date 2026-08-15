@@ -45,6 +45,46 @@ where
     serde_json::from_str(&encoded).expect("deserialize process fixture configuration")
 }
 
+/// Renders a Unix shell script that executes a generated fixture command.
+///
+/// `setup` runs before the fixture command and can translate arguments from a
+/// production CLI contract into environment variables consumed by the
+/// fixture. The command's program, arguments, and environment must all be
+/// UTF-8.
+#[cfg(unix)]
+#[must_use]
+pub fn unix_fixture_script(command: &Command, setup: &str) -> String {
+    fn quote(value: &std::ffi::OsStr) -> String {
+        let value = value
+            .to_str()
+            .expect("process fixture shell value is UTF-8");
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+
+    let mut script = String::from("#!/bin/sh\n");
+    script.push_str(setup);
+    if !setup.ends_with('\n') {
+        script.push('\n');
+    }
+    for (name, value) in command.get_envs() {
+        if let Some(value) = value {
+            script.push_str("export ");
+            script.push_str(&quote(name));
+            script.push('=');
+            script.push_str(&quote(value));
+            script.push('\n');
+        }
+    }
+    script.push_str("exec ");
+    script.push_str(&quote(command.get_program()));
+    for argument in command.get_args() {
+        script.push(' ');
+        script.push_str(&quote(argument));
+    }
+    script.push('\n');
+    script
+}
+
 /// Declares an ignored test entry point and a typed launcher for a child
 /// process.
 ///
