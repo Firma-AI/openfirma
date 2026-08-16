@@ -1,0 +1,19 @@
+[package]
+name = "firma-audit-schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Serializable audit log schema produced by OpenFirma"
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_repr = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

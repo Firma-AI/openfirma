@@ -86,6 +86,7 @@ release = true
 changelog_update = true
 changelog_path = "CHANGELOG.md"
 changelog_include = [
+  "firma-audit-schema",
   "firma-authority",
   "firma-config-loader",
   "firma-core",

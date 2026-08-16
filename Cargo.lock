@@ -1375,6 +1375,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "dialoguer",
+ "firma-audit-schema",
  "firma-authority",
  "firma-config-loader",
  "firma-core",
@@ -1404,7 +1405,6 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
- "serde_repr",
  "serde_yaml",
  "sha2 0.11.0",
  "strum",
@@ -1422,6 +1422,16 @@ dependencies = [
  "windows-sys 0.59.0",
  "wiremock",
  "x509-parser",
+]
+
+[[package]]
+name = "firma-audit-schema"
+version = "0.1.6"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "serde_repr",
 ]
 
 [[package]]
@@ -1714,6 +1724,7 @@ dependencies = [
  "criterion",
  "ecdsa",
  "elliptic-curve",
+ "firma-audit-schema",
  "firma-core",
  "firma-fs",
  "firma-grpc-interceptor-proto",
@@ -1751,7 +1762,6 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
- "serde_repr",
  "sha2 0.11.0",
  "socket2",
  "tempfile",

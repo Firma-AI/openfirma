@@ -1,29 +1,6 @@
 use std::path::Path;
 
-use serde::Deserialize;
-use serde_repr::Deserialize_repr;
-
-#[derive(Debug, PartialEq, Eq, Deserialize_repr)]
-#[repr(u8)]
-pub(crate) enum AuditDecision {
-    Allow = 1,
-    Deny = 2,
-    Abort = 3,
-    Modify = 4,
-    StepUp = 5,
-    Defer = 6,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct AuditEvent {
-    session_id: String,
-    pub(crate) token_id: String,
-    pub(crate) action: String,
-    pub(crate) resource: String,
-    pub(crate) decision: AuditDecision,
-    pub(crate) deny_reason: String,
-    pub(crate) dispatch_status: u16,
-}
+pub(crate) use firma_audit_schema::{Decision as AuditDecision, ExecutionEvent as AuditEvent};
 
 pub(crate) fn correlated_event(path: &Path, session: &str, nonce: &str) -> AuditEvent {
     let audit = std::fs::read_to_string(path)

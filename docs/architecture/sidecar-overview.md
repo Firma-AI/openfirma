@@ -616,14 +616,18 @@ sequenceDiagram
     Sink->>Out: write
 ```
 
-`AuditPayload` is the lightweight hot-path struct (no signing, no UUID);
-`ExecutionEvent` is the full signed record written by the sink. Moving
-ECDSA off the hot path is what keeps the enforcement p95 budget
-achievable (see `5be5c69`).
+`AuditPayload` is the lightweight hot-path struct (no signing, no UUID).
+`ExecutionEvent`, defined by `firma-audit-schema`, is the full signed record
+written by every sink. The shared representational crate keeps Sidecar output,
+tests, and third-party deserializers on one schema without pulling in runtime
+behavior. Moving ECDSA off the hot path is what keeps the enforcement p95
+budget achievable (see `5be5c69`).
 
 ## 9. Module map
 
 ```text
+crates/firma-audit-schema/src/lib.rs — Decision and serializable ExecutionEvent.
+
 crates/firma-sidecar/src/
 ├── main.rs                 — startup, signal handling, task join.
 ├── args.rs                 — CLI flags.
@@ -643,7 +647,7 @@ crates/firma-sidecar/src/
 ├── pipeline.rs             — EnforcementPipeline::enforce() + audit payload projection.
 ├── credential{.rs,/}       — CredentialInjector trait + Null / Basic / Vault providers.
 ├── connector{.rs,/}        — ConnectorRegistry + generic HTTP provider.
-├── audit{.rs,/}            — AuditPayload, ExecutionEvent, EventBuilder, sinks.
+├── audit{.rs,/}            — AuditPayload, EventBuilder, transport mapping, sinks.
 ├── authority_client{.rs,/} — WatchPolicyBundle + WatchRevocations stream tasks,
 │                             SwappablePolicyEvaluation, ReadinessFlag, backoff.
 ├── health.rs               — liveness probe server.
