@@ -24,6 +24,7 @@ use firma_protobuf::v1::audit_service_client::AuditServiceClient;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tonic::transport::Channel;
 
+use super::execution_event_to_proto;
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
 
 /// Audit sink that streams events over gRPC with local WAL fallback.
@@ -316,7 +317,7 @@ impl WalAuditSink {
 
         tracing::info!(count = buffered.len(), "replaying WAL events to gRPC");
         for event in buffered {
-            let proto = firma_protobuf::v1::ExecutionEvent::from(event);
+            let proto = execution_event_to_proto(event);
             if stream_tx.send(proto).await.is_err() {
                 tracing::warn!("gRPC stream broke during WAL replay");
                 return;
@@ -390,7 +391,7 @@ impl WalAuditSink {
         let Some((stream_tx, _)) = stream else {
             return false;
         };
-        let proto = firma_protobuf::v1::ExecutionEvent::from(event.clone());
+        let proto = execution_event_to_proto(event.clone());
         stream_tx.send(proto).await.is_ok()
     }
 
@@ -458,7 +459,7 @@ impl WalAuditSink {
                 "replaying WAL events after reconnect"
             );
             for event in buffered {
-                let proto = firma_protobuf::v1::ExecutionEvent::from(event);
+                let proto = execution_event_to_proto(event);
                 if state.0.send(proto).await.is_err() {
                     tracing::warn!("gRPC broke during reconnect replay; staying in WAL mode");
                     return None;

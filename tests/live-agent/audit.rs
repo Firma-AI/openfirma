@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context;
-use firma_sidecar::audit::Decision;
+use firma_audit_schema::Decision;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 

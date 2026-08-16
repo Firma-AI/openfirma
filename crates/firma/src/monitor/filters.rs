@@ -7,7 +7,7 @@
 //! `timestamp`, `token_id`) and leaves the rest as opaque so format
 //! additions on the sink side do not break the monitor.
 
-use firma_sidecar::audit::Decision as AuditDecision;
+use firma_audit_schema::Decision as AuditDecision;
 use serde::Deserialize;
 
 use crate::args::monitor::Decision as DecisionFilter;
@@ -133,7 +133,7 @@ pub fn audit_passes(
 /// and check whether `parsed` matches.
 ///
 /// `Passthrough` in the audit log is encoded as `decision = ALLOW`
-/// AND `token_id` empty (see `firma_sidecar::audit::builder` tests).
+/// AND `token_id` empty (see the `firma-sidecar` audit builder tests).
 #[must_use]
 pub fn decision_matches(parsed: &AuditLite, want: DecisionFilter) -> bool {
     let Some(AuditLiteDecision::Known(decision)) = parsed.decision else {

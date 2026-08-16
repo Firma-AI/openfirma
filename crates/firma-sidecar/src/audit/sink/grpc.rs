@@ -13,6 +13,7 @@
 use firma_protobuf::v1::audit_service_client::AuditServiceClient;
 use tonic::transport::Channel;
 
+use super::execution_event_to_proto;
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
 
 /// Audit sink that streams events over gRPC to a remote collector.
@@ -67,7 +68,7 @@ impl AuditSink for GrpcAuditSink {
         loop {
             tokio::select! {
                 Some(event) = rx.recv() => {
-                    let proto_event = firma_protobuf::v1::ExecutionEvent::from(event);
+                    let proto_event = execution_event_to_proto(event);
                     if stream_tx.send(proto_event).await.is_err() {
                         tracing::warn!("gRPC stream closed; event dropped");
                     }
@@ -76,7 +77,7 @@ impl AuditSink for GrpcAuditSink {
                     // Drain remaining buffered events before shutting
                     // down.
                     while let Some(event) = rx.recv().await {
-                        let proto_event = firma_protobuf::v1::ExecutionEvent::from(event);
+                        let proto_event = execution_event_to_proto(event);
                         if stream_tx.send(proto_event).await.is_err() {
                             tracing::warn!("gRPC stream closed during drain; event dropped");
                             break;
@@ -177,10 +178,10 @@ mod tests {
 
     #[expect(dead_code, reason = "endpoint retained for sink diagnostics")]
     /// Verifies that events sent through the channel are converted to
-    /// proto types. This is a compile-time check that the `From` impl
+    /// proto types. This is a compile-time check that the transport mapping
     /// is wired correctly; the actual gRPC call requires a live server.
     fn sample_event_converts_to_proto() {
         let event = sample_event("evt-proto");
-        let _proto: firma_protobuf::v1::ExecutionEvent = event.into();
+        let _proto = execution_event_to_proto(event);
     }
 }

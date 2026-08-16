@@ -109,6 +109,8 @@ agent call passes through the Sidecar before reaching external systems.
 - `firma-core` — shared types and trait contracts such as `Decision`,
   `ExecutionEnvelope`, `CapabilityClaims`, `TokenVerifier`, `TokenSigner`,
   `PolicyEvaluator`, and `RevocationStore`. No dependencies on other crates.
+- `firma-audit-schema` — behavior-free `Decision` and `ExecutionEvent` types
+  shared by audit producers, tests, and third-party JSONL consumers.
 - `firma-protobuf` — gRPC wire contract via protobuf, vendored in-tree at
   `crates/firma-protobuf`. `build.rs` compiles `.proto` files with
   `tonic-prost-build`. Owns the `firma.v1.EnforcementDecision` enum

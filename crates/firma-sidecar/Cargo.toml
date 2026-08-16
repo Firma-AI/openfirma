@@ -20,6 +20,7 @@ cedar-policy = { workspace = true }
 chrono = { workspace = true }
 ecdsa = { workspace = true }
 elliptic-curve = { workspace = true }
+firma-audit-schema = { workspace = true }
 firma-core = { workspace = true }
 firma-fs = { workspace = true }
 firma-grpc-interceptor-proto = { workspace = true }
@@ -51,7 +52,6 @@ rustls = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_repr = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, default-features = false, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

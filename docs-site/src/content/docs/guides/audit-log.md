@@ -64,6 +64,44 @@ Field-by-field:
 - **`parent_action_id`** — provenance anchor of the prior admitted action in this thread (AARM R2 G2). Empty for the first admitted action or pre-dispatch outcomes.
 - **`signature`** — DER-encoded ECDSA P-256 signature, serialized as a standard (padded) base64 string. The compact opaque value round-trips through structured JSON log pipelines (such as Cloud Logging) without byte loss, so `sink = "stdout"` is reliable for production on Cloud Run.
 
+## Deserialize records in Rust
+
+The `firma-audit-schema` crate provides the same `ExecutionEvent` and numeric
+`Decision` types the Sidecar uses for serialization. It contains no signing,
+verification, storage, or transport behavior, so integrations do not need to
+depend on `firma-sidecar`.
+
+For a source dependency, add:
+
+```toml
+[dependencies]
+firma-audit-schema = { git = "https://github.com/Firma-AI/openfirma" }
+serde_json = "1"
+```
+
+Then deserialize each JSONL record directly:
+
+```rust
+use std::fs::File;
+use std::io::{BufRead as _, BufReader};
+
+use firma_audit_schema::ExecutionEvent;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let reader = BufReader::new(File::open("audit.jsonl")?);
+    for line in reader.lines() {
+        let event: ExecutionEvent = serde_json::from_str(&line?)?;
+        println!("{:?} {} {}", event.decision, event.action, event.resource);
+    }
+    Ok(())
+}
+```
+
+The schema is strict about required fields, known decision codes, and base64
+signature encoding. Use a smaller local Serde projection when consuming
+partially written records or when unknown future decision codes must remain
+visible instead of failing deserialization.
+
 ## Tail the log
 
 If the Sidecar is running under [`firma sidecar start`](../manage-the-stack/), use `firma monitor` — it knows the state-dir layout and adds filtering by decision, action class, agent, sandbox, and time window:

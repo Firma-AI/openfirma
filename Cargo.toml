@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/firma",
+  "crates/firma-audit-schema",
   "crates/firma-authority",
   "crates/firma-config-loader",
   "crates/firma-core",
@@ -78,6 +79,7 @@ dispatch2 = "0.3"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 either = "1.17"
 elliptic-curve = { version = "0.13", features = ["pem"] }
+firma-audit-schema = { path = "crates/firma-audit-schema", version = "0.1.6" }
 firma-authority = { path = "crates/firma-authority", version = "0.1.5" }
 firma-config-loader = { path = "crates/firma-config-loader", version = "0.1.5" }
 firma-core = { path = "crates/firma-core", version = "0.1.5" }
