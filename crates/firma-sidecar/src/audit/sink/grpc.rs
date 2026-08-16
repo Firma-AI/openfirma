@@ -176,12 +176,38 @@ mod tests {
         );
     }
 
-    #[expect(dead_code, reason = "endpoint retained for sink diagnostics")]
-    /// Verifies that events sent through the channel are converted to
-    /// proto types. This is a compile-time check that the transport mapping
-    /// is wired correctly; the actual gRPC call requires a live server.
-    fn sample_event_converts_to_proto() {
+    #[test]
+    fn execution_event_converts_to_proto() {
         let event = sample_event("evt-proto");
-        let _proto = execution_event_to_proto(event);
+        let proto = execution_event_to_proto(event);
+
+        assert_eq!(
+            proto,
+            firma_protobuf::v1::ExecutionEvent {
+                event_id: "evt-proto".to_string(),
+                session_id: "sess-1".to_string(),
+                token_id: "ctok_01j0000000e008000000000001".to_string(),
+                agent_id: "agt_01j0000000e008000000000001".to_string(),
+                action: "http_get".to_string(),
+                resource: "https://api.example.com/v1".to_string(),
+                decision: 1,
+                deny_reason: String::new(),
+                enforcement_latency_us: 42,
+                context_hash: "abc123".to_string(),
+                bundle_version: "v1".to_string(),
+                timestamp: Some(prost_types::Timestamp {
+                    seconds: 1_700_000_000,
+                    nanos: 0,
+                }),
+                signature: vec![0xDE, 0xAD],
+                dispatch_status: 0,
+                dispatch_latency_us: 0,
+                response_size: 0,
+                sandbox_id: String::new(),
+                provenance: String::new(),
+                thread_id: String::new(),
+                parent_action_id: String::new(),
+            }
+        );
     }
 }
