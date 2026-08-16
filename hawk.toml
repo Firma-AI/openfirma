@@ -35,3 +35,35 @@ item = "startup::capability::seed_into_entry"
 kind = "function"
 level = "expect"
 reason = "used by the separate firma-fuzz workspace"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "firma_identifiers"
+item = "AgentIdParseError"
+kind = "reexport"
+level = "expect"
+reason = "preserves the crate-root identifier parsing API"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "firma_identifiers"
+item = "ApprovalTokenIdParseError"
+kind = "reexport"
+level = "expect"
+reason = "preserves the crate-root identifier parsing API"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "firma_identifiers"
+item = "AuditEventIdParseError"
+kind = "reexport"
+level = "expect"
+reason = "preserves the crate-root identifier parsing API"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "firma_identifiers"
+item = "TokenIdParseError"
+kind = "reexport"
+level = "expect"
+reason = "preserves the crate-root identifier parsing API"
