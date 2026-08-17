@@ -44,7 +44,7 @@ fn policy_update_denies_without_restarting_live_session_or_sidecar() {
             assert_allowed_event(&event, &resource, &initial_token);
             assert!(
                 Instant::now() < deadline,
-                "policy update did not deny within the documented 30-second interval"
+                "policy update did not deny within the bounded 30-second test deadline"
             );
             continue;
         }
@@ -57,7 +57,7 @@ fn policy_update_denies_without_restarting_live_session_or_sidecar() {
     };
     assert!(
         denied_at <= deadline,
-        "policy update denied after the documented 30-second interval"
+        "policy update denied after the bounded 30-second test deadline"
     );
 
     assert_denied_event(
