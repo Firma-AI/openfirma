@@ -18,7 +18,7 @@ pub mod spec;
 
 pub use gateway::{GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest};
 pub use glob::glob_match;
-pub use matcher::{CompiledMatcher, MatcherError};
+pub use matcher::{CompiledMatcher, MatcherCompiler, MatcherError};
 pub use placeholder::{PLACEHOLDER_PREFIX, PLACEHOLDER_SUFFIX_LEN, SecretPlaceholder};
 pub use registry::IntegrationRegistry;
 pub use secrecy::{ExposeSecret, SecretString};

@@ -123,6 +123,12 @@ needs to be, not the order you expect requests to arrive in. A path that
 matches none of them is treated as blocked by default: interception fails
 closed on an unrecognized shape rather than forward it unredacted.
 
+Matchers are compiled once when the Sidecar starts, not per request. An
+invalid `matcher` — a regex without the required named capture groups, or a
+bad JSONPath — is caught at startup: the Sidecar logs a warning and disables
+HTTP vault interception entirely rather than silently skip or degrade
+individual responses. Fix the matcher and restart to re-enable it.
+
 - **`sensitive_command`** — extract secrets from the response body using
   `matcher`, mint a placeholder for each, and substitute it into the body
   before it reaches the agent.
@@ -166,6 +172,13 @@ that's down.
 **A vault path returns denied even though it's read-only.** Every path not
 explicitly listed as `sensitive_command` or `safe_command` is treated as
 `blocked_command`. Add the path to the provider's matcher list.
+
+**HTTP vault interception is off even though `http_secret_providers` is
+configured.** Matchers are compiled at startup, and one invalid matcher (a
+regex without named capture groups, a bad JSONPath) disables interception
+for the whole provider list with a warning in the startup logs. Interception
+is all-or-nothing: there is no partial or per-request degradation. Fix the
+matcher and restart the Sidecar.
 
 **`FIRMA_SECRET_GATEWAY_ADDR` unset.** Rehydration, masking, and HTTP vault
 interception are all silently disabled — this is intentional (nothing to

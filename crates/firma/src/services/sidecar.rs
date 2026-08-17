@@ -1,26 +1,28 @@
 //! Runner for `firma sidecar`.
 
-use std::path::Path;
-use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{path::Path, process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::Context as _;
-use firma_secret_provider::gateway::client::{GATEWAY_ADDR_ENV, GatewayClient};
-use firma_secret_provider::gateway::endpoint::GatewayEndpoint;
-use firma_sidecar::audit::AuditPayload;
-use firma_sidecar::authority_client::readiness::ReadinessFlag;
-use firma_sidecar::composio::ComposioCatalogs;
-use firma_sidecar::connector::ConnectorRegistry;
-use firma_sidecar::pipeline::EnforcementPipeline;
-use firma_sidecar::startup::CapabilityReloader;
-use firma_sidecar::{config, handler, health, startup};
+use firma_secret_provider::{
+    MatcherCompiler,
+    gateway::{
+        client::{GATEWAY_ADDR_ENV, GatewayClient},
+        endpoint::GatewayEndpoint,
+    },
+};
+use firma_sidecar::{
+    audit::AuditPayload, authority_client::readiness::ReadinessFlag, composio::ComposioCatalogs,
+    config, connector::ConnectorRegistry, handler, health, pipeline::EnforcementPipeline, startup,
+    startup::CapabilityReloader,
+};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use crate::args::sidecar::{Args, SidecarCommand, StartArgs, StopArgs};
-use crate::signal::wait_for_shutdown;
+use crate::{
+    args::sidecar::{Args, SidecarCommand, StartArgs, StopArgs},
+    signal::wait_for_shutdown,
+};
 
 /// Entry point for `firma sidecar [SUBCOMMAND]`.
 ///
@@ -168,7 +170,22 @@ fn build_request_handler(
     if config.http_secret_providers.is_empty() {
         return base;
     }
-    base.with_http_secret_providers(config.http_secret_providers.clone())
+
+    match config
+        .http_secret_providers
+        .iter()
+        .map(MatcherCompiler::compile)
+        .collect::<Result<_, _>>()
+    {
+        Ok(http_secret_providers) => base.with_http_secret_providers(http_secret_providers),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+               "invalid secret provider config; secret interception and placeholder rehydration disabled"
+            );
+            base
+        }
+    }
 }
 
 #[expect(

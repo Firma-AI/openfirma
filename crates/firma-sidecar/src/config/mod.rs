@@ -38,6 +38,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use bytesize::ByteSize;
+use firma_core::SecretMatcher;
 use firma_http::HeaderName;
 use firma_secret_provider::{
     gateway::client::config::GatewayClientConfig, spec::http::HttpIntegrationSpec,
@@ -152,7 +153,7 @@ pub struct SidecarConfig {
     /// into the sidecar's `firma.toml`. Treat that as the currently
     /// supported path until the autostart mirroring lands.
     #[serde(default)]
-    pub http_secret_providers: Vec<HttpIntegrationSpec>,
+    pub http_secret_providers: Vec<HttpIntegrationSpec<SecretMatcher>>,
     /// Tunable timeouts and limits for the secret-gateway client used to
     /// resolve and push placeholders against firma-run's broker. The
     /// gateway's address itself is not configured here: it comes from the

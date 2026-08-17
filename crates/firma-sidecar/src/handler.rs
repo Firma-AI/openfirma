@@ -13,8 +13,8 @@ use std::{borrow::Cow, collections::HashMap, fmt::Display, str::FromStr, sync::A
 
 use firma_core::{
     AbortReason, ActionParams, ConnectorError, ConnectorResponse, DenyReason, ExecutionEnvelope,
-    ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams, InjectedCredentials, SecretMatcher,
-    TransportView, envelope::InvalidMethod,
+    ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams, InjectedCredentials, TransportView,
+    envelope::InvalidMethod,
 };
 use firma_http::HeaderMap;
 use firma_identifiers::{AgentId, SessionId};
@@ -691,7 +691,7 @@ async fn mask_handled_response(
 /// (mirroring firma-run's `http_secret_providers` config) is itself the
 /// authorization — no separate policy check gates it.
 struct HttpSecretMediation {
-    providers: Vec<HttpIntegrationSpec>,
+    providers: Vec<HttpIntegrationSpec<CompiledMatcher>>,
 }
 
 /// Default cap on how large a request or response body may grow when
@@ -762,7 +762,10 @@ impl RequestHandler {
     /// broker, so the response is aborted fail-closed rather than forwarded
     /// unmediated (see [`RequestHandler::intercept_http_secrets`]).
     #[must_use]
-    pub fn with_http_secret_providers(mut self, providers: Vec<HttpIntegrationSpec>) -> Self {
+    pub fn with_http_secret_providers(
+        mut self,
+        providers: Vec<HttpIntegrationSpec<CompiledMatcher>>,
+    ) -> Self {
         if !providers.is_empty() {
             self.http_secret_mediation = Some(HttpSecretMediation { providers });
         }
@@ -1093,7 +1096,7 @@ impl RequestHandler {
     fn http_secret_provider_decision<'a>(
         &'a self,
         request: &RawRequest,
-    ) -> Option<(&'a str, MatchingResolution<'a>)> {
+    ) -> Option<(&'a str, MatchingResolution<'a, CompiledMatcher>)> {
         let mediation = self.http_secret_mediation.as_ref()?;
         let host = normalize_host_pattern(request.host.as_str());
         mediation.providers.iter().find_map(|p| {
@@ -1217,24 +1220,12 @@ impl RequestHandler {
         &self,
         mut dispatched: DispatchedResponse,
         provider_id: &str,
-        matcher: &SecretMatcher,
+        matcher: &CompiledMatcher,
         gateway: &GatewayClient,
     ) -> Result<DispatchedResponse, InterceptAbort> {
         let (plaintext, encoding) =
             decode_for_inspection(&dispatched, provider_id, self.max_decompressed_body_bytes)
                 .await?;
-
-        let matcher = match CompiledMatcher::compile(matcher) {
-            Ok(m) => m,
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = %provider_id,
-                    %error,
-                    "HTTP secret intercept: matcher compile failed; forwarding unmodified"
-                );
-                return Ok(dispatched);
-            }
-        };
 
         // Minting must happen synchronously — the single-pass rewrite
         // substitutes the placeholder in place of the plaintext value as it
@@ -2115,12 +2106,13 @@ pub(crate) mod tests {
     use base64::Engine as _;
     use chrono::Utc;
     use firma_core::{
-        CapabilityClaims, Connector, RevocationStore, StepUpSpec, TokenError, TokenVerifier,
-        TransportView,
+        CapabilityClaims, Connector, RevocationStore, SecretMatcher, StepUpSpec, TokenError,
+        TokenVerifier, TransportView,
     };
     use firma_http::{Authority, Method};
     use firma_identifiers::TokenId;
     use firma_secret_provider::{
+        MatcherError,
         gateway::{client::config::GatewayClientConfig, endpoint::GatewayEndpoint},
         non_empty::NonEmptyString,
         spec::http::{HttpMatcherRule, PathAndMatcher, PathOnly},
@@ -3312,13 +3304,15 @@ pub(crate) mod tests {
         upstream_cancel.cancel();
     }
 
-    fn aws_secrets_manager_provider(host: &Authority) -> HttpIntegrationSpec {
-        HttpIntegrationSpec {
+    fn aws_secrets_manager_provider(
+        host: &Authority,
+    ) -> Result<HttpIntegrationSpec<CompiledMatcher>, MatcherError> {
+        Ok(HttpIntegrationSpec {
             provider_id: "aws-secrets-manager".to_string(),
             host: host.to_string(),
             matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
                 path: None,
-                matcher: firma_core::SecretMatcher::Json {
+                matcher: CompiledMatcher::compile(&SecretMatcher::Json {
                     record_path: "$".to_string(),
                     value_path: "$.SecretString".to_string(),
                     name: firma_core::SecretNameSource::Path {
@@ -3326,9 +3320,9 @@ pub(crate) mod tests {
                     },
                     item_selector: None,
                     domain_selector: None,
-                },
+                })?,
             })],
-        }
+        })
     }
 
     #[tokio::test]
@@ -3359,7 +3353,9 @@ pub(crate) mod tests {
             GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ))
-        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+        .with_http_secret_providers(vec![
+            aws_secrets_manager_provider(&host).expect("valid provider"),
+        ]);
 
         let response = handler
             .handle(raw_request(host, Method::POST), "sess_http_secret")
@@ -3459,7 +3455,9 @@ pub(crate) mod tests {
             GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ))
-        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+        .with_http_secret_providers(vec![
+            aws_secrets_manager_provider(&host).expect("valid provider"),
+        ]);
 
         let response = handler
             .handle(raw_request(host, Method::POST), "sess_http_push_fail")
@@ -3580,7 +3578,9 @@ pub(crate) mod tests {
             GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ))
-        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+        .with_http_secret_providers(vec![
+            aws_secrets_manager_provider(&host).expect("valid provider"),
+        ]);
 
         let mut request = raw_request(host, Method::POST);
         request.body = Some(format!(r#"{{"key":"{placeholder}"}}"#).into_bytes());
@@ -3664,7 +3664,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn blocked_command_provider(host: &Authority) -> HttpIntegrationSpec {
+    fn blocked_command_provider(host: &Authority) -> HttpIntegrationSpec<CompiledMatcher> {
         HttpIntegrationSpec {
             provider_id: "blocked-vault".to_string(),
             host: host.to_string(),
@@ -3675,7 +3675,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn safe_command_provider(host: &Authority) -> HttpIntegrationSpec {
+    fn safe_command_provider(host: &Authority) -> HttpIntegrationSpec<CompiledMatcher> {
         HttpIntegrationSpec {
             provider_id: "safe-vault".to_string(),
             host: host.to_string(),
@@ -3800,7 +3800,9 @@ pub(crate) mod tests {
             tx,
         )
         // Provider configured, but no `with_gateway_client` call.
-        .with_http_secret_providers(vec![aws_secrets_manager_provider(&host)]);
+        .with_http_secret_providers(vec![
+            aws_secrets_manager_provider(&host).expect("valid provider"),
+        ]);
 
         let response = handler
             .handle(raw_request(host, Method::POST), "sess_http_no_gateway")
@@ -3840,9 +3842,10 @@ pub(crate) mod tests {
             host: host.to_string(),
             matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
                 path: None,
-                matcher: firma_core::SecretMatcher::Regex {
+                matcher: CompiledMatcher::compile(&SecretMatcher::Regex {
                     pattern: "no_named_groups_here".to_string(),
-                },
+                })
+                .expect("valid provider"),
             })],
         };
 
