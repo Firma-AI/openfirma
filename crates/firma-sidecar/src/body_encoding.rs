@@ -24,13 +24,27 @@ use std::io::{Read, Write};
 use firma_http::HeaderMap;
 use thiserror::Error;
 
+/// RFC 7230 defines HTTP `deflate` as the zlib format
+/// (RFC 1950), but many servers historically send raw
+/// DEFLATE (RFC 1951). Try the zlib wrapper first, then fall
+/// back to raw DEFLATE, so either server behavior decodes.
+/// A mislabeled payload fails the zlib Adler-32 checksum, so
+/// an accidental zlib decode of raw-DEFLATE data is caught
+/// and retried raw rather than silently trusted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum DeflateEncoding {
+    #[default]
+    Deflate,
+    Zlib,
+}
+
 /// A `Content-Encoding` this layer knows how to reversibly decode before
 /// running the plaintext secret matcher, and re-encode afterward so a
 /// forwarded body's declared encoding still matches its bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SupportedEncoding {
     Gzip,
-    Deflate,
+    Deflate(DeflateEncoding),
     Brotli,
     Zstd,
 }
@@ -50,7 +64,7 @@ impl SupportedEncoding {
         match value.trim() {
             "" | "identity" => Ok(None),
             "gzip" => Ok(Some(Self::Gzip)),
-            "deflate" => Ok(Some(Self::Deflate)),
+            "deflate" => Ok(Some(Self::Deflate(DeflateEncoding::default()))),
             "br" => Ok(Some(Self::Brotli)),
             "zstd" => Ok(Some(Self::Zstd)),
             other => Err(other.to_string()),
@@ -58,7 +72,7 @@ impl SupportedEncoding {
     }
 
     fn decode(
-        self,
+        &mut self,
         body: &[u8],
         max_decompressed_bytes: usize,
     ) -> Result<Vec<u8>, BodyEncodingError> {
@@ -66,21 +80,20 @@ impl SupportedEncoding {
             Self::Gzip => {
                 bounded_read_to_end(flate2::read::GzDecoder::new(body), max_decompressed_bytes)
             }
-            Self::Deflate => {
-                // RFC 7230 defines HTTP `deflate` as the zlib format
-                // (RFC 1950), but many servers historically send raw
-                // DEFLATE (RFC 1951). Try the zlib wrapper first, then fall
-                // back to raw DEFLATE, so either server behavior decodes.
-                // A mislabeled payload fails the zlib Adler-32 checksum, so
-                // an accidental zlib decode of raw-DEFLATE data is caught
-                // and retried raw rather than silently trusted.
+            Self::Deflate(encoding) => {
                 bounded_read_to_end(flate2::read::ZlibDecoder::new(body), max_decompressed_bytes)
+                    .inspect(|_| {
+                        *encoding = DeflateEncoding::Zlib;
+                    })
                     .map_or_else(
                         |_| {
                             bounded_read_to_end(
                                 flate2::read::DeflateDecoder::new(body),
                                 max_decompressed_bytes,
                             )
+                            .inspect(|_| {
+                                *encoding = DeflateEncoding::Deflate;
+                            })
                         },
                         Ok,
                     )
@@ -105,12 +118,22 @@ impl SupportedEncoding {
                 encoder.write_all(body).map_err(BodyEncodingError::Encode)?;
                 encoder.finish().map_err(BodyEncodingError::Encode)
             }
-            Self::Deflate => {
-                let mut encoder =
-                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-                encoder.write_all(body).map_err(BodyEncodingError::Encode)?;
-                encoder.finish().map_err(BodyEncodingError::Encode)
-            }
+            Self::Deflate(encoding) => match encoding {
+                DeflateEncoding::Deflate => {
+                    let mut encoder = flate2::write::DeflateEncoder::new(
+                        Vec::new(),
+                        flate2::Compression::default(),
+                    );
+                    encoder.write_all(body).map_err(BodyEncodingError::Encode)?;
+                    encoder.finish().map_err(BodyEncodingError::Encode)
+                }
+                DeflateEncoding::Zlib => {
+                    let mut encoder =
+                        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                    encoder.write_all(body).map_err(BodyEncodingError::Encode)?;
+                    encoder.finish().map_err(BodyEncodingError::Encode)
+                }
+            },
             Self::Brotli => {
                 // Quality 5 of 11: this recompression runs per-request on
                 // the enforcement hot path (off the async worker thread via
@@ -179,15 +202,17 @@ pub(crate) async fn decode_body<'a>(
     headers: &HeaderMap,
     max_decompressed_bytes: usize,
 ) -> Result<(Cow<'a, [u8]>, Option<SupportedEncoding>), BodyEncodingError> {
-    let Some(encoding) =
+    let Some(mut encoding) =
         SupportedEncoding::from_headers(headers).map_err(BodyEncodingError::UnsupportedEncoding)?
     else {
         return Ok((Cow::Borrowed(body), None));
     };
     let owned = body.to_vec();
-    let decoded =
-        tokio::task::spawn_blocking(move || encoding.decode(&owned, max_decompressed_bytes))
-            .await??;
+    let (decoded, encoding) = tokio::task::spawn_blocking(move || {
+        let decoded = encoding.decode(&owned, max_decompressed_bytes)?;
+        Ok::<_, BodyEncodingError>((decoded, encoding))
+    })
+    .await??;
     Ok((Cow::Owned(decoded), Some(encoding)))
 }
 
@@ -252,7 +277,7 @@ mod tests {
 
     async fn roundtrip(encoding: SupportedEncoding, header_value: &str) {
         let plaintext = b"the quick brown fox jumps over the lazy dog".repeat(8);
-        let encoded = encode_body(plaintext.clone(), Some(encoding))
+        let encoded = encode_body(plaintext.clone(), Some(encoding.clone()))
             .await
             .expect("encode succeeds");
         let (decoded, decoded_encoding) =
@@ -270,7 +295,11 @@ mod tests {
 
     #[tokio::test]
     async fn deflate_roundtrip() {
-        roundtrip(SupportedEncoding::Deflate, "deflate").await;
+        roundtrip(
+            SupportedEncoding::Deflate(DeflateEncoding::Deflate),
+            "deflate",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -293,7 +322,10 @@ mod tests {
                 .await
                 .expect("zlib-wrapped deflate decodes");
         assert_eq!(decoded.as_ref(), plaintext.as_slice());
-        assert_eq!(encoding, Some(SupportedEncoding::Deflate));
+        assert_eq!(
+            encoding,
+            Some(SupportedEncoding::Deflate(DeflateEncoding::Zlib))
+        );
     }
 
     #[tokio::test]

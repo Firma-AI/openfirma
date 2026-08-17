@@ -1,3 +1,4 @@
+use firma_core::SecretMatcher;
 use firma_secret_provider::{
     MatchingResolution,
     spec::http::{HttpIntegrationSpec, HttpMatcherRule, PathAndMatcher},
@@ -5,7 +6,7 @@ use firma_secret_provider::{
 
 use crate::support::{json, regex};
 
-fn spec(matchers: Vec<HttpMatcherRule>) -> HttpIntegrationSpec {
+fn spec(matchers: Vec<HttpMatcherRule<SecretMatcher>>) -> HttpIntegrationSpec<SecretMatcher> {
     HttpIntegrationSpec {
         provider_id: String::from("aws-secrets-manager"),
         host: String::from("secretsmanager.*.amazonaws.com"),

@@ -105,3 +105,9 @@ impl CompiledMatcher {
         }
     }
 }
+
+pub trait MatcherCompiler {
+    type Ok;
+
+    fn compile(&self) -> Result<Self::Ok, MatcherError>;
+}

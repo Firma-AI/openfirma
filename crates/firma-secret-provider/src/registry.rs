@@ -55,7 +55,7 @@ use crate::{
 /// take precedence over built-ins when names collide.
 #[derive(Debug, Default)]
 pub struct IntegrationRegistry {
-    specs: BTreeMap<String, CliIntegrationSpec>,
+    specs: BTreeMap<String, CliIntegrationSpec<SecretMatcher>>,
 }
 
 impl IntegrationRegistry {
@@ -73,20 +73,20 @@ impl IntegrationRegistry {
 
     /// Look up a spec by binary basename. Returns `None` for unknown tools.
     #[must_use]
-    pub fn for_binary(&self, binary_name: &str) -> Option<&CliIntegrationSpec> {
+    pub fn for_binary(&self, binary_name: &str) -> Option<&CliIntegrationSpec<SecretMatcher>> {
         self.specs.get(binary_name)
     }
 
     /// Add a custom spec. If a spec with the same binary name already exists
     /// (e.g. a built-in), the custom one replaces it.
-    pub fn push(&mut self, spec: CliIntegrationSpec) {
+    pub fn push(&mut self, spec: CliIntegrationSpec<SecretMatcher>) {
         if let Some(old_spec) = self.specs.insert(String::from(spec.binary_name()), spec) {
             tracing::warn!("replacing {} secret manager specs", old_spec.binary_name());
         }
     }
 }
 
-fn bws_spec() -> CliIntegrationSpec {
+fn bws_spec() -> CliIntegrationSpec<SecretMatcher> {
     CliIntegrationSpec {
         binary_name: String::from("bws"),
         provider_id: String::from("bitwarden"),
@@ -220,7 +220,7 @@ fn bws_spec() -> CliIntegrationSpec {
     }
 }
 
-fn op_spec() -> CliIntegrationSpec {
+fn op_spec() -> CliIntegrationSpec<SecretMatcher> {
     CliIntegrationSpec {
         binary_name: String::from("op"),
         provider_id: String::from("1password"),
@@ -339,7 +339,7 @@ fn op_spec() -> CliIntegrationSpec {
     }
 }
 
-fn vault_spec() -> CliIntegrationSpec {
+fn vault_spec() -> CliIntegrationSpec<SecretMatcher> {
     CliIntegrationSpec {
         binary_name: String::from("vault"),
         provider_id: String::from("hashicorp-vault"),
@@ -490,7 +490,7 @@ fn vault_spec() -> CliIntegrationSpec {
     }
 }
 
-fn doppler_spec() -> CliIntegrationSpec {
+fn doppler_spec() -> CliIntegrationSpec<SecretMatcher> {
     CliIntegrationSpec {
         binary_name: String::from("doppler"),
         provider_id: String::from("doppler"),

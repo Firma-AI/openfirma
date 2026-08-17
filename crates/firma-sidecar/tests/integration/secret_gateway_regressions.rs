@@ -9,6 +9,7 @@ use firma_core::{
     TransportView,
 };
 use firma_http::{Authority, HeaderMap, Method};
+use firma_secret_provider::{CompiledMatcher, MatcherError};
 use firma_secret_provider::{
     SecretPlaceholder,
     gateway::{
@@ -136,13 +137,13 @@ fn fixed_handler(
     ))
 }
 
-fn sensitive_provider(host: &str) -> HttpIntegrationSpec {
-    HttpIntegrationSpec {
+fn sensitive_provider(host: &str) -> Result<HttpIntegrationSpec<CompiledMatcher>, MatcherError> {
+    Ok(HttpIntegrationSpec {
         provider_id: "test-vault".to_string(),
         host: host.to_string(),
         matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
             path: Some(PATH.to_string()),
-            matcher: SecretMatcher::Json {
+            matcher: CompiledMatcher::compile(&SecretMatcher::Json {
                 record_path: "$".to_string(),
                 value_path: "$.SecretString".to_string(),
                 name: firma_core::SecretNameSource::Path {
@@ -150,12 +151,12 @@ fn sensitive_provider(host: &str) -> HttpIntegrationSpec {
                 },
                 item_selector: None,
                 domain_selector: None,
-            },
+            })?,
         })],
-    }
+    })
 }
 
-fn blocked_provider(host: &str) -> anyhow::Result<HttpIntegrationSpec> {
+fn blocked_provider(host: &str) -> anyhow::Result<HttpIntegrationSpec<CompiledMatcher>> {
     Ok(HttpIntegrationSpec {
         provider_id: "test-vault".to_string(),
         host: host.to_string(),
@@ -303,7 +304,8 @@ async fn sensitive_provider_without_gateway_fails_closed() -> anyhow::Result<()>
             http::HeaderValue::from_static("application/json"),
         )]),
     )?;
-    let handler = handler.with_http_secret_providers(vec![sensitive_provider(host)]);
+    let handler =
+        handler.with_http_secret_providers(vec![sensitive_provider(host).expect("valid provider")]);
 
     let response = handler
         .handle(
@@ -386,7 +388,7 @@ async fn compressed_sensitive_response_is_decoded_masked_and_recompressed() -> a
     let (gateway, pushed, gateway_server) = fake_push_gateway().await?;
     let handler = handler
         .with_gateway_client(gateway)
-        .with_http_secret_providers(vec![sensitive_provider(host)]);
+        .with_http_secret_providers(vec![sensitive_provider(host).expect("valid provider")]);
 
     let response = proxy_request(handler, host, b"{}").await?;
     let pushed = tokio::time::timeout(Duration::from_secs(1), pushed).await??;
@@ -438,7 +440,7 @@ async fn unsupported_content_encoding_fails_closed() -> anyhow::Result<()> {
     let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
     let handler = handler
         .with_gateway_client(gateway)
-        .with_http_secret_providers(vec![sensitive_provider(host)]);
+        .with_http_secret_providers(vec![sensitive_provider(host).expect("valid provider")]);
 
     let response = proxy_request(handler, host, b"{}").await?;
     let gateway_contact = tokio::time::timeout(Duration::from_millis(100), contacted).await;
@@ -689,7 +691,7 @@ async fn brotli_and_zstd_sensitive_responses_are_decoded_masked_and_recompressed
         let (gateway, pushed, gateway_server) = fake_push_gateway().await?;
         let handler = handler
             .with_gateway_client(gateway)
-            .with_http_secret_providers(vec![sensitive_provider(host)]);
+            .with_http_secret_providers(vec![sensitive_provider(host).expect("valid provider")]);
 
         let response = proxy_request(handler, host, b"{}").await?;
         let pushed = tokio::time::timeout(Duration::from_secs(1), pushed).await??;
@@ -732,7 +734,7 @@ async fn oversized_decompressed_response_fails_closed() -> anyhow::Result<()> {
     let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
     let handler = handler
         .with_gateway_client(gateway)
-        .with_http_secret_providers(vec![sensitive_provider(host)])
+        .with_http_secret_providers(vec![sensitive_provider(host).expect("valid provider")])
         .with_max_decompressed_body_bytes(1024);
 
     let response = proxy_request(handler, host, b"{}").await?;
@@ -807,7 +809,7 @@ async fn sensitive_provider_schema_mismatch_fails_closed() -> anyhow::Result<()>
     let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
     let handler = handler
         .with_gateway_client(gateway)
-        .with_http_secret_providers(vec![sensitive_provider(host)]);
+        .with_http_secret_providers(vec![sensitive_provider(host).expect("valid provider")]);
 
     let response = proxy_request(handler, host, b"{}").await?;
     let gateway_contact = tokio::time::timeout(Duration::from_millis(100), contacted).await;
@@ -839,9 +841,10 @@ async fn sensitive_provider_matcher_compile_failure_fails_closed() -> anyhow::Re
         host: host.to_string(),
         matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
             path: Some(PATH.to_string()),
-            matcher: SecretMatcher::Regex {
+            matcher: CompiledMatcher::compile(&SecretMatcher::Regex {
                 pattern: "no_named_groups_here".to_string(),
-            },
+            })
+            .expect("valid provider"),
         })],
     };
     let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;

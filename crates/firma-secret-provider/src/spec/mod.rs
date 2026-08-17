@@ -11,7 +11,10 @@
 
 use firma_core::SecretMatcher;
 
-use crate::non_empty::{NonEmptyString, NonEmptyVec};
+use crate::{
+    MatcherCompiler,
+    non_empty::{NonEmptyString, NonEmptyVec},
+};
 
 pub mod cli;
 pub mod http;
@@ -23,17 +26,17 @@ pub enum IntegrationConfig {
     Cli(cli::CliIntegrationConfig),
     /// HTTP integration configuration, which has no additional validation
     /// boundary.
-    Http(http::HttpIntegrationSpec),
+    Http(http::HttpIntegrationSpec<SecretMatcher>),
 }
 
 /// A validated secret-provider integration: either a CLI vault tool or an
 /// HTTP vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IntegrationSpec {
+pub enum IntegrationSpec<Matcher> {
     /// Validated CLI integration.
-    Cli(cli::CliIntegrationSpec),
+    Cli(cli::CliIntegrationSpec<Matcher>),
     /// HTTP integration.
-    Http(http::HttpIntegrationSpec),
+    Http(http::HttpIntegrationSpec<Matcher>),
 }
 
 /// Error returned when validating an [`IntegrationConfig`].
@@ -44,7 +47,7 @@ pub enum IntegrationConfigError {
     Cli(#[from] cli::CliIntegrationConfigError),
 }
 
-impl TryFrom<IntegrationConfig> for IntegrationSpec {
+impl TryFrom<IntegrationConfig> for IntegrationSpec<SecretMatcher> {
     type Error = IntegrationConfigError;
 
     fn try_from(config: IntegrationConfig) -> Result<Self, Self::Error> {
@@ -55,7 +58,7 @@ impl TryFrom<IntegrationConfig> for IntegrationSpec {
     }
 }
 
-impl IntegrationSpec {
+impl<Matcher> IntegrationSpec<Matcher> {
     /// Stable integration identity (e.g. `"bitwarden"`, `"aws-secrets-manager"`),
     /// for both origins. Consumers use it to associate extracted secrets with
     /// the integration that produced them.
@@ -69,7 +72,7 @@ impl IntegrationSpec {
 
     /// Returns the CLI spec, if this is a CLI-origin provider.
     #[must_use]
-    pub fn as_cli(&self) -> Option<&cli::CliIntegrationSpec> {
+    pub fn as_cli(&self) -> Option<&cli::CliIntegrationSpec<Matcher>> {
         match self {
             Self::Cli(spec) => Some(spec),
             Self::Http(_) => None,
@@ -78,7 +81,7 @@ impl IntegrationSpec {
 
     /// Returns the HTTP spec, if this is an HTTP-origin provider.
     #[must_use]
-    pub fn as_http(&self) -> Option<&http::HttpIntegrationSpec> {
+    pub fn as_http(&self) -> Option<&http::HttpIntegrationSpec<Matcher>> {
         match self {
             Self::Http(spec) => Some(spec),
             Self::Cli(_) => None,
@@ -89,9 +92,9 @@ impl IntegrationSpec {
 /// Outcome of resolving a invocation's args against a spec.
 /// See [`cli::CliIntegrationSpec::resolve_args`] and [`http::HttpIntegrationSpec::matcher_for`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MatchingResolution<'a> {
+pub enum MatchingResolution<'a, Matcher> {
     /// Extract and redact secrets from stdout using this matcher.
-    Matcher(&'a SecretMatcher),
+    Matcher(&'a Matcher),
     /// Known-safe invocation shape that never emits secret material; forward
     /// stdout unredacted, no matcher applied.
     PassThrough,
@@ -131,6 +134,22 @@ impl<A, B> MatcherRule<A, B> {
         match self {
             Self::BlockedCommand(b) => Some(b),
             _ => None,
+        }
+    }
+}
+
+impl<A, B> MatcherCompiler for MatcherRule<A, B>
+where
+    A: MatcherCompiler,
+    B: Clone,
+{
+    type Ok = MatcherRule<A::Ok, B>;
+
+    fn compile(&self) -> Result<Self::Ok, crate::MatcherError> {
+        match self {
+            Self::SensitiveCommand(a) => Ok(MatcherRule::SensitiveCommand(a.compile()?)),
+            Self::SafeCommand(b) => Ok(MatcherRule::SafeCommand(b.clone())),
+            Self::BlockedCommand(b) => Ok(MatcherRule::BlockedCommand(b.clone())),
         }
     }
 }
