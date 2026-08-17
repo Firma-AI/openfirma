@@ -138,31 +138,28 @@ fn build_request_handler(
     audit_sink_sender: tokio::sync::mpsc::Sender<AuditPayload>,
     composio_catalogs: Arc<ComposioCatalogs>,
     config: &config::SidecarConfig,
-) -> handler::RequestHandler {
+) -> anyhow::Result<handler::RequestHandler> {
     let base = handler::RequestHandler::new(pipeline, connector_registry, audit_sink_sender)
         .with_composio_catalogs(composio_catalogs)
         .with_max_decompressed_body_bytes(config.interceptor.max_decompressed_body_bytes());
-    let gateway = std::env::var(GATEWAY_ADDR_ENV).ok().and_then(|addr| {
+
+    let base = if let Ok(addr) = std::env::var(GATEWAY_ADDR_ENV) {
         match GatewayEndpoint::parse(&addr) {
             Ok(ep) => {
                 tracing::info!(%addr, "secret gateway configured; placeholder rehydration enabled");
-                Some(GatewayClient::new(ep, config.secret_gateway))
+                base.with_gateway_client(GatewayClient::new(ep, config.secret_gateway))
             }
-            Err(e) => {
-                tracing::warn!(%addr, error = %e, "invalid secret gateway address; placeholder rehydration disabled");
-                None
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "invalid secret gateway address \"{addr}\": {err}"
+                ));
             }
         }
-    });
-    let base = if let Some(client) = gateway {
-        base.with_gateway_client(client)
     } else {
         if !config.http_secret_providers.is_empty() {
-            tracing::warn!(
-                providers = config.http_secret_providers.len(),
-                "http_secret_providers configured but no secret gateway is available; \
-                 matched traffic will be aborted fail-closed instead of intercepted"
-            );
+            return Err(anyhow::anyhow!(
+                "http_secret_providers configured but no secret gateway is available"
+            ));
         }
         base
     };
@@ -170,23 +167,20 @@ fn build_request_handler(
     let http_secret_providers = config
         .http_secret_providers
         .iter()
-        .filter_map(|spec| {
-            spec.compile()
-                .inspect_err(|err| {
-                    tracing::warn!(
-                        error = %err,
-                        "invalid secret provider config for {}; disabling",
-                        spec.provider_id
-                    );
-                })
-                .ok()
+        .map(|spec| {
+            spec.compile().map_err(|err| {
+                anyhow::anyhow!(
+                    "invalid secret provider config for \"{}\": {err}",
+                    spec.provider_id
+                )
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     if http_secret_providers.is_empty() {
-        return base;
+        return Ok(base);
     }
 
-    base.with_http_secret_providers(http_secret_providers)
+    Ok(base.with_http_secret_providers(http_secret_providers))
 }
 
 #[expect(
@@ -253,7 +247,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         audit_payload_tx,
         load_composio_catalogs()?,
         &config,
-    ));
+    )?);
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
