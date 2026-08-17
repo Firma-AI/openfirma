@@ -69,7 +69,7 @@ fn issued_capability_must_verify_with_configured_authority_key() {
         "unverified token reached upstream"
     );
     assert!(
-        !world.audit_path().exists(),
+        !world.path("state/audit.jsonl").exists(),
         "unverified token must not enter Sidecar enforcement"
     );
 }
