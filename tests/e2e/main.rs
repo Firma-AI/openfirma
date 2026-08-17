@@ -12,5 +12,6 @@
 mod audit;
 mod harness;
 mod harness_timeout;
+mod poll;
 mod scenarios;
 mod upstream;

@@ -28,19 +28,20 @@ fn policy_update_denies_without_restarting_live_session_or_sidecar() {
     );
 
     let deadline = Instant::now() + Duration::from_secs(30);
-    let (event, url, denied_at) = loop {
+    let (event, resource, denied_at) = loop {
         let nonce = format!("policy-after-{}", uuid::Uuid::new_v4().simple());
-        let probe = HttpProbe::start(&nonce, ProbeBehavior::RespondOrStop(RESPONSE));
+        let probe = HttpProbe::start(&nonce, ProbeBehavior::OptionalResponse(RESPONSE));
         let url = probe.url();
+        let resource = probe.resource();
         let status = run.request(&nonce, &url);
         let capture = probe.finish();
-        let event = run.audit_event(&nonce);
+        let event = run.audit_event(&nonce, Duration::from_secs(5));
         assert_eq!(run.identity(), initial_identity);
         if status == 0 {
             let capture = capture.expect("allowed propagation probe reached upstream");
             assert_eq!(capture.method, "GET");
             assert_eq!(capture.path, format!("/{nonce}"));
-            assert_allowed_event(&event, &url, &initial_token);
+            assert_allowed_event(&event, &resource, &initial_token);
             assert!(
                 Instant::now() < deadline,
                 "policy update did not deny within the documented 30-second interval"
@@ -52,17 +53,16 @@ fn policy_update_denies_without_restarting_live_session_or_sidecar() {
             "policy denial must surface as curl HTTP failure"
         );
         assert!(capture.is_none(), "policy-denied request reached upstream");
-        break (event, url, Instant::now());
+        break (event, resource, Instant::now());
     };
     assert!(
         denied_at <= deadline,
         "policy update denied after the documented 30-second interval"
     );
 
-    let resource = server_resource(&url);
     assert_denied_event(
         &event,
-        &url,
+        &resource,
         &initial_token,
         ACTION,
         &format!("policy denied: policy denied action '{ACTION}' on resource '{resource}'"),
@@ -108,19 +108,20 @@ fn active_token_revocation_denies_without_restarting_live_session_or_sidecar() {
     assert!(persisted.contains("\te2e-active-token-revocation\n"));
 
     let deadline = Instant::now() + Duration::from_secs(1);
-    let (event, url, denied_at) = loop {
+    let (event, resource, denied_at) = loop {
         let nonce = format!("revoked-after-{}", uuid::Uuid::new_v4().simple());
-        let probe = HttpProbe::start(&nonce, ProbeBehavior::RespondOrStop(RESPONSE));
+        let probe = HttpProbe::start(&nonce, ProbeBehavior::OptionalResponse(RESPONSE));
         let url = probe.url();
+        let resource = probe.resource();
         let status = run.request(&nonce, &url);
         let capture = probe.finish();
-        let event = run.audit_event(&nonce);
+        let event = run.audit_event(&nonce, Duration::from_secs(5));
         assert_eq!(run.identity(), initial_identity);
         if status == 0 {
             let capture = capture.expect("allowed revocation probe reached upstream");
             assert_eq!(capture.method, "GET");
             assert_eq!(capture.path, format!("/{nonce}"));
-            assert_allowed_event(&event, &url, &token_id);
+            assert_allowed_event(&event, &resource, &token_id);
             assert!(
                 Instant::now() < deadline,
                 "revocation did not deny within the documented one-second interval"
@@ -132,7 +133,7 @@ fn active_token_revocation_denies_without_restarting_live_session_or_sidecar() {
             "revocation denial must surface as curl HTTP failure"
         );
         assert!(capture.is_none(), "revoked request reached upstream");
-        break (event, url, Instant::now());
+        break (event, resource, Instant::now());
     };
     assert!(
         denied_at <= deadline,
@@ -141,7 +142,7 @@ fn active_token_revocation_denies_without_restarting_live_session_or_sidecar() {
 
     assert_denied_event(
         &event,
-        &url,
+        &resource,
         "",
         "raw.http.GET",
         &format!("token revoked: token revoked: {token_id}"),
@@ -155,19 +156,20 @@ fn assert_allowed_request(run: &mut LiveGovernedRun, phase: &str) -> String {
     let nonce = format!("{phase}-{}", uuid::Uuid::new_v4().simple());
     let probe = HttpProbe::start(&nonce, ProbeBehavior::Respond(RESPONSE));
     let url = probe.url();
+    let resource = probe.resource();
     assert_eq!(run.request(&nonce, &url), 0, "positive control failed");
     let capture = probe.finish().expect("positive control reached upstream");
     assert_eq!(capture.method, "GET");
     assert_eq!(capture.path, format!("/{nonce}"));
-    let event = run.audit_event(&nonce);
+    let event = run.audit_event(&nonce, Duration::from_secs(5));
     assert!(event.token_id.starts_with("ctok_"));
-    assert_allowed_event(&event, &url, &event.token_id);
+    assert_allowed_event(&event, &resource, &event.token_id);
     event.token_id
 }
 
-fn assert_allowed_event(event: &AuditEvent, url: &str, token_id: &str) {
+fn assert_allowed_event(event: &AuditEvent, resource: &str, token_id: &str) {
     assert_eq!(event.action, ACTION);
-    assert_eq!(event.resource, server_resource(url));
+    assert_eq!(event.resource, resource);
     assert_eq!(event.decision, AuditDecision::Allow);
     assert_eq!(event.deny_reason, "");
     assert_eq!(event.token_id, token_id);
@@ -176,19 +178,15 @@ fn assert_allowed_event(event: &AuditEvent, url: &str, token_id: &str) {
 
 fn assert_denied_event(
     event: &AuditEvent,
-    url: &str,
+    resource: &str,
     audit_token_id: &str,
     action: &str,
     reason: &str,
 ) {
     assert_eq!(event.action, action);
-    assert_eq!(event.resource, server_resource(url));
+    assert_eq!(event.resource, resource);
     assert_eq!(event.decision, AuditDecision::Deny);
     assert_eq!(event.deny_reason, reason);
     assert_eq!(event.token_id, audit_token_id);
     assert_eq!(event.dispatch_status, 0);
-}
-
-fn server_resource(url: &str) -> &str {
-    url.strip_prefix("http://").expect("test URL uses HTTP")
 }

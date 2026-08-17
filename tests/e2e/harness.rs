@@ -8,9 +8,11 @@ use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
+use serde::Deserialize;
 use wait_timeout::ChildExt;
 
 use crate::audit::{AuditEvent, correlated_event};
+use crate::poll::wait_for;
 
 /// An isolated filesystem and environment for one E2E test phase.
 ///
@@ -220,6 +222,10 @@ impl TestWorld {
         run_bounded(&mut command, Duration::from_mins(2))
     }
 
+    /// Starts one governed shell that accepts multiple HTTP requests over standard input.
+    ///
+    /// The returned run owns the full local Authority, Sidecar, sandbox, and wrapped-process group.
+    /// Startup waits for both the wrapped shell readiness line and one complete Sidecar marker.
     pub(crate) fn start_live_governed(&self) -> LiveGovernedRun {
         let stdout = tempfile::NamedTempFile::new().expect("live stdout capture");
         let stderr = tempfile::NamedTempFile::new().expect("live stderr capture");
@@ -265,13 +271,16 @@ impl TestWorld {
             .expect("numeric wrapped process ID");
         let mount_namespace = fields.next().expect("mount namespace").to_string();
         assert_eq!(fields.next(), None);
-        let (sandbox_id, sidecar_id) =
-            wait_for_sidecar_marker(&self.state_path(), Duration::from_secs(5));
+        let marker = wait_for_sidecar_marker(&self.state_path(), Duration::from_secs(5));
+        assert_eq!(marker.session_id, self.session_id);
         run.identity = Some(LiveIdentity {
             process_id,
             mount_namespace,
-            sandbox_id,
-            sidecar_id,
+            sandbox_id: marker.sandbox_id,
+            sidecar_id: marker.sidecar_id,
+            agent_id: marker.agent_id,
+            session_id: marker.session_id,
+            sidecar_started_at: marker.started_at,
         });
         run
     }
@@ -303,14 +312,29 @@ while IFS='|' read -r nonce url; do
 done
 "#;
 
+/// Stable process, sandbox, Sidecar, agent, and session identity for a live governed run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LiveIdentity {
+    /// PID of the wrapped shell inside the structural sandbox.
     pub(crate) process_id: u32,
+    /// Initial mount-namespace link target for the wrapped shell.
     pub(crate) mount_namespace: String,
+    /// Per-run sandbox marker directory name.
     pub(crate) sandbox_id: String,
+    /// PID recorded for the owned Sidecar.
     pub(crate) sidecar_id: u32,
+    /// Agent identity recorded in the Sidecar marker metadata.
+    pub(crate) agent_id: String,
+    /// Session identity recorded in the Sidecar marker metadata.
+    pub(crate) session_id: String,
+    /// Sidecar start timestamp recorded in marker metadata.
+    pub(crate) sidecar_started_at: String,
 }
 
+/// A long-lived governed shell plus its owned local Authority, Sidecar, and process group.
+///
+/// Dropping an unfinished run performs bounded process-group cleanup. Call [`Self::finish`] to
+/// assert and inspect its final status and captured output.
 pub(crate) struct LiveGovernedRun {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
@@ -323,6 +347,7 @@ pub(crate) struct LiveGovernedRun {
 }
 
 impl LiveGovernedRun {
+    /// Returns the original identity after verifying every process and marker remains unchanged.
     pub(crate) fn identity(&self) -> LiveIdentity {
         let identity = self.identity.clone().expect("live identity ready");
         assert!(
@@ -337,15 +362,19 @@ impl LiveGovernedRun {
             identity.mount_namespace,
             "wrapped process mount namespace changed"
         );
-        let sidecar_pid_path = self
-            .state_path
-            .join("run")
-            .join(&identity.sandbox_id)
-            .join("sidecar.pid");
+        let marker_path = self.state_path.join("run").join(&identity.sandbox_id);
+        let marker = read_sidecar_marker(&marker_path, &identity.sandbox_id)
+            .expect("read stable Sidecar marker");
         assert_eq!(
-            read_pid_file(&sidecar_pid_path),
-            Some(identity.sidecar_id),
-            "Sidecar PID marker changed"
+            marker,
+            SidecarMarker {
+                sandbox_id: identity.sandbox_id.clone(),
+                sidecar_id: identity.sidecar_id,
+                agent_id: identity.agent_id.clone(),
+                session_id: identity.session_id.clone(),
+                started_at: identity.sidecar_started_at.clone(),
+            },
+            "Sidecar marker identity changed"
         );
         assert!(
             Path::new(&format!("/proc/{}", identity.sidecar_id)).exists(),
@@ -355,6 +384,10 @@ impl LiveGovernedRun {
         identity
     }
 
+    /// Sends one request through the existing governed shell and returns curl's exit status.
+    ///
+    /// The method waits for an explicit attempt line and matching result line, proving that a
+    /// nonzero status came from the requested stimulus rather than from a missing shell command.
     pub(crate) fn request(&mut self, nonce: &str, url: &str) -> i32 {
         let stdin = self.stdin.as_mut().expect("live governed stdin open");
         writeln!(stdin, "{nonce}|{url}").expect("send request to live governed process");
@@ -370,45 +403,40 @@ impl LiveGovernedRun {
             .expect("numeric curl status")
     }
 
-    pub(crate) fn audit_event(&self, nonce: &str) -> AuditEvent {
-        crate::audit::wait_for_correlated_event(
-            &self.audit_path,
-            &self.session_id,
-            nonce,
-            Duration::from_secs(5),
-        )
+    /// Waits up to `timeout` for this run's unique audit event containing `nonce`.
+    pub(crate) fn audit_event(&self, nonce: &str, timeout: Duration) -> AuditEvent {
+        crate::audit::wait_for_correlated_event(&self.audit_path, &self.session_id, nonce, timeout)
     }
 
+    /// Closes the request stream and waits up to 30 seconds for clean process-group completion.
     pub(crate) fn finish(mut self) -> ProcessOutput {
         self.finish_inner(Duration::from_secs(30))
     }
 
     fn wait_for_line(&mut self, prefix: &str, timeout: Duration) -> String {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let output = read_capture(self.stdout.path());
-            if let Some(line) = output.lines().find(|line| line.starts_with(prefix)) {
-                return line.to_string();
-            }
-            if let Some(status) = self
-                .child
-                .as_mut()
-                .expect("live governed child")
-                .try_wait()
-                .expect("poll live governed child")
-            {
-                panic!(
-                    "live governed process exited before {prefix:?}: status={status}\nstdout:\n{output}\nstderr:\n{}",
-                    read_capture(self.stderr.path())
-                );
-            }
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for {prefix:?}\nstdout:\n{output}\nstderr:\n{}",
-                read_capture(self.stderr.path())
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for(
+            &format!("live output line beginning {prefix:?}"),
+            timeout,
+            || {
+                let output = read_capture(self.stdout.path());
+                if let Some(line) = output.lines().find(|line| line.starts_with(prefix)) {
+                    return Some(line.to_string());
+                }
+                if let Some(status) = self
+                    .child
+                    .as_mut()
+                    .expect("live governed child")
+                    .try_wait()
+                    .expect("poll live governed child")
+                {
+                    panic!(
+                        "live governed process exited before {prefix:?}: status={status}\nstdout:\n{output}\nstderr:\n{}",
+                        read_capture(self.stderr.path())
+                    );
+                }
+                None
+            },
+        )
     }
 
     fn finish_inner(&mut self, timeout: Duration) -> ProcessOutput {
@@ -438,9 +466,26 @@ impl Drop for LiveGovernedRun {
     }
 }
 
-fn wait_for_sidecar_marker(state_path: &Path, timeout: Duration) -> (String, u32) {
-    let deadline = Instant::now() + timeout;
-    loop {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SidecarMarker {
+    sandbox_id: String,
+    sidecar_id: u32,
+    agent_id: String,
+    session_id: String,
+    started_at: String,
+}
+
+#[derive(Deserialize)]
+struct SidecarMarkerMetadata {
+    sandbox_id: String,
+    agent_id: String,
+    session_id: String,
+    pid: u32,
+    started_at: String,
+}
+
+fn wait_for_sidecar_marker(state_path: &Path, timeout: Duration) -> SidecarMarker {
+    wait_for("one complete live Sidecar marker", timeout, || {
         let run_path = state_path.join("run");
         let markers = std::fs::read_dir(&run_path)
             .into_iter()
@@ -448,22 +493,30 @@ fn wait_for_sidecar_marker(state_path: &Path, timeout: Duration) -> (String, u32
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let sandbox_id = entry.file_name().into_string().ok()?;
-                let pid = read_pid_file(&entry.path().join("sidecar.pid"))?;
-                Some((sandbox_id, pid))
+                read_sidecar_marker(&entry.path(), &sandbox_id)
             })
             .collect::<Vec<_>>();
         match markers.as_slice() {
-            [marker] => return marker.clone(),
-            [] => {}
+            [marker] => Some(marker.clone()),
+            [] => None,
             _ => panic!("expected one live Sidecar marker, found {markers:?}"),
         }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for Sidecar marker under {}",
-            run_path.display()
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    })
+}
+
+fn read_sidecar_marker(path: &Path, sandbox_id: &str) -> Option<SidecarMarker> {
+    let sidecar_id = read_pid_file(&path.join("sidecar.pid"))?;
+    let metadata = std::fs::read_to_string(path.join("metadata.toml")).ok()?;
+    let metadata = toml::from_str::<SidecarMarkerMetadata>(&metadata).ok()?;
+    assert_eq!(metadata.sandbox_id, sandbox_id);
+    assert_eq!(metadata.pid, sidecar_id);
+    Some(SidecarMarker {
+        sandbox_id: sandbox_id.to_string(),
+        sidecar_id,
+        agent_id: metadata.agent_id,
+        session_id: metadata.session_id,
+        started_at: metadata.started_at,
+    })
 }
 
 fn read_pid_file(path: &Path) -> Option<u32> {
