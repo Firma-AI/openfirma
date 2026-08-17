@@ -106,10 +106,11 @@ session identifier, and batch position when those values are present.
 
 Linking or removing a connected account changes what an agent can reach, so
 those requests are governed like tool calls instead of passing through.
-Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `connected_accounts`,
-`auth_configs`, and the Tool Router session `link` route, plus `PATCH`,
-`PUT`, and `DELETE` on a Tool Router `session/{id}` resource (under
-`/api/v3` and `/api/v3.1`), decode into one `account.permission.change`
+Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `connected_accounts` and
+`auth_configs`, `POST` to the Tool Router session `link` route — the only
+method Composio defines there, since it only initiates an OAuth link flow —
+and `PATCH`, `PUT`, and `DELETE` on a Tool Router `session/{id}` resource
+(under `/api/v3` and `/api/v3.1`), decode into one `account.permission.change`
 action with a synthetic resource:
 
 ```text

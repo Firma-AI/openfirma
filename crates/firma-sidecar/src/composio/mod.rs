@@ -298,9 +298,13 @@ fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute<'_>> {
         ] => {
             // The Connect Link route initiates OAuth for an account that
             // does not exist yet, so it classifies as a collection-level
-            // creation; capturing the literal `link` segment as an account
-            // id would leak a bogus selector into policy context.
-            let is_link = *family == "connected_accounts" && rest == ["link"];
+            // creation; capturing the literal `link` segment (or anything
+            // nested under it) as an account id would leak a bogus selector
+            // into policy context. `rest.first()` is checked rather than the
+            // exact `["link"]` shape so a malformed deeper path such as
+            // `connected_accounts/link/foo` still collapses to collection
+            // level instead of binding `"link"` as an account id.
+            let is_link = *family == "connected_accounts" && rest.first() == Some(&"link");
             Some(LifecycleRoute::Family {
                 noun: if *family == "connected_accounts" {
                     "CONNECTED_ACCOUNT"
@@ -383,13 +387,22 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
             // to policy; an uninspectable body fails closed.
             Some(decode_session_update(request, session_id))
         }
-        LifecycleRoute::SessionLink { session_id } => Some(lifecycle_action(
-            request,
-            LIFECYCLE_WRITE_ACTION_CLASS,
-            "COMPOSIO_LINK_SESSION_ACCOUNT",
-            Some(session_id),
-            None,
-        )),
+        // Composio only defines POST on this route (it initiates an OAuth
+        // link flow); there is no PUT/PATCH/DELETE counterpart, and no
+        // separate "unlink" action — removing a linked account happens
+        // through `DELETE connected_accounts/{id}`, already governed above.
+        // A non-POST method here is therefore not a real Composio route and
+        // must fail closed rather than being labeled a link write.
+        LifecycleRoute::SessionLink { session_id } if request.method == Method::POST => {
+            Some(lifecycle_action(
+                request,
+                LIFECYCLE_WRITE_ACTION_CLASS,
+                "COMPOSIO_LINK_SESSION_ACCOUNT",
+                Some(session_id),
+                None,
+            ))
+        }
+        LifecycleRoute::SessionLink { .. } => None,
     }
 }
 
@@ -950,7 +963,10 @@ fn logical_envelope(
     method: HttpMethod,
 ) -> NormalizedEnvelope {
     let mut resource = BTreeMap::from([
-        ("host".to_string(), envelope_host(request.host.as_str())),
+        (
+            "host".to_string(),
+            envelope_host(request.host.as_str(), request.is_https),
+        ),
         ("path".to_string(), path_only(&request.path).to_string()),
         ("provider".to_string(), "composio".to_string()),
         (
@@ -1135,10 +1151,15 @@ pub(crate) fn canonical_host(host: &str) -> String {
 /// The connector rebuilds the outbound URL from this resource value, so unlike
 /// [`canonical_host`] a nonstandard port must survive: dropping it would
 /// dispatch an admitted request to 443 instead of the port it arrived on.
-/// Default ports still collapse, so every spelling of one authority yields a
-/// single envelope host, exactly as generic normalization does.
-fn envelope_host(host: &str) -> String {
-    crate::normalizer::mapping::normalize_host_pattern(host)
+/// Scheme-aware default-port collapsing (`443` for HTTPS, `80` for HTTP)
+/// mirrors generic normalization's [`normalize_dispatch_host`]; the
+/// scheme-blind [`normalize_host_pattern`] would strip a `:80` on an HTTPS
+/// request and redirect an admitted request to `:443` instead.
+///
+/// [`normalize_dispatch_host`]: crate::normalizer::mapping::normalize_dispatch_host
+/// [`normalize_host_pattern`]: crate::normalizer::mapping::normalize_host_pattern
+fn envelope_host(host: &str, is_https: bool) -> String {
+    crate::normalizer::mapping::normalize_dispatch_host(host, is_https)
 }
 
 fn path_only(path: &str) -> &str {

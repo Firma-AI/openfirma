@@ -542,6 +542,32 @@ fn connected_account_link_is_governed_as_account_creation() -> anyhow::Result<()
     Ok(())
 }
 
+/// A malformed deeper path under the Connect Link route
+/// (`connected_accounts/link/unexpected`) must still collapse to collection
+/// level: checking only the exact `["link"]` shape would let the literal
+/// `link` segment leak into policy context as a bogus account id, targeting
+/// a `DELETE` at an account named `"link"` that does not exist.
+#[test]
+fn connected_account_link_with_trailing_segments_does_not_leak_account_id() -> anyhow::Result<()> {
+    let mut link = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/connected_accounts/link/unexpected",
+        &serde_json::json!({}),
+    );
+    link.method = Method::DELETE;
+    link.body = None;
+
+    let decoded = actions(decode(&link, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_DELETE_CONNECTED_ACCOUNT"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
 /// MCP server management shares a path shape with hosted MCP transport
 /// sessions; the `servers` collection is management, not transport, and must
 /// fail closed as an unsupported route on every method instead of being
@@ -884,6 +910,29 @@ fn governed_envelopes_keep_a_nonstandard_port() -> anyhow::Result<()> {
     assert_eq!(
         decoded[0].envelope.intent().resource_display(),
         "backend.composio.dev:8443/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
+    );
+    Ok(())
+}
+
+/// A port is scheme-relative: `:80` on an HTTPS request is not this
+/// request's default port (`:443` is) and must survive into the envelope
+/// host. Scheme-blind default-port stripping would collapse it and the
+/// connector would dispatch the admitted request to `:443` — a port the
+/// client never addressed.
+#[test]
+fn governed_envelopes_keep_a_port_that_is_not_the_requests_own_default() -> anyhow::Result<()> {
+    let ported = request(
+        Authority::from_static("backend.composio.dev:80"),
+        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
+        &serde_json::json!({"version": "20251111_00"}),
+    );
+    assert!(ported.is_https);
+
+    let decoded = actions(decode(&ported, &catalogs()?))?;
+
+    assert_eq!(
+        decoded[0].envelope.intent().resource_display(),
+        "backend.composio.dev:80/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
     );
     Ok(())
 }
@@ -1253,6 +1302,32 @@ fn lifecycle_writes_are_governed_as_account_permission_change() -> anyhow::Resul
         );
         assert_eq!(decoded[0].context.connected_account_id.as_deref(), account);
         assert_eq!(decoded[0].context.session_id.as_deref(), session);
+    }
+    Ok(())
+}
+
+/// Composio only defines `POST` on the Tool Router session link route (it
+/// initiates an OAuth link flow); there is no `PUT`/`PATCH`/`DELETE`
+/// counterpart at that path, and no separate "unlink" action — removing a
+/// linked account happens through `DELETE connected_accounts/{id}`, governed
+/// separately. A non-`POST` method at the link path is therefore not a real
+/// Composio route and must fail closed instead of being mislabeled as a link
+/// write.
+#[test]
+fn non_post_session_link_fails_closed() -> anyhow::Result<()> {
+    for method in [Method::PUT, Method::PATCH, Method::DELETE] {
+        let mut link = request(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_1/link",
+            &serde_json::json!({}),
+        );
+        link.method = method.clone();
+        link.body = None;
+
+        let DecodeResult::Deny(denial) = decode(&link, &catalogs()?) else {
+            anyhow::bail!("{method} to the session link route must fail closed");
+        };
+        assert_eq!(denial.code, "unsupported_route");
     }
     Ok(())
 }

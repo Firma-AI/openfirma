@@ -1075,6 +1075,14 @@ fn response_from_blocking_decision(decision: &EnforcementDecision) -> HandledRes
 /// Composio shape is denied `query_string_unsupported` during decoding. Without
 /// this the connector would rebuild the URL from the query-free logical
 /// resource and silently drop a pagination cursor.
+///
+/// [`crate::normalizer::parse_query_string`] splits on `=`/`&` without
+/// percent-decoding, and the connector re-encodes each value with
+/// `reqwest`'s `.query()` before dispatch. That round-trip is a no-op only
+/// for a cursor whose raw bytes are already percent-encoding-safe; a raw
+/// value containing `%` or `+` is delivered changed or double-encoded. This
+/// round-trip contract is shared with generic normalization, not specific to
+/// Composio.
 fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawRequest) {
     let ActionParams::Http(http) = &mut envelope.intent.params else {
         return;
