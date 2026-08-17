@@ -1062,6 +1062,27 @@ fn response_from_blocking_decision(decision: &EnforcementDecision) -> HandledRes
     }
 }
 
+/// Copy the transport fields a Composio logical envelope deliberately omits
+/// onto the clone that is about to be dispatched.
+///
+/// The logical envelope carries no headers, body, or query so that raw tool
+/// arguments never reach a resource, an audit record, or a log. The connector
+/// still has to send the agent's original request, so those fields are
+/// restored here, minus the internal `x-firma-*` headers.
+///
+/// The query is only ever non-empty for the one governed family that is
+/// allowed to carry one (account-lifecycle reads); every other governed
+/// Composio shape is denied `query_string_unsupported` during decoding. Without
+/// this the connector would rebuild the URL from the query-free logical
+/// resource and silently drop a pagination cursor.
+///
+/// [`crate::normalizer::parse_query_string`] splits on `=`/`&` without
+/// percent-decoding, and the connector re-encodes each value with
+/// `reqwest`'s `.query()` before dispatch. That round-trip is a no-op only
+/// for a cursor whose raw bytes are already percent-encoding-safe; a raw
+/// value containing `%` or `+` is delivered changed or double-encoded. This
+/// round-trip contract is shared with generic normalization, not specific to
+/// Composio.
 fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawRequest) {
     let ActionParams::Http(http) = &mut envelope.intent.params else {
         return;
@@ -1074,6 +1095,11 @@ fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawR
     // and only strip the internal `x-firma-*` control headers.
     http.headers = strip_firma_headers(&request.headers);
     http.body.clone_from(&request.body);
+    if let Some((_, query)) = request.path.split_once('?')
+        && !query.is_empty()
+    {
+        http.query = crate::normalizer::parse_query_string(query);
+    }
 }
 
 fn strip_firma_headers(headers: &HeaderMap) -> HeaderMap {

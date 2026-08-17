@@ -102,25 +102,70 @@ forbid (
 The context includes toolkit, exact slug, user selector, account selector,
 session identifier, and batch position when those values are present.
 
-## Account lifecycle writes
+## Account lifecycle requests
 
 Linking or removing a connected account changes what an agent can reach, so
 those requests are governed like tool calls instead of passing through.
-Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `connected_accounts`,
-`auth_configs`, and the Tool Router session `link` route, plus `PATCH`,
-`PUT`, and `DELETE` on a Tool Router `session/{id}` resource (under
-`/api/v3` and `/api/v3.1`), decode into one `account.permission.change`
+Writes (`POST`, `PATCH`, `PUT`, `DELETE`) to `connected_accounts` and
+`auth_configs`, `POST` to the Tool Router session `link` route — the only
+method Composio defines there, since it only initiates an OAuth link flow —
+and `PATCH`, `PUT`, and `DELETE` on a Tool Router `session/{id}` resource
+(under `/api/v3` and `/api/v3.1`), decode into one `account.permission.change`
 action with a synthetic resource:
 
 ```text
 composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT
 ```
 
+Creating a Tool Router session (`POST` to the session collection) is governed
+the same way. The creation payload binds the connected accounts every later
+session call executes within, and Composio resolves an omitted downstream
+account selector from that stored state, so the creation decodes into one
+`account.permission.change` action per selected account (resource
+`composio://composio/COMPOSIO_CREATE_SESSION`); a creation that selects no
+accounts decodes into a single unbound action. A session update (`PATCH` or
+`PUT` on `session/{id}`) can rebind those accounts through the same
+`connected_accounts` field, so its selection decodes into per-account
+`COMPOSIO_UPDATE_SESSION` actions the same way, an explicit
+`connected_accounts: null` clears the selection and decodes unbound, and an
+update body that cannot be parsed fails closed. Account policy therefore
+meets each account before the session perimeter exists or changes. One
+request may select at most 50 accounts.
+
 A capability must grant `account.permission.change` for these requests to
-succeed, and Cedar can deny them like any other action. Grant that class to
-the backend session that runs OAuth flows and withhold it from agent
-runtimes. Read-only lifecycle requests (`GET` listings, MCP session streams)
-still pass through.
+succeed, and Cedar can deny them like any other action. Grant it in two
+scopes: the backend session that runs OAuth flows needs it for the
+`connected_accounts` and `auth_configs` writes, and whichever principal
+creates Tool Router sessions — often the agent runtime itself in the stock
+Composio flow — needs it for session creation and updates. Withholding the
+class from agent runtimes entirely denies every session they try to create;
+constrain them with Cedar conditions on `composio_account` instead, so an
+agent can open sessions but only over the accounts it is allowed to use.
+
+One sharp edge: a session write that selects no accounts carries no
+`composio_account` at all, so a condition that only matches the attribute's
+value admits it. For the "only these accounts" guarantee, also forbid
+session writes whose context lacks `composio_account` (a
+`forbid ... unless context has composio_account` pattern). Even then,
+Composio resolves an omitted account selector on a later session execution
+from server-side state such as the user's default account, which no
+per-call policy sees; the account decision is made at the governed session
+writes or not at all.
+
+Reads of the same two families are governed too. `GET`, `HEAD`, and `OPTIONS`
+on `connected_accounts` and `auth_configs` disclose which integrations exist
+and how they authenticate, so they decode into one `credential.read` action
+with a synthetic resource such as
+`composio://composio/COMPOSIO_LIST_CONNECTED_ACCOUNT` (`LIST` for the
+collection, `GET` for a single item). Discovery routes (`tools`, `toolkits`),
+Tool Router session reads, and MCP session streams still pass through.
+
+These reads are the one governed shape allowed to carry a query string, so
+`GET /api/v3/connected_accounts?cursor=...` keeps paginating: a cursor picks a
+page of the same listing rather than changing which action is classified. The
+logical resource stays query-free and the cursor is restored onto the
+dispatched request. Every other governed Composio request still denies a query
+string outright.
 
 ## Atomic batches
 
@@ -167,15 +212,22 @@ Refreshing a toolkit is a maintainer task, not an operator one: see
 [Composio enforcement](https://github.com/Firma-AI/openfirma/blob/main/docs/architecture/composio-enforcement.md)
 for the refresh and review loop.
 
-Unknown toolkits, missing slugs, version mismatches, malformed execution
-payloads, custom tools, raw proxy execution, and shell or workbench tools fail
-closed. Governed requests carrying a query string are also denied: the query
+Unknown toolkits, missing slugs, mismatched versions, malformed execution
+payloads, custom tools, raw proxy execution, and shell or workbench tools
+fail closed. Direct execution requires the toolkit version in the payload and
+denies `unpinned_tool` without one. The Tool Router session routes
+(`execute`, `execute_meta`) and hosted MCP define no version field in
+Composio's API, so a call without one is admitted and classified from the
+pinned snapshot, while a version a client does attach is still checked
+against the pin. Governed requests carrying a query string are also denied: the query
 never participates in the policy decision, so it must not ride along on an
 admitted dispatch. Hosted MCP URLs deny query strings uniformly, discovery
 included, so a query-carrying MCP URL fails at the handshake with a clear
 denial instead of breaking only on tool calls. Recognized routes accept only
-read methods (plus `DELETE` for MCP session teardown); anything else fails
-closed.
+read methods (plus `DELETE` for MCP session teardown and `POST` on the Tool
+Router session execution routes); anything else fails closed, including a
+`POST` to a discovery route such as `/api/v3/toolkits` or to an existing
+`session/{id}` resource.
 
 Three sharp edges are worth knowing before writing policy.
 
@@ -197,6 +249,32 @@ favor of generic file tools. Those replacements —
 `communication.external.*` because they act on Slack files in general, not
 canvases. A policy meant to block canvas access entirely must name those three
 as well; Composio exposes no canvas-only equivalent of them.
+
+## Known coverage limits
+
+Several Composio API families the SDK can call are not yet decoded and fail
+closed as `unsupported_route`. This is deliberate — an unrecognized route
+must never pass — but it means enabling these SDK features breaks against
+the Sidecar today:
+
+- automatic file upload and download (`POST /api/v3/files/upload/request`
+  and the `files` routes), used whenever a tool parameter is file-backed;
+- session file mounts (`session/{id}/mounts/...`);
+- the manual Tool Router discovery call (`POST session/{id}/search`) — the
+  equivalent `COMPOSIO_SEARCH_TOOLS` meta-tool through `execute_meta` or
+  hosted MCP passes through instead;
+- inline custom tools (`POST session/{id}/attach`), consistent with custom
+  tools being unsupported on the execution routes;
+- triggers (`trigger_instances`, `triggers_types`), including their
+  read-only listings;
+- MCP server management (`/api/{v3,v3.1}/mcp/servers` and related routes).
+  One consequence: `DELETE /api/{v3,v3.1}/mcp/{id}` is indistinguishable by
+  shape from hosted MCP transport teardown, so an MCP server-configuration
+  delete passes through with the teardown allowance. Deleting only narrows
+  the reachable surface, but treat MCP server management as an
+  operator-side task outside agent traffic. Standalone MCP servers on
+  `mcp.composio.dev` are outside the protected hosts entirely and fall to
+  generic mapping.
 
 ## Audit safety
 

@@ -75,6 +75,7 @@ const MAPPING: &str = r#"{
 enum PolicyMode {
     Allow,
     DenySend,
+    DenyExecutiveAccount,
     ModifyRead,
     StepUpRead,
     DeferRead,
@@ -98,8 +99,16 @@ impl PolicyEvaluation for TestPolicy {
         _agent_id: &AgentId,
         action: &str,
         _resource: &str,
-        _context: serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<PolicyVerdict, String> {
+        if matches!(self.0, PolicyMode::DenyExecutiveAccount)
+            && context
+                .get("composio_account")
+                .and_then(serde_json::Value::as_str)
+                == Some("ca_executive")
+        {
+            return Ok(PolicyVerdict::Deny);
+        }
         let verdict = match (self.0, action) {
             (PolicyMode::DenySend, "communication.external.send") => PolicyVerdict::Deny,
             (PolicyMode::ModifyRead, "communication.external.read") => PolicyVerdict::Modify {
@@ -168,6 +177,34 @@ struct CountingConnector {
 struct HeaderCapturingConnector {
     cookie_seen: AtomicBool,
     firma_header_seen: AtomicBool,
+}
+
+/// Records the query the connector was actually handed, so a test can prove a
+/// pagination cursor survived enforcement instead of being silently dropped.
+struct QueryCapturingConnector {
+    query: std::sync::Mutex<HashMap<String, String>>,
+}
+
+#[async_trait]
+impl Connector for QueryCapturingConnector {
+    async fn dispatch(&self, view: &TransportView) -> Result<ConnectorResponse, ConnectorError> {
+        let ActionParams::Http(http) = &view.envelope().intent().params else {
+            return Err(ConnectorError::InvalidRequest(
+                "expected HTTP params".to_string(),
+            ));
+        };
+        match self.query.lock() {
+            Ok(mut recorded) => recorded.clone_from(&http.query),
+            Err(_) => return Err(ConnectorError::InvalidRequest("poisoned".to_string())),
+        }
+        Ok(ConnectorResponse {
+            status: 200,
+            headers: HeaderMap::new(),
+            body: b"ok".to_vec(),
+            dispatch_latency: Duration::from_millis(1),
+            response_size: 2,
+        })
+    }
 }
 
 struct MockTlsConnector {
@@ -308,8 +345,10 @@ fn claims() -> anyhow::Result<CapabilityClaims> {
         action_set: vec![
             "communication.external.read".to_string(),
             "communication.external.send".to_string(),
+            "credential.read".to_string(),
+            "account.permission.change".to_string(),
         ],
-        resource_scope: "composio://gmail/*".to_string(),
+        resource_scope: "composio://*".to_string(),
         issued_at: Utc::now(),
         expiry: Utc::now() + chrono::Duration::hours(1),
         context_hash: "context".to_string(),
@@ -899,6 +938,149 @@ async fn handler_atomic_denial_dispatches_zero_times() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Composio stores the accounts selected at session creation server-side,
+/// and a later hosted-MCP call may omit the selector entirely, so account
+/// policy meets the account at creation or never. A creation that binds a
+/// denied account must be refused before it establishes the perimeter.
+#[tokio::test]
+async fn session_creation_binding_a_denied_account_is_refused() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::DenyExecutiveAccount,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    )
+    .with_composio_catalogs(catalogs()?);
+
+    let creation = |account: &str| RawRequest {
+        method: Method::POST,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3.1/tool_router/session".to_string(),
+        headers: HeaderMap::new(),
+        body: Some(
+            serde_json::json!({
+                "user_id": "user_attacker",
+                "toolkits": ["gmail"],
+                "connected_accounts": {"gmail": [account]},
+                "tools": {"gmail": {"enable": ["GMAIL_SEND_EMAIL"]}}
+            })
+            .to_string()
+            .into_bytes(),
+        ),
+        is_https: true,
+    };
+
+    let refused = handler
+        .handle(creation("ca_executive"), "sess_composite")
+        .await;
+    assert!(matches!(refused, HandledResponse::Deny { .. }));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 0);
+    let refused_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing refused-creation audit"))?;
+    assert_eq!(
+        *refused_audit.decision(),
+        firma_sidecar::audit::Decision::Deny
+    );
+
+    let admitted = handler
+        .handle(creation("ca_mailbox"), "sess_composite")
+        .await;
+    assert!(matches!(admitted, HandledResponse::Ok(_)));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
+    let admitted_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing admitted-creation audit"))?;
+    assert_eq!(
+        *admitted_audit.decision(),
+        firma_sidecar::audit::Decision::Allow
+    );
+    Ok(())
+}
+
+/// An unbound session creation is admitted by an account-keyed policy, so a
+/// later session update must not be able to bind the denied account through
+/// a body the policy never inspects.
+#[tokio::test]
+async fn session_update_binding_a_denied_account_is_refused() -> anyhow::Result<()> {
+    let connector = Arc::new(CountingConnector {
+        dispatches: AtomicUsize::new(0),
+        firma_header_seen: AtomicBool::new(false),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::DenyExecutiveAccount,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    )
+    .with_composio_catalogs(catalogs()?);
+
+    let unbound_creation = RawRequest {
+        method: Method::POST,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3.1/tool_router/session".to_string(),
+        headers: HeaderMap::new(),
+        body: Some(
+            serde_json::json!({"user_id": "user_attacker", "toolkits": ["gmail"]})
+                .to_string()
+                .into_bytes(),
+        ),
+        is_https: true,
+    };
+    let created = handler.handle(unbound_creation, "sess_composite").await;
+    assert!(matches!(created, HandledResponse::Ok(_)));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
+    let creation_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing creation audit"))?;
+    assert_eq!(
+        *creation_audit.decision(),
+        firma_sidecar::audit::Decision::Allow
+    );
+
+    let rebinding_update = RawRequest {
+        method: Method::PATCH,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3.1/tool_router/session/trs_1".to_string(),
+        headers: HeaderMap::new(),
+        body: Some(
+            serde_json::json!({"connected_accounts": {"gmail": ["ca_executive"]}})
+                .to_string()
+                .into_bytes(),
+        ),
+        is_https: true,
+    };
+    let refused = handler.handle(rebinding_update, "sess_composite").await;
+    assert!(matches!(refused, HandledResponse::Deny { .. }));
+    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
+    let refused_audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing refused-update audit"))?;
+    assert_eq!(
+        *refused_audit.decision(),
+        firma_sidecar::audit::Decision::Deny
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn handler_monitor_override_still_dispatches_only_once() -> anyhow::Result<()> {
     let (request, _) = request_and_actions()?;
@@ -1479,5 +1661,52 @@ async fn composio_mock_tls_demo_covers_enforcement_outcomes() -> anyhow::Result<
     println!(
         "Composio mock TLS demo: allow=forwarded deny=blocked batch=atomic monitor=forwarded upstream_dispatches=2"
     );
+    Ok(())
+}
+
+/// A governed lifecycle read keeps its pagination cursor all the way to the
+/// connector. The logical envelope deliberately carries no query, so without
+/// hydration onto the dispatch clone the connector would rebuild a query-free
+/// URL and silently return page one.
+#[tokio::test]
+async fn paginated_lifecycle_read_dispatches_with_its_cursor() -> anyhow::Result<()> {
+    let request = RawRequest {
+        method: Method::GET,
+        host: Authority::from_static("backend.composio.dev"),
+        path: "/api/v3/connected_accounts?cursor=abc".to_string(),
+        headers: HeaderMap::new(),
+        body: None,
+        is_https: true,
+    };
+    let connector = Arc::new(QueryCapturingConnector {
+        query: std::sync::Mutex::new(HashMap::new()),
+    });
+    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
+    let handler = RequestHandler::new(
+        Arc::new(pipeline(
+            PolicyMode::Allow,
+            CredentialMode::Shared,
+            SidecarMode::Enforce,
+        )?),
+        registry,
+        audit_tx,
+    )
+    .with_composio_catalogs(catalogs()?);
+
+    let response = handler.handle(request, "sess_composite").await;
+
+    assert!(matches!(response, HandledResponse::Ok(_)));
+    let recorded = connector
+        .query
+        .lock()
+        .map_err(|_| anyhow::anyhow!("query mutex poisoned"))?
+        .clone();
+    assert_eq!(recorded.get("cursor").map(String::as_str), Some("abc"));
+    let audit = audit_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing lifecycle read audit"))?;
+    assert_eq!(audit.dispatch_status(), 200);
     Ok(())
 }

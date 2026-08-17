@@ -184,14 +184,139 @@ fn governed_requests_with_query_strings_fail_closed() -> anyhow::Result<()> {
 
     let mut listing = request(
         Authority::from_static("backend.composio.dev"),
-        "/api/v3/connected_accounts?cursor=abc",
+        "/api/v3/tools?cursor=abc",
         &serde_json::json!({}),
     );
     listing.method = Method::GET;
+    listing.body = None;
     assert!(matches!(
         decode(&listing, &catalogs()?),
         DecodeResult::Passthrough
     ));
+    Ok(())
+}
+
+/// Reads of `connected_accounts` and `auth_configs` disclose which
+/// integrations exist and how they authenticate, so they reach capability and
+/// Cedar evaluation as `credential.read` instead of passing through with the
+/// discovery routes.
+#[test]
+fn lifecycle_reads_are_governed_as_credential_read() -> anyhow::Result<()> {
+    for (path, slug, account) in [
+        (
+            "/api/v3/connected_accounts",
+            "COMPOSIO_LIST_CONNECTED_ACCOUNT",
+            None,
+        ),
+        (
+            "/api/v3/connected_accounts/ca_123",
+            "COMPOSIO_GET_CONNECTED_ACCOUNT",
+            Some("ca_123"),
+        ),
+        ("/api/v3.1/auth_configs", "COMPOSIO_LIST_AUTH_CONFIG", None),
+        (
+            "/api/v3.1/auth_configs/ac_9",
+            "COMPOSIO_GET_AUTH_CONFIG",
+            None,
+        ),
+    ] {
+        let mut read = request(
+            Authority::from_static("backend.composio.dev"),
+            path,
+            &serde_json::json!({}),
+        );
+        read.method = Method::GET;
+        read.body = None;
+
+        let decoded = actions(decode(&read, &catalogs()?))?;
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].envelope.intent().action_class, "credential.read");
+        assert_eq!(
+            decoded[0].envelope.intent().policy_resource_display(),
+            format!("composio://composio/{slug}")
+        );
+        assert_eq!(decoded[0].context.connected_account_id.as_deref(), account);
+    }
+    Ok(())
+}
+
+/// A cursor selects a page of the same listing rather than changing which
+/// action is classified, so a lifecycle read keeps its query string instead of
+/// failing closed. Lifecycle *writes* must not gain the same exemption.
+#[test]
+fn lifecycle_reads_keep_their_query_but_writes_still_deny() -> anyhow::Result<()> {
+    let mut paginated = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3/connected_accounts?cursor=abc",
+        &serde_json::json!({}),
+    );
+    paginated.method = Method::GET;
+    paginated.body = None;
+
+    let decoded = actions(decode(&paginated, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].envelope.intent().action_class, "credential.read");
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_LIST_CONNECTED_ACCOUNT"
+    );
+    // The logical resource stays query-free; the cursor is restored onto the
+    // dispatch clone, not onto the evaluated resource.
+    assert_eq!(
+        decoded[0].envelope.intent().resource_display(),
+        "backend.composio.dev/api/v3/connected_accounts"
+    );
+
+    let mut write = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3/connected_accounts/ca_123?force=1",
+        &serde_json::json!({}),
+    );
+    write.method = Method::DELETE;
+    write.body = None;
+    let DecodeResult::Deny(denial) = decode(&write, &catalogs()?) else {
+        anyhow::bail!("a lifecycle write with a query string must fail closed");
+    };
+    assert_eq!(denial.code, "query_string_unsupported");
+    Ok(())
+}
+
+/// Governing the credential-adjacent reads must not pull the rest of the
+/// discovery surface out of passthrough.
+#[test]
+fn discovery_and_session_reads_remain_passthrough() -> anyhow::Result<()> {
+    for (host, path) in [
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/tools",
+        ),
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/toolkits",
+        ),
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3/tool_router/session/trs_1",
+        ),
+        (
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_1/tools",
+        ),
+        (
+            Authority::from_static("app.composio.dev"),
+            "/tool_router/v3/trs_1/mcp",
+        ),
+    ] {
+        let mut read = request(host, path, &serde_json::json!({}));
+        read.method = Method::GET;
+        read.body = None;
+        assert!(
+            matches!(decode(&read, &catalogs()?), DecodeResult::Passthrough),
+            "GET {path} must stay passthrough"
+        );
+    }
     Ok(())
 }
 
@@ -248,41 +373,384 @@ fn non_read_methods_on_recognized_routes_fail_closed() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tool Router session creation stays a recognized passthrough, and MCP
-/// session teardown keeps its DELETE: the method allowlists must not break
-/// either flow.
+/// Read routes are recognized for reads only: a `POST` to one is a write the
+/// decoder cannot classify, so it fails closed instead of passing through
+/// unevaluated.
 #[test]
-fn session_creation_and_mcp_teardown_remain_passthrough() -> anyhow::Result<()> {
-    for (method, host, path, has_body) in [
-        (
-            Method::POST,
-            Authority::from_static("backend.composio.dev"),
-            "/api/v3/tool_router/session",
-            true,
-        ),
-        (
-            Method::POST,
-            Authority::from_static("backend.composio.dev"),
-            "/api/v3/tool_router/session/trs_1",
-            true,
-        ),
-        (
-            Method::DELETE,
-            Authority::from_static("app.composio.dev"),
-            "/tool_router/v3/trs_1/mcp",
-            false,
-        ),
+fn post_to_read_only_routes_fails_closed() -> anyhow::Result<()> {
+    for path in [
+        "/api/v3/toolkits",
+        "/api/v3/tools",
+        "/api/v3.1/tools/GMAIL_SEND_EMAIL",
+        "/api/v3.1/tool_router/session/trs_1/tools",
     ] {
-        let mut recognized = request(host, path, &serde_json::json!({}));
-        recognized.method = method.clone();
-        if !has_body {
-            recognized.body = None;
-        }
-        assert!(
-            matches!(decode(&recognized, &catalogs()?), DecodeResult::Passthrough),
-            "{method} {path} must stay passthrough"
+        let unsupported = request(
+            Authority::from_static("backend.composio.dev"),
+            path,
+            &serde_json::json!({}),
         );
+        let DecodeResult::Deny(denial) = decode(&unsupported, &catalogs()?) else {
+            anyhow::bail!("POST {path} must fail closed");
+        };
+        assert_eq!(denial.code, "unsupported_route");
     }
+    Ok(())
+}
+
+/// MCP session teardown keeps its DELETE: the method allowlists must not
+/// break the transport-level teardown flow.
+#[test]
+fn mcp_teardown_remains_passthrough() -> anyhow::Result<()> {
+    let mut teardown = request(
+        Authority::from_static("app.composio.dev"),
+        "/tool_router/v3/trs_1/mcp",
+        &serde_json::json!({}),
+    );
+    teardown.method = Method::DELETE;
+    teardown.body = None;
+    assert!(matches!(
+        decode(&teardown, &catalogs()?),
+        DecodeResult::Passthrough
+    ));
+    Ok(())
+}
+
+/// Session creation binds the connected accounts, toolkits, and tools that
+/// every later call executes within, so it is the perimeter-defining write.
+/// It must decode into governed lifecycle actions, one per selected account,
+/// so account policy can refuse the perimeter instead of meeting it as
+/// server-side session state that later calls no longer mention.
+#[test]
+fn session_creation_is_governed_per_selected_account() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({
+            "user_id": "user_1",
+            "toolkits": ["gmail", "googlecalendar"],
+            "connected_accounts": {
+                "gmail": ["ca_mailbox"],
+                "googlecalendar": ["ca_work", "ca_personal"]
+            }
+        }),
+    );
+
+    let decoded = actions(decode(&creation, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 3);
+    let mut accounts: Vec<Option<&str>> = decoded
+        .iter()
+        .map(|action| action.context.connected_account_id.as_deref())
+        .collect();
+    accounts.sort_unstable();
+    assert_eq!(
+        accounts,
+        [Some("ca_mailbox"), Some("ca_personal"), Some("ca_work")]
+    );
+    for action in &decoded {
+        assert_eq!(
+            action.envelope.intent().action_class,
+            "account.permission.change"
+        );
+        assert_eq!(
+            action.envelope.intent().policy_resource_display(),
+            "composio://composio/COMPOSIO_CREATE_SESSION"
+        );
+        assert_eq!(action.context.user_id.as_deref(), Some("user_1"));
+        assert_eq!(action.context.session_id, None);
+    }
+    Ok(())
+}
+
+/// A session created without account selectors still reshapes the reachable
+/// surface, so it decodes into a single governed action instead of passing
+/// through.
+#[test]
+fn session_creation_without_accounts_is_a_single_governed_action() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({"user_id": "user_1", "toolkits": ["gmail"]}),
+    );
+
+    let decoded = actions(decode(&creation, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_CREATE_SESSION"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// A session update can rebind the session's connected accounts
+/// (`SessionPatchParams.connected_accounts` in Composio's published schema),
+/// so it is the same perimeter-defining write as creation and must expose
+/// each selected account to policy instead of decoding unbound.
+#[test]
+fn session_update_rebinding_accounts_is_governed_per_account() -> anyhow::Result<()> {
+    for method in [Method::PATCH, Method::PUT] {
+        let mut update = request(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_9",
+            &serde_json::json!({
+                "connected_accounts": {"gmail": ["ca_first", "ca_second"]}
+            }),
+        );
+        update.method = method;
+
+        let decoded = actions(decode(&update, &catalogs()?))?;
+
+        assert_eq!(decoded.len(), 2);
+        for action in &decoded {
+            assert_eq!(
+                action.envelope.intent().policy_resource_display(),
+                "composio://composio/COMPOSIO_UPDATE_SESSION"
+            );
+            assert_eq!(action.context.session_id.as_deref(), Some("trs_9"));
+        }
+        let accounts: Vec<Option<&str>> = decoded
+            .iter()
+            .map(|action| action.context.connected_account_id.as_deref())
+            .collect();
+        assert_eq!(accounts, [Some("ca_first"), Some("ca_second")]);
+    }
+    Ok(())
+}
+
+/// The Connect Link route initiates OAuth for an account that does not exist
+/// yet, so it decodes as an account creation with no account selector; the
+/// literal `link` path segment must never leak into policy context as an
+/// account id.
+#[test]
+fn connected_account_link_is_governed_as_account_creation() -> anyhow::Result<()> {
+    let link = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/connected_accounts/link",
+        &serde_json::json!({"auth_config_id": "ac_1", "user_id": "user_1"}),
+    );
+
+    let decoded = actions(decode(&link, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_CREATE_CONNECTED_ACCOUNT"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// A malformed deeper path under the Connect Link route
+/// (`connected_accounts/link/unexpected`) must still collapse to collection
+/// level: checking only the exact `["link"]` shape would let the literal
+/// `link` segment leak into policy context as a bogus account id, targeting
+/// a `DELETE` at an account named `"link"` that does not exist.
+#[test]
+fn connected_account_link_with_trailing_segments_does_not_leak_account_id() -> anyhow::Result<()> {
+    let mut link = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/connected_accounts/link/unexpected",
+        &serde_json::json!({}),
+    );
+    link.method = Method::DELETE;
+    link.body = None;
+
+    let decoded = actions(decode(&link, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_DELETE_CONNECTED_ACCOUNT"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// MCP server management shares a path shape with hosted MCP transport
+/// sessions; the `servers` collection is management, not transport, and must
+/// fail closed as an unsupported route on every method instead of being
+/// mistaken for a JSON-RPC session.
+#[test]
+fn mcp_server_management_routes_fail_closed() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/mcp/servers",
+        &serde_json::json!({"name": "shadow", "toolkits": ["gmail"]}),
+    );
+    let DecodeResult::Deny(denial) = decode(&creation, &catalogs()?) else {
+        anyhow::bail!("MCP server creation must fail closed");
+    };
+    assert_eq!(denial.code, "unsupported_route");
+
+    // The exclusion must not be dodged by case: a variant like `SERVERS`
+    // re-entering the transport shape would turn a management read into an
+    // ungoverned passthrough.
+    for path in ["/api/v3.1/mcp/servers", "/api/v3.1/mcp/SERVERS"] {
+        let mut listing = request(
+            Authority::from_static("backend.composio.dev"),
+            path,
+            &serde_json::json!({}),
+        );
+        listing.method = Method::GET;
+        listing.body = None;
+        let DecodeResult::Deny(denial) = decode(&listing, &catalogs()?) else {
+            anyhow::bail!("MCP server listing on {path} must fail closed");
+        };
+        assert_eq!(denial.code, "unsupported_route");
+    }
+    Ok(())
+}
+
+/// Composio's patch schema allows an explicit `connected_accounts: null` to
+/// clear the pinned selection. Clearing shrinks the perimeter, so it decodes
+/// into the single unbound update action instead of failing closed.
+#[test]
+fn session_update_clearing_accounts_is_a_single_governed_action() -> anyhow::Result<()> {
+    let mut update = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session/trs_9",
+        &serde_json::json!({"connected_accounts": null}),
+    );
+    update.method = Method::PATCH;
+
+    let decoded = actions(decode(&update, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_UPDATE_SESSION"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// A stock session patch that touches only tools or toolkits still reshapes
+/// the reachable surface, so it decodes into one unbound governed action.
+#[test]
+fn session_update_without_account_selection_is_a_single_governed_action() -> anyhow::Result<()> {
+    let mut update = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session/trs_9",
+        &serde_json::json!({"toolkits": {"enable": ["gmail"]}}),
+    );
+    update.method = Method::PUT;
+
+    let decoded = actions(decode(&update, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].envelope.intent().policy_resource_display(),
+        "composio://composio/COMPOSIO_UPDATE_SESSION"
+    );
+    assert_eq!(decoded[0].context.connected_account_id, None);
+    Ok(())
+}
+
+/// A session update whose body cannot be inspected could smuggle an account
+/// rebinding past policy, so it fails closed instead of decoding unbound.
+#[test]
+fn session_update_with_uninspectable_body_fails_closed() -> anyhow::Result<()> {
+    for body in [
+        b"not json".to_vec(),
+        serde_json::json!({"connected_accounts": {"gmail": "ca_first"}})
+            .to_string()
+            .into_bytes(),
+    ] {
+        let mut update = request_with_body(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_9",
+            body,
+        );
+        update.method = Method::PATCH;
+        let DecodeResult::Deny(denial) = decode(&update, &catalogs()?) else {
+            anyhow::bail!("uninspectable session update must fail closed");
+        };
+        assert_eq!(denial.code, "malformed_payload");
+    }
+    Ok(())
+}
+
+/// The per-account expansion shares the multi-execute bound, so one request
+/// cannot fan out into an unbounded number of policy evaluations.
+#[test]
+fn session_creation_selecting_too_many_accounts_fails_closed() -> anyhow::Result<()> {
+    let ids: Vec<String> = (0..51).map(|index| format!("ca_{index}")).collect();
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({"connected_accounts": {"gmail": ids}}),
+    );
+    let DecodeResult::Deny(denial) = decode(&creation, &catalogs()?) else {
+        anyhow::bail!("oversized account selection must fail closed");
+    };
+    assert_eq!(denial.code, "invalid_batch_size");
+    Ok(())
+}
+
+/// The same account selected under several toolkits is one policy subject,
+/// so it decodes into one action instead of duplicate evaluations.
+#[test]
+fn session_creation_deduplicates_repeated_accounts() -> anyhow::Result<()> {
+    let creation = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session",
+        &serde_json::json!({
+            "connected_accounts": {
+                "gmail": ["ca_shared"],
+                "googlecalendar": ["ca_shared"]
+            }
+        }),
+    );
+
+    let decoded = actions(decode(&creation, &catalogs()?))?;
+
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(
+        decoded[0].context.connected_account_id.as_deref(),
+        Some("ca_shared")
+    );
+    Ok(())
+}
+
+/// A `connected_accounts` value that is not a map of non-empty string lists
+/// cannot be bound to per-account actions, so it fails closed instead of
+/// creating a perimeter policy never saw.
+#[test]
+fn session_creation_with_malformed_accounts_fails_closed() -> anyhow::Result<()> {
+    for connected_accounts in [
+        serde_json::json!("ca_mailbox"),
+        serde_json::json!({"gmail": "ca_mailbox"}),
+        serde_json::json!({"gmail": [42]}),
+        serde_json::json!({"gmail": [""]}),
+    ] {
+        let creation = request(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session",
+            &serde_json::json!({"connected_accounts": connected_accounts}),
+        );
+        let DecodeResult::Deny(denial) = decode(&creation, &catalogs()?) else {
+            anyhow::bail!("malformed session creation must fail closed");
+        };
+        assert_eq!(denial.code, "malformed_payload");
+    }
+    Ok(())
+}
+
+/// Composio defines no POST on a session resource; a write-shaped request to
+/// one is neither a read nor a governed lifecycle write and must fail closed.
+#[test]
+fn post_to_a_session_resource_fails_closed() -> anyhow::Result<()> {
+    let write = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3/tool_router/session/trs_1",
+        &serde_json::json!({}),
+    );
+    let DecodeResult::Deny(denial) = decode(&write, &catalogs()?) else {
+        anyhow::bail!("POST to a session resource must fail closed");
+    };
+    assert_eq!(denial.code, "unsupported_route");
     Ok(())
 }
 
@@ -332,6 +800,143 @@ fn direct_execution_rejects_missing_or_wrong_versions() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Composio's Tool Router session API defines no `version` field
+/// (`SessionExecuteParams` in the published `OpenAPI` schema), so demanding one
+/// would deny every stock SDK client. Session routes therefore share the
+/// hosted MCP exemption: an absent version classifies from the pinned
+/// snapshot, and a stated version is still checked against the pin.
+#[test]
+fn session_routes_share_the_version_exemption_and_honor_a_stated_pin() -> anyhow::Result<()> {
+    for (path, body) in [
+        (
+            "/api/v3.1/tool_router/session/trs_1/execute",
+            serde_json::json!({"tool_slug": "GMAIL_SEND_EMAIL", "arguments": {}}),
+        ),
+        (
+            "/api/v3.1/tool_router/session/trs_1/execute_meta",
+            serde_json::json!({
+                "tool_slug": "COMPOSIO_EXECUTE_TOOL",
+                "arguments": {"tool_slug": "GMAIL_SEND_EMAIL"}
+            }),
+        ),
+        (
+            "/api/v3.1/tool_router/session/trs_1/execute_meta",
+            serde_json::json!({
+                "tool_slug": "COMPOSIO_MULTI_EXECUTE_TOOL",
+                "arguments": {"tools": [{"tool_slug": "GMAIL_SEND_EMAIL"}]}
+            }),
+        ),
+    ] {
+        let unversioned = request(Authority::from_static("backend.composio.dev"), path, &body);
+        let decoded = actions(decode(&unversioned, &catalogs()?))?;
+        assert_eq!(
+            decoded[0].envelope.intent().action_class,
+            "communication.external.send",
+            "unversioned session execution on {path} must classify from the pin"
+        );
+    }
+
+    let mismatched = request(
+        Authority::from_static("backend.composio.dev"),
+        "/api/v3.1/tool_router/session/trs_1/execute",
+        &serde_json::json!({
+            "tool_slug": "GMAIL_SEND_EMAIL",
+            "version": "latest",
+            "arguments": {}
+        }),
+    );
+    let DecodeResult::Deny(denial) = decode(&mismatched, &catalogs()?) else {
+        anyhow::bail!("a stated session version must still be checked");
+    };
+    assert_eq!(denial.code, "version_mismatch");
+    Ok(())
+}
+
+/// Hosted MCP JSON-RPC has no native version field, so requiring one would
+/// deny every stock client. A call with no version resolves through the pinned
+/// slug allowlist, while a version a client does choose to attach as a tool
+/// argument is still checked against the pin.
+#[test]
+fn hosted_mcp_keeps_its_version_exemption_but_honors_a_stated_pin() -> anyhow::Result<()> {
+    let mcp_call = |arguments: serde_json::Value| {
+        request(
+            Authority::from_static("app.composio.dev"),
+            "/tool_router/v3/trs_1/mcp",
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "GMAIL_SEND_EMAIL", "arguments": arguments}
+            }),
+        )
+    };
+
+    let unpinned = actions(decode(&mcp_call(serde_json::json!({})), &catalogs()?))?;
+    assert_eq!(
+        unpinned[0].envelope.intent().action_class,
+        "communication.external.send"
+    );
+
+    let pinned = actions(decode(
+        &mcp_call(serde_json::json!({"version": "20251111_00"})),
+        &catalogs()?,
+    ))?;
+    assert_eq!(
+        pinned[0].envelope.intent().action_class,
+        "communication.external.send"
+    );
+
+    let mismatched = mcp_call(serde_json::json!({"version": "latest"}));
+    let DecodeResult::Deny(denial) = decode(&mismatched, &catalogs()?) else {
+        anyhow::bail!("a stated hosted MCP version must still be checked");
+    };
+    assert_eq!(denial.code, "version_mismatch");
+    Ok(())
+}
+
+/// The connector rebuilds the outbound URL from the envelope's host, so a
+/// nonstandard port must survive decoding; collapsing it to the default would
+/// dispatch an admitted request to a port it was never evaluated for.
+#[test]
+fn governed_envelopes_keep_a_nonstandard_port() -> anyhow::Result<()> {
+    let ported = request(
+        Authority::from_static("backend.composio.dev:8443"),
+        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
+        &serde_json::json!({"version": "20251111_00"}),
+    );
+
+    let decoded = actions(decode(&ported, &catalogs()?))?;
+
+    assert_eq!(
+        decoded[0].envelope.intent().resource_display(),
+        "backend.composio.dev:8443/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
+    );
+    Ok(())
+}
+
+/// A port is scheme-relative: `:80` on an HTTPS request is not this
+/// request's default port (`:443` is) and must survive into the envelope
+/// host. Scheme-blind default-port stripping would collapse it and the
+/// connector would dispatch the admitted request to `:443` — a port the
+/// client never addressed.
+#[test]
+fn governed_envelopes_keep_a_port_that_is_not_the_requests_own_default() -> anyhow::Result<()> {
+    let ported = request(
+        Authority::from_static("backend.composio.dev:80"),
+        "/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
+        &serde_json::json!({"version": "20251111_00"}),
+    );
+    assert!(ported.is_https);
+
+    let decoded = actions(decode(&ported, &catalogs()?))?;
+
+    assert_eq!(
+        decoded[0].envelope.intent().resource_display(),
+        "backend.composio.dev:80/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS"
+    );
+    Ok(())
+}
+
 #[test]
 fn session_execution_uses_the_pinned_local_slug_allowlist() -> anyhow::Result<()> {
     let request = request(
@@ -339,6 +944,7 @@ fn session_execution_uses_the_pinned_local_slug_allowlist() -> anyhow::Result<()
         "/api/v3.1/tool_router/session/trs_1/execute",
         &serde_json::json!({
             "tool_slug": "GOOGLECALENDAR_CREATE_EVENT",
+            "version": "20260623_00",
             "arguments": {"summary": "private"},
             "account": "calendar-work",
         }),
@@ -700,6 +1306,32 @@ fn lifecycle_writes_are_governed_as_account_permission_change() -> anyhow::Resul
     Ok(())
 }
 
+/// Composio only defines `POST` on the Tool Router session link route (it
+/// initiates an OAuth link flow); there is no `PUT`/`PATCH`/`DELETE`
+/// counterpart at that path, and no separate "unlink" action — removing a
+/// linked account happens through `DELETE connected_accounts/{id}`, governed
+/// separately. A non-`POST` method at the link path is therefore not a real
+/// Composio route and must fail closed instead of being mislabeled as a link
+/// write.
+#[test]
+fn non_post_session_link_fails_closed() -> anyhow::Result<()> {
+    for method in [Method::PUT, Method::PATCH, Method::DELETE] {
+        let mut link = request(
+            Authority::from_static("backend.composio.dev"),
+            "/api/v3.1/tool_router/session/trs_1/link",
+            &serde_json::json!({}),
+        );
+        link.method = method.clone();
+        link.body = None;
+
+        let DecodeResult::Deny(denial) = decode(&link, &catalogs()?) else {
+            anyhow::bail!("{method} to the session link route must fail closed");
+        };
+        assert_eq!(denial.code, "unsupported_route");
+    }
+    Ok(())
+}
+
 #[test]
 fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Result<()> {
     for (method, host, path, expected_passthrough) in [
@@ -712,12 +1344,6 @@ fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Res
         (
             Method::GET,
             Authority::from_static("backend.composio.dev"),
-            "/api/v3/connected_accounts",
-            true,
-        ),
-        (
-            Method::GET,
-            Authority::from_static("backend.composio.dev"),
             "/api/v3/execute",
             false,
         ),
@@ -725,12 +1351,6 @@ fn non_post_and_backend_lifecycle_routes_are_classified_exactly() -> anyhow::Res
             Method::GET,
             Authority::from_static("app.composio.dev"),
             "/tool_router/v3/trs_1/mcp",
-            true,
-        ),
-        (
-            Method::POST,
-            Authority::from_static("backend.composio.dev"),
-            "/api/v3/toolkits",
             true,
         ),
         (

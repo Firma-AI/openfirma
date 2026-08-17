@@ -34,11 +34,34 @@ pub(crate) const PROTECTED_HOSTS: [&str; 2] = [BACKEND_HOST, APP_HOST];
 /// Linking, updating, or removing connected accounts and auth configurations
 /// changes what an agent can reach through Composio, so those writes are
 /// logical actions rather than ungoverned passthrough.
-const LIFECYCLE_ACTION_CLASS: &str = "account.permission.change";
+const LIFECYCLE_WRITE_ACTION_CLASS: &str = "account.permission.change";
+
+/// Canonical class assigned to Composio account-lifecycle reads.
+///
+/// Listing connected accounts or auth configurations discloses which
+/// integrations exist and how they authenticate, so those reads are governed
+/// credential disclosure rather than ungoverned discovery passthrough.
+const LIFECYCLE_READ_ACTION_CLASS: &str = "credential.read";
 
 /// Toolkit segment used by lifecycle policy resources
 /// (`composio://composio/<slug>`).
 const LIFECYCLE_TOOLKIT: &str = "composio";
+
+/// Whether an execution route must carry the pinned toolkit version.
+///
+/// Direct execution has a native `version` field and requires one, so
+/// Composio can only run the version the local snapshot classified. Tool
+/// Router session routes and hosted MCP JSON-RPC define no version field in
+/// Composio's API; demanding one there would deny every stock client, so on
+/// those routes the pin is honored when a client chooses to attach one and
+/// the pinned slug allowlist stays the guarantee when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VersionPolicy {
+    /// Deny `unpinned_tool` when the request carries no version.
+    Required,
+    /// Accept an absent version; a present but mismatched one still denies.
+    Optional,
+}
 
 /// Sanitized metadata attached to one decoded logical action.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,8 +133,13 @@ pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult
     // A query string never participates in the policy decision, so letting it
     // ride along on an admitted dispatch would smuggle unevaluated input
     // upstream. Read-only passthrough keeps its query (pagination and the
-    // like); governed actions refuse it.
-    if matches!(result, DecodeResult::Actions(_)) && request.path.contains('?') {
+    // like); governed actions refuse it, except account-lifecycle reads, where
+    // a cursor selects a page of the same listing rather than changing which
+    // action is being classified.
+    if matches!(result, DecodeResult::Actions(_))
+        && request.path.contains('?')
+        && !is_lifecycle_read(&result)
+    {
         return deny(
             "query_string_unsupported",
             "Composio governed requests must not carry a query string",
@@ -120,9 +148,30 @@ pub fn decode(request: &RawRequest, catalogs: &ComposioCatalogs) -> DecodeResult
     result
 }
 
+/// Whether a decoded result is entirely account-lifecycle reads.
+///
+/// Both conditions are needed: a catalog tool can also map to `credential.read`
+/// (`GMAIL_LIST_CSE_KEYPAIRS` does), and only the synthetic lifecycle toolkit
+/// distinguishes a route the decoder classified itself from a provider tool.
+fn is_lifecycle_read(result: &DecodeResult) -> bool {
+    let DecodeResult::Actions(actions) = result else {
+        return false;
+    };
+    !actions.is_empty()
+        && actions.iter().all(|action| {
+            action.context.toolkit == LIFECYCLE_TOOLKIT
+                && action.envelope.intent.action_class == LIFECYCLE_READ_ACTION_CLASS
+        })
+}
+
 fn decode_protected(request: &RawRequest, host: &str, catalogs: &ComposioCatalogs) -> DecodeResult {
     if request.method != Method::POST {
         if let Some(result) = decode_lifecycle_write(request, host) {
+            return result;
+        }
+        // Governed before the passthrough recognizer: `connected_accounts` and
+        // `auth_configs` reads are credential disclosure, not discovery.
+        if let Some(result) = decode_lifecycle_read(request, host) {
             return result;
         }
         let path = path_only(&request.path);
@@ -178,35 +227,33 @@ fn decode_backend(
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     // Lifecycle writes are checked first; execution routes never classify as
-    // lifecycle, and a lifecycle route the write decoder declines (for
-    // example POST to `session/{id}`) falls through to the recognized
-    // passthrough check below.
+    // lifecycle, and a lifecycle route the write decoder declines (POST to
+    // `session/{id}`) falls through to the fail-closed arm below.
     if let Some(result) = decode_lifecycle_write(request, BACKEND_HOST) {
         return result;
     }
     let path = path_only(&request.path);
     let components: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
-    match components.as_slice() {
-        ["api", "v3" | "v3.1", "tools", "execute", slug] => {
-            decode_direct(request, payload, slug, catalogs)
+    let ["api", "v3" | "v3.1", rest @ ..] = components.as_slice() else {
+        return deny("unsupported_route", "unsupported Composio route");
+    };
+    match rest {
+        ["tools", "execute", slug] => decode_direct(request, payload, slug, catalogs),
+        ["tool_router", "session", session_id, "execute"] => {
+            decode_session(request, payload, Some(session_id), catalogs)
         }
-        [
-            "api",
-            "v3" | "v3.1",
-            "tool_router",
-            "session",
-            session_id,
-            "execute",
-        ] => decode_session(request, payload, Some(session_id), catalogs),
-        [
-            "api",
-            "v3" | "v3.1",
-            "tool_router",
-            "session",
-            session_id,
-            "execute_meta",
-        ] => decode_meta_route(request, payload, Some(session_id), catalogs),
-        _ if is_recognized_non_execution_path(BACKEND_HOST, path) => DecodeResult::Passthrough,
+        ["tool_router", "session", session_id, "execute_meta"] => {
+            decode_meta_route(request, payload, Some(session_id), catalogs)
+        }
+        // Session creation binds the connected accounts every later call
+        // executes within, so it decodes into governed lifecycle actions
+        // rather than passing through. The read-route recognizer is
+        // deliberately not reused as a POST allowlist: it enumerates GET
+        // shapes, and admitting writes through it would skip capability
+        // checks and policy evaluation — a POST to an existing session
+        // resource (a route Composio does not define) falls through to the
+        // fail-closed arm below.
+        ["tool_router", "session"] => decode_session_creation(request, payload),
         _ => deny("unsupported_route", "unsupported Composio route"),
     }
 }
@@ -248,17 +295,28 @@ fn classify_lifecycle_route(path: &str) -> Option<LifecycleRoute<'_>> {
             "v3" | "v3.1",
             family @ ("connected_accounts" | "auth_configs"),
             rest @ ..,
-        ] => Some(LifecycleRoute::Family {
-            noun: if *family == "connected_accounts" {
-                "CONNECTED_ACCOUNT"
-            } else {
-                "AUTH_CONFIG"
-            },
-            account_id: (*family == "connected_accounts")
-                .then(|| rest.first().copied())
-                .flatten(),
-            is_collection: rest.is_empty(),
-        }),
+        ] => {
+            // The Connect Link route initiates OAuth for an account that
+            // does not exist yet, so it classifies as a collection-level
+            // creation; capturing the literal `link` segment (or anything
+            // nested under it) as an account id would leak a bogus selector
+            // into policy context. `rest.first()` is checked rather than the
+            // exact `["link"]` shape so a malformed deeper path such as
+            // `connected_accounts/link/foo` still collapses to collection
+            // level instead of binding `"link"` as an account id.
+            let is_link = *family == "connected_accounts" && rest.first() == Some(&"link");
+            Some(LifecycleRoute::Family {
+                noun: if *family == "connected_accounts" {
+                    "CONNECTED_ACCOUNT"
+                } else {
+                    "AUTH_CONFIG"
+                },
+                account_id: (*family == "connected_accounts" && !is_link)
+                    .then(|| rest.first().copied())
+                    .flatten(),
+                is_collection: rest.is_empty() || is_link,
+            })
+        }
         ["api", "v3" | "v3.1", "tool_router", "session", session_id] => {
             Some(LifecycleRoute::Session { session_id })
         }
@@ -300,42 +358,90 @@ fn decode_lifecycle_write(request: &RawRequest, host: &str) -> Option<DecodeResu
             };
             Some(lifecycle_action(
                 request,
+                LIFECYCLE_WRITE_ACTION_CLASS,
                 &format!("COMPOSIO_{verb}_{noun}"),
                 None,
                 account_id,
             ))
         }
         LifecycleRoute::Session { session_id } => {
-            // Session creation targets the collection and stays a recognized
-            // POST passthrough; deleting or mutating an existing session
-            // changes the agent's reachable surface and is governed.
+            // Session creation targets the collection and is decoded by
+            // `decode_session_creation`; a POST to an existing session
+            // resource is declined here so `decode_backend` fails it closed.
             if request.method == Method::POST {
                 return None;
             }
-            let verb = if request.method == Method::DELETE {
-                "DELETE"
-            } else {
-                "UPDATE"
-            };
+            if request.method == Method::DELETE {
+                return Some(lifecycle_action(
+                    request,
+                    LIFECYCLE_WRITE_ACTION_CLASS,
+                    "COMPOSIO_DELETE_SESSION",
+                    Some(session_id),
+                    None,
+                ));
+            }
+            // A session update can rebind the session's connected accounts
+            // (`connected_accounts` in Composio's patch schema), making it
+            // the same perimeter-defining write as creation, so a body it
+            // carries must be inspected and each selected account exposed
+            // to policy; an uninspectable body fails closed.
+            Some(decode_session_update(request, session_id))
+        }
+        // Composio only defines POST on this route (it initiates an OAuth
+        // link flow); there is no PUT/PATCH/DELETE counterpart, and no
+        // separate "unlink" action — removing a linked account happens
+        // through `DELETE connected_accounts/{id}`, already governed above.
+        // A non-POST method here is therefore not a real Composio route and
+        // must fail closed rather than being labeled a link write.
+        LifecycleRoute::SessionLink { session_id } if request.method == Method::POST => {
             Some(lifecycle_action(
                 request,
-                &format!("COMPOSIO_{verb}_SESSION"),
+                LIFECYCLE_WRITE_ACTION_CLASS,
+                "COMPOSIO_LINK_SESSION_ACCOUNT",
                 Some(session_id),
                 None,
             ))
         }
-        LifecycleRoute::SessionLink { session_id } => Some(lifecycle_action(
-            request,
-            "COMPOSIO_LINK_SESSION_ACCOUNT",
-            Some(session_id),
-            None,
-        )),
+        LifecycleRoute::SessionLink { .. } => None,
     }
 }
 
-/// Build the single governed logical action for a lifecycle write.
+/// Decode an account-lifecycle read into one governed logical action.
+///
+/// Reads of `connected_accounts` and `auth_configs` disclose which
+/// integrations an agent can reach and how they authenticate, so they are
+/// governed as `credential.read` instead of passing through with the other
+/// discovery routes. Returns `None` for anything else — including Tool Router
+/// session reads and MCP streams, which carry no credential metadata and stay
+/// passthrough.
+fn decode_lifecycle_read(request: &RawRequest, host: &str) -> Option<DecodeResult> {
+    if host != BACKEND_HOST
+        || !matches!(request.method, Method::GET | Method::HEAD | Method::OPTIONS)
+    {
+        return None;
+    }
+    let LifecycleRoute::Family {
+        noun,
+        account_id,
+        is_collection,
+    } = classify_lifecycle_route(path_only(&request.path))?
+    else {
+        return None;
+    };
+    let verb = if is_collection { "LIST" } else { "GET" };
+    Some(lifecycle_action(
+        request,
+        LIFECYCLE_READ_ACTION_CLASS,
+        &format!("COMPOSIO_{verb}_{noun}"),
+        None,
+        account_id,
+    ))
+}
+
+/// Build the single governed logical action for a lifecycle request.
 fn lifecycle_action(
     request: &RawRequest,
+    action_class: &str,
     slug: &str,
     session_id: Option<&str>,
     account: Option<&str>,
@@ -353,9 +459,166 @@ fn lifecycle_action(
         batch_size: None,
     };
     DecodeResult::Actions(vec![ComposioAction {
-        envelope: logical_envelope(request, LIFECYCLE_ACTION_CLASS, &context, method),
+        envelope: logical_envelope(request, action_class, &context, method),
         context,
     }])
+}
+
+/// Decode a Tool Router session creation into governed lifecycle actions.
+///
+/// Session creation is the perimeter-defining write: Composio stores the
+/// selected accounts on the session, and a later call may omit the account
+/// selector entirely, leaving the server to resolve it from that stored
+/// state. Policy therefore meets each selected account here or never. One
+/// `COMPOSIO_CREATE_SESSION` action is emitted per selected account, and a
+/// creation that selects none still decodes into a single unbound action
+/// because it reshapes the agent's reachable surface.
+fn decode_session_creation(request: &RawRequest, payload: &Map<String, Value>) -> DecodeResult {
+    session_perimeter_actions(
+        request,
+        "COMPOSIO_CREATE_SESSION",
+        None,
+        string_field(payload, "user_id"),
+        payload,
+    )
+}
+
+/// Decode a Tool Router session update into governed lifecycle actions.
+///
+/// Composio's session patch schema accepts a `connected_accounts` selection
+/// that rebinds the accounts the session executes with, so an update is the
+/// same perimeter-defining write as creation. A body that cannot be parsed
+/// fails closed rather than decoding unbound, because it could smuggle a
+/// rebinding past policy; an update without a body (or without an account
+/// selection) decodes into a single unbound `COMPOSIO_UPDATE_SESSION`
+/// action.
+fn decode_session_update(request: &RawRequest, session_id: &str) -> DecodeResult {
+    let Some(body) = request.body.as_deref() else {
+        return lifecycle_action(
+            request,
+            LIFECYCLE_WRITE_ACTION_CLASS,
+            "COMPOSIO_UPDATE_SESSION",
+            Some(session_id),
+            None,
+        );
+    };
+    let Ok(payload) = parse_json_without_duplicate_keys(body) else {
+        return deny("malformed_payload", "invalid Composio session payload");
+    };
+    let Some(payload) = payload.as_object() else {
+        return deny("malformed_payload", "invalid Composio session payload");
+    };
+    session_perimeter_actions(
+        request,
+        "COMPOSIO_UPDATE_SESSION",
+        Some(session_id),
+        None,
+        payload,
+    )
+}
+
+/// Extract the deduplicated account selection from a session payload's
+/// `connected_accounts` map.
+///
+/// Returns `None` when the payload selects no accounts. The selection must
+/// be a map of non-empty string lists; anything else fails closed, and a
+/// selection larger than the shared multi-action bound is refused so one
+/// request cannot fan out into an unbounded number of policy evaluations.
+fn selected_session_accounts(
+    payload: &Map<String, Value>,
+) -> Result<Option<Vec<&str>>, DecodeResult> {
+    // An explicit `connected_accounts: null` is schema-valid on the patch
+    // route and clears the pinned selection; clearing shrinks the perimeter,
+    // so it decodes like an absent selection rather than failing closed.
+    let Some(selected) = payload
+        .get("connected_accounts")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let Some(by_toolkit) = selected.as_object() else {
+        return Err(deny(
+            "malformed_payload",
+            "invalid Composio session account selection",
+        ));
+    };
+    let mut accounts: Vec<&str> = Vec::new();
+    let mut total = 0_usize;
+    for ids in by_toolkit.values() {
+        let Some(ids) = ids.as_array() else {
+            return Err(deny(
+                "malformed_payload",
+                "invalid Composio session account selection",
+            ));
+        };
+        for id in ids {
+            let Some(id) = id.as_str().filter(|value| !value.is_empty()) else {
+                return Err(deny(
+                    "malformed_payload",
+                    "invalid Composio session account selection",
+                ));
+            };
+            total += 1;
+            if total > MAX_MULTI_ACTIONS {
+                return Err(deny(
+                    "invalid_batch_size",
+                    "Composio session account selections are limited to 50 account entries",
+                ));
+            }
+            if !accounts.contains(&id) {
+                accounts.push(id);
+            }
+        }
+    }
+    Ok((!accounts.is_empty()).then_some(accounts))
+}
+
+/// Build the governed lifecycle actions for a perimeter-defining session
+/// write, one per selected account or a single unbound action when the
+/// payload selects none.
+fn session_perimeter_actions(
+    request: &RawRequest,
+    slug: &str,
+    session_id: Option<&str>,
+    user_id: Option<&str>,
+    payload: &Map<String, Value>,
+) -> DecodeResult {
+    let Ok(method) = HttpMethod::try_from(&request.method) else {
+        return deny("unsupported_route", "unsupported Composio route");
+    };
+    let accounts = match selected_session_accounts(payload) {
+        Ok(accounts) => accounts,
+        Err(denial) => return denial,
+    };
+    let bound_accounts: Vec<Option<&str>> = accounts.map_or_else(
+        || vec![None],
+        |accounts| accounts.into_iter().map(Some).collect(),
+    );
+    DecodeResult::Actions(
+        bound_accounts
+            .into_iter()
+            .map(|account| {
+                let context = ComposioContext {
+                    toolkit: LIFECYCLE_TOOLKIT.to_string(),
+                    tool_slug: slug.to_string(),
+                    user_id: user_id.map(str::to_string),
+                    connected_account_id: account.map(str::to_string),
+                    session_id: session_id.map(str::to_string),
+                    batch_index: None,
+                    batch_size: None,
+                };
+                ComposioAction {
+                    envelope: logical_envelope(
+                        request,
+                        LIFECYCLE_WRITE_ACTION_CLASS,
+                        &context,
+                        method,
+                    ),
+                    context,
+                }
+            })
+            .collect(),
+    )
 }
 
 fn decode_direct(
@@ -370,20 +633,15 @@ fn decode_direct(
             "Composio raw proxy execution is unsupported",
         );
     }
-    let Some(version) = string_field(payload, "version") else {
-        return deny(
-            "unpinned_tool",
-            "Composio direct execution requires a pinned toolkit version",
-        );
-    };
     decode_tool(
         request,
         slug,
-        Some(version),
+        string_field(payload, "version"),
         string_field(payload, "user_id"),
         string_field(payload, "connected_account_id"),
         None,
         None,
+        VersionPolicy::Required,
         catalogs,
     )
 }
@@ -412,6 +670,7 @@ fn decode_session(
             slug,
             payload.get("arguments").and_then(Value::as_object),
             session_id,
+            VersionPolicy::Optional,
             catalogs,
         );
     }
@@ -423,6 +682,7 @@ fn decode_session(
         string_field(payload, "account"),
         session_id,
         None,
+        VersionPolicy::Optional,
         catalogs,
     )
 }
@@ -441,6 +701,7 @@ fn decode_meta_route(
         slug,
         payload.get("arguments").and_then(Value::as_object),
         session_id,
+        VersionPolicy::Optional,
         catalogs,
     )
 }
@@ -475,13 +736,32 @@ fn decode_mcp(
     let arguments = params.get("arguments").and_then(Value::as_object);
     let session_id = mcp_session_id(path_only(&request.path));
     if slug.starts_with("COMPOSIO_") {
-        return decode_meta(request, slug, arguments, session_id, catalogs);
+        return decode_meta(
+            request,
+            slug,
+            arguments,
+            session_id,
+            VersionPolicy::Optional,
+            catalogs,
+        );
     }
     let account = arguments.and_then(|value| {
         string_field(value, "account").or_else(|| string_field(value, "connected_account_id"))
     });
+    // JSON-RPC has no version slot of its own, so the pin travels as a tool
+    // argument the same way the account selector does. It is honored when a
+    // client sends it and cannot be demanded when one does not.
+    let version = arguments.and_then(|value| string_field(value, "version"));
     decode_tool(
-        request, slug, None, None, account, session_id, None, catalogs,
+        request,
+        slug,
+        version,
+        None,
+        account,
+        session_id,
+        None,
+        VersionPolicy::Optional,
+        catalogs,
     )
 }
 
@@ -490,10 +770,13 @@ fn decode_meta(
     slug: &str,
     arguments: Option<&Map<String, Value>>,
     session_id: Option<&str>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     match slug {
-        "COMPOSIO_MULTI_EXECUTE_TOOL" => decode_multi(request, arguments, session_id, catalogs),
+        "COMPOSIO_MULTI_EXECUTE_TOOL" => {
+            decode_multi(request, arguments, session_id, policy, catalogs)
+        }
         "COMPOSIO_EXECUTE_TOOL" => {
             let Some(arguments) = arguments else {
                 return deny("malformed_payload", "invalid Composio execution payload");
@@ -510,6 +793,7 @@ fn decode_meta(
                     .or_else(|| string_field(arguments, "connected_account_id")),
                 session_id,
                 None,
+                policy,
                 catalogs,
             )
         }
@@ -526,6 +810,7 @@ fn decode_multi(
     request: &RawRequest,
     arguments: Option<&Map<String, Value>>,
     session_id: Option<&str>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     let Some(tools) = arguments
@@ -577,6 +862,7 @@ fn decode_multi(
             string_field(tool, "account").or_else(|| string_field(tool, "connected_account_id")),
             session_id,
             Some((batch_index, batch_size)),
+            policy,
             catalogs,
         ) {
             Ok(action) => actions.push(action),
@@ -598,10 +884,11 @@ fn decode_tool(
     account: Option<&str>,
     session_id: Option<&str>,
     batch: Option<(u32, u32)>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> DecodeResult {
     match action_for_tool(
-        request, slug, version, user_id, account, session_id, batch, catalogs,
+        request, slug, version, user_id, account, session_id, batch, policy, catalogs,
     ) {
         Ok(action) => DecodeResult::Actions(vec![action]),
         Err(denial) => DecodeResult::Deny(denial),
@@ -620,6 +907,7 @@ fn action_for_tool(
     account: Option<&str>,
     session_id: Option<&str>,
     batch: Option<(u32, u32)>,
+    policy: VersionPolicy,
     catalogs: &ComposioCatalogs,
 ) -> Result<ComposioAction, ProtocolDenial> {
     let Some(entry) = catalogs.lookup(slug) else {
@@ -628,13 +916,23 @@ fn action_for_tool(
             detail: "Composio tool is not in a pinned local catalog",
         });
     };
-    if let Some(version) = version
-        && version != entry.version
-    {
-        return Err(ProtocolDenial {
-            code: "version_mismatch",
-            detail: "Composio toolkit version does not match the pinned catalog",
-        });
+    // Every execution route funnels through here, so this is the single
+    // version gate. A stated version must match the pin on every route; only
+    // whether one is required at all varies, and only for hosted MCP.
+    match version {
+        Some(version) if version != entry.version => {
+            return Err(ProtocolDenial {
+                code: "version_mismatch",
+                detail: "Composio toolkit version does not match the pinned catalog",
+            });
+        }
+        None if policy == VersionPolicy::Required => {
+            return Err(ProtocolDenial {
+                code: "unpinned_tool",
+                detail: "Composio execution requires a pinned toolkit version",
+            });
+        }
+        _ => {}
     }
     let (batch_index, batch_size) =
         batch.map_or((None, None), |(index, size)| (Some(index), Some(size)));
@@ -665,7 +963,10 @@ fn logical_envelope(
     method: HttpMethod,
 ) -> NormalizedEnvelope {
     let mut resource = BTreeMap::from([
-        ("host".to_string(), canonical_host(request.host.as_str())),
+        (
+            "host".to_string(),
+            envelope_host(request.host.as_str(), request.is_https),
+        ),
         ("path".to_string(), path_only(&request.path).to_string()),
         ("provider".to_string(), "composio".to_string()),
         (
@@ -845,16 +1146,43 @@ pub(crate) fn canonical_host(host: &str) -> String {
     without_port.trim_end_matches('.').to_string()
 }
 
+/// Canonicalize the host recorded in a governed logical envelope.
+///
+/// The connector rebuilds the outbound URL from this resource value, so unlike
+/// [`canonical_host`] a nonstandard port must survive: dropping it would
+/// dispatch an admitted request to 443 instead of the port it arrived on.
+/// Scheme-aware default-port collapsing (`443` for HTTPS, `80` for HTTP)
+/// mirrors generic normalization's [`normalize_dispatch_host`]; the
+/// scheme-blind [`normalize_host_pattern`] would strip a `:80` on an HTTPS
+/// request and redirect an admitted request to `:443` instead.
+///
+/// [`normalize_dispatch_host`]: crate::normalizer::mapping::normalize_dispatch_host
+/// [`normalize_host_pattern`]: crate::normalizer::mapping::normalize_host_pattern
+fn envelope_host(host: &str, is_https: bool) -> String {
+    crate::normalizer::mapping::normalize_dispatch_host(host, is_https)
+}
+
 fn path_only(path: &str) -> &str {
     path.split_once('?').map_or(path, |(path, _)| path)
 }
 
+fn is_mcp_route(parts: &[&str]) -> bool {
+    match parts {
+        ["tool_router", "v3" | "v3.1", _, "mcp"] => true,
+        // `mcp/servers` is the MCP server-management collection, which
+        // shares this path shape with hosted MCP transport sessions;
+        // management is not transport and must fail closed instead of being
+        // mistaken for a JSON-RPC session. The comparison ignores case so a
+        // variant like `SERVERS` cannot re-enter the transport shape, where
+        // a read would pass through ungoverned.
+        ["api", "v3" | "v3.1", "mcp", id] => !id.eq_ignore_ascii_case("servers"),
+        _ => false,
+    }
+}
+
 fn is_mcp_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
-    matches!(
-        parts.as_slice(),
-        ["tool_router", "v3" | "v3.1", _, "mcp"] | ["api", "v3" | "v3.1", "mcp", _]
-    )
+    is_mcp_route(&parts)
 }
 
 fn mcp_session_id(path: &str) -> Option<&str> {
@@ -867,25 +1195,24 @@ fn mcp_session_id(path: &str) -> Option<&str> {
 }
 
 fn is_recognized_non_execution_path(host: &str, path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
     // Hosted MCP sessions use GET for the event stream and DELETE for
     // teardown; neither carries a tool call.
-    if is_mcp_path(path) {
+    if is_mcp_route(&parts) {
         return true;
     }
     if host == APP_HOST {
         return false;
     }
-    let parts: Vec<&str> = path.split('/').filter(|value| !value.is_empty()).collect();
+    // `connected_accounts` and `auth_configs` are deliberately absent: their
+    // reads are governed as `credential.read` by `decode_lifecycle_read` and
+    // their writes by `decode_lifecycle_write`, so any method that reaches
+    // here on those routes is neither and must fail closed.
     matches!(
         parts.as_slice(),
         ["api", "v3" | "v3.1", "tools"]
             | ["api", "v3" | "v3.1", "tools", _]
-            | [
-                "api",
-                "v3" | "v3.1",
-                "toolkits" | "connected_accounts" | "auth_configs",
-                ..
-            ]
+            | ["api", "v3" | "v3.1", "toolkits", ..]
             | ["api", "v3" | "v3.1", "tool_router", "session"]
             | ["api", "v3" | "v3.1", "tool_router", "session", _]
             | [
