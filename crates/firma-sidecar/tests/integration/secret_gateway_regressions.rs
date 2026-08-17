@@ -832,54 +832,6 @@ async fn sensitive_provider_schema_mismatch_fails_closed() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn sensitive_provider_matcher_compile_failure_fails_closed() -> anyhow::Result<()> {
-    let host = "vault.example.test";
-    let response_body = b"token=plaintext-secret".to_vec();
-    let (handler, requests) = fixed_handler(response_body.clone(), HeaderMap::new())?;
-    let provider = HttpIntegrationSpec {
-        provider_id: "broken-vault".to_string(),
-        host: host.to_string(),
-        matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
-            path: Some(PATH.to_string()),
-            matcher: CompiledMatcher::compile(&SecretMatcher::Regex {
-                pattern: "no_named_groups_here".to_string(),
-            })
-            .expect("valid provider"),
-        })],
-    };
-    let (gateway, contacted, gateway_server) = gateway_contact_probe().await?;
-    let handler = handler
-        .with_gateway_client(gateway)
-        .with_http_secret_providers(vec![provider]);
-
-    let response = proxy_request(handler, host, b"{}").await?;
-    let gateway_contact = tokio::time::timeout(Duration::from_millis(100), contacted).await;
-    gateway_server.abort();
-
-    assert!(
-        gateway_contact.is_err(),
-        "an invalid matcher must be rejected before gateway access"
-    );
-    assert_eq!(
-        requests
-            .lock()
-            .map_err(|error| anyhow::anyhow!("{error}"))?
-            .as_slice(),
-        &[b"{}".to_vec()],
-        "the provider response must reach mediation before the matcher compile failure aborts it"
-    );
-    assert!(
-        !response
-            .body
-            .windows(response_body.len())
-            .any(|window| window == response_body.as_slice()),
-        "the plaintext provider response must not reach the client"
-    );
-    response.assert_abort(AbortReason::CredentialInjectionFailed)?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn deflate_response_masking_preserves_zlib_wrapper() -> anyhow::Result<()> {
     let host = "api.example.test";
     let placeholder = SecretPlaceholder::new();

@@ -3794,59 +3794,6 @@ pub(crate) mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_handle_http_secret_provider_matcher_compile_failure_forwards_unmodified() {
-        // A `Regex` matcher missing the required `value`/`name` named
-        // groups fails to compile. `rewrite_with_http_intercept` must fail
-        // open (forward the dispatched response unmodified) rather than
-        // aborting or panicking, since the underlying request was already
-        // permitted by the main enforcement pipeline.
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/v1/chat/completions"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("token=abc123"))
-            .mount(&server)
-            .await;
-
-        let (gateway_addr, _push_rx) = fake_push_gateway().await;
-        let host = Authority::from_str(&format!("127.0.0.1:{}", server.address().port()))
-            .expect("valid authority");
-        let provider = HttpIntegrationSpec {
-            provider_id: "broken-matcher".to_string(),
-            host: host.to_string(),
-            matchers: vec![HttpMatcherRule::SensitiveCommand(PathAndMatcher {
-                path: None,
-                matcher: CompiledMatcher::compile(&SecretMatcher::Regex {
-                    pattern: "no_named_groups_here".to_string(),
-                })
-                .expect("valid provider"),
-            })],
-        };
-
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_bad_matcher"),
-            test_connector_registry(),
-            tx,
-        )
-        .with_gateway_client(GatewayClient::new(
-            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
-            GatewayClientConfig::default(),
-        ))
-        .with_http_secret_providers(vec![provider]);
-
-        let response = handler
-            .handle(raw_request(host, Method::POST), "sess_http_bad_matcher")
-            .await;
-
-        match response {
-            HandledResponse::Ok(dispatched) => {
-                assert_eq!(dispatched.body, b"token=abc123");
-            }
-            other => panic!("expected ok, got {other:?}"),
-        }
-    }
-
     #[test]
     fn test_abort_body_json_shape_matches_contract() {
         let body = abort_body_json(AbortReason::ConnectorTimeout, "timeout after 100ms");

@@ -167,25 +167,26 @@ fn build_request_handler(
         base
     };
 
-    if config.http_secret_providers.is_empty() {
+    let http_secret_providers = config
+        .http_secret_providers
+        .iter()
+        .filter_map(|spec| {
+            spec.compile()
+                .inspect_err(|err| {
+                    tracing::warn!(
+                        error = %err,
+                        "invalid secret provider config for {}; disabling",
+                        spec.provider_id
+                    );
+                })
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    if http_secret_providers.is_empty() {
         return base;
     }
 
-    match config
-        .http_secret_providers
-        .iter()
-        .map(MatcherCompiler::compile)
-        .collect::<Result<_, _>>()
-    {
-        Ok(http_secret_providers) => base.with_http_secret_providers(http_secret_providers),
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-               "invalid secret provider config; secret interception and placeholder rehydration disabled"
-            );
-            base
-        }
-    }
+    base.with_http_secret_providers(http_secret_providers)
 }
 
 #[expect(
