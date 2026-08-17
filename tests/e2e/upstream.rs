@@ -4,18 +4,30 @@ use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+/// The request-line fields captured by an [`HttpProbe`].
 #[derive(Debug)]
 pub(crate) struct Capture {
+    /// The HTTP method received by the probe.
     pub(crate) method: String,
+    /// The request target received by the probe.
     pub(crate) path: String,
 }
 
+/// The single-connection behavior expected from an [`HttpProbe`].
 pub(crate) enum ProbeBehavior {
+    /// Capture one request and return a successful response with this body.
     Respond(&'static str),
+    /// Capture one request and close its connection without sending an HTTP response.
     CloseWithoutResponse,
+    /// Fail if any connection arrives before the probe is finished.
     MustNotConnect,
 }
 
+/// A single-request HTTP/1.1 probe for dispatch and network-isolation scenarios.
+///
+/// The probe deliberately exposes connection-level behavior that a normal HTTP mock does not: it
+/// can close without responding and can assert that no TCP connection occurred. Call [`Self::finish`]
+/// after the client command to stop the listener and join its thread.
 pub(crate) struct HttpProbe {
     address: SocketAddr,
     nonce: String,
@@ -24,6 +36,10 @@ pub(crate) struct HttpProbe {
 }
 
 impl HttpProbe {
+    /// Starts a loopback probe whose request path is `/{nonce}`.
+    ///
+    /// Request acceptance has a 30-second deadline and each header read has a 15-second timeout.
+    /// The probe accepts at most one connection and fails on malformed or oversized requests.
     pub(crate) fn start(nonce: &str, behavior: ProbeBehavior) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP probe");
         listener
@@ -82,10 +98,14 @@ impl HttpProbe {
         }
     }
 
+    /// Returns the probe URL using its loopback IP address as the host.
     pub(crate) fn url(&self) -> String {
         format!("http://{}/{nonce}", self.address, nonce = self.nonce)
     }
 
+    /// Returns the probe URL with `host` in the authority while retaining the bound loopback port.
+    ///
+    /// The caller is responsible for resolving `host` to the probe's loopback address.
     pub(crate) fn url_for_host(&self, host: &str) -> String {
         format!(
             "http://{host}:{port}/{nonce}",
@@ -94,6 +114,11 @@ impl HttpProbe {
         )
     }
 
+    /// Stops a negative probe, joins the listener thread, and returns any captured request.
+    ///
+    /// Positive behaviors wait for their expected connection or the acceptance deadline. A
+    /// [`ProbeBehavior::MustNotConnect`] probe returns `None` once no connection has occurred before
+    /// this method is called.
     pub(crate) fn finish(self) -> Option<Capture> {
         let _ = self.stop.send(());
         self.task.join().expect("HTTP probe thread")

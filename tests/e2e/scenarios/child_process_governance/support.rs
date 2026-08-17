@@ -2,6 +2,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// Asserts that the local-exec endpoint observed exactly the expected root command.
+///
+/// This proves that child stimuli exercised confinement without generating additional governance
+/// requests. The recorded request must be valid JSON for a `local.exec` action.
 pub(super) fn assert_only_root_governed(governed: &[String], root: &Path) {
     assert_eq!(
         governed.len(),
@@ -14,6 +18,11 @@ pub(super) fn assert_only_root_governed(governed: &[String], root: &Path) {
     assert_eq!(request["executable"], root.to_string_lossy().as_ref());
 }
 
+/// Configures the generic profile to allow one root executable through a local governance endpoint.
+///
+/// The function also points sidecar traffic at `traffic_sock`, allowing each scenario to choose
+/// whether that socket is served. It fails if the scaffolded profile no longer has the expected
+/// shape rather than silently patching the wrong section.
 pub(super) fn patch_local_exec_allowlist(
     config_path: &Path,
     traffic_sock: &Path,
@@ -41,6 +50,10 @@ pub(super) fn patch_local_exec_allowlist(
         .expect("write patched firma.toml");
 }
 
+/// Starts a detached Unix-socket endpoint that records requests and replies with `allow`.
+///
+/// Each newline-delimited request is appended to `log`. The endpoint serves until its socket and
+/// listener are closed when the test process exits; callers do not receive a shutdown handle.
 pub(super) fn spawn_allow_all_endpoint(sock_path: &Path, log: Arc<Mutex<Vec<String>>>) {
     use std::os::unix::net::UnixListener;
 
@@ -63,6 +76,7 @@ pub(super) fn spawn_allow_all_endpoint(sock_path: &Path, log: Arc<Mutex<Vec<Stri
     });
 }
 
+/// Sets a generated test tool's Unix permissions to executable by all users.
 pub(super) fn set_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = std::fs::metadata(path)
@@ -72,10 +86,12 @@ pub(super) fn set_executable(path: &Path) {
     std::fs::set_permissions(path, permissions).expect("chmod forbidden-tool");
 }
 
+/// Quotes a path as one POSIX shell word, including paths containing single quotes.
 pub(super) fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
 }
 
+/// Returns the first existing path from an ordered list of platform-specific candidates.
 pub(super) fn first_existing(candidates: &[&str]) -> Option<PathBuf> {
     candidates
         .iter()

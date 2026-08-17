@@ -11,12 +11,20 @@ use wait_timeout::ChildExt;
 
 use crate::audit::{AuditEvent, correlated_event};
 
+/// An isolated filesystem and environment for one E2E test phase.
+///
+/// Dropping the world removes its temporary root. Commands created through the world inherit only
+/// the explicitly configured environment and must run from a directory beneath that root.
 pub(crate) struct TestWorld {
     root: tempfile::TempDir,
     session_id: String,
 }
 
 impl TestWorld {
+    /// Creates a world with the default `generic` agent-local configuration.
+    ///
+    /// Host-home masks are disabled because [`Self::isolated`] already supplies an empty home;
+    /// this keeps scenarios independent of files on the machine running the tests.
     pub(crate) fn new() -> Self {
         let world = Self::isolated();
         world.scaffold_config(
@@ -30,6 +38,9 @@ impl TestWorld {
         world
     }
 
+    /// Creates an empty world with isolated home, XDG, state, workspace, and temporary directories.
+    ///
+    /// Unlike [`Self::new`], this does not scaffold a Firma configuration.
     pub(crate) fn isolated() -> Self {
         let root = tempfile::tempdir().expect("create isolated test world");
         for directory in [
@@ -53,6 +64,9 @@ impl TestWorld {
         }
     }
 
+    /// Resolves a contained relative path beneath the world's temporary root.
+    ///
+    /// Absolute paths and paths containing parent or platform-prefix components are rejected.
     pub(crate) fn path(&self, relative: impl AsRef<Path>) -> PathBuf {
         let relative = relative.as_ref();
         assert!(
@@ -64,18 +78,25 @@ impl TestWorld {
         self.root.path().join(relative)
     }
 
+    /// Returns the world's isolated workspace directory.
     pub(crate) fn workspace_path(&self) -> PathBuf {
         self.path("workspace")
     }
 
+    /// Returns the world's isolated Firma state directory.
     pub(crate) fn state_path(&self) -> PathBuf {
         self.path("state")
     }
 
+    /// Returns the default scaffolded configuration path.
     pub(crate) fn config_path(&self) -> PathBuf {
         self.path("config/firma.toml")
     }
 
+    /// Runs `firma config` to scaffold an agent-local development configuration.
+    ///
+    /// The command runs with the world's isolated environment and a 30-second deadline. The test
+    /// fails if scaffolding times out or exits unsuccessfully.
     pub(crate) fn scaffold_config(
         &self,
         profile: &str,
@@ -108,6 +129,10 @@ impl TestWorld {
         assert!(output.success(), "firma config failed:\n{output}");
     }
 
+    /// Removes generated masks for host-home secrets from a scaffolded configuration.
+    ///
+    /// Tests use an empty isolated home, so retaining these masks would test host-specific paths
+    /// rather than the scenario. The test fails if the expected generated setting is absent.
     pub(crate) fn disable_host_home_masks(config_path: &Path) {
         let config = std::fs::read_to_string(config_path).expect("read scaffolded config");
         let patched = config.replace(
@@ -122,15 +147,21 @@ impl TestWorld {
         self.path("state/audit.jsonl")
     }
 
+    /// Returns the unique audit event whose resource contains `nonce` in this world's session.
     pub(crate) fn audit_event(&self, nonce: &str) -> AuditEvent {
         correlated_event(&self.audit_path(), &self.session_id, nonce)
     }
 
+    /// Writes a Cedar policy into the default scaffolded policy directory.
     pub(crate) fn add_policy(&self, name: &str, policy: &str) {
         std::fs::write(self.root.path().join("config/policies").join(name), policy)
             .expect("write scenario policy");
     }
 
+    /// Runs a command through local Firma authority and sidecar processes using the default profile.
+    ///
+    /// The returned run retains the session and nonce needed to retrieve its correlated audit
+    /// event with [`GovernedRun::audit_event`].
     pub(crate) fn run_governed<I, S>(
         &self,
         nonce: &str,
@@ -156,6 +187,11 @@ impl TestWorld {
         }
     }
 
+    /// Runs a program through `firma run` in this world and returns its captured output.
+    ///
+    /// The Firma process receives a two-minute deadline; if it is still running then, its entire
+    /// process group is terminated. `run_args` are Firma arguments placed before `--`; `args` are
+    /// arguments for `program`.
     pub(crate) fn run_firma<I, S>(
         &self,
         profile: &str,
@@ -183,6 +219,9 @@ impl TestWorld {
         run_bounded(&mut command, Duration::from_mins(2))
     }
 
+    /// Creates an isolated command whose working directory is contained by this world.
+    ///
+    /// The test fails if `cwd` does not exist or resolves outside the world's temporary root.
     pub(crate) fn isolated_command_in(&self, program: impl AsRef<OsStr>, cwd: &Path) -> Command {
         let canonical_cwd = cwd
             .canonicalize()
@@ -197,7 +236,9 @@ impl TestWorld {
     }
 }
 
+/// The output and audit correlation data from [`TestWorld::run_governed`].
 pub(crate) struct GovernedRun {
+    /// Captured process status and output.
     pub(crate) output: ProcessOutput,
     audit_path: PathBuf,
     session_id: String,
@@ -205,11 +246,16 @@ pub(crate) struct GovernedRun {
 }
 
 impl GovernedRun {
+    /// Returns the unique audit event correlated with this run's session and nonce.
     pub(crate) fn audit_event(&self) -> AuditEvent {
         correlated_event(&self.audit_path, &self.session_id, &self.nonce)
     }
 }
 
+/// Creates a command with only the environment needed to run inside `world`.
+///
+/// The command defaults to the world's workspace directory. Callers may add scenario-specific
+/// environment variables and arguments before passing it to [`run_bounded`].
 pub(crate) fn isolated_command(program: impl AsRef<OsStr>, world: &TestWorld) -> Command {
     let mut command = Command::new(program);
     command
@@ -228,14 +274,18 @@ pub(crate) fn isolated_command(program: impl AsRef<OsStr>, world: &TestWorld) ->
     command
 }
 
+/// Captured UTF-8-lossy output and completion state for a bounded child process.
 pub(crate) struct ProcessOutput {
     status: ExitStatus,
+    /// Standard output captured when the process-group leader was reaped.
     pub(crate) stdout: String,
+    /// Standard error captured when the process-group leader was reaped.
     pub(crate) stderr: String,
     timed_out: bool,
 }
 
 impl ProcessOutput {
+    /// Reports success only when the process exited successfully before its deadline.
     pub(crate) fn success(&self) -> bool {
         self.status.success() && !self.timed_out
     }
@@ -251,6 +301,13 @@ impl fmt::Display for ProcessOutput {
     }
 }
 
+/// Runs `command` with a deadline for its process-group leader while capturing stdout and stderr.
+///
+/// The command starts a new process group. If its leader is still running at the deadline, the
+/// entire group receives `SIGTERM`, then receives `SIGKILL` after a two-second grace period even if
+/// the leader exited during that grace period. The returned output records the timeout independently
+/// of the eventual exit status. If the leader exits before the deadline, descendants are not
+/// explicitly reaped and the captures are read immediately.
 pub(crate) fn run_bounded(command: &mut Command, timeout: Duration) -> ProcessOutput {
     let stdout = tempfile::NamedTempFile::new().expect("stdout capture");
     let stderr = tempfile::NamedTempFile::new().expect("stderr capture");
