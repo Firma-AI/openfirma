@@ -63,6 +63,7 @@ impl Connector for FixedConnector {
 
 struct ProxyResponse {
     status: u16,
+    headers: HeaderMap,
     body: Vec<u8>,
 }
 
@@ -227,8 +228,22 @@ async fn proxy_request(
         .and_then(|line| line.split_whitespace().nth(1))
         .ok_or_else(|| anyhow::anyhow!("proxy response contained no status"))?
         .parse()?;
+    let headers = headers
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let (name, value) = line
+                .split_once(':')
+                .ok_or_else(|| anyhow::anyhow!("malformed proxy response header: {line}"))?;
+            Ok((
+                http::HeaderName::from_bytes(name.as_bytes())?,
+                http::HeaderValue::from_str(value.trim())?,
+            ))
+        })
+        .collect::<anyhow::Result<HeaderMap>>()?;
     Ok(ProxyResponse {
         status,
+        headers,
         body: response[header_end + 4..].to_vec(),
     })
 }
@@ -855,6 +870,20 @@ async fn deflate_response_masking_preserves_zlib_wrapper() -> anyhow::Result<()>
     let response = proxy_request(handler, host, &request_body).await?;
 
     assert_eq!(response.status, 200);
+    assert_eq!(
+        response.headers.get("content-encoding"),
+        Some(&http::HeaderValue::from_static("deflate"))
+    );
+    assert_eq!(
+        response
+            .headers
+            .get("content-length")
+            .ok_or_else(|| anyhow::anyhow!("response missing content-length"))?
+            .to_str()?
+            .parse::<usize>()?,
+        response.body.len(),
+        "content-length must describe the rewritten compressed body"
+    );
     let decoded = zlib_inflate(&response.body)?;
     assert_eq!(
         decoded,
