@@ -21,9 +21,9 @@ use super::{AuditPayload, ExecutionEvent};
 /// Builds signed [`ExecutionEvent`]s from [`AuditPayload`]s.
 ///
 /// Loaded once at startup with an ECDSA P-256 signing key. Each call
-/// to [`build`](Self::build) produces a new event with a UUID v7
-/// identifier, a nanosecond-precision timestamp, and an ECDSA signature
-/// covering all preceding fields.
+/// to [`build`](Self::build) produces a new event with an `aevt` `TypeID`
+/// backed by UUID v7, a nanosecond-precision timestamp, and an ECDSA
+/// signature covering all preceding fields.
 pub struct EventBuilder {
     signing_key: SigningKey,
     sandbox_id: Option<SandboxId>,
