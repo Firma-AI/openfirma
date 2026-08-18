@@ -1,3 +1,33 @@
+//! Sandboxed HTTP client for uninterrupted E2E scenarios.
+//!
+//! Some scenarios must issue multiple requests through one `firma run` process so they can prove
+//! that policy, revocation, and capability changes take effect without restarting the sandbox or
+//! Sidecar. This module provides that stimulus as a Rust `process_fixture!` instead of relying on a
+//! shell and `curl`, which would add host-tool dependencies and expose only command exit codes.
+//!
+//! # Wiring
+//!
+//! [`command`] re-executes the E2E test binary at the ignored fixture entry point. The harness
+//! passes that command to `firma run`, pipes the resulting process's standard input and output into
+//! [`LiveHttpClient`], and keeps standard error for lifecycle diagnostics. Inside the sandbox, the
+//! fixture uses the proxy environment injected by `firma run`, so requests traverse the Sidecar
+//! before reaching the test's controlled upstream server.
+//!
+//! The parent writes newline-delimited JSON requests to the fixture's standard input. A detached
+//! reader thread parses framed events from standard output and forwards them to [`LiveHttpClient`]
+//! while retaining an eventually consistent diagnostic capture. The thread is deliberately not
+//! joined: a descendant retaining the inherited output pipe must not make bounded run cleanup wait
+//! forever. Closing standard input ends the fixture's request loop and initiates normal shutdown.
+//!
+//! # Protocol
+//!
+//! Protocol events are JSON lines prefixed by [`PROTOCOL_PREFIX`], allowing the reader to ignore
+//! libtest output produced by the fixture process under `--nocapture`. The fixture sends `Ready`
+//! first, including its process and mount-namespace identity. For each request it sends `Attempt`
+//! before touching the network, then either `Response` with the HTTP status and raw body bytes or
+//! `Error` with a transport failure. Every request and request-scoped event carries the same nonce,
+//! which prevents a response from being attributed to the wrong E2E stimulus.
+
 use std::io::{BufRead, BufReader, Write};
 use std::process::{ChildStdin, ChildStdout, Command};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
