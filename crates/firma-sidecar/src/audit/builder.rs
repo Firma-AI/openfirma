@@ -76,8 +76,8 @@ impl EventBuilder {
 
     /// Builds a signed [`ExecutionEvent`] from an [`AuditPayload`].
     ///
-    /// Generates a UUID v7 event ID, captures the current wall-clock
-    /// timestamp in nanoseconds, and signs all fields with ECDSA P-256.
+    /// Generates an `aevt` `TypeID` backed by UUID v7, captures the current
+    /// wall-clock timestamp in nanoseconds, and signs all fields with ECDSA P-256.
     #[must_use]
     pub(crate) fn build(&self, payload: AuditPayload) -> ExecutionEvent {
         let event_id = AuditEventId::generate().to_string();
