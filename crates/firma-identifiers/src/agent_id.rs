@@ -7,5 +7,7 @@ firma_type_id!(
     AgentIdType,
     AgentIdParseError,
     "agt",
-    "agent id"
+    "agent id",
+    SortRand,
+    type_safe_id::TypeSafeId::new()
 );

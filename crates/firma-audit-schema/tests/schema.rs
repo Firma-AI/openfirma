@@ -2,7 +2,7 @@ use firma_audit_schema::{Decision, ExecutionEvent};
 
 fn sample_event(signature: Vec<u8>) -> ExecutionEvent {
     ExecutionEvent {
-        event_id: "018f5c6d-7a8b-7c9d-8e0f-123456789abc".to_string(),
+        event_id: "aevt_01j0000000e008000000000001".to_string(),
         session_id: "session-001".to_string(),
         token_id: "ctok_01j0000000e008000000000001".to_string(),
         agent_id: "agt_01j0000000e008000000000001".to_string(),
@@ -50,7 +50,7 @@ fn execution_event_has_stable_json_representation() {
     let json = serde_json::to_string(&event).expect("event serializes");
     assert_eq!(
         json,
-        r#"{"event_id":"018f5c6d-7a8b-7c9d-8e0f-123456789abc","session_id":"session-001","token_id":"ctok_01j0000000e008000000000001","agent_id":"agt_01j0000000e008000000000001","action":"communication.external.send","resource":"paste.rs/","decision":2,"deny_reason":"policy denied","enforcement_latency_us":420,"context_hash":"sha256:abc123","bundle_version":"local","timestamp":1717505648761000000,"dispatch_status":0,"dispatch_latency_us":0,"response_size":0,"sandbox_id":"","provenance":"","thread_id":"","parent_action_id":"","signature":"MEUCIQ=="}"#
+        r#"{"event_id":"aevt_01j0000000e008000000000001","session_id":"session-001","token_id":"ctok_01j0000000e008000000000001","agent_id":"agt_01j0000000e008000000000001","action":"communication.external.send","resource":"paste.rs/","decision":2,"deny_reason":"policy denied","enforcement_latency_us":420,"context_hash":"sha256:abc123","bundle_version":"local","timestamp":1717505648761000000,"dispatch_status":0,"dispatch_latency_us":0,"response_size":0,"sandbox_id":"","provenance":"","thread_id":"","parent_action_id":"","signature":"MEUCIQ=="}"#
     );
 
     let decoded: ExecutionEvent = serde_json::from_str(&json).expect("event deserializes");

@@ -44,7 +44,7 @@ pub enum Decision {
 /// strings have defined wire meaning for passthrough and pre-dispatch events.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionEvent {
-    /// Unique event identifier (UUID v7, time-ordered).
+    /// Unique `aevt` `TypeID` backed by UUID v7 (time-ordered).
     pub event_id: String,
     /// Session that produced this event.
     pub session_id: String,

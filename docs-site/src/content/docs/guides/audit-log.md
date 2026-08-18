@@ -28,7 +28,7 @@ A single line of the JSONL log decodes to something like:
 
 ```json
 {
-  "event_id": "018f5c6d-7a8b-7c9d-8e0f-123456789abc",
+  "event_id": "aevt_01j0000000e008000000000001",
   "session_id": "session-001",
   "token_id": "ctok_01j0000000e008000000000001",
   "agent_id": "agt_01j0000000e008000000000001",
@@ -53,7 +53,7 @@ A single line of the JSONL log decodes to something like:
 
 Field-by-field:
 
-- **`event_id`** — UUIDv7 per event. Sortable by time, unique even across restarts.
+- **`event_id`** — `aevt` `TypeID` backed by UUIDv7. Sortable by time, unique even across restarts.
 - **`session_id`, `token_id`, `agent_id`** — the session, capability token, and agent identity evaluated by the pipeline.
 - **`action`, `resource`** — the normalized action class and opaque resource UID (`host + path`, for example `paste.rs/`).
 - **`decision`** — numeric outcome (`1` = ALLOW, `2` = DENY). For DENYs, `deny_reason` is a lowercase string (often `"{reason}: {detail}"`, e.g. `"policy denied: …"`). The troubleshooting headings below use PascalCase labels for readability.

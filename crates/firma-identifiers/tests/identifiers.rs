@@ -8,6 +8,8 @@ fn generated_type_ids_have_their_canonical_prefixes_and_round_trip() {
         AgentId::generate().to_string(),
         SandboxId::generate().to_string(),
         TokenId::generate().to_string(),
+        AuditEventId::generate().to_string(),
+        ApprovalTokenId::generate().to_string(),
     ];
 
     assert!(ids[0].starts_with("agt_"));
@@ -16,6 +18,10 @@ fn generated_type_ids_have_their_canonical_prefixes_and_round_trip() {
     assert!(ids[1].parse::<SandboxId>().is_ok());
     assert!(ids[2].starts_with("ctok_"));
     assert!(ids[2].parse::<TokenId>().is_ok());
+    assert!(ids[3].starts_with("aevt_"));
+    assert!(ids[3].parse::<AuditEventId>().is_ok());
+    assert!(ids[4].starts_with("atok_"));
+    assert!(ids[4].parse::<ApprovalTokenId>().is_ok());
 }
 
 #[test]
@@ -51,12 +57,18 @@ fn type_id_rejects_malformed_suffix() {
 }
 
 #[test]
-fn type_id_rejects_non_v7_uuid() {
+fn type_id_rejects_incorrect_uuid_version() {
     let error = "sbx_2n1t201rmv88eb2sj4cn248g00"
         .parse::<SandboxId>()
         .expect_err("UUID v4 TypeID must be rejected");
 
     insta::assert_snapshot!(error.to_string(), @"sandbox id must be backed by a UUID v7: `sbx_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4");
+
+    let error = "atok_01j0000000e008000000000001"
+        .parse::<ApprovalTokenId>()
+        .expect_err("UUID v7 approval TypeID must be rejected");
+
+    insta::assert_snapshot!(error.to_string(), @"approval token id must be backed by a UUID v4: `atok_01j0000000e008000000000001` is backed by a UUID v7");
 }
 
 #[test]
@@ -77,33 +89,10 @@ fn type_id_deserialization_runs_validation() {
 }
 
 #[test]
-fn generated_uuid_ids_have_their_required_versions_and_round_trip() {
-    let event_id = AuditEventId::generate().to_string();
-    let approval_id = ApprovalTokenId::generate().to_string();
-
-    assert!(event_id.parse::<AuditEventId>().is_ok());
-    assert!(approval_id.parse::<ApprovalTokenId>().is_ok());
-    assert!(event_id.parse::<ApprovalTokenId>().is_err());
-    assert!(approval_id.parse::<AuditEventId>().is_err());
-}
-
-#[test]
-fn uuid_id_rejects_malformed_input() {
-    let error = "not-a-uuid"
-        .parse::<AuditEventId>()
-        .expect_err("malformed UUID must be rejected");
-
-    assert!(
-        error
-            .to_string()
-            .starts_with("audit event id must be a valid UUID: `not-a-uuid` is malformed:")
-    );
-}
-
-#[test]
 fn generated_session_id_is_valid() {
     let generated = SessionId::generate();
 
+    assert!(generated.to_string().starts_with("ses_"));
     assert!(generated.to_string().parse::<SessionId>().is_ok());
 }
 

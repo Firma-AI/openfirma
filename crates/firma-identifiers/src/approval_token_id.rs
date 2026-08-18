@@ -1,8 +1,13 @@
-firma_uuid_id!(
-    /// The opaque UUID v4 assigned to one human-approval request.
+firma_type_id!(
+    /// An opaque identifier assigned to one human-approval request.
+    ///
+    /// Its canonical representation is an `atok` `TypeID` backed by an RFC
+    /// 9562 UUID v4.
     ApprovalTokenId,
+    ApprovalTokenIdType,
     ApprovalTokenIdParseError,
-    new_v4,
+    "atok",
+    "approval token id",
     Random,
-    "approval token id"
+    type_safe_id::TypeSafeId::from_uuid(uuid::Uuid::new_v4())
 );

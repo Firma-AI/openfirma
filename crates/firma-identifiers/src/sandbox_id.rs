@@ -7,5 +7,7 @@ firma_type_id!(
     SandboxIdType,
     SandboxIdParseError,
     "sbx",
-    "sandbox id"
+    "sandbox id",
+    SortRand,
+    type_safe_id::TypeSafeId::new()
 );

@@ -21,9 +21,9 @@ use super::{AuditPayload, ExecutionEvent};
 /// Builds signed [`ExecutionEvent`]s from [`AuditPayload`]s.
 ///
 /// Loaded once at startup with an ECDSA P-256 signing key. Each call
-/// to [`build`](Self::build) produces a new event with a UUID v7
-/// identifier, a nanosecond-precision timestamp, and an ECDSA signature
-/// covering all preceding fields.
+/// to [`build`](Self::build) produces a new event with an `aevt` `TypeID`
+/// backed by UUID v7, a nanosecond-precision timestamp, and an ECDSA
+/// signature covering all preceding fields.
 pub struct EventBuilder {
     signing_key: SigningKey,
     sandbox_id: Option<SandboxId>,
@@ -76,8 +76,8 @@ impl EventBuilder {
 
     /// Builds a signed [`ExecutionEvent`] from an [`AuditPayload`].
     ///
-    /// Generates a UUID v7 event ID, captures the current wall-clock
-    /// timestamp in nanoseconds, and signs all fields with ECDSA P-256.
+    /// Generates an `aevt` `TypeID` backed by UUID v7, captures the current
+    /// wall-clock timestamp in nanoseconds, and signs all fields with ECDSA P-256.
     #[must_use]
     pub(crate) fn build(&self, payload: AuditPayload) -> ExecutionEvent {
         let event_id = AuditEventId::generate().to_string();
@@ -546,7 +546,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
         assert_ne!(
             e1.event_id, e2.event_id,
-            "each event must get a unique UUID v7"
+            "each event must get a unique aevt TypeID"
         );
     }
 
