@@ -1,12 +1,16 @@
-use super::{MatcherRule, MatchingResolution, NonEmptyString, SecretMatcher};
+use firma_core::SecretMatcher;
 
-pub type HttpMatcherRule = MatcherRule<PathAndMatcher, PathOnly>;
+use crate::{CompiledMatcher, MatcherCompiler, MatcherError, glob::glob_match};
+
+use super::{MatcherRule, MatchingResolution, NonEmptyString};
+
+pub type HttpMatcherRule<Matcher> = MatcherRule<PathAndMatcher<Matcher>, PathOnly>;
 
 /// Per-HTTP-vault behavior spec: which traffic to intercept and how to extract
 /// secrets from the response body. Callers own placeholder minting and
 /// persistence for extracted values.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct HttpIntegrationSpec {
+pub struct HttpIntegrationSpec<Matcher> {
     /// Stable integration identity (e.g. `"aws-secrets-manager"`).
     pub provider_id: String,
     /// Host glob pattern to match against MITM'd responses (e.g.
@@ -18,10 +22,10 @@ pub struct HttpIntegrationSpec {
     /// secrets" path returning an array vs. a "get secret" path returning a
     /// single record), so the matcher to apply is resolved per path rather
     /// than fixed per host.
-    pub matchers: Vec<HttpMatcherRule>,
+    pub matchers: Vec<HttpMatcherRule<Matcher>>,
 }
 
-impl HttpIntegrationSpec {
+impl<Matcher> HttpIntegrationSpec<Matcher> {
     /// Resolves the matcher to apply for a response observed on `path`.
     ///
     /// Follows a specific order:
@@ -32,7 +36,7 @@ impl HttpIntegrationSpec {
     /// Any command not falling in any of those rules will be blocked as an
     /// extra safety measure.
     #[must_use]
-    pub fn matcher_for(&self, path: &str) -> MatchingResolution<'_> {
+    pub fn matcher_for(&self, path: &str) -> MatchingResolution<'_, Matcher> {
         // blocked commands
         if self
             .matchers
@@ -71,13 +75,51 @@ impl HttpIntegrationSpec {
     }
 }
 
+impl MatcherCompiler for HttpIntegrationSpec<SecretMatcher> {
+    type Ok = HttpIntegrationSpec<CompiledMatcher>;
+
+    fn compile(&self) -> Result<Self::Ok, MatcherError> {
+        let Self {
+            provider_id,
+            host,
+            matchers,
+        } = self;
+
+        let matchers = matchers
+            .iter()
+            .map(MatcherCompiler::compile)
+            .collect::<Result<_, _>>()?;
+
+        Ok(HttpIntegrationSpec {
+            provider_id: provider_id.clone(),
+            host: host.clone(),
+            matchers,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PathAndMatcher {
+pub struct PathAndMatcher<Matcher> {
     /// Path glob pattern (e.g. `"/v1/secrets/*"`). `None` matches any path on
     /// the spec's host and acts as the spec's fallback.
     pub path: Option<String>,
     /// How to extract `(name, value)` pairs from the tool's stdout.
-    pub matcher: SecretMatcher,
+    pub matcher: Matcher,
+}
+
+impl MatcherCompiler for PathAndMatcher<SecretMatcher> {
+    type Ok = PathAndMatcher<CompiledMatcher>;
+
+    fn compile(&self) -> Result<Self::Ok, MatcherError> {
+        let Self { path, matcher } = self;
+
+        let matcher = CompiledMatcher::compile(matcher)?;
+
+        Ok(PathAndMatcher {
+            path: path.clone(),
+            matcher,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -85,41 +127,4 @@ pub struct PathOnly {
     /// Path glob pattern (e.g. `"/v1/secrets/*"`). `None` matches any path on
     /// the spec's host and acts as the spec's fallback.
     pub path: NonEmptyString,
-}
-
-/// Simple glob matching supporting `*` as a wildcard matching any sequence of
-/// characters (including path separators).
-///
-/// - `*` matches anything.
-/// - `/v1/secrets/*` matches `/v1/secrets/get` and `/v1/secrets/get/abc`.
-fn glob_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == value;
-    }
-
-    let mut pos = 0usize;
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        match value[pos..].find(part) {
-            Some(found) => {
-                if i == 0 && found != 0 {
-                    return false;
-                }
-                pos += found + part.len();
-            }
-            None => return false,
-        }
-    }
-
-    match parts.last() {
-        Some(last) if !last.is_empty() => value.ends_with(last),
-        _ => true,
-    }
 }

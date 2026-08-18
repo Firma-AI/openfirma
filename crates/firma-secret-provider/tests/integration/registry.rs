@@ -23,7 +23,7 @@ fn command(words: &[&str], match_kind: CommandMatch) -> Result<CommandPattern, E
 
 fn validated_config(
     config: CliIntegrationConfig,
-) -> Result<CliIntegrationSpec, CliIntegrationConfigError> {
+) -> Result<CliIntegrationSpec<SecretMatcher>, CliIntegrationConfigError> {
     CliIntegrationSpec::try_from(config)
 }
 

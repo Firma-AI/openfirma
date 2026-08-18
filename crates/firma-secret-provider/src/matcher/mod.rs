@@ -17,7 +17,7 @@ mod regex;
 use std::collections::HashSet;
 
 use firma_core::SecretMatcher;
-use http::uri::Authority;
+use firma_http::Authority;
 
 use crate::{SecretPlaceholder, SecretString};
 
@@ -104,4 +104,17 @@ impl CompiledMatcher {
             MatcherKind::Regex(matcher) => matcher.rewrite(output, mint),
         }
     }
+}
+
+/// Compiles an inner [`SecretMatcher`] into a [`CompiledMatcher`].
+pub trait MatcherCompiler {
+    type Ok;
+
+    /// Compile and validate a matcher spec.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatcherError`] for an invalid `JSONPath`, an invalid `Regex`, or a
+    /// `Regex` missing its required `value` / `name` named capture groups.
+    fn compile(&self) -> Result<Self::Ok, MatcherError>;
 }

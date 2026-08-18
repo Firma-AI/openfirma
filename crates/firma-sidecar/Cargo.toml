@@ -16,6 +16,8 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+brotli = { workspace = true }
+bytesize = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
 ecdsa = { workspace = true }
@@ -29,6 +31,7 @@ firma-identifiers = { workspace = true }
 firma-protobuf = { workspace = true }
 firma-runtime-state = { workspace = true }
 firma-secret-provider = { workspace = true }
+flate2 = { workspace = true }
 form_urlencoded = { workspace = true }
 governor = { workspace = true }
 headers = { workspace = true }
@@ -38,6 +41,7 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+json-escape = { workspace = true }
 lru = { workspace = true }
 mime = { workspace = true }
 nix = { workspace = true }
@@ -68,6 +72,7 @@ uuid = { workspace = true }
 webpki-roots = { workspace = true }
 x509-parser = { workspace = true }
 xxhash-rust = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }

@@ -178,3 +178,6 @@ For a production deployment:
 - [Read & verify the audit log](../audit-log/) — see injection records cleanly.
 - [Concepts: Connectors](../../concepts/connectors/) — the dispatch path and where injection fits.
 - [Concepts: Threat model](../../concepts/threat-model/) — the security rationale.
+- [Rehydrate & mask secrets (secret gateway)](../secret-gateway/) — the
+  dynamic, placeholder-based alternative for secrets that live in an
+  external vault instead of a fixed host-scoped credential.

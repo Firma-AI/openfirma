@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use either::Either;
-use http::uri::Authority;
+use firma_http::Authority;
 use regex::{Captures, Regex};
 
 use crate::{

@@ -1,20 +1,28 @@
 //! Runner for `firma sidecar`.
 
-use std::path::Path;
-use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{path::Path, process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::Context as _;
-use firma_sidecar::authority_client::readiness::ReadinessFlag;
-use firma_sidecar::startup::CapabilityReloader;
-use firma_sidecar::{config, handler, health, startup};
+use firma_secret_provider::{
+    MatcherCompiler,
+    gateway::{
+        client::{GATEWAY_ADDR_ENV, GatewayClient},
+        endpoint::GatewayEndpoint,
+    },
+};
+use firma_sidecar::{
+    audit::AuditPayload, authority_client::readiness::ReadinessFlag, composio::ComposioCatalogs,
+    config, connector::ConnectorRegistry, handler, health, pipeline::EnforcementPipeline, startup,
+    startup::CapabilityReloader,
+};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use crate::args::sidecar::{Args, SidecarCommand, StartArgs, StopArgs};
-use crate::signal::wait_for_shutdown;
+use crate::{
+    args::sidecar::{Args, SidecarCommand, StartArgs, StopArgs},
+    signal::wait_for_shutdown,
+};
 
 /// Entry point for `firma sidecar [SUBCOMMAND]`.
 ///
@@ -124,6 +132,57 @@ fn load_composio_catalogs() -> anyhow::Result<Arc<firma_sidecar::composio::Compo
     Ok(Arc::new(catalogs))
 }
 
+fn build_request_handler(
+    pipeline: Arc<EnforcementPipeline>,
+    connector_registry: Arc<ConnectorRegistry>,
+    audit_sink_sender: tokio::sync::mpsc::Sender<AuditPayload>,
+    composio_catalogs: Arc<ComposioCatalogs>,
+    config: &config::SidecarConfig,
+) -> anyhow::Result<handler::RequestHandler> {
+    let base = handler::RequestHandler::new(pipeline, connector_registry, audit_sink_sender)
+        .with_composio_catalogs(composio_catalogs)
+        .with_max_decompressed_body_bytes(config.interceptor.max_decompressed_body_bytes());
+
+    let base = if let Ok(addr) = std::env::var(GATEWAY_ADDR_ENV) {
+        match GatewayEndpoint::parse(&addr) {
+            Ok(ep) => {
+                tracing::info!(%addr, "secret gateway configured; placeholder rehydration enabled");
+                base.with_gateway_client(GatewayClient::new(ep, config.secret_gateway))
+            }
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "invalid secret gateway address \"{addr}\": {err}"
+                ));
+            }
+        }
+    } else {
+        if !config.http_secret_providers.is_empty() {
+            return Err(anyhow::anyhow!(
+                "http_secret_providers configured but no secret gateway is available"
+            ));
+        }
+        base
+    };
+
+    let http_secret_providers = config
+        .http_secret_providers
+        .iter()
+        .map(|spec| {
+            spec.compile().map_err(|err| {
+                anyhow::anyhow!(
+                    "invalid secret provider config for \"{}\": {err}",
+                    spec.provider_id
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if http_secret_providers.is_empty() {
+        return Ok(base);
+    }
+
+    Ok(base.with_http_secret_providers(http_secret_providers))
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "startup sequencing stays linear so readiness ordering remains auditable"
@@ -182,14 +241,13 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let _capability_reload = spawn_capability_reload(&config, &pipeline_runtime, &exit)?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
-    let handler = Arc::new(
-        handler::RequestHandler::new(
-            Arc::clone(&pipeline_runtime.pipeline),
-            connector_registry,
-            audit_payload_tx,
-        )
-        .with_composio_catalogs(load_composio_catalogs()?),
-    );
+    let handler = Arc::new(build_request_handler(
+        Arc::clone(&pipeline_runtime.pipeline),
+        connector_registry,
+        audit_payload_tx,
+        load_composio_catalogs()?,
+        &config,
+    )?);
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
@@ -552,5 +610,63 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         ready.load(Ordering::Acquire) == expected
+    }
+
+    #[test]
+    fn build_startup_report_falls_back_when_policy_dir_unreadable_and_authority_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        // A regular file, not a directory: `read_dir` fails with a real IO
+        // error (not `NotFound`, which `compute_policy_bundle_version`
+        // already handles as "no policies"), so the report must fall back
+        // to the "00000000"/0 defaults rather than propagating the error.
+        let not_a_dir = dir.path().join("not-a-directory");
+        std::fs::write(&not_a_dir, b"oops").unwrap();
+        let mut cfg = config::SidecarConfig::default();
+        cfg.policy.dir = not_a_dir;
+        cfg.authority.url = None;
+
+        let config_path = Path::new("firma.toml");
+        let report = build_startup_report(config_path, &cfg, 3, "127.0.0.1:9000");
+
+        assert_eq!(report.policy_bundle_version, "00000000");
+        assert_eq!(report.policy_count, 0);
+        assert_eq!(report.authority_endpoint, "(disabled)");
+        assert_eq!(report.mapping_rules, 3);
+        assert_eq!(report.connector_hosts, cfg.connector.hosts.len());
+        assert_eq!(
+            report.connector_default_timeout_ms,
+            cfg.connector.default_timeout_ms
+        );
+        assert_eq!(report.interceptor_addr, "127.0.0.1:9000");
+    }
+
+    #[test]
+    fn build_startup_report_uses_authority_url_and_computed_policy_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("a.cedar"),
+            b"permit(principal, action, resource);",
+        )
+        .unwrap();
+
+        let mut cfg = config::SidecarConfig::default();
+        cfg.policy.dir = dir.path().to_path_buf();
+        cfg.authority.url = Some("https://auth.test:9443".to_string());
+        cfg.connector.default_timeout_ms = 5_000;
+
+        let config_path = Path::new("firma.toml");
+        let report = build_startup_report(config_path, &cfg, 1, "127.0.0.1:9001");
+
+        assert_eq!(report.authority_endpoint, "https://auth.test:9443");
+        assert_eq!(report.policy_count, 1);
+        assert_eq!(report.policy_bundle_version.len(), 8);
+        assert!(
+            report
+                .policy_bundle_version
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
+        assert_eq!(report.connector_hosts, cfg.connector.hosts.len());
+        assert_eq!(report.connector_default_timeout_ms, 5_000);
     }
 }

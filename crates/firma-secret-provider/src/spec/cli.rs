@@ -1,7 +1,9 @@
-use super::{MatcherRule, MatchingResolution, NonEmptyVec, SecretMatcher};
+use firma_core::SecretMatcher;
+
+use super::{MatcherRule, MatchingResolution, NonEmptyVec};
 
 /// A command-classification rule for a CLI secret provider.
-pub type CliMatcherRule = MatcherRule<CommandAndMatcher, CommandPattern>;
+pub type CliMatcherRule<Matcher> = MatcherRule<CommandAndMatcher<Matcher>, CommandPattern>;
 
 /// A command-line option that a CLI integration needs to recognize.
 ///
@@ -90,18 +92,18 @@ pub struct CliIntegrationConfig {
     #[serde(default)]
     pub forbidden_options: Vec<FlagSpec>,
     /// Rules that classify invocations and configure secret extraction.
-    pub matchers: Vec<CliMatcherRule>,
+    pub matchers: Vec<CliMatcherRule<SecretMatcher>>,
 }
 
 /// A CLI integration configuration that has passed cross-field validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CliIntegrationSpec {
+pub struct CliIntegrationSpec<Matcher> {
     pub(crate) binary_name: String,
     pub(crate) provider_id: String,
     pub(crate) credential_env_vars: Vec<String>,
     pub(crate) stripped_options: Vec<FlagSpec>,
     pub(crate) forbidden_options: Vec<FlagSpec>,
-    pub(crate) matchers: Vec<CliMatcherRule>,
+    pub(crate) matchers: Vec<CliMatcherRule<Matcher>>,
 }
 
 /// Error returned when validating a [`CliIntegrationConfig`].
@@ -124,7 +126,7 @@ pub enum CliIntegrationConfigError {
     },
 }
 
-impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec {
+impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec<SecretMatcher> {
     type Error = CliIntegrationConfigError;
 
     fn try_from(config: CliIntegrationConfig) -> Result<Self, Self::Error> {
@@ -198,7 +200,7 @@ fn validate_consistent_options(options: &[FlagSpec]) -> Result<(), CliIntegratio
     Ok(())
 }
 
-impl CliIntegrationSpec {
+impl<Matcher> CliIntegrationSpec<Matcher> {
     /// Returns the executable basename used to select this integration.
     #[must_use]
     pub fn binary_name(&self) -> &str {
@@ -220,7 +222,7 @@ impl CliIntegrationSpec {
     /// Classifies an invocation as sensitive, safe to pass through, or
     /// blocked. Malformed recognized options fail closed.
     #[must_use]
-    pub fn resolve_args(&self, args: &[String]) -> MatchingResolution<'_> {
+    pub fn resolve_args(&self, args: &[String]) -> MatchingResolution<'_, Matcher> {
         if contains_any_option(args, &self.forbidden_options) {
             return MatchingResolution::Blocked;
         }
@@ -303,12 +305,12 @@ impl CliIntegrationSpec {
 /// normalization policy.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CommandAndMatcher {
+pub struct CommandAndMatcher<Matcher> {
     /// Pattern used to identify the command.
     #[serde(flatten)]
     pub command: CommandPattern,
     /// Matcher used to extract secrets from the normalized output.
-    pub matcher: SecretMatcher,
+    pub matcher: Matcher,
     /// Output-shaping options skipped during matching and removed before
     /// [`Self::append_options`] is applied.
     #[serde(default)]
