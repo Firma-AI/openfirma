@@ -611,12 +611,12 @@ sequenceDiagram
     Handler->>Channel: send(AuditPayload)
     Channel->>Sink: recv()
     Sink->>Builder: build(payload)
-    Builder->>Builder: assign UUID v7<br/>set timestamp<br/>sign (ECDSA)
+    Builder->>Builder: assign aevt TypeID (UUID v7)<br/>set timestamp<br/>sign (ECDSA)
     Builder-->>Sink: ExecutionEvent
     Sink->>Out: write
 ```
 
-`AuditPayload` is the lightweight hot-path struct (no signing, no UUID).
+`AuditPayload` is the lightweight hot-path struct (no signing, no event ID).
 `ExecutionEvent`, defined by `firma-audit-schema`, is the full signed record
 written by every sink. The shared representational crate keeps Sidecar output,
 tests, and third-party deserializers on one schema without pulling in runtime
