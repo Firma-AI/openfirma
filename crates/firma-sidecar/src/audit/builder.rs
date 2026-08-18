@@ -546,7 +546,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
         assert_ne!(
             e1.event_id, e2.event_id,
-            "each event must get a unique UUID v7"
+            "each event must get a unique aevt TypeID"
         );
     }
 
