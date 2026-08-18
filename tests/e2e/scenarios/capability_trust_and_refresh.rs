@@ -109,7 +109,9 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
     );
     let before_url = before_probe.url();
     let before_resource = before_probe.resource();
-    assert_eq!(run.request(&before_nonce, &before_url), 0);
+    let before_response = run.request(&before_nonce, &before_url);
+    assert_eq!(before_response.status, 200);
+    assert_eq!(before_response.body, RESPONSE_BEFORE_REFRESH.as_bytes());
     let before_capture = before_probe
         .finish()
         .expect("initial request reached upstream");
@@ -147,7 +149,9 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
         HttpProbe::start(&after_nonce, ProbeBehavior::Respond(RESPONSE_AFTER_REFRESH));
     let after_url = after_probe.url();
     let after_resource = after_probe.resource();
-    assert_eq!(run.request(&after_nonce, &after_url), 0);
+    let after_response = run.request(&after_nonce, &after_url);
+    assert_eq!(after_response.status, 200);
+    assert_eq!(after_response.body, RESPONSE_AFTER_REFRESH.as_bytes());
     let after_capture = after_probe
         .finish()
         .expect("post-refresh request reached upstream");
@@ -186,7 +190,7 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
     let expired_probe = HttpProbe::start(&expired_nonce, ProbeBehavior::MustNotConnect);
     let expired_url = expired_probe.url();
     let expired_resource = expired_probe.resource();
-    assert_eq!(run.request(&expired_nonce, &expired_url), 22);
+    assert_eq!(run.request(&expired_nonce, &expired_url).status, 403);
     assert!(
         expired_probe.finish().is_none(),
         "expired token reached upstream after unverified refresh"
@@ -202,11 +206,6 @@ fn capability_refresh_hot_loads_in_one_uninterrupted_run_and_fails_closed() {
 
     let output = run.finish();
     assert!(output.success(), "governed refresh run failed:\n{output}");
-    assert!(
-        output.stdout.contains(RESPONSE_BEFORE_REFRESH)
-            && output.stdout.contains(RESPONSE_AFTER_REFRESH),
-        "both intended requests must return upstream responses:\n{output}"
-    );
 }
 
 fn configure_capability(world: &TestWorld, public_key_path: Option<&Path>) {

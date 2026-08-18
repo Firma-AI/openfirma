@@ -1,9 +1,8 @@
 use std::ffi::OsStr;
 use std::fmt;
-use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, killpg};
@@ -12,6 +11,7 @@ use serde::Deserialize;
 use wait_timeout::ChildExt;
 
 use crate::audit::{AuditEvent, correlated_event};
+use crate::live_http_fixture::{LiveHttpClient, LiveHttpResponse};
 use crate::poll::wait_for;
 
 /// An isolated filesystem and environment for one E2E test phase.
@@ -222,60 +222,54 @@ impl TestWorld {
         run_bounded(&mut command, Duration::from_mins(2))
     }
 
-    /// Starts one governed shell that accepts multiple HTTP requests over standard input.
+    /// Starts one governed Rust fixture that accepts multiple HTTP requests over standard input.
     ///
     /// The returned run owns the full local Authority, Sidecar, sandbox, and wrapped-process group.
-    /// Startup waits for both the wrapped shell readiness line and one complete Sidecar marker.
+    /// Startup waits for both the fixture's readiness event and one complete Sidecar marker.
     pub(crate) fn start_live_governed(&self) -> LiveGovernedRun {
-        let stdout = tempfile::NamedTempFile::new().expect("live stdout capture");
         let stderr = tempfile::NamedTempFile::new().expect("live stderr capture");
+        let fixture = crate::live_http_fixture::command();
         let mut command =
             self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), &self.workspace_path());
         command
             .args(["run", "--profile", "generic", "--config"])
             .arg(self.config_path())
-            .args([
-                "--authority",
-                "local",
-                "--sidecar",
-                "local",
-                "--",
-                "sh",
-                "-c",
-                LIVE_SESSION_SCRIPT,
-            ])
+            .args(["--authority", "local", "--sidecar", "local", "--"])
+            .arg(fixture.get_program())
+            .args(fixture.get_args())
             .env("FIRMA_RUN_SESSION_ID", &self.session_id)
             .stdin(Stdio::piped())
-            .stdout(Stdio::from(stdout.reopen().expect("live stdout handle")))
+            .stdout(Stdio::piped())
             .stderr(Stdio::from(stderr.reopen().expect("live stderr handle")));
+        for (name, value) in fixture.get_envs() {
+            if let Some(value) = value {
+                command.env(name, value);
+            } else {
+                command.env_remove(name);
+            }
+        }
         command.process_group(0);
         let mut child = command.spawn().expect("spawn live governed process");
         let stdin = child.stdin.take().expect("live governed stdin");
+        let stdout = child.stdout.take().expect("live governed stdout");
         let mut run = LiveGovernedRun {
             child: Some(child),
-            stdin: Some(stdin),
-            stdout,
+            http: LiveHttpClient::new(stdin, stdout),
             stderr,
             state_path: self.state_path(),
             audit_path: self.audit_path(),
             session_id: self.session_id.clone(),
             identity: None,
         };
-        let ready = run.wait_for_line("READY|", Duration::from_secs(30));
-        let mut fields = ready.trim().split('|');
-        assert_eq!(fields.next(), Some("READY"));
-        let process_id = fields
-            .next()
-            .expect("wrapped process ID")
-            .parse()
-            .expect("numeric wrapped process ID");
-        let mount_namespace = fields.next().expect("mount namespace").to_string();
-        assert_eq!(fields.next(), None);
+        let ready = match run.http.wait_until_ready(Duration::from_secs(30)) {
+            Ok(ready) => ready,
+            Err(error) => run.protocol_failure("fixture readiness", &error),
+        };
         let marker = wait_for_sidecar_marker(&self.state_path(), Duration::from_secs(5));
         assert_eq!(marker.session_id, self.session_id);
         run.identity = Some(LiveIdentity {
-            process_id,
-            mount_namespace,
+            process_id: ready.process_id,
+            mount_namespace: ready.mount_namespace,
             sandbox_id: marker.sandbox_id,
             sidecar_id: marker.sidecar_id,
             agent_id: marker.agent_id,
@@ -302,22 +296,12 @@ impl TestWorld {
     }
 }
 
-const LIVE_SESSION_SCRIPT: &str = r#"
-printf 'READY|%s|%s\n' "$$" "$(readlink /proc/self/ns/mnt)"
-while IFS='|' read -r nonce url; do
-    printf 'ATTEMPT|%s\n' "$nonce"
-    curl --fail-with-body --silent --show-error --max-time 3 "$url"
-    status=$?
-    printf '\nRESULT|%s|%s\n' "$nonce" "$status"
-done
-"#;
-
 /// Stable process, sandbox, Sidecar, agent, and session identity for a live governed run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LiveIdentity {
-    /// PID of the wrapped shell inside the structural sandbox.
+    /// PID of the wrapped fixture inside the structural sandbox.
     pub(crate) process_id: u32,
-    /// Initial mount-namespace link target for the wrapped shell.
+    /// Initial mount-namespace link target for the wrapped fixture.
     pub(crate) mount_namespace: String,
     /// Per-run sandbox marker directory name.
     pub(crate) sandbox_id: String,
@@ -331,14 +315,13 @@ pub(crate) struct LiveIdentity {
     pub(crate) sidecar_started_at: String,
 }
 
-/// A long-lived governed shell plus its owned local Authority, Sidecar, and process group.
+/// A long-lived governed HTTP fixture plus its owned local Authority, Sidecar, and process group.
 ///
 /// Dropping an unfinished run performs bounded process-group cleanup. Call [`Self::finish`] to
 /// assert and inspect its final status and captured output.
 pub(crate) struct LiveGovernedRun {
     child: Option<Child>,
-    stdin: Option<ChildStdin>,
-    stdout: tempfile::NamedTempFile,
+    http: LiveHttpClient,
     stderr: tempfile::NamedTempFile,
     state_path: PathBuf,
     audit_path: PathBuf,
@@ -384,23 +367,15 @@ impl LiveGovernedRun {
         identity
     }
 
-    /// Sends one request through the existing governed shell and returns curl's exit status.
+    /// Sends one request through the existing governed fixture and returns its HTTP response.
     ///
-    /// The method waits for an explicit attempt line and matching result line, proving that a
-    /// nonzero status came from the requested stimulus rather than from a missing shell command.
-    pub(crate) fn request(&mut self, nonce: &str, url: &str) -> i32 {
-        let stdin = self.stdin.as_mut().expect("live governed stdin open");
-        writeln!(stdin, "{nonce}|{url}").expect("send request to live governed process");
-        stdin.flush().expect("flush live governed request");
-        self.wait_for_line(&format!("ATTEMPT|{nonce}"), Duration::from_secs(5));
-        let result = self.wait_for_line(&format!("RESULT|{nonce}|"), Duration::from_secs(10));
-        result
-            .trim()
-            .rsplit('|')
-            .next()
-            .expect("request status")
-            .parse()
-            .expect("numeric curl status")
+    /// The method waits for an explicit attempt event and matching response, proving that the
+    /// requested stimulus ran inside the sandbox.
+    pub(crate) fn request(&mut self, nonce: &str, url: &str) -> LiveHttpResponse {
+        match self.http.request(nonce, url) {
+            Ok(response) => response,
+            Err(error) => self.protocol_failure("request response", &error),
+        }
     }
 
     /// Waits up to `timeout` for this run's unique audit event containing `nonce`.
@@ -413,34 +388,22 @@ impl LiveGovernedRun {
         self.finish_inner(Duration::from_secs(30))
     }
 
-    fn wait_for_line(&mut self, prefix: &str, timeout: Duration) -> String {
-        wait_for(
-            &format!("live output line beginning {prefix:?}"),
-            timeout,
-            || {
-                let output = read_capture(self.stdout.path());
-                if let Some(line) = output.lines().find(|line| line.starts_with(prefix)) {
-                    return Some(line.to_string());
-                }
-                if let Some(status) = self
-                    .child
-                    .as_mut()
-                    .expect("live governed child")
-                    .try_wait()
-                    .expect("poll live governed child")
-                {
-                    panic!(
-                        "live governed process exited before {prefix:?}: status={status}\nstdout:\n{output}\nstderr:\n{}",
-                        read_capture(self.stderr.path())
-                    );
-                }
-                None
-            },
-        )
+    fn protocol_failure(&mut self, expected: &str, error: &str) -> ! {
+        let status = self
+            .child
+            .as_mut()
+            .expect("live governed child")
+            .try_wait()
+            .expect("poll live governed child");
+        panic!(
+            "live HTTP fixture failed while waiting for {expected}: {error}\nstatus={status:?}\nstdout:\n{}\nstderr:\n{}",
+            self.http.stdout(),
+            read_capture(self.stderr.path())
+        );
     }
 
     fn finish_inner(&mut self, timeout: Duration) -> ProcessOutput {
-        self.stdin.take();
+        self.http.close_input();
         let Some(mut child) = self.child.take() else {
             panic!("live governed process already finished");
         };
@@ -451,7 +414,7 @@ impl LiveGovernedRun {
         let status = status.unwrap_or_else(|| terminate_process_group(&mut child));
         ProcessOutput {
             status,
-            stdout: read_capture(self.stdout.path()),
+            stdout: self.http.stdout(),
             stderr: read_capture(self.stderr.path()),
             timed_out,
         }
