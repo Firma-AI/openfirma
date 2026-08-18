@@ -2,14 +2,16 @@
 //!
 //! The shim binary connects to the broker over a Unix domain socket (Unix) or
 //! TCP loopback (Windows) and sends a newline-terminated JSON request. The
-//! broker runs the real CLI out of the sandbox, intercepts the output, and
+//! broker dispatches each request to its handler, which applies config
+//! matching and authorization to decide whether the real CLI runs out of the
+//! sandbox; when it does, the handler intercepts the output, and the broker
 //! writes back a newline-terminated JSON response containing the base64-encoded
 //! stdout.
 //!
 //! Protocol (one round-trip per connection):
 //!
 //! ```text
-//! shim  →  {"bin":"bws","args":"secret get abc"}\n
+//! shim  →  {"bin":"bws","args":["secret","get","abc"]}\n
 //! broker → {"type":"Ok","stdout":"<base64>"}\n     (on success)
 //! broker → {"type":"Err","error":"<reason>"}\n     (on failure — shim exits non-zero)
 //! ```
@@ -39,7 +41,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::CommandMediatorEndpoint;
 
-/// Shim → broker request: describes one tool launch.
+/// Shim → broker request: describes one tool invocation, which the broker's
+/// handler may refuse (config matching and authorization happen downstream in
+/// the handler, not in the shim).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct BrokerRequest<'a, T: ArgsList> {
     /// Executable basename of the wrapped tool (e.g. `"bws"`).

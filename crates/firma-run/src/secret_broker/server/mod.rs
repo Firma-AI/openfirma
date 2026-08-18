@@ -1,7 +1,9 @@
 //! Broker-side listener: accepts shim connections and dispatches requests.
 //!
-//! The broker is a trust boundary: it runs the real CLI out of the sandbox and
-//! returns secret material, so the listener restricts who can connect. On Unix
+//! The broker is a trust boundary: its handler applies config matching and
+//! authorization to decide what can run, executes the real CLI out of the
+//! sandbox, and returns secret material, so the listener restricts who can
+//! connect. On Unix
 //! the socket file is created owner-only (`0600`), and the connecting shim's
 //! credentials are validated to belong to the current user before the request
 //! is read. A connection that fails these checks receives an error response
