@@ -1,0 +1,15 @@
+[package]
+name = "firma-config-schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Behavior-free serde schema for the unified Firma configuration"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytesize = { workspace = true, features = ["serde"] }
+serde = { workspace = true }

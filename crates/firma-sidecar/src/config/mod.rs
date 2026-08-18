@@ -38,12 +38,13 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use bytesize::ByteSize;
+use firma_config_schema::sidecar::interceptor as schema_ic;
 use firma_core::SecretMatcher;
 use firma_http::HeaderName;
 use firma_secret_provider::{
     gateway::client::config::GatewayClientConfig, spec::http::HttpIntegrationSpec,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 pub(crate) enum AuthorityTarget {
     Disabled,
@@ -338,6 +339,17 @@ impl fmt::Display for InterceptorMode {
     }
 }
 
+impl From<schema_ic::InterceptorMode> for InterceptorMode {
+    fn from(mode: schema_ic::InterceptorMode) -> Self {
+        match mode {
+            schema_ic::InterceptorMode::HttpProxy => Self::HttpProxy,
+            schema_ic::InterceptorMode::Grpc => Self::Grpc,
+            #[cfg(unix)]
+            schema_ic::InterceptorMode::UnixSocket => Self::UnixSocket,
+        }
+    }
+}
+
 /// Interceptor settings.
 ///
 /// Selects the interception mode and supplies mode-specific
@@ -350,43 +362,66 @@ impl fmt::Display for InterceptorMode {
 /// | `unix_socket` | `socket_path` |
 ///
 /// `drain_timeout_secs` is shared across all modes.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct InterceptorConfig {
     /// Interception mode. Default: `http_proxy`.
-    #[serde(default)]
     pub mode: InterceptorMode,
     /// Socket address used by `http_proxy` and `grpc` modes.
-    #[serde(default = "default_listen_addr")]
     pub listen_addr: SocketAddr,
     /// Path to the Unix domain socket file, used by `unix_socket`
     /// mode.
-    #[serde(default)]
     pub socket_path: Option<PathBuf>,
     /// Seconds to wait for in-flight requests to drain on shutdown.
-    #[serde(default = "default_drain_timeout")]
     drain_timeout_secs: u64,
     /// Maximum request body size accepted by proxy interceptors.
-    #[serde(default = "default_max_request_body_bytes")]
     pub(crate) max_request_body_bytes: usize,
     /// Maximum size a single request or response body may expand to when
     /// decompressed for secret placeholder rehydration or masking. Bounds
     /// the memory a decompression bomb (e.g. a small `gzip`/`br`/`zstd`
     /// payload that expands enormously) can force the Sidecar to allocate.
-    #[serde(default = "default_max_decompressed_body_size")]
     max_decompressed_body_size: ByteSize,
     /// CONNECT/MITM relay timeout controls.
-    #[serde(default)]
     pub(crate) connect_relay: ConnectRelayConfig,
     /// HTTPS MITM settings used by the HTTP proxy interceptor.
-    #[serde(default)]
     pub https_mitm: HttpsMitmConfig,
     /// Global ceiling for the total bytes of request bodies buffered
     /// concurrently across all in-flight proxy connections.  When the
     /// budget is full, new requests receive an immediate 403 denial
     /// with an audit trail rather than silently unbounded buffering
     /// that could OOM-kill the enforcer.
-    #[serde(default = "default_total_body_budget_bytes")]
     pub(crate) total_body_budget_bytes: usize,
+}
+
+impl InterceptorConfig {
+    /// Infallible field mapping from the schema representation. Validation is
+    /// applied separately (see [`TryFrom`] and [`Self::validate`]).
+    fn from_schema(s: schema_ic::InterceptorConfig) -> Self {
+        Self {
+            mode: s.mode.into(),
+            listen_addr: s.listen_addr,
+            socket_path: s.socket_path,
+            drain_timeout_secs: s.drain_timeout_secs,
+            max_request_body_bytes: s.max_request_body_bytes,
+            max_decompressed_body_size: s.max_decompressed_body_size,
+            connect_relay: s.connect_relay.into(),
+            https_mitm: s.https_mitm.into(),
+            total_body_budget_bytes: s.total_body_budget_bytes,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InterceptorConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Map only. Validation is deferred to `SidecarConfig::validate` so the
+        // whole tree surfaces its first invalid field consistently, matching
+        // the other infra sub-configs (`PolicyConfig`, `CaConfig`, `LogConfig`).
+        Ok(Self::from_schema(
+            schema_ic::InterceptorConfig::deserialize(deserializer)?,
+        ))
+    }
 }
 
 impl InterceptorConfig {
@@ -449,29 +484,26 @@ impl InterceptorConfig {
 
 impl Default for InterceptorConfig {
     fn default() -> Self {
-        Self {
-            mode: InterceptorMode::default(),
-            listen_addr: default_listen_addr(),
-            socket_path: Some(default_socket_path()),
-            drain_timeout_secs: default_drain_timeout(),
-            max_request_body_bytes: default_max_request_body_bytes(),
-            max_decompressed_body_size: default_max_decompressed_body_size(),
-            connect_relay: ConnectRelayConfig::default(),
-            https_mitm: HttpsMitmConfig::default(),
-            total_body_budget_bytes: default_total_body_budget_bytes(),
-        }
+        Self::from_schema(schema_ic::InterceptorConfig::default())
     }
 }
 
 /// Timeout controls for CONNECT tunnel and MITM relay sessions.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    #[serde(default = "default_connect_setup_timeout_secs")]
     pub(crate) setup_timeout_secs: u64,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    #[serde(default = "default_connect_session_max_secs")]
     pub(crate) session_max_secs: u64,
+}
+
+impl From<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
+    fn from(s: schema_ic::ConnectRelayConfig) -> Self {
+        Self {
+            setup_timeout_secs: s.setup_timeout_secs,
+            session_max_secs: s.session_max_secs,
+        }
+    }
 }
 
 impl ConnectRelayConfig {
@@ -488,10 +520,7 @@ impl ConnectRelayConfig {
 
 impl Default for ConnectRelayConfig {
     fn default() -> Self {
-        Self {
-            setup_timeout_secs: default_connect_setup_timeout_secs(),
-            session_max_secs: default_connect_session_max_secs(),
-        }
+        Self::from(schema_ic::ConnectRelayConfig::default())
     }
 }
 
@@ -500,32 +529,39 @@ impl Default for ConnectRelayConfig {
 /// When disabled, HTTPS `CONNECT` requests are handled as blind tunnels.
 /// When enabled, hosts matched by `intercept_hosts` are decrypted and
 /// re-encrypted by the sidecar.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
-    #[serde(default = "default_https_mitm_enabled")]
     pub(crate) enabled: bool,
     /// Optional explicit CA certificate path. Defaults under `ca.dir`.
-    #[serde(default)]
     pub(crate) ca_cert_path: Option<PathBuf>,
     /// Optional explicit CA private key path. Defaults under `ca.dir`.
-    #[serde(default)]
     pub(crate) ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
-    #[serde(default = "default_https_mitm_intercept_hosts")]
     pub(crate) intercept_hosts: Vec<String>,
     /// Host patterns that should bypass interception and use CONNECT tunnel.
-    #[serde(default)]
     pub(crate) bypass_hosts: Vec<String>,
     /// Dynamic leaf certificate TTL in seconds.
-    #[serde(default = "default_https_mitm_cert_ttl_secs")]
     pub(crate) cert_ttl_secs: u64,
     /// Maximum number of cached leaf certificates.
-    #[serde(default = "default_https_mitm_cert_cache_capacity")]
     pub(crate) cert_cache_capacity: usize,
     /// Host patterns that must be intercepted; failures are hard deny.
-    #[serde(default = "default_https_mitm_strict_hosts")]
     pub(crate) strict_hosts: Vec<String>,
+}
+
+impl From<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
+    fn from(s: schema_ic::HttpsMitmConfig) -> Self {
+        Self {
+            enabled: s.enabled,
+            ca_cert_path: s.ca_cert_path,
+            ca_key_path: s.ca_key_path,
+            intercept_hosts: s.intercept_hosts,
+            bypass_hosts: s.bypass_hosts,
+            cert_ttl_secs: s.cert_ttl_secs,
+            cert_cache_capacity: s.cert_cache_capacity,
+            strict_hosts: s.strict_hosts,
+        }
+    }
 }
 
 impl HttpsMitmConfig {
@@ -598,16 +634,7 @@ impl HttpsMitmConfig {
 
 impl Default for HttpsMitmConfig {
     fn default() -> Self {
-        Self {
-            enabled: default_https_mitm_enabled(),
-            ca_cert_path: None,
-            ca_key_path: None,
-            intercept_hosts: default_https_mitm_intercept_hosts(),
-            bypass_hosts: Vec::new(),
-            cert_ttl_secs: default_https_mitm_cert_ttl_secs(),
-            cert_cache_capacity: default_https_mitm_cert_cache_capacity(),
-            strict_hosts: default_https_mitm_strict_hosts(),
-        }
+        Self::from(schema_ic::HttpsMitmConfig::default())
     }
 }
 
@@ -784,91 +811,10 @@ impl CredentialConfig {
 // Defaults
 // ---------------------------------------------------------------------------
 
-fn default_listen_addr() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 8080))
-}
-
-pub(crate) fn default_socket_path() -> PathBuf {
-    let xdg = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-    PathBuf::from(xdg).join("firma/sidecar.sock")
-}
-
-const fn default_drain_timeout() -> u64 {
-    30
-}
-
-const fn default_max_request_body_bytes() -> usize {
-    4 * 1024 * 1024
-}
-
-const fn default_max_decompressed_body_size() -> ByteSize {
-    ByteSize::mb(16)
-}
-
-const fn default_total_body_budget_bytes() -> usize {
-    64 * 1024 * 1024
-}
-
-const fn default_connect_setup_timeout_secs() -> u64 {
-    10
-}
-
-const fn default_connect_session_max_secs() -> u64 {
-    600
-}
-
-const fn default_https_mitm_cert_ttl_secs() -> u64 {
-    86_400
-}
-
-const fn default_https_mitm_cert_cache_capacity() -> usize {
-    1_024
-}
-
-const fn default_https_mitm_enabled() -> bool {
-    true
-}
-
-fn default_https_mitm_intercept_hosts() -> Vec<String> {
-    vec![
-        "chatgpt.com".to_string(),
-        "auth.openai.com".to_string(),
-        "api.openai.com".to_string(),
-        "api.anthropic.com".to_string(),
-        "platform.claude.com".to_string(),
-        "claude.ai".to_string(),
-        "console.anthropic.com".to_string(),
-        "openrouter.ai".to_string(),
-        "api.groq.com".to_string(),
-        "api.mistral.ai".to_string(),
-        "api.cohere.com".to_string(),
-        "generativelanguage.googleapis.com".to_string(),
-        "aiplatform.googleapis.com".to_string(),
-        "api.deepseek.com".to_string(),
-        "api.together.xyz".to_string(),
-        "api.fireworks.ai".to_string(),
-        "api.replicate.com".to_string(),
-        "api.perplexity.ai".to_string(),
-        "api.x.ai".to_string(),
-        "api.supabase.com".to_string(),
-        "*.supabase.co".to_string(),
-        "api.resend.com".to_string(),
-        "api.twilio.com".to_string(),
-        "api.sendgrid.com".to_string(),
-        "api.stripe.com".to_string(),
-        "api.slack.com".to_string(),
-        "hooks.slack.com".to_string(),
-        "github.com".to_string(),
-        "api.github.com".to_string(),
-        "uploads.github.com".to_string(),
-        "downloads.claude.ai".to_string(),
-    ]
-}
-
-fn default_https_mitm_strict_hosts() -> Vec<String> {
-    default_https_mitm_intercept_hosts()
-}
+// Interceptor-section defaults live in the schema crate
+// (`firma_config_schema::sidecar::interceptor`). Re-exported here for the
+// one caller that constructs a fallback socket path directly.
+pub(crate) use schema_ic::default_socket_path;
 
 /// Sentinel: unset `policy.dir`.
 const DEFAULT_POLICY_DIR: &str = "./policies/";

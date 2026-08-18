@@ -1543,6 +1543,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "firma-config-schema"
+version = "0.1.6"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "firma-core"
 version = "0.1.6"
 dependencies = [
@@ -1785,6 +1792,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "firma-audit-schema",
+ "firma-config-schema",
  "firma-core",
  "firma-fs",
  "firma-grpc-interceptor-proto",

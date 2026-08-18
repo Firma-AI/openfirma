@@ -23,6 +23,7 @@ chrono = { workspace = true }
 ecdsa = { workspace = true }
 elliptic-curve = { workspace = true }
 firma-audit-schema = { workspace = true }
+firma-config-schema = { workspace = true }
 firma-core = { workspace = true }
 firma-fs = { workspace = true }
 firma-grpc-interceptor-proto = { workspace = true }
