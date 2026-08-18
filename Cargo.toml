@@ -124,6 +124,7 @@ objc2-virtualization = { version = "0.3.2", default-features = false }
 owo-colors = { version = "4", features = ["supports-colors"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
+pin-project = "1.1"
 pretty_assertions = "1"
 proptest = "1"
 prost = "0.14"

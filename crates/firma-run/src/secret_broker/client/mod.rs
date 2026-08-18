@@ -12,16 +12,14 @@
 //! caller must treat the tool launch as failed rather than substituting a
 //! partial or synthetic result.
 
-use std::{io, net::TcpStream, time::Instant};
-
 use base64::Engine as _;
 use firma_http::Str;
 
 use crate::{
     config::CommandMediatorEndpoint,
     secret_broker::{
-        BrokerRequest, BrokerResponse, BrokerStream, read_bounded_line, validate_endpoint,
-        write_all_bounded,
+        ArgsList, BrokerRequest, BrokerResponse, read_bounded_line, stream::BrokerStream,
+        validate_endpoint, write_all,
     },
 };
 
@@ -37,7 +35,7 @@ use error::{BrokerClientError, ProtocolViolation, TransportError};
 /// Construction validates address-level invariants; transport-level checks
 /// (Unix socket presence, peer credentials) run at connect time.
 #[derive(Debug)]
-pub struct BrokerClient {
+pub(crate) struct BrokerClient {
     endpoint: CommandMediatorEndpoint,
     config: BrokerClientConfig,
 }
@@ -51,7 +49,7 @@ impl BrokerClient {
     /// local: a TCP endpoint on any host (TCP is Windows-only for this
     /// transport) or a non-loopback TCP address on Windows, or a non-absolute
     /// Unix path.
-    pub fn try_new(
+    pub(crate) fn try_new(
         endpoint: CommandMediatorEndpoint,
         config: BrokerClientConfig,
     ) -> Result<Self, BrokerClientError> {
@@ -69,10 +67,10 @@ impl BrokerClient {
     /// not complete, and [`BrokerClientError::ProtocolViolation`] when the
     /// response broke the wire contract. All errors are fail-closed: the tool
     /// produced no usable output.
-    pub fn run(&self, bin: &str, args: &str) -> Result<Vec<u8>, BrokerClientError> {
+    pub(crate) async fn run(&self, bin: &str, args: &[&str]) -> Result<Vec<u8>, BrokerClientError> {
         let request = BrokerRequest {
             bin: Str::from(bin),
-            args: Str::from(args),
+            args,
         };
         self.request(&request, |response| match response {
             BrokerResponse::Ok { stdout } => base64::engine::general_purpose::STANDARD
@@ -82,6 +80,7 @@ impl BrokerClient {
                 }),
             BrokerResponse::Err { error } => Err(BrokerClientError::Rejected(error.to_string())),
         })
+        .await
     }
 
     /// Send one request and read the broker's response.
@@ -89,50 +88,42 @@ impl BrokerClient {
     /// # Errors
     ///
     /// See [`Self::run`].
-    pub fn request<T>(
+    pub(crate) async fn request<R, T>(
         &self,
-        request: &BrokerRequest,
-        exec: impl Fn(BrokerResponse) -> Result<T, BrokerClientError>,
-    ) -> Result<T, BrokerClientError> {
+        request: &BrokerRequest<'_, R>,
+        exec: impl Fn(BrokerResponse<'_>) -> Result<T, BrokerClientError>,
+    ) -> Result<T, BrokerClientError>
+    where
+        R: ArgsList,
+    {
         let payload = serde_json::to_string(request).map_err(BrokerClientError::Bug)?;
         if payload.len() > self.max_buffer_size() {
             return Err(BrokerClientError::ProtocolViolation(
                 ProtocolViolation::MaxBufferSizeExceeded,
             ));
         }
-        let stream = self.connect()?;
-        self.send_and_receive(stream, &payload, exec)
+        let stream = self.connect().await?;
+        self.send_and_receive(stream, &payload, exec).await
     }
 
-    fn connect(&self) -> Result<BrokerStream, BrokerClientError> {
+    async fn connect(&self) -> Result<BrokerStream, BrokerClientError> {
         let timeout = self.config.connection_timeout;
-        let stream = match &self.endpoint {
+        let stream: BrokerStream = match &self.endpoint {
             CommandMediatorEndpoint::Tcp { addr } => {
-                let stream = TcpStream::connect_timeout(addr, timeout).map_err(|error| {
-                    let source = if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) {
-                        TransportError::ConnectionTimeout
-                    } else {
-                        TransportError::Connect(error)
-                    };
-                    self.transport_error(source)
-                })?;
-                BrokerStream::Tcp(stream)
+                let stream = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr))
+                    .await
+                    .map_err(|_| self.transport_error(TransportError::ConnectionTimeout))?
+                    .map_err(|error| self.transport_error(TransportError::Connect(error)))?;
+                BrokerStream::Tcp { stream }
             }
             #[cfg(unix)]
             CommandMediatorEndpoint::Unix { path } => {
-                let stream = connect_unix_with_timeout(path, timeout).map_err(|error| {
-                    let source = if error.kind() == io::ErrorKind::TimedOut {
-                        TransportError::ConnectionTimeout
-                    } else {
-                        TransportError::Connect(error)
-                    };
-                    self.transport_error(source)
-                })?;
+                let stream = tokio::time::timeout(timeout, tokio::net::UnixStream::connect(path))
+                    .await
+                    .map_err(|_| self.transport_error(TransportError::ConnectionTimeout))?
+                    .map_err(|error| self.transport_error(TransportError::Connect(error)))?;
                 validate_broker_peer_credentials(&stream, &self.endpoint)?;
-                BrokerStream::Unix(stream)
+                BrokerStream::Unix { stream }
             }
             #[cfg(not(unix))]
             CommandMediatorEndpoint::Unix { .. } => {
@@ -144,25 +135,35 @@ impl BrokerClient {
         Ok(stream)
     }
 
-    fn send_and_receive<T>(
+    async fn send_and_receive<T>(
         &self,
         mut stream: BrokerStream,
         payload: &str,
-        exec: impl Fn(BrokerResponse) -> Result<T, BrokerClientError>,
+        exec: impl Fn(BrokerResponse<'_>) -> Result<T, BrokerClientError>,
     ) -> Result<T, BrokerClientError> {
-        let deadline = Instant::now() + self.config.operation_timeout;
-        write_all_bounded(&mut stream, payload.as_bytes(), deadline)
-            .map_err(|error| self.transport_error(map_io_error(error, TransportError::Write)))?;
-        write_all_bounded(&mut stream, b"\n", deadline)
-            .map_err(|error| self.transport_error(map_io_error(error, TransportError::Write)))?;
+        // The whole write-then-read exchange runs under one deadline, so a
+        // peer that stalls mid-exchange cannot hold the connection past
+        // `operation_timeout`.
+        let line = tokio::time::timeout(self.config.operation_timeout, async {
+            write_all(&mut stream, payload.as_bytes())
+                .await
+                .map_err(|error| self.transport_error(TransportError::Write(error)))?;
+            write_all(&mut stream, b"\n")
+                .await
+                .map_err(|error| self.transport_error(TransportError::Write(error)))?;
 
-        // Cap the underlying reads at max_buffer_size + 1 (see
-        // [`read_bounded_line`]) and reject any response whose newline-stripped
-        // line exceeds the limit. Padding an over-limit response with boundary
-        // whitespace must not let it pass, so the check measures the raw line,
-        // not the trimmed content.
-        let line = read_bounded_line(&mut stream, self.max_buffer_size() as u64, deadline)
-            .map_err(|error| self.transport_error(map_io_error(error, TransportError::Read)))?;
+            // Cap the underlying reads at max_buffer_size + 1 (see
+            // [`read_bounded_line`]) and reject any response whose newline-stripped
+            // line exceeds the limit. Padding an over-limit response with boundary
+            // whitespace must not let it pass, so the check measures the raw line,
+            // not the trimmed content.
+            read_bounded_line(&mut stream, self.max_buffer_size() as u64)
+                .await
+                .map_err(|error| self.transport_error(TransportError::Read(error)))
+        })
+        .await
+        .map_err(|_| self.transport_error(TransportError::OperationTimeout))??;
+
         let line = String::from_utf8(line).map_err(|error| {
             BrokerClientError::ProtocolViolation(ProtocolViolation::InvalidUtf8(error))
         })?;
@@ -192,45 +193,8 @@ impl BrokerClient {
     fn max_buffer_size(&self) -> usize {
         // The only way this conversion can fail is on a 32-bit system with a
         // configured max_buffer_size larger than usize::MAX.
-        usize::try_from(self.config.max_buffer_size.as_u64()).unwrap_or(usize::MAX)
+        usize::try_from(self.config.max_buffer_size.as_u64()).unwrap_or(usize::MAX - 1)
     }
-}
-
-/// Classify an I/O failure from a deadline-bounded read or write as the
-/// operation timeout, or wrap it in the operation-specific variant.
-fn map_io_error(error: io::Error, wrap: fn(io::Error) -> TransportError) -> TransportError {
-    if matches!(
-        error.kind(),
-        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-    ) {
-        TransportError::OperationTimeout
-    } else {
-        wrap(error)
-    }
-}
-
-/// Connect to a Unix broker socket with a deadline.
-///
-/// `UnixStream::connect` has no built-in timeout, so the connect runs on a
-/// detached thread and this function waits on it for up to `timeout`. On
-/// timeout the connect thread is left to finish and drop its result; the
-/// caller only ever sees a [`io::ErrorKind::TimedOut`] error.
-#[cfg(unix)]
-fn connect_unix_with_timeout(
-    path: &std::path::Path,
-    timeout: std::time::Duration,
-) -> io::Result<std::os::unix::net::UnixStream> {
-    let path = path.to_owned();
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let _ = sender.send(std::os::unix::net::UnixStream::connect(&path));
-    });
-    receiver.recv_timeout(timeout).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            "secret broker unix connect timed out",
-        )
-    })?
 }
 
 /// Confirm the broker socket's peer belongs to the current user.
@@ -240,7 +204,7 @@ fn connect_unix_with_timeout(
 /// exec mediator applies on its side of the same boundary.
 #[cfg(unix)]
 fn validate_broker_peer_credentials(
-    stream: &std::os::unix::net::UnixStream,
+    stream: &tokio::net::UnixStream,
     endpoint: &CommandMediatorEndpoint,
 ) -> Result<(), BrokerClientError> {
     let actual_uid = super::peer_uid(stream).map_err(|error| BrokerClientError::Transport {
@@ -262,8 +226,7 @@ fn validate_broker_peer_credentials(
 
 #[cfg(test)]
 mod tests {
-    use std::io::BufRead;
-    use std::thread;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
     use super::*;
 
@@ -278,7 +241,7 @@ mod tests {
 
     /// Bind a listener on a fresh Unix socket in a temp dir.
     #[cfg(unix)]
-    fn bind_broker() -> BoundBroker {
+    async fn bind_broker() -> BoundBroker {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("broker.sock");
         let endpoint = CommandMediatorEndpoint::Unix { path };
@@ -286,6 +249,7 @@ mod tests {
             &endpoint,
             crate::secret_broker::server::config::BrokerListenerConfig::default(),
         )
+        .await
         .expect("bind");
         BoundBroker {
             listener,
@@ -296,7 +260,7 @@ mod tests {
 
     /// Bind a listener on a fresh loopback TCP port (the Windows transport).
     #[cfg(not(unix))]
-    fn bind_broker() -> BoundBroker {
+    async fn bind_broker() -> BoundBroker {
         let endpoint = CommandMediatorEndpoint::Tcp {
             addr: "127.0.0.1:0".parse().expect("valid loopback addr"),
         };
@@ -304,6 +268,7 @@ mod tests {
             &endpoint,
             crate::secret_broker::server::config::BrokerListenerConfig::default(),
         )
+        .await
         .expect("bind");
         let CommandMediatorEndpoint::Tcp { addr } =
             listener.bound_endpoint().expect("bound_endpoint")
@@ -318,67 +283,77 @@ mod tests {
     }
 
     fn serve_ok(listener: crate::secret_broker::server::BrokerListener, stdout: Vec<u8>) {
-        thread::spawn(move || {
+        tokio::spawn(async move {
             listener
                 .accept_one(|_req| crate::secret_broker::BrokerResponse::ok(&stdout))
+                .await
                 .expect("accept_one");
         });
     }
 
-    #[test]
-    fn run_returns_decoded_stdout() {
+    #[tokio::test]
+    async fn run_returns_decoded_stdout() {
         let BoundBroker {
             listener,
             endpoint,
             _dir,
-        } = bind_broker();
+        } = bind_broker().await;
         serve_ok(listener, b"secret-value".to_vec());
         let client =
             BrokerClient::try_new(endpoint, BrokerClientConfig::default()).expect("client");
         assert_eq!(
-            client.run("bws", "secret get abc").expect("run"),
+            client
+                .run("bws", &["secret", "get", "abc"])
+                .await
+                .expect("run"),
             b"secret-value"
         );
     }
 
-    #[test]
-    fn run_propagates_broker_rejection() {
+    #[tokio::test]
+    async fn run_propagates_broker_rejection() {
         let BoundBroker {
             listener,
             endpoint,
             _dir,
-        } = bind_broker();
-        thread::spawn(move || {
+        } = bind_broker().await;
+        tokio::spawn(async move {
             listener
                 .accept_one(|_req| crate::secret_broker::BrokerResponse::err("tool not found"))
+                .await
                 .expect("accept_one");
         });
         let client =
             BrokerClient::try_new(endpoint, BrokerClientConfig::default()).expect("client");
-        let error = client.run("bws", "secret get x").expect_err("rejected");
+        let error = client
+            .run("bws", &["secret", "get", "x"])
+            .await
+            .expect_err("rejected");
         assert!(matches!(error, BrokerClientError::Rejected(_)));
     }
 
-    #[test]
-    fn request_fails_closed_when_response_exceeds_buffer() {
+    #[tokio::test]
+    async fn request_fails_closed_when_response_exceeds_buffer() {
         let BoundBroker {
             listener,
             endpoint,
             _dir,
-        } = bind_broker();
+        } = bind_broker().await;
         serve_ok(listener, vec![b'x'; 256]);
         let config = BrokerClientConfig {
             max_buffer_size: bytesize::ByteSize::b(64),
             ..BrokerClientConfig::default()
         };
         let client = BrokerClient::try_new(endpoint, config).expect("client");
-        let error = client.request(
-            &BrokerRequest {
-                bin: Str::from("bws"),
-                args: Str::from("secret get abc"),
-            },
-            |_| Ok(()),
-        );
+        let error = client
+            .request(
+                &BrokerRequest {
+                    bin: Str::from("bws"),
+                    args: &["secret", "get", "abc"][..],
+                },
+                |_| Ok(()),
+            )
+            .await;
         assert!(matches!(
             error,
             Err(BrokerClientError::ProtocolViolation(
@@ -387,13 +362,13 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn request_accepts_response_exactly_at_buffer_limit() {
+    #[tokio::test]
+    async fn request_accepts_response_exactly_at_buffer_limit() {
         let BoundBroker {
             listener,
             endpoint,
             _dir,
-        } = bind_broker();
+        } = bind_broker().await;
         // A response whose encoded JSON line is exactly `max_buffer_size`
         // bytes must be accepted (the trailing newline must not count against
         // the limit). Sizing the limit from the real serialized payload keeps
@@ -408,13 +383,15 @@ mod tests {
         };
         serve_ok(listener, stdout.clone());
         let client = BrokerClient::try_new(endpoint, config).expect("client");
-        let response = client.request(
-            &BrokerRequest {
-                bin: Str::from("bws"),
-                args: Str::from("secret get abc"),
-            },
-            |response| response.into_stdout().map_err(BrokerClientError::Rejected),
-        );
+        let response = client
+            .request(
+                &BrokerRequest {
+                    bin: Str::from("bws"),
+                    args: &["secret", "get", "abc"][..],
+                },
+                |response| response.into_stdout().map_err(BrokerClientError::Rejected),
+            )
+            .await;
         assert_eq!(response.expect("response"), stdout);
     }
 
@@ -425,14 +402,14 @@ mod tests {
     fn bind_raw_responder(padded: Vec<u8>) -> (CommandMediatorEndpoint, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("broker.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
-        thread::spawn(move || {
-            let (mut conn, _) = listener.accept().expect("accept");
-            let mut reader = std::io::BufReader::new(&mut conn);
+        let listener = tokio::net::UnixListener::bind(&path).expect("bind");
+        tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.expect("accept");
+            let mut reader = tokio::io::BufReader::new(&mut conn);
             let mut request = Vec::new();
-            let _ = reader.read_until(b'\n', &mut request);
+            let _ = reader.read_until(b'\n', &mut request).await;
             drop(reader);
-            std::io::Write::write_all(&mut conn, &padded).expect("write");
+            conn.write_all(&padded).await.expect("write");
         });
         (CommandMediatorEndpoint::Unix { path }, dir)
     }
@@ -440,21 +417,22 @@ mod tests {
     /// Windows twin of [`bind_raw_responder`], using the TCP transport.
     #[cfg(not(unix))]
     fn bind_raw_responder(padded: Vec<u8>) -> (CommandMediatorEndpoint, ()) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = tokio::net::TcpListener::from_std(std_listener).expect("from_std");
         let addr = listener.local_addr().expect("local_addr");
-        thread::spawn(move || {
-            let (mut conn, _) = listener.accept().expect("accept");
-            let mut reader = std::io::BufReader::new(&mut conn);
+        tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.expect("accept");
+            let mut reader = tokio::io::BufReader::new(&mut conn);
             let mut request = Vec::new();
-            let _ = reader.read_until(b'\n', &mut request);
+            let _ = reader.read_until(b'\n', &mut request).await;
             drop(reader);
-            std::io::Write::write_all(&mut conn, &padded).expect("write");
+            conn.write_all(&padded).await.expect("write");
         });
         (CommandMediatorEndpoint::Tcp { addr }, ())
     }
 
-    #[test]
-    fn request_rejects_over_limit_line_padded_with_whitespace() {
+    #[tokio::test]
+    async fn request_rejects_over_limit_line_padded_with_whitespace() {
         let stdout = b"secret-value".to_vec();
         let response_payload =
             serde_json::to_vec(&crate::secret_broker::BrokerResponse::ok(&stdout))
@@ -472,13 +450,15 @@ mod tests {
             ..BrokerClientConfig::default()
         };
         let client = BrokerClient::try_new(endpoint, config).expect("client");
-        let error = client.request(
-            &BrokerRequest {
-                bin: Str::from("bws"),
-                args: Str::from("secret get abc"),
-            },
-            |_| Ok(()),
-        );
+        let error = client
+            .request(
+                &BrokerRequest {
+                    bin: Str::from("bws"),
+                    args: &["secret", "get", "abc"][..],
+                },
+                |_| Ok(()),
+            )
+            .await;
         assert!(
             matches!(
                 error,
@@ -490,36 +470,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn request_fails_closed_when_operation_times_out() {
+    #[tokio::test]
+    async fn request_fails_closed_when_operation_times_out() {
+        // Bind a listener but never accept: the client connects into the
+        // backlog, writes its request, and must time out waiting for a
+        // response that never arrives.
         let BoundBroker {
-            listener,
+            listener: _kept_alive,
             endpoint,
             _dir,
-        } = bind_broker();
-        let server = thread::spawn(move || {
-            let result = listener.accept_one(|_req| {
-                // Stall longer than the client's operation_timeout so the
-                // response never arrives within the deadline.
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                crate::secret_broker::BrokerResponse::err("too late")
-            });
-            // The client is gone by the time the response is written, so the
-            // write fails with a broken pipe; that is the expected outcome.
-            let _ = result;
-        });
+        } = bind_broker().await;
         let config = BrokerClientConfig {
             operation_timeout: std::time::Duration::from_millis(100),
             ..BrokerClientConfig::default()
         };
         let client = BrokerClient::try_new(endpoint, config).expect("client");
-        let error = client.request(
-            &BrokerRequest {
-                bin: Str::from("bws"),
-                args: Str::from("secret get abc"),
-            },
-            |_| Ok(()),
-        );
+        let error = client
+            .request(
+                &BrokerRequest {
+                    bin: Str::from("bws"),
+                    args: &["secret", "get", "abc"][..],
+                },
+                |_| Ok(()),
+            )
+            .await;
         assert!(matches!(
             error,
             Err(BrokerClientError::Transport {
@@ -527,7 +501,6 @@ mod tests {
                 ..
             })
         ));
-        server.join().expect("server thread");
     }
 
     #[test]
@@ -559,39 +532,43 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn request_fails_fast_when_broker_is_unreachable() {
+    #[tokio::test]
+    async fn request_fails_fast_when_broker_is_unreachable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let endpoint = CommandMediatorEndpoint::Unix {
             path: dir.path().join("missing-broker.sock"),
         };
         let client =
             BrokerClient::try_new(endpoint, BrokerClientConfig::default()).expect("client");
-        let error = client.request(
-            &BrokerRequest {
-                bin: Str::from("bws"),
-                args: Str::from("secret get abc"),
-            },
-            |_| Ok(()),
-        );
+        let error = client
+            .request(
+                &BrokerRequest {
+                    bin: Str::from("bws"),
+                    args: &["secret", "get", "abc"][..],
+                },
+                |_| Ok(()),
+            )
+            .await;
         assert!(matches!(error, Err(BrokerClientError::Transport { .. })));
     }
 
     #[cfg(not(unix))]
-    #[test]
-    fn request_fails_fast_when_broker_is_unreachable() {
+    #[tokio::test]
+    async fn request_fails_fast_when_broker_is_unreachable() {
         let endpoint = CommandMediatorEndpoint::Tcp {
             addr: "127.0.0.1:1".parse().expect("valid addr"),
         };
         let client =
             BrokerClient::try_new(endpoint, BrokerClientConfig::default()).expect("client");
-        let error = client.request(
-            &BrokerRequest {
-                bin: Str::from("bws"),
-                args: Str::from("secret get abc"),
-            },
-            |_| Ok(()),
-        );
+        let error = client
+            .request(
+                &BrokerRequest {
+                    bin: Str::from("bws"),
+                    args: &["secret", "get", "abc"][..],
+                },
+                |_| Ok(()),
+            )
+            .await;
         assert!(matches!(error, Err(BrokerClientError::Transport { .. })));
     }
 }
