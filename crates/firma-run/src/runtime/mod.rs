@@ -1605,6 +1605,7 @@ mod tests {
         assert_eq!(handle.mounts.len(), 1);
         assert_eq!(handle.mounts[0].spec().source, state_dir);
         assert!(!handle.mounts[0].spec().read_only);
+        assert!(handle.mounts[0].is_framework_protected_subpath());
     }
 
     #[test]

@@ -13,9 +13,9 @@ use self::mount::{BwrapHardening, BwrapMountPlan};
 use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
-    SandboxMount,
+    SandboxInfrastructureKind, SandboxMount,
 };
-use crate::config::{MountSpec, NetworkPolicy, SandboxIdentityMode};
+use crate::config::{NetworkPolicy, SandboxIdentityMode};
 use crate::error::RunError;
 
 const BWRAP_ENTRYPOINT_SCRIPT: &str = include_str!("../../resources/bwrap_entrypoint.sh");
@@ -89,16 +89,16 @@ impl SandboxBackend for BwrapBackend {
                 ),
             })?;
 
-            mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
-                source: passwd_path,
-                target: PathBuf::from("/etc/passwd"),
-                read_only: true,
-            }));
-            mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
-                source: group_path,
-                target: PathBuf::from("/etc/group"),
-                read_only: true,
-            }));
+            mounts.push(SandboxMount::sandbox_infrastructure(
+                SandboxInfrastructureKind::Passwd,
+                passwd_path,
+                PathBuf::from("/etc/passwd"),
+            ));
+            mounts.push(SandboxMount::sandbox_infrastructure(
+                SandboxInfrastructureKind::Group,
+                group_path,
+                PathBuf::from("/etc/group"),
+            ));
         }
 
         if request.profile.network.enforce_network_namespace {
@@ -126,21 +126,21 @@ impl SandboxBackend for BwrapBackend {
             if resolv_conf_target != std::path::Path::new("/etc/resolv.conf") {
                 // Mount at the canonical target so reads through the symlink
                 // inside the sandbox see our stub-pointing content.
-                mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
-                    source: resolv_conf_path.clone(),
-                    target: resolv_conf_target,
-                    read_only: true,
-                }));
+                mounts.push(SandboxMount::sandbox_infrastructure(
+                    SandboxInfrastructureKind::ResolverConfig,
+                    resolv_conf_path.clone(),
+                    resolv_conf_target,
+                ));
             }
 
             // Always mount at the literal /etc/resolv.conf path so that
             // processes that open the path directly (not via symlink) also
             // get our stub-pointing content.
-            mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
-                source: resolv_conf_path,
-                target: PathBuf::from("/etc/resolv.conf"),
-                read_only: true,
-            }));
+            mounts.push(SandboxMount::sandbox_infrastructure(
+                SandboxInfrastructureKind::ResolverConfig,
+                resolv_conf_path,
+                PathBuf::from("/etc/resolv.conf"),
+            ));
         }
 
         Ok(SandboxHandle {

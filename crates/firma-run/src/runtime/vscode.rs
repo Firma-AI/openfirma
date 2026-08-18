@@ -119,18 +119,31 @@ pub(super) fn resolve_vscode_state_dir(
 }
 
 pub(super) fn ensure_vscode_state_mount(handle: &mut SandboxHandle, state_dir: &Path) {
-    let already_mounted =
-        handle.mounts.iter().map(SandboxMount::spec).any(|mount| {
-            mount.source == state_dir && mount.target == state_dir && !mount.read_only
-        });
+    let protected_subpath = state_dir.ancestors().skip(1).any(|ancestor| {
+        ancestor.file_name().and_then(std::ffi::OsStr::to_str)
+            == Some(firma_config_loader::CONFIG_DIR_NAME)
+    });
+    let already_mounted = handle.mounts.iter().any(|mount| {
+        let spec = mount.spec();
+        mount.is_framework()
+            && mount.is_framework_protected_subpath() == protected_subpath
+            && spec.source == state_dir
+            && spec.target == state_dir
+            && !spec.read_only
+    });
     if already_mounted {
         return;
     }
-    handle.mounts.push(SandboxMount::framework(MountSpec {
+    let spec = MountSpec {
         source: state_dir.to_path_buf(),
         target: state_dir.to_path_buf(),
         read_only: false,
-    }));
+    };
+    handle.mounts.push(if protected_subpath {
+        SandboxMount::framework_protected_subpath(spec)
+    } else {
+        SandboxMount::framework(spec)
+    });
 }
 
 fn seed_vscode_user_settings(user_data_dir: &Path) -> Result<(), RunError> {
