@@ -1548,6 +1548,7 @@ version = "0.1.6"
 dependencies = [
  "bytesize",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

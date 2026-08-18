@@ -7,6 +7,11 @@
 //! Sections are migrated incrementally; only the modules listed here have
 //! moved to the schema crate so far.
 
+pub mod infra;
 pub mod interceptor;
 
+pub use infra::{
+    CaConfig, CredentialConfig, CredentialMode, CredentialTransform, LogConfig, PolicyConfig,
+    SidecarMode,
+};
 pub use interceptor::{ConnectRelayConfig, HttpsMitmConfig, InterceptorConfig, InterceptorMode};

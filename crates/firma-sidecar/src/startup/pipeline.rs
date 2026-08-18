@@ -126,13 +126,13 @@ const MONITOR_MODE_ENV: &str = "FIRMA_ALLOW_MONITOR_MODE";
 /// unchanged.
 #[must_use]
 fn resolve_effective_mode(
-    configured: &config::SidecarMode,
+    configured: config::SidecarMode,
     monitor_env_value: Option<&str>,
 ) -> config::SidecarMode {
-    if *configured == config::SidecarMode::Monitor && monitor_env_value != Some("1") {
+    if configured == config::SidecarMode::Monitor && monitor_env_value != Some("1") {
         config::SidecarMode::Enforce
     } else {
-        configured.clone()
+        configured
     }
 }
 
@@ -281,7 +281,7 @@ pub fn build_pipeline_runtime(
         build_session_state_store(runtime_layout, config)?;
 
     let monitor_env_value = std::env::var(MONITOR_MODE_ENV).ok();
-    let effective_mode = resolve_effective_mode(&config.mode, monitor_env_value.as_deref());
+    let effective_mode = resolve_effective_mode(config.mode, monitor_env_value.as_deref());
     if effective_mode == config::SidecarMode::Monitor {
         tracing::warn!(
             "MONITOR MODE ACTIVE — enforcement is observing only; all calls \
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn enforce_mode_is_unchanged_without_env_opt_in() {
         assert_eq!(
-            resolve_effective_mode(&SidecarMode::Enforce, None),
+            resolve_effective_mode(SidecarMode::Enforce, None),
             SidecarMode::Enforce
         );
     }
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn monitor_mode_downgrades_without_env_opt_in() {
         assert_eq!(
-            resolve_effective_mode(&SidecarMode::Monitor, None),
+            resolve_effective_mode(SidecarMode::Monitor, None),
             SidecarMode::Enforce
         );
     }
@@ -341,15 +341,15 @@ mod tests {
     #[test]
     fn monitor_mode_downgrades_with_wrong_env_value() {
         assert_eq!(
-            resolve_effective_mode(&SidecarMode::Monitor, Some("0")),
+            resolve_effective_mode(SidecarMode::Monitor, Some("0")),
             SidecarMode::Enforce
         );
         assert_eq!(
-            resolve_effective_mode(&SidecarMode::Monitor, Some("true")),
+            resolve_effective_mode(SidecarMode::Monitor, Some("true")),
             SidecarMode::Enforce
         );
         assert_eq!(
-            resolve_effective_mode(&SidecarMode::Monitor, Some("")),
+            resolve_effective_mode(SidecarMode::Monitor, Some("")),
             SidecarMode::Enforce
         );
     }
@@ -357,12 +357,12 @@ mod tests {
     #[test]
     fn monitor_mode_honored_only_with_explicit_opt_in() {
         assert_eq!(
-            resolve_effective_mode(&SidecarMode::Monitor, Some("1")),
+            resolve_effective_mode(SidecarMode::Monitor, Some("1")),
             SidecarMode::Monitor
         );
         // Enforce mode is never upgraded to monitor regardless of the env var.
         assert_eq!(
-            resolve_effective_mode(&SidecarMode::Enforce, Some("1")),
+            resolve_effective_mode(SidecarMode::Enforce, Some("1")),
             SidecarMode::Enforce
         );
     }
