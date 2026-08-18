@@ -2,6 +2,14 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use type_safe_id::{StaticType, TypeSafeId};
+
+#[derive(Default)]
+struct SessionIdType;
+
+impl StaticType for SessionIdType {
+    const TYPE: &'static str = "ses";
+}
 
 /// Error returned when a [`SessionId`] string fails validation.
 #[derive(Debug, thiserror::Error)]
@@ -21,10 +29,10 @@ pub enum InvalidSessionIdError {
 pub struct SessionId(String);
 
 impl SessionId {
-    /// Generate a new session identifier backed by an RFC 9562 UUID v7.
+    /// Generate a new `ses` `TypeID` backed by an RFC 9562 UUID v7.
     #[must_use]
     pub fn generate() -> Self {
-        Self(uuid::Uuid::now_v7().to_string())
+        Self(TypeSafeId::<SessionIdType>::new().to_string())
     }
 }
 

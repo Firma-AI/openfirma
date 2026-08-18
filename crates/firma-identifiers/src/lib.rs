@@ -1,8 +1,9 @@
 //! Validated identifiers used across `OpenFirma`'s external interfaces.
 //!
-//! Firma-generated identifiers use `TypeID`s backed by RFC 9562 UUID v7 values.
-//! [`SessionId`] also accepts caller-provided values because sessions can be
-//! correlated with external runtimes.
+//! Firma-generated identifiers use `TypeID`s backed by RFC 9562 UUID values.
+//! Most use UUID v7 for time ordering; approval tokens use UUID v4 for
+//! unpredictability. [`SessionId`] also accepts caller-provided values because
+//! sessions can be correlated with external runtimes.
 
 #[macro_use]
 mod helper;

@@ -1,8 +1,13 @@
-firma_uuid_id!(
-    /// The time-ordered UUID v7 assigned to one emitted audit event.
+firma_type_id!(
+    /// A time-ordered identifier assigned to one emitted audit event.
+    ///
+    /// Its canonical representation is an `aevt` `TypeID` backed by an RFC
+    /// 9562 UUID v7.
     AuditEventId,
+    AuditEventIdType,
     AuditEventIdParseError,
-    now_v7,
+    "aevt",
+    "audit event id",
     SortRand,
-    "audit event id"
+    type_safe_id::TypeSafeId::new()
 );

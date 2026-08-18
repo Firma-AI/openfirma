@@ -7,5 +7,7 @@ firma_type_id!(
     TokenIdType,
     TokenIdParseError,
     "ctok",
-    "capability token id"
+    "capability token id",
+    SortRand,
+    type_safe_id::TypeSafeId::new()
 );
