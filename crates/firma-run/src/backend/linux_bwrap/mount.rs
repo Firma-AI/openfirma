@@ -10,7 +10,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use crate::backend::{BackendKind, LaunchSpec, SandboxHandle, SandboxMountRole};
+use crate::backend::{BackendKind, LaunchSpec, SandboxHandle, SandboxMountAuthority};
 use crate::config::MountSpec;
 use crate::error::RunError;
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
@@ -70,16 +70,16 @@ fn parse_truthy(value: &str) -> bool {
 
 /// Immutable, validated sequence of filesystem operations passed to bwrap.
 ///
-/// Construction is the security boundary: profile and ordinary framework
-/// mounts are validated against protected host paths before any arguments are
-/// emitted, while the narrowly-scoped sandbox infrastructure role is checked
-/// against [`SandboxHandle::runtime_dir`].
+/// Construction is the security boundary: operator-provided and ordinary
+/// framework mounts are validated against protected host paths before any
+/// arguments are emitted, while the narrowly-scoped sandbox infrastructure
+/// authority is checked against [`SandboxHandle::runtime_dir`].
 #[derive(Debug)]
 pub(super) struct BwrapMountPlan {
     steps: Vec<BwrapPlanStep>,
 }
 
-/// Prepared mount whose source has passed role-aware path validation.
+/// Prepared mount whose source has passed authority-aware path validation.
 ///
 /// The canonical source stored here is the source later copied into the plan,
 /// keeping validation and emission on the same path identity.
@@ -87,8 +87,8 @@ pub(super) struct BwrapMountPlan {
 struct ValidatedMount {
     /// Mount specification with a canonical host source.
     spec: MountSpec,
-    /// Security role retained from the prepared sandbox mount.
-    role: SandboxMountRole,
+    /// Security authority retained from the prepared sandbox mount.
+    authority: SandboxMountAuthority,
 }
 
 /// Semantic role of a mount operation in the final bwrap filesystem plan.
@@ -100,8 +100,8 @@ struct ValidatedMount {
 enum BwrapPlanRole {
     /// Baseline sandbox filesystem layout owned by the bwrap backend.
     Layout,
-    /// Operator-provided mount from the selected run profile.
-    Profile,
+    /// Mount controlled by the operator through external configuration.
+    OperatorProvided,
     /// Mount introduced by an ordinary runtime integration.
     Framework,
     /// Backend-owned mount sourced from the private sandbox runtime.
@@ -475,8 +475,8 @@ fn validate_mounts(
                     ),
                 }
             })?;
-            match mount.role() {
-                SandboxMountRole::SandboxInfrastructure => {
+            match mount.authority() {
+                SandboxMountAuthority::SandboxInfrastructure => {
                     if !source.starts_with(sandbox_runtime) {
                         return Err(RunError::Backend {
                             backend: BackendKind::Bwrap.to_string(),
@@ -488,7 +488,7 @@ fn validate_mounts(
                         });
                     }
                 }
-                SandboxMountRole::Profile | SandboxMountRole::Framework => {
+                SandboxMountAuthority::OperatorProvided | SandboxMountAuthority::Framework => {
                     if source.starts_with(control_plane_runtime) {
                         return Err(RunError::Backend {
                             backend: BackendKind::Bwrap.to_string(),
@@ -508,7 +508,7 @@ fn validate_mounts(
                     target: mount.spec().target.clone(),
                     read_only: mount.spec().read_only,
                 },
-                role: mount.role(),
+                authority: mount.authority(),
             })
         })
         .collect()
@@ -597,13 +597,13 @@ fn normalize_absolute_path(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Emit each profile/runtime bind mount (`--ro-bind` or `--bind`) in order.
+/// Emit each operator/framework bind mount (`--ro-bind` or `--bind`) in order.
 fn emit_mounts<'a>(plan: &mut BwrapMountPlan, mounts: impl Iterator<Item = &'a ValidatedMount>) {
     for mount in mounts {
-        let role = match mount.role {
-            SandboxMountRole::Profile => BwrapPlanRole::Profile,
-            SandboxMountRole::Framework => BwrapPlanRole::Framework,
-            SandboxMountRole::SandboxInfrastructure => BwrapPlanRole::SandboxInfrastructure,
+        let role = match mount.authority {
+            SandboxMountAuthority::OperatorProvided => BwrapPlanRole::OperatorProvided,
+            SandboxMountAuthority::Framework => BwrapPlanRole::Framework,
+            SandboxMountAuthority::SandboxInfrastructure => BwrapPlanRole::SandboxInfrastructure,
         };
         let spec = &mount.spec;
         let mode = if spec.read_only {
@@ -1176,7 +1176,7 @@ mod tests {
                 "claude-code",
             ),
             // Mirrors the workspace-parent bind from firma.toml.
-            mounts: vec![crate::backend::SandboxMount::profile(
+            mounts: vec![crate::backend::SandboxMount::operator_provided(
                 crate::config::MountSpec {
                     source: workspace.clone(),
                     target: workspace.clone(),

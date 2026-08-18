@@ -161,7 +161,7 @@ impl SandboxBackend for VzBackend {
             .mounts
             .iter()
             .cloned()
-            .map(SandboxMount::profile)
+            .map(SandboxMount::operator_provided)
             .chain(std::iter::once(SandboxMount::framework(MountSpec {
                 source: request.working_dir.clone(),
                 target: request.working_dir.clone(),
@@ -1621,7 +1621,7 @@ mod tests {
             backend: BackendKind::Vz,
             runtime_dir: PathBuf::from("/tmp/firma-test-vz-guest"),
             identity: identity.clone(),
-            mounts: vec![crate::backend::SandboxMount::profile(
+            mounts: vec![crate::backend::SandboxMount::operator_provided(
                 crate::config::MountSpec {
                     source: PathBuf::from("/Users/tester/project"),
                     target: PathBuf::from("/workspace"),
@@ -1910,7 +1910,7 @@ mod tests {
             backend: BackendKind::Vz,
             runtime_dir: tempdir.path().join("runtime"),
             identity: identity.clone(),
-            mounts: vec![crate::backend::SandboxMount::profile(
+            mounts: vec![crate::backend::SandboxMount::operator_provided(
                 crate::config::MountSpec {
                     source: PathBuf::from("/Users/tester/project"),
                     target: PathBuf::from("/workspace"),

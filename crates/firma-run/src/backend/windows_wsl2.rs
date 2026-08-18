@@ -72,7 +72,7 @@ impl SandboxBackend for Wsl2Backend {
             .mounts
             .iter()
             .cloned()
-            .map(SandboxMount::profile)
+            .map(SandboxMount::operator_provided)
             .chain(std::iter::once(SandboxMount::framework(MountSpec {
                 source: request.working_dir.clone(),
                 target: request.working_dir.clone(),

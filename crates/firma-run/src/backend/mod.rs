@@ -123,32 +123,32 @@ pub struct SandboxHandle {
     pub backend: BackendKind,
     pub runtime_dir: PathBuf,
     pub identity: RunIdentity,
-    /// Prepared mounts, retaining their semantic role until a backend emits
-    /// its launch contract.
+    /// Prepared mounts, retaining their security authority until a backend
+    /// emits its launch contract.
     pub mounts: Vec<SandboxMount>,
     pub network_policy: NetworkPolicy,
 }
 
-/// A mount carried by a prepared sandbox together with its security provenance.
+/// A mount carried by a prepared sandbox together with its security authority.
 ///
-/// Profile mounts are operator-controlled, framework mounts are added by
-/// ordinary runtime integrations, and sandbox-infrastructure mounts are the
-/// narrow class allowed to originate in the private per-sandbox runtime.
+/// Operator-provided mounts and framework mounts cannot expose control-plane
+/// state. Sandbox-infrastructure mounts are the narrow class allowed to
+/// originate in the private per-sandbox runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxMount {
     spec: MountSpec,
-    role: SandboxMountRole,
+    authority: SandboxMountAuthority,
 }
 
-/// Security role assigned to a prepared [`SandboxMount`].
+/// Security authority assigned to a prepared [`SandboxMount`].
 ///
-/// Backends use the role to distinguish operator input from mounts introduced
-/// by `OpenFirma`. The bwrap backend additionally uses it to constrain the only
-/// mounts allowed to expose its private sandbox runtime.
+/// Backends use the authority to constrain which host sources a mount may
+/// expose. The bwrap backend reserves access to its private sandbox runtime for
+/// sandbox-infrastructure mounts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::backend) enum SandboxMountRole {
-    /// Mount requested by the selected run profile.
-    Profile,
+pub(in crate::backend) enum SandboxMountAuthority {
+    /// Mount controlled by the operator through external configuration.
+    OperatorProvided,
     /// Mount introduced by an ordinary `OpenFirma` runtime integration.
     Framework,
     /// Backend-owned mount sourced from the private per-sandbox runtime.
@@ -156,48 +156,49 @@ pub(in crate::backend) enum SandboxMountRole {
 }
 
 impl SandboxMount {
-    /// Tags an operator-provided profile mount for backend-specific handling.
-    fn profile(spec: MountSpec) -> Self {
+    /// Assigns the authority used for an operator-provided mount.
+    fn operator_provided(spec: MountSpec) -> Self {
         Self {
             spec,
-            role: SandboxMountRole::Profile,
+            authority: SandboxMountAuthority::OperatorProvided,
         }
     }
 
     /// Tags a mount introduced by an ordinary runtime integration.
     ///
     /// Framework mounts do not receive the privileged source-path exemption
-    /// reserved for [`SandboxMountRole::SandboxInfrastructure`].
+    /// reserved for [`SandboxMountAuthority::SandboxInfrastructure`].
     pub(crate) fn framework(spec: MountSpec) -> Self {
         Self {
             spec,
-            role: SandboxMountRole::Framework,
+            authority: SandboxMountAuthority::Framework,
         }
     }
 
     /// Tags a backend-owned mount sourced from private sandbox infrastructure.
     ///
-    /// This role is intentionally constructible only inside `backend`: the
+    /// This authority is intentionally constructible only inside `backend`: the
     /// bwrap backend permits it to re-expose paths beneath its private sandbox
     /// runtime after masking the host control-plane runtime.
     fn sandbox_infrastructure(spec: MountSpec) -> Self {
         Self {
             spec,
-            role: SandboxMountRole::SandboxInfrastructure,
+            authority: SandboxMountAuthority::SandboxInfrastructure,
         }
     }
 
     /// Returns the backend-neutral mount specification.
     ///
-    /// Backends without role-sensitive mount validation use this at their
-    /// serialization boundary to discard `OpenFirma`'s internal role metadata.
+    /// Backends without authority-sensitive mount validation use this at their
+    /// serialization boundary to discard `OpenFirma`'s internal authority
+    /// metadata.
     pub(crate) fn spec(&self) -> &MountSpec {
         &self.spec
     }
 
-    /// Returns the semantic role retained with this prepared mount.
-    fn role(&self) -> SandboxMountRole {
-        self.role
+    /// Returns the security authority retained with this prepared mount.
+    fn authority(&self) -> SandboxMountAuthority {
+        self.authority
     }
 }
 

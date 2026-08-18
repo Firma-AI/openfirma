@@ -60,7 +60,7 @@ impl SandboxBackend for BwrapBackend {
             .mounts
             .iter()
             .cloned()
-            .map(SandboxMount::profile)
+            .map(SandboxMount::operator_provided)
             .collect::<Vec<_>>();
 
         if request.profile.identity_mode == SandboxIdentityMode::SandboxUser {
