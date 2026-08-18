@@ -15,9 +15,11 @@ pub(crate) struct Capture {
 
 /// The single-connection behavior expected from an [`HttpProbe`].
 pub(crate) enum ProbeBehavior {
-    /// Capture one request and return a successful response with this body.
+    /// Require one request and return a successful response with this body.
     Respond(&'static str),
-    /// Capture one request and close its connection without sending an HTTP response.
+    /// Respond if a request arrives, or finish successfully when stopped before any connection.
+    OptionalResponse(&'static str),
+    /// Require one request and close its connection without sending an HTTP response.
     CloseWithoutResponse,
     /// Fail if any connection arrives before the probe is finished.
     MustNotConnect,
@@ -25,9 +27,8 @@ pub(crate) enum ProbeBehavior {
 
 /// A single-request HTTP/1.1 probe for dispatch and network-isolation scenarios.
 ///
-/// The probe deliberately exposes connection-level behavior that a normal HTTP mock does not: it
-/// can close without responding and can assert that no TCP connection occurred. Call [`Self::finish`]
-/// after the client command to stop the listener and join its thread.
+/// The probe exposes TCP-level behavior that a normal HTTP mock does not: it can close without
+/// responding, allow an optional propagation attempt, or assert that no connection occurred.
 pub(crate) struct HttpProbe {
     address: SocketAddr,
     nonce: String,
@@ -38,7 +39,7 @@ pub(crate) struct HttpProbe {
 impl HttpProbe {
     /// Starts a loopback probe whose request path is `/{nonce}`.
     ///
-    /// Request acceptance has a 30-second deadline and each header read has a 15-second timeout.
+    /// Request acceptance has a 30-second deadline and reading headers has a 15-second deadline.
     /// The probe accepts at most one connection and fails on malformed or oversized requests.
     pub(crate) fn start(nonce: &str, behavior: ProbeBehavior) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP probe");
@@ -53,8 +54,10 @@ impl HttpProbe {
                 match listener.accept() {
                     Ok(connection) => break connection,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        if matches!(behavior, ProbeBehavior::MustNotConnect)
-                            && stopped.try_recv().is_ok()
+                        if matches!(
+                            behavior,
+                            ProbeBehavior::MustNotConnect | ProbeBehavior::OptionalResponse(_)
+                        ) && stopped.try_recv().is_ok()
                         {
                             return None;
                         }
@@ -76,7 +79,7 @@ impl HttpProbe {
                 .expect("set HTTP probe read timeout");
             let capture = read_request(&mut stream);
             match behavior {
-                ProbeBehavior::Respond(body) => {
+                ProbeBehavior::Respond(body) | ProbeBehavior::OptionalResponse(body) => {
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
@@ -103,6 +106,11 @@ impl HttpProbe {
         format!("http://{}/{nonce}", self.address, nonce = self.nonce)
     }
 
+    /// Returns the audit resource corresponding to [`Self::url`].
+    pub(crate) fn resource(&self) -> String {
+        format!("{}/{nonce}", self.address, nonce = self.nonce)
+    }
+
     /// Returns the probe URL with `host` in the authority while retaining the bound loopback port.
     ///
     /// The caller is responsible for resolving `host` to the probe's loopback address.
@@ -114,11 +122,9 @@ impl HttpProbe {
         )
     }
 
-    /// Stops a negative probe, joins the listener thread, and returns any captured request.
+    /// Stops an optional or negative probe, joins its thread, and returns any captured request.
     ///
-    /// Positive behaviors wait for their expected connection or the acceptance deadline. A
-    /// [`ProbeBehavior::MustNotConnect`] probe returns `None` once no connection has occurred before
-    /// this method is called.
+    /// Required-response behaviors still wait for their expected connection or acceptance deadline.
     pub(crate) fn finish(self) -> Option<Capture> {
         let _ = self.stop.send(());
         self.task.join().expect("HTTP probe thread")
