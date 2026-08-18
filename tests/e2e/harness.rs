@@ -1,21 +1,17 @@
 use std::ffi::OsStr;
 use std::fmt;
-use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::Arc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
-use std::thread::JoinHandle;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use firma_test_helpers::process_fixture;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use wait_timeout::ChildExt;
 
 use crate::audit::{AuditEvent, correlated_event};
+use crate::live_http_fixture::{LiveHttpClient, LiveHttpResponse};
 use crate::poll::wait_for;
 
 /// An isolated filesystem and environment for one E2E test phase.
@@ -232,8 +228,7 @@ impl TestWorld {
     /// Startup waits for both the fixture's readiness event and one complete Sidecar marker.
     pub(crate) fn start_live_governed(&self) -> LiveGovernedRun {
         let stderr = tempfile::NamedTempFile::new().expect("live stderr capture");
-        let mut fixture = live_http_client_fixture();
-        fixture.arg("--nocapture");
+        let fixture = crate::live_http_fixture::command();
         let mut command =
             self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), &self.workspace_path());
         command
@@ -257,30 +252,24 @@ impl TestWorld {
         let mut child = command.spawn().expect("spawn live governed process");
         let stdin = child.stdin.take().expect("live governed stdin");
         let stdout = child.stdout.take().expect("live governed stdout");
-        let (events, stdout_reader) = start_live_stdout_reader(stdout);
         let mut run = LiveGovernedRun {
             child: Some(child),
-            stdin: Some(stdin),
-            events,
-            stdout_reader: Some(stdout_reader),
+            http: LiveHttpClient::new(stdin, stdout),
             stderr,
             state_path: self.state_path(),
             audit_path: self.audit_path(),
             session_id: self.session_id.clone(),
             identity: None,
         };
-        let LiveHttpEvent::Ready {
-            process_id,
-            mount_namespace,
-        } = run.receive_event("fixture readiness", Duration::from_secs(30))
-        else {
-            panic!("live governed fixture did not send readiness first");
+        let ready = match run.http.wait_until_ready(Duration::from_secs(30)) {
+            Ok(ready) => ready,
+            Err(error) => run.protocol_failure("fixture readiness", &error),
         };
         let marker = wait_for_sidecar_marker(&self.state_path(), Duration::from_secs(5));
         assert_eq!(marker.session_id, self.session_id);
         run.identity = Some(LiveIdentity {
-            process_id,
-            mount_namespace,
+            process_id: ready.process_id,
+            mount_namespace: ready.mount_namespace,
             sandbox_id: marker.sandbox_id,
             sidecar_id: marker.sidecar_id,
             agent_id: marker.agent_id,
@@ -305,148 +294,6 @@ impl TestWorld {
         command.current_dir(cwd);
         command
     }
-}
-
-const LIVE_HTTP_PREFIX: &str = "FIRMA_E2E_HTTP ";
-
-#[derive(Deserialize, Serialize)]
-struct LiveHttpRequest {
-    nonce: String,
-    url: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum LiveHttpEvent {
-    Ready {
-        process_id: u32,
-        mount_namespace: String,
-    },
-    Attempt {
-        nonce: String,
-    },
-    Response {
-        nonce: String,
-        status: u16,
-        body: Vec<u8>,
-    },
-    Error {
-        nonce: String,
-        message: String,
-    },
-}
-
-/// The HTTP response returned to a request made inside a live governed sandbox.
-pub(crate) struct LiveHttpResponse {
-    /// HTTP status returned by the Sidecar or upstream destination.
-    pub(crate) status: u16,
-    /// Response body returned by the Sidecar or upstream destination.
-    pub(crate) body: Vec<u8>,
-}
-
-process_fixture! {
-    fn live_http_client_fixture() {
-        let proxy = std::env::var("HTTP_PROXY").expect("live HTTP proxy URL");
-        let client = reqwest::blocking::Client::builder()
-            .use_preconfigured_tls(build_live_http_tls_config())
-            .proxy(reqwest::Proxy::all(proxy).expect("configure live HTTP proxy"))
-            .timeout(Duration::from_secs(3))
-            .build()
-            .expect("build live HTTP client");
-        let stdin = std::io::stdin();
-        let stdout = std::io::stdout();
-        let mut stdout = stdout.lock();
-        write_live_http_event(
-            &mut stdout,
-            &LiveHttpEvent::Ready {
-                process_id: std::process::id(),
-                mount_namespace: std::fs::read_link("/proc/self/ns/mnt")
-                    .expect("read fixture mount namespace")
-                    .to_string_lossy()
-                    .into_owned(),
-            },
-        );
-
-        for line in stdin.lock().lines() {
-            let line = line.expect("read live HTTP request");
-            let request: LiveHttpRequest =
-                serde_json::from_str(&line).expect("deserialize live HTTP request");
-            write_live_http_event(
-                &mut stdout,
-                &LiveHttpEvent::Attempt {
-                    nonce: request.nonce.clone(),
-                },
-            );
-            let event = match client.get(&request.url).send() {
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    match response.bytes() {
-                        Ok(body) => LiveHttpEvent::Response {
-                            nonce: request.nonce,
-                            status,
-                            body: body.to_vec(),
-                        },
-                        Err(error) => LiveHttpEvent::Error {
-                            nonce: request.nonce,
-                            message: format!("read HTTP response body: {error}"),
-                        },
-                    }
-                }
-                Err(error) => LiveHttpEvent::Error {
-                    nonce: request.nonce,
-                    message: format!("send HTTP request: {error}"),
-                },
-            };
-            write_live_http_event(&mut stdout, &event);
-        }
-    }
-}
-
-fn build_live_http_tls_config() -> rustls::ClientConfig {
-    use rustls_platform_verifier::BuilderVerifierExt as _;
-
-    rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .expect("configure live HTTP TLS protocol versions")
-        .with_platform_verifier()
-        .expect("configure live HTTP platform verifier")
-        .with_no_client_auth()
-}
-
-fn write_live_http_event(writer: &mut impl Write, event: &LiveHttpEvent) {
-    write!(writer, "{LIVE_HTTP_PREFIX}").expect("write live HTTP protocol prefix");
-    serde_json::to_writer(&mut *writer, event).expect("serialize live HTTP event");
-    writeln!(writer).expect("terminate live HTTP event");
-    writer.flush().expect("flush live HTTP event");
-}
-
-fn start_live_stdout_reader(
-    stdout: ChildStdout,
-) -> (Receiver<Result<LiveHttpEvent, String>>, JoinHandle<String>) {
-    let (sender, receiver) = channel();
-    let reader = std::thread::spawn(move || {
-        let mut capture = String::new();
-        for line in BufReader::new(stdout).lines() {
-            match line {
-                Ok(line) => {
-                    capture.push_str(&line);
-                    capture.push('\n');
-                    if let Some((_, encoded)) = line.split_once(LIVE_HTTP_PREFIX) {
-                        let event = serde_json::from_str(encoded).map_err(|error| {
-                            format!("deserialize live HTTP event {encoded:?}: {error}")
-                        });
-                        let _ = sender.send(event);
-                    }
-                }
-                Err(error) => {
-                    let _ = sender.send(Err(format!("read live governed stdout: {error}")));
-                    break;
-                }
-            }
-        }
-        capture
-    });
-    (receiver, reader)
 }
 
 /// Stable process, sandbox, Sidecar, agent, and session identity for a live governed run.
@@ -474,9 +321,7 @@ pub(crate) struct LiveIdentity {
 /// assert and inspect its final status and captured output.
 pub(crate) struct LiveGovernedRun {
     child: Option<Child>,
-    stdin: Option<ChildStdin>,
-    events: Receiver<Result<LiveHttpEvent, String>>,
-    stdout_reader: Option<JoinHandle<String>>,
+    http: LiveHttpClient,
     stderr: tempfile::NamedTempFile,
     state_path: PathBuf,
     audit_path: PathBuf,
@@ -527,40 +372,9 @@ impl LiveGovernedRun {
     /// The method waits for an explicit attempt event and matching response, proving that the
     /// requested stimulus ran inside the sandbox.
     pub(crate) fn request(&mut self, nonce: &str, url: &str) -> LiveHttpResponse {
-        let stdin = self.stdin.as_mut().expect("live governed stdin open");
-        serde_json::to_writer(
-            &mut *stdin,
-            &LiveHttpRequest {
-                nonce: nonce.to_string(),
-                url: url.to_string(),
-            },
-        )
-        .expect("serialize request to live governed process");
-        writeln!(stdin).expect("terminate live governed request");
-        stdin.flush().expect("flush live governed request");
-        match self.receive_event("request attempt", Duration::from_secs(5)) {
-            LiveHttpEvent::Attempt {
-                nonce: attempted_nonce,
-            } => assert_eq!(attempted_nonce, nonce),
-            event => panic!("expected request attempt for {nonce}, got {event:?}"),
-        }
-        match self.receive_event("request response", Duration::from_secs(10)) {
-            LiveHttpEvent::Response {
-                nonce: response_nonce,
-                status,
-                body,
-            } => {
-                assert_eq!(response_nonce, nonce);
-                LiveHttpResponse { status, body }
-            }
-            LiveHttpEvent::Error {
-                nonce: response_nonce,
-                message,
-            } => {
-                assert_eq!(response_nonce, nonce);
-                panic!("live HTTP request {nonce} failed: {message}");
-            }
-            event => panic!("expected request response for {nonce}, got {event:?}"),
+        match self.http.request(nonce, url) {
+            Ok(response) => response,
+            Err(error) => self.protocol_failure("request response", &error),
         }
     }
 
@@ -574,33 +388,22 @@ impl LiveGovernedRun {
         self.finish_inner(Duration::from_secs(30))
     }
 
-    fn receive_event(&mut self, expected: &str, timeout: Duration) -> LiveHttpEvent {
-        match self.events.recv_timeout(timeout) {
-            Ok(Ok(event)) => event,
-            Ok(Err(error)) => {
-                panic!("invalid live HTTP protocol while waiting for {expected}: {error}")
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                let status = self
-                    .child
-                    .as_mut()
-                    .expect("live governed child")
-                    .try_wait()
-                    .expect("poll live governed child");
-                panic!(
-                    "timed out waiting for {expected}: status={status:?}\nstderr:\n{}",
-                    read_capture(self.stderr.path())
-                );
-            }
-            Err(RecvTimeoutError::Disconnected) => panic!(
-                "live HTTP protocol closed while waiting for {expected}\nstderr:\n{}",
-                read_capture(self.stderr.path())
-            ),
-        }
+    fn protocol_failure(&mut self, expected: &str, error: &str) -> ! {
+        let status = self
+            .child
+            .as_mut()
+            .expect("live governed child")
+            .try_wait()
+            .expect("poll live governed child");
+        panic!(
+            "live HTTP fixture failed while waiting for {expected}: {error}\nstatus={status:?}\nstdout:\n{}\nstderr:\n{}",
+            self.http.stdout(),
+            read_capture(self.stderr.path())
+        );
     }
 
     fn finish_inner(&mut self, timeout: Duration) -> ProcessOutput {
-        self.stdin.take();
+        self.http.close_input();
         let Some(mut child) = self.child.take() else {
             panic!("live governed process already finished");
         };
@@ -609,15 +412,9 @@ impl LiveGovernedRun {
             .expect("wait for live governed process");
         let timed_out = status.is_none();
         let status = status.unwrap_or_else(|| terminate_process_group(&mut child));
-        let stdout = self
-            .stdout_reader
-            .take()
-            .expect("live stdout reader")
-            .join()
-            .expect("join live stdout reader");
         ProcessOutput {
             status,
-            stdout,
+            stdout: self.http.stdout(),
             stderr: read_capture(self.stderr.path()),
             timed_out,
         }
