@@ -38,6 +38,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use bytesize::ByteSize;
+use firma_config_schema::sidecar::infra as schema_infra;
 use firma_config_schema::sidecar::interceptor as schema_ic;
 use firma_core::SecretMatcher;
 use firma_http::HeaderName;
@@ -46,15 +47,11 @@ use firma_secret_provider::{
 };
 use serde::{Deserialize, Deserializer};
 
-pub(crate) enum AuthorityTarget {
-    Disabled,
-    Enabled(AuthorityEndpoint),
-}
-
-// ---------------------------------------------------------------------------
-// Top-level sidecar configuration
-// ---------------------------------------------------------------------------
-
+/// Credential injection mode selector.
+pub use schema_infra::CredentialMode;
+/// Optional transformation applied to resolved credential material before
+/// injection.
+pub use schema_infra::CredentialTransform;
 /// Enforcement mode for the sidecar.
 ///
 /// `enforce` (default): normal fail-closed operation — DENY blocks the call.
@@ -69,15 +66,16 @@ pub(crate) enum AuthorityTarget {
 /// with an error log, so a dev config left on `monitor` cannot accidentally
 /// bypass enforcement in production. When honored, the sidecar emits a
 /// startup warning.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SidecarMode {
-    /// Normal fail-closed enforcement (default).
-    #[default]
-    Enforce,
-    /// Observe-only: classify and log every call, but never block.
-    Monitor,
+pub use schema_infra::SidecarMode;
+
+pub(crate) enum AuthorityTarget {
+    Disabled,
+    Enabled(AuthorityEndpoint),
 }
+
+// ---------------------------------------------------------------------------
+// Top-level sidecar configuration
+// ---------------------------------------------------------------------------
 
 /// Top-level sidecar configuration deserialized from TOML.
 ///
@@ -639,11 +637,25 @@ impl Default for HttpsMitmConfig {
 }
 
 /// Policy source settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PolicyConfig {
     /// Directory containing `.cedar` policy files.
-    #[serde(default = "default_policy_dir")]
     pub dir: PathBuf,
+}
+
+impl From<schema_infra::PolicyConfig> for PolicyConfig {
+    fn from(s: schema_infra::PolicyConfig) -> Self {
+        Self { dir: s.dir }
+    }
+}
+
+impl<'de> Deserialize<'de> for PolicyConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(schema_infra::PolicyConfig::deserialize(deserializer)?.into())
+    }
 }
 
 impl PolicyConfig {
@@ -657,18 +669,30 @@ impl PolicyConfig {
 
 impl Default for PolicyConfig {
     fn default() -> Self {
-        Self {
-            dir: default_policy_dir(),
-        }
+        schema_infra::PolicyConfig::default().into()
     }
 }
 
 /// Certificate authority directory settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CaConfig {
     /// Directory containing CA key material.
-    #[serde(default = "default_ca_dir")]
     pub(crate) dir: PathBuf,
+}
+
+impl From<schema_infra::CaConfig> for CaConfig {
+    fn from(s: schema_infra::CaConfig) -> Self {
+        Self { dir: s.dir }
+    }
+}
+
+impl<'de> Deserialize<'de> for CaConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(schema_infra::CaConfig::deserialize(deserializer)?.into())
+    }
 }
 
 impl CaConfig {
@@ -682,9 +706,7 @@ impl CaConfig {
 
 impl Default for CaConfig {
     fn default() -> Self {
-        Self {
-            dir: default_ca_dir(),
-        }
+        schema_infra::CaConfig::default().into()
     }
 }
 
@@ -692,11 +714,25 @@ impl Default for CaConfig {
 ///
 /// The log level set here acts as the base; CLI args (`--log-level`)
 /// override it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LogConfig {
     /// Log level: `trace`, `debug`, `info`, `warn`, or `error`.
-    #[serde(default = "default_log_level")]
     level: String,
+}
+
+impl From<schema_infra::LogConfig> for LogConfig {
+    fn from(s: schema_infra::LogConfig) -> Self {
+        Self { level: s.level }
+    }
+}
+
+impl<'de> Deserialize<'de> for LogConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(schema_infra::LogConfig::deserialize(deserializer)?.into())
+    }
 }
 
 impl LogConfig {
@@ -715,31 +751,8 @@ impl LogConfig {
 
 impl Default for LogConfig {
     fn default() -> Self {
-        Self {
-            level: default_log_level(),
-        }
+        schema_infra::LogConfig::default().into()
     }
-}
-
-/// Credential injection mode selector.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialMode {
-    /// Static credential read from an environment variable at startup.
-    #[default]
-    Basic,
-    /// Secret file rendered by Vault Agent, read from disk per-call.
-    Vault,
-}
-
-/// Optional transformation applied to resolved credential material before
-/// injection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialTransform {
-    /// Render a GitHub PAT as the Basic auth value accepted by Git smart HTTP:
-    /// `Basic base64("x-access-token:<token>")`.
-    GithubPatBasic,
 }
 
 /// Credential injection entry for a single external target.
@@ -747,10 +760,9 @@ pub enum CredentialTransform {
 /// Each entry selects a mode (`basic` or `vault`) and provides the
 /// fields that mode requires. At proxy time, matching outbound requests
 /// have the specified header injected.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CredentialConfig {
     /// Injection mode. Default: `basic`.
-    #[serde(default)]
     pub(crate) mode: CredentialMode,
     /// Host that this credential applies to.
     pub(crate) target_host: String,
@@ -758,20 +770,46 @@ pub struct CredentialConfig {
     pub(crate) header: HeaderName,
     /// Optional prefix prepended to the resolved value
     /// (e.g. `"Bearer "`).
-    #[serde(default)]
     pub(crate) prefix: Option<String>,
     /// Optional transform applied to the resolved secret before injection.
-    #[serde(default)]
     pub(crate) transform: Option<CredentialTransform>,
     // -- basic mode fields --
     /// Environment variable whose value is injected (basic mode).
-    #[serde(default)]
     pub(crate) value_from_env: Option<String>,
     // -- vault mode fields --
     /// Filesystem path to the secret file rendered by Vault Agent
     /// (vault mode).
-    #[serde(default)]
     pub(crate) secret_path: Option<PathBuf>,
+}
+
+impl TryFrom<schema_infra::CredentialConfig> for CredentialConfig {
+    type Error = String;
+
+    fn try_from(s: schema_infra::CredentialConfig) -> Result<Self, Self::Error> {
+        let header = s
+            .header
+            .parse::<HeaderName>()
+            .map_err(|e| format!("header '{}' is invalid: {e}", s.header))?;
+        Ok(Self {
+            mode: s.mode,
+            target_host: s.target_host,
+            header,
+            prefix: s.prefix,
+            transform: s.transform,
+            value_from_env: s.value_from_env,
+            secret_path: s.secret_path,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let schema = schema_infra::CredentialConfig::deserialize(deserializer)?;
+        Self::try_from(schema).map_err(serde::de::Error::custom)
+    }
 }
 
 impl CredentialConfig {
@@ -815,23 +853,6 @@ impl CredentialConfig {
 // (`firma_config_schema::sidecar::interceptor`). Re-exported here for the
 // one caller that constructs a fallback socket path directly.
 pub(crate) use schema_ic::default_socket_path;
-
-/// Sentinel: unset `policy.dir`.
-const DEFAULT_POLICY_DIR: &str = "./policies/";
-/// Sentinel: unset `ca.dir` (state-managed; never re-based).
-const DEFAULT_CA_DIR: &str = "./firma-ca/";
-
-fn default_policy_dir() -> PathBuf {
-    PathBuf::from(DEFAULT_POLICY_DIR)
-}
-
-fn default_ca_dir() -> PathBuf {
-    PathBuf::from(DEFAULT_CA_DIR)
-}
-
-fn default_log_level() -> String {
-    "info".to_string()
-}
 
 fn validate_host_patterns(field: &str, patterns: &[String]) -> Result<(), String> {
     for (idx, pattern) in patterns.iter().enumerate() {
