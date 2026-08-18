@@ -33,11 +33,12 @@ fn policy_update_denies_without_restarting_live_session_or_sidecar() {
         let probe = HttpProbe::start(&nonce, ProbeBehavior::OptionalResponse(RESPONSE));
         let url = probe.url();
         let resource = probe.resource();
-        let status = run.request(&nonce, &url);
+        let response = run.request(&nonce, &url);
         let capture = probe.finish();
         let event = run.audit_event(&nonce, Duration::from_secs(5));
         assert_eq!(run.identity(), initial_identity);
-        if status == 0 {
+        if response.status == 200 {
+            assert_eq!(response.body, RESPONSE.as_bytes());
             let capture = capture.expect("allowed propagation probe reached upstream");
             assert_eq!(capture.method, "GET");
             assert_eq!(capture.path, format!("/{nonce}"));
@@ -49,8 +50,8 @@ fn policy_update_denies_without_restarting_live_session_or_sidecar() {
             continue;
         }
         assert_eq!(
-            status, 22,
-            "policy denial must surface as curl HTTP failure"
+            response.status, 403,
+            "policy denial must return an HTTP forbidden response"
         );
         assert!(capture.is_none(), "policy-denied request reached upstream");
         break (event, resource, Instant::now());
@@ -113,11 +114,12 @@ fn active_token_revocation_denies_without_restarting_live_session_or_sidecar() {
         let probe = HttpProbe::start(&nonce, ProbeBehavior::OptionalResponse(RESPONSE));
         let url = probe.url();
         let resource = probe.resource();
-        let status = run.request(&nonce, &url);
+        let response = run.request(&nonce, &url);
         let capture = probe.finish();
         let event = run.audit_event(&nonce, Duration::from_secs(5));
         assert_eq!(run.identity(), initial_identity);
-        if status == 0 {
+        if response.status == 200 {
+            assert_eq!(response.body, RESPONSE.as_bytes());
             let capture = capture.expect("allowed revocation probe reached upstream");
             assert_eq!(capture.method, "GET");
             assert_eq!(capture.path, format!("/{nonce}"));
@@ -129,8 +131,8 @@ fn active_token_revocation_denies_without_restarting_live_session_or_sidecar() {
             continue;
         }
         assert_eq!(
-            status, 22,
-            "revocation denial must surface as curl HTTP failure"
+            response.status, 403,
+            "revocation denial must return an HTTP forbidden response"
         );
         assert!(capture.is_none(), "revoked request reached upstream");
         break (event, resource, Instant::now());
@@ -157,7 +159,9 @@ fn assert_allowed_request(run: &mut LiveGovernedRun, phase: &str) -> String {
     let probe = HttpProbe::start(&nonce, ProbeBehavior::Respond(RESPONSE));
     let url = probe.url();
     let resource = probe.resource();
-    assert_eq!(run.request(&nonce, &url), 0, "positive control failed");
+    let response = run.request(&nonce, &url);
+    assert_eq!(response.status, 200, "positive control failed");
+    assert_eq!(response.body, RESPONSE.as_bytes());
     let capture = probe.finish().expect("positive control reached upstream");
     assert_eq!(capture.method, "GET");
     assert_eq!(capture.path, format!("/{nonce}"));
