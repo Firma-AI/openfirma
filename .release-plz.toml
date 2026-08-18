@@ -89,6 +89,7 @@ changelog_include = [
   "firma-audit-schema",
   "firma-authority",
   "firma-config-loader",
+  "firma-config-schema",
   "firma-core",
   "firma-demo-fixture",
   "firma-demo-tui",
