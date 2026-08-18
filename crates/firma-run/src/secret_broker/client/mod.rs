@@ -1,15 +1,18 @@
 //! Client for the out-of-sandbox secret broker.
 //!
 //! The shim binary runs inside the sandbox and uses [`BrokerClient`] to ask
-//! the broker (running out of the sandbox, inside firma-run) to launch the
-//! real CLI tool and return its stdout. [`BrokerClient`] opens a fresh
-//! connection per call rather than pooling, since broker calls are
-//! infrequent relative to tool launches, and applies the timeouts and buffer
-//! limits from [`BrokerClientConfig`] to every operation.
+//! the broker (running out of the sandbox, inside firma-run) to run the real
+//! CLI tool and return its stdout. Whether the tool is authorized to run is
+//! decided downstream by the broker's handler (config matching and
+//! authorization), which reports a refused or failed launch back as an error.
+//! [`BrokerClient`] opens a fresh connection per call rather than pooling,
+//! since broker calls are infrequent relative to tool launches, and applies
+//! the timeouts and buffer limits from [`BrokerClientConfig`] to every
+//! operation.
 //!
 //! All operations are fail-closed: any connect, timeout, protocol, or
 //! rejected error means the wrapped tool produced no usable output, and the
-//! caller must treat the tool launch as failed rather than substituting a
+//! caller must treat the invocation as failed rather than substituting a
 //! partial or synthetic result.
 
 use base64::Engine as _;
@@ -57,16 +60,19 @@ impl BrokerClient {
         Ok(Self { endpoint, config })
     }
 
-    /// Launch one wrapped tool via the broker and return its raw stdout
-    /// bytes.
+    /// Run one wrapped tool via the broker and return its raw stdout bytes.
+    ///
+    /// The broker's handler applies config matching and authorization before
+    /// executing the tool, so a request the handler refuses fails closed here.
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerClientError::Rejected`] when the broker reports the
-    /// tool failed, [`BrokerClientError::Transport`] when the round-trip did
-    /// not complete, and [`BrokerClientError::ProtocolViolation`] when the
-    /// response broke the wire contract. All errors are fail-closed: the tool
-    /// produced no usable output.
+    /// Returns [`BrokerClientError::Rejected`] when the broker's handler
+    /// refused the request or the tool ran and failed,
+    /// [`BrokerClientError::Transport`] when the round-trip did not complete,
+    /// and [`BrokerClientError::ProtocolViolation`] when the response broke
+    /// the wire contract. All errors are fail-closed: the tool produced no
+    /// usable output.
     pub(crate) async fn run(&self, bin: &str, args: &[&str]) -> Result<Vec<u8>, BrokerClientError> {
         let request = BrokerRequest {
             bin: Str::from(bin),

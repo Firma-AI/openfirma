@@ -15,7 +15,8 @@ use crate::config::CommandMediatorEndpoint;
 ///   broke the wire contract. Not a caller bug, but retrying the same
 ///   request is unlikely to help.
 /// - [`BrokerClientError::Rejected`] — the broker understood the request and
-///   explicitly refused it (the wrapped tool exited non-zero). Retrying
+///   explicitly refused it: the handler's config matching or authorization did
+///   not allow the tool to run, or the tool ran and exited non-zero. Retrying
 ///   without changing the input is pointless.
 /// - [`BrokerClientError::InvalidEndpoint`] — the endpoint fails an
 ///   address-level invariant (non-loopback TCP, relative Unix path). A
