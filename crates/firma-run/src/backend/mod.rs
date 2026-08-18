@@ -146,7 +146,7 @@ pub(in crate::backend) enum SandboxMountRole {
 }
 
 impl SandboxMount {
-    pub(crate) fn profile(spec: MountSpec) -> Self {
+    fn profile(spec: MountSpec) -> Self {
         Self {
             spec,
             role: SandboxMountRole::Profile,
@@ -160,7 +160,7 @@ impl SandboxMount {
         }
     }
 
-    pub(in crate::backend) fn sandbox_infrastructure(spec: MountSpec) -> Self {
+    fn sandbox_infrastructure(spec: MountSpec) -> Self {
         Self {
             spec,
             role: SandboxMountRole::SandboxInfrastructure,
@@ -171,7 +171,7 @@ impl SandboxMount {
         &self.spec
     }
 
-    pub(in crate::backend) fn role(&self) -> SandboxMountRole {
+    fn role(&self) -> SandboxMountRole {
         self.role
     }
 }
