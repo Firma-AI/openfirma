@@ -213,8 +213,11 @@ impl FromStr for SidecarEndpoint {
 /// Mount entry passed to sandbox backends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MountSpec {
+    /// Host path exposed by the mount.
     pub(crate) source: PathBuf,
+    /// Path where the backend exposes `source` inside the sandbox or guest.
     pub(crate) target: PathBuf,
+    /// Whether the backend must prevent writes through the mounted path.
     pub(crate) read_only: bool,
 }
 

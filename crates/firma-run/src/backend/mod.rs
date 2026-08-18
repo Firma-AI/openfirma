@@ -123,6 +123,8 @@ pub struct SandboxHandle {
     pub backend: BackendKind,
     pub runtime_dir: PathBuf,
     pub identity: RunIdentity,
+    /// Prepared mounts, retaining their semantic role until a backend emits
+    /// its launch contract.
     pub mounts: Vec<SandboxMount>,
     pub network_policy: NetworkPolicy,
 }
@@ -138,14 +140,23 @@ pub struct SandboxMount {
     role: SandboxMountRole,
 }
 
+/// Security role assigned to a prepared [`SandboxMount`].
+///
+/// Backends use the role to distinguish operator input from mounts introduced
+/// by `OpenFirma`. The bwrap backend additionally uses it to constrain the only
+/// mounts allowed to expose its private sandbox runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::backend) enum SandboxMountRole {
+    /// Mount requested by the selected run profile.
     Profile,
+    /// Mount introduced by an ordinary `OpenFirma` runtime integration.
     Framework,
+    /// Backend-owned mount sourced from the private per-sandbox runtime.
     SandboxInfrastructure,
 }
 
 impl SandboxMount {
+    /// Tags an operator-provided profile mount for backend-specific handling.
     fn profile(spec: MountSpec) -> Self {
         Self {
             spec,
@@ -153,6 +164,10 @@ impl SandboxMount {
         }
     }
 
+    /// Tags a mount introduced by an ordinary runtime integration.
+    ///
+    /// Framework mounts do not receive the privileged source-path exemption
+    /// reserved for [`SandboxMountRole::SandboxInfrastructure`].
     pub(crate) fn framework(spec: MountSpec) -> Self {
         Self {
             spec,
@@ -160,6 +175,11 @@ impl SandboxMount {
         }
     }
 
+    /// Tags a backend-owned mount sourced from private sandbox infrastructure.
+    ///
+    /// This role is intentionally constructible only inside `backend`: the
+    /// bwrap backend permits it to re-expose paths beneath its private sandbox
+    /// runtime after masking the host control-plane runtime.
     fn sandbox_infrastructure(spec: MountSpec) -> Self {
         Self {
             spec,
@@ -167,10 +187,15 @@ impl SandboxMount {
         }
     }
 
+    /// Returns the backend-neutral mount specification.
+    ///
+    /// Backends without role-sensitive mount validation use this at their
+    /// serialization boundary to discard `OpenFirma`'s internal role metadata.
     pub(crate) fn spec(&self) -> &MountSpec {
         &self.spec
     }
 
+    /// Returns the semantic role retained with this prepared mount.
     fn role(&self) -> SandboxMountRole {
         self.role
     }
