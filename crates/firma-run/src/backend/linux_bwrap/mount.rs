@@ -91,11 +91,11 @@ struct ValidatedMount {
     role: SandboxMountRole,
 }
 
-/// Semantic role of an operation in the final bwrap filesystem plan.
+/// Semantic role of a mount operation in the final bwrap filesystem plan.
 ///
-/// Roles remain attached after validation so the immutable plan records why
-/// each operation exists, even though bwrap itself receives only path-based
-/// arguments.
+/// Roles remain attached to bind, tmpfs, and device-filesystem operations so
+/// the immutable plan records why each mount exists, even though bwrap itself
+/// receives only path-based arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BwrapPlanRole {
     /// Baseline sandbox filesystem layout owned by the bwrap backend.
@@ -110,6 +110,15 @@ enum BwrapPlanRole {
     Mask,
 }
 
+/// Access mode applied to a bwrap bind mount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BwrapBindMode {
+    /// Exposes the source without permitting writes through the mount.
+    ReadOnly,
+    /// Exposes the source with its host write permissions intact.
+    ReadWrite,
+}
+
 /// One ordered filesystem or namespace operation emitted to bwrap.
 #[derive(Debug)]
 enum BwrapPlanStep {
@@ -117,12 +126,15 @@ enum BwrapPlanStep {
     Bind {
         /// Semantic owner of the bind operation.
         role: BwrapPlanRole,
-        /// Canonical host path exposed by the bind.
+        /// Host source path passed to bwrap.
+        ///
+        /// Sources originating from [`ValidatedMount`] are canonical; trusted
+        /// backend layout and mask sources may remain literal paths.
         source: PathBuf,
         /// Path where the source appears inside the sandbox.
         target: PathBuf,
-        /// Whether bwrap must expose the source read-only.
-        read_only: bool,
+        /// Access mode applied to the bind mount.
+        mode: BwrapBindMode,
     },
     /// Mounts an empty temporary filesystem over a sandbox path.
     Tmpfs {
@@ -132,7 +144,12 @@ enum BwrapPlanStep {
         target: PathBuf,
     },
     /// Creates bwrap's private device filesystem at the target path.
-    Dev(PathBuf),
+    Dev {
+        /// Semantic owner of the device-filesystem operation.
+        role: BwrapPlanRole,
+        /// Sandbox path populated with the private device filesystem.
+        target: PathBuf,
+    },
     /// Selects the wrapped process's working directory.
     Chdir(PathBuf),
     /// Isolates the wrapped process in a new network namespace.
@@ -190,13 +207,13 @@ impl BwrapMountPlan {
         role: BwrapPlanRole,
         source: impl Into<PathBuf>,
         target: impl Into<PathBuf>,
-        read_only: bool,
+        mode: BwrapBindMode,
     ) {
         self.steps.push(BwrapPlanStep::Bind {
             role,
             source: source.into(),
             target: target.into(),
-            read_only,
+            mode,
         });
     }
 
@@ -209,8 +226,11 @@ impl BwrapMountPlan {
     }
 
     /// Appends creation of bwrap's private device filesystem.
-    fn dev(&mut self, target: impl Into<PathBuf>) {
-        self.steps.push(BwrapPlanStep::Dev(target.into()));
+    fn dev(&mut self, role: BwrapPlanRole, target: impl Into<PathBuf>) {
+        self.steps.push(BwrapPlanStep::Dev {
+            role,
+            target: target.into(),
+        });
     }
 
     /// Appends the working-directory selection applied before process launch.
@@ -231,17 +251,21 @@ impl BwrapMountPlan {
                     role,
                     source,
                     target,
-                    read_only,
+                    mode,
                 } => {
                     let _ = role;
-                    command.arg(if read_only { "--ro-bind" } else { "--bind" });
+                    command.arg(match mode {
+                        BwrapBindMode::ReadOnly => "--ro-bind",
+                        BwrapBindMode::ReadWrite => "--bind",
+                    });
                     command.arg(source).arg(target);
                 }
                 BwrapPlanStep::Tmpfs { role, target } => {
                     let _ = role;
                     command.arg("--tmpfs").arg(target);
                 }
-                BwrapPlanStep::Dev(target) => {
+                BwrapPlanStep::Dev { role, target } => {
+                    let _ = role;
                     command.arg("--dev").arg(target);
                 }
                 BwrapPlanStep::Chdir(target) => {
@@ -267,7 +291,12 @@ fn bind_host_home(plan: &mut BwrapMountPlan, launch: &LaunchSpec) {
         .or_else(|| std::env::var("HOME").ok())
         .unwrap_or_default();
     if !home.is_empty() && home.starts_with('/') {
-        plan.bind(BwrapPlanRole::Layout, &home, &home, false);
+        plan.bind(
+            BwrapPlanRole::Layout,
+            &home,
+            &home,
+            BwrapBindMode::ReadWrite,
+        );
     }
 }
 
@@ -326,24 +355,29 @@ fn append_filesystem_layout(
     hardening: &BwrapHardening,
 ) -> Result<(), RunError> {
     if hardening.readonly_rootfs {
-        plan.bind(BwrapPlanRole::Layout, "/", "/", true);
+        plan.bind(BwrapPlanRole::Layout, "/", "/", BwrapBindMode::ReadOnly);
         plan.tmpfs(BwrapPlanRole::Layout, "/tmp");
         plan.tmpfs(BwrapPlanRole::Layout, "/var/tmp");
-        plan.bind(BwrapPlanRole::Layout, &launch.cwd, &launch.cwd, false);
+        plan.bind(
+            BwrapPlanRole::Layout,
+            &launch.cwd,
+            &launch.cwd,
+            BwrapBindMode::ReadWrite,
+        );
         plan.bind(
             BwrapPlanRole::SandboxInfrastructure,
             &handle.runtime_dir,
             &handle.runtime_dir,
-            false,
+            BwrapBindMode::ReadWrite,
         );
         if !hardening.runtime_home_isolation {
             bind_host_home(plan, launch);
         }
         mask_sensitive_paths(plan, launch, &hardening.mask_home_paths);
     } else {
-        plan.bind(BwrapPlanRole::Layout, "/", "/", false);
+        plan.bind(BwrapPlanRole::Layout, "/", "/", BwrapBindMode::ReadWrite);
     }
-    plan.dev("/dev");
+    plan.dev(BwrapPlanRole::Layout, "/dev");
     plan.chdir(&launch.cwd);
 
     if handle.network_policy.enforce_network_namespace {
@@ -415,7 +449,7 @@ fn mask_control_plane_runtime(
             BwrapPlanRole::SandboxInfrastructure,
             sandbox_runtime,
             sandbox_runtime,
-            false,
+            BwrapBindMode::ReadWrite,
         );
     }
     Ok(())
@@ -572,7 +606,12 @@ fn emit_mounts<'a>(plan: &mut BwrapMountPlan, mounts: impl Iterator<Item = &'a V
             SandboxMountRole::SandboxInfrastructure => BwrapPlanRole::SandboxInfrastructure,
         };
         let spec = &mount.spec;
-        plan.bind(role, &spec.source, &spec.target, spec.read_only);
+        let mode = if spec.read_only {
+            BwrapBindMode::ReadOnly
+        } else {
+            BwrapBindMode::ReadWrite
+        };
+        plan.bind(role, &spec.source, &spec.target, mode);
     }
 }
 
@@ -872,7 +911,12 @@ fn emit_ro_bind_null(
     masked: &mut BTreeMap<PathBuf, MaskKind>,
 ) {
     if masked.insert(target.clone(), MaskKind::File).is_none() {
-        plan.bind(BwrapPlanRole::Mask, "/dev/null", target, true);
+        plan.bind(
+            BwrapPlanRole::Mask,
+            "/dev/null",
+            target,
+            BwrapBindMode::ReadOnly,
+        );
     }
 }
 
