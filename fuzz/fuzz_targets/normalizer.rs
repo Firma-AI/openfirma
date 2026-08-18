@@ -1,6 +1,5 @@
 #![no_main]
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use arbitrary::Arbitrary;

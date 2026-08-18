@@ -29,11 +29,12 @@ firma-sidecar.workspace = true
 hex.workspace = true
 jiff = { workspace = true, features = ["serde"] }
 p256 = { workspace = true }
+pin-project = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "rt", "time"] }
+tokio = { workspace = true, features = ["net", "rt", "time", "io-util"] }
 toml.workspace = true
 toml_edit.workspace = true
 tonic.workspace = true
@@ -57,7 +58,7 @@ pasetors = { workspace = true }
 pretty_assertions.workspace = true
 prost-types.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
+tokio = { workspace = true, features = ["rt", "net", "time", "sync", "io-util", "macros"] }
 tokio-stream = { workspace = true }
 toml = { workspace = true }
 tonic = { workspace = true }

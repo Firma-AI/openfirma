@@ -25,13 +25,13 @@
 
 pub mod client;
 pub mod server;
+pub mod stream;
 
-use std::io::{self, Read, Write};
-use std::net::TcpStream;
-use std::time::{Duration, Instant};
+use std::io;
 
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(unix)]
-use std::os::unix::net::UnixStream;
+use tokio::net::UnixStream;
 
 use base64::Engine as _;
 use firma_http::Str;
@@ -41,19 +41,41 @@ use crate::config::CommandMediatorEndpoint;
 
 /// Shim → broker request: describes one tool launch.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct BrokerRequest<'a> {
+pub(crate) struct BrokerRequest<'a, T: ArgsList> {
     /// Executable basename of the wrapped tool (e.g. `"bws"`).
     #[serde(borrow)]
     pub bin: Str<'a>,
-    /// Space-joined arguments (everything after the binary name).
-    #[serde(borrow)]
-    pub args: Str<'a>,
+    /// Arguments (everything after the binary name).
+    pub args: T,
+}
+
+pub(crate) trait ArgsList: sealed::Sealed {}
+
+impl<T> ArgsList for T where T: sealed::Sealed {}
+
+mod sealed {
+    use firma_http::Str;
+    use serde::Serialize;
+
+    pub trait Sealed: Serialize + Sync {}
+
+    impl Sealed for Vec<String> {}
+
+    impl Sealed for Vec<Str<'_>> {}
+
+    impl Sealed for Vec<&'_ str> {}
+
+    impl Sealed for &'_ [String] {}
+
+    impl<'a> Sealed for &'a [Str<'a>] {}
+
+    impl<'a> Sealed for &'a [&'a str] {}
 }
 
 /// Broker → shim response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum BrokerResponse<'a> {
+pub(crate) enum BrokerResponse<'a> {
     Ok {
         /// Base64-encoded stdout bytes from the real tool.
         #[serde(borrow)]
@@ -98,73 +120,6 @@ impl BrokerResponse<'_> {
     }
 }
 
-/// A connected broker socket, abstracting over the TCP and Unix transports.
-///
-/// Shared by the shim-side [`client::BrokerClient`] (outbound connections)
-/// and the broker-side [`server::BrokerListener`] (accepted connections).
-#[derive(Debug)]
-pub(crate) enum BrokerStream {
-    Tcp(TcpStream),
-    #[cfg(unix)]
-    Unix(UnixStream),
-}
-
-impl BrokerStream {
-    /// Set the read deadline.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the OS cannot apply the timeout.
-    pub(crate) fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        match self {
-            Self::Tcp(stream) => stream.set_read_timeout(timeout),
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.set_read_timeout(timeout),
-        }
-    }
-
-    /// Set the write deadline.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the OS cannot apply the timeout.
-    pub(crate) fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        match self {
-            Self::Tcp(stream) => stream.set_write_timeout(timeout),
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.set_write_timeout(timeout),
-        }
-    }
-}
-
-impl io::Read for BrokerStream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::Tcp(stream) => stream.read(buf),
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.read(buf),
-        }
-    }
-}
-
-impl io::Write for BrokerStream {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Tcp(stream) => stream.write(buf),
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Self::Tcp(stream) => stream.flush(),
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.flush(),
-        }
-    }
-}
-
 /// Address-level endpoint invariants shared by both transport roles.
 ///
 /// The broker returns secret material, so the transport must stay local: on
@@ -200,105 +155,57 @@ pub(crate) fn validate_endpoint(endpoint: &CommandMediatorEndpoint) -> Result<()
     }
 }
 
-/// Read one newline-terminated line from `stream`, bounded by both a byte cap
-/// and an absolute wall-clock deadline.
-///
-/// `max_bytes` is the maximum number of bytes read, exclusive of any trailing
-/// newline (the newline is truncated from the result). Reading stops at the
-/// first newline, at EOF, or once `max_bytes` bytes have been collected. The
-/// per-read timeout is re-armed to the remaining budget before every read, so
-/// a peer that trickles bytes cannot hold the connection past `deadline`.
-pub(crate) fn read_line_bounded(
-    stream: &mut BrokerStream,
-    max_bytes: u64,
-    deadline: Instant,
-) -> io::Result<Vec<u8>> {
-    let cap = usize::try_from(max_bytes).unwrap_or(usize::MAX);
-    let mut line = Vec::with_capacity(usize::min(cap, 256));
-    let mut buf = [0u8; 4096];
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "broker read deadline exceeded",
-            ));
-        }
-        stream.set_read_timeout(Some(remaining))?;
-        let n = stream.read(&mut buf)?;
-        if n == 0 {
-            return Ok(line);
-        }
-        let remaining_cap = cap.saturating_sub(line.len());
-        if let Some(pos) = buf[..n].iter().position(|&b| b == b'\n') {
-            line.extend_from_slice(&buf[..usize::min(pos, remaining_cap)]);
-            return Ok(line);
-        }
-        line.extend_from_slice(&buf[..usize::min(n, remaining_cap)]);
-        if line.len() >= cap {
-            return Ok(line);
-        }
-    }
-}
-
-/// Write all of `payload` to `stream` before `deadline`.
-///
-/// The per-write timeout is re-armed to the remaining budget before every
-/// write, so a peer that stops reading cannot hold the connection past
-/// `deadline`.
-pub(crate) fn write_all_bounded(
-    stream: &mut BrokerStream,
-    mut payload: &[u8],
-    deadline: Instant,
-) -> io::Result<()> {
-    while !payload.is_empty() {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "broker write deadline exceeded",
-            ));
-        }
-        stream.set_write_timeout(Some(remaining))?;
-        match stream.write(payload) {
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "failed to write broker payload",
-                ));
-            }
-            Ok(n) => payload = &payload[n..],
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                ) =>
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "broker write deadline exceeded",
-                ));
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    stream.flush()
-}
-
 /// Read one newline-terminated line from `stream` with `max_bytes` as the
-/// line-size limit, under an absolute wall-clock deadline.
+/// line-size limit.
 ///
 /// The underlying read is capped at `max_bytes + 1` so a line without a
 /// trailing newline cannot grow without bound; the `+ 1` lets an over-limit
 /// line still trip the caller's size check instead of being silently truncated
-/// to exactly the limit.
-pub(crate) fn read_bounded_line(
-    stream: &mut BrokerStream,
+/// to exactly the limit. The caller bounds the whole exchange with
+/// [`tokio::time::timeout`], so a peer that trickles bytes cannot hold the
+/// connection indefinitely.
+pub(crate) async fn read_bounded_line<S: AsyncRead + Unpin>(
+    stream: &mut S,
     max_bytes: u64,
-    deadline: Instant,
 ) -> io::Result<Vec<u8>> {
-    read_line_bounded(stream, max_bytes + 1, deadline)
+    let mut buf = tokio::io::BufReader::new(stream.take(max_bytes + 1));
+    let mut line = Vec::new();
+    buf.read_until(b'\n', &mut line).await?;
+    if line.last() == Some(&b'\n') {
+        line.pop();
+    }
+    Ok(line)
+}
+
+/// Write all of `payload` to `stream` and flush.
+///
+/// The caller bounds the whole exchange with [`tokio::time::timeout`], so a
+/// peer that stops reading cannot hold the connection indefinitely.
+pub(crate) async fn write_all<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    payload: &[u8],
+) -> io::Result<()> {
+    stream.write_all(payload).await?;
+    stream.flush().await
+}
+
+/// Read and discard everything remaining on `stream` until EOF.
+///
+/// Used after writing an error response for an over-limit request whose bytes
+/// are still in flight: closing a TCP socket that still has unread data in its
+/// receive buffer makes the OS send RST instead of FIN, which can discard the
+/// response the client has not read yet. Draining first keeps the close
+/// graceful. The caller bounds the exchange with [`tokio::time::timeout`], so a
+/// peer that streams indefinitely cannot hold the connection past the deadline.
+pub(crate) async fn drain_remaining<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<()> {
+    let mut buf = [0u8; 1024];
+    loop {
+        match stream.read(&mut buf).await {
+            Ok(0) => return Ok(()),
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// The real uid of the process that owns the Unix socket on the other side of
