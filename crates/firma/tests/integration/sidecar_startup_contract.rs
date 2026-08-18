@@ -43,10 +43,14 @@ fn firma_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
-#[test]
-fn emits_ready_sequence_in_order() {
-    let tmp = tempfile::tempdir().unwrap();
-    let policies = tmp.path().join("policies");
+struct StartupFixture {
+    temp_dir: tempfile::TempDir,
+    config_path: std::path::PathBuf,
+}
+
+fn startup_fixture(extra_config: &str) -> StartupFixture {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let policies = temp_dir.path().join("policies");
     std::fs::create_dir_all(&policies).unwrap();
     std::fs::write(
         policies.join("default.cedar"),
@@ -54,7 +58,7 @@ fn emits_ready_sequence_in_order() {
     )
     .unwrap();
 
-    let mapping = tmp.path().join("mapping-rules.toml");
+    let mapping = temp_dir.path().join("mapping-rules.toml");
     std::fs::write(
         &mapping,
         r#"[[rules]]
@@ -66,17 +70,15 @@ action_class = "communication.external.send"
     )
     .unwrap();
 
-    let ca_dir = tmp.path().join("ca");
+    let ca_dir = temp_dir.path().join("ca");
     std::fs::create_dir_all(&ca_dir).unwrap();
 
-    let audit_key = tmp.path().join("audit.key");
+    let audit_key = temp_dir.path().join("audit.key");
     std::fs::write(&audit_key, TEST_AUDIT_KEY_PEM).unwrap();
 
-    let interceptor_listen_addr = "127.0.0.1:0";
-    let health_bind_addr = "127.0.0.1:0";
-    let sidecar_toml = tmp.path().join(CONFIG_FILE_NAME);
+    let config_path = temp_dir.path().join(CONFIG_FILE_NAME);
     std::fs::write(
-        &sidecar_toml,
+        &config_path,
         format!(
             // Paths embedded as TOML literal strings (single quotes) so Windows
             // backslashes pass through verbatim instead of being interpreted as
@@ -85,7 +87,7 @@ action_class = "communication.external.send"
             r#"
 [sidecar.interceptor]
 mode = "http_proxy"
-listen_addr = "{interceptor_listen_addr}"
+listen_addr = "127.0.0.1:0"
 drain_timeout_secs = 30
 
 [sidecar.policy]
@@ -107,23 +109,35 @@ default_timeout_ms = 30000
 [sidecar.audit]
 sink = "stdout"
 signing_key_path = '{audit_key}'
+
+{extra_config}
 "#,
             policies = policies.display(),
             ca = ca_dir.display(),
             mapping = mapping.display(),
             audit_key = audit_key.display(),
-            interceptor_listen_addr = interceptor_listen_addr,
         ),
     )
     .unwrap();
 
-    let stdout_file = File::create(tmp.path().join("sidecar.stdout.log")).unwrap();
-    let stderr_log = tmp.path().join("sidecar.stderr.log");
+    StartupFixture {
+        temp_dir,
+        config_path,
+    }
+}
+
+#[test]
+fn emits_ready_sequence_in_order() {
+    let fixture = startup_fixture("");
+    let health_bind_addr = "127.0.0.1:0";
+
+    let stdout_file = File::create(fixture.temp_dir.path().join("sidecar.stdout.log")).unwrap();
+    let stderr_log = fixture.temp_dir.path().join("sidecar.stderr.log");
     let stderr_file = File::create(&stderr_log).unwrap();
 
     let mut child = Command::new(firma_bin())
         .args(["sidecar", "--config"])
-        .arg(&sidecar_toml)
+        .arg(&fixture.config_path)
         .args(["--health-bind-addr", health_bind_addr])
         .stdout(stdout_file)
         .stderr(stderr_file)
@@ -160,5 +174,49 @@ signing_key_path = '{audit_key}'
         idx,
         CONTRACT_PREFIXES.len(),
         lines.join("\n"),
+    );
+}
+
+#[test]
+fn invalid_secret_provider_matcher_prevents_readiness() {
+    let fixture = startup_fixture(
+        r#"
+[[sidecar.http_secret_providers]]
+provider_id = "broken-vault"
+host = "vault.example.test"
+
+[[sidecar.http_secret_providers.matchers]]
+type = "sensitive_command"
+path = "/v1/secrets"
+
+[sidecar.http_secret_providers.matchers.matcher]
+type = "regex"
+pattern = "no_named_groups_here"
+"#,
+    );
+
+    let output = Command::new(firma_bin())
+        .args(["sidecar", "--config"])
+        .arg(&fixture.config_path)
+        .args(["--health-bind-addr", "127.0.0.1:0"])
+        .env("FIRMA_SECRET_GATEWAY_ADDR", "tcp:127.0.0.1:1")
+        .output()
+        .expect("spawn firma sidecar");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "an invalid sensitive-provider matcher must reject startup; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "invalid secret provider config for \"broken-vault\": regex matcher must contain a \
+             named `value` capture group, found"
+        ),
+        "startup diagnostic must identify the invalid provider and matcher: {stderr}"
+    );
+    assert!(
+        !stderr.contains("sidecar ready"),
+        "the Sidecar must not report readiness after rejecting its provider config: {stderr}"
     );
 }

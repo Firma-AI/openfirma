@@ -125,9 +125,8 @@ closed on an unrecognized shape rather than forward it unredacted.
 
 Matchers are compiled once when the Sidecar starts, not per request. An
 invalid `matcher` — a regex without the required named capture groups, or a
-bad JSONPath — is caught at startup: the Sidecar logs a warning and disables
-HTTP vault interception entirely rather than silently skip or degrade
-individual responses. Fix the matcher and restart to re-enable it.
+bad JSONPath — prevents the Sidecar from starting rather than silently
+skipping or degrading interception. Fix the matcher and restart the Sidecar.
 
 - **`sensitive_command`** — extract secrets from the response body using
   `matcher`, mint a placeholder for each, and substitute it into the body
@@ -173,16 +172,15 @@ that's down.
 explicitly listed as `sensitive_command` or `safe_command` is treated as
 `blocked_command`. Add the path to the provider's matcher list.
 
-**HTTP vault interception is off even though `http_secret_providers` is
-configured.** Matchers are compiled at startup, and one invalid matcher (a
-regex without named capture groups, a bad JSONPath) disables interception
-for the whole provider list with a warning in the startup logs. Interception
-is all-or-nothing: there is no partial or per-request degradation. Fix the
-matcher and restart the Sidecar.
+**The Sidecar fails to start with an invalid secret-provider diagnostic.**
+Matchers are compiled at startup, and one invalid matcher (a regex without
+named capture groups or a bad JSONPath) rejects the whole configuration.
+Fix the matcher and restart the Sidecar.
 
-**`FIRMA_SECRET_GATEWAY_ADDR` unset.** Rehydration, masking, and HTTP vault
-interception are all silently disabled — this is intentional (nothing to
-fail closed on if the feature isn't configured at all), not a bug.
+**`FIRMA_SECRET_GATEWAY_ADDR` unset.** If `http_secret_providers` is
+configured, the Sidecar fails to start because it cannot safely intercept
+vault responses without a gateway. Without HTTP providers, gateway-backed
+rehydration and masking remain disabled until the variable is set.
 
 ## What's next
 

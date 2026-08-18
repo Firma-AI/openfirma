@@ -157,8 +157,9 @@ pub struct SidecarConfig {
     /// Tunable timeouts and limits for the secret-gateway client used to
     /// resolve and push placeholders against firma-run's broker. The
     /// gateway's address itself is not configured here: it comes from the
-    /// `FIRMA_SECRET_GATEWAY_ADDR` environment variable, and
-    /// rehydration/interception stay disabled when that variable is unset.
+    /// `FIRMA_SECRET_GATEWAY_ADDR` environment variable. Rehydration stays
+    /// disabled when that variable is unset; configuring HTTP providers
+    /// without it rejects Sidecar startup.
     ///
     /// As of this writing, `firma-run` does not yet set this variable at
     /// autostart; an operator must set it in the sidecar's process
