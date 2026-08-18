@@ -60,6 +60,7 @@ impl BwrapHardening {
     }
 }
 
+/// Returns whether a profile environment value enables a boolean setting.
 fn parse_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -78,39 +79,68 @@ pub(super) struct BwrapMountPlan {
     steps: Vec<BwrapPlanStep>,
 }
 
+/// Prepared mount whose source has passed role-aware path validation.
+///
+/// The canonical source stored here is the source later copied into the plan,
+/// keeping validation and emission on the same path identity.
 #[derive(Debug)]
 struct ValidatedMount {
+    /// Mount specification with a canonical host source.
     spec: MountSpec,
+    /// Security role retained from the prepared sandbox mount.
     role: SandboxMountRole,
 }
 
+/// Semantic role of an operation in the final bwrap filesystem plan.
+///
+/// Roles remain attached after validation so the immutable plan records why
+/// each operation exists, even though bwrap itself receives only path-based
+/// arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BwrapPlanRole {
+    /// Baseline sandbox filesystem layout owned by the bwrap backend.
     Layout,
+    /// Operator-provided mount from the selected run profile.
     Profile,
+    /// Mount introduced by an ordinary runtime integration.
     Framework,
+    /// Backend-owned mount sourced from the private sandbox runtime.
     SandboxInfrastructure,
+    /// Overlay that hides host configuration or control-plane state.
     Mask,
 }
 
+/// One ordered filesystem or namespace operation emitted to bwrap.
 #[derive(Debug)]
 enum BwrapPlanStep {
+    /// Bind-mounts a host source at a sandbox target.
     Bind {
+        /// Semantic owner of the bind operation.
         role: BwrapPlanRole,
+        /// Canonical host path exposed by the bind.
         source: PathBuf,
+        /// Path where the source appears inside the sandbox.
         target: PathBuf,
+        /// Whether bwrap must expose the source read-only.
         read_only: bool,
     },
+    /// Mounts an empty temporary filesystem over a sandbox path.
     Tmpfs {
+        /// Semantic owner of the masking or layout operation.
         role: BwrapPlanRole,
+        /// Sandbox path covered by the temporary filesystem.
         target: PathBuf,
     },
+    /// Creates bwrap's private device filesystem at the target path.
     Dev(PathBuf),
+    /// Selects the wrapped process's working directory.
     Chdir(PathBuf),
+    /// Isolates the wrapped process in a new network namespace.
     UnshareNet,
 }
 
 impl BwrapMountPlan {
+    /// Creates a plan with no filesystem or namespace operations.
     fn empty() -> Self {
         Self { steps: Vec::new() }
     }
@@ -154,6 +184,7 @@ impl BwrapMountPlan {
         Ok(plan)
     }
 
+    /// Appends an ordered bind-mount operation to the plan.
     fn bind(
         &mut self,
         role: BwrapPlanRole,
@@ -169,6 +200,7 @@ impl BwrapMountPlan {
         });
     }
 
+    /// Appends an ordered temporary-filesystem operation to the plan.
     fn tmpfs(&mut self, role: BwrapPlanRole, target: impl Into<PathBuf>) {
         self.steps.push(BwrapPlanStep::Tmpfs {
             role,
@@ -176,14 +208,17 @@ impl BwrapMountPlan {
         });
     }
 
+    /// Appends creation of bwrap's private device filesystem.
     fn dev(&mut self, target: impl Into<PathBuf>) {
         self.steps.push(BwrapPlanStep::Dev(target.into()));
     }
 
+    /// Appends the working-directory selection applied before process launch.
     fn chdir(&mut self, target: impl Into<PathBuf>) {
         self.steps.push(BwrapPlanStep::Chdir(target.into()));
     }
 
+    /// Appends network-namespace isolation to the plan.
     fn unshare_net(&mut self) {
         self.steps.push(BwrapPlanStep::UnshareNet);
     }
@@ -236,6 +271,8 @@ fn bind_host_home(plan: &mut BwrapMountPlan, launch: &LaunchSpec) {
     }
 }
 
+/// Masks configured sensitive paths beneath the host home directory when they
+/// exist, avoiding mount failures for absent paths on a read-only root.
 fn mask_sensitive_paths(plan: &mut BwrapMountPlan, launch: &LaunchSpec, suffixes: &[String]) {
     let home = launch
         .env
@@ -384,6 +421,8 @@ fn mask_control_plane_runtime(
     Ok(())
 }
 
+/// Resolves every prepared mount to the exact host source that will be emitted
+/// and enforces the source-path constraints associated with its role.
 fn validate_mounts(
     handle: &SandboxHandle,
     control_plane_runtime: &Path,
@@ -502,6 +541,8 @@ fn resolve_path_allow_missing(path: &Path, description: &str) -> Result<PathBuf,
     }
 }
 
+/// Lexically removes `.` and `..` components from an absolute path without
+/// following filesystem links.
 fn normalize_absolute_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -718,6 +759,8 @@ pub(super) fn reject_symlinked_firma_dirs(launch: &LaunchSpec) -> Result<(), Run
     Ok(())
 }
 
+/// Rejects one discoverable `.firma` path when its directory entry is a
+/// symlink, while deduplicating paths already inspected for the launch.
 fn reject_symlinked_firma_dir(
     dir: &Path,
     checked: &mut std::collections::BTreeSet<PathBuf>,
