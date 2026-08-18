@@ -123,8 +123,57 @@ pub struct SandboxHandle {
     pub backend: BackendKind,
     pub runtime_dir: PathBuf,
     pub identity: RunIdentity,
-    pub mounts: Vec<MountSpec>,
+    pub mounts: Vec<SandboxMount>,
     pub network_policy: NetworkPolicy,
+}
+
+/// A mount carried by a prepared sandbox together with its security provenance.
+///
+/// Profile mounts are operator-controlled, framework mounts are added by
+/// ordinary runtime integrations, and sandbox-infrastructure mounts are the
+/// narrow class allowed to originate in the private per-sandbox runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxMount {
+    spec: MountSpec,
+    role: SandboxMountRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::backend) enum SandboxMountRole {
+    Profile,
+    Framework,
+    SandboxInfrastructure,
+}
+
+impl SandboxMount {
+    pub(crate) fn profile(spec: MountSpec) -> Self {
+        Self {
+            spec,
+            role: SandboxMountRole::Profile,
+        }
+    }
+
+    pub(crate) fn framework(spec: MountSpec) -> Self {
+        Self {
+            spec,
+            role: SandboxMountRole::Framework,
+        }
+    }
+
+    pub(in crate::backend) fn sandbox_infrastructure(spec: MountSpec) -> Self {
+        Self {
+            spec,
+            role: SandboxMountRole::SandboxInfrastructure,
+        }
+    }
+
+    pub(crate) fn spec(&self) -> &MountSpec {
+        &self.spec
+    }
+
+    pub(in crate::backend) fn role(&self) -> SandboxMountRole {
+        self.role
+    }
 }
 
 /// Network enforcement proof returned by backend.

@@ -9,7 +9,7 @@ use std::process::{Child, Command};
 
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, NetworkConfinement, PrepareRequest, SandboxBackend,
-    SandboxHandle,
+    SandboxHandle, SandboxMount,
 };
 use crate::config::{MountSpec, NetworkPolicy, SidecarEndpoint};
 use crate::error::RunError;
@@ -161,11 +161,12 @@ impl SandboxBackend for VzBackend {
             .mounts
             .iter()
             .cloned()
-            .chain(std::iter::once(MountSpec {
+            .map(SandboxMount::profile)
+            .chain(std::iter::once(SandboxMount::framework(MountSpec {
                 source: request.working_dir.clone(),
                 target: request.working_dir.clone(),
                 read_only: false,
-            }))
+            })))
             .collect::<Vec<_>>();
 
         Ok(SandboxHandle {
@@ -394,7 +395,12 @@ impl VzGuestLaunchContract {
                 identity_mode: launch.identity_mode,
             },
             terminal,
-            mounts: handle.mounts.clone(),
+            mounts: handle
+                .mounts
+                .iter()
+                .map(SandboxMount::spec)
+                .cloned()
+                .collect(),
             network: VzGuestNetworkContract::from_launch(
                 launch,
                 handle.identity.full_attribution_headers(),
@@ -1615,11 +1621,13 @@ mod tests {
             backend: BackendKind::Vz,
             runtime_dir: PathBuf::from("/tmp/firma-test-vz-guest"),
             identity: identity.clone(),
-            mounts: vec![crate::config::MountSpec {
-                source: PathBuf::from("/Users/tester/project"),
-                target: PathBuf::from("/workspace"),
-                read_only: false,
-            }],
+            mounts: vec![crate::backend::SandboxMount::profile(
+                crate::config::MountSpec {
+                    source: PathBuf::from("/Users/tester/project"),
+                    target: PathBuf::from("/workspace"),
+                    read_only: false,
+                },
+            )],
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1902,11 +1910,13 @@ mod tests {
             backend: BackendKind::Vz,
             runtime_dir: tempdir.path().join("runtime"),
             identity: identity.clone(),
-            mounts: vec![crate::config::MountSpec {
-                source: PathBuf::from("/Users/tester/project"),
-                target: PathBuf::from("/workspace"),
-                read_only: false,
-            }],
+            mounts: vec![crate::backend::SandboxMount::profile(
+                crate::config::MountSpec {
+                    source: PathBuf::from("/Users/tester/project"),
+                    target: PathBuf::from("/workspace"),
+                    read_only: false,
+                },
+            )],
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,

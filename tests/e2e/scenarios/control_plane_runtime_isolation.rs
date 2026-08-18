@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+use std::net::TcpListener;
 use std::path::Path;
 
 use crate::harness::{TestWorld, run_bounded};
@@ -51,6 +53,101 @@ fn root_process_cannot_reach_run_control_plane_assets() {
     );
 }
 
+#[test]
+fn profile_mount_cannot_source_control_plane_runtime() {
+    let world = TestWorld::isolated();
+    let cfg_dir = world.path("config");
+    let state = tempfile::tempdir_in(std::env::current_dir().expect("resolve repository cwd"))
+        .expect("create control-plane state outside sandbox tmpfs paths");
+    let state_dir = state.path().to_path_buf();
+    let workspace = world.workspace_path();
+    world.scaffold_config(
+        "generic",
+        &cfg_dir,
+        &state_dir,
+        Some(&workspace),
+        &workspace,
+    );
+
+    let protected_source = state_dir.join("authority.key");
+    assert!(
+        protected_source.is_file(),
+        "config scaffold did not create the expected authority key"
+    );
+    let alias = workspace.join("exposed-authority.key");
+    append_profile_mount(&cfg_dir.join("firma.toml"), &protected_source, &alias);
+
+    let output = world.run_firma_with_state_dir(
+        &cfg_dir.join("firma.toml"),
+        &state_dir,
+        &workspace,
+        &["--sidecar", "local", "--authority", "local"],
+        "/bin/true",
+        std::iter::empty::<&str>(),
+    );
+
+    assert!(
+        !output.success(),
+        "firma run accepted a profile mount sourced from FIRMA_STATE_DIR:\n{output}"
+    );
+    assert!(
+        output.stderr.contains("refusing mount source")
+            && output.stderr.contains("inside the control-plane runtime"),
+        "firma run did not explain the protected-runtime mount rejection:\n{output}"
+    );
+    assert!(
+        !alias.exists(),
+        "rejected mount unexpectedly created its alias"
+    );
+}
+
+#[test]
+fn absent_control_plane_runtime_cannot_be_forged() {
+    let world = TestWorld::isolated();
+    let cfg_dir = world.path("config");
+    let workspace = world.workspace_path();
+    world.scaffold_config(
+        "generic",
+        &cfg_dir,
+        &world.state_path(),
+        Some(&workspace),
+        &workspace,
+    );
+
+    let state_dir = workspace.join("future-control-plane-state");
+    assert!(!state_dir.exists(), "state path must begin absent");
+    let forge_tool = workspace.join("forge-control-plane-state");
+    write_forge_tool(&forge_tool);
+    let evidence = workspace.join("control-plane-forge-ran");
+
+    let authority = tcp_probe_endpoint("http");
+    let sidecar = tcp_probe_endpoint("tcp");
+    let output = world.run_firma_with_state_dir(
+        &cfg_dir.join("firma.toml"),
+        &state_dir,
+        &workspace,
+        &[
+            "--no-autostart",
+            "--authority",
+            &authority,
+            "--sidecar",
+            &sidecar,
+        ],
+        &forge_tool,
+        [&state_dir, &evidence],
+    );
+
+    assert!(
+        output.success(),
+        "root process forge probe failed:\n{output}"
+    );
+    assert!(evidence.is_file(), "root process forge probe did not run");
+    assert!(
+        !state_dir.join("forged-control-plane-file").exists(),
+        "root process forged the previously absent control-plane runtime"
+    );
+}
+
 fn assert_probe_positive_control(world: &TestWorld, workspace: &Path, probe_tool: &Path) {
     let control_root = world.path("control-assets");
     let control_evidence = world.path("control-probe-ran");
@@ -98,6 +195,43 @@ printf '%s\n' attempted >"$evidence"
     );
     std::fs::write(path, script).expect("write control-plane probe");
     set_executable(path);
+}
+
+fn write_forge_tool(path: &Path) {
+    let script = r#"#!/bin/sh
+set -eu
+control_root="$1"
+evidence="$2"
+mkdir -p "$control_root"
+printf '%s\n' forged >"$control_root/forged-control-plane-file"
+printf '%s\n' attempted >"$evidence"
+"#;
+    std::fs::write(path, script).expect("write control-plane forge tool");
+    set_executable(path);
+}
+
+fn append_profile_mount(config_file: &Path, source: &Path, target: &Path) {
+    let mut config = std::fs::read_to_string(config_file).expect("read generated config");
+    write!(
+        config,
+        "\n[[run.profiles.generic.mounts]]\n\
+         source = \"{}\"\n\
+         target = \"{}\"\n\
+         read_only = false\n",
+        source.display(),
+        target.display(),
+    )
+    .expect("render profile mount");
+    std::fs::write(config_file, config).expect("append profile mount");
+}
+
+fn tcp_probe_endpoint(scheme: &str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind TCP probe endpoint");
+    let address = listener.local_addr().expect("resolve TCP probe address");
+    std::thread::spawn(move || {
+        let _ = listener.accept();
+    });
+    format!("{scheme}://{address}")
 }
 
 fn set_executable(path: &Path) {

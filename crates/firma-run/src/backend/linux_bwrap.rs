@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command};
 #[cfg(target_os = "linux")]
 use std::{fs::File, os::fd::AsRawFd};
@@ -13,6 +13,7 @@ use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
+    SandboxMount, SandboxMountRole,
 };
 use crate::config::MountSpec;
 use crate::config::NetworkPolicy;
@@ -60,7 +61,13 @@ impl SandboxBackend for BwrapBackend {
 
         let runtime_dir = create_bwrap_runtime_dir(&request.identity.sandbox_id)?;
 
-        let mut mounts = request.profile.mounts.clone();
+        let mut mounts = request
+            .profile
+            .mounts
+            .iter()
+            .cloned()
+            .map(SandboxMount::profile)
+            .collect::<Vec<_>>();
 
         if request.profile.identity_mode == SandboxIdentityMode::SandboxUser {
             let (uid, gid) = host_uid_gid()?;
@@ -88,16 +95,16 @@ impl SandboxBackend for BwrapBackend {
                 ),
             })?;
 
-            mounts.push(MountSpec {
+            mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
                 source: passwd_path,
                 target: PathBuf::from("/etc/passwd"),
                 read_only: true,
-            });
-            mounts.push(MountSpec {
+            }));
+            mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
                 source: group_path,
                 target: PathBuf::from("/etc/group"),
                 read_only: true,
-            });
+            }));
         }
 
         if request.profile.network.enforce_network_namespace {
@@ -125,21 +132,21 @@ impl SandboxBackend for BwrapBackend {
             if resolv_conf_target != std::path::Path::new("/etc/resolv.conf") {
                 // Mount at the canonical target so reads through the symlink
                 // inside the sandbox see our stub-pointing content.
-                mounts.push(MountSpec {
+                mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
                     source: resolv_conf_path.clone(),
                     target: resolv_conf_target,
                     read_only: true,
-                });
+                }));
             }
 
             // Always mount at the literal /etc/resolv.conf path so that
             // processes that open the path directly (not via symlink) also
             // get our stub-pointing content.
-            mounts.push(MountSpec {
+            mounts.push(SandboxMount::sandbox_infrastructure(MountSpec {
                 source: resolv_conf_path,
                 target: PathBuf::from("/etc/resolv.conf"),
                 read_only: true,
-            });
+            }));
         }
 
         Ok(SandboxHandle {
@@ -201,11 +208,12 @@ impl SandboxBackend for BwrapBackend {
         }
 
         reject_symlinked_firma_dirs(launch)?;
+        let hardening = bwrap_hardening_from_env(&launch.env);
+        let mount_plan = BwrapMountPlan::build(handle, launch, &hardening)?;
 
         let mut command = Command::new("bwrap");
         command.arg("--die-with-parent");
         command.arg("--new-session");
-        let hardening = bwrap_hardening_from_env(&launch.env);
 
         #[cfg(target_os = "linux")]
         #[expect(
@@ -229,7 +237,7 @@ impl SandboxBackend for BwrapBackend {
             _seccomp_file = Some(file);
         }
 
-        append_filesystem_layout(&mut command, handle, launch, &hardening)?;
+        mount_plan.emit(&mut command);
 
         for (key, value) in &launch.env {
             command.arg("--setenv").arg(key).arg(value);
@@ -399,11 +407,158 @@ fn parse_truthy(value: &str) -> bool {
     )
 }
 
+/// Immutable, validated sequence of filesystem operations passed to bwrap.
+///
+/// Construction is the security boundary: profile and ordinary framework
+/// mounts are validated against protected host paths before any arguments are
+/// emitted, while the narrowly-scoped sandbox infrastructure role is checked
+/// against [`SandboxHandle::runtime_dir`].
+#[derive(Debug)]
+struct BwrapMountPlan {
+    steps: Vec<BwrapPlanStep>,
+}
+
+#[derive(Debug)]
+struct ValidatedMount {
+    spec: MountSpec,
+    role: SandboxMountRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BwrapPlanRole {
+    Layout,
+    Profile,
+    Framework,
+    SandboxInfrastructure,
+    Mask,
+}
+
+#[derive(Debug)]
+enum BwrapPlanStep {
+    Bind {
+        role: BwrapPlanRole,
+        source: PathBuf,
+        target: PathBuf,
+        read_only: bool,
+    },
+    Tmpfs {
+        role: BwrapPlanRole,
+        target: PathBuf,
+    },
+    Dev(PathBuf),
+    Chdir(PathBuf),
+    UnshareNet,
+}
+
+impl BwrapMountPlan {
+    fn empty() -> Self {
+        Self { steps: Vec::new() }
+    }
+
+    fn build(
+        handle: &SandboxHandle,
+        launch: &LaunchSpec,
+        hardening: &BwrapHardening,
+    ) -> Result<Self, RunError> {
+        let control_plane_runtime = resolve_path_allow_missing(
+            &firma_runtime_state::runtime_paths::default_runtime_dir(),
+            "control-plane runtime",
+        )?;
+        let sandbox_runtime =
+            handle
+                .runtime_dir
+                .canonicalize()
+                .map_err(|error| RunError::Backend {
+                    backend: BackendKind::Bwrap.to_string(),
+                    reason: format!(
+                        "failed to resolve sandbox runtime {} before planning mounts: {error}",
+                        handle.runtime_dir.display()
+                    ),
+                })?;
+        let mounts = validate_mounts(handle, &control_plane_runtime, &sandbox_runtime)?;
+        let mut plan = Self::empty();
+        append_filesystem_layout(
+            &mut plan,
+            handle,
+            &mounts,
+            &control_plane_runtime,
+            &sandbox_runtime,
+            launch,
+            hardening,
+        )?;
+        Ok(plan)
+    }
+
+    fn bind(
+        &mut self,
+        role: BwrapPlanRole,
+        source: impl Into<PathBuf>,
+        target: impl Into<PathBuf>,
+        read_only: bool,
+    ) {
+        self.steps.push(BwrapPlanStep::Bind {
+            role,
+            source: source.into(),
+            target: target.into(),
+            read_only,
+        });
+    }
+
+    fn tmpfs(&mut self, role: BwrapPlanRole, target: impl Into<PathBuf>) {
+        self.steps.push(BwrapPlanStep::Tmpfs {
+            role,
+            target: target.into(),
+        });
+    }
+
+    fn dev(&mut self, target: impl Into<PathBuf>) {
+        self.steps.push(BwrapPlanStep::Dev(target.into()));
+    }
+
+    fn chdir(&mut self, target: impl Into<PathBuf>) {
+        self.steps.push(BwrapPlanStep::Chdir(target.into()));
+    }
+
+    fn unshare_net(&mut self) {
+        self.steps.push(BwrapPlanStep::UnshareNet);
+    }
+
+    fn emit(self, command: &mut Command) {
+        for step in self.steps {
+            match step {
+                BwrapPlanStep::Bind {
+                    role,
+                    source,
+                    target,
+                    read_only,
+                } => {
+                    let _ = role;
+                    command.arg(if read_only { "--ro-bind" } else { "--bind" });
+                    command.arg(source).arg(target);
+                }
+                BwrapPlanStep::Tmpfs { role, target } => {
+                    let _ = role;
+                    command.arg("--tmpfs").arg(target);
+                }
+                BwrapPlanStep::Dev(target) => {
+                    command.arg("--dev").arg(target);
+                }
+                BwrapPlanStep::Chdir(target) => {
+                    command.arg("--chdir").arg(target);
+                }
+                BwrapPlanStep::UnshareNet => {
+                    command.arg("--unshare-net");
+                }
+            }
+        }
+    }
+}
+
 /// Rebind real `$HOME` writable when `runtime_home_isolation` is off.
 /// Without this, `--ro-bind /` makes `$HOME` read-only and the agent hits
 /// EROFS writing config/session state. `mask_home_paths` tmpfs overlays
 /// applied afterward still take precedence over this bind.
-fn bind_host_home(command: &mut Command, launch: &LaunchSpec) {
+fn bind_host_home(plan: &mut BwrapMountPlan, launch: &LaunchSpec) {
     let home = launch
         .env
         .get("HOME")
@@ -411,11 +566,11 @@ fn bind_host_home(command: &mut Command, launch: &LaunchSpec) {
         .or_else(|| std::env::var("HOME").ok())
         .unwrap_or_default();
     if !home.is_empty() && home.starts_with('/') {
-        command.arg("--bind").arg(&home).arg(&home);
+        plan.bind(BwrapPlanRole::Layout, &home, &home, false);
     }
 }
 
-fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[String]) {
+fn mask_sensitive_paths(plan: &mut BwrapMountPlan, launch: &LaunchSpec, suffixes: &[String]) {
     let home = launch
         .env
         .get("HOME")
@@ -429,7 +584,7 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[
     for suffix in suffixes {
         let path = format!("{home}/{suffix}");
         if std::path::Path::new(&path).exists() {
-            command.arg("--tmpfs").arg(&path);
+            plan.tmpfs(BwrapPlanRole::Mask, path);
         }
     }
 }
@@ -459,54 +614,59 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[
 /// Reordering would either bury the vscode-style subpath mounts or re-leak
 /// `firma.toml` under a workspace-parent bind.
 fn append_filesystem_layout(
-    command: &mut Command,
+    plan: &mut BwrapMountPlan,
     handle: &SandboxHandle,
+    mounts: &[ValidatedMount],
+    control_plane_runtime: &Path,
+    sandbox_runtime: &Path,
     launch: &LaunchSpec,
     hardening: &BwrapHardening,
 ) -> Result<(), RunError> {
     if hardening.readonly_rootfs {
-        command.arg("--ro-bind").arg("/").arg("/");
-        command.arg("--tmpfs").arg("/tmp");
-        command.arg("--tmpfs").arg("/var/tmp");
-        command.arg("--bind").arg(&launch.cwd).arg(&launch.cwd);
-        command
-            .arg("--bind")
-            .arg(&handle.runtime_dir)
-            .arg(&handle.runtime_dir);
+        plan.bind(BwrapPlanRole::Layout, "/", "/", true);
+        plan.tmpfs(BwrapPlanRole::Layout, "/tmp");
+        plan.tmpfs(BwrapPlanRole::Layout, "/var/tmp");
+        plan.bind(BwrapPlanRole::Layout, &launch.cwd, &launch.cwd, false);
+        plan.bind(
+            BwrapPlanRole::SandboxInfrastructure,
+            &handle.runtime_dir,
+            &handle.runtime_dir,
+            false,
+        );
         if !hardening.runtime_home_isolation {
-            bind_host_home(command, launch);
+            bind_host_home(plan, launch);
         }
-        mask_sensitive_paths(command, launch, &hardening.mask_home_paths);
+        mask_sensitive_paths(plan, launch, &hardening.mask_home_paths);
     } else {
-        command.arg("--bind").arg("/").arg("/");
+        plan.bind(BwrapPlanRole::Layout, "/", "/", false);
     }
-    command.arg("--dev").arg("/dev");
-    command.arg("--chdir").arg(&launch.cwd);
+    plan.dev("/dev");
+    plan.chdir(&launch.cwd);
 
     if handle.network_policy.enforce_network_namespace {
-        command.arg("--unshare-net");
+        plan.unshare_net();
     }
 
     // Partition profile mounts around the mask. A strict `.firma/` subpath
     // re-expose (e.g. the vscode state) is emitted *after* the mask; everything
     // else — a workspace-parent bind and a mount whose target *is* `.firma` —
     // is emitted *before*, so neither can re-leak nor replace the mask.
-    let (inside, outside): (Vec<&MountSpec>, Vec<&MountSpec>) = handle
-        .mounts
+    let (inside, outside): (Vec<&ValidatedMount>, Vec<&ValidatedMount>) = mounts
         .iter()
-        .partition(|mount| mount.reexposes_firma_subpath());
+        .partition(|mount| mount.spec.reexposes_firma_subpath());
 
-    emit_mounts(command, outside.iter().copied());
+    emit_mounts(plan, outside.iter().copied());
 
     // Mask the discoverable `.firma/`, then project each mask through the outside
     // binds above so an alias mount of a `.firma`-containing tree (e.g. the
     // workspace rebound elsewhere) can't re-expose the config at the aliased path.
-    let masked = mask_firma_dir(command, launch);
-    project_mount_aliases(command, &outside, masked);
+    let masked = mask_firma_dir(plan, launch);
+    let outside_specs = outside.iter().map(|mount| &mount.spec).collect::<Vec<_>>();
+    project_mount_aliases(plan, &outside_specs, masked);
 
-    emit_mounts(command, inside.iter().copied());
+    emit_mounts(plan, inside.iter().copied());
 
-    mask_control_plane_runtime(command, handle, launch)?;
+    mask_control_plane_runtime(plan, mounts, control_plane_runtime, sandbox_runtime, launch)?;
     Ok(())
 }
 
@@ -518,21 +678,12 @@ fn append_filesystem_layout(
 /// process needs. The sandbox-local bwrap runtime remains available separately
 /// because the proxy bridge and egress guard require its sockets.
 fn mask_control_plane_runtime(
-    command: &mut Command,
-    handle: &SandboxHandle,
+    plan: &mut BwrapMountPlan,
+    mounts: &[ValidatedMount],
+    runtime: &Path,
+    sandbox_runtime: &Path,
     launch: &LaunchSpec,
 ) -> Result<(), RunError> {
-    let runtime = firma_runtime_state::runtime_paths::default_runtime_dir();
-    if !runtime.exists() {
-        return Ok(());
-    }
-    let runtime = runtime.canonicalize().map_err(|error| RunError::Backend {
-        backend: BackendKind::Bwrap.to_string(),
-        reason: format!(
-            "failed to resolve control-plane runtime {} before masking: {error}",
-            runtime.display()
-        ),
-    })?;
     let cwd = launch.cwd.canonicalize().map_err(|error| RunError::Backend {
         backend: BackendKind::Bwrap.to_string(),
         reason: format!(
@@ -540,7 +691,7 @@ fn mask_control_plane_runtime(
             launch.cwd.display()
         ),
     })?;
-    if cwd.starts_with(&runtime) {
+    if cwd.starts_with(runtime) {
         return Err(RunError::Backend {
             backend: BackendKind::Bwrap.to_string(),
             reason: format!(
@@ -552,30 +703,169 @@ fn mask_control_plane_runtime(
     }
 
     let mut masked = BTreeMap::new();
-    emit_tmpfs(command, runtime.clone(), &mut masked);
-    let mounts = handle.mounts.iter().collect::<Vec<_>>();
-    project_mount_aliases(command, &mounts, masked);
+    emit_tmpfs(plan, runtime.to_path_buf(), &mut masked);
+    let specs = mounts.iter().map(|mount| &mount.spec).collect::<Vec<_>>();
+    project_mount_aliases(plan, &specs, masked);
 
-    if handle.runtime_dir.starts_with(&runtime) {
-        command
-            .arg("--bind")
-            .arg(&handle.runtime_dir)
-            .arg(&handle.runtime_dir);
+    if sandbox_runtime.starts_with(runtime) {
+        plan.bind(
+            BwrapPlanRole::SandboxInfrastructure,
+            sandbox_runtime,
+            sandbox_runtime,
+            false,
+        );
     }
     Ok(())
 }
 
-/// Emit each profile/runtime bind mount (`--ro-bind` or `--bind`) in order.
-fn emit_mounts<'a>(command: &mut Command, mounts: impl Iterator<Item = &'a MountSpec>) {
-    for mount in mounts {
-        if mount.read_only {
-            command
-                .arg("--ro-bind")
-                .arg(&mount.source)
-                .arg(&mount.target);
-        } else {
-            command.arg("--bind").arg(&mount.source).arg(&mount.target);
+fn validate_mounts(
+    handle: &SandboxHandle,
+    control_plane_runtime: &Path,
+    sandbox_runtime: &Path,
+) -> Result<Vec<ValidatedMount>, RunError> {
+    handle
+        .mounts
+        .iter()
+        .map(|mount| {
+            let source = mount.spec().source.canonicalize().map_err(|error| {
+                RunError::Backend {
+                    backend: BackendKind::Bwrap.to_string(),
+                    reason: format!(
+                        "failed to resolve mount source {} before planning mounts: {error}",
+                        mount.spec().source.display()
+                    ),
+                }
+            })?;
+            match mount.role() {
+                SandboxMountRole::SandboxInfrastructure => {
+                    if !source.starts_with(sandbox_runtime) {
+                        return Err(RunError::Backend {
+                            backend: BackendKind::Bwrap.to_string(),
+                            reason: format!(
+                                "sandbox-infrastructure mount source {} escapes the private sandbox runtime {}",
+                                source.display(),
+                                sandbox_runtime.display()
+                            ),
+                        });
+                    }
+                }
+                SandboxMountRole::Profile | SandboxMountRole::Framework => {
+                    if source.starts_with(control_plane_runtime) {
+                        return Err(RunError::Backend {
+                            backend: BackendKind::Bwrap.to_string(),
+                            reason: format!(
+                                "refusing mount source {} inside the control-plane runtime {}; wrapped processes must not access FIRMA_STATE_DIR",
+                                source.display(),
+                                control_plane_runtime.display()
+                            ),
+                        });
+                    }
+                }
+            }
+
+            Ok(ValidatedMount {
+                spec: MountSpec {
+                    source,
+                    target: mount.spec().target.clone(),
+                    read_only: mount.spec().read_only,
+                },
+                role: mount.role(),
+            })
+        })
+        .collect()
+}
+
+/// Resolve an absolute mount path through every existing symlink while
+/// preserving a suffix that has not been created yet.
+///
+/// This keeps protected paths stable even before their final directory exists:
+/// the nearest existing ancestor is canonicalized, then the normalized missing
+/// components are restored beneath it.
+fn resolve_path_allow_missing(path: &Path, description: &str) -> Result<PathBuf, RunError> {
+    let absolute = std::path::absolute(path).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!(
+            "failed to make {description} path {} absolute: {error}",
+            path.display()
+        ),
+    })?;
+    let normalized = normalize_absolute_path(&absolute);
+    let mut missing = Vec::<OsString>::new();
+    let mut candidate = normalized.as_path();
+
+    loop {
+        match candidate.canonicalize() {
+            Ok(mut resolved) => {
+                while let Some(component) = missing.pop() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = candidate.file_name() else {
+                    return Err(RunError::Backend {
+                        backend: BackendKind::Bwrap.to_string(),
+                        reason: format!(
+                            "failed to resolve {description} path {}: no existing ancestor",
+                            path.display()
+                        ),
+                    });
+                };
+                missing.push(name.to_os_string());
+                let Some(parent) = candidate.parent() else {
+                    return Err(RunError::Backend {
+                        backend: BackendKind::Bwrap.to_string(),
+                        reason: format!(
+                            "failed to resolve {description} path {}: no parent",
+                            path.display()
+                        ),
+                    });
+                };
+                candidate = parent;
+            }
+            Err(error) => {
+                return Err(RunError::Backend {
+                    backend: BackendKind::Bwrap.to_string(),
+                    reason: format!(
+                        "failed to resolve {description} path {}: {error}",
+                        path.display()
+                    ),
+                });
+            }
         }
+    }
+}
+
+fn normalize_absolute_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if normalized
+                    .components()
+                    .next_back()
+                    .is_some_and(|part| matches!(part, Component::Normal(_)))
+                {
+                    normalized.pop();
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// Emit each profile/runtime bind mount (`--ro-bind` or `--bind`) in order.
+fn emit_mounts<'a>(plan: &mut BwrapMountPlan, mounts: impl Iterator<Item = &'a ValidatedMount>) {
+    for mount in mounts {
+        let role = match mount.role {
+            SandboxMountRole::Profile => BwrapPlanRole::Profile,
+            SandboxMountRole::Framework => BwrapPlanRole::Framework,
+            SandboxMountRole::SandboxInfrastructure => BwrapPlanRole::SandboxInfrastructure,
+        };
+        let spec = &mount.spec;
+        plan.bind(role, &spec.source, &spec.target, spec.read_only);
     }
 }
 
@@ -622,11 +912,11 @@ fn emit_mounts<'a>(command: &mut Command, mounts: impl Iterator<Item = &'a Mount
 ///
 /// Returns the emitted mask set so the caller can project it through outside
 /// binds (see [`project_mount_aliases`]).
-fn mask_firma_dir(command: &mut Command, launch: &LaunchSpec) -> BTreeMap<PathBuf, MaskKind> {
+fn mask_firma_dir(plan: &mut BwrapMountPlan, launch: &LaunchSpec) -> BTreeMap<PathBuf, MaskKind> {
     let mut masked: BTreeMap<PathBuf, MaskKind> = BTreeMap::new();
 
     for candidate in firma_config_loader::FirmaConfigCandidateAncestors::new(&launch.cwd, None) {
-        mask_firma_dir_at(command, &candidate.config_dir, &mut masked);
+        mask_firma_dir_at(plan, &candidate.config_dir, &mut masked);
     }
 
     // The cwd is bound read-write, so the agent can *plant* a higher-precedence
@@ -637,11 +927,11 @@ fn mask_firma_dir(command: &mut Command, launch: &LaunchSpec) -> BTreeMap<PathBu
     // (and tmpfs-ing them there could fail `EROFS`).
     let cwd_firma = launch.cwd.join(CONFIG_DIR_NAME);
     if !cwd_firma.exists() {
-        emit_tmpfs(command, cwd_firma, &mut masked);
+        emit_tmpfs(plan, cwd_firma, &mut masked);
     }
 
     if let Some(home_firma) = host_home_firma_dir(launch) {
-        mask_firma_dir_at(command, &home_firma, &mut masked);
+        mask_firma_dir_at(plan, &home_firma, &mut masked);
     }
 
     if let Some(config_file) = &launch.config_file {
@@ -655,12 +945,12 @@ fn mask_firma_dir(command: &mut Command, launch: &LaunchSpec) -> BTreeMap<PathBu
             parent.file_name().and_then(|name| name.to_str()) == Some(CONFIG_DIR_NAME)
         });
         if let Some(firma_parent) = firma_parent {
-            mask_firma_dir_at(command, firma_parent, &mut masked);
+            mask_firma_dir_at(plan, firma_parent, &mut masked);
         } else {
             // Bare config file whose parent is not `.firma`: hide only the file
             // (reads empty, writes fail `EROFS`) without tmpfs-ing the parent,
             // which could be the workspace root.
-            mask_config_file_at(command, &config_file, &mut masked);
+            mask_config_file_at(plan, &config_file, &mut masked);
         }
     }
 
@@ -681,7 +971,7 @@ fn mask_firma_dir(command: &mut Command, launch: &LaunchSpec) -> BTreeMap<PathBu
 /// paths are projected; aliases are not themselves re-projected through other
 /// mounts.
 fn project_mount_aliases(
-    command: &mut Command,
+    plan: &mut BwrapMountPlan,
     mounts: &[&MountSpec],
     mut masked: BTreeMap<PathBuf, MaskKind>,
 ) {
@@ -703,8 +993,8 @@ fn project_mount_aliases(
                 mount.target.join(relative)
             };
             match kind {
-                MaskKind::Dir => emit_tmpfs(command, alias, &mut masked),
-                MaskKind::File => emit_ro_bind_null(command, alias, &mut masked),
+                MaskKind::Dir => emit_tmpfs(plan, alias, &mut masked),
+                MaskKind::File => emit_ro_bind_null(plan, alias, &mut masked),
             }
         }
     }
@@ -809,10 +1099,14 @@ fn reject_symlinked_firma_dir(
 /// - any other canonicalize error → fail closed, tmpfs the literal path.
 ///
 /// Deduplicates via `masked` so shared ancestors are only emitted once.
-fn mask_firma_dir_at(command: &mut Command, dir: &Path, masked: &mut BTreeMap<PathBuf, MaskKind>) {
+fn mask_firma_dir_at(
+    plan: &mut BwrapMountPlan,
+    dir: &Path,
+    masked: &mut BTreeMap<PathBuf, MaskKind>,
+) {
     let target = match dir.canonicalize() {
         Ok(canonical) if canonical.file_name().and_then(OsStr::to_str) != Some(CONFIG_DIR_NAME) => {
-            mask_config_file_at(command, &canonical.join(CONFIG_FILE_NAME), masked);
+            mask_config_file_at(plan, &canonical.join(CONFIG_FILE_NAME), masked);
             return;
         }
         Ok(canonical) => canonical,
@@ -824,9 +1118,9 @@ fn mask_firma_dir_at(command: &mut Command, dir: &Path, masked: &mut BTreeMap<Pa
     };
     let config_file = target.join(CONFIG_FILE_NAME);
     if config_file.is_symlink() {
-        mask_config_file_at(command, &config_file, masked);
+        mask_config_file_at(plan, &config_file, masked);
     }
-    emit_tmpfs(command, target, masked);
+    emit_tmpfs(plan, target, masked);
 }
 
 /// ro-bind `/dev/null` over a single config file at its canonical path, so reads
@@ -834,12 +1128,12 @@ fn mask_firma_dir_at(command: &mut Command, dir: &Path, masked: &mut BTreeMap<Pa
 /// symlink. Canonicalizes first to defeat a post-discovery symlink swap, falling
 /// back to the literal path if it does not resolve. Deduplicated via `masked`.
 fn mask_config_file_at(
-    command: &mut Command,
+    plan: &mut BwrapMountPlan,
     file: &Path,
     masked: &mut BTreeMap<PathBuf, MaskKind>,
 ) {
     let target = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-    emit_ro_bind_null(command, target, masked);
+    emit_ro_bind_null(plan, target, masked);
 }
 
 /// Whether a mask hides a whole `.firma/` directory or a single config file.
@@ -851,21 +1145,25 @@ enum MaskKind {
 }
 
 /// tmpfs-mask a directory once, tracking it in `masked` for dedup/projection.
-fn emit_tmpfs(command: &mut Command, target: PathBuf, masked: &mut BTreeMap<PathBuf, MaskKind>) {
+fn emit_tmpfs(
+    plan: &mut BwrapMountPlan,
+    target: PathBuf,
+    masked: &mut BTreeMap<PathBuf, MaskKind>,
+) {
     if masked.insert(target.clone(), MaskKind::Dir).is_none() {
-        command.arg("--tmpfs").arg(target);
+        plan.tmpfs(BwrapPlanRole::Mask, target);
     }
 }
 
 /// ro-bind `/dev/null` over a file once, tracking it in `masked` for
 /// dedup/projection.
 fn emit_ro_bind_null(
-    command: &mut Command,
+    plan: &mut BwrapMountPlan,
     target: PathBuf,
     masked: &mut BTreeMap<PathBuf, MaskKind>,
 ) {
     if masked.insert(target.clone(), MaskKind::File).is_none() {
-        command.arg("--ro-bind").arg("/dev/null").arg(target);
+        plan.bind(BwrapPlanRole::Mask, "/dev/null", target, true);
     }
 }
 
@@ -1031,7 +1329,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_sensitive_paths_adds_expected_mounts() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("home");
         std::fs::create_dir_all(home.join(".ssh")).expect("mkdir .ssh");
@@ -1057,12 +1355,8 @@ mod tests {
             ".aws".to_string(),
             ".config/gcloud".to_string(),
         ];
-        super::mask_sensitive_paths(&mut cmd, &launch, &suffixes);
-        let rendered = cmd
-            .get_args()
-            .map(|arg| arg.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
+        super::mask_sensitive_paths(&mut plan, &launch, &suffixes);
+        let rendered = rendered_plan(plan).join(" ");
 
         assert!(rendered.contains(&format!("--tmpfs {}/.ssh", home.display())));
         assert!(rendered.contains(&format!("--tmpfs {}/.aws", home.display())));
@@ -1110,6 +1404,13 @@ mod tests {
             .collect::<Vec<_>>()
     }
 
+    #[cfg(target_os = "linux")]
+    fn rendered_plan(plan: super::BwrapMountPlan) -> Vec<String> {
+        let mut command = std::process::Command::new("bwrap");
+        plan.emit(&mut command);
+        rendered_args(&command)
+    }
+
     /// Canonicalized path, matching how `mask_firma_dir` renders mount targets.
     #[cfg(target_os = "linux")]
     fn canonical(path: &std::path::Path) -> String {
@@ -1122,7 +1423,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_masks_dir_without_recreating_file() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // Config discovered in a `.firma/` above the workspace cwd (walk-up).
         let temp = tempfile::tempdir().expect("tempdir");
         let firma_dir = temp.path().join(".firma");
@@ -1131,9 +1432,9 @@ mod tests {
         std::fs::write(&config_file, "").expect("write firma.toml");
         let launch = launch_with_cwd_and_config(temp.path().to_path_buf(), Some(config_file));
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd).join(" ");
+        let rendered = rendered_plan(plan).join(" ");
         assert!(rendered.contains(&format!("--tmpfs {}", canonical(&firma_dir))));
         assert!(!rendered.contains("--ro-bind /dev/null"));
     }
@@ -1141,7 +1442,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_masks_all_ancestor_dirs() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // Two `.firma/` on the discovery path: the nearest (resolved) and a
         // parent that lost the walk-up race. Both must be masked, since root is
         // bound and a later `firma run` could select the parent.
@@ -1155,9 +1456,9 @@ mod tests {
         std::fs::write(&config_file, "").expect("write firma.toml");
         let launch = launch_with_cwd_and_config(child, Some(config_file));
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd).join(" ");
+        let rendered = rendered_plan(plan).join(" ");
         assert!(rendered.contains(&format!("--tmpfs {}", canonical(&child_firma))));
         assert!(rendered.contains(&format!("--tmpfs {}", canonical(&parent_firma))));
     }
@@ -1181,11 +1482,13 @@ mod tests {
             backend: crate::backend::BackendKind::Bwrap,
             runtime_dir,
             identity: crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "vscode"),
-            mounts: vec![crate::config::MountSpec {
-                source: vscode_state.clone(),
-                target: vscode_state.clone(),
-                read_only: false,
-            }],
+            mounts: vec![crate::backend::SandboxMount::framework(
+                crate::config::MountSpec {
+                    source: vscode_state.clone(),
+                    target: vscode_state.clone(),
+                    read_only: false,
+                },
+            )],
             network_policy: crate::config::NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1202,11 +1505,10 @@ mod tests {
         let launch = launch_with_env(cwd.clone(), None, env);
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
-        let mut cmd = std::process::Command::new("bwrap");
-        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening)
-            .expect("append filesystem layout");
+        let plan =
+            super::BwrapMountPlan::build(&handle, &launch, &hardening).expect("build mount plan");
 
-        let rendered = rendered_args(&cmd);
+        let rendered = rendered_plan(plan);
         let cwd_bind = rendered
             .iter()
             .position(|arg| arg == &cwd.display().to_string())
@@ -1248,11 +1550,13 @@ mod tests {
                 "claude-code",
             ),
             // Mirrors the workspace-parent bind from firma.toml.
-            mounts: vec![crate::config::MountSpec {
-                source: workspace.clone(),
-                target: workspace.clone(),
-                read_only: false,
-            }],
+            mounts: vec![crate::backend::SandboxMount::profile(
+                crate::config::MountSpec {
+                    source: workspace.clone(),
+                    target: workspace.clone(),
+                    read_only: false,
+                },
+            )],
             network_policy: crate::config::NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1264,11 +1568,10 @@ mod tests {
         let launch = launch_with_env(workspace.clone(), None, env);
         let hardening = super::bwrap_hardening_from_env(&launch.env);
 
-        let mut cmd = std::process::Command::new("bwrap");
-        super::append_filesystem_layout(&mut cmd, &handle, &launch, &hardening)
-            .expect("append filesystem layout");
+        let plan =
+            super::BwrapMountPlan::build(&handle, &launch, &hardening).expect("build mount plan");
 
-        let rendered = rendered_args(&cmd);
+        let rendered = rendered_plan(plan);
         // The workspace-parent bind: `--bind <workspace> <workspace>`.
         let workspace_str = workspace.display().to_string();
         let workspace_mount = rendered
@@ -1290,7 +1593,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_masks_home_firma_outside_cwd_ancestry() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // cwd is not under $HOME, so $HOME/.firma is outside the walk-up path.
         // It must still be masked: a later run from $HOME would discover it, and
         // $HOME is rebound read-write, so an agent could plant a config there.
@@ -1305,16 +1608,16 @@ mod tests {
         env.insert("HOME".to_string(), home.display().to_string());
         let launch = launch_with_env(cwd, None, env);
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd).join(" ");
+        let rendered = rendered_plan(plan).join(" ");
         assert!(rendered.contains(&format!("--tmpfs {}", canonical(&home_firma))));
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_fails_closed_when_canonicalize_errors() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // A `.firma` that exists but cannot be canonicalized (here a self-
         // referential symlink → ELOOP, not NotFound). Must fail closed and mask
         // the literal path rather than leave the config exposed.
@@ -1330,16 +1633,16 @@ mod tests {
 
         let launch = launch_with_cwd_and_config(cwd, None);
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd).join(" ");
+        let rendered = rendered_plan(plan).join(" ");
         assert!(rendered.contains(&format!("--tmpfs {}", link.display())));
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_follows_symlink_swap_to_real_path() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // A hostile workspace swaps `.firma` for a symlink after discovery. The
         // mask must land on the symlink target's real path, not the link name,
         // so the real config directory is actually hidden.
@@ -1353,16 +1656,16 @@ mod tests {
 
         let launch = launch_with_cwd_and_config(cwd, None);
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd).join(" ");
+        let rendered = rendered_plan(plan).join(" ");
         assert!(rendered.contains(&format!("--tmpfs {}", canonical(&real_firma))));
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_ignores_symlink_to_non_firma_dir() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // `.firma` symlinked at the workspace root: canonicalizing resolves to a
         // non-`.firma` directory, so we must NOT tmpfs it (that would hide the
         // whole workspace).
@@ -1374,9 +1677,9 @@ mod tests {
 
         let launch = launch_with_cwd_and_config(cwd, None);
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd);
+        let rendered = rendered_plan(plan);
         assert!(
             rendered.iter().all(|arg| arg != "--tmpfs"),
             "must not tmpfs a symlink that resolves outside a .firma dir"
@@ -1386,7 +1689,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_masks_bare_file_without_tmpfsing_parent() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // Explicit --config pointing at a bare file: parent is not `.firma`, so
         // we must NOT tmpfs the parent (it could be the workspace root); only the
         // file itself is masked. The absent cwd `.firma` is still masked to block
@@ -1397,9 +1700,9 @@ mod tests {
         let launch =
             launch_with_cwd_and_config(temp.path().to_path_buf(), Some(config_file.clone()));
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd);
+        let rendered = rendered_plan(plan);
         // The bare file is masked with /dev/null.
         assert!(
             rendered
@@ -1426,7 +1729,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_resolves_relative_config_file_against_cwd() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // `--config ./firma.toml`: relative paths must be made absolute or bwrap
         // aborts the sandbox (fail-closed DENY) on a relative mount target.
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1437,16 +1740,16 @@ mod tests {
             Some(std::path::PathBuf::from("firma.toml")),
         );
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd).join(" ");
+        let rendered = rendered_plan(plan).join(" ");
         assert!(rendered.contains(&format!("--ro-bind /dev/null {}", canonical(&config_file))));
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_firma_dir_masks_absent_cwd_candidate_to_block_planting() {
-        let mut cmd = std::process::Command::new("bwrap");
+        let mut plan = super::BwrapMountPlan::empty();
         // No `.firma/` anywhere and no `--config`: the only mask is the absent
         // cwd candidate, tmpfs'd so the agent can't plant a higher-precedence
         // `.firma/` at the rw-bound cwd for a later run to select. Ancestors
@@ -1454,9 +1757,9 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let launch = launch_with_cwd_and_config(temp.path().to_path_buf(), None);
 
-        super::mask_firma_dir(&mut cmd, &launch);
+        super::mask_firma_dir(&mut plan, &launch);
 
-        let rendered = rendered_args(&cmd);
+        let rendered = rendered_plan(plan);
         assert_eq!(
             rendered,
             vec![

@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::backend::SandboxHandle;
+use crate::backend::{SandboxHandle, SandboxMount};
 use crate::config::MountSpec;
 use crate::config::ResolvedProfile;
 use crate::error::RunError;
@@ -119,18 +119,18 @@ pub(super) fn resolve_vscode_state_dir(
 }
 
 pub(super) fn ensure_vscode_state_mount(handle: &mut SandboxHandle, state_dir: &Path) {
-    let already_mounted = handle
-        .mounts
-        .iter()
-        .any(|mount| mount.source == state_dir && mount.target == state_dir && !mount.read_only);
+    let already_mounted =
+        handle.mounts.iter().map(SandboxMount::spec).any(|mount| {
+            mount.source == state_dir && mount.target == state_dir && !mount.read_only
+        });
     if already_mounted {
         return;
     }
-    handle.mounts.push(MountSpec {
+    handle.mounts.push(SandboxMount::framework(MountSpec {
         source: state_dir.to_path_buf(),
         target: state_dir.to_path_buf(),
         read_only: false,
-    });
+    }));
 }
 
 fn seed_vscode_user_settings(user_data_dir: &Path) -> Result<(), RunError> {
