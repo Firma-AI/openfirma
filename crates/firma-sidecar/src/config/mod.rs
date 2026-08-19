@@ -846,7 +846,9 @@ impl CredentialConfig {
 
 // Interceptor-section defaults live in the schema crate
 // (`firma_config_schema::sidecar::interceptor`). Re-exported here for the
-// one caller that constructs a fallback socket path directly.
+// one caller that constructs a fallback socket path directly. The Unix-socket
+// interceptor mode is the only consumer, so the re-export is Unix-only.
+#[cfg(unix)]
 pub(crate) use schema_ic::default_socket_path;
 
 fn validate_host_patterns(field: &str, patterns: &[String]) -> Result<(), String> {
