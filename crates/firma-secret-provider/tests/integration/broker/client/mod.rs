@@ -1,6 +1,8 @@
 use std::str::FromStr;
 
 use firma_http::Str;
+#[cfg(not(unix))]
+use firma_secret_provider::endpoint::EndpointInner;
 use firma_secret_provider::{
     broker::{
         BrokerRequest, BrokerResponse,
@@ -34,31 +36,25 @@ async fn bind_broker() -> anyhow::Result<BoundBroker> {
     let dir = tempfile::tempdir()?;
     tokio::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).await?;
     let path = dir.path().join("broker.sock");
-    let endpoint = ServerEndpoint::from_str(&format!("unix:{}", path.display()))?;
+    let endpoint = ServerEndpoint::from_str(&format!("unix://{}", path.display()))?;
     let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default()).await?;
     Ok(BoundBroker {
         listener,
         _dir: dir,
-        endpoint: ClientEndpoint::from_str(&format!("unix:{}", path.display()))?,
+        endpoint: ClientEndpoint::from_str(&format!("unix://{}", path.display()))?,
     })
 }
 
 /// Bind a listener on a fresh loopback TCP port (the Windows transport).
 #[cfg(not(unix))]
 async fn bind_broker() -> anyhow::Result<BoundBroker> {
-    let endpoint = ServerEndpoint::from_str("tcp:127.0.0.1:0")?;
-    let listener = crate::secret_broker::server::BrokerListener::bind(
-        &endpoint,
-        crate::secret_broker::server::config::BrokerListenerConfig::default(),
-    )
-    .await?;
-    let EndpointInner::Tcp(addr) = listener.bound_endpoint()? else {
-        panic!("TCP listener must return TCP endpoint");
-    };
+    let endpoint = ServerEndpoint::from_str("tcp://127.0.0.1:0")?;
+    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default()).await?;
+    let EndpointInner::Tcp(addr) = listener.bound_endpoint()?;
     Ok(BoundBroker {
         listener,
         _dir: (),
-        endpoint: ClientEndpoint::from_str(&format!("tcp:{addr}"))?,
+        endpoint: ClientEndpoint::from_str(&format!("tcp://{addr}"))?,
     })
 }
 
@@ -196,7 +192,7 @@ fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, tempfile::TempDir) {
         conn.write_all(&padded).await.expect("write");
     });
     (
-        ClientEndpoint::from_str(&format!("unix:{}", path.display())).expect("valid endpoint"),
+        ClientEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint"),
         dir,
     )
 }
@@ -204,19 +200,22 @@ fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, tempfile::TempDir) {
 /// Windows twin of [`bind_raw_responder`], using the TCP transport.
 #[cfg(not(unix))]
 #[expect(clippy::expect_used, reason = "this is a test")]
-fn bind_raw_responder(padded: Vec<u8>) -> anyhow::Result<(CommandMediatorEndpoint, ())> {
-    let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let listener = tokio::net::TcpListener::from_std(std_listener)?;
+fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, ()) {
+    let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = tokio::net::TcpListener::from_std(std_listener).expect("tcp listener");
     let addr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
-        let (mut conn, _) = listener.accept().await?;
+        let (mut conn, _) = listener.accept().await.expect("accept");
         let mut reader = tokio::io::BufReader::new(&mut conn);
         let mut request = Vec::new();
         let _ = reader.read_until(b'\n', &mut request).await;
         drop(reader);
-        conn.write_all(&padded).await?;
+        conn.write_all(&padded).await.expect("write");
     });
-    Ok((ClientEndpoint::from_str(&format!("tcp:{addr}"))?, ()))
+    (
+        ClientEndpoint::from_str(&format!("tcp://{addr}")).expect("valid endpoint"),
+        (),
+    )
 }
 
 #[tokio::test]
@@ -292,15 +291,13 @@ async fn request_fails_closed_when_operation_times_out() {
 #[cfg(not(unix))]
 #[tokio::test]
 async fn request_fails_fast_when_broker_is_unreachable() {
-    let endpoint = CommandMediatorEndpoint::Tcp {
-        addr: "127.0.0.1:1".parse().expect("valid addr"),
-    };
-    let client = BrokerClient::try_new(endpoint, BrokerClientConfig::default()).expect("client");
+    let endpoint = ClientEndpoint::from_str("tcp://127.0.0.1:1").expect("valid addr");
+    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
     let error = client
         .request(
             &BrokerRequest {
                 bin: Str::from("bws"),
-                args: &["secret", "get", "abc"][..],
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
         )

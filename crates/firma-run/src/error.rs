@@ -80,13 +80,13 @@ pub enum RunError {
 
     #[error(
         "`--sidecar local` is incompatible with `--no-autostart`; \
-         pass `--sidecar <tcp:...|unix:...>` or omit `--no-autostart`"
+         pass `--sidecar <tcp://...|unix://...>` or omit `--no-autostart`"
     )]
     SidecarLocalNoAutostart,
 
     #[error(
         "no sidecar endpoint configured and autostart is disabled; \
-         pass `--sidecar local` or `--sidecar <tcp:...|unix:...>`"
+         pass `--sidecar local` or `--sidecar <tcp://...|unix://...>`"
     )]
     MissingSidecar,
 

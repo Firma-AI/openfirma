@@ -52,7 +52,7 @@ pub struct RunArgs {
     pub print_effective_config: bool,
 
     /// Sidecar selection. `local` autostarts a per-run sidecar; a
-    /// `tcp:host:port` or `unix:/path/to/sock` value targets an existing
+    /// `tcp://host:port` or `unix:///path/to/sock` value targets an existing
     /// external sidecar at that endpoint and never autostarts. When omitted,
     /// falls back to the persisted `sidecar_endpoint` in `firma.toml`
     /// (external) or, if none, local autostart.

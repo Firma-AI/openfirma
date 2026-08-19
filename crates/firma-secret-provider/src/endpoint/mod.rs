@@ -15,14 +15,14 @@ pub enum EndpointInner {
 }
 
 impl EndpointInner {
-    /// Parse a `unix:<path>` or `tcp:<host>:<port>` address string.
+    /// Parse a `unix://<path>` or `tcp://<host>:<port>` address string.
     ///
     /// # Errors
     ///
     /// Returns an error [`EndpointParseError`] if the scheme is unrecognized, the TCP address
-    /// is malformed, or a `unix:` address is used on a non-Unix platform.
+    /// is malformed, or a `unix://` address is used on a non-Unix platform.
     fn parse_client(s: &str) -> Result<Self, error::EndpointParseError> {
-        if let Some(addr_str) = s.strip_prefix("tcp:") {
+        if let Some(addr_str) = s.strip_prefix("tcp://") {
             let addr = addr_str.parse::<SocketAddr>().map_err(|error| {
                 error::EndpointParseError::InvalidTCP {
                     addr: addr_str.to_owned(),
@@ -36,7 +36,7 @@ impl EndpointInner {
             return Ok(Self::Tcp(addr));
         }
 
-        if let Some(path_str) = s.strip_prefix("unix:") {
+        if let Some(path_str) = s.strip_prefix("unix://") {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -84,14 +84,14 @@ impl EndpointInner {
         Err(error::EndpointParseError::Unrecognized(s.to_owned()))
     }
 
-    /// Parse a `unix:<path>` or `tcp:<host>:<port>` address string.
+    /// Parse a `unix:<path>` or `tcp://<host>:<port>` address string.
     ///
     /// # Errors
     ///
     /// Returns an error [`EndpointParseError`] if the scheme is unrecognized, the TCP address
-    /// is malformed, or a `unix:` address is used on a non-Unix platform.
+    /// is malformed, or a `unix://` address is used on a non-Unix platform.
     fn parse_server(s: &str) -> Result<Self, error::EndpointParseError> {
-        if let Some(addr_str) = s.strip_prefix("tcp:") {
+        if let Some(addr_str) = s.strip_prefix("tcp://") {
             let addr = addr_str.parse::<SocketAddr>().map_err(|error| {
                 error::EndpointParseError::InvalidTCP {
                     addr: addr_str.to_owned(),
@@ -105,7 +105,7 @@ impl EndpointInner {
             return Ok(Self::Tcp(addr));
         }
 
-        if let Some(path_str) = s.strip_prefix("unix:") {
+        if let Some(path_str) = s.strip_prefix("unix://") {
             #[cfg(unix)]
             {
                 let socket_file = std::path::PathBuf::from(path_str);
@@ -130,9 +130,9 @@ impl EndpointInner {
 impl Display for EndpointInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Tcp(addr) => write!(f, "tcp:{addr}"),
+            Self::Tcp(addr) => write!(f, "tcp://{addr}"),
             #[cfg(unix)]
-            Self::Unix(path) => write!(f, "unix:{}", path.display()),
+            Self::Unix(path) => write!(f, "unix://{}", path.display()),
         }
     }
 }

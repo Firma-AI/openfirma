@@ -27,7 +27,7 @@ struct BoundBroker {
 async fn bind_with_config(config: BrokerListenerConfig) -> anyhow::Result<BoundBroker> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("broker.sock");
-    let endpoint = ServerEndpoint::from_str(&format!("unix:{}", path.display()))?;
+    let endpoint = ServerEndpoint::from_str(&format!("unix://{}", path.display()))?;
     let listener = BrokerListener::bind(&endpoint, config).await?;
     Ok(BoundBroker {
         listener,
@@ -39,15 +39,13 @@ async fn bind_with_config(config: BrokerListenerConfig) -> anyhow::Result<BoundB
 /// Bind a listener on a fresh loopback TCP port (the Windows transport).
 #[cfg(not(unix))]
 async fn bind_with_config(config: BrokerListenerConfig) -> anyhow::Result<BoundBroker> {
-    let endpoint = ServerEndpoint::from_str("tcp:127.0.0.1:0")?;
+    let endpoint = ServerEndpoint::from_str("tcp://127.0.0.1:0")?;
     let listener = BrokerListener::bind(&endpoint, config).await?;
-    let CommandMediatorEndpoint::Tcp { addr } = listener.bound_endpoint()? else {
-        panic!("TCP listener must return TCP endpoint");
-    };
+    let EndpointInner::Tcp(addr) = listener.bound_endpoint()?;
     Ok(BoundBroker {
         listener,
         _dir: (),
-        endpoint: CommandMediatorEndpoint::Tcp { addr },
+        endpoint: ServerEndpoint::from_str(&format!("tcp://{addr}"))?,
     })
 }
 
@@ -158,9 +156,7 @@ async fn bound_endpoint_returns_assigned_tcp_port() {
     let BoundBroker { endpoint, .. } = bind_with_config(BrokerListenerConfig::default())
         .await
         .expect("bind");
-    let CommandMediatorEndpoint::Tcp { addr } = endpoint else {
-        panic!("TCP listener must return TCP endpoint");
-    };
+    let EndpointInner::Tcp(addr) = endpoint.as_inner();
     assert_ne!(addr.port(), 0, "OS must assign a non-zero port");
 }
 
@@ -238,7 +234,7 @@ async fn unix_socket_is_owner_only() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("broker.sock");
     let endpoint =
-        ServerEndpoint::from_str(&format!("unix:{}", path.display())).expect("valid endpoint");
+        ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
     let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
         .await
         .expect("bind");

@@ -48,7 +48,7 @@ impl BrokerListener {
     /// Bind a listener at `endpoint` with `config`.
     ///
     /// The endpoint must pass the transport's address-level invariants (see
-    /// [`validate_endpoint`]): on Unix hosts only a Unix socket is accepted,
+    /// [`EndpointInner::parse_server`]): on Unix hosts only a Unix socket is accepted,
     /// and on any platform a non-loopback TCP endpoint is rejected. For Unix
     /// endpoints, any stale socket file is removed before binding and the new
     /// socket is created owner-only (`0600`), so only the owning user can
@@ -106,7 +106,7 @@ impl BrokerListener {
     /// response back.
     ///
     /// The whole read-then-run-then-write exchange is bounded by
-    /// [`BrokerListenerConfig::operation_timeout`], and on Unix the connecting
+    /// [`config::BrokerListenerConfig::operation_timeout`], and on Unix the connecting
     /// shim's credentials are validated before the request is read. A rejected
     /// connection receives an error response.
     ///

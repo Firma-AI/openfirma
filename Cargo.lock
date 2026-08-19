@@ -1689,8 +1689,6 @@ name = "firma-run"
 version = "0.1.6"
 dependencies = [
  "anyhow",
- "base64",
- "bytesize",
  "chrono",
  "ctrlc",
  "dialoguer",
@@ -1707,7 +1705,6 @@ dependencies = [
  "firma-test-helpers",
  "fs-err",
  "hex",
- "jiff",
  "libc",
  "nix 0.31.3",
  "p256",

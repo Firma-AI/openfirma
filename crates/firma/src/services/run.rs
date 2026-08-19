@@ -38,7 +38,7 @@ pub fn run(args: RunArgs, foreground: &ForegroundLog) -> anyhow::Result<ExitCode
     if args.no_autostart && args.sidecar.as_deref() == Some("local") {
         anyhow::bail!(
             "`--sidecar local` is incompatible with `--no-autostart`; \
-             pass `--sidecar <tcp:...|unix:...>` or omit `--no-autostart`"
+             pass `--sidecar <tcp://...|unix://...>` or omit `--no-autostart`"
         );
     }
     validate_sidecar_endpoint_flag(&args)?;
