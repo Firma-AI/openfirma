@@ -49,11 +49,8 @@ impl EndpointInner {
                             .symlink_metadata()
                             .map_err(error::EndpointParseError::IO)?;
                         Ok::<_, error::EndpointParseError>(
-                            is_expected_type(&metadata.file_type()) && {
-                                let perm = metadata.permissions().mode() & 0o777;
-                                eprintln!("{perm:#o}");
-                                perm
-                            } == mode,
+                            is_expected_type(&metadata.file_type())
+                                && metadata.permissions().mode() & 0o777 == mode,
                         )
                     };
 

@@ -255,6 +255,101 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
     );
 }
 
+/// Runs a single `request` round-trip against `raw_response` bytes written
+/// by a bare responder, returning the client error.
+#[expect(clippy::expect_used, reason = "this is a test")]
+async fn raw_response_error(raw_response: &[u8]) -> BrokerClientError {
+    let (endpoint, _guard) = bind_raw_responder(raw_response.to_vec());
+    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    client
+        .request(
+            &BrokerRequest {
+                bin: Str::from("bws"),
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
+            },
+            |_| Ok(()),
+        )
+        .await
+        .expect_err("protocol-violating response must fail closed")
+}
+
+#[tokio::test]
+async fn request_rejects_invalid_base64_stdout() {
+    // `run`'s exec closure decodes the success payload's base64, so the
+    // malformed-payload path lives there rather than in the generic
+    // `request` deserialization.
+    let (endpoint, _guard) =
+        bind_raw_responder(br#"{"type":"ok","stdout":"not-base64!!"}"#.to_vec());
+    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let error = client
+        .run("bws", &["secret", "get", "abc"])
+        .await
+        .expect_err("invalid base64 must fail closed");
+    std::assert_matches!(
+        error,
+        BrokerClientError::ProtocolViolation(ProtocolViolation::Base64(_))
+    );
+}
+
+#[tokio::test]
+async fn request_rejects_non_utf8_response_line() {
+    let error = raw_response_error(&[0xff, 0xfe, b'\n']).await;
+    std::assert_matches!(
+        error,
+        BrokerClientError::ProtocolViolation(ProtocolViolation::InvalidUtf8(_))
+    );
+}
+
+#[tokio::test]
+async fn request_rejects_empty_response_line() {
+    let error = raw_response_error(b"\n").await;
+    std::assert_matches!(
+        error,
+        BrokerClientError::Transport {
+            source: TransportError::Empty,
+            ..
+        }
+    );
+}
+
+#[tokio::test]
+async fn request_rejects_malformed_response_json() {
+    let error = raw_response_error(b"not json\n").await;
+    std::assert_matches!(
+        error,
+        BrokerClientError::ProtocolViolation(ProtocolViolation::Deserialize(_))
+    );
+}
+
+#[tokio::test]
+async fn request_fails_closed_when_request_exceeds_buffer() {
+    let BoundBroker {
+        listener: _never_used,
+        endpoint,
+        _dir,
+    } = bind_broker().await.expect("bind");
+    let config = BrokerClientConfig {
+        max_buffer_size: bytesize::ByteSize::b(16),
+        ..BrokerClientConfig::default()
+    };
+    let client = BrokerClient::new(endpoint, config);
+    let error = client
+        .request(
+            &BrokerRequest {
+                bin: Str::from("bws"),
+                args: vec![Str::from("x".repeat(64))],
+            },
+            |_| Ok(()),
+        )
+        .await;
+    std::assert_matches!(
+        error,
+        Err(BrokerClientError::ProtocolViolation(
+            ProtocolViolation::MaxBufferSizeExceeded
+        ))
+    );
+}
+
 #[tokio::test]
 async fn request_fails_closed_when_operation_times_out() {
     // Bind a listener but never accept: the client connects into the

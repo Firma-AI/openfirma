@@ -226,6 +226,76 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
     assert!(response.into_stdout().is_err());
 }
 
+#[tokio::test]
+async fn malformed_request_is_rejected_without_reaching_handler() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig::default())
+        .await
+        .expect("bind");
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |_req| panic!("malformed request must not reach the handler"))
+            .await
+            .expect("accept_one");
+    });
+    let line = connect_and_send_raw(&endpoint, b"this is not json\n")
+        .await
+        .expect("connect_and_send_raw");
+    server.await.expect("server task");
+    let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
+    assert!(response.into_stdout().is_err());
+}
+
+#[tokio::test]
+async fn empty_request_is_rejected_without_reaching_handler() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig::default())
+        .await
+        .expect("bind");
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |_req| panic!("empty request must not reach the handler"))
+            .await
+            .expect("accept_one");
+    });
+    let line = connect_and_send_raw(&endpoint, b"\n")
+        .await
+        .expect("connect_and_send_raw");
+    server.await.expect("server task");
+    let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
+    assert!(response.into_stdout().is_err());
+}
+
+#[tokio::test]
+async fn non_utf8_request_is_rejected_without_reaching_handler() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig::default())
+        .await
+        .expect("bind");
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |_req| panic!("non-utf8 request must not reach the handler"))
+            .await
+            .expect_err("non-utf8 request must fail accept_one");
+    });
+    // The server cannot serialize a response to a peer that sent invalid
+    // bytes, so the connection is closed without a response line.
+    let line = connect_and_send_raw(&endpoint, &[0xff, 0xfe, b'\n'])
+        .await
+        .expect("connect_and_send_raw");
+    server.await.expect("server task");
+    assert!(line.is_empty(), "connection must close without a response");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_socket_is_owner_only() {
