@@ -514,7 +514,7 @@ fn dbus_configuration_links_unix_socket_and_rewrites_address()
     let source = tmpdir.path().join("host-bus");
     fs::write(&source, "socket")?;
     let mut env = BTreeMap::new();
-    let address = format!("unix://path={}", source.display());
+    let address = format!("unix:path={}", source.display());
 
     testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some(&address))?;
 
@@ -522,7 +522,7 @@ fn dbus_configuration_links_unix_socket_and_rewrites_address()
     assert_eq!(fs::read_link(&target)?, source);
     assert_eq!(
         env.get("DBUS_SESSION_BUS_ADDRESS"),
-        Some(&format!("unix://path={}", target.display()))
+        Some(&format!("unix:path={}", target.display()))
     );
     Ok(())
 }
@@ -535,7 +535,7 @@ fn dbus_configuration_ignores_non_unix_address() -> Result<(), Box<dyn std::erro
     fs::create_dir(&desktop_runtime_dir)?;
     let mut env = BTreeMap::new();
 
-    testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some("tcp://host=localhost"))?;
+    testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some("tcp:host=localhost"))?;
 
     assert!(env.is_empty());
     assert!(fs::read_dir(desktop_runtime_dir)?.next().is_none());
@@ -565,7 +565,7 @@ fn dbus_configuration_ignores_missing_host_socket() -> Result<(), Box<dyn std::e
     fs::create_dir(&desktop_runtime_dir)?;
     let missing_socket = tmpdir.path().join("missing-bus");
     let mut env = BTreeMap::new();
-    let address = format!("unix://path={}", missing_socket.display());
+    let address = format!("unix:path={}", missing_socket.display());
 
     testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some(&address))?;
 
