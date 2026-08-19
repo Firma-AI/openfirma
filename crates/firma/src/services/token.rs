@@ -95,7 +95,7 @@ fn send_management(action: &str, args: &TokenActionArgs) -> anyhow::Result<ExitC
     }
 }
 
-/// Strip a leading `unix:` prefix so plain paths also work.
+/// Strip a leading `unix://` prefix so plain paths also work.
 #[cfg(target_family = "unix")]
 fn strip_unix_prefix(s: &str) -> &str {
     s.strip_prefix("unix://").unwrap_or(s)

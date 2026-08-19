@@ -259,7 +259,7 @@ fn unix_sidecar_publication_matches_planned_endpoint() {
         .expect("Unix Sidecar publication should satisfy readiness");
     let endpoint = std::fs::read_to_string(state_dir.join("sidecar.listen"))
         .expect("read canonical Sidecar endpoint");
-    assert_eq!(endpoint, format!("unix://{}\n", sidecar_socket.display()));
+    assert_eq!(endpoint, format!("unix:{}\n", sidecar_socket.display()));
     stack
         .shutdown(Duration::ZERO)
         .expect("shut down fixture stack");
