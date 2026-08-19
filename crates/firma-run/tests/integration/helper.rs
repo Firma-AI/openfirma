@@ -5,7 +5,8 @@
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
+use firma_authority::{AuthorityConfigBuilder, Server};
+use firma_config_schema::authority as authority_schema;
 use firma_identifiers::AgentId;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
@@ -50,23 +51,20 @@ impl RealAuthority {
         std::fs::write(&pub_key_path, keypair.public.as_bytes()).expect("write public key");
 
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
-        let server = Server::try_new(
-            AuthorityConfig {
-                listen_addr: "127.0.0.1:0".to_string(),
-                policy_dir,
-                issuance_policy_dir,
-                schema_path: None,
-                revocation_file: dir.path().join("revocations.txt"),
-                max_ttl_seconds: 3600,
-                key_file: key_path,
-                log_level: "warn".to_string(),
-                bundle_ttl_seconds: 30,
-                tls: AuthorityTlsConfig::default(),
-            },
-            async {
-                let _ = shutdown_rx.await;
-            },
-        )
+        let config = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
+            listen_addr: "127.0.0.1:0".to_string(),
+            policy_dir,
+            issuance_policy_dir,
+            revocation_file: dir.path().join("revocations.txt"),
+            key_file: key_path,
+            log_level: "warn".to_string(),
+            ..authority_schema::AuthorityConfig::default()
+        })
+        .build()
+        .expect("valid authority config");
+        let server = Server::try_new(config, async {
+            let _ = shutdown_rx.await;
+        })
         .await
         .expect("start real Authority");
         let url = format!("http://127.0.0.1:{}", server.port());

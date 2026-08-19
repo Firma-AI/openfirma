@@ -92,6 +92,17 @@ fn marker_state_is_live(state: firma_runtime_state::status::State) -> bool {
 /// the `block_on` call without extra synchronisation.
 struct RenderedReport(Report, bool);
 
+/// Resolve the authority reachability endpoint from a raw `[authority]` section
+/// body: parse + validate it into a [`firma_authority::AuthorityConfig`], then derive the probe
+/// endpoint. Returns `None` if it does not parse, validate, or expose an address.
+fn authority_endpoint_from_body(body: &str) -> Option<Endpoint> {
+    let config = firma_authority::AuthorityConfigBuilder::from_toml_str(body)
+        .ok()?
+        .build()
+        .ok()?;
+    reachability::endpoint_from_authority(&config)
+}
+
 async fn build_report(args: Args) -> RenderedReport {
     let mut report = Report::default();
     let timeout = Duration::from_millis(args.timeout_ms);
@@ -182,12 +193,10 @@ async fn build_report(args: Args) -> RenderedReport {
     ));
 
     // 5. authority reachability
-    let authority_endpoint: Option<Endpoint> = parsed_config.as_ref().and_then(|c| {
-        c.raw_section("authority")
-            .ok()
-            .and_then(|body| toml::from_str::<firma_authority::AuthorityConfig>(&body).ok())
-            .and_then(|ac| reachability::endpoint_from_authority(&ac))
-    });
+    let authority_endpoint: Option<Endpoint> = parsed_config
+        .as_ref()
+        .and_then(|c| c.raw_section("authority").ok())
+        .and_then(|body| authority_endpoint_from_body(&body));
     let authority_daemon =
         reachability::check_endpoint("authority reachable", authority_endpoint, timeout).await;
     report.push(reachability::reconcile_reachability(

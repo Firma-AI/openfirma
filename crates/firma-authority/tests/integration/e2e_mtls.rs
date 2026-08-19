@@ -10,7 +10,8 @@
 use std::io::Write as _;
 use std::net::IpAddr;
 
-use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
+use firma_authority::{AuthorityConfigBuilder, Server};
+use firma_config_schema::authority as authority_schema;
 use firma_protobuf::v1::WatchPolicyBundleRequest;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
@@ -174,24 +175,23 @@ impl MtlsTestServer {
         let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
         std::fs::write(&key_file, kp.secret.as_bytes()).unwrap();
 
-        let config = AuthorityConfig {
+        let config = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
             listen_addr: "127.0.0.1:0".to_string(),
             policy_dir,
             issuance_policy_dir: issuance_dir,
-            schema_path: None,
             revocation_file,
             key_file,
-            max_ttl_seconds: 3600,
-            log_level: "info".to_string(),
-            bundle_ttl_seconds: 30,
-            tls: AuthorityTlsConfig {
+            tls: authority_schema::AuthorityTlsConfig {
                 tls_cert_path: Some(server_cert_path),
                 tls_key_path: Some(server_key_path),
                 mtls_client_ca_cert_path: Some(client_ca_cert_path),
                 mtls_client_ca_key_path: None,
                 authorized_clients_path: Some(authorized_clients_path),
             },
-        };
+            ..authority_schema::AuthorityConfig::default()
+        })
+        .build()
+        .expect("valid mtls authority config");
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let shutdown_signal = async {

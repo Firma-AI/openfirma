@@ -33,7 +33,9 @@ pub fn check_loaded(parsed: &firma_config_loader::FirmaConfig) -> Check {
 
     // [authority] is optional — agent-remote configs have no server section.
     if let Ok(body) = parsed.raw_section("authority")
-        && let Err(error) = toml::from_str::<firma_authority::AuthorityConfig>(&body)
+        && let Err(error) = firma_authority::AuthorityConfigBuilder::from_toml_str(&body)
+            .map_err(|e| e.to_string())
+            .and_then(|builder| builder.build().map_err(|e| e.to_string()))
     {
         return Check::fail("config parsed", format!("[authority]: {display}: {error}"))
             .with_detail("path", display);

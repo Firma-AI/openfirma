@@ -91,18 +91,18 @@ async fn run_server(config: AuthorityConfig, startup_report: Option<&Path>) -> R
 }
 
 async fn run_revoke(config: &AuthorityConfig, token_id: TokenId, reason: &str) -> Result<()> {
-    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
+    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds()));
     let store =
-        RevocationStore::try_new(&config.revocation_file, token_ttl).with_context(|| {
+        RevocationStore::try_new(config.revocation_file(), token_ttl).with_context(|| {
             format!(
                 "failed to open revocation store at {}",
-                config.revocation_file.display()
+                config.revocation_file().display()
             )
         })?;
     store.revoke(token_id, reason).await.with_context(|| {
         format!(
             "failed to revoke token using store {}",
-            config.revocation_file.display()
+            config.revocation_file().display()
         )
     })?;
     crate::output::ok(format!("revoked token: {token_id}"));
@@ -110,21 +110,21 @@ async fn run_revoke(config: &AuthorityConfig, token_id: TokenId, reason: &str) -
 }
 
 async fn run_compact(config: &AuthorityConfig) -> Result<()> {
-    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
+    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds()));
     let store =
-        RevocationStore::try_new(&config.revocation_file, token_ttl).with_context(|| {
+        RevocationStore::try_new(config.revocation_file(), token_ttl).with_context(|| {
             format!(
                 "failed to open revocation store at {}",
-                config.revocation_file.display()
+                config.revocation_file().display()
             )
         })?;
     store.compact_file().await.with_context(|| {
         format!(
             "failed to compact revocation file {}",
-            config.revocation_file.display()
+            config.revocation_file().display()
         )
     })?;
-    crate::output::ok(format!("compacted: {}", config.revocation_file.display()));
+    crate::output::ok(format!("compacted: {}", config.revocation_file().display()));
     Ok(())
 }
 
@@ -244,14 +244,14 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
 }
 
 async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
-    let key_bytes = std::fs::read(&config.key_file)
-        .with_context(|| format!("failed to read signing key {}", config.key_file.display()))?;
+    let key_bytes = std::fs::read(config.key_file())
+        .with_context(|| format!("failed to read signing key {}", config.key_file().display()))?;
     let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).context("invalid signing key")?);
     let policy_store = Arc::new(
         CedarPolicyStore::load(
-            &config.policy_dir,
-            config.schema_path.clone(),
-            config.bundle_ttl_seconds,
+            config.policy_dir(),
+            config.schema_path().map(std::path::Path::to_path_buf),
+            config.bundle_ttl_seconds(),
         )
         .context("failed to load Cedar policies")?,
     );
@@ -265,7 +265,7 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
         resource_scope: &args.resource_scope,
         requested_ttl_seconds: args.ttl_seconds,
     };
-    let out = issue_capability(&policy_store, &signer, config.max_ttl_seconds, &req)
+    let out = issue_capability(&policy_store, &signer, config.max_ttl_seconds(), &req)
         .await
         .map_err(|e| anyhow::anyhow!("issuance failed: {e}"))?;
 
@@ -279,17 +279,13 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
 fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -> Result<()> {
     use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
 
-    let ca_cert_path = config
-        .tls
-        .mtls_client_ca_cert_path
-        .as_ref()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "mtls_client_ca_cert_path is not set in the Authority config; \
+    let ca_cert_path = config.tls().mtls_client_ca_cert_path().ok_or_else(|| {
+        anyhow::anyhow!(
+            "mtls_client_ca_cert_path is not set in the Authority config; \
              run `firma authority generate-client-ca` first"
-            )
-        })?;
-    let ca_key_path = config.tls.mtls_client_ca_key_path.as_ref().ok_or_else(|| {
+        )
+    })?;
+    let ca_key_path = config.tls().mtls_client_ca_key_path().ok_or_else(|| {
         anyhow::anyhow!("mtls_client_ca_key_path is not set in the Authority config")
     })?;
 

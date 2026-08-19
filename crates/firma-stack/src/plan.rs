@@ -13,7 +13,6 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
 use firma_config_schema::sidecar::InterceptorMode;
 #[cfg(unix)]
@@ -248,17 +247,17 @@ impl FirmaToml {
 
     /// Deserialize Authority configuration and resolve its listen address.
     ///
-    /// Using [`AuthorityConfig`] keeps the plan aligned with the Authority's
-    /// own schema and defaults.
+    /// Reading the Authority's own `firma_config_schema` section keeps the plan
+    /// aligned with its schema and defaults.
     ///
     /// # Errors
     ///
     /// Returns a configuration error when the `[authority]` section is
     /// missing, does not deserialize, or holds an invalid socket address.
     pub fn authority_listen_addr(&self) -> Result<SocketAddr, StackError> {
-        let authority: AuthorityConfig = self
+        let authority = self
             .config
-            .section("authority")
+            .section::<firma_config_schema::authority::AuthorityConfig>("authority")
             .map_err(|source| StackError::ConfigValidation { source })?;
         authority
             .listen_addr

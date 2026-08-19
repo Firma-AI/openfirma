@@ -1502,6 +1502,7 @@ dependencies = [
  "cedar-policy",
  "chrono",
  "firma-config-loader",
+ "firma-config-schema",
  "firma-core",
  "firma-identifiers",
  "firma-protobuf",

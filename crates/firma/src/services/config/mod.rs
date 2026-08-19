@@ -1587,7 +1587,10 @@ mod tests {
         let path = dir.path().join(CONFIG_FILE_NAME);
         fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
         let body = firma_config_loader::load_section(&path, "authority").unwrap();
-        let _: firma_authority::AuthorityConfig = toml::from_str(&body).unwrap();
+        firma_authority::AuthorityConfigBuilder::from_toml_str(&body)
+            .unwrap()
+            .build()
+            .unwrap();
     }
 
     #[test]

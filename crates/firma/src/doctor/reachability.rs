@@ -5,6 +5,10 @@ use std::str::FromStr as _;
 use std::time::Duration;
 
 use firma_authority::config::AuthorityConfig;
+#[cfg(test)]
+use firma_authority::config::AuthorityConfigBuilder;
+#[cfg(test)]
+use firma_config_schema::authority as authority_schema;
 use firma_config_schema::sidecar::interceptor::InterceptorMode;
 use firma_runtime_state::RuntimeLayout;
 use firma_sidecar::config::SidecarConfig;
@@ -83,7 +87,7 @@ pub fn endpoint_from_sidecar(
 /// for the probe (connecting to a wildcard address fails on macOS).
 #[must_use]
 pub fn endpoint_from_authority(cfg: &AuthorityConfig) -> Option<Endpoint> {
-    let parsed = SocketAddr::from_str(&cfg.listen_addr).ok()?;
+    let parsed = SocketAddr::from_str(cfg.listen_addr()).ok()?;
     Some(Endpoint::Tcp(rewrite_wildcard(parsed)))
 }
 
@@ -303,10 +307,12 @@ mod tests {
 
     #[test]
     fn authority_endpoint_extracts_listen_addr() {
-        let cfg = AuthorityConfig {
+        let cfg = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
             listen_addr: "127.0.0.1:60051".to_owned(),
-            ..AuthorityConfig::default()
-        };
+            ..authority_schema::AuthorityConfig::default()
+        })
+        .build()
+        .expect("valid authority config");
         let endpoint = endpoint_from_authority(&cfg).expect("endpoint");
         match endpoint {
             Endpoint::Tcp(addr) => {
@@ -327,10 +333,12 @@ mod tests {
 
     #[test]
     fn endpoint_from_authority_returns_none_on_unparseable_listen_addr() {
-        let cfg = AuthorityConfig {
+        let cfg = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
             listen_addr: "not-an-addr".to_owned(),
-            ..AuthorityConfig::default()
-        };
+            ..authority_schema::AuthorityConfig::default()
+        })
+        .build()
+        .expect("valid authority config");
         assert!(endpoint_from_authority(&cfg).is_none());
     }
 

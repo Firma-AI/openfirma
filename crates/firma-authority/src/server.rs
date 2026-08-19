@@ -57,8 +57,9 @@ impl Server {
             "NOT FOR PRODUCTION USE: This is the Mini Authority (Firma OSS v1) intended for local development and testing only."
         );
 
-        validate_tls_config(&config)?;
-
+        // `config` is already validated: it can only be built through
+        // `AuthorityConfigBuilder::build`, which folds in rebasing and env
+        // overrides and checks the TLS invariants.
         let authority_service = load_authority_service(&config)?;
         let (listener, port) = bind_listener(&config.listen_addr).await?;
         let local_addr = listener
@@ -126,26 +127,6 @@ impl Server {
 // Setup helpers
 // ---------------------------------------------------------------------------
 
-fn validate_tls_config(config: &AuthorityConfig) -> Result<()> {
-    if config.tls.tls_cert_path.is_some() != config.tls.tls_key_path.is_some() {
-        anyhow::bail!("tls_cert_path and tls_key_path must both be set or both be unset");
-    }
-    if config.tls.mtls_client_ca_cert_path.is_some() != config.tls.authorized_clients_path.is_some()
-    {
-        anyhow::bail!(
-            "mtls_client_ca_cert_path and authorized_clients_path must both be set or both be unset"
-        );
-    }
-    if config.tls.mtls_client_ca_cert_path.is_some()
-        && (config.tls.tls_cert_path.is_none() || config.tls.tls_key_path.is_none())
-    {
-        anyhow::bail!(
-            "mTLS (mtls_client_ca_cert_path) requires tls_cert_path and tls_key_path to also be configured"
-        );
-    }
-    Ok(())
-}
-
 fn load_authority_service(config: &AuthorityConfig) -> Result<AuthorityServiceImpl> {
     let key_bytes = std::fs::read(&config.key_file)
         .with_context(|| format!("failed to read key file {}", config.key_file.display()))?;
@@ -203,10 +184,10 @@ where
     H: tonic_health::pb::health_server::Health + Send + Sync + 'static,
 {
     match (
-        &config.tls.tls_cert_path,
-        &config.tls.tls_key_path,
-        &config.tls.mtls_client_ca_cert_path,
-        &config.tls.authorized_clients_path,
+        &config.tls.cert,
+        &config.tls.key,
+        &config.tls.mtls_client_ca_cert,
+        &config.tls.authorized_clients,
     ) {
         (Some(cert_path), Some(key_path), Some(ca_cert_path), Some(clients_path)) => {
             build_mtls_future(

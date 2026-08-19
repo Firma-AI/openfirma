@@ -13,6 +13,7 @@ async-stream = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
 firma-config-loader = { workspace = true }
+firma-config-schema = { workspace = true }
 firma-core = { workspace = true }
 firma-identifiers = { workspace = true }
 firma-protobuf = { workspace = true }

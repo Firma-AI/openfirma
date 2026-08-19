@@ -74,7 +74,7 @@ fn load_authority_policy_dir(
 ) -> Result<Option<PathBuf>, PolicyDirResolveError> {
     Ok(AuthorityConfig::from_resolved_section(resolved)
         .map_err(|source| PolicyDirResolveError::LoadAuthorityConfig { source })?
-        .map(|config| config.policy_dir))
+        .map(|config| config.policy_dir().to_path_buf()))
 }
 
 fn spawn_audit_source(args: &Args) -> anyhow::Result<(Receiver<AuditRow>, AuditSourceGuard)> {
