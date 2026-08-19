@@ -43,35 +43,13 @@ use serde::{Deserialize, Serialize};
 /// handler may refuse (config matching and authorization happen downstream in
 /// the handler, not in the shim).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct BrokerRequest<'a, T: ArgsList> {
+pub struct BrokerRequest<'a> {
     /// Executable basename of the wrapped tool (e.g. `"bws"`).
     #[serde(borrow)]
     pub bin: Str<'a>,
     /// Arguments (everything after the binary name).
-    pub args: T,
-}
-
-pub trait ArgsList: sealed::Sealed {}
-
-impl<T> ArgsList for T where T: sealed::Sealed {}
-
-mod sealed {
-    use firma_http::Str;
-    use serde::Serialize;
-
-    pub trait Sealed: Serialize + Sync {}
-
-    impl Sealed for Vec<String> {}
-
-    impl Sealed for Vec<Str<'_>> {}
-
-    impl Sealed for Vec<&'_ str> {}
-
-    impl Sealed for &'_ [String] {}
-
-    impl<'a> Sealed for &'a [Str<'a>] {}
-
-    impl<'a> Sealed for &'a [&'a str] {}
+    #[serde(borrow)]
+    pub args: Vec<Str<'a>>,
 }
 
 /// Broker → shim response.

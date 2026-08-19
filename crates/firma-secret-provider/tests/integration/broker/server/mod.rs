@@ -3,7 +3,7 @@ use std::str::FromStr;
 use firma_http::Str;
 use firma_secret_provider::{
     broker::{
-        ArgsList, BrokerRequest, BrokerResponse,
+        BrokerRequest, BrokerResponse,
         server::{BrokerListener, config::BrokerListenerConfig},
         stream::BrokerStream,
     },
@@ -51,13 +51,10 @@ async fn bind_with_config(config: BrokerListenerConfig) -> anyhow::Result<BoundB
     })
 }
 
-async fn connect_and_send<T>(
+async fn connect_and_send(
     endpoint: &ServerEndpoint,
-    request: &BrokerRequest<'_, T>,
-) -> anyhow::Result<String>
-where
-    T: ArgsList,
-{
+    request: &BrokerRequest<'_>,
+) -> anyhow::Result<String> {
     let mut stream: BrokerStream = match endpoint.as_inner() {
         EndpointInner::Tcp(addr) => BrokerStream::Tcp {
             stream: tokio::net::TcpStream::connect(addr).await?,
@@ -110,7 +107,7 @@ async fn roundtrip_ok_response() {
     let request_clone = request.clone();
     let server = tokio::spawn(async move {
         listener
-            .accept_one(|req| {
+            .accept_one(async |req| {
                 assert_eq!(req, request_clone);
                 BrokerResponse::ok(b"secret-value")
             })
@@ -139,11 +136,11 @@ async fn handler_error_written_as_error_response() {
         .expect("bind");
     let request = BrokerRequest {
         bin: Str::from("bws"),
-        args: &["secret", "get", "x"][..],
+        args: vec![Str::from("secret"), Str::from("get"), Str::from("x")],
     };
     let server = tokio::spawn(async move {
         listener
-            .accept_one(|_req| BrokerResponse::err("tool not found"))
+            .accept_one(async |_req| BrokerResponse::err("tool not found"))
             .await
             .expect("accept_one");
     });
@@ -181,7 +178,7 @@ async fn oversize_request_is_rejected() {
     .expect("bind");
     let server = tokio::spawn(async move {
         listener
-            .accept_one(|_req| panic!("oversize request must not reach the handler"))
+            .accept_one(async |_req| panic!("oversize request must not reach the handler"))
             .await
             .expect("accept_one");
     });
@@ -209,7 +206,7 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
     .expect("bind");
     let server = tokio::spawn(async move {
         listener
-            .accept_one(|_req| panic!("oversize request must not reach the handler"))
+            .accept_one(async |_req| panic!("oversize request must not reach the handler"))
             .await
             .expect("accept_one");
     });
@@ -219,7 +216,7 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
     // the trimmed content.
     let request = BrokerRequest {
         bin: Str::from("bws"),
-        args: &["secret", "get", "abc"][..],
+        args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
     };
     let json = serde_json::to_string(&request).expect("serialize");
     let mut padded = " ".repeat(usize::try_from(limit + 1).expect("usize") - json.len());

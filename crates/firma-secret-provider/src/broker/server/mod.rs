@@ -18,7 +18,6 @@ use std::io;
 use std::path::PathBuf;
 
 use bytesize::ByteSize;
-use firma_http::Str;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio::{net::TcpListener, time::timeout};
@@ -120,7 +119,7 @@ impl BrokerListener {
     /// loop must keep accepting.
     pub async fn accept_one<F>(&self, handler: F) -> io::Result<()>
     where
-        F: for<'a> AsyncFnOnce(BrokerRequest<'a, Vec<Str<'a>>>) -> BrokerResponse<'a>,
+        F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
     {
         let mut stream: BrokerStream = match &self.inner {
             BrokerListenerInner::Tcp(listener) => BrokerStream::Tcp {
@@ -196,7 +195,7 @@ async fn handle_connection<F>(
     handler: F,
 ) -> io::Result<()>
 where
-    F: for<'a> AsyncFnOnce(BrokerRequest<'a, Vec<Str<'a>>>) -> BrokerResponse<'a>,
+    F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
 {
     // The read is capped at max_request_bytes + 1 (see [`read_bounded_line`]),
     // and any request whose newline-stripped line exceeds the limit is
@@ -218,7 +217,7 @@ where
     if trimmed.is_empty() {
         return write_response(stream, &BrokerResponse::err("empty broker request")).await;
     }
-    let response = match serde_json::from_str::<BrokerRequest<Vec<Str>>>(trimmed) {
+    let response = match serde_json::from_str::<BrokerRequest>(trimmed) {
         Ok(request) => handler(request).await,
         Err(e) => BrokerResponse::err(format!("malformed broker request: {e}")),
     };

@@ -19,9 +19,7 @@ use base64::Engine as _;
 use firma_http::Str;
 
 use crate::{
-    broker::{
-        ArgsList, BrokerRequest, BrokerResponse, read_bounded_line, stream::BrokerStream, write_all,
-    },
+    broker::{BrokerRequest, BrokerResponse, read_bounded_line, stream::BrokerStream, write_all},
     endpoint::{EndpointInner, client::ClientEndpoint},
 };
 
@@ -65,7 +63,7 @@ impl BrokerClient {
     pub async fn run(&self, bin: &str, args: &[&str]) -> Result<Vec<u8>, BrokerClientError> {
         let request = BrokerRequest {
             bin: Str::from(bin),
-            args,
+            args: args.iter().map(Str::from).collect(),
         };
         self.request(&request, |response| match response {
             BrokerResponse::Ok { stdout } => base64::engine::general_purpose::STANDARD
@@ -83,14 +81,11 @@ impl BrokerClient {
     /// # Errors
     ///
     /// See [`Self::run`].
-    pub async fn request<R, T>(
+    pub async fn request<T>(
         &self,
-        request: &BrokerRequest<'_, R>,
+        request: &BrokerRequest<'_>,
         exec: impl Fn(BrokerResponse<'_>) -> Result<T, BrokerClientError>,
-    ) -> Result<T, BrokerClientError>
-    where
-        R: ArgsList,
-    {
+    ) -> Result<T, BrokerClientError> {
         let payload = serde_json::to_string(request).map_err(BrokerClientError::Bug)?;
         if payload.len() > self.max_buffer_size() {
             return Err(BrokerClientError::ProtocolViolation(

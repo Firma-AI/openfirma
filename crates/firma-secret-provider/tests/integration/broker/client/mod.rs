@@ -66,7 +66,7 @@ fn serve_ok(listener: BrokerListener, stdout: Vec<u8>) {
     tokio::spawn(async move {
         #[expect(clippy::expect_used, reason = "this is a test")]
         listener
-            .accept_one(move |_req| async move { BrokerResponse::ok(&stdout) })
+            .accept_one(async move |_req| BrokerResponse::ok(&stdout))
             .await
             .expect("accept_one");
     });
@@ -128,7 +128,7 @@ async fn request_fails_closed_when_response_exceeds_buffer() {
         .request(
             &BrokerRequest {
                 bin: Str::from("bws"),
-                args: &["secret", "get", "abc"][..],
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
         )
@@ -164,7 +164,7 @@ async fn request_accepts_response_exactly_at_buffer_limit() {
         .request(
             &BrokerRequest {
                 bin: Str::from("bws"),
-                args: &["secret", "get", "abc"][..],
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |response| response.into_stdout().map_err(BrokerClientError::Rejected),
         )
@@ -240,7 +240,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
         .request(
             &BrokerRequest {
                 bin: Str::from("bws"),
-                args: &["secret", "get", "abc"][..],
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
         )
@@ -275,7 +275,7 @@ async fn request_fails_closed_when_operation_times_out() {
         .request(
             &BrokerRequest {
                 bin: Str::from("bws"),
-                args: &["secret", "get", "abc"][..],
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
         )
