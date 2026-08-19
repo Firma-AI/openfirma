@@ -25,7 +25,7 @@ FIRMA_BIN="target/debug/firma"
 AUTHORITY_ADDR="127.0.0.1:50051"
 AUTHORITY_URL="http://${AUTHORITY_ADDR}"
 SIDECAR_ADDR="127.0.0.1:7474"
-SIDECAR_ENDPOINT="tcp://${SIDECAR_ADDR}"
+SIDECAR_ENDPOINT="tcp:${SIDECAR_ADDR}"
 
 # Dedicated workspace the agent is allowed to write to (FIR-116 Layer 3 contract).
 # Under readonly-rootfs mode bwrap RW-binds exactly the cwd at launch, so we must

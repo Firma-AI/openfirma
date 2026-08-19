@@ -128,7 +128,7 @@ Expected:
 
 ```bash
 # Point sidecar at a closed port, do not autostart
-firma run --sidecar tcp://127.0.0.1:19999 --no-autostart -- echo hello
+firma run --sidecar tcp:127.0.0.1:19999 --no-autostart -- echo hello
 ```
 
 Expected:

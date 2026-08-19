@@ -132,14 +132,14 @@ impl ResolvedProfile {
             #[cfg(target_family = "unix")]
             if !matches!(self.sidecar_endpoint, SidecarEndpoint::Unix { .. }) {
                 return Err(RunError::ConfigValidation(
-                    "sidecar_local_exec requires sidecar_endpoint to use unix:// on unix hosts"
+                    "sidecar_local_exec requires sidecar_endpoint to use unix: on unix hosts"
                         .to_string(),
                 ));
             }
             #[cfg(target_family = "unix")]
             if matches!(mediator.endpoint, CommandMediatorEndpoint::Tcp { .. }) {
                 return Err(RunError::ConfigValidation(
-                    "sidecar_local_exec.endpoint must use unix:// on unix hosts".to_string(),
+                    "sidecar_local_exec.endpoint must use unix: on unix hosts".to_string(),
                 ));
             }
             if let CommandMediatorEndpoint::Unix { path } = &mediator.endpoint
@@ -189,14 +189,14 @@ impl FromStr for SidecarEndpoint {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if let Some(rest) = value.strip_prefix("tcp://") {
+        if let Some(rest) = value.strip_prefix("tcp:") {
             let addr = rest
                 .parse::<SocketAddr>()
                 .map_err(|err| format!("invalid tcp sidecar endpoint '{value}': {err}"))?;
             return Ok(Self::Tcp { addr });
         }
 
-        if let Some(rest) = value.strip_prefix("unix://") {
+        if let Some(rest) = value.strip_prefix("unix:") {
             let path = PathBuf::from(rest);
             if path.as_os_str().is_empty() {
                 return Err("unix sidecar endpoint path must not be empty".to_string());
@@ -205,7 +205,7 @@ impl FromStr for SidecarEndpoint {
         }
 
         Err(format!(
-            "unsupported sidecar endpoint '{value}'; expected tcp://host:port or unix:///path"
+            "unsupported sidecar endpoint '{value}'; expected tcp:host:port or unix:path"
         ))
     }
 }
@@ -303,8 +303,8 @@ pub enum CommandMediatorEndpoint {
 impl std::fmt::Display for CommandMediatorEndpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Tcp { addr } => write!(f, "tcp://{addr}"),
-            Self::Unix { path } => write!(f, "unix://{}", path.display()),
+            Self::Tcp { addr } => write!(f, "tcp:{addr}"),
+            Self::Unix { path } => write!(f, "unix:{}", path.display()),
         }
     }
 }
@@ -351,7 +351,7 @@ pub enum SeccompRuntimeMode {
 
 /// Fallback sidecar endpoint used only to keep `ResolvedProfile.sidecar_endpoint`
 /// populated on local autostart, where the supervisor substitutes its own UDS.
-const DEFAULT_SIDECAR_ENDPOINT: &str = "tcp://127.0.0.1:8080";
+const DEFAULT_SIDECAR_ENDPOINT: &str = "tcp:127.0.0.1:8080";
 const DEFAULT_MANAGED_POLICY_FILE: &str = "generic-local-command-v1.toml";
 const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
 const MANAGED_ARTIFACT_DIR_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_ARTIFACT_DIR";
@@ -903,7 +903,7 @@ fn resolve_sidecar_local_exec_config(
 }
 
 fn parse_sidecar_local_exec_endpoint(value: &str) -> Result<CommandMediatorEndpoint, RunError> {
-    if let Some(rest) = value.strip_prefix("tcp://") {
+    if let Some(rest) = value.strip_prefix("tcp:") {
         let addr = rest.parse::<SocketAddr>().map_err(|err| {
             RunError::ConfigValidation(format!(
                 "invalid sidecar_local_exec.endpoint '{value}': {err}"
@@ -911,7 +911,7 @@ fn parse_sidecar_local_exec_endpoint(value: &str) -> Result<CommandMediatorEndpo
         })?;
         return Ok(CommandMediatorEndpoint::Tcp { addr });
     }
-    if let Some(rest) = value.strip_prefix("unix://") {
+    if let Some(rest) = value.strip_prefix("unix:") {
         let path = PathBuf::from(rest);
         if path.as_os_str().is_empty() {
             return Err(RunError::ConfigValidation(
@@ -921,7 +921,7 @@ fn parse_sidecar_local_exec_endpoint(value: &str) -> Result<CommandMediatorEndpo
         return Ok(CommandMediatorEndpoint::Unix { path });
     }
     Err(RunError::ConfigValidation(format!(
-        "unsupported sidecar_local_exec.endpoint '{value}'; expected tcp://host:port or unix:///path"
+        "unsupported sidecar_local_exec.endpoint '{value}'; expected tcp:host:port or unix:path"
     )))
 }
 
@@ -953,7 +953,7 @@ fn derive_sidecar_local_exec_endpoint(
             Ok(CommandMediatorEndpoint::Unix { path: derived_path })
         }
         SidecarEndpoint::Tcp { addr } => Err(RunError::ConfigValidation(format!(
-            "sidecar_local_exec endpoint is required when sidecar endpoint is tcp://{addr}; automatic derivation only supports unix sidecar endpoints"
+            "sidecar_local_exec endpoint is required when sidecar endpoint is tcp:{addr}; automatic derivation only supports unix sidecar endpoints"
         ))),
     }
 }
@@ -1370,7 +1370,7 @@ mod tests {
 
         let toml = r#"
 [run.defaults]
-sidecar_endpoint = "tcp://127.0.0.1:18080"
+sidecar_endpoint = "tcp:127.0.0.1:18080"
 
 [run.profiles.codex]
 backend = "bwrap"
@@ -1587,7 +1587,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
+sidecar_endpoint = "unix:/tmp/sidecar.sock"
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1669,7 +1669,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
+sidecar_endpoint = "unix:/tmp/sidecar.sock"
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1732,7 +1732,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
+sidecar_endpoint = "unix:/tmp/sidecar.sock"
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1776,7 +1776,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
+sidecar_endpoint = "unix:/tmp/sidecar.sock"
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1784,7 +1784,7 @@ artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
-endpoint = 'unix://{}'
+endpoint = 'unix:{}'
 timeout_ms = 700
 "#,
             policy_path.display(),
@@ -1820,7 +1820,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
+sidecar_endpoint = "unix:/tmp/sidecar.sock"
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1828,7 +1828,7 @@ artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
-endpoint = "unix://relative.sock"
+endpoint = "unix:relative.sock"
 timeout_ms = 500
 "#,
             policy_path.display(),
@@ -1863,15 +1863,15 @@ deny_actions = ["filesystem.delete"]
         let artifact_dir = tmpdir.path().join("artifacts");
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let endpoint = if cfg!(target_family = "unix") {
-            "unix:///tmp/sidecar-local-exec.sock"
+            "unix:/tmp/sidecar-local-exec.sock"
         } else {
-            "tcp://127.0.0.1:19090"
+            "tcp:127.0.0.1:19090"
         };
         let toml = format!(
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
+sidecar_endpoint = "unix:/tmp/sidecar.sock"
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1915,15 +1915,15 @@ deny_actions = ["filesystem.delete"]
         let artifact_dir = tmpdir.path().join("artifacts");
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let endpoint = if cfg!(target_family = "unix") {
-            "unix:///tmp/sidecar-local-exec.sock"
+            "unix:/tmp/sidecar-local-exec.sock"
         } else {
-            "tcp://127.0.0.1:19090"
+            "tcp:127.0.0.1:19090"
         };
         let toml = format!(
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
+sidecar_endpoint = "unix:/tmp/sidecar.sock"
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1975,7 +1975,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [run.profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = 'unix://{}'
+sidecar_endpoint = 'unix:{}'
 
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'

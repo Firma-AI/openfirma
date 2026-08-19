@@ -29,7 +29,7 @@ fn parse_sidecar_local() {
 
 #[test]
 fn parse_sidecar_endpoint_urls() {
-    for value in ["tcp://127.0.0.1:8080", "unix:///tmp/firma.sock"] {
+    for value in ["tcp:127.0.0.1:8080", "unix:/tmp/firma.sock"] {
         let out = Command::new(firma_bin())
             .args(["run", "--sidecar", value, "--help"])
             .output()
@@ -64,7 +64,7 @@ fn no_autostart_with_sidecar_url_is_accepted_by_clap() {
             "run",
             "--no-autostart",
             "--sidecar",
-            "tcp://127.0.0.1:8080",
+            "tcp:127.0.0.1:8080",
             "--help",
         ])
         .output()

@@ -265,14 +265,14 @@ if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
     env HOME="$FAKE_HOME" \
     cargo run -p firma -- run \
       --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
+      --sidecar-endpoint "tcp:127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'curl -fsS --max-time 20 http://httpbin.org/get -o /dev/null'
 
   run_expect_fail "child-process wget is intercepted+denied" \
     env HOME="$FAKE_HOME" \
     cargo run -p firma -- run \
       --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
+      --sidecar-endpoint "tcp:127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'cat > /tmp/child-fetch.sh << "SH"
 #!/bin/sh
 wget -q -O /dev/null http://httpbin.org/get
@@ -284,14 +284,14 @@ chmod +x /tmp/child-fetch.sh
     env HOME="$FAKE_HOME" \
     cargo run -p firma -- run \
       --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
+      --sidecar-endpoint "tcp:127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'echo blocked >/etc/firma-run-claude-probe'
 
   run_expect_fail "read masked ssh key is blocked" \
     env HOME="$FAKE_HOME" \
     cargo run -p firma -- run \
       --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
+      --sidecar-endpoint "tcp:127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'cat ~/.ssh/id_rsa'
 fi
 
@@ -301,7 +301,7 @@ if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
   set +e
   cargo run -p firma -- run \
     --profile "$PROFILE" \
-    --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
+    --sidecar-endpoint "tcp:127.0.0.1:${SIDECAR_PORT}" \
     -- /bin/sh -lc 'true' >"$RUN_STDOUT" 2>"$RUN_STDERR"
   RUN_STATUS=$?
   set -e
@@ -309,7 +309,7 @@ else
   set +e
   cargo run -p firma -- run \
     --profile "$PROFILE" \
-    --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
+    --sidecar-endpoint "tcp:127.0.0.1:${SIDECAR_PORT}" \
     -- "${SANDBOX_CMD[@]}" >"$RUN_STDOUT" 2>"$RUN_STDERR"
   RUN_STATUS=$?
   set -e
@@ -353,7 +353,7 @@ stop_sidecar
 set +e
 cargo run -p firma -- run \
   --profile "$PROFILE" \
-  --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
+  --sidecar-endpoint "tcp:127.0.0.1:${SIDECAR_PORT}" \
   -- "${SANDBOX_CMD[@]}" >/dev/null 2>"$FAIL_STDERR"
 STATUS=$?
 set -e

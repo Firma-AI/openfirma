@@ -29,12 +29,10 @@ use tokio::{
 use crate::{
     ExposeSecret, GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder, SecretString,
-    gateway::{
-        client::{
-            config::GatewayClientConfig,
-            error::{GatewayClientError, ProtocolViolation, TransportError},
-        },
-        endpoint::{GatewayEndpoint, GatewayEndpointInner},
+    endpoint::{EndpointInner, client::ClientEndpoint},
+    gateway::client::{
+        config::GatewayClientConfig,
+        error::{GatewayClientError, ProtocolViolation, TransportError},
     },
 };
 
@@ -51,13 +49,13 @@ pub const GATEWAY_ADDR_ENV: &str = "FIRMA_SECRET_GATEWAY_ADDR";
 /// calls are infrequent relative to request traffic.
 #[derive(Debug)]
 pub struct GatewayClient {
-    endpoint: GatewayEndpoint,
+    endpoint: ClientEndpoint,
     config: GatewayClientConfig,
 }
 
 impl GatewayClient {
     #[must_use]
-    pub fn new(endpoint: GatewayEndpoint, config: GatewayClientConfig) -> Self {
+    pub fn new(endpoint: ClientEndpoint, config: GatewayClientConfig) -> Self {
         Self { endpoint, config }
     }
 
@@ -106,7 +104,7 @@ impl GatewayClient {
         let payload = serde_json::to_string(&request).map_err(GatewayClientError::Bug)?;
 
         let response_line = match self.endpoint.as_inner() {
-            GatewayEndpointInner::Tcp(addr) => {
+            EndpointInner::Tcp(addr) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::TcpStream::connect(addr),
@@ -117,7 +115,7 @@ impl GatewayClient {
                 self.send_and_receive(stream, &payload).await?
             }
             #[cfg(unix)]
-            GatewayEndpointInner::Unix(path) => {
+            EndpointInner::Unix(path) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::UnixStream::connect(path),
@@ -204,7 +202,7 @@ impl GatewayClient {
         let payload = serde_json::to_string(&request).map_err(GatewayClientError::Bug)?;
 
         let response_line = match self.endpoint.as_inner() {
-            GatewayEndpointInner::Tcp(addr) => {
+            EndpointInner::Tcp(addr) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::TcpStream::connect(addr),
@@ -215,7 +213,7 @@ impl GatewayClient {
                 self.send_and_receive(stream, &payload).await?
             }
             #[cfg(unix)]
-            GatewayEndpointInner::Unix(path) => {
+            EndpointInner::Unix(path) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::UnixStream::connect(path),

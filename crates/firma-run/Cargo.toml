@@ -29,7 +29,6 @@ firma-sidecar.workspace = true
 hex.workspace = true
 jiff = { workspace = true, features = ["serde"] }
 p256 = { workspace = true }
-pin-project = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -45,6 +44,8 @@ uuid.workspace = true
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["process", "signal", "socket", "uio"] }
 signal-hook.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
 
 [dev-dependencies]

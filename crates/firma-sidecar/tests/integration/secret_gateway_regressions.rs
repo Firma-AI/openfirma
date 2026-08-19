@@ -1,4 +1,5 @@
 use std::io::{Read as _, Write as _};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,12 +10,11 @@ use firma_core::{
     TransportView,
 };
 use firma_http::{Authority, HeaderMap, Method};
+use firma_secret_provider::endpoint::client::ClientEndpoint;
 use firma_secret_provider::{CompiledMatcher, MatcherError};
 use firma_secret_provider::{
     SecretPlaceholder,
-    gateway::{
-        client::GatewayClient, client::config::GatewayClientConfig, endpoint::GatewayEndpoint,
-    },
+    gateway::{client::GatewayClient, client::config::GatewayClientConfig},
     non_empty::NonEmptyString,
     spec::http::{HttpIntegrationSpec, HttpMatcherRule, PathAndMatcher, PathOnly},
 };
@@ -262,7 +262,7 @@ async fn fake_resolve_gateway(secret: &str) -> anyhow::Result<GatewayClient> {
         }
     });
     Ok(GatewayClient::new(
-        GatewayEndpoint::parse(&format!("tcp:{address}"))?,
+        ClientEndpoint::from_str(&format!("tcp:{address}"))?,
         GatewayClientConfig::default(),
     ))
 }
@@ -281,7 +281,7 @@ async fn gateway_contact_probe() -> anyhow::Result<(
         }
     });
     let client = GatewayClient::new(
-        GatewayEndpoint::parse(&format!("tcp:{address}"))?,
+        ClientEndpoint::from_str(&format!("tcp:{address}"))?,
         GatewayClientConfig::default(),
     );
     Ok((client, contacted_rx, server))
@@ -378,7 +378,7 @@ async fn fake_push_gateway() -> anyhow::Result<(
         }
     });
     let client = GatewayClient::new(
-        GatewayEndpoint::parse(&format!("tcp:{address}"))?,
+        ClientEndpoint::from_str(&format!("tcp:{address}"))?,
         GatewayClientConfig::default(),
     );
     Ok((client, pushed_rx, server))

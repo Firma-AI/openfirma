@@ -1,3 +1,4 @@
+mod broker;
 mod compile;
 mod endpoint;
 mod gateway_client;

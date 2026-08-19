@@ -41,8 +41,8 @@ Each script prints whether the expected behavior occurred.
 If you already run real local services, you can override endpoints:
 
 ```bash
-FIRMA_SHOWCASE_SIDECAR_ENDPOINT="unix:///run/firma/sidecar.sock" \
-FIRMA_SHOWCASE_MEDIATOR_ENDPOINT="unix:///run/firma/sidecar-tools.sock" \
+FIRMA_SHOWCASE_SIDECAR_ENDPOINT="unix:/run/firma/sidecar.sock" \
+FIRMA_SHOWCASE_MEDIATOR_ENDPOINT="unix:/run/firma/sidecar-tools.sock" \
 ./examples/firma-run/local-command-governance/scripts/run-allow.sh
 ```
 
@@ -71,7 +71,7 @@ python3 examples/firma-run/local-command-governance/scripts/mock_mediator.py \
 cat >/tmp/firma-run.mediator.toml <<'EOF'
 [profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
+sidecar_endpoint = "unix:/tmp/firma-sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = "/home/dario/Work/Firma/openfirma/crates/firma-run/policies/generic-local-command-v1.toml"
@@ -80,7 +80,7 @@ verify_checksum = true
 runtime_mode = "compile_on_launch"
 
 [profiles.generic.sidecar_local_exec]
-endpoint = "unix:///tmp/firma-sidecar-tools.sock"
+endpoint = "unix:/tmp/firma-sidecar-tools.sock"
 timeout_ms = 500
 hitl_mode = "async_token"
 enforce_known_executables = true
@@ -102,7 +102,7 @@ readlink -f /bin/sh
 cargo run -p firma -- run \
   --profile generic \
   --config /tmp/firma-run.mediator.toml \
-  --sidecar-endpoint unix:///tmp/firma-sidecar.sock \
+  --sidecar-endpoint unix:/tmp/firma-sidecar.sock \
   -- /bin/echo FIRMA_OK
 ```
 
