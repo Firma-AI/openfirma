@@ -7,7 +7,7 @@ use firma_secret_provider::broker::server::config::BrokerListenerConfig;
 fn empty_table_uses_all_defaults() {
     let config: BrokerListenerConfig = toml::from_str("").expect("empty table parses");
     assert_eq!(config.operation_timeout, Duration::from_secs(5));
-    assert_eq!(config.max_request_bytes, ByteSize::kib(64));
+    assert_eq!(config.max_buffer_size, ByteSize::mb(10));
 }
 
 #[test]
@@ -15,14 +15,14 @@ fn partial_table_defaults_missing_fields() {
     let config: BrokerListenerConfig =
         toml::from_str("operation_timeout = \"2s\"").expect("partial table parses");
     assert_eq!(config.operation_timeout, Duration::from_secs(2));
-    assert_eq!(config.max_request_bytes, ByteSize::kib(64));
+    assert_eq!(config.max_buffer_size, ByteSize::mb(10));
 }
 
 #[test]
 fn full_table_uses_every_given_value() {
     let config: BrokerListenerConfig =
-        toml::from_str("operation_timeout = \"3s\"\nmax_request_bytes = \"1MB\"")
+        toml::from_str("operation_timeout = \"3s\"\nmax_buffer_size = \"2MB\"")
             .expect("full table parses");
     assert_eq!(config.operation_timeout, Duration::from_secs(3));
-    assert_eq!(config.max_request_bytes, ByteSize::mb(1));
+    assert_eq!(config.max_buffer_size, ByteSize::mb(2));
 }

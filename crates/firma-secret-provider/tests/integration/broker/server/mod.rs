@@ -150,6 +150,75 @@ async fn handler_error_written_as_error_response() {
     assert!(response.into_stdout().is_err());
 }
 
+#[tokio::test]
+async fn oversized_response_is_replaced_with_clean_error() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig {
+        max_buffer_size: bytesize::ByteSize::b(64),
+        ..BrokerListenerConfig::default()
+    })
+    .await
+    .expect("bind");
+    let request = BrokerRequest {
+        bin: Str::from("bws"),
+        args: vec![Str::from("secret"), Str::from("get"), Str::from("x")],
+    };
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |_req| BrokerResponse::ok(&vec![b'x'; 256]))
+            .await
+            .expect("accept_one");
+    });
+    let line = connect_and_send(&endpoint, &request)
+        .await
+        .expect("connect_and_send");
+    server.await.expect("server task");
+    let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
+    assert_eq!(
+        response.into_stdout().expect_err("must be an error"),
+        "response too large"
+    );
+}
+
+#[tokio::test]
+async fn response_exactly_at_limit_is_forwarded() {
+    // Size the cap from the real serialized payload so the boundary is exact:
+    // a response line equal to `max_response_bytes` must pass, the trailing
+    // newline must not count against the limit.
+    let stdout = vec![b'y'; 42];
+    let payload = serde_json::to_vec(&BrokerResponse::ok(&stdout)).expect("serialize");
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig {
+        max_buffer_size: bytesize::ByteSize::b(payload.len() as u64),
+        ..BrokerListenerConfig::default()
+    })
+    .await
+    .expect("bind");
+    let request = BrokerRequest {
+        bin: Str::from("bws"),
+        args: vec![Str::from("secret"), Str::from("get"), Str::from("x")],
+    };
+    let served_stdout = stdout.clone();
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |_req| BrokerResponse::ok(&served_stdout))
+            .await
+            .expect("accept_one");
+    });
+    let line = connect_and_send(&endpoint, &request)
+        .await
+        .expect("connect_and_send");
+    server.await.expect("server task");
+    let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
+    assert_eq!(response.into_stdout().expect("ok response"), stdout);
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn bound_endpoint_returns_assigned_tcp_port() {
@@ -167,7 +236,7 @@ async fn oversize_request_is_rejected() {
         endpoint,
         _dir,
     } = bind_with_config(BrokerListenerConfig {
-        max_request_bytes: bytesize::ByteSize::b(32),
+        max_buffer_size: bytesize::ByteSize::b(4000),
         ..BrokerListenerConfig::default()
     })
     .await
@@ -195,7 +264,7 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
         endpoint,
         _dir,
     } = bind_with_config(BrokerListenerConfig {
-        max_request_bytes: bytesize::ByteSize::b(limit),
+        max_buffer_size: bytesize::ByteSize::b(limit),
         ..BrokerListenerConfig::default()
     })
     .await

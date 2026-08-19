@@ -65,6 +65,10 @@ pub enum TransportError {
     /// Connecting to the broker failed.
     #[error("connect failed: {0}")]
     Connect(#[source] io::Error),
+    /// Reading the broker's peer credentials failed.
+    #[error("failed to read broker peer credentials: {0}")]
+    #[cfg(unix)]
+    PeerCredential(#[source] io::Error),
     /// Writing the request line to the broker socket failed.
     #[error("write failed: {0}")]
     Write(#[source] io::Error),

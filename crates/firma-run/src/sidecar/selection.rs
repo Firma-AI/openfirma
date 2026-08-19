@@ -19,7 +19,7 @@ pub enum SidecarCli {
     Unset,
     /// `--sidecar local`.
     Local,
-    /// `--sidecar <tcp://...|unix://...>`.
+    /// `--sidecar <tcp://...|unix:///...>`.
     Remote(String),
 }
 

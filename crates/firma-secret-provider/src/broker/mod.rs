@@ -19,11 +19,11 @@
 //! Layout mirrors the secret gateway's: shared wire types live here,
 //! [`client`] is the shim-side connector, and [`server`] is the broker-side
 //! listener.
-
-#![allow(
-    dead_code,
-    reason = "transport is wired by the secret shim in a later PR"
-)]
+//!
+//! Size caps: stdout is base64-encoded onto the wire, so a configured
+//! response cap of `N` bytes admits roughly `3N/4` bytes of raw tool stdout.
+//! The [`client`] and [`server`] defaults are aligned so both sides agree on
+//! the largest request and response lines; tune them together.
 
 pub mod client;
 pub mod server;
@@ -69,6 +69,12 @@ pub enum BrokerResponse<'a> {
 
 impl BrokerResponse<'_> {
     /// Build a success response from raw stdout bytes.
+    ///
+    /// The whole payload is base64-encoded into memory here, so handlers must
+    /// cap tool stdout capture: an unbounded payload would exhaust broker
+    /// memory before the listener's response-size check (see
+    /// [`server::config::BrokerListenerConfig::max_buffer_size`]) can
+    /// reject it.
     #[must_use]
     pub fn ok(stdout: &[u8]) -> Self {
         Self::Ok {
@@ -113,7 +119,9 @@ pub(crate) async fn read_bounded_line<S: AsyncRead + Unpin>(
     stream: &mut S,
     max_bytes: u64,
 ) -> io::Result<Vec<u8>> {
-    let mut buf = tokio::io::BufReader::new(stream.take(max_bytes + 1));
+    // `saturating_add` keeps a caller passing `max_bytes` at the type's
+    // ceiling from overflowing the `+ 1` boundary byte.
+    let mut buf = tokio::io::BufReader::new(stream.take(max_bytes.saturating_add(1)));
     let mut line = Vec::new();
     buf.read_until(b'\n', &mut line).await?;
     if line.last() == Some(&b'\n') {
@@ -159,7 +167,7 @@ pub(crate) async fn drain_remaining<S: AsyncRead + Unpin>(stream: &mut S) -> io:
 /// Linux exposes it via the `SO_PEERCRED` sockopt; BSD-family platforms (where
 /// the sockopt is unavailable) use `getpeereid`.
 #[cfg(target_os = "linux")]
-pub(crate) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
     use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 
     getsockopt(stream, PeerCredentials)
@@ -170,7 +178,7 @@ pub(crate) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
 /// [`peer_uid`] on BSD-family platforms, where the Linux `SO_PEERCRED` sockopt
 /// is unavailable.
 #[cfg(all(unix, not(target_os = "linux")))]
-pub(crate) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
     match nix::unistd::getpeereid(stream) {
         Ok((user_id, _group_id)) => Ok(user_id.as_raw()),
         Err(err_no) => Err(io::Error::from(err_no)),
@@ -179,6 +187,6 @@ pub(crate) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
 
 /// The uid of the current process.
 #[cfg(unix)]
-pub(crate) fn current_uid() -> u32 {
+fn current_uid() -> u32 {
     nix::unistd::Uid::current().as_raw()
 }

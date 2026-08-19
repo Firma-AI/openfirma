@@ -37,7 +37,7 @@ pub struct RunInput {
     pub config: Option<PathBuf>,
     /// Override backend selection.
     pub backend: Option<crate::backend::BackendKind>,
-    /// CLI value of `--sidecar` (`local` | `<tcp://...|unix://...>` | unset).
+    /// CLI value of `--sidecar` (`local` | `<tcp://...|unix:///...>` | unset).
     pub sidecar_cli: crate::sidecar::SidecarCli,
     /// Optional operator-supplied capability token file, injected into the
     /// agent environment at launch (bring-your-own token).
