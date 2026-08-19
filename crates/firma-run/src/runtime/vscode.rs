@@ -333,9 +333,9 @@ fn configure_vscode_dbus_socket_with_address(
         );
         return Ok(());
     };
-    let Some(path) = address.strip_prefix("unix:path=") else {
+    let Some(path) = address.strip_prefix("unix://path=") else {
         tracing::debug!(
-            "VS Code D-Bus socket not configured because DBUS_SESSION_BUS_ADDRESS is not a unix:path address"
+            "VS Code D-Bus socket not configured because DBUS_SESSION_BUS_ADDRESS is not a unix://path address"
         );
         return Ok(());
     };
@@ -345,7 +345,7 @@ fn configure_vscode_dbus_socket_with_address(
         replace_symlink(&source, &target)?;
         env.insert(
             "DBUS_SESSION_BUS_ADDRESS".to_string(),
-            format!("unix:path={}", target.display()),
+            format!("unix://path={}", target.display()),
         );
         tracing::debug!(
             source = %source.display(),

@@ -40,7 +40,7 @@ async fn mock_gateway(response: &str) -> Result<ClientEndpoint, EndpointParseErr
             let _ = writer.shutdown().await;
         }
     });
-    ClientEndpoint::from_str(&format!("tcp:{addr}"))
+    ClientEndpoint::from_str(&format!("tcp://{addr}"))
 }
 
 /// Binds an ephemeral TCP listener that accepts a single connection, reads
@@ -63,7 +63,7 @@ async fn mock_gateway_unterminated(response: &[u8]) -> Result<ClientEndpoint, En
             let _ = writer.shutdown().await;
         }
     });
-    ClientEndpoint::from_str(&format!("tcp:{addr}"))
+    ClientEndpoint::from_str(&format!("tcp://{addr}"))
 }
 
 /// Binds an ephemeral TCP listener and immediately drops it, yielding an
@@ -74,7 +74,7 @@ async fn unreachable_endpoint() -> Result<ClientEndpoint, EndpointParseError> {
         .map_err(EndpointParseError::IO)?;
     let addr = listener.local_addr().map_err(EndpointParseError::IO)?;
     drop(listener);
-    ClientEndpoint::from_str(&format!("tcp:{addr}"))
+    ClientEndpoint::from_str(&format!("tcp://{addr}"))
 }
 
 #[tokio::test]

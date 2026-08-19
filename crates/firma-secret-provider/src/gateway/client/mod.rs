@@ -8,14 +8,14 @@
 //!
 //! The gateway address is advertised via the [`GATEWAY_ADDR_ENV`] environment
 //! variable, set by the orchestrator after firma-run binds the socket. The
-//! address uses a `unix:<path>` or `tcp:<host>:<port>` scheme (no `//`):
+//! address uses a `unix://<path>` or `tcp://<host>:<port>` scheme (no `//`):
 //!
 //! ```text
-//! unix:/run/firma/secret-shims/gateway.sock   (Linux/macOS)
-//! tcp:127.0.0.1:51234                          (Windows)
+//! unix:///run/firma/secret-shims/gateway.sock   (Linux/macOS)
+//! tcp://127.0.0.1:51234                          (Windows)
 //! ```
 //!
-//! Parse it with [`GatewayEndpoint::parse`] and pass it to [`GatewayClient::resolve_batch`].
+//! Parse it with [`EndpointInner::parse_client`] and pass it to [`GatewayClient::resolve_batch`].
 
 use std::collections::HashSet;
 
@@ -40,10 +40,11 @@ pub mod config;
 pub mod error;
 
 /// Environment variable the Sidecar reads to locate the firma-run secret
-/// gateway (`unix:<path>` or `tcp:<host>:<port>` format).
+/// gateway (`unix://<path>` or `tcp://<host>:<port>` format).
 pub const GATEWAY_ADDR_ENV: &str = "FIRMA_SECRET_GATEWAY_ADDR";
 
-/// Client for the firma-run secret resolution gateway, bound to one [`GatewayEndpoint`].
+/// Client for the firma-run secret resolution gateway, bound to one
+/// [`ClientEndpoint`].
 ///
 /// Opens a fresh connection per call rather than pooling, since gateway
 /// calls are infrequent relative to request traffic.

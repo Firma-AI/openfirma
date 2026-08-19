@@ -17,14 +17,14 @@ fn endpoint_state_representation_round_trips_and_preserves_tcp_bytes() {
         use std::os::unix::ffi::OsStringExt as _;
 
         let unix = unix_endpoint("/tmp/firma socket.sock");
-        assert_eq!(unix.to_string(), "unix:/tmp/firma socket.sock");
+        assert_eq!(unix.to_string(), "unix:///tmp/firma socket.sock");
         assert_eq!(
             unix.to_string().parse::<ComponentEndpoint>(),
             Ok(unix.clone())
         );
         assert_eq!(
             toml::to_string(&EndpointRecord { endpoint: &unix }).expect("serialize Unix endpoint"),
-            "endpoint = \"unix:/tmp/firma socket.sock\"\n"
+            "endpoint = \"unix:///tmp/firma socket.sock\"\n"
         );
         assert!(UnixEndpoint::new("/tmp/firma\n.sock").is_err());
         assert!(UnixEndpoint::new("/tmp/firma\0.sock").is_err());

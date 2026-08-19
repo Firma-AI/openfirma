@@ -25,7 +25,7 @@ use firma_runtime_state::UserProcessId;
 /// A connectable endpoint exposed by a managed component.
 ///
 /// TCP endpoints retain their conventional bare `host:port` representation.
-/// On Unix, local sockets use `unix:<path>`; the prefix makes persisted listen
+/// On Unix, local sockets use `unix://<path>`; the prefix makes persisted listen
 /// state unambiguous and is shared by display, parsing, and status reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComponentEndpoint {
@@ -82,7 +82,7 @@ impl std::fmt::Display for ComponentEndpoint {
         match self {
             Self::Tcp(addr) => addr.fmt(formatter),
             #[cfg(unix)]
-            Self::Unix(path) => write!(formatter, "unix:{path}"),
+            Self::Unix(path) => write!(formatter, "unix://{path}"),
         }
     }
 }
@@ -98,7 +98,7 @@ impl FromStr for ComponentEndpoint {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         #[cfg(unix)]
-        if let Some(path) = value.strip_prefix("unix:") {
+        if let Some(path) = value.strip_prefix("unix://") {
             return UnixEndpoint::new(path)
                 .map(Self::Unix)
                 .map_err(|_| "Unix endpoint path is empty or contains a NUL or line break".into());

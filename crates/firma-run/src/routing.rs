@@ -1481,8 +1481,8 @@ fn parse_host_port(url_str: &str) -> Option<(String, u16)> {
 
 fn format_endpoint(endpoint: &SidecarEndpoint) -> String {
     match endpoint {
-        SidecarEndpoint::Tcp { addr } => format!("tcp:{addr}"),
-        SidecarEndpoint::Unix { path } => format!("unix:{}", path.display()),
+        SidecarEndpoint::Tcp { addr } => format!("tcp://{addr}"),
+        SidecarEndpoint::Unix { path } => format!("unix://{}", path.display()),
     }
 }
 

@@ -133,9 +133,9 @@ Artifact layout:
 
 `sidecar_local_exec` supports:
 
-1. `tcp:host:port`
-2. `unix:/absolute/path.sock`
-3. On Unix hosts, governed mode requires `unix:` endpoint for peer-credential validation.
+1. `tcp://host:port`
+2. `unix:///absolute/path.sock`
+3. On Unix hosts, governed mode requires `unix://` endpoint for peer-credential validation.
 
 `timeout_ms` must be `> 0`.
 
@@ -145,7 +145,7 @@ Optional governance controls:
 2. `enforce_known_executables = true|false` (default: `false`).
 3. `allowed_executables = ["/usr/bin/bash", "/bin/sh", "/usr/bin/python3"]` (required when enforcement is enabled; entries must be absolute canonical paths).
 4. If `endpoint` is omitted and sidecar endpoint is unix socket, runtime derives `*-tools.sock` next to sidecar socket.
-5. On Unix hosts, `sidecar_endpoint` must also use `unix:` when `sidecar_local_exec` is enabled.
+5. On Unix hosts, `sidecar_endpoint` must also use `unix://` when `sidecar_local_exec` is enabled.
 
 ### Request (JSON line)
 
@@ -297,7 +297,7 @@ Create `/tmp/firma-run.mediator.toml`:
 ```toml
 [profiles.generic]
 backend = "bwrap"
-sidecar_endpoint = "unix:/tmp/firma-sidecar.sock"
+sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = "/ABS/PATH/TO/crates/firma-run/policies/generic-local-command-v1.toml"
@@ -306,7 +306,7 @@ verify_checksum = true
 runtime_mode = "compile_on_launch"
 
 [profiles.generic.sidecar_local_exec]
-endpoint = "unix:/tmp/firma-sidecar-tools.sock"
+endpoint = "unix:///tmp/firma-sidecar-tools.sock"
 timeout_ms = 500
 hitl_mode = "async_token"
 enforce_known_executables = true
@@ -346,7 +346,7 @@ Run governed command:
 cargo run -p firma -- run \
   --profile generic \
   --config /tmp/firma-run.mediator.toml \
-  --sidecar unix:/tmp/firma-sidecar.sock \
+  --sidecar unix:///tmp/firma-sidecar.sock \
   -- /bin/echo mediator-allow
 ```
 
@@ -362,7 +362,7 @@ Repeat with decision responses:
 
 ### Step 5: Negative Config Validation
 
-1. `endpoint = "unix:relative.sock"` -> validation error (requires absolute path).
+1. `endpoint = "unix://relative.sock"` -> validation error (requires absolute path).
 2. `timeout_ms = 0` -> validation error.
 
 ### Step 6: Final Acceptance

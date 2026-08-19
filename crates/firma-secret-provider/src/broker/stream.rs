@@ -13,8 +13,8 @@ use tokio::{
 
 /// A connected broker socket, abstracting over the TCP and Unix transports.
 ///
-/// Shared by the shim-side [`client::BrokerClient`] (outbound connections)
-/// and the broker-side [`server::BrokerListener`] (accepted connections). Peer
+/// Shared by the shim-side [`super::client::BrokerClient`] (outbound connections)
+/// and the broker-side [`super::server::BrokerListener`] (accepted connections). Peer
 /// credentials are validated on the concrete socket before it is erased here.
 #[pin_project::pin_project(project = BrokerStreamProj)]
 pub enum BrokerStream {

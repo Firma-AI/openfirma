@@ -95,7 +95,7 @@ fn unix_listen_state_distinguishes_running_and_unhealthy() {
     .expect("write live pid");
     std::fs::write(
         dir.path().join("authority.listen"),
-        format!("unix:{}\n", socket.display()),
+        format!("unix://{}\n", socket.display()),
     )
     .expect("write Unix endpoint");
 
@@ -130,7 +130,7 @@ fn noncanonical_unix_listen_state_is_not_accepted() {
     )
     .expect("write live pid");
 
-    for record in ["unix:\n", "unix:/tmp/a\njunk\n"] {
+    for record in ["unix://\n", "unix:///tmp/a\njunk\n"] {
         std::fs::write(dir.path().join("authority.listen"), record)
             .expect("write malformed Unix endpoint");
         let status = status_components(dir.path(), &topology()).expect("status");

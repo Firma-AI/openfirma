@@ -249,9 +249,9 @@ for i in $(seq 1 "$ITERATIONS"); do
     run_cmd+=(--inner-loops "$INNER_LOOPS")
     run_cmd+=(--failure-mode "$FAILURE_MODE")
     run_cmd+=(--profile "$PROFILE")
-    run_cmd+=(--sidecar-endpoint "tcp:127.0.0.1:${SIDE_PORT}")
+    run_cmd+=(--sidecar-endpoint "tcp://127.0.0.1:${SIDE_PORT}")
   else
-    run_cmd+=(--sidecar-endpoint "tcp:127.0.0.1:${SIDE_PORT}")
+    run_cmd+=(--sidecar-endpoint "tcp://127.0.0.1:${SIDE_PORT}")
     if [[ "$MODE" == "seccomp-static" ]]; then
       run_cmd+=(--config "$RUN_CONFIG_FILE")
     fi

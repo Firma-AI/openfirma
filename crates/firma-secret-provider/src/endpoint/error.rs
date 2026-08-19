@@ -3,12 +3,11 @@ use std::{
     net::{AddrParseError, IpAddr},
 };
 
-/// Errors returned by [`EndpointInner::parse`] when a
-/// (`tcp:<host>:<post>`|`unix:<path>`)-style address string is
-/// malformed or names a scheme unavailable on the current platform.
+/// Errors returned by [`super::EndpointInner::parse_client`] and [`super::EndpointInner::parse_server`]
+/// when an address string is malformed or names a scheme unavailable on the current platform.
 #[derive(Debug, thiserror::Error)]
 pub enum EndpointParseError {
-    /// The `tcp:` prefix matched, but the remainder did not parse as a
+    /// The `tcp://` prefix matched, but the remainder did not parse as a
     /// `SocketAddr`.
     #[error("invalid TCP address '{addr}': {error}")]
     InvalidTCP {
@@ -18,11 +17,11 @@ pub enum EndpointParseError {
     },
     #[error("IO error: {0}")]
     IO(#[source] io::Error),
-    /// A `unix:` address was given on a non-unix system.
+    /// A `unix://` address was given on a non-unix system.
     #[error("unix address '{0}' is not supported on this platform")]
     UnixUnsupported(String),
-    /// The string had neither a `tcp:` nor a `unix:` prefix.
-    #[error("unrecognized address '{0}'; expected 'tcp:<host>:<port>' or 'unix:<path>'")]
+    /// The string had neither a `tcp://` nor a `unix://` prefix.
+    #[error("unrecognized address '{0}'; expected 'tcp://<host>:<port>' or 'unix://<path>'")]
     Unrecognized(String),
     #[error("TCP gateway address {0} is not a loopback address")]
     NoLoopback(IpAddr),

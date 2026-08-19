@@ -11,7 +11,7 @@
 //!
 //! This module defines the wire types themselves; [`client`] implements the
 //! transport that speaks the protocol over a [`client::config::GatewayClientConfig`]-tuned
-//! connection to an [`endpoint::GatewayEndpoint`].
+//! connection to a [`crate::endpoint::client::ClientEndpoint`].
 
 use std::collections::HashSet;
 

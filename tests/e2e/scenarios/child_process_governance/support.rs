@@ -36,9 +36,9 @@ pub(super) fn patch_local_exec_allowlist(
         "generated firma.toml did not contain the expected generic profile anchor:\n{original}"
     );
     let injected = format!(
-        "{anchor}sidecar_endpoint = \"unix:{traffic}\"\n\n\
+        "{anchor}sidecar_endpoint = \"unix://{traffic}\"\n\n\
          [run.profiles.generic.sidecar_local_exec]\n\
-         endpoint = \"unix:{governance}\"\n\
+         endpoint = \"unix://{governance}\"\n\
          timeout_ms = 2000\n\
          enforce_known_executables = true\n\
          allowed_executables = [\"{bash}\"]\n",

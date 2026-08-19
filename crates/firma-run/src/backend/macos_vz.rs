@@ -783,7 +783,7 @@ fn sidecar_host_addr(endpoint: &SidecarEndpoint) -> Result<String, RunError> {
         SidecarEndpoint::Unix { path } => Err(RunError::UnsupportedBackend {
             backend: BackendKind::Vz.to_string(),
             reason: format!(
-                "VZ guest launch requires a TCP sidecar endpoint for the host bridge; got unix:{}",
+                "VZ guest launch requires a TCP sidecar endpoint for the host bridge; got unix://{}",
                 path.display()
             ),
         }),

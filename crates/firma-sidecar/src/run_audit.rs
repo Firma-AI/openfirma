@@ -77,13 +77,13 @@ impl From<&RunAuditMessage> for AuditPayload {
 /// Renders a blocked loopback destination as an audit `resource` string.
 ///
 /// IPv6 destinations are bracketed so the `host:port` form stays unambiguous
-/// (`[::1]:9000`); IPv4 destinations are left bare. The `tcp:` scheme marks
+/// (`[::1]:9000`); IPv4 destinations are left bare. The `tcp://` scheme marks
 /// the transport.
 fn loopback_resource(dst_ip: &str, dst_port: u16) -> String {
     if dst_ip.contains(':') {
-        format!("tcp:[{dst_ip}]:{dst_port}")
+        format!("tcp://[{dst_ip}]:{dst_port}")
     } else {
-        format!("tcp:{dst_ip}:{dst_port}")
+        format!("tcp://{dst_ip}:{dst_port}")
     }
 }
 
@@ -239,7 +239,7 @@ mod tests {
         let payload = AuditPayload::from(&loopback_msg("127.0.0.1", 6379));
         assert_eq!(payload.decision, Decision::Deny);
         assert_eq!(payload.action, "network.loopback");
-        assert_eq!(payload.resource, "tcp:127.0.0.1:6379");
+        assert_eq!(payload.resource, "tcp://127.0.0.1:6379");
         assert_eq!(payload.deny_reason, "loopback blocked");
         assert_eq!(payload.session_id, "sess-1");
         assert_eq!(payload.agent_id, "agt_01j0000000e008000000000001");
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn ipv6_loopback_resource_is_bracketed() {
         let payload = AuditPayload::from(&loopback_msg("::1", 53));
-        assert_eq!(payload.resource, "tcp:[::1]:53");
+        assert_eq!(payload.resource, "tcp://[::1]:53");
     }
 
     #[tokio::test]
@@ -271,7 +271,7 @@ mod tests {
             .expect("payload within timeout")
             .expect("payload present");
         assert_eq!(payload.action, "network.loopback");
-        assert_eq!(payload.resource, "tcp:[::1]:9000");
+        assert_eq!(payload.resource, "tcp://[::1]:9000");
         assert_eq!(payload.decision, Decision::Deny);
 
         exit.cancel();
@@ -331,7 +331,7 @@ mod tests {
             .await
             .expect("payload within timeout")
             .expect("payload present");
-        assert_eq!(payload.resource, "tcp:127.0.0.1:5432");
+        assert_eq!(payload.resource, "tcp://127.0.0.1:5432");
         assert!(rx.try_recv().is_err(), "blank lines must not emit payloads");
 
         exit.cancel();

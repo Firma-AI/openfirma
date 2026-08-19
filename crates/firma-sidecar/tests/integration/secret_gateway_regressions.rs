@@ -262,7 +262,7 @@ async fn fake_resolve_gateway(secret: &str) -> anyhow::Result<GatewayClient> {
         }
     });
     Ok(GatewayClient::new(
-        ClientEndpoint::from_str(&format!("tcp:{address}"))?,
+        ClientEndpoint::from_str(&format!("tcp://{address}"))?,
         GatewayClientConfig::default(),
     ))
 }
@@ -281,7 +281,7 @@ async fn gateway_contact_probe() -> anyhow::Result<(
         }
     });
     let client = GatewayClient::new(
-        ClientEndpoint::from_str(&format!("tcp:{address}"))?,
+        ClientEndpoint::from_str(&format!("tcp://{address}"))?,
         GatewayClientConfig::default(),
     );
     Ok((client, contacted_rx, server))
@@ -378,7 +378,7 @@ async fn fake_push_gateway() -> anyhow::Result<(
         }
     });
     let client = GatewayClient::new(
-        ClientEndpoint::from_str(&format!("tcp:{address}"))?,
+        ClientEndpoint::from_str(&format!("tcp://{address}"))?,
         GatewayClientConfig::default(),
     );
     Ok((client, pushed_rx, server))

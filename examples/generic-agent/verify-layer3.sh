@@ -17,7 +17,7 @@
 #
 # Linux-only. Requires: cargo, bwrap.
 # Optional env overrides:
-#   SIDECAR_ENDPOINT   default: tcp:127.0.0.1:7474
+#   SIDECAR_ENDPOINT   default: tcp://127.0.0.1:7474
 #   AUTHORITY_URL      default: http://127.0.0.1:50051
 set -euo pipefail
 
@@ -45,7 +45,7 @@ echo "building firma..."
 FIRMA_BIN="$ROOT_DIR/target/debug/firma"
 [[ -x "$FIRMA_BIN" ]] || fail "firma binary not built at $FIRMA_BIN"
 
-SIDECAR_ENDPOINT="${SIDECAR_ENDPOINT:-tcp:127.0.0.1:7474}"
+SIDECAR_ENDPOINT="${SIDECAR_ENDPOINT:-tcp://127.0.0.1:7474}"
 AUTHORITY_URL="${AUTHORITY_URL:-http://127.0.0.1:50051}"
 
 WORKDIR="$(mktemp -d /tmp/firma-l3.XXXXXX)"

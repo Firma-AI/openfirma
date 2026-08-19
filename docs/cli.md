@@ -479,7 +479,7 @@ When autostart fires, `firma run`:
    startup-report contract.
 5. On publication, writes `sidecar.pid` and `metadata.toml` from the
    orchestrator's component handle.
-6. Substitutes `unix:<sock>` as the effective endpoint and proceeds.
+6. Substitutes `unix://<sock>` as the effective endpoint and proceeds.
 
 When the `firma run` process exits — by clean exit, `SIGINT`, or
 `SIGTERM` — the process orchestrator shuts down the component stack. The
@@ -489,12 +489,12 @@ inputs for recovery. Set `FIRMA_RUN_KEEP_MARKERS` to retain them deliberately.
 
 ### Flags
 
-| Flag                                   | Default | Description                                                                                                                                                                                          |
-| -------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--sidecar <local\|url>`               | —       | `local` autostarts a per-run sidecar. A `tcp:host:port` / `unix:path` value targets an external sidecar and never autostarts. Omitted: persisted `sidecar_endpoint` (external) else local autostart. |
-| `--no-autostart`                       | off     | Fail with a typed error instead of autostarting any missing component. CI safety net. Incompatible with `--sidecar local` and `--authority local`.                                                   |
-| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback.                                                                                                     |
-| `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for startup publication. `0` reverts to the built-in default.                                                                                                                           |
+| Flag                                   | Default | Description                                                                                                                                                                                              |
+| -------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--sidecar <local\|url>`               | —       | `local` autostarts a per-run sidecar. A `tcp://host:port` / `unix://path` value targets an external sidecar and never autostarts. Omitted: persisted `sidecar_endpoint` (external) else local autostart. |
+| `--no-autostart`                       | off     | Fail with a typed error instead of autostarting any missing component. CI safety net. Incompatible with `--sidecar local` and `--authority local`.                                                       |
+| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback.                                                                                                         |
+| `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for startup publication. `0` reverts to the built-in default.                                                                                                                               |
 
 ### Typed errors
 
