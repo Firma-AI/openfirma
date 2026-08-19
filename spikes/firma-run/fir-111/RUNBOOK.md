@@ -50,7 +50,7 @@ spikes/firma-run/fir-111/adapters/unotify-runner-firma.sh \
   --firma-bin /bin/true \
   --workload spikes/firma-run/fir-111/workloads/shell-heavy.sh \
   --profile generic \
-  --sidecar-endpoint tcp://127.0.0.1:1 \
+  --sidecar-endpoint tcp:127.0.0.1:1 \
   --failure-mode none
 ```
 

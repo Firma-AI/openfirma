@@ -8,6 +8,8 @@
 //! back out of its own synthesized startup config and runs extraction
 //! itself against MITM'd response bodies.
 
+pub mod broker;
+pub mod endpoint;
 pub mod gateway;
 mod glob;
 mod matcher;

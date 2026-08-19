@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::config::CommandMediatorEndpoint;
+use crate::endpoint::client::ClientEndpoint;
 
 /// Whole-request failures from talking to the out-of-sandbox secret broker.
 ///
@@ -28,7 +28,7 @@ pub enum BrokerClientError {
     /// The round-trip to the broker did not complete. Retryable.
     #[error("secret broker ({endpoint}): {source}")]
     Transport {
-        endpoint: CommandMediatorEndpoint,
+        endpoint: ClientEndpoint,
         #[source]
         source: TransportError,
     },

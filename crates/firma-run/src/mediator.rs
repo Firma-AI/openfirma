@@ -226,7 +226,7 @@ fn request_over_tcp(
     let timeout = Duration::from_millis(timeout_ms);
     let stream = TcpStream::connect_timeout(&addr, timeout).map_err(|error| {
         RunError::Governance(format!(
-            "local-exec governance endpoint unavailable (tcp://{addr}) in fail-closed mode: {error}"
+            "local-exec governance endpoint unavailable (tcp:{addr}) in fail-closed mode: {error}"
         ))
     })?;
     stream.set_read_timeout(Some(timeout)).map_err(|error| {
@@ -259,7 +259,7 @@ fn request_over_unix(
         let timeout = Duration::from_millis(timeout_ms);
         let stream = UnixStream::connect(path).map_err(|error| {
             RunError::Governance(format!(
-                "local-exec governance endpoint unavailable (unix://{}) in fail-closed mode: {error}",
+                "local-exec governance endpoint unavailable (unix:{}) in fail-closed mode: {error}",
                 path.display()
             ))
         })?;

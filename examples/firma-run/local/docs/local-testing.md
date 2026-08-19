@@ -76,7 +76,7 @@ Templates used:
 
 `firma run` supports the following environment variables to customize addresses and avoid port conflicts:
 
-- `FIRMA_SIDECAR_ENDPOINT`: Sidecar endpoint (default: `tcp://127.0.0.1:8080`)
+- `FIRMA_SIDECAR_ENDPOINT`: Sidecar endpoint (default: `tcp:127.0.0.1:8080`)
 - `FIRMA_PROXY_LISTEN_ADDR`: Proxy bridge listen address (default: `127.0.0.1:18080`)
 - `FIRMA_SIDECAR_CA_CERT_PATH`: Explicit path to sidecar MITM CA cert (preferred override)
 - `FIRMA_SIDECAR_CA_DIR`: Directory containing `firma-ca.crt` (fallback override)
@@ -91,7 +91,7 @@ run marker's `metadata.toml`, or from the `sandbox_id` field in audit events.
 Example:
 
 ```bash
-export FIRMA_SIDECAR_ENDPOINT=tcp://127.0.0.1:9090
+export FIRMA_SIDECAR_ENDPOINT=tcp:127.0.0.1:9090
 export FIRMA_PROXY_LISTEN_ADDR=127.0.0.1:18181
 cargo run -p firma -- run -- "your command"
 ```

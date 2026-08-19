@@ -98,7 +98,7 @@ fn ungoverned_child_remains_network_confined() {
 
     let audit = world.audit_event(&blocked_port);
     assert_eq!(audit.action, "network.loopback");
-    assert_eq!(audit.resource, format!("tcp://127.0.0.1:{blocked_port}"));
+    assert_eq!(audit.resource, format!("tcp:127.0.0.1:{blocked_port}"));
     assert_eq!(audit.decision, AuditDecision::Deny);
     assert_eq!(audit.deny_reason, "loopback blocked");
     assert_eq!(audit.dispatch_status, 0);

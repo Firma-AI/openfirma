@@ -12,8 +12,8 @@
 //!
 //! ```text
 //! shim  →  {"bin":"bws","args":["secret","get","abc"]}\n
-//! broker → {"type":"Ok","stdout":"<base64>"}\n     (on success)
-//! broker → {"type":"Err","error":"<reason>"}\n     (on failure — shim exits non-zero)
+//! broker → {"type":"ok","stdout":"<base64>"}\n     (on success)
+//! broker → {"type":"err","error":"<reason>"}\n     (on failure — shim exits non-zero)
 //! ```
 //!
 //! Layout mirrors the secret gateway's: shared wire types live here,
@@ -39,13 +39,11 @@ use base64::Engine as _;
 use firma_http::Str;
 use serde::{Deserialize, Serialize};
 
-use crate::config::CommandMediatorEndpoint;
-
 /// Shim → broker request: describes one tool invocation, which the broker's
 /// handler may refuse (config matching and authorization happen downstream in
 /// the handler, not in the shim).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub(crate) struct BrokerRequest<'a, T: ArgsList> {
+pub struct BrokerRequest<'a, T: ArgsList> {
     /// Executable basename of the wrapped tool (e.g. `"bws"`).
     #[serde(borrow)]
     pub bin: Str<'a>,
@@ -53,7 +51,7 @@ pub(crate) struct BrokerRequest<'a, T: ArgsList> {
     pub args: T,
 }
 
-pub(crate) trait ArgsList: sealed::Sealed {}
+pub trait ArgsList: sealed::Sealed {}
 
 impl<T> ArgsList for T where T: sealed::Sealed {}
 
@@ -79,7 +77,7 @@ mod sealed {
 /// Broker → shim response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum BrokerResponse<'a> {
+pub enum BrokerResponse<'a> {
     Ok {
         /// Base64-encoded stdout bytes from the real tool.
         #[serde(borrow)]
@@ -94,7 +92,7 @@ pub(crate) enum BrokerResponse<'a> {
 impl BrokerResponse<'_> {
     /// Build a success response from raw stdout bytes.
     #[must_use]
-    pub(crate) fn ok(stdout: &[u8]) -> Self {
+    pub fn ok(stdout: &[u8]) -> Self {
         Self::Ok {
             stdout: Str::from(base64::engine::general_purpose::STANDARD.encode(stdout)),
         }
@@ -102,7 +100,7 @@ impl BrokerResponse<'_> {
 
     /// Build an error response.
     #[must_use]
-    pub(crate) fn err<'a>(reason: impl Into<Str<'a>>) -> BrokerResponse<'a> {
+    pub fn err<'a>(reason: impl Into<Str<'a>>) -> BrokerResponse<'a> {
         BrokerResponse::Err {
             error: reason.into(),
         }
@@ -114,47 +112,12 @@ impl BrokerResponse<'_> {
     ///
     /// Returns an error if the payload is an error response or the base64 is
     /// malformed.
-    pub(crate) fn into_stdout(self) -> Result<Vec<u8>, String> {
+    pub fn into_stdout(self) -> Result<Vec<u8>, String> {
         match self {
             Self::Ok { stdout } => base64::engine::general_purpose::STANDARD
                 .decode(&*stdout)
                 .map_err(|e| format!("broker response base64 decode failed: {e}")),
             Self::Err { error } => Err(error.to_string()),
-        }
-    }
-}
-
-/// Address-level endpoint invariants shared by both transport roles.
-///
-/// The broker returns secret material, so the transport must stay local: on
-/// Unix hosts only a Unix socket can carry the same-user guarantee that peer
-/// credentials provide, and on any platform a non-loopback TCP endpoint would
-/// expose the broker to remote callers. A relative Unix path is an ambiguous
-/// config bug that must fail closed.
-pub(crate) fn validate_endpoint(endpoint: &CommandMediatorEndpoint) -> Result<(), String> {
-    match endpoint {
-        #[cfg(unix)]
-        CommandMediatorEndpoint::Tcp { .. } => Err(
-            "secret broker tcp endpoint is only supported on Windows; use unix:// on unix hosts"
-                .to_string(),
-        ),
-        #[cfg(not(unix))]
-        CommandMediatorEndpoint::Tcp { addr } => {
-            if !addr.ip().is_loopback() {
-                return Err(format!(
-                    "secret broker endpoint must be a loopback address, got {addr}"
-                ));
-            }
-            Ok(())
-        }
-        CommandMediatorEndpoint::Unix { path } => {
-            if !path.is_absolute() {
-                return Err(format!(
-                    "secret broker unix endpoint must be an absolute path: {}",
-                    path.display()
-                ));
-            }
-            Ok(())
         }
     }
 }
@@ -230,22 +193,10 @@ pub(crate) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
 /// is unavailable.
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
-    use std::os::fd::AsRawFd;
-
-    let (mut effective_user_id, mut effective_group_id) = (0u32, 0u32);
-    // SAFETY: euid/egid are initialized by the kernel on success.
-    #[expect(unsafe_code, reason = "BSD getpeereid bindings are unsafe")]
-    if unsafe {
-        libc::getpeereid(
-            stream.as_raw_fd(),
-            &raw mut effective_user_id,
-            &raw mut effective_group_id,
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
+    match nix::unistd::getpeereid(stream) {
+        Ok((user_id, _group_id)) => Ok(user_id.as_raw()),
+        Err(err_no) => Err(io::Error::from(err_no)),
     }
-    Ok(effective_user_id)
 }
 
 /// The uid of the current process.

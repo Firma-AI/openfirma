@@ -19,7 +19,7 @@ pub enum SidecarCli {
     Unset,
     /// `--sidecar local`.
     Local,
-    /// `--sidecar <tcp://...|unix:///...>`.
+    /// `--sidecar <tcp:...|unix:...>`.
     Remote(String),
 }
 
@@ -100,29 +100,21 @@ mod tests {
     #[test]
     fn remote_tcp_parses() {
         let sel = resolve(
-            &SidecarCli::Remote("tcp://127.0.0.1:9000".into()),
+            &SidecarCli::Remote("tcp:127.0.0.1:9000".into()),
             false,
             None,
         )
         .unwrap();
         assert_eq!(
             sel,
-            SidecarSelection::Remote(endpoint("tcp://127.0.0.1:9000"))
+            SidecarSelection::Remote(endpoint("tcp:127.0.0.1:9000"))
         );
     }
 
     #[test]
     fn remote_unix_parses() {
-        let sel = resolve(
-            &SidecarCli::Remote("unix:///tmp/s.sock".into()),
-            false,
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            sel,
-            SidecarSelection::Remote(endpoint("unix:///tmp/s.sock"))
-        );
+        let sel = resolve(&SidecarCli::Remote("unix:/tmp/s.sock".into()), false, None).unwrap();
+        assert_eq!(sel, SidecarSelection::Remote(endpoint("unix:/tmp/s.sock")));
     }
 
     #[test]
@@ -133,11 +125,8 @@ mod tests {
 
     #[test]
     fn unset_with_persisted_is_remote() {
-        let sel = resolve(&SidecarCli::Unset, false, Some("tcp://10.0.0.1:8080")).unwrap();
-        assert_eq!(
-            sel,
-            SidecarSelection::Remote(endpoint("tcp://10.0.0.1:8080"))
-        );
+        let sel = resolve(&SidecarCli::Unset, false, Some("tcp:10.0.0.1:8080")).unwrap();
+        assert_eq!(sel, SidecarSelection::Remote(endpoint("tcp:10.0.0.1:8080")));
     }
 
     #[test]
@@ -154,15 +143,10 @@ mod tests {
 
     #[test]
     fn remote_wins_even_with_no_autostart() {
-        let sel = resolve(
-            &SidecarCli::Remote("tcp://127.0.0.1:9000".into()),
-            true,
-            None,
-        )
-        .unwrap();
+        let sel = resolve(&SidecarCli::Remote("tcp:127.0.0.1:9000".into()), true, None).unwrap();
         assert_eq!(
             sel,
-            SidecarSelection::Remote(endpoint("tcp://127.0.0.1:9000"))
+            SidecarSelection::Remote(endpoint("tcp:127.0.0.1:9000"))
         );
     }
 }

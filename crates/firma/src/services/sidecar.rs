@@ -1,14 +1,12 @@
 //! Runner for `firma sidecar`.
 
-use std::{path::Path, process::ExitCode, sync::Arc, time::Duration};
+use std::{path::Path, process::ExitCode, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::Context as _;
 use firma_secret_provider::{
     MatcherCompiler,
-    gateway::{
-        client::{GATEWAY_ADDR_ENV, GatewayClient},
-        endpoint::GatewayEndpoint,
-    },
+    endpoint::client::ClientEndpoint,
+    gateway::client::{GATEWAY_ADDR_ENV, GatewayClient},
 };
 use firma_sidecar::{
     audit::AuditPayload, authority_client::readiness::ReadinessFlag, composio::ComposioCatalogs,
@@ -144,7 +142,7 @@ fn build_request_handler(
         .with_max_decompressed_body_bytes(config.interceptor.max_decompressed_body_bytes());
 
     let base = if let Ok(addr) = std::env::var(GATEWAY_ADDR_ENV) {
-        match GatewayEndpoint::parse(&addr) {
+        match ClientEndpoint::from_str(&addr) {
             Ok(ep) => {
                 tracing::info!(%addr, "secret gateway configured; placeholder rehydration enabled");
                 base.with_gateway_client(GatewayClient::new(ep, config.secret_gateway))

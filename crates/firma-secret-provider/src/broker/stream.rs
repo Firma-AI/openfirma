@@ -17,7 +17,7 @@ use tokio::{
 /// and the broker-side [`server::BrokerListener`] (accepted connections). Peer
 /// credentials are validated on the concrete socket before it is erased here.
 #[pin_project::pin_project(project = BrokerStreamProj)]
-pub(crate) enum BrokerStream {
+pub enum BrokerStream {
     Tcp {
         #[pin]
         stream: TcpStream,

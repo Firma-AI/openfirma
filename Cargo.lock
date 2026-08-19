@@ -1712,7 +1712,6 @@ dependencies = [
  "nix 0.31.3",
  "p256",
  "pasetors",
- "pin-project",
  "pretty_assertions",
  "prost-types",
  "serde",
@@ -1751,6 +1750,7 @@ dependencies = [
 name = "firma-secret-provider"
 version = "0.1.6"
 dependencies = [
+ "anyhow",
  "base64",
  "bytesize",
  "either",
@@ -1759,6 +1759,8 @@ dependencies = [
  "http",
  "insta",
  "jiff",
+ "nix 0.31.3",
+ "pin-project",
  "regex",
  "secrecy",
  "serde",
