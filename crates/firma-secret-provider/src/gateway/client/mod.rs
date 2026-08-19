@@ -8,7 +8,7 @@
 //!
 //! The gateway address is advertised via the [`GATEWAY_ADDR_ENV`] environment
 //! variable, set by the orchestrator after firma-run binds the socket. The
-//! address uses a `unix://<path>` or `tcp://<host>:<port>` scheme (no `//`):
+//! address uses a `unix:///path` or `tcp://host:port` scheme:
 //!
 //! ```text
 //! unix:///run/firma/secret-shims/gateway.sock   (Linux/macOS)
@@ -40,7 +40,7 @@ pub mod config;
 pub mod error;
 
 /// Environment variable the Sidecar reads to locate the firma-run secret
-/// gateway (`unix://<path>` or `tcp://<host>:<port>` format).
+/// gateway (`unix:///path` or `tcp://host:port` format).
 pub const GATEWAY_ADDR_ENV: &str = "FIRMA_SECRET_GATEWAY_ADDR";
 
 /// Client for the firma-run secret resolution gateway, bound to one

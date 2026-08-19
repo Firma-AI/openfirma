@@ -69,7 +69,7 @@ FIRMA_SECRET_GATEWAY_ADDR=unix:///run/firma/secret-shims/gateway.sock \
 firma sidecar -c firma.toml
 ```
 
-On Windows, use a `tcp:` endpoint instead (`tcp://127.0.0.1:51234`) since Unix
+On Windows, use a `tcp://` endpoint instead (`tcp://127.0.0.1:51234`) since Unix
 sockets aren't available.
 
 Tune the gateway client's timeouts and buffer cap under

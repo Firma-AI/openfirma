@@ -15,12 +15,26 @@ pub enum EndpointInner {
 }
 
 impl EndpointInner {
-    /// Parse a `unix://<path>` or `tcp://<host>:<port>` address string.
+    /// Parse a `unix:///path` or `tcp://host:port` address string.
+    ///
+    /// Client-side parsing is strict about the transport's security
+    /// invariants, so it must run when the peer socket already exists:
+    ///
+    /// - TCP addresses must be loopback. Note that over TCP the peer-uid
+    ///   checks the Unix transport performs at connect time do not apply —
+    ///   a `tcp://` endpoint on a Unix host therefore relies on loopback
+    ///   binding alone to keep cross-user traffic out.
+    /// - Unix socket files must be absolute, already exist, be a real socket
+    ///   (not a symlink or regular file), and be `0600`; their immediate
+    ///   parent directory must be `0700`. A socket whose parent was created
+    ///   with default permissions (e.g. `0755`) is rejected, so the binding
+    ///   side must create the parent `0700`.
     ///
     /// # Errors
     ///
     /// Returns an error [`EndpointParseError`] if the scheme is unrecognized, the TCP address
-    /// is malformed, or a `unix://` address is used on a non-Unix platform.
+    /// is malformed, a `unix://` address is used on a non-Unix platform, or the
+    /// Unix socket fails the existence, type, or permission checks above.
     fn parse_client(s: &str) -> Result<Self, error::EndpointParseError> {
         if let Some(addr_str) = s.strip_prefix("tcp://") {
             let addr = addr_str.parse::<SocketAddr>().map_err(|error| {
@@ -81,7 +95,7 @@ impl EndpointInner {
         Err(error::EndpointParseError::Unrecognized(s.to_owned()))
     }
 
-    /// Parse a `unix:<path>` or `tcp://<host>:<port>` address string.
+    /// Parse a `unix:///path` or `tcp://host:port` address string.
     ///
     /// # Errors
     ///

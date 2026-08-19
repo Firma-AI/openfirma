@@ -205,7 +205,7 @@ impl FromStr for SidecarEndpoint {
         }
 
         Err(format!(
-            "unsupported sidecar endpoint '{value}'; expected tcp://<host>:<port> or unix://<path>"
+            "unsupported sidecar endpoint '{value}'; expected tcp://host:port or unix:///path"
         ))
     }
 }
@@ -351,15 +351,6 @@ pub struct CommandMediatorConfig {
 pub enum CommandMediatorEndpoint {
     Tcp { addr: SocketAddr },
     Unix { path: PathBuf },
-}
-
-impl std::fmt::Display for CommandMediatorEndpoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Tcp { addr } => write!(f, "tcp://{addr}"),
-            Self::Unix { path } => write!(f, "unix://{}", path.display()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -974,7 +965,7 @@ fn parse_sidecar_local_exec_endpoint(value: &str) -> Result<CommandMediatorEndpo
         return Ok(CommandMediatorEndpoint::Unix { path });
     }
     Err(RunError::ConfigValidation(format!(
-        "unsupported sidecar_local_exec.endpoint '{value}'; expected tcp://<host>:<port> or unix://<path>"
+        "unsupported sidecar_local_exec.endpoint '{value}'; expected tcp://host:port or unix:///path"
     )))
 }
 

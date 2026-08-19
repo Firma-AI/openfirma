@@ -21,7 +21,7 @@ pub enum EndpointParseError {
     #[error("unix address '{0}' is not supported on this platform")]
     UnixUnsupported(String),
     /// The string had neither a `tcp://` nor a `unix://` prefix.
-    #[error("unrecognized address '{0}'; expected 'tcp://<host>:<port>' or 'unix://<path>'")]
+    #[error("unrecognized address '{0}'; expected 'tcp://host:port' or 'unix:///path'")]
     Unrecognized(String),
     #[error("TCP gateway address {0} is not a loopback address")]
     NoLoopback(IpAddr),

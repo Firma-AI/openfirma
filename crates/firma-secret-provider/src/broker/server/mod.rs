@@ -11,13 +11,23 @@
 //!
 //! A same-user local process is trusted: it already has the user's secrets.
 //! The boundary enforced here is cross-user access.
+//!
+//! Concurrency: [`BrokerListener::accept_one`] services exactly one
+//! connection, so an accept loop that awaits it serially runs tools one at a
+//! time — new connections queue in the kernel backlog and their shims can
+//! time out while a slow tool holds the broker. Callers that want tools to
+//! run concurrently should spawn a task per `accept_one` (each call takes
+//! `&self`, so concurrent accepts are safe). Note that
+//! [`config::BrokerListenerConfig::operation_timeout`] cancels the handler
+//! mid-run when it fires: a handler that spawns a child process must ensure
+//! the child is killed on cancellation, or the tool keeps running out of the
+//! sandbox after the shim has already failed closed.
 
 use std::io;
 
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use bytesize::ByteSize;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio::{net::TcpListener, time::timeout};
@@ -134,7 +144,7 @@ impl BrokerListener {
                     let mut stream = BrokerStream::Unix { stream };
                     let _ = timeout(
                         self.config.operation_timeout,
-                        write_response(&mut stream, &response),
+                        write_response(&mut stream, &response, self.config.max_buffer_size()),
                     )
                     .await;
                     return Err(error);
@@ -147,11 +157,7 @@ impl BrokerListener {
         // the connection indefinitely.
         timeout(
             self.config.operation_timeout,
-            handle_connection(
-                &mut stream,
-                max_request_bytes(self.config.max_request_bytes),
-                handler,
-            ),
+            handle_connection(&mut stream, self.config.max_buffer_size(), handler),
         )
         .await
         .map_err(|_| {
@@ -191,54 +197,93 @@ fn reject_mismatched_peer(stream: &tokio::net::UnixStream) -> io::Result<()> {
 
 async fn handle_connection<F>(
     stream: &mut BrokerStream,
-    max_request_bytes: usize,
+    max_buffer_size: usize,
     handler: F,
 ) -> io::Result<()>
 where
     F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
 {
-    // The read is capped at max_request_bytes + 1 (see [`read_bounded_line`]),
+    // The read is capped at max_buffer_size + 1 (see [`read_bounded_line`]),
     // and any request whose newline-stripped line exceeds the limit is
     // rejected. Padding an over-limit request with boundary whitespace must
     // not let it pass, so the check measures the raw line, not the trimmed
-    // content.
-    let line = read_bounded_line(stream, max_request_bytes as u64).await?;
-    let line = String::from_utf8(line)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "broker request is not UTF-8"))?;
-    if line.len() > max_request_bytes {
-        write_response(stream, &BrokerResponse::err("request too large")).await?;
+    // content. The size check runs on the raw bytes before UTF-8 decoding so
+    // an over-limit line that truncates mid-character still receives the
+    // "request too large" response instead of a silent close.
+    let line = read_bounded_line(stream, max_buffer_size as u64).await?;
+    if line.len() > max_buffer_size {
+        write_response(
+            stream,
+            &BrokerResponse::err("request too large"),
+            max_buffer_size,
+        )
+        .await?;
         // The request line was capped, so the rest of an over-limit request is
         // still in flight. Drain it before closing so the TCP close delivers a
         // FIN, not an RST that can discard the error response the client has
         // not read yet (see [`drain_remaining`]).
         return drain_remaining(stream).await;
     }
+    let line = String::from_utf8(line)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "broker request is not UTF-8"))?;
     let trimmed = line.trim();
     if trimmed.is_empty() {
-        return write_response(stream, &BrokerResponse::err("empty broker request")).await;
+        return write_response(
+            stream,
+            &BrokerResponse::err("empty broker request"),
+            max_buffer_size,
+        )
+        .await;
     }
     let response = match serde_json::from_str::<BrokerRequest>(trimmed) {
         Ok(request) => handler(request).await,
         Err(e) => BrokerResponse::err(format!("malformed broker request: {e}")),
     };
-    write_response(stream, &response).await
+    write_response(stream, &response, max_buffer_size).await
+}
+
+/// Serialize `response` into a newline-terminated wire line, or return `None`
+/// when the serialized line exceeds `max_response_bytes`.
+///
+/// The response must be capped before it reaches the shim: the shim reads
+/// only up to its own buffer limit, so an over-limit line would be truncated
+/// or rejected without a meaningful reason. Enforcing the cap here replaces
+/// it with a short, clean error response instead.
+fn serialize_response(
+    response: &BrokerResponse<'_>,
+    max_response_bytes: usize,
+) -> io::Result<Option<Vec<u8>>> {
+    let mut payload = serde_json::to_vec(response)
+        .map_err(|e| io::Error::other(format!("failed to serialize broker response: {e}")))?;
+    if payload.len() > max_response_bytes {
+        return Ok(None);
+    }
+    payload.push(b'\n');
+    Ok(Some(payload))
 }
 
 async fn write_response(
     stream: &mut BrokerStream,
     response: &BrokerResponse<'_>,
+    max_response_bytes: usize,
 ) -> io::Result<()> {
-    let mut payload = serde_json::to_vec(response)
-        .map_err(|e| io::Error::other(format!("failed to serialize broker response: {e}")))?;
-    payload.push(b'\n');
+    let Some(payload) = serialize_response(response, max_response_bytes)? else {
+        // The handler's response (or its error reason) exceeded the cap.
+        // Answer with a fixed-size error instead so the shim fails closed
+        // with a meaningful reason.
+        let Some(payload) = serialize_response(
+            &BrokerResponse::err("response too large"),
+            max_response_bytes,
+        )?
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "configured max_response_bytes is smaller than the smallest error response",
+            ));
+        };
+        return write_all(stream, &payload).await;
+    };
     write_all(stream, &payload).await
-}
-
-/// Byte size of the request-line cap, as a `usize` the reader can bound with.
-fn max_request_bytes(size: ByteSize) -> usize {
-    // The only way this conversion can fail is on a 32-bit system with a
-    // configured max_request_bytes larger than usize::MAX.
-    usize::try_from(size.as_u64()).unwrap_or(usize::MAX)
 }
 
 /// Make a freshly-bound Unix socket owner-only.

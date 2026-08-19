@@ -148,14 +148,17 @@ impl BrokerClient {
         .await
         .map_err(|_| self.transport_error(TransportError::OperationTimeout))??;
 
-        let line = String::from_utf8(line).map_err(|error| {
-            BrokerClientError::ProtocolViolation(ProtocolViolation::InvalidUtf8(error))
-        })?;
+        // Size-check the raw line before UTF-8 decoding so an over-limit
+        // response that truncates mid-character is reported as an oversized
+        // payload rather than a decode failure.
         if line.len() > self.max_buffer_size() {
             return Err(BrokerClientError::ProtocolViolation(
                 ProtocolViolation::MaxBufferSizeExceeded,
             ));
         }
+        let line = String::from_utf8(line).map_err(|error| {
+            BrokerClientError::ProtocolViolation(ProtocolViolation::InvalidUtf8(error))
+        })?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return Err(self.transport_error(TransportError::Empty));
@@ -177,7 +180,7 @@ impl BrokerClient {
     fn max_buffer_size(&self) -> usize {
         // The only way this conversion can fail is on a 32-bit system with a
         // configured max_buffer_size larger than usize::MAX.
-        usize::try_from(self.config.max_buffer_size.as_u64()).unwrap_or(usize::MAX - 1)
+        usize::try_from(self.config.max_buffer_size.as_u64()).unwrap_or(usize::MAX)
     }
 }
 
@@ -193,7 +196,7 @@ fn validate_broker_peer_credentials(
 ) -> Result<(), BrokerClientError> {
     let actual_uid = super::peer_uid(stream).map_err(|error| BrokerClientError::Transport {
         endpoint: endpoint.clone(),
-        source: TransportError::Connect(error),
+        source: TransportError::PeerCredential(error),
     })?;
     let expected_uid = super::current_uid();
     if actual_uid != expected_uid {
