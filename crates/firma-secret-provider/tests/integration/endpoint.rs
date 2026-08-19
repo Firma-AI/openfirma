@@ -1,7 +1,7 @@
-use std::str::FromStr;
+use std::{net::IpAddr, str::FromStr};
 
 use firma_secret_provider::endpoint::{
-    EndpointInner, client::ClientEndpoint, error::EndpointParseError,
+    EndpointInner, client::ClientEndpoint, error::EndpointParseError, server::ServerEndpoint,
 };
 #[cfg(unix)]
 use tokio::io;
@@ -25,6 +25,87 @@ fn parse_rejects_invalid_tcp_addr() {
 fn parse_rejects_unknown_scheme() {
     let err = ClientEndpoint::from_str("vsock://3:1234").expect_err("unknown scheme");
     std::assert_matches!(err, EndpointParseError::Unrecognized(s) if s == "vsock://3:1234");
+}
+
+#[test]
+fn parse_rejects_non_loopback_tcp_client() {
+    let err = ClientEndpoint::from_str("tcp://8.8.8.8:1234").expect_err("non-loopback");
+    std::assert_matches!(err, EndpointParseError::NoLoopback(ip) if ip == "8.8.8.8".parse::<IpAddr>().unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_rejects_relative_unix_path() {
+    let err = ClientEndpoint::from_str("unix://gateway.sock").expect_err("relative path");
+    std::assert_matches!(err, EndpointParseError::NotAbsolute(s) if s == "gateway.sock");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_rejects_unix_path_without_parent() {
+    // `/` has no parent component, so no socket file can ever live there.
+    let err = ClientEndpoint::from_str("unix:///").expect_err("no parent");
+    std::assert_matches!(err, EndpointParseError::NoParent(s) if s == "/");
+}
+
+#[test]
+fn display_round_trips_tcp() {
+    let ep = ClientEndpoint::from_str("tcp://127.0.0.1:1234").expect("parse");
+    assert_eq!(ep.to_string(), "tcp://127.0.0.1:1234");
+}
+
+#[cfg(unix)]
+#[test]
+fn display_round_trips_unix() {
+    let (_temp_dir, socket_file) = secure_unix_socket().expect("secure unix socket");
+    let ep = ClientEndpoint::from_str(&format!("unix://{}", socket_file.display())).expect("parse");
+    assert_eq!(ep.to_string(), format!("unix://{}", socket_file.display()));
+}
+
+#[test]
+fn parse_server_tcp_address() {
+    let ep = ServerEndpoint::from_str("tcp://127.0.0.1:1234").expect("parse");
+    assert_eq!(
+        ep.as_inner(),
+        &EndpointInner::Tcp("127.0.0.1:1234".parse().unwrap())
+    );
+}
+
+#[test]
+fn parse_server_rejects_non_loopback_tcp() {
+    let err = ServerEndpoint::from_str("tcp://8.8.8.8:1234").expect_err("non-loopback");
+    std::assert_matches!(err, EndpointParseError::NoLoopback(ip) if ip == "8.8.8.8".parse::<IpAddr>().unwrap());
+}
+
+#[test]
+fn parse_server_rejects_unknown_scheme() {
+    let err = ServerEndpoint::from_str("vsock://3:1234").expect_err("unknown scheme");
+    std::assert_matches!(err, EndpointParseError::Unrecognized(s) if s == "vsock://3:1234");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_server_rejects_relative_unix_path() {
+    let err = ServerEndpoint::from_str("unix://broker.sock").expect_err("relative path");
+    std::assert_matches!(err, EndpointParseError::NotAbsolute(s) if s == "broker.sock");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_server_accepts_absolute_unix_path_without_existing_socket() {
+    // The server side defers existence/permission checks to bind time, so a
+    // not-yet-created socket path must parse.
+    let ep = ServerEndpoint::from_str("unix:///tmp/firma-broker-test.sock").expect("parse");
+    std::assert_matches!(
+        ep.as_inner(),
+        EndpointInner::Unix(path) if path == &std::path::PathBuf::from("/tmp/firma-broker-test.sock")
+    );
+}
+
+#[test]
+fn parse_server_display_round_trips() {
+    let ep = ServerEndpoint::from_str("tcp://127.0.0.1:0").expect("parse");
+    assert_eq!(ep.to_string(), "tcp://127.0.0.1:0");
 }
 
 #[cfg(unix)]
