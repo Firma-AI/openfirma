@@ -10,10 +10,14 @@ use crate::{
 /// Returned by [`super::BrokerClient`]. Variants are grouped by what the
 /// caller should *do*, not by which internal step failed:
 ///
-/// - [`BrokerClientError::Transport`] — the round-trip to `endpoint` did not
-///   complete (connect/read/write failure, a timeout, a peer-credential
-///   mismatch, or the connection closing without a response). Transient;
-///   safe to retry.
+/// - [`BrokerClientError::Unavailable`] — no request reached the broker, so a
+///   retry cannot duplicate tool execution.
+/// - [`BrokerClientError::OutcomeUnknown`] — the request may have reached the
+///   broker and executed, but no valid response arrived. Retrying can duplicate
+///   execution and requires caller-level idempotency or deduplication.
+/// - `PeerAuthentication` — the connected Unix peer could
+///   not be authenticated as the current user. Not retryable without fixing
+///   the endpoint or its ownership.
 /// - [`BrokerClientError::ProtocolViolation`] — the broker responded but
 ///   broke the wire contract. Not a caller bug, but retrying the same
 ///   request is unlikely to help.
@@ -28,12 +32,27 @@ use crate::{
 ///   Should never happen given internally-constructed request data.
 #[derive(Debug, thiserror::Error)]
 pub enum BrokerClientError {
-    /// The round-trip to the broker did not complete. Retryable.
-    #[error("secret broker ({endpoint}): {source}")]
-    Transport {
+    /// The broker could not be reached, and the request was not dispatched.
+    #[error("secret broker unavailable ({endpoint}): {source}")]
+    Unavailable {
         endpoint: ClientEndpoint,
         #[source]
-        source: TransportError,
+        source: UnavailableError,
+    },
+    /// The request may have executed, but no valid response arrived.
+    #[error("secret broker outcome unknown ({endpoint}): {source}")]
+    OutcomeUnknown {
+        endpoint: ClientEndpoint,
+        #[source]
+        source: OutcomeUnknownError,
+    },
+    /// The connected Unix peer failed same-user authentication.
+    #[cfg(unix)]
+    #[error("secret broker peer authentication failed ({endpoint}): {source}")]
+    PeerAuthentication {
+        endpoint: ClientEndpoint,
+        #[source]
+        source: PeerAuthenticationError,
     },
     /// The broker responded but violated the wire protocol. Not retryable
     /// without a code or protocol fix.
@@ -56,39 +75,45 @@ pub enum BrokerClientError {
     Bug(#[source] serde_json::Error),
 }
 
-/// Round-trip failure to the broker.
-///
-/// Covers connect, write, read, timeout, and peer-credential mismatch at any
-/// stage. Grouped under [`BrokerClientError::Transport`] because a caller
-/// handles all of them the same way (retry).
+/// A pre-dispatch connection failure. Retrying cannot duplicate execution.
 #[derive(Debug, thiserror::Error)]
-pub enum TransportError {
+pub enum UnavailableError {
     /// Connecting to the broker timed out.
     #[error("connection timed out")]
     ConnectionTimeout,
-    /// The write-then-read round-trip exceeded the operation timeout.
-    #[error("operation timed out")]
-    OperationTimeout,
     /// Connecting to the broker failed.
     #[error("connect failed: {0}")]
     Connect(#[source] io::Error),
-    /// Reading the broker's peer credentials failed.
-    #[error("failed to read broker peer credentials: {0}")]
-    #[cfg(unix)]
-    PeerCredential(#[source] io::Error),
-    /// Writing the request line to the broker socket failed.
+}
+
+/// A post-connect failure for which tool execution may already have occurred.
+#[derive(Debug, thiserror::Error)]
+pub enum OutcomeUnknownError {
+    /// The write-then-read round-trip exceeded the operation timeout.
+    #[error("operation timed out")]
+    OperationTimeout,
+    /// Writing the request line failed, possibly after a complete request
+    /// reached the broker.
     #[error("write failed: {0}")]
     Write(#[source] io::Error),
-    /// Reading the response line from the broker socket failed.
+    /// Reading the response failed after the request was dispatched.
     #[error("read failed: {0}")]
     Read(#[source] io::Error),
-    /// The broker closed the connection without writing a response line.
+    /// The broker closed the connection without a response after dispatch.
     #[error("broker closed the connection without a response")]
     Empty,
+}
+
+/// Unix peer-authentication failures.
+#[cfg(unix)]
+#[derive(Debug, thiserror::Error)]
+pub enum PeerAuthenticationError {
+    /// Reading the broker's peer credentials failed.
+    #[error("failed to read broker peer credentials: {0}")]
+    Credential(#[source] io::Error),
     /// The broker's Unix peer did not match the expected user id.
-    #[cfg(unix)]
     #[error("broker unix peer uid mismatch: expected {expected_uid}, got {actual_uid}")]
-    PeerUidMismatch { expected_uid: u32, actual_uid: u32 },
+    UidMismatch { expected_uid: u32, actual_uid: u32 },
 }
 
 /// The broker responded, but the response broke the wire contract.
