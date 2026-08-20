@@ -197,12 +197,11 @@ impl BwrapMountPlan {
     /// before this boundary; afterward, the immutable plan is the sole source
     /// of filesystem arguments emitted to bwrap.
     pub(super) fn build(
+        runtime_layout: &firma_runtime_state::RuntimeLayout,
         handle: &SandboxHandle,
         launch: &LaunchSpec,
         hardening: &BwrapHardening,
     ) -> Result<Self, RunError> {
-        let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)
-            .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
         let control_plane_runtime =
             resolve_path_allow_missing(runtime_layout.root(), "control-plane runtime")?;
         let sandbox_runtime =
@@ -1279,9 +1278,11 @@ mod tests {
         );
         let launch = launch_with_env(cwd.clone(), None, env);
         let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
 
-        let plan =
-            super::BwrapMountPlan::build(&handle, &launch, &hardening).expect("build mount plan");
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("build mount plan");
 
         let rendered = rendered_plan(plan);
         let cwd_bind = rendered
@@ -1345,9 +1346,11 @@ mod tests {
         env.insert("HOME".to_string(), "/nonexistent-firma-home".to_string());
         let launch = launch_with_env(workspace.clone(), None, env);
         let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
 
-        let plan =
-            super::BwrapMountPlan::build(&handle, &launch, &hardening).expect("build mount plan");
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("build mount plan");
 
         let rendered = rendered_plan(plan);
         // The workspace-parent bind: `--bind <workspace> <workspace>`.

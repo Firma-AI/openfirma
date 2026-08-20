@@ -125,7 +125,12 @@ impl SandboxBackend for Wsl2Backend {
         Ok(())
     }
 
-    fn start_agent(&self, _handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
+    fn start_agent(
+        &self,
+        _runtime_layout: &firma_runtime_state::RuntimeLayout,
+        _handle: &SandboxHandle,
+        launch: &LaunchSpec,
+    ) -> Result<Child, RunError> {
         match current_host_mode() {
             Wsl2HostMode::WslLinux => {
                 let mut command = build_wsl_linux_command(launch);

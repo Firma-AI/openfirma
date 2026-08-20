@@ -53,6 +53,7 @@ impl SandboxBackend for FirecrackerBackend {
 
     fn start_agent(
         &self,
+        _runtime_layout: &firma_runtime_state::RuntimeLayout,
         _handle: &SandboxHandle,
         _launch: &LaunchSpec,
     ) -> Result<Child, RunError> {

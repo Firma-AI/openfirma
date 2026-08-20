@@ -347,7 +347,12 @@ pub trait SandboxBackend: Send + Sync {
     /// # Errors
     ///
     /// Returns an error when the child process cannot be spawned.
-    fn start_agent(&self, handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError>;
+    fn start_agent(
+        &self,
+        runtime_layout: &firma_runtime_state::RuntimeLayout,
+        handle: &SandboxHandle,
+        launch: &LaunchSpec,
+    ) -> Result<Child, RunError>;
 
     /// Tear down backend runtime state after execution.
     ///

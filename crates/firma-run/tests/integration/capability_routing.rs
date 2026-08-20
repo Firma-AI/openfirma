@@ -257,6 +257,7 @@ fn autostart_with_effective_key_attempts_managed_capability_mint() {
     let handle = sandbox_handle(&identity, dir.path());
 
     let error = prepare_network_runtime(
+        &firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout"),
         &handle,
         &enforcement_proof(),
         &SidecarEndpoint::Tcp {
@@ -295,6 +296,7 @@ fn clean_startup_failure_removes_enclosing_run_marker() {
     let handle = sandbox_handle(&identity, dir.path());
 
     let error = prepare_network_runtime(
+        &firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout"),
         &handle,
         &enforcement_proof(),
         &SidecarEndpoint::Tcp {
@@ -343,6 +345,7 @@ process_fixture! {
         let handle = sandbox_handle(&identity, dir.path());
 
         let error = prepare_network_runtime(
+            &firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout"),
             &handle,
             &enforcement_proof(),
             &SidecarEndpoint::Tcp {
@@ -416,6 +419,7 @@ fn autostart_without_effective_key_preserves_no_mint_behavior() {
     let handle = sandbox_handle(&identity, dir.path());
 
     let error = prepare_network_runtime(
+        &firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout"),
         &handle,
         &enforcement_proof(),
         &SidecarEndpoint::Tcp {
@@ -458,6 +462,7 @@ process_fixture! {
         let handle = sandbox_handle(&identity, dir.path());
 
         let error = prepare_network_runtime(
+            &firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout"),
             &handle,
             &enforcement_proof(),
             &SidecarEndpoint::Tcp {
