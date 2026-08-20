@@ -144,7 +144,7 @@ enum BwrapBindMode {
     ReadWrite,
 }
 
-/// One ordered filesystem or namespace operation emitted to bwrap.
+/// One ordered filesystem operation emitted to bwrap.
 #[derive(Debug)]
 enum BwrapPlanStep {
     /// Bind-mounts a host source at a sandbox target.
@@ -175,14 +175,10 @@ enum BwrapPlanStep {
         /// Sandbox path populated with the private device filesystem.
         target: PathBuf,
     },
-    /// Selects the wrapped process's working directory.
-    Chdir(PathBuf),
-    /// Isolates the wrapped process in a new network namespace.
-    UnshareNet,
 }
 
 impl BwrapMountPlan {
-    /// Creates a plan with no filesystem or namespace operations in any phase.
+    /// Creates a plan with no filesystem operations in any phase.
     fn empty() -> Self {
         Self {
             layout: BwrapMountPhase::default(),
@@ -284,16 +280,6 @@ impl BwrapMountPhase {
         });
     }
 
-    /// Appends the working-directory selection applied before process launch.
-    fn chdir(&mut self, target: impl Into<PathBuf>) {
-        self.steps.push(BwrapPlanStep::Chdir(target.into()));
-    }
-
-    /// Appends network-namespace isolation to the plan.
-    fn unshare_net(&mut self) {
-        self.steps.push(BwrapPlanStep::UnshareNet);
-    }
-
     /// Consumes this phase and appends its operations to bwrap.
     fn emit(self, command: &mut Command) {
         for step in self.steps {
@@ -318,12 +304,6 @@ impl BwrapMountPhase {
                 BwrapPlanStep::Dev { role, target } => {
                     let _ = role;
                     command.arg("--dev").arg(target);
-                }
-                BwrapPlanStep::Chdir(target) => {
-                    command.arg("--chdir").arg(target);
-                }
-                BwrapPlanStep::UnshareNet => {
-                    command.arg("--unshare-net");
                 }
             }
         }
@@ -425,11 +405,6 @@ fn append_filesystem_layout(
             .bind(BwrapPlanRole::Layout, "/", "/", BwrapBindMode::ReadWrite);
     }
     plan.layout.dev(BwrapPlanRole::Layout, "/dev");
-    plan.layout.chdir(&launch.cwd);
-
-    if handle.network_policy.enforce_network_namespace {
-        plan.layout.unshare_net();
-    }
 
     emit_mounts(plan, mounts.iter());
 

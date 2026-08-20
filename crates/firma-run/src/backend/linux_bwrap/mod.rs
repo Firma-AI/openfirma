@@ -208,6 +208,9 @@ impl SandboxBackend for BwrapBackend {
         let mut command = Command::new("bwrap");
         command.arg("--die-with-parent");
         command.arg("--new-session");
+        if handle.network_policy.enforce_network_namespace {
+            command.arg("--unshare-net");
+        }
 
         #[cfg(target_os = "linux")]
         #[expect(
@@ -232,6 +235,7 @@ impl SandboxBackend for BwrapBackend {
         }
 
         mount_plan.emit(&mut command);
+        command.arg("--chdir").arg(&launch.cwd);
 
         for (key, value) in &launch.env {
             command.arg("--setenv").arg(key).arg(value);
