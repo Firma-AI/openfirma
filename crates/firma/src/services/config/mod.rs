@@ -3,6 +3,7 @@
 mod doc;
 
 use std::borrow::Cow;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -15,6 +16,7 @@ use doc::DocInputs;
 use firma_config_loader::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 use firma_fs::create_private_dir_all;
 use firma_identifiers::AgentId;
+use firma_runtime_state::RuntimeLayout;
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
@@ -44,6 +46,86 @@ struct CollectedInputs {
     state_dir: PathBuf,
     agent_id: Option<AgentId>,
     profile: String,
+}
+
+/// Files and directories owned by a local Authority instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthorityStateLayout {
+    root: PathBuf,
+}
+
+impl AuthorityStateLayout {
+    /// Construct an Authority state layout from an already resolved root.
+    fn from_root(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+        }
+    }
+
+    /// Return the Authority state root.
+    fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Return the Authority private signing-key path.
+    fn authority_private_key(&self) -> PathBuf {
+        self.root.join("authority.key")
+    }
+
+    /// Return the Authority public signing-key path.
+    fn authority_public_key(&self) -> PathBuf {
+        self.root.join("authority.pub")
+    }
+
+    /// Return the audit signing-key path.
+    fn audit_key(&self) -> PathBuf {
+        self.root.join("audit.key")
+    }
+
+    /// Return the revocation-list path.
+    fn revocations(&self) -> PathBuf {
+        self.root.join("revocations.txt")
+    }
+
+    /// Return the generated certificate-authority directory.
+    fn generated_ca(&self) -> PathBuf {
+        self.root.join("generated-firma-ca")
+    }
+
+    /// Return the TLS material directory.
+    fn tls_directory(&self) -> PathBuf {
+        self.root.join("tls")
+    }
+
+    /// Return the Authority TLS certificate path.
+    fn tls_certificate(&self) -> PathBuf {
+        self.tls_directory().join("authority.crt")
+    }
+
+    /// Return the Authority TLS private-key path.
+    fn tls_private_key(&self) -> PathBuf {
+        self.tls_directory().join("authority.key")
+    }
+
+    /// Return the TLS certificate-authority certificate path.
+    fn tls_ca_certificate(&self) -> PathBuf {
+        self.tls_directory().join("authority-ca.crt")
+    }
+
+    /// Return the TLS certificate-authority private-key path.
+    fn tls_ca_private_key(&self) -> PathBuf {
+        self.tls_directory().join("authority-ca.key")
+    }
+
+    /// Return every generated TLS material path.
+    fn tls_files(&self) -> [PathBuf; 4] {
+        [
+            self.tls_certificate(),
+            self.tls_private_key(),
+            self.tls_ca_certificate(),
+            self.tls_ca_private_key(),
+        ]
+    }
 }
 
 #[derive(Debug, Default)]
@@ -78,6 +160,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     let inputs = collect_inputs(args)?;
     let cfg = &inputs.config_dir;
     let state = &inputs.state_dir;
+    let authority_layout = AuthorityStateLayout::from_root(state);
 
     let files = generate_files(&inputs)?;
 
@@ -89,7 +172,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    create_scaffold_dirs(cfg, state)?;
+    create_scaffold_dirs(cfg, &authority_layout)?;
     write_scaffold_files(&files, cfg, args.force, inputs.sidecar.overwrite_policy)?;
 
     let has_server = has_server(&inputs);
@@ -107,15 +190,15 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     if has_server {
-        write_revocations(state, args.force)?;
+        write_revocations(&authority_layout, args.force)?;
         crate::services::authority::generate_audit_key_if_absent(
-            &state.join("audit.key"),
+            &authority_layout.audit_key(),
             args.force,
         )?;
     }
 
     if has_server {
-        write_server_material(state, args.force)?;
+        write_server_material(&authority_layout, args.force)?;
     }
 
     println!("\nScaffolded:");
@@ -137,8 +220,8 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn write_revocations(state_dir: &Path, force: bool) -> Result<()> {
-    let path = state_dir.join("revocations.txt");
+fn write_revocations(layout: &AuthorityStateLayout, force: bool) -> Result<()> {
+    let path = layout.revocations();
     if force {
         Ok(firma_fs::write_file(&path, b"", 0o600)?)
     } else {
@@ -152,14 +235,14 @@ fn write_revocations(state_dir: &Path, force: bool) -> Result<()> {
     }
 }
 
-fn create_scaffold_dirs(cfg: &Path, state: &Path) -> Result<()> {
+fn create_scaffold_dirs(cfg: &Path, authority_layout: &AuthorityStateLayout) -> Result<()> {
     for dir in [
         cfg,
         &cfg.join("policies"),
         &cfg.join("issuance-policies"),
         &cfg.join("mappings"),
-        state,
-        &state.join("generated-firma-ca"),
+        authority_layout.root(),
+        &authority_layout.generated_ca(),
     ] {
         create_private_dir_all(dir)?;
     }
@@ -175,8 +258,7 @@ fn write_scaffold_files(
     for (rel, content) in files {
         let path = cfg.join(rel);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
         }
         // `firma.toml` and `mapping-rules.toml` are produced by the toml_edit
         // merge layer: the input was read from disk, modified in place, and
@@ -195,22 +277,20 @@ fn write_scaffold_files(
             ));
             continue;
         }
-        std::fs::write(&path, content.as_bytes())
+        fs::write(&path, content.as_bytes())
             .with_context(|| format!("write {}", path.display()))?;
         println!("  wrote {}", path.display());
     }
     Ok(())
 }
 
-fn write_server_material(state: &Path, force: bool) -> Result<()> {
-    let key_path = state.join("authority.key");
+fn write_server_material(layout: &AuthorityStateLayout, force: bool) -> Result<()> {
+    let key_path = layout.authority_private_key();
     if force && key_path.exists() {
-        std::fs::remove_file(&key_path)
-            .with_context(|| format!("remove {}", key_path.display()))?;
-        let pub_path = state.join("authority.pub");
+        fs::remove_file(&key_path).with_context(|| format!("remove {}", key_path.display()))?;
+        let pub_path = layout.authority_public_key();
         if pub_path.exists() {
-            std::fs::remove_file(&pub_path)
-                .with_context(|| format!("remove {}", pub_path.display()))?;
+            fs::remove_file(&pub_path).with_context(|| format!("remove {}", pub_path.display()))?;
         }
     }
     if key_path.exists() {
@@ -221,18 +301,12 @@ fn write_server_material(state: &Path, force: bool) -> Result<()> {
         println!("  generated authority keypair → {}", key_path.display());
     }
 
-    let tls_dir = state.join("tls");
-    let tls_cert = tls_dir.join("authority.crt");
+    let tls_dir = layout.tls_directory();
+    let tls_cert = layout.tls_certificate();
     if force && tls_dir.exists() {
-        for name in [
-            "authority.crt",
-            "authority.key",
-            "authority-ca.crt",
-            "authority-ca.key",
-        ] {
-            let p = tls_dir.join(name);
+        for p in layout.tls_files() {
             if p.exists() {
-                std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
+                fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
     }
@@ -270,15 +344,14 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         .collect();
 
     let state_dir = &inputs.state_dir;
-    let tls_dir = state_dir.join("tls");
-    let revocation_file = path_display(&state_dir.join("revocations.txt"));
-    let key_file = path_display(&state_dir.join("authority.key"));
-    let ca_dir = path_display(&state_dir.join("generated-firma-ca"));
-    let audit_file =
-        path_display(&firma_runtime_state::RuntimeLayout::from_root(state_dir).audit_log());
-    let audit_key = path_display(&state_dir.join("audit.key"));
-    let tls_cert_path = path_display(&tls_dir.join("authority.crt"));
-    let tls_key_path = path_display(&tls_dir.join("authority.key"));
+    let authority_layout = AuthorityStateLayout::from_root(state_dir);
+    let revocation_file = path_display(&authority_layout.revocations());
+    let key_file = path_display(&authority_layout.authority_private_key());
+    let ca_dir = path_display(&authority_layout.generated_ca());
+    let audit_file = path_display(&RuntimeLayout::from_root(state_dir).audit_log());
+    let audit_key = path_display(&authority_layout.audit_key());
+    let tls_cert_path = path_display(&authority_layout.tls_certificate());
+    let tls_key_path = path_display(&authority_layout.tls_private_key());
     let workspace_display = path_display(&inputs.sidecar.workspace);
 
     let doc_inputs = DocInputs {
@@ -484,7 +557,7 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
         return Ok(ExistingConfigDefaults::default());
     }
 
-    let text = std::fs::read_to_string(&firma_toml)
+    let text = fs::read_to_string(&firma_toml)
         .with_context(|| format!("read existing config {}", firma_toml.display()))?;
     let value: toml::Value = toml::from_str(&text)
         .with_context(|| format!("parse existing config {}", firma_toml.display()))?;
@@ -663,15 +736,9 @@ fn workspace_from_firma_toml(value: &toml::Value) -> Option<PathBuf> {
 
 fn collect_local_connect_inputs(listen: &str, state_dir: &Path) -> (String, String, String) {
     let url = format!("https://{listen}");
-    let tls_ca = state_dir
-        .join("tls")
-        .join("authority-ca.crt")
-        .to_string_lossy()
-        .into_owned();
-    let pub_key = state_dir
-        .join("authority.pub")
-        .to_string_lossy()
-        .into_owned();
+    let layout = AuthorityStateLayout::from_root(state_dir);
+    let tls_ca = layout.tls_ca_certificate().to_string_lossy().into_owned();
+    let pub_key = layout.authority_public_key().to_string_lossy().into_owned();
     (url, tls_ca, pub_key)
 }
 
@@ -1096,11 +1163,11 @@ fn cleanup_stale_posture_files(
             continue;
         }
         let current =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let pristine = posture.cedar_content();
         let modified = current.trim() != pristine.trim();
         if force || !modified {
-            std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+            fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
             println!("  removed stale posture file {}", path.display());
             continue;
         }
@@ -1115,8 +1182,7 @@ fn cleanup_stale_posture_files(
                 .interact()
                 .context("posture cleanup prompt")?;
             if confirmed {
-                std::fs::remove_file(&path)
-                    .with_context(|| format!("remove {}", path.display()))?;
+                fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
                 println!("  removed {}", path.display());
             } else {
                 crate::output::warn(format!(
@@ -1179,7 +1245,7 @@ pub fn resolve_audit_log_path(
 ) -> Result<PathBuf, String> {
     let state_dir = resolve_state_dir(state_dir_flag.cloned())?;
     if state_dir_flag.is_some() {
-        return Ok(firma_runtime_state::RuntimeLayout::from_root(state_dir).audit_log());
+        return Ok(RuntimeLayout::from_root(state_dir).audit_log());
     }
 
     if let Some(resolved) = firma_config_loader::ConfigResolver::default()
@@ -1202,7 +1268,7 @@ pub fn resolve_audit_log_path(
         }
     }
 
-    Ok(firma_runtime_state::RuntimeLayout::from_root(state_dir).audit_log())
+    Ok(RuntimeLayout::from_root(state_dir).audit_log())
 }
 
 fn resolve_config_relative_path(config_dir: &Path, path: &str) -> PathBuf {
@@ -1239,13 +1305,12 @@ fn resolve_state_dir_with_default(
 /// Returns a formatted string on any filesystem or key-generation failure.
 pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     let mappings = provider_to_mappings(&plan.provider);
+    let authority_layout = AuthorityStateLayout::from_root(&plan.state_dir);
     let (mode, authority) = match &plan.authority {
         AuthorityShape::Local => {
             let connect_url = format!("https://{}", plan.authority_listen);
-            let connect_ca_cert = plan
-                .state_dir
-                .join("tls")
-                .join("authority-ca.crt")
+            let connect_ca_cert = authority_layout
+                .tls_ca_certificate()
                 .to_string_lossy()
                 .into_owned();
             (
@@ -1254,9 +1319,8 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
                     listen: plan.authority_listen.clone(),
                     connect_url,
                     connect_ca_cert,
-                    connect_pub_key: plan
-                        .state_dir
-                        .join("authority.pub")
+                    connect_pub_key: authority_layout
+                        .authority_public_key()
                         .to_string_lossy()
                         .into_owned(),
                 },
@@ -1289,8 +1353,8 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         &plan.config_dir.join("policies"),
         &plan.config_dir.join("issuance-policies"),
         &plan.config_dir.join("mappings"),
-        plan.state_dir.as_path(),
-        &plan.state_dir.join("generated-firma-ca"),
+        authority_layout.root(),
+        &authority_layout.generated_ca(),
     ] {
         create_private_dir_all(dir)?;
     }
@@ -1298,41 +1362,34 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     for (rel, content) in &files {
         let path = plan.config_dir.join(rel);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
         }
         if !plan.force && path.exists() {
             continue;
         }
-        std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
+        fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     }
 
-    write_revocations(&plan.state_dir, plan.force)?;
+    write_revocations(&authority_layout, plan.force)?;
     crate::services::authority::generate_audit_key_if_absent(
-        &plan.state_dir.join("audit.key"),
+        &authority_layout.audit_key(),
         plan.force,
     )?;
 
-    let key_path = plan.state_dir.join("authority.key");
+    let key_path = authority_layout.authority_private_key();
     if plan.force || !key_path.exists() {
         crate::services::authority::run_generate_key(&key_path)?;
     }
 
-    let tls_dir = plan.state_dir.join("tls");
+    let tls_dir = authority_layout.tls_directory();
     if plan.force && tls_dir.exists() {
-        for name in [
-            "authority.crt",
-            "authority.key",
-            "authority-ca.crt",
-            "authority-ca.key",
-        ] {
-            let p = tls_dir.join(name);
+        for p in authority_layout.tls_files() {
             if p.exists() {
-                std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
+                fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
     }
-    if !tls_dir.join("authority.crt").exists() {
+    if !authority_layout.tls_certificate().exists() {
         crate::services::authority::run_bootstrap_tls(&tls_dir, &[])
             .context("generate TLS material")?;
     }
@@ -1465,7 +1522,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join(CONFIG_FILE_NAME);
         let audit_log = dir.path().join("explicit-audit.jsonl");
-        std::fs::write(
+        fs::write(
             &config,
             format!(
                 "[sidecar.audit]\nfile_path = {:?}\n",
@@ -1528,7 +1585,7 @@ mod tests {
         let files = make_files(&Posture::Dev, &[Mapping::Anthropic], &[]);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE_NAME);
-        std::fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
+        fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
         let body = firma_config_loader::load_section(&path, "authority").unwrap();
         let _: firma_authority::AuthorityConfig = toml::from_str(&body).unwrap();
     }
@@ -1544,7 +1601,7 @@ mod tests {
                 let files = make_files(&posture, &mappings, &[]);
                 let dir = tempfile::tempdir().unwrap();
                 let path = dir.path().join(CONFIG_FILE_NAME);
-                std::fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
+                fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
                 let body = firma_config_loader::load_section(&path, "sidecar").unwrap();
                 let _: firma_sidecar::config::SidecarConfig = toml::from_str(&body).unwrap();
             }
@@ -1839,7 +1896,7 @@ mod tests {
         let workspace = tmp.path().join("project");
         let config_dir = workspace.join(CONFIG_DIR_NAME);
         let state_dir = tmp.path().join("state");
-        std::fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
 
         scaffold_from_plan(&ScaffoldPlan {
             config_dir: config_dir.clone(),
@@ -1854,7 +1911,7 @@ mod tests {
         })
         .unwrap();
 
-        let text = std::fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).unwrap();
+        let text = fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).unwrap();
         let t: toml::Value = toml::from_str(&text).unwrap();
         // agent="generic" is a recognized profile → section is [run.profiles.generic]
         let mounts = t["run"]["profiles"]["generic"]["mounts"]
