@@ -123,8 +123,149 @@ pub struct SandboxHandle {
     pub backend: BackendKind,
     pub runtime_dir: PathBuf,
     pub identity: RunIdentity,
-    pub mounts: Vec<MountSpec>,
+    /// Prepared mounts, retaining their security authority until a backend
+    /// emits its launch contract.
+    pub mounts: Vec<SandboxMount>,
     pub network_policy: NetworkPolicy,
+}
+
+/// A mount carried by a prepared sandbox together with its security authority.
+///
+/// Operator-provided mounts and framework mounts cannot expose control-plane
+/// state. Sandbox-infrastructure mounts are the narrow class allowed to
+/// originate in the private per-sandbox runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxMount {
+    spec: MountSpec,
+    authority: SandboxMountAuthority,
+    placement: SandboxMountPlacement,
+}
+
+/// Security authority assigned to a prepared [`SandboxMount`].
+///
+/// Backends use the authority to constrain which host sources a mount may
+/// expose. The bwrap backend reserves access to its private sandbox runtime for
+/// sandbox-infrastructure mounts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::backend) enum SandboxMountAuthority {
+    /// Mount controlled by the operator through external configuration.
+    OperatorProvided,
+    /// Mount introduced by an ordinary `OpenFirma` runtime integration.
+    Framework,
+    /// Backend-owned mount sourced from the private per-sandbox runtime.
+    SandboxInfrastructure(SandboxInfrastructureKind),
+}
+
+/// Narrow facility represented by a sandbox-infrastructure mount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::backend) enum SandboxInfrastructureKind {
+    /// Identity database mounted at `/etc/passwd`.
+    Passwd,
+    /// Identity database mounted at `/etc/group`.
+    Group,
+    /// Resolver configuration mounted at `/etc/resolv.conf` or its host-side
+    /// canonical target.
+    ResolverConfig,
+}
+
+/// Layer in which a prepared mount may be emitted by an ordered backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::backend) enum SandboxMountPlacement {
+    /// Ordinary overlay that must precede security seals.
+    Overlay,
+    /// Framework-owned subpath intentionally restored after configuration
+    /// directories have been sealed.
+    FrameworkProtectedSubpath,
+}
+
+impl SandboxMount {
+    /// Assigns the authority used for an operator-provided mount.
+    fn operator_provided(spec: MountSpec) -> Self {
+        Self {
+            spec,
+            authority: SandboxMountAuthority::OperatorProvided,
+            placement: SandboxMountPlacement::Overlay,
+        }
+    }
+
+    /// Tags a mount introduced by an ordinary runtime integration.
+    ///
+    /// Framework mounts do not receive the privileged source-path exemption
+    /// reserved for [`SandboxMountAuthority::SandboxInfrastructure`].
+    pub(crate) fn framework(spec: MountSpec) -> Self {
+        Self {
+            spec,
+            authority: SandboxMountAuthority::Framework,
+            placement: SandboxMountPlacement::Overlay,
+        }
+    }
+
+    /// Assigns framework authority to a mount that must remain visible inside
+    /// an otherwise protected configuration directory.
+    ///
+    /// Ordered backends emit this narrow capability after configuration seals
+    /// but before the final control-plane seal. The backend validates that the
+    /// target is a strict protected-directory subpath.
+    pub(crate) fn framework_protected_subpath(spec: MountSpec) -> Self {
+        Self {
+            spec,
+            authority: SandboxMountAuthority::Framework,
+            placement: SandboxMountPlacement::FrameworkProtectedSubpath,
+        }
+    }
+
+    /// Creates a read-only backend facility sourced from private sandbox
+    /// infrastructure.
+    ///
+    /// This authority is intentionally constructible only inside `backend`: the
+    /// bwrap backend permits it to re-expose paths beneath its private sandbox
+    /// runtime after masking the host control-plane runtime.
+    fn sandbox_infrastructure(
+        kind: SandboxInfrastructureKind,
+        source: PathBuf,
+        target: PathBuf,
+    ) -> Self {
+        Self {
+            spec: MountSpec {
+                source,
+                target,
+                read_only: true,
+            },
+            authority: SandboxMountAuthority::SandboxInfrastructure(kind),
+            placement: SandboxMountPlacement::Overlay,
+        }
+    }
+
+    /// Returns the backend-neutral mount specification.
+    ///
+    /// Backends without authority-sensitive mount validation use this at their
+    /// serialization boundary to discard `OpenFirma`'s internal authority
+    /// metadata.
+    pub(crate) fn spec(&self) -> &MountSpec {
+        &self.spec
+    }
+
+    /// Returns whether this mount carries the narrow framework capability to
+    /// restore a subpath after configuration sealing.
+    pub(crate) fn is_framework_protected_subpath(&self) -> bool {
+        self.authority == SandboxMountAuthority::Framework
+            && self.placement == SandboxMountPlacement::FrameworkProtectedSubpath
+    }
+
+    /// Returns whether this mount was introduced by a framework integration.
+    pub(crate) fn is_framework(&self) -> bool {
+        self.authority == SandboxMountAuthority::Framework
+    }
+
+    /// Returns the security authority retained with this prepared mount.
+    fn authority(&self) -> SandboxMountAuthority {
+        self.authority
+    }
+
+    /// Returns the security layer assigned to this prepared mount.
+    fn placement(&self) -> SandboxMountPlacement {
+        self.placement
+    }
 }
 
 /// Network enforcement proof returned by backend.

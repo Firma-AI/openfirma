@@ -3,6 +3,7 @@ use std::process::{Child, Command};
 use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
+    SandboxMount,
 };
 use crate::config::MountSpec;
 use crate::config::NetworkPolicy;
@@ -71,11 +72,12 @@ impl SandboxBackend for Wsl2Backend {
             .mounts
             .iter()
             .cloned()
-            .chain(std::iter::once(MountSpec {
+            .map(SandboxMount::operator_provided)
+            .chain(std::iter::once(SandboxMount::framework(MountSpec {
                 source: request.working_dir.clone(),
                 target: request.working_dir.clone(),
                 read_only: false,
-            }))
+            })))
             .collect::<Vec<_>>();
 
         Ok(SandboxHandle {

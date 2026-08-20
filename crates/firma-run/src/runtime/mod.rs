@@ -1603,8 +1603,9 @@ mod tests {
         super::vscode::ensure_vscode_state_mount(&mut handle, &state_dir);
 
         assert_eq!(handle.mounts.len(), 1);
-        assert_eq!(handle.mounts[0].source, state_dir);
-        assert!(!handle.mounts[0].read_only);
+        assert_eq!(handle.mounts[0].spec().source, state_dir);
+        assert!(!handle.mounts[0].spec().read_only);
+        assert!(handle.mounts[0].is_framework_protected_subpath());
     }
 
     #[test]

@@ -194,6 +194,31 @@ fn mount_targeting_firma_dir_does_not_replace_mask() {
 }
 
 #[test]
+fn operator_mount_inside_firma_does_not_gain_post_seal_placement() {
+    let world = TestWorld::isolated();
+    let workspace = world.workspace_path();
+    let config_dir = workspace.join(".firma");
+    let config_file = scaffold_mask_test_config(&world, &config_dir, &workspace);
+    let source = world.path("operator-state");
+    std::fs::create_dir_all(&source).expect("mkdir operator state source");
+    std::fs::write(source.join("marker"), MASK_TEST_SENTINEL).expect("write operator marker");
+    let target = config_dir.join("operator-state");
+    append_profile_mount(&config_file, &source, &target);
+
+    let shell = format!(
+        "cat {marker} 2>/dev/null; echo {ran}",
+        marker = shell_quote(&target.join("marker")),
+        ran = MASK_TEST_RAN_MARKER,
+    );
+    let output = run_structural_shell(&world, Some(&config_file), &workspace, &shell);
+    assert_mask_test_ran(&output);
+    assert!(
+        !output.stdout.contains(MASK_TEST_SENTINEL),
+        "operator-provided mount pierced the sealed .firma directory"
+    );
+}
+
+#[test]
 fn firma_source_mount_alias_does_not_reexpose_config() {
     let world = TestWorld::isolated();
     let workspace = world.workspace_path();
@@ -218,7 +243,7 @@ fn firma_source_mount_alias_does_not_reexpose_config() {
 }
 
 #[test]
-fn parent_dir_mount_target_does_not_replace_firma_mask() {
+fn normalized_duplicate_mount_target_fails_closed() {
     let world = TestWorld::isolated();
     let workspace = world.workspace_path();
     let config_dir = workspace.join(".firma");
@@ -232,10 +257,18 @@ fn parent_dir_mount_target_does_not_replace_firma_mask() {
         ran = MASK_TEST_RAN_MARKER,
     );
     let output = run_structural_shell(&world, Some(&config_file), &workspace, &shell);
-    assert_mask_test_ran(&output);
     assert!(
-        !output.stdout.contains(MASK_TEST_SENTINEL),
-        "unnormalized .firma/.. mount target was emitted after the mask and re-exposed the selected config"
+        !output.success(),
+        "firma run accepted mount targets that normalize to the same destination:\n{output}"
+    );
+    assert!(
+        output.stderr.contains("duplicate mount targets")
+            && output.stderr.contains("depend on mount order"),
+        "firma run did not explain the ambiguous mount rejection:\n{output}"
+    );
+    assert!(
+        !output.stdout.contains(MASK_TEST_RAN_MARKER),
+        "sandboxed command ran despite ambiguous mount targets:\n{output}"
     );
 }
 
