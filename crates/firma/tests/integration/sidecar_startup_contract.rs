@@ -199,7 +199,7 @@ pattern = "no_named_groups_here"
         .args(["sidecar", "--config"])
         .arg(&fixture.config_path)
         .args(["--health-bind-addr", "127.0.0.1:0"])
-        .env("FIRMA_SECRET_GATEWAY_ADDR", "tcp:127.0.0.1:1")
+        .env("FIRMA_SECRET_GATEWAY_ADDR", "tcp://127.0.0.1:1")
         .output()
         .expect("spawn firma sidecar");
     let stderr = String::from_utf8_lossy(&output.stderr);

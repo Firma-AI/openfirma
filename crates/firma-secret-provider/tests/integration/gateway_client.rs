@@ -1,20 +1,18 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, str::FromStr};
 
 use firma_http::Authority;
 use firma_secret_provider::{
-    SecretPlaceholder,
-    gateway::{
-        client::{
-            GatewayClient, ResolveError,
-            config::GatewayClientConfig,
-            error::{GatewayClientError, ProtocolViolation, TransportError},
-        },
-        endpoint::{GatewayEndpoint, GatewayEndpointParseError},
+    ExposeSecret, SecretPlaceholder,
+    endpoint::{client::ClientEndpoint, error::EndpointParseError},
+    gateway::client::{
+        GatewayClient, ResolveError,
+        config::GatewayClientConfig,
+        error::{GatewayClientError, ProtocolViolation, TransportError},
     },
 };
 use secrecy::SecretString;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::TcpListener,
 };
 
@@ -23,13 +21,11 @@ use tokio::{
 /// `response` followed by a newline before closing. An empty `response`
 /// closes the connection without writing anything, to exercise the
 /// empty-response error path.
-async fn mock_gateway(response: &str) -> Result<GatewayEndpoint, GatewayEndpointParseError> {
+async fn mock_gateway(response: &str) -> Result<ClientEndpoint, EndpointParseError> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .map_err(GatewayEndpointParseError::IO)?;
-    let addr = listener
-        .local_addr()
-        .map_err(GatewayEndpointParseError::IO)?;
+        .map_err(EndpointParseError::IO)?;
+    let addr = listener.local_addr().map_err(EndpointParseError::IO)?;
     let response = response.to_owned();
     tokio::spawn(async move {
         if let Ok((stream, _)) = listener.accept().await {
@@ -44,22 +40,18 @@ async fn mock_gateway(response: &str) -> Result<GatewayEndpoint, GatewayEndpoint
             let _ = writer.shutdown().await;
         }
     });
-    GatewayEndpoint::parse(&format!("tcp:{addr}"))
+    ClientEndpoint::from_str(&format!("tcp://{addr}"))
 }
 
 /// Binds an ephemeral TCP listener that accepts a single connection, reads
 /// its request line, then writes back `response` verbatim (no trailing
 /// newline) before closing. Used to simulate a gateway that never terminates
 /// its response line, to exercise the bounded-read path.
-async fn mock_gateway_unterminated(
-    response: &[u8],
-) -> Result<GatewayEndpoint, GatewayEndpointParseError> {
+async fn mock_gateway_unterminated(response: &[u8]) -> Result<ClientEndpoint, EndpointParseError> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .map_err(GatewayEndpointParseError::IO)?;
-    let addr = listener
-        .local_addr()
-        .map_err(GatewayEndpointParseError::IO)?;
+        .map_err(EndpointParseError::IO)?;
+    let addr = listener.local_addr().map_err(EndpointParseError::IO)?;
     let response = response.to_owned();
     tokio::spawn(async move {
         if let Ok((stream, _)) = listener.accept().await {
@@ -71,20 +63,40 @@ async fn mock_gateway_unterminated(
             let _ = writer.shutdown().await;
         }
     });
-    GatewayEndpoint::parse(&format!("tcp:{addr}"))
+    ClientEndpoint::from_str(&format!("tcp://{addr}"))
 }
 
-/// Binds an ephemeral TCP listener and immediately drops it, yielding an
-/// address nothing is listening on, to exercise the connect-failure path.
-async fn unreachable_endpoint() -> Result<GatewayEndpoint, GatewayEndpointParseError> {
+/// Binds an ephemeral TCP listener that accepts a single connection, reads
+/// the request, and then holds the connection open without responding until
+/// the client gives up, to exercise the operation-timeout path.
+async fn mock_gateway_silent() -> Result<ClientEndpoint, EndpointParseError> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .map_err(GatewayEndpointParseError::IO)?;
-    let addr = listener
-        .local_addr()
-        .map_err(GatewayEndpointParseError::IO)?;
+        .map_err(EndpointParseError::IO)?;
+    let addr = listener.local_addr().map_err(EndpointParseError::IO)?;
+    tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let mut stream = stream;
+            let mut buf = [0u8; 1024];
+            while let Ok(n) = stream.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+            }
+        }
+    });
+    ClientEndpoint::from_str(&format!("tcp://{addr}"))
+}
+
+/// Binds an ephemeral TCP listener that immediately drops it, yielding an
+/// address nothing is listening on, to exercise the connect-failure path.
+async fn unreachable_endpoint() -> Result<ClientEndpoint, EndpointParseError> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(EndpointParseError::IO)?;
+    let addr = listener.local_addr().map_err(EndpointParseError::IO)?;
     drop(listener);
-    GatewayEndpoint::parse(&format!("tcp:{addr}"))
+    ClientEndpoint::from_str(&format!("tcp://{addr}"))
 }
 
 #[tokio::test]
@@ -100,6 +112,105 @@ async fn resolve_batch_returns_empty_without_io_for_empty_placeholders() {
         .await
         .expect("empty batch needs no io");
     assert!(result.is_ok_and(|vec| vec.is_empty()));
+}
+
+#[tokio::test]
+async fn resolve_batch_maps_all_ok_results_in_order() {
+    let client = GatewayClient::new(
+        mock_gateway(
+            r#"[{"type":"ok","secret_b64":"aGVsbG8="},{"type":"ok","secret_b64":"d29ybGQ="}]"#,
+        )
+        .await
+        .expect("mock gateway"),
+        GatewayClientConfig::default(),
+    );
+
+    let secrets = client
+        .resolve_batch(
+            &[SecretPlaceholder::new(), SecretPlaceholder::new()],
+            Authority::from_static("example.com"),
+        )
+        .await
+        .expect("outer call succeeds")
+        .expect("all placeholders resolve");
+
+    assert_eq!(
+        secrets
+            .iter()
+            .map(ExposeSecret::expose_secret)
+            .collect::<Vec<_>>(),
+        ["hello", "world"]
+    );
+}
+
+#[tokio::test]
+async fn resolve_batch_reports_per_placeholder_gateway_error() {
+    let client = GatewayClient::new(
+        mock_gateway(r#"[{"type":"err","error":"unknown placeholder"}]"#)
+            .await
+            .expect("mock gateway"),
+        GatewayClientConfig::default(),
+    );
+
+    let err = client
+        .resolve_batch(
+            &[SecretPlaceholder::new()],
+            Authority::from_static("example.com"),
+        )
+        .await
+        .expect("outer call succeeds")
+        .expect_err("gateway error result");
+    std::assert_matches!(
+        err,
+        ResolveError::Gateway(ref message) if message == "unknown placeholder"
+    );
+    insta::assert_snapshot!(err.to_string(), @"gateway error: unknown placeholder");
+}
+
+#[tokio::test]
+async fn resolve_batch_rejects_non_utf8_secret() {
+    let client = GatewayClient::new(
+        mock_gateway(r#"[{"type":"ok","secret_b64":"/w=="}]"#)
+            .await
+            .expect("mock gateway"),
+        GatewayClientConfig::default(),
+    );
+
+    let err = client
+        .resolve_batch(
+            &[SecretPlaceholder::new()],
+            Authority::from_static("example.com"),
+        )
+        .await
+        .expect("outer call succeeds")
+        .expect_err("non-utf8 secret");
+    std::assert_matches!(err, ResolveError::Utf8);
+}
+
+#[tokio::test]
+async fn resolve_batch_reports_operation_timeout() {
+    let client = GatewayClient::new(
+        mock_gateway_silent().await.expect("silent mock gateway"),
+        GatewayClientConfig {
+            operation_timeout: std::time::Duration::from_millis(100),
+            ..Default::default()
+        },
+    );
+
+    let err = client
+        .resolve_batch(
+            &[SecretPlaceholder::new()],
+            Authority::from_static("example.com"),
+        )
+        .await
+        .expect_err("operation timeout");
+    std::assert_matches!(
+        err,
+        GatewayClientError::Transport {
+            source: TransportError::OperationTimeout,
+            ..
+        }
+    );
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@
 //!
 //! This module defines the wire types themselves; [`client`] implements the
 //! transport that speaks the protocol over a [`client::config::GatewayClientConfig`]-tuned
-//! connection to an [`endpoint::GatewayEndpoint`].
+//! connection to a [`crate::endpoint::client::ClientEndpoint`].
 
 use std::collections::HashSet;
 
@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use crate::SecretPlaceholder;
 
 pub mod client;
-pub mod endpoint;
 
 /// A gateway call, tagged by `action` in its wire representation (e.g.
 /// `{"action": "secret.push", ...}`) so the broker can dispatch without a

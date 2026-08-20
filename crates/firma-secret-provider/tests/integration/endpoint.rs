@@ -1,28 +1,111 @@
-use firma_secret_provider::gateway::endpoint::{
-    GatewayEndpoint, GatewayEndpointInner, GatewayEndpointParseError,
+use std::{net::IpAddr, str::FromStr};
+
+use firma_secret_provider::endpoint::{
+    EndpointInner, client::ClientEndpoint, error::EndpointParseError, server::ServerEndpoint,
 };
 #[cfg(unix)]
 use tokio::io;
 
 #[test]
 fn parse_tcp_address() {
-    let ep = GatewayEndpoint::parse("tcp:127.0.0.1:1234").expect("parse");
+    let ep = ClientEndpoint::from_str("tcp://127.0.0.1:1234").expect("parse");
     assert_eq!(
         ep.as_inner(),
-        &GatewayEndpointInner::Tcp("127.0.0.1:1234".parse().unwrap())
+        &EndpointInner::Tcp("127.0.0.1:1234".parse().unwrap())
     );
 }
 
 #[test]
 fn parse_rejects_invalid_tcp_addr() {
-    let err = GatewayEndpoint::parse("tcp:not-an-addr").expect_err("invalid");
-    std::assert_matches!(err, GatewayEndpointParseError::InvalidTCP { addr, .. } if addr == "not-an-addr");
+    let err = ClientEndpoint::from_str("tcp://not-an-addr").expect_err("invalid");
+    std::assert_matches!(err, EndpointParseError::InvalidTCP { addr, .. } if addr == "not-an-addr");
 }
 
 #[test]
 fn parse_rejects_unknown_scheme() {
-    let err = GatewayEndpoint::parse("vsock://3:1234").expect_err("unknown scheme");
-    std::assert_matches!(err, GatewayEndpointParseError::Unrecognized(s) if s == "vsock://3:1234");
+    let err = ClientEndpoint::from_str("vsock://3:1234").expect_err("unknown scheme");
+    std::assert_matches!(err, EndpointParseError::Unrecognized(s) if s == "vsock://3:1234");
+}
+
+#[test]
+fn parse_rejects_non_loopback_tcp_client() {
+    let err = ClientEndpoint::from_str("tcp://8.8.8.8:1234").expect_err("non-loopback");
+    std::assert_matches!(err, EndpointParseError::NoLoopback(ip) if ip == "8.8.8.8".parse::<IpAddr>().unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_rejects_relative_unix_path() {
+    let err = ClientEndpoint::from_str("unix://gateway.sock").expect_err("relative path");
+    std::assert_matches!(err, EndpointParseError::NotAbsolute(s) if s == "gateway.sock");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_rejects_unix_path_without_parent() {
+    // `/` has no parent component, so no socket file can ever live there.
+    let err = ClientEndpoint::from_str("unix:///").expect_err("no parent");
+    std::assert_matches!(err, EndpointParseError::NoParent(s) if s == "/");
+}
+
+#[test]
+fn display_round_trips_tcp() {
+    let ep = ClientEndpoint::from_str("tcp://127.0.0.1:1234").expect("parse");
+    assert_eq!(ep.to_string(), "tcp://127.0.0.1:1234");
+}
+
+#[cfg(unix)]
+#[test]
+fn display_round_trips_unix() {
+    let (_temp_dir, socket_file) = secure_unix_socket().expect("secure unix socket");
+    let ep = ClientEndpoint::from_str(&format!("unix://{}", socket_file.display())).expect("parse");
+    assert_eq!(ep.to_string(), format!("unix://{}", socket_file.display()));
+}
+
+#[test]
+fn parse_server_tcp_address() {
+    let ep = ServerEndpoint::from_str("tcp://127.0.0.1:1234").expect("parse");
+    assert_eq!(
+        ep.as_inner(),
+        &EndpointInner::Tcp("127.0.0.1:1234".parse().unwrap())
+    );
+}
+
+#[test]
+fn parse_server_rejects_non_loopback_tcp() {
+    let err = ServerEndpoint::from_str("tcp://8.8.8.8:1234").expect_err("non-loopback");
+    std::assert_matches!(err, EndpointParseError::NoLoopback(ip) if ip == "8.8.8.8".parse::<IpAddr>().unwrap());
+}
+
+#[test]
+fn parse_server_rejects_unknown_scheme() {
+    let err = ServerEndpoint::from_str("vsock://3:1234").expect_err("unknown scheme");
+    std::assert_matches!(err, EndpointParseError::Unrecognized(s) if s == "vsock://3:1234");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_server_rejects_relative_unix_path() {
+    let err = ServerEndpoint::from_str("unix://broker.sock").expect_err("relative path");
+    std::assert_matches!(err, EndpointParseError::NotAbsolute(s) if s == "broker.sock");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_server_accepts_absolute_unix_path_without_existing_socket() {
+    // The server side defers existence/permission checks to bind time, so a
+    // not-yet-created socket path must parse.
+    let ep = ServerEndpoint::from_str("unix:///tmp/firma-broker-test.sock").expect("parse");
+    std::assert_matches!(
+        ep.as_inner(),
+        EndpointInner::Unix(path) if path == &std::path::PathBuf::from("/tmp/firma-broker-test.sock")
+    );
+}
+
+#[test]
+fn parse_server_display_round_trips() {
+    let ep = ServerEndpoint::from_str("tcp://127.0.0.1:0").expect("parse");
+    assert_eq!(ep.to_string(), "tcp://127.0.0.1:0");
 }
 
 #[cfg(unix)]
@@ -55,10 +138,10 @@ fn secure_unix_socket() -> io::Result<(tempfile::TempDir, std::path::PathBuf)> {
 #[cfg(unix)]
 fn assert_wrong_permissions(path: &std::path::Path) {
     let path = path.display().to_string();
-    let error = GatewayEndpoint::parse(&format!("unix:{path}"));
+    let error = ClientEndpoint::from_str(&format!("unix://{path}"));
     std::assert_matches!(
         error,
-        Err(GatewayEndpointParseError::WrongPermissions(actual)) if actual == path
+        Err(EndpointParseError::WrongPermissions(actual)) if actual == path
     );
 }
 
@@ -68,12 +151,9 @@ fn parse_unix_path() {
     let (_temp_dir, socket_file) = secure_unix_socket().expect("secure unix socket");
 
     let endpoint =
-        GatewayEndpoint::parse(&format!("unix:{}", socket_file.display())).expect("parse");
+        ClientEndpoint::from_str(&format!("unix://{}", socket_file.display())).expect("parse");
 
-    assert_eq!(
-        endpoint.as_inner(),
-        &GatewayEndpointInner::Unix(socket_file)
-    );
+    assert_eq!(endpoint.as_inner(), &EndpointInner::Unix(socket_file));
 }
 
 #[cfg(unix)]
@@ -102,7 +182,7 @@ fn parse_rejects_regular_file_at_unix_socket_path() {
     std::fs::File::create_new(&socket_file).expect("file created");
     set_mode(&socket_file, 0o600).expect("set mode");
 
-    let _error = GatewayEndpoint::parse(&format!("unix:{}", socket_file.display()))
+    let _error = ClientEndpoint::from_str(&format!("unix://{}", socket_file.display()))
         .expect_err("a regular file must not be accepted as a Unix socket");
 }
 
@@ -117,7 +197,7 @@ fn parse_rejects_symlink_at_unix_socket_path() {
     let symlink = temp_dir.path().join("gateway.sock");
     std::os::unix::fs::symlink(&socket_file, &symlink).expect("create socket symlink");
 
-    let _error = GatewayEndpoint::parse(&format!("unix:{}", symlink.display()))
+    let _error = ClientEndpoint::from_str(&format!("unix://{}", symlink.display()))
         .expect_err("a symlink must not be accepted as a Unix socket");
 }
 
@@ -137,6 +217,6 @@ fn parse_rejects_symlink_in_unix_socket_parent_path() {
     std::os::unix::fs::symlink(&socket_dir, &symlink).expect("create directory symlink");
     let endpoint_path = symlink.join("gateway.sock");
 
-    let _error = GatewayEndpoint::parse(&format!("unix:{}", endpoint_path.display()))
+    let _error = ClientEndpoint::from_str(&format!("unix://{}", endpoint_path.display()))
         .expect_err("a symlinked parent must not be accepted for a Unix socket");
 }

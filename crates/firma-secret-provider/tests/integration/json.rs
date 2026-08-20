@@ -222,3 +222,74 @@ fn non_string_value_is_rejected() {
     );
     insta::assert_snapshot!(error.to_string(), @"json matcher value_path selected a non-string node in record 0");
 }
+
+#[test]
+fn multiple_value_matches_fail_before_minting() {
+    let compiled = CompiledMatcher::compile(&json("$[*]", "$.v[*]", "$.k")).unwrap();
+    let mut minted = Vec::new();
+    let error = compiled
+        .rewrite(br#"[{"k":"a","v":["x","y"]}]"#, &mut |name, _, _, _| {
+            minted.push(name);
+            SecretPlaceholder::new()
+        })
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::RecordSelectorMatchCount {
+            selector: "value_path",
+            record_index: 0,
+            matches: 2
+        }
+    );
+    insta::assert_snapshot!(error.to_string(), @"json matcher value_path selected 2 node(s) in record 0; expected exactly one");
+    assert!(minted.is_empty());
+}
+
+#[test]
+fn non_string_name_is_rejected() {
+    let compiled = CompiledMatcher::compile(&json("$[*]", "$.value", "$.key")).unwrap();
+    let error = compiled
+        .rewrite(br#"[{"key":42,"value":"AAA"}]"#, &mut |_, _, _, _| {
+            SecretPlaceholder::new()
+        })
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::NonStringNode {
+            selector: "name",
+            record_index: 0,
+        }
+    );
+    insta::assert_snapshot!(error.to_string(), @"json matcher name selected a non-string node in record 0");
+}
+
+#[test]
+fn record_key_name_unescapes_rfc6901_pointer_segments() {
+    let compiled = CompiledMatcher::compile(&json_record_key_name("$.data.*", "$")).unwrap();
+    let mut pairs = Vec::new();
+    let output = compiled
+        .rewrite(
+            br#"{"data":{"a/b~c":"first-secret","plain":"second-secret"}}"#,
+            &mut |name, value, _, _| {
+                pairs.push((name, value.expose_secret().to_owned()));
+                SecretPlaceholder::new()
+            },
+        )
+        .unwrap();
+    let output = String::from_utf8(output).expect("valid utf8");
+
+    insta::with_settings!({
+        filters => vec![(r"fsp_[0-9a-z]{26}", "[placeholder]")],
+    }, {
+        insta::assert_snapshot!("record_key_name_unescapes_rfc6901_pointer_segments", output);
+    });
+    assert_eq!(
+        pairs,
+        [
+            ("a/b~c".into(), "first-secret".into()),
+            ("plain".into(), "second-secret".into())
+        ]
+    );
+}

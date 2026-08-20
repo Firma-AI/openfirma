@@ -2113,7 +2113,8 @@ pub(crate) mod tests {
     use firma_identifiers::TokenId;
     use firma_secret_provider::{
         MatcherError,
-        gateway::{client::config::GatewayClientConfig, endpoint::GatewayEndpoint},
+        endpoint::client::ClientEndpoint,
+        gateway::client::config::GatewayClientConfig,
         non_empty::NonEmptyString,
         spec::http::{HttpMatcherRule, PathAndMatcher, PathOnly},
     };
@@ -3132,7 +3133,7 @@ pub(crate) mod tests {
             tx,
         )
         .with_gateway_client(GatewayClient::new(
-            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ));
 
@@ -3196,7 +3197,7 @@ pub(crate) mod tests {
             tx,
         )
         .with_gateway_client(GatewayClient::new(
-            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ));
 
@@ -3269,7 +3270,7 @@ pub(crate) mod tests {
             tx,
         )
         .with_gateway_client(GatewayClient::new(
-            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ));
 
@@ -3350,7 +3351,7 @@ pub(crate) mod tests {
             tx,
         )
         .with_gateway_client(GatewayClient::new(
-            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ))
         .with_http_secret_providers(vec![
@@ -3452,7 +3453,7 @@ pub(crate) mod tests {
             tx,
         )
         .with_gateway_client(GatewayClient::new(
-            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ))
         .with_http_secret_providers(vec![
@@ -3575,7 +3576,7 @@ pub(crate) mod tests {
             tx,
         )
         .with_gateway_client(GatewayClient::new(
-            GatewayEndpoint::parse(&format!("tcp:{gateway_addr}")).expect("valid addr"),
+            ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
             GatewayClientConfig::default(),
         ))
         .with_http_secret_providers(vec![

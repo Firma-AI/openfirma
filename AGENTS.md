@@ -134,13 +134,17 @@ agent call passes through the Sidecar before reaching external systems.
 - `firma-secret-provider` — secret-provider spec types (`IntegrationSpec`:
   `Cli`/`Http` variants), the built-in `IntegrationRegistry` of CLI vault
   specs, the extraction engine (`CompiledMatcher`, `SecretPlaceholder`), and
-  the `gateway` module: the `GatewayRequest` wire types plus the
-  `GatewayClient` transport (`resolve_batch`/`push_secret` over a
-  `unix:`/`tcp:` `GatewayEndpoint`) for the Sidecar↔broker secret-gateway
-  protocol. Shared by `firma-run` (CLI vault shims, via
-  `secret_providers` config) and `firma-sidecar` (HTTP vault MITM
-  interception, via the mirrored `http_secret_providers` config). Depends
-  only on `firma-core` and `firma-http` among Firma crates.
+  the shared `endpoint` module: `unix://`/`tcp://` `ClientEndpoint` /
+  `ServerEndpoint` transport addresses used by the `gateway` and `broker`
+  modules. The `gateway` module holds the `GatewayRequest` wire types plus
+  the `GatewayClient` transport (`resolve_batch`/`push_secret`) for the
+  Sidecar↔broker secret-gateway protocol. The `broker` module holds the
+  out-of-sandbox secret-shim transport: `BrokerClient` (shim-side) and
+  `BrokerListener` (broker-side) speaking a newline-terminated JSON protocol
+  over `unix://` (Unix) or `tcp://` loopback (Windows). Shared by `firma-run`
+  (CLI vault shims, via `secret_providers` config) and `firma-sidecar` (HTTP
+  vault MITM interception, via the mirrored `http_secret_providers` config).
+  Depends only on `firma-core` and `firma-http` among Firma crates.
 
 ### Key Invariants
 

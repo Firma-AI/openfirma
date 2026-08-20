@@ -1,10 +1,15 @@
+mod broker;
 mod compile;
 mod endpoint;
 mod gateway_client;
+mod glob;
 mod http_spec;
 mod json;
 mod metadata;
+mod non_empty;
 mod redaction;
 mod regex;
 mod registry;
+mod spec;
 mod support;
+mod wire_types;

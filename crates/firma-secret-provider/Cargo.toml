@@ -15,6 +15,7 @@ firma-core = { workspace = true }
 firma-http = { workspace = true }
 http = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
+pin-project = { workspace = true }
 regex = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
@@ -25,7 +26,11 @@ tokio = { workspace = true, default-features = false, features = ["fs", "io-util
 tracing = { workspace = true }
 type-safe-id = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["socket", "user"] }
+
 [dev-dependencies]
+anyhow = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = false, features = ["macros"] }

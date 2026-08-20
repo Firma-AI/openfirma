@@ -8,14 +8,14 @@
 //!
 //! The gateway address is advertised via the [`GATEWAY_ADDR_ENV`] environment
 //! variable, set by the orchestrator after firma-run binds the socket. The
-//! address uses a `unix:<path>` or `tcp:<host>:<port>` scheme (no `//`):
+//! address uses a `unix:///path` or `tcp://host:port` scheme:
 //!
 //! ```text
-//! unix:/run/firma/secret-shims/gateway.sock   (Linux/macOS)
-//! tcp:127.0.0.1:51234                          (Windows)
+//! unix:///run/firma/secret-shims/gateway.sock   (Linux/macOS)
+//! tcp://127.0.0.1:51234                          (Windows)
 //! ```
 //!
-//! Parse it with [`GatewayEndpoint::parse`] and pass it to [`GatewayClient::resolve_batch`].
+//! Parse it with [`EndpointInner::parse_client`] and pass it to [`GatewayClient::resolve_batch`].
 
 use std::collections::HashSet;
 
@@ -29,12 +29,10 @@ use tokio::{
 use crate::{
     ExposeSecret, GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder, SecretString,
-    gateway::{
-        client::{
-            config::GatewayClientConfig,
-            error::{GatewayClientError, ProtocolViolation, TransportError},
-        },
-        endpoint::{GatewayEndpoint, GatewayEndpointInner},
+    endpoint::{EndpointInner, client::ClientEndpoint},
+    gateway::client::{
+        config::GatewayClientConfig,
+        error::{GatewayClientError, ProtocolViolation, TransportError},
     },
 };
 
@@ -42,22 +40,23 @@ pub mod config;
 pub mod error;
 
 /// Environment variable the Sidecar reads to locate the firma-run secret
-/// gateway (`unix:<path>` or `tcp:<host>:<port>` format).
+/// gateway (`unix:///path` or `tcp://host:port` format).
 pub const GATEWAY_ADDR_ENV: &str = "FIRMA_SECRET_GATEWAY_ADDR";
 
-/// Client for the firma-run secret resolution gateway, bound to one [`GatewayEndpoint`].
+/// Client for the firma-run secret resolution gateway, bound to one
+/// [`ClientEndpoint`].
 ///
 /// Opens a fresh connection per call rather than pooling, since gateway
 /// calls are infrequent relative to request traffic.
 #[derive(Debug)]
 pub struct GatewayClient {
-    endpoint: GatewayEndpoint,
+    endpoint: ClientEndpoint,
     config: GatewayClientConfig,
 }
 
 impl GatewayClient {
     #[must_use]
-    pub fn new(endpoint: GatewayEndpoint, config: GatewayClientConfig) -> Self {
+    pub fn new(endpoint: ClientEndpoint, config: GatewayClientConfig) -> Self {
         Self { endpoint, config }
     }
 
@@ -106,7 +105,7 @@ impl GatewayClient {
         let payload = serde_json::to_string(&request).map_err(GatewayClientError::Bug)?;
 
         let response_line = match self.endpoint.as_inner() {
-            GatewayEndpointInner::Tcp(addr) => {
+            EndpointInner::Tcp(addr) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::TcpStream::connect(addr),
@@ -117,7 +116,7 @@ impl GatewayClient {
                 self.send_and_receive(stream, &payload).await?
             }
             #[cfg(unix)]
-            GatewayEndpointInner::Unix(path) => {
+            EndpointInner::Unix(path) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::UnixStream::connect(path),
@@ -204,7 +203,7 @@ impl GatewayClient {
         let payload = serde_json::to_string(&request).map_err(GatewayClientError::Bug)?;
 
         let response_line = match self.endpoint.as_inner() {
-            GatewayEndpointInner::Tcp(addr) => {
+            EndpointInner::Tcp(addr) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::TcpStream::connect(addr),
@@ -215,7 +214,7 @@ impl GatewayClient {
                 self.send_and_receive(stream, &payload).await?
             }
             #[cfg(unix)]
-            GatewayEndpointInner::Unix(path) => {
+            EndpointInner::Unix(path) => {
                 let stream = timeout(
                     self.config.connection_timeout,
                     net::UnixStream::connect(path),

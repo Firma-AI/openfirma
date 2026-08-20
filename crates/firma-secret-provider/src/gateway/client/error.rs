@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::{SecretPlaceholder, gateway::endpoint::GatewayEndpoint};
+use crate::{SecretPlaceholder, endpoint::client::ClientEndpoint};
 
 /// Whole-request failures from talking to the firma-run secret gateway,
 /// returned by [`super::GatewayClient::resolve_batch`] and [`super::GatewayClient::push_secret`].
@@ -32,7 +32,7 @@ pub enum GatewayClientError {
     /// The round-trip to the gateway did not complete. Retryable.
     #[error("secret gateway ({endpoint}): {source}")]
     Transport {
-        endpoint: GatewayEndpoint,
+        endpoint: ClientEndpoint,
         #[source]
         source: TransportError,
     },

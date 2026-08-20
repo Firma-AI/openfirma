@@ -18,6 +18,7 @@ firma-authority.workspace = true
 firma-config-loader.workspace = true
 firma-core.workspace = true
 firma-fs.workspace = true
+firma-http.workspace = true
 firma-identifiers.workspace = true
 firma-process-orchestrator.workspace = true
 firma-protobuf.workspace = true

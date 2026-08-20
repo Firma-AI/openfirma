@@ -100,3 +100,21 @@ fn regex_rejects_output_without_matches() {
     std::assert_matches!(&error, MatcherError::NoMatches);
     insta::assert_snapshot!(error.to_string(), @"no matches");
 }
+
+#[test]
+fn regex_rejects_missing_runtime_name_capture() {
+    // The alternation lets `value` participate while `name` stays absent.
+    let compiled = CompiledMatcher::compile(&regex(r"^(?:x(?P<name>a)|(?P<value>b))$")).unwrap();
+    let error = compiled
+        .rewrite(b"b", &mut |_, _, _, _| SecretPlaceholder::new())
+        .unwrap_err();
+
+    std::assert_matches!(
+        &error,
+        MatcherError::MissingGroup {
+            missing: "name",
+            found,
+        } if found == "value"
+    );
+    insta::assert_snapshot!(error.to_string(), @"regex matcher must contain a named `name` capture group, found value");
+}

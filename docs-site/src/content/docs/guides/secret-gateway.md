@@ -61,15 +61,15 @@ enforcement — no partial or best-effort forwarding:
 
 ## Step 1: Start the gateway and point the Sidecar at it
 
-Run `firma-run`'s broker so it's listening on a `unix:` or `tcp:` endpoint,
+Run `firma-run`'s broker so it's listening on a `unix://` or `tcp://` endpoint,
 then set that address in the Sidecar's environment before it starts:
 
 ```bash
-FIRMA_SECRET_GATEWAY_ADDR=unix:/run/firma/secret-shims/gateway.sock \
+FIRMA_SECRET_GATEWAY_ADDR=unix:///run/firma/secret-shims/gateway.sock \
 firma sidecar -c firma.toml
 ```
 
-On Windows, use a `tcp:` endpoint instead (`tcp:127.0.0.1:51234`) since Unix
+On Windows, use a `tcp://` endpoint instead (`tcp://127.0.0.1:51234`) since Unix
 sockets aren't available.
 
 Tune the gateway client's timeouts and buffer cap under
