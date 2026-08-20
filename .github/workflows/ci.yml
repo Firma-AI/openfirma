@@ -50,7 +50,19 @@ jobs:
       - run: command -v cargo-audit || cargo binstall -y --force --locked cargo-audit@$CARGO_AUDIT_VERSION
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo audit --deny warnings
+      - name: Fetch change base
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+      - name: Audit advisories introduced by the change
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: ./scripts/ci/audit-new-advisories.sh "$BASE_SHA"
+      - name: Audit all advisories
+        if: github.event_name == 'push'
+        run: cargo audit --deny warnings
 
   zizmor:
     name: Actions Lint
