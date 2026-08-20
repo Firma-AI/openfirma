@@ -347,7 +347,7 @@ impl fmt::Display for InterceptorMode {
 /// |------|-----------------|
 /// | `http_proxy` | `listen_addr` |
 /// | `grpc` | `listen_addr` |
-/// | `unix_socket` | `socket_path` |
+/// | `unix_socket` | `socket_path` (defaults to the lifecycle runtime layout) |
 ///
 /// `drain_timeout_secs` is shared across all modes.
 #[derive(Debug, Clone, Deserialize)]
@@ -425,11 +425,6 @@ impl InterceptorConfig {
                         "interceptor.socket_path must not be empty when mode is unix_socket".into(),
                     );
                 }
-                None => {
-                    return Err(
-                        "interceptor.socket_path is required when mode is unix_socket".into(),
-                    );
-                }
                 _ => {}
             }
         }
@@ -452,7 +447,7 @@ impl Default for InterceptorConfig {
         Self {
             mode: InterceptorMode::default(),
             listen_addr: default_listen_addr(),
-            socket_path: Some(default_socket_path()),
+            socket_path: None,
             drain_timeout_secs: default_drain_timeout(),
             max_request_body_bytes: default_max_request_body_bytes(),
             max_decompressed_body_size: default_max_decompressed_body_size(),
@@ -786,13 +781,6 @@ impl CredentialConfig {
 
 fn default_listen_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 8080))
-}
-
-pub(crate) fn default_socket_path() -> PathBuf {
-    firma_runtime_state::RuntimeLayout::resolve(None).map_or_else(
-        |_| std::env::temp_dir().join("firma").join("sidecar.sock"),
-        |layout| layout.sidecar_socket(),
-    )
 }
 
 const fn default_drain_timeout() -> u64 {
@@ -1533,7 +1521,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_unix_socket_mode_requires_socket_path() {
+    fn test_unix_socket_mode_allows_lifecycle_default_path() {
         let config = SidecarConfig {
             interceptor: InterceptorConfig {
                 mode: InterceptorMode::UnixSocket,
@@ -1542,11 +1530,7 @@ mod tests {
             },
             ..SidecarConfig::default()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("socket_path"),
-            "error should mention socket_path: {err}"
-        );
+        assert!(config.validate().is_ok());
     }
 
     #[cfg(unix)]

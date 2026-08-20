@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use firma_runtime_state::RuntimeLayout;
 use tracing::{debug, info, warn};
 
 use crate::args::doctor::Args;
@@ -133,6 +134,7 @@ async fn build_report(args: Args) -> RenderedReport {
     // cross-check live per-run instances against the configured daemon probe.
     let state_dir = crate::services::config::resolve_state_dir(args.state_dir.clone())
         .unwrap_or_else(|_| PathBuf::from("."));
+    let runtime_layout = RuntimeLayout::from_root(&state_dir);
     let live_running = count_live_per_run_sidecars(&state_dir);
 
     // 4. sidecar mode + reachability
@@ -165,7 +167,7 @@ async fn build_report(args: Args) -> RenderedReport {
     }
     let sidecar_endpoint = parsed_sidecar
         .as_ref()
-        .map(reachability::endpoint_from_sidecar);
+        .map(|config| reachability::endpoint_from_sidecar(config, &runtime_layout));
     let sidecar_daemon =
         reachability::check_endpoint("sidecar reachable", sidecar_endpoint, timeout).await;
     report.push(reachability::reconcile_reachability(

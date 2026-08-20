@@ -2,7 +2,11 @@
 
 use std::{path::Path, process::ExitCode, str::FromStr, sync::Arc, time::Duration};
 
+#[cfg(unix)]
+use std::path::PathBuf;
+
 use anyhow::Context as _;
+use firma_runtime_state::RuntimeLayout;
 use firma_secret_provider::{
     MatcherCompiler,
     endpoint::client::ClientEndpoint,
@@ -13,6 +17,8 @@ use firma_sidecar::{
     config, connector::ConnectorRegistry, handler, health, pipeline::EnforcementPipeline, startup,
     startup::CapabilityReloader,
 };
+#[cfg(unix)]
+use firma_stack::UnixEndpoint;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -96,7 +102,7 @@ fn fail(msg: &str) -> ExitCode {
 /// hot-swapped into Stage 1 without a restart. Returns `None` when hot-reload is
 /// disabled. The returned guard stops the watch on drop.
 fn spawn_capability_reload(
-    runtime_layout: &firma_runtime_state::RuntimeLayout,
+    runtime_layout: &RuntimeLayout,
     config: &config::SidecarConfig,
     pipeline_runtime: &startup::PipelineRuntime,
     exit: &CancellationToken,
@@ -190,7 +196,7 @@ fn build_request_handler(
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
     let sandbox_id = propagated_sandbox_id()?;
-    let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)?;
+    let runtime_layout = RuntimeLayout::resolve(None)?;
 
     let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(args.config.as_deref())?
@@ -252,7 +258,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     )?);
 
     debug!(mode = %config.interceptor.mode, "starting interceptor");
-    let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
+    let interceptor = startup::spawn_interceptor(&runtime_layout, &config, handler, exit.clone())?;
 
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
 
@@ -340,20 +346,14 @@ fn write_startup_report(
             })?)
         }
         #[cfg(unix)]
-        config::InterceptorMode::UnixSocket => {
-            let socket_path = interceptor
-                .socket_path
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("validated Unix interceptor has no socket path"))?;
-            firma_stack::UnixEndpoint::new(socket_path)
-                .map(firma_stack::ComponentEndpoint::Unix)
-                .map_err(|path| {
-                    anyhow::anyhow!(
-                        "Unix interceptor socket path is invalid: {}",
-                        path.display()
-                    )
-                })?
-        }
+        config::InterceptorMode::UnixSocket => UnixEndpoint::new(PathBuf::from(listen_addr))
+            .map(firma_stack::ComponentEndpoint::Unix)
+            .map_err(|path| {
+                anyhow::anyhow!(
+                    "Unix interceptor socket path is invalid: {}",
+                    path.display()
+                )
+            })?,
     };
     firma_stack::publish_startup_report(path, &endpoint)
         .with_context(|| format!("failed to write startup report to {}", path.display()))
@@ -388,7 +388,7 @@ fn spawn_run_audit_listener(
         .ok()
         .filter(|value| !value.trim().is_empty())?;
     match firma_sidecar::run_audit::spawn_listener(
-        std::path::PathBuf::from(socket),
+        PathBuf::from(socket),
         audit_payload_tx.clone(),
         exit.clone(),
     ) {
