@@ -202,9 +202,8 @@ signing_key_path = '{audit_key}'
     std::thread::sleep(Duration::from_secs(2));
     #[cfg(unix)]
     {
-        firma_runtime_state::UserProcessId::new(child.id())
-            .expect("sidecar PID is nonzero")
-            .send_sigterm_signal()
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("sidecar PID fits"));
+        nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM)
             .expect("send termination signal to firma sidecar");
     }
     #[cfg(windows)]

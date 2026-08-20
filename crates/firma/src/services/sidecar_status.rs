@@ -107,12 +107,13 @@ fn collect(args: &StatusArgs) -> anyhow::Result<Vec<SidecarEntry>> {
     if args.daemon {
         return collect_daemon();
     }
-    let runtime_dir = firma_runtime_state::default_runtime_dir();
+    let runtime_dir = firma_runtime_state::RuntimeLayout::resolve(None)?.into_root();
     if let Some(id) = &args.sandbox_id {
         return Ok(firma_runtime_state::sidecar_markers::get(&runtime_dir, id)?
             .into_iter()
             .collect());
     }
+    firma_runtime_state::sidecar_markers::gc_stale(&runtime_dir)?;
     Ok(firma_runtime_state::sidecar_markers::list(&runtime_dir)?)
 }
 

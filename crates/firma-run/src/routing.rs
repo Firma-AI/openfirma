@@ -13,7 +13,7 @@ use firma_process_orchestrator::{
     spawn_stack_from_plan,
 };
 #[cfg(unix)]
-use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
+use firma_runtime_state::RuntimeLayout;
 
 #[cfg(unix)]
 use std::io;
@@ -874,8 +874,9 @@ fn prepare_run_components(
     #[cfg(unix)]
     {
         let mut authority = authority;
-        let runtime_dir = default_runtime_dir();
-        let marker_dir = run_entry_from(&runtime_dir, &identity.sandbox_id);
+        let runtime_layout = RuntimeLayout::resolve(None)
+            .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
+        let marker_dir = runtime_layout.run_entry(&identity.sandbox_id);
         let orchestrator_dir = marker_dir.join("orchestrator");
         let names: Vec<&str> = match (owns_authority, owns_sidecar) {
             (true, true) => vec!["authority", "sidecar"],
@@ -905,8 +906,7 @@ fn prepare_run_components(
         let mut sidecar_launch = None;
         let mut capability_guard = None;
         let mut capability_refresher = None;
-        let capability_seed_path =
-            firma_runtime_state::runtime_paths::capability_seed_path(&identity.sandbox_id);
+        let capability_seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
         let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
 
         let stack_result = spawn_stack_from_plan(
@@ -1009,7 +1009,7 @@ fn prepare_run_components(
                             authority_credentials: component_flags.authority_credentials.clone(),
                             capability_seed_path: component_flags.capability_seed_path.clone(),
                             use_http_proxy_interceptor: component_flags.use_http_proxy_sidecar,
-                            audit_fallback_path: Some(runtime_dir.join("audit.jsonl")),
+                            audit_fallback_path: Some(runtime_layout.audit_log()),
                             monitor_mode: component_flags.monitor_mode,
                         },
                     )?;

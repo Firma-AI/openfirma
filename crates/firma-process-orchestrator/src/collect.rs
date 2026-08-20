@@ -17,7 +17,7 @@ use tracing::debug;
 
 use crate::component::OwnedComponent;
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
-use firma_runtime_state::ChildExt as _;
+use crate::process_id::ChildExt as _;
 
 const COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const BACKGROUND_COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);

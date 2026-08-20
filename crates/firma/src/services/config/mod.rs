@@ -274,7 +274,8 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
     let revocation_file = path_display(&state_dir.join("revocations.txt"));
     let key_file = path_display(&state_dir.join("authority.key"));
     let ca_dir = path_display(&state_dir.join("generated-firma-ca"));
-    let audit_file = path_display(&state_dir.join("audit.jsonl"));
+    let audit_file =
+        path_display(&firma_runtime_state::RuntimeLayout::from_root(state_dir).audit_log());
     let audit_key = path_display(&state_dir.join("audit.key"));
     let tls_cert_path = path_display(&tls_dir.join("authority.crt"));
     let tls_key_path = path_display(&tls_dir.join("authority.key"));
@@ -1178,7 +1179,7 @@ pub fn resolve_audit_log_path(
 ) -> Result<PathBuf, String> {
     let state_dir = resolve_state_dir(state_dir_flag.cloned())?;
     if state_dir_flag.is_some() {
-        return Ok(state_dir.join("audit.jsonl"));
+        return Ok(firma_runtime_state::RuntimeLayout::from_root(state_dir).audit_log());
     }
 
     if let Some(resolved) = firma_config_loader::ConfigResolver::default()
@@ -1201,7 +1202,7 @@ pub fn resolve_audit_log_path(
         }
     }
 
-    Ok(state_dir.join("audit.jsonl"))
+    Ok(firma_runtime_state::RuntimeLayout::from_root(state_dir).audit_log())
 }
 
 fn resolve_config_relative_path(config_dir: &Path, path: &str) -> PathBuf {

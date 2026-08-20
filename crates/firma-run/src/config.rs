@@ -1047,7 +1047,7 @@ fn managed_policy_for_profile(profile_id: &str) -> (&'static str, &'static str) 
 /// To override, set `FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH` or `seccomp_policy.source_policy_path` in the profile config.
 /// Creates the directory with restricted permissions (0o700/0o600).
 fn ensure_managed_policy_path(profile_id: &str) -> PathBuf {
-    let dir = firma_runtime_state::runtime_paths::default_runtime_dir().join("seccomp");
+    let dir = resolved_runtime_root().join("seccomp");
     write_managed_policy_to_dir(&dir, profile_id)
 }
 
@@ -1068,9 +1068,20 @@ fn write_managed_policy_to_dir(dir: &std::path::Path, profile_id: &str) -> PathB
 }
 
 fn default_managed_artifact_dir() -> PathBuf {
-    let dir = firma_runtime_state::runtime_paths::default_runtime_dir().join("seccomp-artifacts");
+    let dir = resolved_runtime_root().join("seccomp-artifacts");
     tracing::debug!(path = %dir.display(), "seccomp artifact dir");
     dir
+}
+
+fn resolved_runtime_root() -> PathBuf {
+    firma_runtime_state::RuntimeLayout::resolve(None).map_or_else(
+        |error| {
+            let fallback = std::env::temp_dir().join("firma");
+            tracing::warn!(%error, path = %fallback.display(), "runtime layout unavailable; using temporary fallback");
+            fallback
+        },
+        firma_runtime_state::RuntimeLayout::into_root,
+    )
 }
 
 pub(crate) fn env_truthy(name: &str) -> bool {

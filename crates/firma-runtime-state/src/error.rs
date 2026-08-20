@@ -29,6 +29,10 @@ pub enum RuntimeStateError {
         source: Box<toml::de::Error>,
     },
 
+    /// A sidecar marker could not be serialized as TOML.
+    #[error("failed to serialize sidecar marker: {0}")]
+    MarkerSerialize(#[from] toml::ser::Error),
+
     /// A marker's validated identity does not match its containing directory.
     #[error(
         "sidecar marker identity mismatch at '{path}': directory is '{directory}', metadata is '{metadata}'"

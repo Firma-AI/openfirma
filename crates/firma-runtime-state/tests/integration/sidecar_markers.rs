@@ -9,7 +9,7 @@ use std::assert_matches;
 use std::fs;
 use std::path::Path;
 
-use firma_runtime_state::{MetadataFile, RuntimeStateError};
+use firma_runtime_state::{MetadataFile, RuntimeStateError, UserProcessId};
 
 const ID_1: &str = "sbx_01j0000000e008000000000001";
 const ID_2: &str = "sbx_01j0000000e008000000000002";
@@ -56,6 +56,33 @@ fn metadata_file_parses_all_fields() {
     assert_eq!(meta.policy_bundle_version, "deadbeef");
     assert_eq!(meta.pid.get(), 4242);
     assert_eq!(meta.started_at, "2026-05-18T10:00:00Z");
+}
+
+#[test]
+fn publish_writes_complete_marker_contract() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let marker_dir = tmp.path().join("run").join(ID_1);
+    let metadata = MetadataFile {
+        sandbox_id: ID_1.parse().expect("sandbox ID"),
+        agent_id: "codex".into(),
+        session_id: "sess-1".into(),
+        authority_url: "https://authority.local".into(),
+        policy_bundle_version: "deadbeef".into(),
+        pid: UserProcessId::new(std::process::id()).expect("process ID"),
+        started_at: "2026-05-18T10:00:00Z".into(),
+        listen: "127.0.0.1:12345".into(),
+    };
+
+    firma_runtime_state::publish(&marker_dir, &metadata).expect("publish marker");
+
+    assert_eq!(
+        firma_runtime_state::pidfile::read(&marker_dir.join("sidecar.pid")).expect("read PID file"),
+        Some(metadata.pid)
+    );
+    let persisted =
+        firma_runtime_state::sidecar_markers::read(&marker_dir).expect("read published metadata");
+    assert_eq!(persisted.sandbox_id, metadata.sandbox_id);
+    assert_eq!(persisted.listen, metadata.listen);
 }
 
 use firma_runtime_state::sidecar_markers::probe_entry;
@@ -227,7 +254,7 @@ fn live_pid_with_listening_socket_is_running() {
 use firma_runtime_state::sidecar_markers::{gc_stale, get, list};
 
 #[test]
-fn list_skips_and_gcs_dead_markers() {
+fn list_reports_dead_markers_without_deleting_them() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_dir = tmp.path();
     let run_dir = runtime_dir.join("run");
@@ -237,9 +264,10 @@ fn list_skips_and_gcs_dead_markers() {
 
     let entries = list(runtime_dir).expect("list");
     let ids: Vec<&str> = entries.iter().map(|e| e.sandbox_id.as_str()).collect();
-    assert_eq!(ids, vec![ID_1]);
+    assert_eq!(ids, vec![ID_1, ID_2]);
+    assert_eq!(entries[1].state, State::Stopped);
 
-    assert!(!run_dir.join(ID_2).exists());
+    assert!(run_dir.join(ID_2).exists());
     assert!(run_dir.join(ID_1).exists());
 }
 

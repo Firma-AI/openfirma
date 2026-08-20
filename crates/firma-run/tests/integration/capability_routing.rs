@@ -88,8 +88,9 @@ fn autostart_flags(capability_seed_path: Option<PathBuf>) -> AutostartFlags {
 }
 
 fn marker_dir(identity: &RunIdentity) -> PathBuf {
-    let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
-    firma_runtime_state::runtime_paths::run_entry_from(&runtime_dir, &identity.sandbox_id)
+    firma_runtime_state::RuntimeLayout::resolve(None)
+        .expect("resolve runtime layout")
+        .run_entry(&identity.sandbox_id)
 }
 
 #[cfg(unix)]
@@ -240,7 +241,8 @@ fn no_autostart_unreachable_authority_fails_loudly() {
         "unexpected diagnostic: {error}"
     );
 
-    let capabilities_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(runtime_dir);
+    let capabilities_dir =
+        firma_runtime_state::RuntimeLayout::from_root(runtime_dir).capabilities_dir();
     assert!(
         !capabilities_dir.exists(),
         "failed authority resolution must not create a capability directory"

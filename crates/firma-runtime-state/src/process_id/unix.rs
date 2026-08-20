@@ -1,4 +1,4 @@
-use super::{SignalProcessError, UserProcessId};
+use super::UserProcessId;
 
 pub(super) fn in_range_for_platform(raw: u32) -> bool {
     u32::try_from(nix::libc::pid_t::MAX).is_ok_and(|max| raw <= max)
@@ -26,20 +26,6 @@ impl UserProcessId {
             Err(nix::errno::Errno::ESRCH) => Ok(false),
             Err(error) => Err(std::io::Error::from_raw_os_error(error as i32)),
         }
-    }
-
-    /// Send `SIGTERM` to this process ID.
-    ///
-    /// This is a best-effort process signal by PID, not an ownership guarantee.
-    /// The operating system may reuse process IDs after the original process
-    /// exits.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the signal cannot be delivered.
-    pub fn send_sigterm_signal(self) -> Result<(), SignalProcessError> {
-        nix::sys::signal::kill(self.into(), nix::sys::signal::Signal::SIGTERM)
-            .map_err(|source| SignalProcessError::Signal { pid: self, source })
     }
 }
 

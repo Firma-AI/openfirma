@@ -34,7 +34,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use firma_identifiers::SessionId;
@@ -94,12 +94,6 @@ impl PersistentSessionStateStore {
         Ok(Self {
             inner: Mutex::new(Inner { cache, file }),
         })
-    }
-
-    /// Default path for the persistent store under a runtime directory.
-    #[must_use]
-    pub(crate) fn default_path(runtime_dir: &Path) -> PathBuf {
-        runtime_dir.join("session-state.jsonl")
     }
 }
 
@@ -301,6 +295,8 @@ fn replay(path: &Path, cap: NonZeroUsize) -> std::io::Result<LruCache<SessionId,
 mod tests {
     #![allow(clippy::float_cmp)]
     use super::*;
+    use std::path::PathBuf;
+
     use firma_identifiers::SessionId;
 
     fn sid(s: &str) -> SessionId {
@@ -392,12 +388,6 @@ mod tests {
         let store = PersistentSessionStateStore::open(&path, 16).expect("reopen");
         assert_eq!(store.signals(&sid("sess_a")).action_count, 2);
         let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn default_path_joins_runtime_dir() {
-        let p = PersistentSessionStateStore::default_path(Path::new("/var/lib/firma"));
-        assert_eq!(p, PathBuf::from("/var/lib/firma/session-state.jsonl"));
     }
 
     #[test]

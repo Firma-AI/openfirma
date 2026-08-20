@@ -310,7 +310,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | [`crates/firma-core`](crates/firma-core/)                   | Shared types, Cedar schema, action classes, audit event format                |
 | [`crates/firma-identifiers`](crates/firma-identifiers/)     | Agent, sandbox, session, capability, audit, and approval identifiers          |
 | [`crates/firma-run`](crates/firma-run/)                     | Agent process confinement: bwrap backend, profile resolution, autostart       |
-| [`crates/firma-runtime-state`](crates/firma-runtime-state/) | Runtime paths, pidfiles, per-run sidecar markers, local liveness probes       |
+| [`crates/firma-runtime-state`](crates/firma-runtime-state/) | Runtime filesystem layout, persisted markers, and local liveness snapshots    |
 | [`crates/firma-stack`](crates/firma-stack/)                 | Firma Authority and Sidecar lifecycle used by `firma sidecar start`           |
 
 **Examples**

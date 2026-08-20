@@ -17,7 +17,7 @@ use crate::doctor::report::Check;
 /// - I/O error during read → `FAIL`.
 #[must_use]
 pub fn check(state_dir: &Path) -> Check {
-    let dir = state_dir.join("capabilities");
+    let dir = firma_runtime_state::RuntimeLayout::from_root(state_dir).capabilities_dir();
     let display = dir.display().to_string();
     match std::fs::read_dir(&dir) {
         Ok(entries) => {

@@ -1894,7 +1894,6 @@ name = "firma-vz-guest-init"
 version = "0.1.6"
 dependencies = [
  "firma-identifiers",
- "firma-runtime-state",
  "insta",
  "libc",
  "serde",
@@ -1913,7 +1912,6 @@ dependencies = [
  "dispatch2",
  "firma-fs",
  "firma-identifiers",
- "firma-runtime-state",
  "insta",
  "libc",
  "objc2",

@@ -789,9 +789,10 @@ fn default_listen_addr() -> SocketAddr {
 }
 
 pub(crate) fn default_socket_path() -> PathBuf {
-    let xdg = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-    PathBuf::from(xdg).join("firma/sidecar.sock")
+    firma_runtime_state::RuntimeLayout::resolve(None).map_or_else(
+        |_| std::env::temp_dir().join("firma").join("sidecar.sock"),
+        |layout| layout.sidecar_socket(),
+    )
 }
 
 const fn default_drain_timeout() -> u64 {

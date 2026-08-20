@@ -181,9 +181,8 @@ impl CapabilityReloader {
         capability_handle: CapabilityMapHandle,
         cancel: CancellationToken,
     ) -> anyhow::Result<Self> {
-        let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
-        let capabilities_dir =
-            firma_runtime_state::runtime_paths::capabilities_dir_from(&runtime_dir);
+        let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)?;
+        let capabilities_dir = runtime_layout.capabilities_dir();
         let seed_config = config.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
         let event_handler = move |res: notify::Result<notify::Event>| match res {
