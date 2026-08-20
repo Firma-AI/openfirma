@@ -4,7 +4,10 @@ use firma_http::{Authority, Str};
 use firma_secret_provider::{
     GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder,
-    broker::{BinaryName, BinaryNameError, BrokerRequest, BrokerResponse},
+    broker::{
+        BinaryName, BinaryNameError, BrokerExitStatus, BrokerRequest, BrokerResponse,
+        DecodedBrokerResponse,
+    },
 };
 
 #[test]
@@ -117,19 +120,28 @@ fn broker_request_rejects_non_basename_binary() {
 }
 
 #[test]
-fn broker_response_ok_round_trips() {
-    let response = BrokerResponse::ok(b"secret-value");
+fn broker_execution_response_round_trips() {
+    let response = BrokerResponse::executed(
+        b"secret-value",
+        b"warning",
+        BrokerExitStatus::Exited { code: 7 },
+    );
     let wire = serde_json::to_string(&response).expect("serialize");
-    insta::assert_snapshot!(wire, @r#"{"type":"ok","stdout":"c2VjcmV0LXZhbHVl"}"#);
+    insta::assert_snapshot!(wire, @r#"{"type":"executed","stdout":"c2VjcmV0LXZhbHVl","stderr":"d2FybmluZw==","status":{"type":"exited","code":7}}"#);
     let back: BrokerResponse = serde_json::from_str(&wire).expect("deserialize");
-    assert_eq!(back.into_stdout().expect("stdout"), b"secret-value");
+    let DecodedBrokerResponse::Executed(output) = back.decode().expect("decode") else {
+        panic!("expected executed response");
+    };
+    assert_eq!(output.stdout, b"secret-value");
+    assert_eq!(output.stderr, b"warning");
+    assert_eq!(output.status, BrokerExitStatus::Exited { code: 7 });
 }
 
 #[test]
-fn broker_response_err_into_stdout_reports_reason() {
-    let response = BrokerResponse::err("tool not found");
+fn broker_rejection_response_reports_reason() {
+    let response = BrokerResponse::rejected("tool not found");
     assert_eq!(
-        response.into_stdout().expect_err("error response"),
-        "tool not found"
+        response.decode().expect("decode"),
+        DecodedBrokerResponse::Rejected(String::from("tool not found"))
     );
 }
