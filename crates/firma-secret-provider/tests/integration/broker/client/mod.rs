@@ -308,7 +308,10 @@ async fn request_rejects_invalid_base64_stdout() {
     // `request` deserialization.
     let (endpoint, _guard) = bind_raw_responder(
         br#"{"type":"executed","output":[{"stream":"stdout","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
-            .to_vec(),
+            .iter()
+            .copied()
+            .chain(*b"\n")
+            .collect(),
     );
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
     let error = client
@@ -327,7 +330,10 @@ async fn request_rejects_invalid_base64_stdout() {
 async fn request_rejects_invalid_base64_stderr() {
     let (endpoint, _guard) = bind_raw_responder(
         br#"{"type":"executed","output":[{"stream":"stderr","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
-            .to_vec(),
+            .iter()
+            .copied()
+            .chain(*b"\n")
+            .collect(),
     );
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
     let error = client
@@ -369,6 +375,45 @@ async fn request_rejects_malformed_response_json() {
     std::assert_matches!(
         error,
         BrokerClientError::ProtocolViolation(ProtocolViolation::Deserialize(_))
+    );
+}
+
+#[tokio::test]
+async fn request_rejects_unterminated_response() {
+    let response = serde_json::to_vec(&executed_response(b"secret-value")).expect("serialize");
+    let error = raw_response_error(&response).await;
+    std::assert_matches!(
+        error,
+        BrokerClientError::OutcomeUnknown {
+            source: OutcomeUnknownError::UnterminatedResponse,
+            ..
+        }
+    );
+}
+
+#[tokio::test]
+async fn request_reports_over_limit_unterminated_response_as_outcome_unknown() {
+    let (endpoint, _guard) = bind_raw_responder(vec![b'x'; 65]);
+    let config = BrokerClientConfig {
+        max_response_size: bytesize::ByteSize::b(64),
+        ..BrokerClientConfig::default()
+    };
+    let client = BrokerClient::new(endpoint, config);
+    let error = client
+        .request(
+            &BrokerRequest {
+                bin: BinaryName::new("bws").expect("valid binary name"),
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
+            },
+            |_| Ok(()),
+        )
+        .await;
+    std::assert_matches!(
+        error,
+        Err(BrokerClientError::OutcomeUnknown {
+            source: OutcomeUnknownError::UnterminatedResponse,
+            ..
+        })
     );
 }
 

@@ -10,7 +10,7 @@ use firma_secret_provider::{
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 mod config;
 
@@ -335,6 +335,49 @@ async fn malformed_request_is_rejected_without_reaching_handler() {
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
     assert!(decode_output(response).is_err());
+}
+
+#[tokio::test]
+async fn unterminated_request_is_rejected_without_reaching_handler() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig::default())
+        .await
+        .expect("bind");
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |_req| panic!("unterminated request must not reach the handler"))
+            .await
+            .expect_err("unterminated request must fail accept_one")
+    });
+    let request = BrokerRequest {
+        bin: BinaryName::new("bws").expect("valid binary name"),
+        args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
+    };
+    let mut stream: BrokerStream = match endpoint.as_inner() {
+        EndpointInner::Tcp(addr) => BrokerStream::Tcp {
+            stream: tokio::net::TcpStream::connect(addr).await.expect("connect"),
+        },
+        #[cfg(unix)]
+        EndpointInner::Unix(path) => BrokerStream::Unix {
+            stream: tokio::net::UnixStream::connect(path)
+                .await
+                .expect("connect"),
+        },
+    };
+    let payload = serde_json::to_vec(&request).expect("serialize");
+    stream.write_all(&payload).await.expect("write");
+    stream.shutdown().await.expect("shutdown write half");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("read to end");
+    assert!(response.is_empty(), "invalid frame receives no response");
+    let error = server.await.expect("server task");
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
 #[tokio::test]
