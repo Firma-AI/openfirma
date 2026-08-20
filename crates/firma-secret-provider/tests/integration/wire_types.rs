@@ -4,7 +4,7 @@ use firma_http::{Authority, Str};
 use firma_secret_provider::{
     GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder,
-    broker::{BrokerRequest, BrokerResponse},
+    broker::{BinaryName, BinaryNameError, BrokerRequest, BrokerResponse},
 };
 
 #[test]
@@ -86,13 +86,34 @@ fn push_response_err_round_trips() {
 #[test]
 fn broker_request_round_trips() {
     let request = BrokerRequest {
-        bin: Str::from("bws"),
+        bin: BinaryName::new("bws").expect("valid binary name"),
         args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
     };
     let wire = serde_json::to_string(&request).expect("serialize");
     insta::assert_snapshot!(wire, @r#"{"bin":"bws","args":["secret","get","abc"]}"#);
     let back: BrokerRequest = serde_json::from_str(&wire).expect("deserialize");
     assert_eq!(back, request);
+}
+
+#[test]
+fn broker_request_rejects_non_basename_binary() {
+    for bin in ["", ".", "..", "../bws", "dir/bws", "dir\\bws", "C:bws"] {
+        let expected = if bin.is_empty() {
+            BinaryNameError::Empty
+        } else {
+            BinaryNameError::NotBasename(String::from(bin))
+        };
+        assert_eq!(
+            BinaryName::new(bin),
+            Err(expected),
+            "unexpected result for {bin:?}"
+        );
+    }
+
+    let wire = serde_json::json!({ "bin": "../bws", "args": [] }).to_string();
+    let error = serde_json::from_str::<BrokerRequest>(&wire)
+        .expect_err("path-like wire binary must be rejected");
+    insta::assert_snapshot!(error.to_string(), @"binary name must be a single path component: ../bws at line 1 column 15");
 }
 
 #[test]

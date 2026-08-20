@@ -3,7 +3,7 @@ use std::str::FromStr;
 use firma_http::Str;
 use firma_secret_provider::{
     broker::{
-        BrokerRequest, BrokerResponse,
+        BinaryName, BrokerRequest, BrokerResponse,
         server::{BrokerListener, config::BrokerListenerConfig},
         stream::BrokerStream,
     },
@@ -99,7 +99,7 @@ async fn roundtrip_ok_response() {
         .await
         .expect("bind");
     let request = BrokerRequest {
-        bin: Str::from("bws"),
+        bin: BinaryName::new("bws").expect("valid binary name"),
         args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
     };
     let request_clone = request.clone();
@@ -133,7 +133,7 @@ async fn handler_error_written_as_error_response() {
         .await
         .expect("bind");
     let request = BrokerRequest {
-        bin: Str::from("bws"),
+        bin: BinaryName::new("bws").expect("valid binary name"),
         args: vec![Str::from("secret"), Str::from("get"), Str::from("x")],
     };
     let server = tokio::spawn(async move {
@@ -163,7 +163,7 @@ async fn oversized_response_is_replaced_with_clean_error() {
     .await
     .expect("bind");
     let request = BrokerRequest {
-        bin: Str::from("bws"),
+        bin: BinaryName::new("bws").expect("valid binary name"),
         args: vec![Str::from("secret"), Str::from("get"), Str::from("x")],
     };
     let server = tokio::spawn(async move {
@@ -201,7 +201,7 @@ async fn response_exactly_at_limit_is_forwarded() {
     .await
     .expect("bind");
     let request = BrokerRequest {
-        bin: Str::from("bws"),
+        bin: BinaryName::new("bws").expect("valid binary name"),
         args: vec![Str::from("secret"), Str::from("get"), Str::from("x")],
     };
     let served_stdout = stdout.clone();
@@ -280,7 +280,7 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
     // trimmed content is not. The size check must measure the line, not
     // the trimmed content.
     let request = BrokerRequest {
-        bin: Str::from("bws"),
+        bin: BinaryName::new("bws").expect("valid binary name"),
         args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
     };
     let json = serde_json::to_string(&request).expect("serialize");

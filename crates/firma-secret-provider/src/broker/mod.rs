@@ -29,7 +29,7 @@ pub mod client;
 pub mod server;
 pub mod stream;
 
-use std::io;
+use std::{fmt::Display, io, ops::Deref};
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(unix)]
@@ -39,6 +39,74 @@ use base64::Engine as _;
 use firma_http::Str;
 use serde::{Deserialize, Serialize};
 
+/// A validated executable basename from a shim request.
+///
+/// The broker resolves executable names outside the sandbox, so wire input
+/// must remain one path component on both Unix and Windows. In particular,
+/// absolute paths, parent traversal, and platform-specific separators are
+/// rejected before a request reaches the handler.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct BinaryName<'a>(Str<'a>);
+
+impl<'a> BinaryName<'a> {
+    /// Validate `value` as a portable executable basename.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BinaryNameError`] when `value` is empty, is `.` or `..`, or
+    /// contains a Unix or Windows path separator, drive separator, or NUL.
+    pub fn new(value: impl Into<Str<'a>>) -> Result<Self, BinaryNameError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(BinaryNameError::Empty);
+        }
+        if &*value == "."
+            || &*value == ".."
+            || value
+                .chars()
+                .any(|character| matches!(character, '/' | '\\' | ':' | '\0'))
+        {
+            return Err(BinaryNameError::NotBasename(value.to_string()));
+        }
+        Ok(Self(value))
+    }
+}
+
+impl<'de: 'a, 'a> Deserialize<'de> for BinaryName<'a> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::new(Str::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Deref for BinaryName<'_> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Display for BinaryName<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Validation failures for [`BinaryName`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BinaryNameError {
+    /// An executable basename cannot be empty.
+    #[error("binary name must not be empty")]
+    Empty,
+    /// The value is not exactly one portable path component.
+    #[error("binary name must be a single path component: {0}")]
+    NotBasename(String),
+}
+
 /// Shim → broker request: describes one tool invocation, which the broker's
 /// handler may refuse (config matching and authorization happen downstream in
 /// the handler, not in the shim).
@@ -46,7 +114,7 @@ use serde::{Deserialize, Serialize};
 pub struct BrokerRequest<'a> {
     /// Executable basename of the wrapped tool (e.g. `"bws"`).
     #[serde(borrow)]
-    pub bin: Str<'a>,
+    pub bin: BinaryName<'a>,
     /// Arguments (everything after the binary name).
     #[serde(borrow)]
     pub args: Vec<Str<'a>>,

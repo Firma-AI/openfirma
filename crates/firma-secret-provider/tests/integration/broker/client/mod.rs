@@ -5,7 +5,7 @@ use firma_http::Str;
 use firma_secret_provider::endpoint::EndpointInner;
 use firma_secret_provider::{
     broker::{
-        BrokerRequest, BrokerResponse,
+        BinaryName, BrokerRequest, BrokerResponse,
         client::{
             BrokerClient,
             config::BrokerClientConfig,
@@ -123,7 +123,7 @@ async fn request_fails_closed_when_response_exceeds_buffer() {
     let error = client
         .request(
             &BrokerRequest {
-                bin: Str::from("bws"),
+                bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
@@ -159,7 +159,7 @@ async fn request_accepts_response_exactly_at_buffer_limit() {
     let response = client
         .request(
             &BrokerRequest {
-                bin: Str::from("bws"),
+                bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |response| response.into_stdout().map_err(BrokerClientError::Rejected),
@@ -238,7 +238,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
     let error = client
         .request(
             &BrokerRequest {
-                bin: Str::from("bws"),
+                bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
@@ -264,7 +264,7 @@ async fn raw_response_error(raw_response: &[u8]) -> BrokerClientError {
     client
         .request(
             &BrokerRequest {
-                bin: Str::from("bws"),
+                bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
@@ -336,7 +336,7 @@ async fn request_fails_closed_when_request_exceeds_buffer() {
     let error = client
         .request(
             &BrokerRequest {
-                bin: Str::from("bws"),
+                bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("x".repeat(64))],
             },
             |_| Ok(()),
@@ -368,7 +368,7 @@ async fn request_fails_closed_when_operation_times_out() {
     let error = client
         .request(
             &BrokerRequest {
-                bin: Str::from("bws"),
+                bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
@@ -391,7 +391,7 @@ async fn request_fails_fast_when_broker_is_unreachable() {
     let error = client
         .request(
             &BrokerRequest {
-                bin: Str::from("bws"),
+                bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
             |_| Ok(()),
