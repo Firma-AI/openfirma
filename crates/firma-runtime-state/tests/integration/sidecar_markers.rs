@@ -9,7 +9,9 @@ use std::assert_matches;
 use std::fs;
 use std::path::Path;
 
-use firma_runtime_state::{MetadataFile, RuntimeStateError, UserProcessId};
+use firma_runtime_state::{
+    MetadataFile, RuntimeStateError, UserProcessId, pidfile, publish, sidecar_markers::read,
+};
 
 const ID_1: &str = "sbx_01j0000000e008000000000001";
 const ID_2: &str = "sbx_01j0000000e008000000000002";
@@ -73,14 +75,13 @@ fn publish_writes_complete_marker_contract() {
         listen: "127.0.0.1:12345".into(),
     };
 
-    firma_runtime_state::publish(&marker_dir, &metadata).expect("publish marker");
+    publish(&marker_dir, &metadata).expect("publish marker");
 
     assert_eq!(
-        firma_runtime_state::pidfile::read(&marker_dir.join("sidecar.pid")).expect("read PID file"),
+        pidfile::read(&marker_dir.join("sidecar.pid")).expect("read PID file"),
         Some(metadata.pid)
     );
-    let persisted =
-        firma_runtime_state::sidecar_markers::read(&marker_dir).expect("read published metadata");
+    let persisted = read(&marker_dir).expect("read published metadata");
     assert_eq!(persisted.sandbox_id, metadata.sandbox_id);
     assert_eq!(persisted.listen, metadata.listen);
 }

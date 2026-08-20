@@ -91,9 +91,26 @@ fn derives_all_runtime_contract_paths_from_one_root() {
     let layout = RuntimeLayout::from_root(&base);
     let sandbox_id = firma_identifiers::SandboxId::generate();
     assert_eq!(layout.run_dir(), base.join("run"));
+    let run_entry = layout.run_entry_layout(&sandbox_id);
     assert_eq!(
-        layout.run_entry(&sandbox_id),
+        run_entry.root(),
         base.join("run").join(sandbox_id.to_string())
+    );
+    assert_eq!(
+        run_entry.sidecar_socket(),
+        run_entry.root().join("sidecar.sock")
+    );
+    assert_eq!(
+        run_entry.sidecar_config(),
+        run_entry.root().join("sidecar.toml")
+    );
+    assert_eq!(
+        run_entry.sidecar_pid(),
+        run_entry.root().join("sidecar.pid")
+    );
+    assert_eq!(
+        run_entry.sidecar_metadata(),
+        run_entry.root().join("metadata.toml")
     );
     assert_eq!(
         layout.capability_seed(&sandbox_id),

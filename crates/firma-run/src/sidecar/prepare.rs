@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 
 use firma_config_loader::AgentProfile;
 use firma_identifiers::{AgentId, SandboxId};
+use firma_runtime_state::RunEntryLayout;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 use crate::config::SidecarEndpoint;
@@ -84,10 +85,11 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
     firma_fs::create_private_dir_all(&marker_dir)
         .map_err(|error| RunError::Internal(format!("mkdir {}: {error}", marker_dir.display())))?;
 
-    let socket_path = marker_dir.join("sidecar.sock");
-    let config_path = marker_dir.join("sidecar.toml");
-    let pid_path = marker_dir.join("sidecar.pid");
-    let metadata_path = marker_dir.join("metadata.toml");
+    let marker_layout = RunEntryLayout::from_root(&marker_dir);
+    let socket_path = marker_layout.sidecar_socket();
+    let config_path = marker_layout.sidecar_config();
+    let pid_path = marker_layout.sidecar_pid();
+    let metadata_path = marker_layout.sidecar_metadata();
     let audit_socket_path = firma_sidecar::run_audit::socket_path_in(&marker_dir);
     let listen_addr = req.use_http_proxy_interceptor.then_some(LOOPBACK_EPHEMERAL);
     let expected_endpoint = listen_addr.map_or_else(

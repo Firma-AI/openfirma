@@ -332,7 +332,9 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             // Per-run marker dir under the persistent runtime root, alongside
             // `sidecar.log` / `authority.log`. The caller redirects its foreground
             // logs here while the agent's TUI owns the terminal.
-            let marker_dir = runtime_layout.run_entry(&identity.sandbox_id);
+            let marker_dir = runtime_layout
+                .run_entry_layout(&identity.sandbox_id)
+                .into_root();
             if let Some(hook) = hooks.on_agent_launch {
                 hook(&marker_dir);
             }
