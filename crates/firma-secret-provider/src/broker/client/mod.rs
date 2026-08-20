@@ -29,7 +29,9 @@ pub mod config;
 pub mod error;
 
 use config::BrokerClientConfig;
-use error::{BrokerClientError, ProtocolViolation, TransportError};
+#[cfg(unix)]
+use error::PeerAuthenticationError;
+use error::{BrokerClientError, OutcomeUnknownError, ProtocolViolation, UnavailableError};
 
 /// Client for the out-of-sandbox secret broker, bound to one
 /// [`ClientEndpoint`].
@@ -58,10 +60,13 @@ impl BrokerClient {
     ///
     /// Returns [`BrokerClientError::Rejected`] when the broker's handler
     /// refused the request or failed to launch the tool,
-    /// [`BrokerClientError::Transport`] when the round-trip did not complete,
+    /// [`BrokerClientError::Unavailable`] when no request reached the broker,
+    /// [`BrokerClientError::OutcomeUnknown`] when execution may have occurred
+    /// without a valid response,
     /// and [`BrokerClientError::ProtocolViolation`] when the response broke
-    /// the wire contract. All errors are fail-closed: the tool produced no
-    /// usable output.
+    /// the wire contract. All errors are fail-closed from the caller's
+    /// perspective: no usable output is returned, though an
+    /// [`BrokerClientError::OutcomeUnknown`] means the tool may have executed.
     pub async fn run(&self, bin: &str, args: &[&str]) -> Result<BrokerOutput, BrokerClientError> {
         let request = BrokerRequest {
             bin: BinaryName::new(bin)?,
@@ -103,16 +108,16 @@ impl BrokerClient {
             EndpointInner::Tcp(addr) => {
                 let stream = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr))
                     .await
-                    .map_err(|_| self.transport_error(TransportError::ConnectionTimeout))?
-                    .map_err(|error| self.transport_error(TransportError::Connect(error)))?;
+                    .map_err(|_| self.unavailable(UnavailableError::ConnectionTimeout))?
+                    .map_err(|error| self.unavailable(UnavailableError::Connect(error)))?;
                 BrokerStream::Tcp { stream }
             }
             #[cfg(unix)]
             EndpointInner::Unix(path) => {
                 let stream = tokio::time::timeout(timeout, tokio::net::UnixStream::connect(path))
                     .await
-                    .map_err(|_| self.transport_error(TransportError::ConnectionTimeout))?
-                    .map_err(|error| self.transport_error(TransportError::Connect(error)))?;
+                    .map_err(|_| self.unavailable(UnavailableError::ConnectionTimeout))?
+                    .map_err(|error| self.unavailable(UnavailableError::Connect(error)))?;
                 validate_broker_peer_credentials(&stream, &self.endpoint)?;
                 BrokerStream::Unix { stream }
             }
@@ -132,10 +137,10 @@ impl BrokerClient {
         let line = tokio::time::timeout(self.config.operation_timeout, async {
             write_all(&mut stream, payload.as_bytes())
                 .await
-                .map_err(|error| self.transport_error(TransportError::Write(error)))?;
+                .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Write(error)))?;
             write_all(&mut stream, b"\n")
                 .await
-                .map_err(|error| self.transport_error(TransportError::Write(error)))?;
+                .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Write(error)))?;
 
             // Cap the underlying reads at max_buffer_size + 1 (see
             // [`read_bounded_line`]) and reject any response whose newline-stripped
@@ -144,10 +149,10 @@ impl BrokerClient {
             // not the trimmed content.
             read_bounded_line(&mut stream, self.max_buffer_size() as u64)
                 .await
-                .map_err(|error| self.transport_error(TransportError::Read(error)))
+                .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Read(error)))
         })
         .await
-        .map_err(|_| self.transport_error(TransportError::OperationTimeout))??;
+        .map_err(|_| self.outcome_unknown(OutcomeUnknownError::OperationTimeout))??;
 
         // Size-check the raw line before UTF-8 decoding so an over-limit
         // response that truncates mid-character is reported as an oversized
@@ -162,16 +167,24 @@ impl BrokerClient {
         })?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            return Err(self.transport_error(TransportError::Empty));
+            return Err(self.outcome_unknown(OutcomeUnknownError::Empty));
         }
         exec(serde_json::from_str(trimmed).map_err(|error| {
             BrokerClientError::ProtocolViolation(ProtocolViolation::Deserialize(error))
         })?)
     }
 
-    /// Wrap a [`TransportError`] with this client's endpoint.
-    fn transport_error(&self, source: TransportError) -> BrokerClientError {
-        BrokerClientError::Transport {
+    /// Wrap a pre-dispatch failure with this client's endpoint.
+    fn unavailable(&self, source: UnavailableError) -> BrokerClientError {
+        BrokerClientError::Unavailable {
+            endpoint: self.endpoint.clone(),
+            source,
+        }
+    }
+
+    /// Wrap an indeterminate post-connect failure with this client's endpoint.
+    fn outcome_unknown(&self, source: OutcomeUnknownError) -> BrokerClientError {
+        BrokerClientError::OutcomeUnknown {
             endpoint: self.endpoint.clone(),
             source,
         }
@@ -195,15 +208,16 @@ fn validate_broker_peer_credentials(
     stream: &tokio::net::UnixStream,
     endpoint: &ClientEndpoint,
 ) -> Result<(), BrokerClientError> {
-    let actual_uid = super::peer_uid(stream).map_err(|error| BrokerClientError::Transport {
-        endpoint: endpoint.clone(),
-        source: TransportError::PeerCredential(error),
-    })?;
+    let actual_uid =
+        super::peer_uid(stream).map_err(|error| BrokerClientError::PeerAuthentication {
+            endpoint: endpoint.clone(),
+            source: PeerAuthenticationError::Credential(error),
+        })?;
     let expected_uid = super::current_uid();
     if actual_uid != expected_uid {
-        return Err(BrokerClientError::Transport {
+        return Err(BrokerClientError::PeerAuthentication {
             endpoint: endpoint.clone(),
-            source: TransportError::PeerUidMismatch {
+            source: PeerAuthenticationError::UidMismatch {
                 expected_uid,
                 actual_uid,
             },
