@@ -23,10 +23,11 @@ validate_report() {
 
 extract_findings() {
   jq -r '
-    ([.vulnerabilities.list[]? | "advisory:" + .advisory.id]
+    ([.vulnerabilities.list[]?
+        | "advisory:" + .advisory.id + ":" + .package.name + "@" + .package.version]
       + [.warnings[]?[]?
           | if .advisory.id then
-              "advisory:" + .advisory.id
+              "advisory:" + .advisory.id + ":" + .package.name + "@" + .package.version
             else
               "yanked:" + .package.name + "@" + .package.version
             end])
