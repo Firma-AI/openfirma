@@ -170,7 +170,7 @@ async fn oversized_response_is_replaced_with_clean_error() {
         endpoint,
         _dir,
     } = bind_with_config(BrokerListenerConfig {
-        max_buffer_size: bytesize::ByteSize::b(64),
+        max_response_size: bytesize::ByteSize::b(64),
         ..BrokerListenerConfig::default()
     })
     .await
@@ -208,7 +208,7 @@ async fn response_exactly_at_limit_is_forwarded() {
         endpoint,
         _dir,
     } = bind_with_config(BrokerListenerConfig {
-        max_buffer_size: bytesize::ByteSize::b(payload.len() as u64),
+        max_response_size: bytesize::ByteSize::b(payload.len() as u64),
         ..BrokerListenerConfig::default()
     })
     .await
@@ -249,7 +249,7 @@ async fn oversize_request_is_rejected() {
         endpoint,
         _dir,
     } = bind_with_config(BrokerListenerConfig {
-        max_buffer_size: bytesize::ByteSize::b(4000),
+        max_request_size: bytesize::ByteSize::b(4000),
         ..BrokerListenerConfig::default()
     })
     .await
@@ -277,7 +277,7 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
         endpoint,
         _dir,
     } = bind_with_config(BrokerListenerConfig {
-        max_buffer_size: bytesize::ByteSize::b(limit),
+        max_request_size: bytesize::ByteSize::b(limit),
         ..BrokerListenerConfig::default()
     })
     .await
