@@ -1716,7 +1716,6 @@ dependencies = [
  "firma-process-orchestrator",
  "firma-protobuf",
  "firma-runtime-state",
- "firma-secret-provider",
  "firma-sidecar",
  "firma-test-helpers",
  "fs-err",
@@ -1766,7 +1765,6 @@ name = "firma-secret-provider"
 version = "0.1.6"
 dependencies = [
  "anyhow",
- "arc-swap",
  "base64",
  "bytesize",
  "either",

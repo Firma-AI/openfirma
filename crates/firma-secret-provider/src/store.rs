@@ -80,13 +80,6 @@ impl SecretStore {
         })
     }
 
-    /// Iterate stored `(placeholder, secret bytes)` pairs, ordered by placeholder.
-    pub fn iter(&self) -> impl Iterator<Item = (&SecretPlaceholder, &SecretString)> {
-        self.by_placeholder
-            .iter()
-            .map(|(placeholder, entry)| (placeholder, &entry.value))
-    }
-
     /// Number of stored secrets.
     #[must_use]
     pub fn len(&self) -> usize {

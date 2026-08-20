@@ -8,7 +8,7 @@
 //! authorization), which reports a refused or failed launch back as an error.
 //! [`BrokerClient`] opens a fresh connection per call rather than
 //! pooling, since broker calls are infrequent relative to tool launches, and
-//! applies the timeouts and buffer limits from [`BrokerClientConfig`] to every
+//! applies the timeouts and buffer limits from [`BrokerConfig`] to every
 //! operation.
 //!
 //! All operations are fail-closed: any connect, timeout, protocol, or

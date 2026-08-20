@@ -3,41 +3,49 @@
 //!
 //! The gateway is a trust boundary: it holds the secret dictionary and hands
 //! real secret values to the Sidecar, so the listener restricts who can
-//! connect. On Unix
-//! the socket file is created owner-only (`0600`), and the connecting peer's
-//! credentials are validated to belong to the current user before the request
-//! is read. A connection that fails these checks is closed without touching
-//! the store.
+//! connect. On Unix the socket file is created owner-only (`0600`) and the
+//! connecting peer's credentials are validated to belong to the current user
+//! before the request is read; a connection that fails these checks is closed
+//! without touching the store. TCP loopback carries no peer credentials to
+//! check (the Windows transport), so a `tcp://` endpoint relies on loopback
+//! binding alone.
 //!
 //! A same-user local process is trusted: it already has the user's secrets.
 //! The boundary enforced here is cross-user access.
 //!
 //! Concurrency: [`GatewayListener::serve_forever`] spawns a task per accepted
 //! connection, so connections are serviced concurrently against the current
-//! [`SecretStore`] snapshot. Each connection carries one request, so there is
-//! no per-connection timeout beyond the OS-level socket behavior; a stalled
-//! connection only ties up its own task.
+//! [`SecretStore`] snapshot. Each connection's read-then-respond exchange is
+//! bounded by [`GatewayConfig::operation_timeout`] and its request line is
+//! capped at [`GatewayConfig::max_buffer_size`], so a peer can neither stall a
+//! connection indefinitely nor grow the broker's memory without bound.
 
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::{io, sync::Arc};
+use std::{io, sync::Arc, time::Duration};
 
-use arc_swap::ArcSwap;
 use base64::Engine;
 use firma_http::Str;
 use secrecy::{ExposeSecret, SecretString};
 #[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     net::TcpListener,
+    sync::RwLock,
+    time::timeout,
 };
 
 use crate::{
+    broker::{drain_remaining, read_bounded_line},
     endpoint::{EndpointInner, server::ServerEndpoint},
     gateway::config::GatewayConfig,
     store::SecretStore,
 };
+
+/// Sleep between retries of a transient accept error (e.g. the process briefly
+/// hitting its file-descriptor limit).
+const ACCEPT_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
 enum GatewayListenerInner {
     Tcp(TcpListener),
@@ -110,17 +118,21 @@ impl GatewayListener {
     /// Accept and serve `secret.resolve` / `secret.push` connections
     /// indefinitely.
     ///
-    /// Each connection is dispatched on a dedicated task. The loop exits when
-    /// the listener socket is closed or a fatal accept error occurs. The caller
-    /// retains ownership; `Drop` removes the socket file after this returns.
-    pub async fn serve_forever<R, S>(&self, store: Arc<ArcSwap<SecretStore>>) {
+    /// Each connection is dispatched on a dedicated task whose whole exchange
+    /// is bounded by [`GatewayConfig::operation_timeout`]; on Unix the accepted
+    /// peer's credentials are validated before the request is read. The loop
+    /// exits when the listener hits a non-transient accept error; transient
+    /// errors (e.g. hitting the file-descriptor limit) are retried with a
+    /// short backoff. Consumes the listener, whose `Drop` removes the socket
+    /// file when the loop ends or the task is dropped.
+    pub async fn serve_forever(self, store: Arc<RwLock<SecretStore>>) {
         match &self.inner {
             GatewayListenerInner::Tcp(listener) => {
-                serve_tcp(listener, self.config.max_buffer_size(), store).await;
+                serve_tcp(listener, self.config, store).await;
             }
             #[cfg(unix)]
             GatewayListenerInner::Unix(listener, _) => {
-                serve_unix(listener, self.config.max_buffer_size(), store).await;
+                serve_unix(listener, self.config, store).await;
             }
         }
     }
@@ -135,27 +147,41 @@ impl Drop for GatewayListener {
     }
 }
 
-async fn serve_tcp(
-    listener: &TcpListener,
-    max_buffer_size: usize,
-    store: Arc<ArcSwap<SecretStore>>,
-) {
+async fn serve_tcp(listener: &TcpListener, config: GatewayConfig, store: Arc<RwLock<SecretStore>>) {
     loop {
         match listener.accept().await {
             Ok((mut stream, _addr)) => {
                 let store = Arc::clone(&store);
                 tokio::spawn(async move {
                     let (reader, writer) = stream.split();
-                    if let Err(e) =
-                        handle_protocol(BufReader::new(reader), writer, max_buffer_size, store)
-                            .await
+                    match timeout(
+                        config.operation_timeout,
+                        handle_protocol(reader, writer, config, store),
+                    )
+                    .await
                     {
-                        tracing::warn!(error = %e, "secret gateway TCP connection error");
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            tracing::warn!(error = %error, "secret gateway TCP connection error");
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                "secret gateway TCP connection exceeded operation timeout"
+                            );
+                        }
                     }
                 });
             }
-            Err(e) => {
-                tracing::debug!(error = %e, "secret gateway TCP accept loop stopped");
+            Err(error) => {
+                if is_transient_accept_error(&error) {
+                    tracing::debug!(
+                        error = %error,
+                        "secret gateway TCP accept hit a transient error; retrying"
+                    );
+                    tokio::time::sleep(ACCEPT_RETRY_BACKOFF).await;
+                    continue;
+                }
+                tracing::debug!(error = %error, "secret gateway TCP accept loop stopped");
                 break;
             }
         }
@@ -165,25 +191,59 @@ async fn serve_tcp(
 #[cfg(unix)]
 async fn serve_unix(
     listener: &UnixListener,
-    max_buffer_size: usize,
-    store: Arc<ArcSwap<SecretStore>>,
+    config: GatewayConfig,
+    store: Arc<RwLock<SecretStore>>,
 ) {
     loop {
         match listener.accept().await {
             Ok((mut stream, _addr)) => {
                 let store = Arc::clone(&store);
                 tokio::spawn(async move {
+                    if let Err(error) = reject_mismatched_peer(&stream) {
+                        let (_, mut writer) = stream.split();
+                        let _ = timeout(
+                            config.operation_timeout,
+                            write_error_line(
+                                &mut writer,
+                                &format!("peer credential validation failed: {error}"),
+                            ),
+                        )
+                        .await;
+                        tracing::warn!(
+                            error = %error,
+                            "secret gateway Unix peer credential validation failed"
+                        );
+                        return;
+                    }
                     let (reader, writer) = stream.split();
-                    if let Err(e) =
-                        handle_protocol(BufReader::new(reader), writer, max_buffer_size, store)
-                            .await
+                    match timeout(
+                        config.operation_timeout,
+                        handle_protocol(reader, writer, config, store),
+                    )
+                    .await
                     {
-                        tracing::warn!(error = %e, "secret gateway Unix connection error");
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            tracing::warn!(error = %error, "secret gateway Unix connection error");
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                "secret gateway Unix connection exceeded operation timeout"
+                            );
+                        }
                     }
                 });
             }
-            Err(e) => {
-                tracing::debug!(error = %e, "secret gateway Unix accept loop stopped");
+            Err(error) => {
+                if is_transient_accept_error(&error) {
+                    tracing::debug!(
+                        error = %error,
+                        "secret gateway Unix accept hit a transient error; retrying"
+                    );
+                    tokio::time::sleep(ACCEPT_RETRY_BACKOFF).await;
+                    continue;
+                }
+                tracing::debug!(error = %error, "secret gateway Unix accept loop stopped");
                 break;
             }
         }
@@ -193,20 +253,31 @@ async fn serve_unix(
 async fn handle_protocol<R, W>(
     mut reader: R,
     mut writer: W,
-    max_buffer_size: usize,
-    store: Arc<ArcSwap<SecretStore>>,
+    config: GatewayConfig,
+    store: Arc<RwLock<SecretStore>>,
 ) -> io::Result<()>
 where
-    R: AsyncBufReadExt + Unpin,
+    R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send,
 {
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
-
-    if line.len() > max_buffer_size {
-        return write_error_line(&mut writer, "request too large").await;
+    // The read is capped at max_buffer_size + 1 (see [`read_bounded_line`]),
+    // so an over-limit request line cannot grow memory without bound. The size
+    // check measures the raw line (not the trimmed content), so padding an
+    // over-limit request with boundary whitespace cannot let it pass. The
+    // check also runs before UTF-8 decoding, so an over-limit line that
+    // truncates mid-character still receives the "request too large" response.
+    let line = read_bounded_line(&mut reader, config.max_buffer_size.as_u64()).await?;
+    if line.bytes.len() > config.max_buffer_size() {
+        write_error_line(&mut writer, "request too large").await?;
+        // The request line was capped, so the rest of an over-limit request is
+        // still in flight. Drain it before closing so the close delivers a
+        // FIN, not an RST that can discard the error response the client has
+        // not read yet (see [`drain_remaining`]).
+        return drain_remaining(&mut reader).await;
     }
 
+    let line = String::from_utf8(line.bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "gateway request is not UTF-8"))?;
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return Err(io::Error::new(
@@ -230,6 +301,55 @@ where
     }
 }
 
+/// Validate that the accepted connection's peer belongs to the current user.
+///
+/// The caller writes an error response and fails the connection when this
+/// returns an error. TCP loopback carries no peer credentials to check.
+#[cfg(unix)]
+fn reject_mismatched_peer(stream: &tokio::net::UnixStream) -> io::Result<()> {
+    let actual_uid = crate::unix::peer_uid(stream)?;
+    let expected_uid = crate::unix::current_uid();
+    if actual_uid != expected_uid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("gateway peer uid mismatch: expected uid={expected_uid} got uid={actual_uid}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether an accept error is transient — worth retrying with a short backoff
+/// rather than stopping the accept loop. Covers signal interruption, loopback
+/// connection resets, and the process briefly hitting its file-descriptor
+/// limit (`EMFILE`/`ENFILE` on Unix).
+fn is_transient_accept_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::Interrupted
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionRefused
+    ) || is_fd_limit_error(error)
+}
+
+/// [`is_transient_accept_error`] on Unix, where hitting the file-descriptor
+/// limit surfaces as `EMFILE`/`ENFILE` raw OS errors.
+#[cfg(unix)]
+fn is_fd_limit_error(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error().map(nix::errno::Errno::from_raw),
+        Some(nix::errno::Errno::EMFILE | nix::errno::Errno::ENFILE)
+    )
+}
+
+/// [`is_transient_accept_error`] on Windows, whose accept errors do not expose
+/// the Unix file-descriptor-limit errnos.
+#[cfg(not(unix))]
+fn is_fd_limit_error(_error: &io::Error) -> bool {
+    false
+}
+
 async fn write_error_line<W>(writer: &mut W, message: &str) -> io::Result<()>
 where
     W: AsyncWrite + Unpin + Send,
@@ -246,12 +366,12 @@ where
 async fn handle_resolve<W>(
     request: &super::ResolveRequest,
     writer: &mut W,
-    store: Arc<ArcSwap<SecretStore>>,
+    store: Arc<RwLock<SecretStore>>,
 ) -> io::Result<()>
 where
     W: AsyncWrite + Unpin + Send,
 {
-    let snapshot = store.load();
+    let snapshot = store.read().await;
     let results = request
         .placeholders
         .iter()
@@ -273,6 +393,7 @@ where
             )
         })
         .collect::<Vec<_>>();
+    drop(snapshot);
 
     write_json_line(writer, &results).await
 }
@@ -282,10 +403,16 @@ where
 /// mirroring a CLI intercept whose matcher has no `domain_path`), and return
 /// the placeholder so the Sidecar can substitute it into the response body it
 /// forwards to the agent.
+///
+/// The store is shared with concurrently-serviced connections, so it is
+/// updated copy-on-write: each push clones the current snapshot, inserts, and
+/// swaps, making a write O(n) in the number of stored secrets. The dictionary
+/// is run-scoped and small in practice, so this stays cheap; avoid designs
+/// that store per-request entries here.
 async fn handle_push<W>(
     request: super::PushRequest<'_>,
     writer: &mut W,
-    store: Arc<ArcSwap<SecretStore>>,
+    store: Arc<RwLock<SecretStore>>,
 ) -> io::Result<()>
 where
     W: AsyncWrite + Unpin + Send,
@@ -325,11 +452,9 @@ where
         domain = ?domain,
         "secret gateway: pushing HTTP-intercepted secret"
     );
-    store.rcu(|current| {
-        let mut updated = SecretStore::clone(current);
-        updated.insert(placeholder.clone(), domain.clone(), value.clone());
-        updated
-    });
+    let mut snapshot = store.write().await;
+    snapshot.insert(placeholder.clone(), domain.clone(), value.clone());
+    drop(snapshot);
 
     write_json_line(writer, &super::PushResponse::Ok { placeholder }).await
 }

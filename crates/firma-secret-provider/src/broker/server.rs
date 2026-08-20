@@ -169,12 +169,7 @@ impl BrokerListener {
         // the connection indefinitely.
         timeout(
             self.config.operation_timeout,
-            handle_connection(
-                &mut stream,
-                self.config.max_request_size(),
-                self.config.max_response_size(),
-                handler,
-            ),
+            handle_connection(&mut stream, self.config, handler),
         )
         .await
         .map_err(|_| {
@@ -214,8 +209,7 @@ fn reject_mismatched_peer(stream: &tokio::net::UnixStream) -> io::Result<()> {
 
 async fn handle_connection<F>(
     stream: &mut BrokerStream,
-    max_request_size: usize,
-    max_response_size: usize,
+    config: BrokerConfig,
     handler: F,
 ) -> io::Result<()>
 where
@@ -228,12 +222,12 @@ where
     // content. The size check runs on the raw bytes before UTF-8 decoding so
     // an over-limit line that truncates mid-character still receives the
     // "request too large" response instead of a silent close.
-    let line = read_bounded_line(stream, max_request_size as u64).await?;
-    if line.bytes.len() > max_request_size {
+    let line = read_bounded_line(stream, config.max_request_size.as_u64()).await?;
+    if line.bytes.len() > config.max_request_size() {
         write_response(
             stream,
             &BrokerResponse::rejected("request too large"),
-            max_response_size,
+            config.max_response_size(),
         )
         .await?;
         // The request line was capped, so the rest of an over-limit request is
@@ -255,7 +249,7 @@ where
         return write_response(
             stream,
             &BrokerResponse::rejected("empty broker request"),
-            max_response_size,
+            config.max_response_size(),
         )
         .await;
     }
@@ -263,7 +257,7 @@ where
         Ok(request) => handler(request).await,
         Err(e) => BrokerResponse::rejected(format!("malformed broker request: {e}")),
     };
-    write_response(stream, &response, max_response_size).await
+    write_response(stream, &response, config.max_response_size()).await
 }
 
 /// Serialize `response` into a newline-terminated wire line, or return `None`

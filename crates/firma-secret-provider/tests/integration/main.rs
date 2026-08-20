@@ -2,6 +2,7 @@ mod broker;
 mod compile;
 mod endpoint;
 mod gateway_client;
+mod gateway_server;
 mod glob;
 mod http_spec;
 mod json;

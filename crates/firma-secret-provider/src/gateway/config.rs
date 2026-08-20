@@ -3,8 +3,11 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use serde::Deserialize;
 
-/// Tunable timeouts and limits for [`super::client::GatewayClient`], deserialized
-/// from the Sidecar's `firma.toml`.
+/// Tunable timeouts and limits for the secret gateway.
+///
+/// Deserialized from the Sidecar's `firma.toml` and shared by the client-side
+/// transport ([`super::client::GatewayClient`]) and the broker-side listener
+/// ([`super::server::GatewayListener`]).
 #[derive(Debug, Copy, Clone, Deserialize)]
 pub struct GatewayConfig {
     /// Deadline for establishing the connection to the gateway endpoint.
@@ -13,14 +16,18 @@ pub struct GatewayConfig {
         default = "default_connection_timeout"
     )]
     pub connection_timeout: Duration,
-    /// Deadline for a single write-then-read round-trip once connected.
+    /// Deadline for a single write-then-read round-trip once connected. The
+    /// listener applies the same deadline to each accepted connection's
+    /// read-then-respond exchange, so a peer that connects and stalls cannot
+    /// hold a connection indefinitely.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
         default = "default_operation_timeout"
     )]
     pub operation_timeout: Duration,
-    /// Cap on the outbound payload and inbound response line size, enforced
-    /// by [`super::client::GatewayClient`].
+    /// Cap on the outbound payload and inbound response line size, enforced by
+    /// [`super::client::GatewayClient`]; the listener enforces the same cap on
+    /// the inbound request line.
     #[serde(default = "default_max_buffer_size")]
     pub max_buffer_size: ByteSize,
 }
