@@ -7,11 +7,18 @@
 
 use std::assert_matches;
 use std::fs;
-use std::path::Path;
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
+use std::process::{self, Command};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use firma_runtime_state::{
-    MetadataFile, RuntimeStateError, UserProcessId, pidfile, publish, sidecar_markers::read,
+    MetadataFile, RuntimeStateError, UserProcessId, gc_stale, pidfile, publish,
+    sidecar_markers::read,
 };
+use fs2::FileExt;
 
 const ID_1: &str = "sbx_01j0000000e008000000000001";
 const ID_2: &str = "sbx_01j0000000e008000000000002";
@@ -70,7 +77,7 @@ fn publish_writes_complete_marker_contract() {
         session_id: "sess-1".into(),
         authority_url: "https://authority.local".into(),
         policy_bundle_version: "deadbeef".into(),
-        pid: UserProcessId::new(std::process::id()).expect("process ID"),
+        pid: UserProcessId::new(process::id()).expect("process ID"),
         started_at: "2026-05-18T10:00:00Z".into(),
         listen: "127.0.0.1:12345".into(),
     };
@@ -86,6 +93,89 @@ fn publish_writes_complete_marker_contract() {
     assert_eq!(persisted.listen, metadata.listen);
 }
 
+#[test]
+fn publication_waits_for_marker_namespace_lock() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let run_dir = tmp.path().join("run");
+    fs::create_dir_all(&run_dir).expect("mkdir run");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(run_dir.join(".sidecar-markers.lock"))
+        .expect("open namespace lock");
+    lock.lock_exclusive().expect("lock namespace");
+
+    let marker_dir = run_dir.join(ID_1);
+    let metadata = MetadataFile {
+        sandbox_id: ID_1.parse().expect("sandbox ID"),
+        agent_id: "codex".into(),
+        session_id: "sess-1".into(),
+        authority_url: "https://authority.local".into(),
+        policy_bundle_version: "deadbeef".into(),
+        pid: UserProcessId::new(process::id()).expect("process ID"),
+        started_at: "2026-05-18T10:00:00Z".into(),
+        listen: "127.0.0.1:12345".into(),
+    };
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let publisher = thread::spawn(move || {
+        started_tx.send(()).expect("signal publisher start");
+        let result = publish(&marker_dir, &metadata);
+        done_tx.send(result).expect("send publication result");
+    });
+
+    started_rx.recv().expect("publisher started");
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "publication must wait while stale collection owns the namespace"
+    );
+    FileExt::unlock(&lock).expect("unlock namespace");
+    done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("publication completed")
+        .expect("publish marker");
+    publisher.join().expect("join publisher");
+}
+
+#[test]
+fn stale_collection_waits_for_marker_namespace_lock() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let runtime_dir = tmp.path().to_path_buf();
+    let run_dir = runtime_dir.join("run");
+    write_marker(&run_dir, ID_1, reaped_dead_pid());
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(run_dir.join(".sidecar-markers.lock"))
+        .expect("open namespace lock");
+    lock.lock_exclusive().expect("lock namespace");
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let collector = thread::spawn(move || {
+        started_tx.send(()).expect("signal collector start");
+        let result = gc_stale(&runtime_dir);
+        done_tx.send(result).expect("send collection result");
+    });
+
+    started_rx.recv().expect("collector started");
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "stale collection must wait while publication owns the namespace"
+    );
+    FileExt::unlock(&lock).expect("unlock namespace");
+    let removed = done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("collection completed")
+        .expect("collect stale markers");
+    assert_eq!(removed, vec![ID_1.to_string()]);
+    collector.join().expect("join collector");
+}
+
 use firma_runtime_state::sidecar_markers::probe_entry;
 use firma_runtime_state::status::State;
 
@@ -93,7 +183,7 @@ use firma_runtime_state::status::State;
 fn live_pid_no_socket_is_unhealthy() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    let me = std::process::id();
+    let me = process::id();
     write_marker(&run_dir, ID_1, me);
 
     let entry = probe_entry(&run_dir.join(ID_1)).expect("probe");
@@ -111,15 +201,13 @@ fn live_pid_no_socket_is_unhealthy() {
 /// `is_alive` on this PID returns false (ESRCH) until the OS reuses the slot.
 fn reaped_dead_pid() -> u32 {
     #[cfg(windows)]
-    let mut child = std::process::Command::new("cmd")
+    let mut child = Command::new("cmd")
         .args(["/C", "exit"])
         .spawn()
         .expect("spawn throwaway child");
 
     #[cfg(not(windows))]
-    let mut child = std::process::Command::new("true")
-        .spawn()
-        .expect("spawn throwaway child");
+    let mut child = Command::new("true").spawn().expect("spawn throwaway child");
 
     let pid = child.id();
     child.wait().expect("reap throwaway child");
@@ -144,7 +232,7 @@ fn exited_unreaped_child_is_unhealthy() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    let mut child = std::process::Command::new("true")
+    let mut child = Command::new("true")
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn throwaway child");
@@ -164,7 +252,7 @@ fn exited_unreaped_child_is_unhealthy() {
 fn uptime_secs_is_some_when_pid_file_exists() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    let me = std::process::id();
+    let me = process::id();
     write_marker(&run_dir, ID_1, me);
 
     // Write sidecar.pid so marker_uptime_secs finds a file to stat.
@@ -184,7 +272,7 @@ fn http_proxy_listen_with_listening_port_is_running() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    let me = std::process::id();
+    let me = process::id();
 
     // An `http_proxy` per-run sidecar binds a loopback TCP port, not a
     // Unix socket. Keep a listener bound so the probe's connect succeeds.
@@ -198,7 +286,7 @@ fn http_proxy_listen_with_listening_port_is_running() {
         State::Running,
         "a healthy http_proxy per-run sidecar must report Running, not Unhealthy"
     );
-    assert_eq!(entry.listen, std::path::PathBuf::from(addr.to_string()));
+    assert_eq!(entry.listen, PathBuf::from(addr.to_string()));
 }
 
 #[test]
@@ -219,10 +307,10 @@ fn http_proxy_listen_with_closed_port_is_unhealthy() {
     // closed port. Wait until connect() fails before probing.
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(10)).is_err() {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(10)).is_err() {
             break;
         }
-        std::thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(5));
     }
 
     let entry = probe_entry(&run_dir.join(ID_1)).expect("probe");
@@ -236,8 +324,8 @@ fn live_pid_with_listening_socket_is_running() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    let me = std::process::id();
-    let sock = std::path::PathBuf::from(format!("/tmp/firma-status-{}.sock", std::process::id()));
+    let me = process::id();
+    let sock = PathBuf::from(format!("/tmp/firma-status-{}.sock", process::id()));
     let _ = fs::remove_file(&sock);
     write_marker_with_listen(
         &run_dir,
@@ -252,14 +340,14 @@ fn live_pid_with_listening_socket_is_running() {
     let _ = fs::remove_file(sock);
 }
 
-use firma_runtime_state::sidecar_markers::{gc_stale, get, list};
+use firma_runtime_state::sidecar_markers::{get, list};
 
 #[test]
 fn list_reports_dead_markers_without_deleting_them() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_dir = tmp.path();
     let run_dir = runtime_dir.join("run");
-    let me = std::process::id();
+    let me = process::id();
     write_marker(&run_dir, ID_1, me);
     write_marker(&run_dir, ID_2, reaped_dead_pid());
 
@@ -283,7 +371,7 @@ fn list_on_missing_run_dir_is_empty() {
 fn get_returns_single_entry_or_none() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_dir = tmp.path();
-    write_marker(&runtime_dir.join("run"), ID_1, std::process::id());
+    write_marker(&runtime_dir.join("run"), ID_1, process::id());
 
     let id = ID_1.parse().expect("valid sandbox ID fixture");
     let found = get(runtime_dir, &id).expect("get");
@@ -298,7 +386,7 @@ fn get_returns_single_entry_or_none() {
 fn marker_metadata_id_must_match_directory_name() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    write_marker(&run_dir, ID_1, std::process::id());
+    write_marker(&run_dir, ID_1, process::id());
     fs::rename(run_dir.join(ID_1), run_dir.join(ID_2)).expect("rename marker directory");
 
     let marker_dir = run_dir.join(ID_2);
@@ -322,7 +410,7 @@ fn gc_stale_returns_removed_ids() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_dir = tmp.path();
     write_marker(&runtime_dir.join("run"), ID_1, reaped_dead_pid());
-    write_marker(&runtime_dir.join("run"), ID_2, std::process::id());
+    write_marker(&runtime_dir.join("run"), ID_2, process::id());
 
     let removed = gc_stale(runtime_dir).expect("gc");
     assert_eq!(removed, vec![ID_1.to_string()]);
@@ -342,7 +430,7 @@ fn corrupt_marker_is_not_gcd_and_skipped_by_list() {
     fs::write(bad_dir.join("metadata.toml"), "not valid toml = =").expect("write bad metadata");
 
     // Write a healthy live marker alongside it.
-    let me = std::process::id();
+    let me = process::id();
     write_marker(&run_dir, ID_1, me);
 
     // list() must succeed and return only the good entry.

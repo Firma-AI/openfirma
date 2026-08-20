@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 firma-identifiers = { workspace = true }
+fs2 = { workspace = true }
 serde = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
