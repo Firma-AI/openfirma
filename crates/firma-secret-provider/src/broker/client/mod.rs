@@ -15,13 +15,12 @@
 //! caller must treat the invocation as failed rather than substituting a
 //! partial or synthetic result.
 
-use base64::Engine as _;
 use firma_http::Str;
 
 use crate::{
     broker::{
-        BinaryName, BrokerRequest, BrokerResponse, read_bounded_line, stream::BrokerStream,
-        write_all,
+        BinaryName, BrokerOutput, BrokerRequest, BrokerResponse, DecodedBrokerResponse,
+        read_bounded_line, stream::BrokerStream, write_all,
     },
     endpoint::{EndpointInner, client::ClientEndpoint},
 };
@@ -50,7 +49,7 @@ impl BrokerClient {
         Self { endpoint, config }
     }
 
-    /// Run one wrapped tool via the broker and return its raw stdout bytes.
+    /// Run one wrapped tool via the broker and return its output and status.
     ///
     /// The broker's handler applies config matching and authorization before
     /// executing the tool, so a request the handler refuses fails closed here.
@@ -58,23 +57,22 @@ impl BrokerClient {
     /// # Errors
     ///
     /// Returns [`BrokerClientError::Rejected`] when the broker's handler
-    /// refused the request or the tool ran and failed,
+    /// refused the request or failed to launch the tool,
     /// [`BrokerClientError::Transport`] when the round-trip did not complete,
     /// and [`BrokerClientError::ProtocolViolation`] when the response broke
     /// the wire contract. All errors are fail-closed: the tool produced no
     /// usable output.
-    pub async fn run(&self, bin: &str, args: &[&str]) -> Result<Vec<u8>, BrokerClientError> {
+    pub async fn run(&self, bin: &str, args: &[&str]) -> Result<BrokerOutput, BrokerClientError> {
         let request = BrokerRequest {
             bin: BinaryName::new(bin)?,
             args: args.iter().map(Str::from).collect(),
         };
-        self.request(&request, |response| match response {
-            BrokerResponse::Ok { stdout } => base64::engine::general_purpose::STANDARD
-                .decode(&*stdout)
-                .map_err(|error| {
-                    BrokerClientError::ProtocolViolation(ProtocolViolation::Base64(error))
-                }),
-            BrokerResponse::Err { error } => Err(BrokerClientError::Rejected(error.to_string())),
+        self.request(&request, |response| match response.decode() {
+            Ok(DecodedBrokerResponse::Executed(output)) => Ok(output),
+            Ok(DecodedBrokerResponse::Rejected(error)) => Err(BrokerClientError::Rejected(error)),
+            Err(error) => Err(BrokerClientError::ProtocolViolation(
+                ProtocolViolation::Output(error),
+            )),
         })
         .await
     }

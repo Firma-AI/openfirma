@@ -12,8 +12,8 @@
 //!
 //! ```text
 //! shim  →  {"bin":"bws","args":["secret","get","abc"]}\n
-//! broker → {"type":"ok","stdout":"<base64>"}\n     (on success)
-//! broker → {"type":"err","error":"<reason>"}\n     (on failure — shim exits non-zero)
+//! broker → {"type":"executed","stdout":"<base64>","stderr":"<base64>","status":{"type":"exited","code":0}}\n
+//! broker → {"type":"rejected","error":"<reason>"}\n
 //! ```
 //!
 //! Layout mirrors the secret gateway's: shared wire types live here,
@@ -124,54 +124,137 @@ pub struct BrokerRequest<'a> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrokerResponse<'a> {
-    Ok {
+    /// The real tool ran. Its complete observable process result follows.
+    Executed {
         /// Base64-encoded stdout bytes from the real tool.
         #[serde(borrow)]
         stdout: Str<'a>,
+        /// Base64-encoded stderr bytes from the real tool.
+        #[serde(borrow)]
+        stderr: Str<'a>,
+        /// How the real tool terminated.
+        status: BrokerExitStatus,
     },
-    Err {
+    /// The broker refused or failed to launch the real tool.
+    Rejected {
         #[serde(borrow)]
         error: Str<'a>,
     },
 }
 
 impl BrokerResponse<'_> {
-    /// Build a success response from raw stdout bytes.
+    /// Build an execution response from raw process output and status.
     ///
-    /// The whole payload is base64-encoded into memory here, so handlers must
-    /// cap tool stdout capture: an unbounded payload would exhaust broker
+    /// Both output streams are base64-encoded into memory here, so handlers
+    /// must cap process output capture: an unbounded payload would exhaust broker
     /// memory before the listener's response-size check (see
     /// [`server::config::BrokerListenerConfig::max_buffer_size`]) can
     /// reject it.
     #[must_use]
-    pub fn ok(stdout: &[u8]) -> Self {
-        Self::Ok {
+    pub fn executed(stdout: &[u8], stderr: &[u8], status: BrokerExitStatus) -> Self {
+        Self::Executed {
             stdout: Str::from(base64::engine::general_purpose::STANDARD.encode(stdout)),
+            stderr: Str::from(base64::engine::general_purpose::STANDARD.encode(stderr)),
+            status,
         }
     }
 
-    /// Build an error response.
+    /// Build a rejection response.
     #[must_use]
-    pub fn err<'a>(reason: impl Into<Str<'a>>) -> BrokerResponse<'a> {
-        BrokerResponse::Err {
+    pub fn rejected<'a>(reason: impl Into<Str<'a>>) -> BrokerResponse<'a> {
+        BrokerResponse::Rejected {
             error: reason.into(),
         }
     }
 
-    /// Decode the stdout bytes from a success response.
+    /// Decode an execution response's output streams.
     ///
     /// # Errors
     ///
-    /// Returns an error if the payload is an error response or the base64 is
-    /// malformed.
-    pub fn into_stdout(self) -> Result<Vec<u8>, String> {
+    /// Returns [`BrokerResponseDecodeError`] if either output stream is not
+    /// valid base64.
+    pub fn decode(self) -> Result<DecodedBrokerResponse, BrokerResponseDecodeError> {
         match self {
-            Self::Ok { stdout } => base64::engine::general_purpose::STANDARD
-                .decode(&*stdout)
-                .map_err(|e| format!("broker response base64 decode failed: {e}")),
-            Self::Err { error } => Err(error.to_string()),
+            Self::Executed {
+                stdout,
+                stderr,
+                status,
+            } => {
+                let stdout = base64::engine::general_purpose::STANDARD
+                    .decode(&*stdout)
+                    .map_err(BrokerResponseDecodeError::Stdout)?;
+                let stderr = base64::engine::general_purpose::STANDARD
+                    .decode(&*stderr)
+                    .map_err(BrokerResponseDecodeError::Stderr)?;
+                Ok(DecodedBrokerResponse::Executed(BrokerOutput {
+                    stdout,
+                    stderr,
+                    status,
+                }))
+            }
+            Self::Rejected { error } => Ok(DecodedBrokerResponse::Rejected(error.to_string())),
         }
     }
+}
+
+/// A platform-neutral process termination status returned by the broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BrokerExitStatus {
+    /// The process exited normally with `code`.
+    Exited { code: i32 },
+    /// The process was terminated by a Unix signal.
+    Signaled { signal: i32 },
+    /// The platform reported neither an exit code nor a Unix signal.
+    Unknown,
+}
+
+impl From<std::process::ExitStatus> for BrokerExitStatus {
+    fn from(status: std::process::ExitStatus) -> Self {
+        if let Some(code) = status.code() {
+            return Self::Exited { code };
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt as _;
+
+            if let Some(signal) = status.signal() {
+                return Self::Signaled { signal };
+            }
+        }
+        Self::Unknown
+    }
+}
+
+/// Raw output and termination status from a broker-executed tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokerOutput {
+    /// Raw stdout bytes from the real tool.
+    pub stdout: Vec<u8>,
+    /// Raw stderr bytes from the real tool.
+    pub stderr: Vec<u8>,
+    /// How the real tool terminated.
+    pub status: BrokerExitStatus,
+}
+
+/// A decoded broker response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodedBrokerResponse {
+    /// The real tool ran and produced this observable result.
+    Executed(BrokerOutput),
+    /// The broker refused or failed to launch the real tool.
+    Rejected(String),
+}
+
+/// Invalid base64 in a broker execution response.
+#[derive(Debug, thiserror::Error)]
+pub enum BrokerResponseDecodeError {
+    /// The response's stdout field is not valid base64.
+    #[error("broker returned invalid base64 stdout: {0}")]
+    Stdout(#[source] base64::DecodeError),
+    /// The response's stderr field is not valid base64.
+    #[error("broker returned invalid base64 stderr: {0}")]
+    Stderr(#[source] base64::DecodeError),
 }
 
 /// Read one newline-terminated line from `stream` with `max_bytes` as the
