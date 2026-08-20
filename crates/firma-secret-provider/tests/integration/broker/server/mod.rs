@@ -102,6 +102,18 @@ async fn connect_and_send_raw(endpoint: &ServerEndpoint, raw: &[u8]) -> anyhow::
     Ok(line)
 }
 
+async fn connect(endpoint: &ServerEndpoint) -> anyhow::Result<BrokerStream> {
+    match endpoint.as_inner() {
+        EndpointInner::Tcp(addr) => Ok(BrokerStream::Tcp {
+            stream: tokio::net::TcpStream::connect(addr).await?,
+        }),
+        #[cfg(unix)]
+        EndpointInner::Unix(path) => Ok(BrokerStream::Unix {
+            stream: tokio::net::UnixStream::connect(path).await?,
+        }),
+    }
+}
+
 #[tokio::test]
 async fn roundtrip_ok_response() {
     let BoundBroker {
@@ -134,6 +146,62 @@ async fn roundtrip_ok_response() {
         decode_output(response).expect("executed").stdout,
         b"secret-value"
     );
+}
+
+#[tokio::test]
+async fn io_timeout_does_not_cancel_handler() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig {
+        io_timeout: std::time::Duration::from_millis(50),
+        ..BrokerListenerConfig::default()
+    })
+    .await
+    .expect("bind");
+    let request = BrokerRequest {
+        bin: BinaryName::new("bws").expect("valid binary name"),
+        args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
+    };
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |_req| {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                executed_response(b"secret-value")
+            })
+            .await
+            .expect("handler may outlive I/O timeout");
+    });
+    let line = connect_and_send(&endpoint, &request)
+        .await
+        .expect("connect_and_send");
+    server.await.expect("server task");
+    let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
+    assert_eq!(
+        decode_output(response).expect("executed").stdout,
+        b"secret-value"
+    );
+}
+
+#[tokio::test]
+async fn io_timeout_still_bounds_stalled_request_read() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerListenerConfig {
+        io_timeout: std::time::Duration::from_millis(50),
+        ..BrokerListenerConfig::default()
+    })
+    .await
+    .expect("bind");
+    let _stalled_connection = connect(&endpoint).await.expect("connect");
+    let error = listener
+        .accept_one(async |_req| panic!("stalled request must not reach handler"))
+        .await
+        .expect_err("stalled request must time out");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
 }
 
 #[tokio::test]

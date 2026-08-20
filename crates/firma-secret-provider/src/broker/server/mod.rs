@@ -17,11 +17,10 @@
 //! time — new connections queue in the kernel backlog and their shims can
 //! time out while a slow tool holds the broker. Callers that want tools to
 //! run concurrently should spawn a task per `accept_one` (each call takes
-//! `&self`, so concurrent accepts are safe). Note that
-//! [`config::BrokerListenerConfig::operation_timeout`] cancels the handler
-//! mid-run when it fires: a handler that spawns a child process must ensure
-//! the child is killed on cancellation, or the tool keeps running out of the
-//! sandbox after the shim has already failed closed.
+//! `&self`, so concurrent accepts are safe). The listener only times out socket
+//! I/O. A handler that spawns a child process must own its execution deadline,
+//! termination, and reaping; cancelling an arbitrary handler future here could
+//! leave its child running after the shim has failed closed.
 
 use std::io;
 
@@ -115,9 +114,10 @@ impl BrokerListener {
     /// Accept one shim connection, invoke `handler(request)`, and write the
     /// response back.
     ///
-    /// The whole read-then-run-then-write exchange is bounded by
-    /// [`config::BrokerListenerConfig::operation_timeout`], and on Unix the connecting
-    /// shim's credentials are validated before the request is read. A rejected
+    /// Each socket I/O operation is bounded by
+    /// [`config::BrokerListenerConfig::io_timeout`], and on Unix the connecting
+    /// shim's credentials are validated before the request is read. Handler
+    /// execution is not cancelled by this transport timeout. A rejected
     /// connection receives an error response.
     ///
     /// # Errors
@@ -143,9 +143,11 @@ impl BrokerListener {
                         "peer credential validation failed: {error}"
                     ));
                     let mut stream = BrokerStream::Unix { stream };
-                    let _ = timeout(
-                        self.config.operation_timeout,
-                        write_response(&mut stream, &response, self.config.max_response_size()),
+                    let _ = write_response(
+                        &mut stream,
+                        &response,
+                        self.config.max_response_size(),
+                        self.config.io_timeout,
                     )
                     .await;
                     return Err(error);
@@ -153,25 +155,14 @@ impl BrokerListener {
                 BrokerStream::Unix { stream }
             }
         };
-        // The whole read-then-run-then-write exchange is bounded by
-        // `operation_timeout`, so a shim that stalls mid-exchange cannot hold
-        // the connection indefinitely.
-        timeout(
-            self.config.operation_timeout,
-            handle_connection(
-                &mut stream,
-                self.config.max_request_size(),
-                self.config.max_response_size(),
-                handler,
-            ),
+        handle_connection(
+            &mut stream,
+            self.config.max_request_size(),
+            self.config.max_response_size(),
+            self.config.io_timeout,
+            handler,
         )
         .await
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                "broker connection exceeded operation timeout",
-            )
-        })?
     }
 }
 
@@ -205,6 +196,7 @@ async fn handle_connection<F>(
     stream: &mut BrokerStream,
     max_request_size: usize,
     max_response_size: usize,
+    io_timeout: std::time::Duration,
     handler: F,
 ) -> io::Result<()>
 where
@@ -217,19 +209,27 @@ where
     // content. The size check runs on the raw bytes before UTF-8 decoding so
     // an over-limit line that truncates mid-character still receives the
     // "request too large" response instead of a silent close.
-    let line = read_bounded_line(stream, max_request_size as u64).await?;
+    let line = timeout(
+        io_timeout,
+        read_bounded_line(stream, max_request_size as u64),
+    )
+    .await
+    .map_err(|_| io_timed_out("reading broker request"))??;
     if line.len() > max_request_size {
         write_response(
             stream,
             &BrokerResponse::rejected("request too large"),
             max_response_size,
+            io_timeout,
         )
         .await?;
         // The request line was capped, so the rest of an over-limit request is
         // still in flight. Drain it before closing so the TCP close delivers a
         // FIN, not an RST that can discard the error response the client has
         // not read yet (see [`drain_remaining`]).
-        return drain_remaining(stream).await;
+        return timeout(io_timeout, drain_remaining(stream))
+            .await
+            .map_err(|_| io_timed_out("draining oversized broker request"))?;
     }
     let line = String::from_utf8(line)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "broker request is not UTF-8"))?;
@@ -239,6 +239,7 @@ where
             stream,
             &BrokerResponse::rejected("empty broker request"),
             max_response_size,
+            io_timeout,
         )
         .await;
     }
@@ -246,7 +247,7 @@ where
         Ok(request) => handler(request).await,
         Err(e) => BrokerResponse::rejected(format!("malformed broker request: {e}")),
     };
-    write_response(stream, &response, max_response_size).await
+    write_response(stream, &response, max_response_size, io_timeout).await
 }
 
 /// Serialize `response` into a newline-terminated wire line, or return `None`
@@ -273,6 +274,20 @@ async fn write_response(
     stream: &mut BrokerStream,
     response: &BrokerResponse<'_>,
     max_response_bytes: usize,
+    io_timeout: std::time::Duration,
+) -> io::Result<()> {
+    timeout(
+        io_timeout,
+        write_response_inner(stream, response, max_response_bytes),
+    )
+    .await
+    .map_err(|_| io_timed_out("writing broker response"))?
+}
+
+async fn write_response_inner(
+    stream: &mut BrokerStream,
+    response: &BrokerResponse<'_>,
+    max_response_bytes: usize,
 ) -> io::Result<()> {
     let Some(payload) = serialize_response(response, max_response_bytes)? else {
         // The handler's response (or its error reason) exceeded the cap.
@@ -291,6 +306,10 @@ async fn write_response(
         return write_all(stream, &payload).await;
     };
     write_all(stream, &payload).await
+}
+
+fn io_timed_out(operation: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, format!("timed out {operation}"))
 }
 
 /// Make a freshly-bound Unix socket owner-only.

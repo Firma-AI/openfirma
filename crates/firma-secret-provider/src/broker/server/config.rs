@@ -7,13 +7,16 @@ use serde::Deserialize;
 /// firma-run's `firma.toml`.
 #[derive(Debug, Copy, Clone, Deserialize)]
 pub struct BrokerListenerConfig {
-    /// Deadline for reading one request line and writing the response on an
-    /// accepted connection.
+    /// Deadline for each read, write, or drain operation on an accepted
+    /// connection.
+    ///
+    /// This does not bound handler execution. A handler that launches a
+    /// subprocess must own its execution deadline, termination, and reaping.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_operation_timeout"
+        default = "default_io_timeout"
     )]
-    pub operation_timeout: Duration,
+    pub io_timeout: Duration,
     /// Cap on the inbound request line size.
     #[serde(default = "default_max_request_size")]
     pub max_request_size: ByteSize,
@@ -42,14 +45,14 @@ impl BrokerListenerConfig {
 impl Default for BrokerListenerConfig {
     fn default() -> Self {
         Self {
-            operation_timeout: default_operation_timeout(),
+            io_timeout: default_io_timeout(),
             max_request_size: default_max_request_size(),
             max_response_size: default_max_response_size(),
         }
     }
 }
 
-fn default_operation_timeout() -> Duration {
+fn default_io_timeout() -> Duration {
     Duration::from_secs(5)
 }
 
