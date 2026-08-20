@@ -176,12 +176,12 @@ impl CapabilityReloader {
     ///
     /// Returns an error when the OS file watcher cannot be created or registered.
     pub fn spawn(
+        runtime_layout: &firma_runtime_state::RuntimeLayout,
         config: &config::CapabilitySeedConfig,
         token_verifier: Arc<dyn TokenVerifier + Send + Sync>,
         capability_handle: CapabilityMapHandle,
         cancel: CancellationToken,
     ) -> anyhow::Result<Self> {
-        let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)?;
         let capabilities_dir = runtime_layout.capabilities_dir();
         let seed_config = config.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
