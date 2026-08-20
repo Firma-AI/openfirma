@@ -81,6 +81,7 @@
 //! remain in `firma-stack`, which wraps these generic entry points.
 
 pub mod error;
+mod process_id;
 pub mod shutdown_event;
 pub mod start;
 pub mod status;

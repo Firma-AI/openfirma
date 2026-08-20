@@ -92,10 +92,10 @@ fn build_session_state_store(
             )))
         }
         SessionStateBackend::Persistent => {
-            let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
+            let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)?;
             let path = match &ce.session_state_path {
                 Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
-                _ => crate::enforcement::PersistentSessionStateStore::default_path(&runtime_dir),
+                _ => runtime_layout.session_state(),
             };
             tracing::debug!(capacity, ?path, "session-state backend: persistent");
             let store = crate::enforcement::PersistentSessionStateStore::open(&path, capacity)
@@ -232,8 +232,8 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     tracing::debug!("Stage 1 using configured capability seed and authority public key");
     let token_verifier: Arc<dyn TokenVerifier + Send + Sync> =
         build_token_verifier(config.authority.public_key_path.as_deref())?.into();
-    let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
-    let capabilities_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(&runtime_dir);
+    let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)?;
+    let capabilities_dir = runtime_layout.capabilities_dir();
     let capability_map = load_capability_map(
         &config.capability_seed,
         token_verifier.as_ref(),

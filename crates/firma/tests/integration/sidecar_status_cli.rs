@@ -40,6 +40,50 @@ fn json_mode_emits_array() {
 }
 
 #[test]
+fn status_explicitly_removes_stale_markers_before_listing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sandbox_id = "sbx_01j0000000e008000000000001";
+    let marker_dir = tmp.path().join("run").join(sandbox_id);
+    std::fs::create_dir_all(&marker_dir).expect("create marker directory");
+
+    #[cfg(unix)]
+    let mut child = Command::new("true")
+        .spawn()
+        .expect("spawn short-lived child");
+    #[cfg(windows)]
+    let mut child = Command::new("cmd")
+        .args(["/C", "exit"])
+        .spawn()
+        .expect("spawn short-lived child");
+    let pid = child.id();
+    child.wait().expect("reap short-lived child");
+
+    std::fs::write(
+        marker_dir.join("metadata.toml"),
+        format!(
+            "sandbox_id = \"{sandbox_id}\"\n\
+             agent_id = \"codex\"\n\
+             session_id = \"session\"\n\
+             authority_url = \"https://authority.local\"\n\
+             policy_bundle_version = \"deadbeef\"\n\
+             pid = {pid}\n\
+             started_at = \"2026-05-18T10:00:00Z\"\n"
+        ),
+    )
+    .expect("write stale marker");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["sidecar", "status", "--json"])
+        .env("FIRMA_STATE_DIR", tmp.path())
+        .output()
+        .expect("spawn firma");
+
+    assert!(out.status.success(), "status failed: {out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[]");
+    assert!(!marker_dir.exists(), "stale marker was not removed");
+}
+
+#[test]
 fn traversal_id_is_rejected_before_marker_access() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let outside = tmp.path().join("outside");

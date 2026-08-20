@@ -3,7 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
+use firma_runtime_state::RuntimeLayout;
 use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
@@ -233,7 +233,6 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             },
             &mut prompt,
         )?;
-
         let network_runtime = prepare_network_runtime(
             handle_ref,
             &proof,
@@ -330,7 +329,9 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             // Per-run marker dir under the persistent runtime root, alongside
             // `sidecar.log` / `authority.log`. The caller redirects its foreground
             // logs here while the agent's TUI owns the terminal.
-            let marker_dir = run_entry_from(&default_runtime_dir(), &identity.sandbox_id);
+            let runtime_layout = RuntimeLayout::resolve(None)
+                .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
+            let marker_dir = runtime_layout.run_entry(&identity.sandbox_id);
             if let Some(hook) = hooks.on_agent_launch {
                 hook(&marker_dir);
             }

@@ -1,4 +1,4 @@
-//! Resolution of firma runtime directories.
+//! Canonical resolution and layout of Firma runtime files.
 //!
 //! Linux uses `XDG_RUNTIME_DIR`. macOS and Windows have no XDG equivalent;
 //! the fallback path is `/tmp/firma-$UID` (Unix) or `%LOCALAPPDATA%\firma\runtime`
@@ -7,78 +7,151 @@
 use std::path::{Path, PathBuf};
 
 use firma_identifiers::SandboxId;
+use tracing::debug;
 
-/// Return `<runtime>/firma`. Pure resolver with no I/O. Reads
-/// `FIRMA_STATE_DIR` / `XDG_RUNTIME_DIR` / `LOCALAPPDATA` from the current
-/// process environment.
-#[must_use]
-pub fn default_runtime_dir() -> PathBuf {
-    let firma_state_dir = std::env::var("FIRMA_STATE_DIR").ok();
-    let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
-    let local = std::env::var("LOCALAPPDATA").ok();
-    let uid = current_uid();
-    default_runtime_dir_from(xdg, firma_state_dir, local, uid)
+use crate::error::Result;
+
+/// Canonical paths rooted at one resolved Firma runtime directory.
+///
+/// Construct this value once at a process boundary and pass it to code that
+/// reads or publishes runtime files. This prevents separate operations from
+/// resolving environment variables differently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeLayout {
+    root: PathBuf,
 }
 
-/// Compute the runtime dir from explicit inputs. Exposed for tests and
-/// internal callers that need to inject environment overrides.
-#[doc(hidden)]
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::needless_pass_by_value,
-        reason = "the pure helper takes owned env overrides so tests and callers can pass them through directly"
-    )
-)]
-#[must_use]
-pub fn default_runtime_dir_from(
-    xdg_runtime_dir: Option<String>,
-    firma_state_dir: Option<String>,
-    local_app_data: Option<String>,
-    uid: u32,
-) -> PathBuf {
-    if let Some(env) = firma_state_dir.filter(|value| !value.is_empty()) {
-        return PathBuf::from(env);
+impl RuntimeLayout {
+    /// Resolve a runtime layout from an optional explicit root and the process
+    /// environment.
+    ///
+    /// Resolution order is the explicit root, `FIRMA_STATE_DIR`, and then the
+    /// platform runtime-directory convention.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on Windows when neither `LOCALAPPDATA` nor `TEMP` is set.
+    pub fn resolve(flag: Option<PathBuf>) -> Result<Self> {
+        let layout = Self::resolve_from(
+            flag,
+            std::env::var("FIRMA_STATE_DIR").ok(),
+            std::env::var("XDG_RUNTIME_DIR").ok(),
+            std::env::var("LOCALAPPDATA").ok(),
+            std::env::var("TEMP").ok(),
+            current_uid(),
+        )?;
+        debug!(path = %layout.root.display(), "resolved runtime layout");
+        Ok(layout)
     }
-    #[cfg(unix)]
-    {
-        let _ = local_app_data;
-        if let Some(xdg) = xdg_runtime_dir.filter(|value| !value.is_empty()) {
-            return PathBuf::from(xdg).join("firma");
+
+    /// Construct a layout from an already resolved runtime root.
+    #[must_use]
+    pub fn from_root(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// Resolve a layout from explicit environment inputs.
+    ///
+    /// This pure form is public to support environment-independent integration
+    /// tests and embedding processes that resolve their own environment.
+    #[doc(hidden)]
+    pub fn resolve_from(
+        flag: Option<PathBuf>,
+        firma_state_dir: Option<String>,
+        xdg_runtime_dir: Option<String>,
+        local_app_data: Option<String>,
+        temp: Option<String>,
+        uid: u32,
+    ) -> Result<Self> {
+        if let Some(root) = flag {
+            return Ok(Self::from_root(root));
         }
-        PathBuf::from(format!("/tmp/firma-{uid}"))
+        if let Some(root) = firma_state_dir.filter(|value| !value.is_empty()) {
+            return Ok(Self::from_root(root));
+        }
+
+        #[cfg(unix)]
+        {
+            let _ = (local_app_data, temp);
+            let root = xdg_runtime_dir
+                .filter(|value| !value.is_empty())
+                .map_or_else(
+                    || PathBuf::from(format!("/tmp/firma-{uid}")),
+                    |xdg| PathBuf::from(xdg).join("firma"),
+                );
+            Ok(Self::from_root(root))
+        }
+
+        #[cfg(windows)]
+        {
+            let _ = (xdg_runtime_dir, uid);
+            if let Some(local) = local_app_data.filter(|value| !value.is_empty()) {
+                return Ok(Self::from_root(
+                    PathBuf::from(local).join("firma").join("runtime"),
+                ));
+            }
+            if let Some(temp) = temp.filter(|value| !value.is_empty()) {
+                return Ok(Self::from_root(PathBuf::from(temp).join("firma")));
+            }
+            Err(crate::RuntimeStateError::StateDirResolve(
+                "neither LOCALAPPDATA nor TEMP is set".into(),
+            ))
+        }
     }
-    #[cfg(windows)]
-    {
-        let _ = (xdg_runtime_dir, uid);
-        local_app_data
-            .filter(|value| !value.is_empty())
-            .map_or_else(
-                || PathBuf::from(r"C:\Temp\firma"),
-                |path| PathBuf::from(path).join("firma").join("runtime"),
-            )
+
+    /// Return the resolved runtime root.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
-}
 
-/// `<runtime>/capabilities` — directory holding per-sandbox capability
-/// seed files written by `firma run`.
-#[must_use]
-pub fn capabilities_dir_from(runtime_dir: &Path) -> PathBuf {
-    runtime_dir.join("capabilities")
-}
+    /// Consume the layout and return its runtime root.
+    #[must_use]
+    pub fn into_root(self) -> PathBuf {
+        self.root
+    }
 
-/// `<runtime>/run` — directory that contains one subdirectory per
-/// autostarted per-run sidecar.
-#[must_use]
-pub fn run_dir_from(runtime_dir: &Path) -> PathBuf {
-    runtime_dir.join("run")
-}
+    /// Return `<runtime>/capabilities`.
+    #[must_use]
+    pub fn capabilities_dir(&self) -> PathBuf {
+        self.root.join("capabilities")
+    }
 
-/// `<runtime>/run/<sandbox_id>` — marker directory for a single
-/// per-run sidecar.
-#[must_use]
-pub fn run_entry_from(runtime_dir: &Path, sandbox_id: &SandboxId) -> PathBuf {
-    run_dir_from(runtime_dir).join(sandbox_id.to_string())
+    /// Return `<runtime>/capabilities/<sandbox_id>.toml`.
+    #[must_use]
+    pub fn capability_seed(&self, sandbox_id: &SandboxId) -> PathBuf {
+        self.capabilities_dir().join(format!("{sandbox_id}.toml"))
+    }
+
+    /// Return `<runtime>/run`.
+    #[must_use]
+    pub fn run_dir(&self) -> PathBuf {
+        self.root.join("run")
+    }
+
+    /// Return `<runtime>/run/<sandbox_id>`.
+    #[must_use]
+    pub fn run_entry(&self, sandbox_id: &SandboxId) -> PathBuf {
+        self.run_dir().join(sandbox_id.to_string())
+    }
+
+    /// Return the default shared audit log path.
+    #[must_use]
+    pub fn audit_log(&self) -> PathBuf {
+        self.root.join("audit.jsonl")
+    }
+
+    /// Return the default long-lived sidecar Unix socket path.
+    #[must_use]
+    pub fn sidecar_socket(&self) -> PathBuf {
+        self.root.join("sidecar.sock")
+    }
+
+    /// Return the default persistent enforcement session-state path.
+    #[must_use]
+    pub fn session_state(&self) -> PathBuf {
+        self.root.join("session-state.jsonl")
+    }
 }
 
 #[cfg(unix)]
@@ -89,13 +162,4 @@ fn current_uid() -> u32 {
 #[cfg(windows)]
 fn current_uid() -> u32 {
     0
-}
-
-/// `<runtime>/capabilities/<name>.toml` — the per-sandbox capability seed
-/// file written by `firma run`.
-#[must_use]
-pub fn capability_seed_path(sandbox_id: &SandboxId) -> PathBuf {
-    let runtime_dir = default_runtime_dir();
-    let cap_dir = capabilities_dir_from(&runtime_dir);
-    cap_dir.join(format!("{sandbox_id}.toml"))
 }

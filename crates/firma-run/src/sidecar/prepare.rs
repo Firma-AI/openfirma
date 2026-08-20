@@ -185,11 +185,9 @@ pub fn publish_metadata(
     endpoint: &SidecarEndpoint,
     pid: firma_runtime_state::UserProcessId,
 ) -> Result<(), RunError> {
-    firma_runtime_state::pidfile::write(&prepared.pid_path, pid)
-        .map_err(|error| RunError::Internal(format!("write sidecar.pid: {error}")))?;
-    crate::sidecar::metadata::write(
-        &prepared.metadata_path,
-        &crate::sidecar::metadata::Metadata {
+    firma_runtime_state::sidecar_markers::publish(
+        &prepared.marker_dir,
+        &firma_runtime_state::sidecar_markers::MetadataFile {
             sandbox_id: prepared.sandbox_id,
             agent_id: prepared.agent_id.to_string(),
             session_id: prepared.session_id.clone(),
@@ -200,6 +198,7 @@ pub fn publish_metadata(
             listen: endpoint_text(endpoint),
         },
     )
+    .map_err(|error| RunError::Internal(format!("publish sidecar marker: {error}")))
 }
 
 fn endpoint_text(endpoint: &SidecarEndpoint) -> String {

@@ -23,6 +23,7 @@ impl DemoRuntime {
 
 pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
     let state_dir = manifest.root.join(".runtime");
+    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(&state_dir);
     firma_fs::create_private_dir_all(&state_dir)?;
 
     provision_demo_assets(&state_dir)?;
@@ -37,7 +38,7 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
 
     Ok(DemoRuntime {
         stack,
-        audit_log_path: state_dir.join("audit.jsonl"),
+        audit_log_path: runtime_layout.audit_log(),
         authority_log_path: state_dir.join("authority.log"),
         sidecar_log_path: state_dir.join("sidecar.log"),
         ca_cert_path: state_dir.join("generated-firma-ca/firma-ca.crt"),

@@ -201,10 +201,10 @@ impl BwrapMountPlan {
         launch: &LaunchSpec,
         hardening: &BwrapHardening,
     ) -> Result<Self, RunError> {
-        let control_plane_runtime = resolve_path_allow_missing(
-            &firma_runtime_state::runtime_paths::default_runtime_dir(),
-            "control-plane runtime",
-        )?;
+        let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)
+            .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
+        let control_plane_runtime =
+            resolve_path_allow_missing(runtime_layout.root(), "control-plane runtime")?;
         let sandbox_runtime =
             handle
                 .runtime_dir

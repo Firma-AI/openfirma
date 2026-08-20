@@ -1,5 +1,6 @@
-//! Reader half of the per-run sidecar marker contract.
+//! Persistence and observation of per-run sidecar markers.
 
+use std::io::Write as _;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -7,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::process_id::UserProcessId;
-use crate::runtime_paths::{run_dir_from, run_entry_from};
+use crate::runtime_paths::RuntimeLayout;
 use firma_identifiers::SandboxId;
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
@@ -39,7 +40,7 @@ pub struct MetadataFile {
     pub listen: String,
 }
 
-/// One row of `firma sidecar status`. Serialized verbatim by `--json`.
+/// Observed state of one persisted per-run sidecar marker.
 #[derive(Debug, Clone, Serialize)]
 pub struct SidecarEntry {
     /// Sandbox identifier for this run.
@@ -62,6 +63,32 @@ pub struct SidecarEntry {
     pub listen: PathBuf,
     /// Seconds since `sidecar.pid` was written in the marker directory, used as a proxy for sidecar start time. `None` if the file is absent or its mtime is in the future.
     pub uptime_secs: Option<u64>,
+}
+
+/// Atomically publish a sidecar's PID and metadata in `marker_dir`.
+///
+/// The PID file is written first and `metadata.toml` acts as the publication
+/// point. Readers therefore never observe metadata before its associated PID
+/// file exists. Both files are flushed and renamed from temporary files in the
+/// marker directory.
+///
+/// # Errors
+///
+/// Returns serialization or filesystem errors. A failure may leave a PID file
+/// without metadata, which readers treat as an incomplete marker.
+pub fn publish(marker_dir: &Path, metadata: &MetadataFile) -> crate::error::Result<()> {
+    std::fs::create_dir_all(marker_dir)?;
+    crate::pidfile::write(&marker_dir.join("sidecar.pid"), metadata.pid)?;
+
+    let text = toml::to_string_pretty(metadata)?;
+    let mut temp = tempfile::NamedTempFile::new_in(marker_dir)?;
+    temp.write_all(text.as_bytes())?;
+    temp.as_file().sync_all()?;
+    temp.persist(marker_dir.join("metadata.toml"))
+        .map_err(|error| error.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(marker_dir)?.sync_all()?;
+    Ok(())
 }
 
 /// UDS reachability: a successful `connect` means the sidecar is
@@ -100,7 +127,7 @@ fn marker_uptime_secs(marker_dir: &Path) -> Option<u64> {
 /// stale: we never delete a directory we cannot understand, since it may belong
 /// to a live sidecar (deleting it would orphan its socket).
 fn is_stale(marker_dir: &Path) -> bool {
-    match read_metadata(marker_dir) {
+    match read(marker_dir) {
         Ok(meta) => matches!(meta.pid.process_exists(), Ok(false)),
         Err(_) => false,
     }
@@ -116,7 +143,7 @@ fn is_stale(marker_dir: &Path) -> bool {
 pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
     use crate::error::RuntimeStateError;
 
-    let run_dir = run_dir_from(runtime_dir);
+    let run_dir = RuntimeLayout::from_root(runtime_dir).run_dir();
     let read = match std::fs::read_dir(&run_dir) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -138,13 +165,15 @@ pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
     Ok(removed)
 }
 
-/// List all live per-run sidecars under `<runtime>/run`, GC'ing stale
-/// marker dirs as a side effect. Sorted by `sandbox_id`.
+/// List all readable per-run sidecars under `<runtime>/run`, sorted by
+/// `sandbox_id`.
 ///
 /// Corrupt or transiently-missing markers (race away between readdir and
 /// open, or with an unparseable `metadata.toml`) are skipped so that one
 /// bad marker does not break the full listing. Use [`get`] when you need
-/// an error surfaced for a specific sandbox id.
+/// an error surfaced for a specific sandbox id. This operation is
+/// observational; callers that want to delete stale markers must invoke
+/// [`gc_stale`] explicitly.
 ///
 /// # Errors
 ///
@@ -153,8 +182,7 @@ pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
 pub fn list(runtime_dir: &Path) -> crate::error::Result<Vec<SidecarEntry>> {
     use crate::error::RuntimeStateError;
 
-    gc_stale(runtime_dir)?;
-    let run_dir = run_dir_from(runtime_dir);
+    let run_dir = RuntimeLayout::from_root(runtime_dir).run_dir();
     let read = match std::fs::read_dir(&run_dir) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -192,7 +220,7 @@ pub fn get(
     runtime_dir: &Path,
     sandbox_id: &SandboxId,
 ) -> crate::error::Result<Option<SidecarEntry>> {
-    let marker_dir = run_entry_from(runtime_dir, sandbox_id);
+    let marker_dir = RuntimeLayout::from_root(runtime_dir).run_entry(sandbox_id);
     if !marker_dir.is_dir() {
         return Ok(None);
     }
@@ -214,7 +242,7 @@ pub fn get(
 pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     use crate::status::State;
 
-    let meta = read_metadata(marker_dir)?;
+    let meta = read(marker_dir)?;
 
     // Legacy markers (pre-FIR-195) record no `listen`; fall back to the
     // conventional UDS path so their probe behavior is unchanged.
@@ -223,13 +251,11 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     } else {
         PathBuf::from(&meta.listen)
     };
-    let process_exists = meta.pid.process_exists()?;
-    let state = if !process_exists {
-        State::Stopped
-    } else if endpoint_responds(&meta.listen, &listen) {
-        State::Running
-    } else {
-        State::Unhealthy
+    let state = match meta.pid.process_exists() {
+        Ok(false) => State::Stopped,
+        Ok(true) if endpoint_responds(&meta.listen, &listen) => State::Running,
+        Ok(true) => State::Unhealthy,
+        Err(_) => State::Unknown,
     };
 
     Ok(SidecarEntry {
@@ -246,7 +272,13 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     })
 }
 
-fn read_metadata(marker_dir: &Path) -> crate::error::Result<MetadataFile> {
+/// Read and validate `metadata.toml` from one marker directory.
+///
+/// # Errors
+///
+/// Returns an I/O or parse error, or an identity-mismatch error when the
+/// metadata's sandbox ID differs from the marker directory name.
+pub fn read(marker_dir: &Path) -> crate::error::Result<MetadataFile> {
     use crate::error::RuntimeStateError;
 
     let meta_path = marker_dir.join("metadata.toml");

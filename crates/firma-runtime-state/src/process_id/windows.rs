@@ -1,4 +1,4 @@
-use super::{SignalProcessError, UserProcessId};
+use super::UserProcessId;
 
 pub(super) fn in_range_for_platform(_raw: u32) -> bool {
     // All `u32` are (potentially) valid process ids on Windows.
@@ -43,19 +43,5 @@ impl UserProcessId {
             return Err(error);
         }
         Ok(code == STILL_ACTIVE as u32)
-    }
-
-    /// Send a graceful termination signal to this process ID.
-    ///
-    /// This currently does nothing on non-Unix platforms; Windows process
-    /// shutdown uses higher-level named events in `firma-stack`.
-    ///
-    /// # Errors
-    ///
-    /// This method currently always succeeds on Windows.
-    #[must_use]
-    pub fn send_sigterm_signal(self) -> Result<(), SignalProcessError> {
-        let _ = self;
-        Ok(())
     }
 }

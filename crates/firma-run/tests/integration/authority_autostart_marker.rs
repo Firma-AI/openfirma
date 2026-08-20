@@ -113,10 +113,9 @@ fn local_authority_publishes_effective_component_handle_and_metadata() {
     )
     .expect("prepare run with owned Authority");
 
-    let marker = firma_runtime_state::runtime_paths::run_entry_from(
-        &firma_runtime_state::runtime_paths::default_runtime_dir(),
-        &identity.sandbox_id,
-    );
+    let marker = firma_runtime_state::RuntimeLayout::resolve(None)
+        .expect("resolve runtime layout")
+        .run_entry(&identity.sandbox_id);
     let authority_marker = marker.join("authority");
     let config =
         std::fs::read_to_string(authority_marker.join("authority.toml")).expect("Authority config");
@@ -313,10 +312,9 @@ fn prepare_failing_runtime(
         grace_seconds: 30,
         requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     };
-    let marker = firma_runtime_state::runtime_paths::run_entry_from(
-        &firma_runtime_state::runtime_paths::default_runtime_dir(),
-        &identity.sandbox_id,
-    );
+    let marker = firma_runtime_state::RuntimeLayout::resolve(None)
+        .expect("resolve runtime layout")
+        .run_entry(&identity.sandbox_id);
     let result = prepare_network_runtime(
         &handle,
         &proof,

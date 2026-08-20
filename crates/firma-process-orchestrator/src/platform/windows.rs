@@ -35,9 +35,9 @@ use windows_sys::Win32::System::Threading::{
 use crate::collect::{collect_child_in_background, collect_child_until};
 use crate::error::OrchestratorError;
 use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
+use crate::process_id::ChildExt as _;
 use crate::shutdown_event::windows_shutdown_event_name;
 use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
-use firma_runtime_state::ChildExt as _;
 
 /// Windows implementation of the process-authority [`Platform`] contract.
 ///

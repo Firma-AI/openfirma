@@ -45,6 +45,7 @@ use crate::component::{
 use crate::detach::spawn_supervisor;
 use crate::error::{OrchestratorError, ShutdownError, StartError};
 use crate::platform::{Platform, SystemPlatform, TerminationTarget};
+use crate::process_id::ChildExt as _;
 use crate::readiness::{wait_for_child_published, wait_for_endpoint};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
@@ -285,8 +286,7 @@ impl Drop for DetachedLaunchGuard<'_> {
         let Some(mut supervisor) = self.supervisor.take() else {
             return;
         };
-        let target =
-            TerminationTarget::for_leader(firma_runtime_state::ChildExt::process_id(&supervisor));
+        let target = TerminationTarget::for_leader(supervisor.process_id());
         let _ = target.signal_hard();
         let _ = supervisor.kill();
         if let Err(error) = collect_child_in_background(supervisor) {
@@ -1084,8 +1084,7 @@ fn rollback_detached_start(
 fn terminate_detached_supervisor(
     mut supervisor: std::process::Child,
 ) -> Result<(), OrchestratorError> {
-    let target =
-        TerminationTarget::for_leader(firma_runtime_state::ChildExt::process_id(&supervisor));
+    let target = TerminationTarget::for_leader(supervisor.process_id());
     let _ = target.signal_hard();
     let _ = supervisor.kill();
     if collect_child_until(&mut supervisor, Instant::now() + CHILD_COLLECTION_TIMEOUT) {

@@ -3,10 +3,8 @@
 use std::fmt;
 use std::num::NonZeroU32;
 
-pub use child_ext::ChildExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-mod child_ext;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -91,17 +89,3 @@ impl fmt::Display for UserProcessId {
 #[error("process id must be non-zero and fit the platform process id type")]
 #[non_exhaustive]
 pub struct UserProcessIdError;
-
-/// Error returned when signaling a process ID fails.
-#[derive(Debug, thiserror::Error)]
-pub enum SignalProcessError {
-    /// The operating system rejected the signal operation.
-    #[cfg(unix)]
-    #[error("SIGTERM to process id {pid} failed: {source}")]
-    Signal {
-        /// Process ID targeted by the signal.
-        pid: UserProcessId,
-        /// OS error returned by `kill`.
-        source: nix::errno::Errno,
-    },
-}

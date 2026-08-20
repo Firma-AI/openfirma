@@ -5,14 +5,13 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
-description = "Runtime state contracts and local liveness primitives shared by OpenFirma crates"
+description = "Runtime filesystem layout, persistence contracts, and liveness observations for OpenFirma"
 
 [lints]
 workspace = true
 
 [dependencies]
 firma-identifiers = { workspace = true }
-insta = { workspace = true }
 serde = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -26,4 +25,5 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 serde_json = { workspace = true }

@@ -11,7 +11,7 @@ use nix::unistd::Pid;
 
 use crate::error::OrchestratorError;
 use crate::platform::{Group, Platform, SpawnedChild, TerminationTarget};
-use firma_runtime_state::ChildExt as _;
+use crate::process_id::ChildExt as _;
 
 pub struct UnixPlatform;
 
