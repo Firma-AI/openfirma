@@ -9,16 +9,14 @@ use firma_secret_provider::{
         BrokerResponseDecodeError, DecodedBrokerResponse,
         client::{
             BrokerClient,
-            config::BrokerClientConfig,
             error::{BrokerClientError, OutcomeUnknownError, ProtocolViolation},
         },
-        server::{BrokerListener, config::BrokerListenerConfig},
+        config::BrokerConfig,
+        server::BrokerListener,
     },
     endpoint::{client::ClientEndpoint, server::ServerEndpoint},
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-
-mod config;
 
 struct BoundBroker {
     listener: BrokerListener,
@@ -63,7 +61,7 @@ async fn bind_broker() -> anyhow::Result<BoundBroker> {
     tokio::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).await?;
     let path = dir.path().join("broker.sock");
     let endpoint = ServerEndpoint::from_str(&format!("unix://{}", path.display()))?;
-    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default()).await?;
+    let listener = BrokerListener::bind(&endpoint, BrokerConfig::default()).await?;
     Ok(BoundBroker {
         listener,
         _dir: dir,
@@ -75,7 +73,7 @@ async fn bind_broker() -> anyhow::Result<BoundBroker> {
 #[cfg(not(unix))]
 async fn bind_broker() -> anyhow::Result<BoundBroker> {
     let endpoint = ServerEndpoint::from_str("tcp://127.0.0.1:0")?;
-    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default()).await?;
+    let listener = BrokerListener::bind(&endpoint, BrokerConfig::default()).await?;
     let EndpointInner::Tcp(addr) = listener.bound_endpoint()?;
     Ok(BoundBroker {
         listener,
@@ -102,7 +100,7 @@ async fn run_returns_decoded_stdout() {
         _dir,
     } = bind_broker().await.expect("bind");
     serve_ok(listener, b"secret-value".to_vec());
-    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let client = BrokerClient::new(endpoint, BrokerConfig::default());
     let output = client
         .run("bws", &["secret", "get", "abc"])
         .await
@@ -127,7 +125,7 @@ async fn run_propagates_broker_rejection() {
             .await
             .expect("accept_one");
     });
-    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let client = BrokerClient::new(endpoint, BrokerConfig::default());
     let error = client
         .run("bws", &["secret", "get", "x"])
         .await
@@ -143,9 +141,9 @@ async fn request_fails_closed_when_response_exceeds_buffer() {
         _dir,
     } = bind_broker().await.expect("bind");
     serve_ok(listener, vec![b'x'; 256]);
-    let config = BrokerClientConfig {
+    let config = BrokerConfig {
         max_response_size: bytesize::ByteSize::b(64),
-        ..BrokerClientConfig::default()
+        ..BrokerConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
     let error = client
@@ -178,9 +176,9 @@ async fn request_accepts_response_exactly_at_buffer_limit() {
     // the boundary exact.
     let stdout = vec![b'x'; 42];
     let response_payload = serde_json::to_vec(&executed_response(&stdout)).expect("serialize");
-    let config = BrokerClientConfig {
+    let config = BrokerConfig {
         max_response_size: bytesize::ByteSize::b(response_payload.len() as u64),
-        ..BrokerClientConfig::default()
+        ..BrokerConfig::default()
     };
     serve_ok(listener, stdout.clone());
     let client = BrokerClient::new(endpoint, config);
@@ -267,9 +265,9 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
     padded.push(b' ');
     padded.push(b'\n');
     let (endpoint, _guard) = bind_raw_responder(padded, false);
-    let config = BrokerClientConfig {
+    let config = BrokerConfig {
         max_response_size: bytesize::ByteSize::b(response_payload.len() as u64),
-        ..BrokerClientConfig::default()
+        ..BrokerConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
     let error = client
@@ -297,7 +295,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
 #[expect(clippy::expect_used, reason = "this is a test")]
 async fn raw_response_error(raw_response: &[u8]) -> BrokerClientError {
     let (endpoint, _guard) = bind_raw_responder(raw_response.to_vec(), false);
-    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let client = BrokerClient::new(endpoint, BrokerConfig::default());
     client
         .request(
             &BrokerRequest {
@@ -323,7 +321,7 @@ async fn request_rejects_invalid_base64_stdout() {
             .collect(),
         false,
     );
-    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let client = BrokerClient::new(endpoint, BrokerConfig::default());
     let error = client
         .run("bws", &["secret", "get", "abc"])
         .await
@@ -346,7 +344,7 @@ async fn request_rejects_invalid_base64_stderr() {
             .collect(),
         false,
     );
-    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let client = BrokerClient::new(endpoint, BrokerConfig::default());
     let error = client
         .run("bws", &["secret", "get", "abc"])
         .await
@@ -437,9 +435,9 @@ async fn request_fails_closed_when_request_exceeds_buffer() {
         endpoint,
         _dir,
     } = bind_broker().await.expect("bind");
-    let config = BrokerClientConfig {
+    let config = BrokerConfig {
         max_request_size: bytesize::ByteSize::b(16),
-        ..BrokerClientConfig::default()
+        ..BrokerConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
     let error = client
@@ -464,9 +462,9 @@ async fn request_fails_closed_when_operation_times_out() {
         endpoint,
         _dir,
     } = bind_broker().await.expect("bind");
-    let config = BrokerClientConfig {
+    let config = BrokerConfig {
         operation_timeout: std::time::Duration::from_millis(100),
-        ..BrokerClientConfig::default()
+        ..BrokerConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
     let error = client
@@ -491,7 +489,7 @@ async fn request_fails_closed_when_operation_times_out() {
 #[tokio::test]
 async fn request_fails_fast_when_broker_is_unreachable() {
     let endpoint = ClientEndpoint::from_str("tcp://127.0.0.1:1").expect("valid addr");
-    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let client = BrokerClient::new(endpoint, BrokerConfig::default());
     let error = client
         .request(
             &BrokerRequest {

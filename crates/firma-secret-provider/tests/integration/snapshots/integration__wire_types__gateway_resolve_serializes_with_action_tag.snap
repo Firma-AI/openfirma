@@ -1,0 +1,5 @@
+---
+source: crates/firma-secret-provider/tests/integration/wire_types.rs
+expression: wire
+---
+{"action":"secret.resolve","placeholders":["[placeholder]"],"domain":"example.com"}

@@ -13,22 +13,30 @@ use firma_secret_provider::{
 #[test]
 fn gateway_resolve_serializes_with_action_tag() {
     let request = GatewayRequest::Resolve(ResolveRequest {
-        placeholders: vec![Str::from("fsp_placeholder")],
+        placeholders: vec![SecretPlaceholder::new()],
         domain: Authority::from_static("example.com"),
     });
     let wire = serde_json::to_string(&request).expect("serialize");
-    insta::assert_snapshot!(wire, @r#"{"action":"secret.resolve","placeholders":["fsp_placeholder"],"domain":"example.com"}"#);
+    insta::with_settings!({
+        filters => vec![(r"fsp_[0-9a-z]{26}", "[placeholder]")],
+    }, {
+        insta::assert_snapshot!("gateway_resolve_serializes_with_action_tag", wire);
+    });
 }
 
 #[test]
 fn gateway_push_serializes_with_action_tag() {
     let request = GatewayRequest::Push(PushRequest {
-        placeholder: Str::from("fsp_placeholder"),
+        placeholder: SecretPlaceholder::new(),
         value_b64: Str::from("aGVsbG8="),
         domain: HashSet::from([Authority::from_static("example.com")]),
     });
     let wire = serde_json::to_string(&request).expect("serialize");
-    insta::assert_snapshot!(wire, @r#"{"action":"secret.push","placeholder":"fsp_placeholder","value_b64":"aGVsbG8=","domain":["example.com"]}"#);
+    insta::with_settings!({
+        filters => vec![(r"fsp_[0-9a-z]{26}", "[placeholder]")],
+    }, {
+        insta::assert_snapshot!("gateway_push_serializes_with_action_tag", wire);
+    });
 }
 
 #[test]

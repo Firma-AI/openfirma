@@ -8,8 +8,8 @@
 //! forwarding. firma-run remains the single source of truth; the Sidecar never
 //! caches secrets persistently.
 //!
-//! The design mirrors `firma_run::secret::SecretStore` but lives in the Sidecar
-//! crate to avoid a circular dependency.
+//! The design mirrors [`firma_secret_provider::store::SecretStore`] but lives in the
+//! Sidecar crate to avoid a circular dependency.
 //!
 //! The two directions use different matching strategies. Rehydration scans
 //! for placeholder tokens, which are fixed-format and never need decoding, so

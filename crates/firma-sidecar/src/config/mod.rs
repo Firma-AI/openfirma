@@ -102,7 +102,7 @@ pub struct SidecarConfig {
     /// HTTP secret-provider registry for MITM interception.
     pub http_secret_providers: Vec<HttpIntegrationSpec<SecretMatcher>>,
     /// Tunable timeouts and limits for the secret-gateway client.
-    pub secret_gateway: GatewayClientConfig,
+    pub secret_gateway: GatewayConfig,
 }
 
 /// Error building or loading a validated [`SidecarConfig`].

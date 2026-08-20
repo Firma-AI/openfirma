@@ -5,9 +5,12 @@ use firma_http::Authority;
 use firma_secret_provider::{
     ExposeSecret, SecretPlaceholder,
     endpoint::{client::ClientEndpoint, error::EndpointParseError},
-    gateway::client::{
-        GatewayClient, GatewayClientConfig, ResolveError,
-        error::{GatewayClientError, ProtocolViolation, TransportError},
+    gateway::{
+        client::{
+            GatewayClient, ResolveError,
+            error::{GatewayClientError, ProtocolViolation, TransportError},
+        },
+        config::GatewayConfig,
     },
 };
 use secrecy::SecretString;
@@ -105,10 +108,10 @@ async fn resolve_batch_returns_empty_without_io_for_empty_placeholders() {
     // any connection is attempted.
     let client = GatewayClient::new(
         unreachable_endpoint().await.expect("unreachable endpoint"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
     let result = client
-        .resolve_batch(&[], Authority::from_static("example.com"))
+        .resolve_batch(vec![], Authority::from_static("example.com"))
         .await
         .expect("empty batch needs no io");
     assert!(result.is_ok_and(|vec| vec.is_empty()));
@@ -122,12 +125,12 @@ async fn resolve_batch_maps_all_ok_results_in_order() {
         )
         .await
         .expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let secrets = client
         .resolve_batch(
-            &[SecretPlaceholder::new(), SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new(), SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -149,12 +152,12 @@ async fn resolve_batch_reports_per_placeholder_gateway_error() {
         mock_gateway(r#"[{"type":"err","error":"unknown placeholder"}]"#)
             .await
             .expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -173,12 +176,12 @@ async fn resolve_batch_rejects_non_utf8_secret() {
         mock_gateway(r#"[{"type":"ok","secret_b64":"/w=="}]"#)
             .await
             .expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -191,7 +194,7 @@ async fn resolve_batch_rejects_non_utf8_secret() {
 async fn resolve_batch_reports_operation_timeout() {
     let client = GatewayClient::new(
         mock_gateway_silent().await.expect("silent mock gateway"),
-        GatewayClientConfig {
+        GatewayConfig {
             operation_timeout: NonZeroDuration::new(std::time::Duration::from_millis(100))
                 .expect("non-zero operation timeout"),
             ..Default::default()
@@ -200,7 +203,7 @@ async fn resolve_batch_reports_operation_timeout() {
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -219,11 +222,11 @@ async fn resolve_batch_maps_per_placeholder_results() {
     let client = GatewayClient::new(mock_gateway(
             r#"[{"type":"ok","secret_b64":"aGVsbG8="},{"type":"ok","secret_b64":"not-base64!!"},{"type":"err","error":"unknown placeholder"}]"#,
         )
-        .await.expect("mock gateway"), GatewayClientConfig::default());
+        .await.expect("mock gateway"), GatewayConfig::default());
 
     let result = client
         .resolve_batch(
-            &[
+            vec![
                 SecretPlaceholder::new(),
                 SecretPlaceholder::new(),
                 SecretPlaceholder::new(),
@@ -243,12 +246,12 @@ async fn resolve_batch_rejects_mismatched_result_count() {
         mock_gateway(r#"[{"type":"ok","secret_b64":"aGVsbG8="}]"#)
             .await
             .expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new(), SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new(), SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -266,12 +269,12 @@ async fn resolve_batch_rejects_mismatched_result_count() {
 async fn resolve_batch_rejects_malformed_response() {
     let client = GatewayClient::new(
         mock_gateway("not json").await.expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -286,12 +289,12 @@ async fn resolve_batch_rejects_malformed_response() {
 async fn resolve_batch_reports_empty_response_line() {
     let client = GatewayClient::new(
         mock_gateway("").await.expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -314,7 +317,7 @@ async fn resolve_batch_rejects_oversized_unterminated_response() {
         mock_gateway_unterminated(&[b'['; 64])
             .await
             .expect("mock gateway"),
-        GatewayClientConfig {
+        GatewayConfig {
             max_buffer_size: bytesize::ByteSize::b(16),
             ..Default::default()
         },
@@ -322,7 +325,7 @@ async fn resolve_batch_rejects_oversized_unterminated_response() {
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -339,7 +342,7 @@ async fn resolve_batch_does_not_preallocate_configured_maximum() {
         mock_gateway(r#"[{"type":"ok","secret_b64":"aA=="}]"#)
             .await
             .expect("mock gateway"),
-        GatewayClientConfig {
+        GatewayConfig {
             max_buffer_size: bytesize::ByteSize::b(u64::MAX),
             ..Default::default()
         },
@@ -347,7 +350,7 @@ async fn resolve_batch_does_not_preallocate_configured_maximum() {
 
     let secrets = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -361,7 +364,7 @@ async fn resolve_batch_does_not_preallocate_configured_maximum() {
 async fn resolve_batch_reports_unreachable_gateway() {
     let client = GatewayClient::new(
         unreachable_endpoint().await.expect("unreachable endpoint"),
-        GatewayClientConfig {
+        GatewayConfig {
             connection_timeout: NonZeroDuration::new(std::time::Duration::from_hours(1))
                 .expect("non-zero connection timeout"),
             ..Default::default()
@@ -370,7 +373,7 @@ async fn resolve_batch_reports_unreachable_gateway() {
 
     let err = client
         .resolve_batch(
-            &[SecretPlaceholder::new()],
+            vec![SecretPlaceholder::new()],
             Authority::from_static("example.com"),
         )
         .await
@@ -392,7 +395,7 @@ async fn push_secret_returns_placeholder_on_success() {
         mock_gateway(&format!(r#"{{"type":"ok","placeholder":"{placeholder}"}}"#))
             .await
             .expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let returned = client
@@ -411,7 +414,7 @@ async fn push_secret_rejects_mismatched_placeholder() {
         mock_gateway(&format!(r#"{{"type":"ok","placeholder":"{returned}"}}"#))
             .await
             .expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let error = client
@@ -444,7 +447,7 @@ async fn push_secret_reports_gateway_rejection() {
         mock_gateway(r#"{"type":"err","error":"malformed placeholder"}"#)
             .await
             .expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let err = client
@@ -460,7 +463,7 @@ async fn push_secret_rejects_malformed_response() {
     let secret = SecretString::from("s3cr3t");
     let client = GatewayClient::new(
         mock_gateway("not json").await.expect("mock gateway"),
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
 
     let err = client
@@ -479,7 +482,7 @@ async fn push_secret_reports_unreachable_gateway() {
     let secret = SecretString::from("s3cr3t");
     let client = GatewayClient::new(
         unreachable_endpoint().await.expect("unreachable endpoint"),
-        GatewayClientConfig {
+        GatewayConfig {
             connection_timeout: NonZeroDuration::new(std::time::Duration::from_hours(1))
                 .expect("non-zero connection timeout"),
             ..Default::default()

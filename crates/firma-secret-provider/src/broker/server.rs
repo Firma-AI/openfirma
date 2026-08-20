@@ -18,7 +18,7 @@
 //! time out while a slow tool holds the broker. Callers that want tools to
 //! run concurrently should spawn a task per `accept_one` (each call takes
 //! `&self`, so concurrent accepts are safe). Note that
-//! [`config::BrokerListenerConfig::operation_timeout`] cancels the handler
+//! [`crate::broker::config::BrokerConfig::operation_timeout`] cancels the handler
 //! mid-run when it fires: a handler that spawns a child process must ensure
 //! the child is killed on cancellation, or the tool keeps running out of the
 //! sandbox after the shim has already failed closed.
@@ -34,13 +34,11 @@ use tokio::{net::TcpListener, time::timeout};
 
 use crate::{
     broker::{
-        BrokerRequest, BrokerResponse, drain_remaining, read_bounded_line, stream::BrokerStream,
-        write_all,
+        BrokerRequest, BrokerResponse, config::BrokerConfig, drain_remaining, read_bounded_line,
+        stream::BrokerStream, write_all,
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
-
-pub mod config;
 
 enum BrokerListenerInner {
     Tcp(TcpListener),
@@ -62,7 +60,7 @@ struct SocketIdentity {
 /// Broker-side listener: accepts shim connections and dispatches requests.
 pub struct BrokerListener {
     inner: BrokerListenerInner,
-    config: config::BrokerListenerConfig,
+    config: BrokerConfig,
 }
 
 impl BrokerListener {
@@ -82,10 +80,7 @@ impl BrokerListener {
     /// Returns [`io::ErrorKind::InvalidInput`] when the endpoint fails the
     /// address-level invariants, or the underlying I/O error if binding or
     /// setting socket permissions fails.
-    pub async fn bind(
-        endpoint: &ServerEndpoint,
-        config: config::BrokerListenerConfig,
-    ) -> io::Result<Self> {
+    pub async fn bind(endpoint: &ServerEndpoint, config: BrokerConfig) -> io::Result<Self> {
         match endpoint.as_inner() {
             EndpointInner::Tcp(addr) => {
                 let listener = TcpListener::bind(addr).await?;
@@ -132,7 +127,7 @@ impl BrokerListener {
     /// response back.
     ///
     /// The whole read-then-run-then-write exchange is bounded by
-    /// [`config::BrokerListenerConfig::operation_timeout`], and on Unix the connecting
+    /// [`crate::broker::config::BrokerConfig::operation_timeout`], and on Unix the connecting
     /// shim's credentials are validated before the request is read. A rejected
     /// connection receives an error response.
     ///
@@ -147,7 +142,7 @@ impl BrokerListener {
     where
         F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
     {
-        let mut stream: BrokerStream = match &self.inner {
+        let mut stream = match &self.inner {
             BrokerListenerInner::Tcp(listener) => BrokerStream::Tcp {
                 stream: listener.accept().await?.0,
             },
@@ -206,8 +201,8 @@ impl Drop for BrokerListener {
 /// returns an error. TCP loopback carries no peer credentials to check.
 #[cfg(unix)]
 fn reject_mismatched_peer(stream: &tokio::net::UnixStream) -> io::Result<()> {
-    let actual_uid = super::peer_uid(stream)?;
-    let expected_uid = super::current_uid();
+    let actual_uid = crate::unix::peer_uid(stream)?;
+    let expected_uid = crate::unix::current_uid();
     if actual_uid != expected_uid {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,

@@ -4,15 +4,12 @@ use firma_http::Str;
 use firma_secret_provider::{
     broker::{
         BinaryName, BrokerExitStatus, BrokerOutput, BrokerOutputChunk, BrokerRequest,
-        BrokerResponse, DecodedBrokerResponse,
-        server::{BrokerListener, config::BrokerListenerConfig},
+        BrokerResponse, DecodedBrokerResponse, config::BrokerConfig, server::BrokerListener,
         stream::BrokerStream,
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-
-mod config;
 
 struct BoundBroker {
     listener: BrokerListener,
@@ -40,7 +37,7 @@ fn decode_output(response: BrokerResponse<'_>) -> Result<BrokerOutput, String> {
 
 /// Bind a listener on a fresh Unix socket in a temp dir.
 #[cfg(unix)]
-async fn bind_with_config(config: BrokerListenerConfig) -> anyhow::Result<BoundBroker> {
+async fn bind_with_config(config: BrokerConfig) -> anyhow::Result<BoundBroker> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("broker.sock");
     let endpoint = ServerEndpoint::from_str(&format!("unix://{}", path.display()))?;
@@ -54,7 +51,7 @@ async fn bind_with_config(config: BrokerListenerConfig) -> anyhow::Result<BoundB
 
 /// Bind a listener on a fresh loopback TCP port (the Windows transport).
 #[cfg(not(unix))]
-async fn bind_with_config(config: BrokerListenerConfig) -> anyhow::Result<BoundBroker> {
+async fn bind_with_config(config: BrokerConfig) -> anyhow::Result<BoundBroker> {
     let endpoint = ServerEndpoint::from_str("tcp://127.0.0.1:0")?;
     let listener = BrokerListener::bind(&endpoint, config).await?;
     let EndpointInner::Tcp(addr) = listener.bound_endpoint()?;
@@ -111,7 +108,7 @@ async fn roundtrip_ok_response() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig::default())
+    } = bind_with_config(BrokerConfig::default())
         .await
         .expect("bind");
     let request = BrokerRequest {
@@ -145,7 +142,7 @@ async fn handler_error_written_as_error_response() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig::default())
+    } = bind_with_config(BrokerConfig::default())
         .await
         .expect("bind");
     let request = BrokerRequest {
@@ -172,9 +169,9 @@ async fn oversized_response_is_replaced_with_clean_error() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig {
+    } = bind_with_config(BrokerConfig {
         max_response_size: bytesize::ByteSize::b(64),
-        ..BrokerListenerConfig::default()
+        ..BrokerConfig::default()
     })
     .await
     .expect("bind");
@@ -210,9 +207,9 @@ async fn response_exactly_at_limit_is_forwarded() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig {
+    } = bind_with_config(BrokerConfig {
         max_response_size: bytesize::ByteSize::b(payload.len() as u64),
-        ..BrokerListenerConfig::default()
+        ..BrokerConfig::default()
     })
     .await
     .expect("bind");
@@ -241,7 +238,7 @@ async fn response_exactly_at_limit_is_forwarded() {
 #[cfg(windows)]
 #[tokio::test]
 async fn bound_endpoint_returns_assigned_tcp_port() {
-    let BoundBroker { endpoint, .. } = bind_with_config(BrokerListenerConfig::default())
+    let BoundBroker { endpoint, .. } = bind_with_config(BrokerConfig::default())
         .await
         .expect("bind");
     let EndpointInner::Tcp(addr) = endpoint.as_inner();
@@ -254,9 +251,9 @@ async fn oversize_request_is_rejected() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig {
+    } = bind_with_config(BrokerConfig {
         max_request_size: bytesize::ByteSize::b(4000),
-        ..BrokerListenerConfig::default()
+        ..BrokerConfig::default()
     })
     .await
     .expect("bind");
@@ -282,9 +279,9 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig {
+    } = bind_with_config(BrokerConfig {
         max_request_size: bytesize::ByteSize::b(limit),
-        ..BrokerListenerConfig::default()
+        ..BrokerConfig::default()
     })
     .await
     .expect("bind");
@@ -320,7 +317,7 @@ async fn malformed_request_is_rejected_without_reaching_handler() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig::default())
+    } = bind_with_config(BrokerConfig::default())
         .await
         .expect("bind");
     let server = tokio::spawn(async move {
@@ -386,7 +383,7 @@ async fn empty_request_is_rejected_without_reaching_handler() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig::default())
+    } = bind_with_config(BrokerConfig::default())
         .await
         .expect("bind");
     let server = tokio::spawn(async move {
@@ -409,7 +406,7 @@ async fn non_utf8_request_is_rejected_without_reaching_handler() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig::default())
+    } = bind_with_config(BrokerConfig::default())
         .await
         .expect("bind");
     let server = tokio::spawn(async move {
@@ -436,7 +433,7 @@ async fn unix_socket_is_owner_only() {
     let path = dir.path().join("broker.sock");
     let endpoint =
         ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
-    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+    let listener = BrokerListener::bind(&endpoint, BrokerConfig::default())
         .await
         .expect("bind");
     let metadata = std::fs::metadata(&path).expect("metadata");

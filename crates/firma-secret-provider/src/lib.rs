@@ -17,6 +17,9 @@ pub mod non_empty;
 mod placeholder;
 mod registry;
 pub mod spec;
+pub mod store;
+#[cfg(unix)]
+pub(crate) mod unix;
 
 pub use gateway::{GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest};
 pub use glob::glob_match;

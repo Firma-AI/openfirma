@@ -23,15 +23,15 @@ fn initial_status_with_no_policy_dir() {
     assert_eq!(status.pending_rewrites, 0);
     assert_eq!(status.policy_error, None);
     insta::assert_snapshot!(status_snapshot(&status, None), @"
-runtime_state: running
-policy_dir: <none>
-policy_count: 0
-audit_connected: false
-audit_rows: 0
-rewrite_queue_len: 0
-pending_rewrites: 0
-policy_error: none
-");
+    runtime_state: running
+    policy_dir: <none>
+    policy_count: 0
+    audit_connected: false
+    audit_rows: 0
+    rewrite_queue_len: 0
+    pending_rewrites: 0
+    policy_error: none
+    ");
 }
 
 #[test]
@@ -46,15 +46,15 @@ fn status_with_policy_dir_and_policy_count() -> anyhow::Result<()> {
     assert_eq!(status.policy_dir.as_deref(), Some(temp.path()));
     assert_eq!(status.policy_count, 4);
     insta::assert_snapshot!(status_snapshot(&status, Some(temp.path())), @"
-runtime_state: running
-policy_dir: <policy-dir>
-policy_count: 4
-audit_connected: false
-audit_rows: 0
-rewrite_queue_len: 0
-pending_rewrites: 0
-policy_error: none
-");
+    runtime_state: running
+    policy_dir: <policy-dir>
+    policy_count: 4
+    audit_connected: false
+    audit_rows: 0
+    rewrite_queue_len: 0
+    pending_rewrites: 0
+    policy_error: none
+    ");
 
     Ok(())
 }
@@ -67,15 +67,15 @@ fn status_tracks_audit_connected_true_and_false() {
     assert!(!disconnected.status().audit_connected);
     assert!(connected.status().audit_connected);
     insta::assert_snapshot!(status_snapshot(&connected.status(), None), @"
-runtime_state: running
-policy_dir: <none>
-policy_count: 0
-audit_connected: true
-audit_rows: 0
-rewrite_queue_len: 0
-pending_rewrites: 0
-policy_error: none
-");
+    runtime_state: running
+    policy_dir: <none>
+    policy_count: 0
+    audit_connected: true
+    audit_rows: 0
+    rewrite_queue_len: 0
+    pending_rewrites: 0
+    policy_error: none
+    ");
 }
 
 #[test]
@@ -88,15 +88,15 @@ fn status_tracks_audit_row_count_changes() {
 
     assert_eq!(status.audit_rows, 2);
     insta::assert_snapshot!(status_snapshot(&status, None), @"
-runtime_state: running
-policy_dir: <none>
-policy_count: 0
-audit_connected: true
-audit_rows: 2
-rewrite_queue_len: 0
-pending_rewrites: 0
-policy_error: none
-");
+    runtime_state: running
+    policy_dir: <none>
+    policy_count: 0
+    audit_connected: true
+    audit_rows: 2
+    rewrite_queue_len: 0
+    pending_rewrites: 0
+    policy_error: none
+    ");
 }
 
 #[test]
@@ -137,15 +137,15 @@ fn status_tracks_rewrite_queue_length_changes() -> anyhow::Result<()> {
 
     assert_eq!(status.rewrite_queue_len, 1);
     insta::assert_snapshot!(status_snapshot(&status, Some(temp.path())), @"
-runtime_state: rewriting
-policy_dir: <policy-dir>
-policy_count: 2
-audit_connected: false
-audit_rows: 0
-rewrite_queue_len: 1
-pending_rewrites: 0
-policy_error: none
-");
+    runtime_state: rewriting
+    policy_dir: <policy-dir>
+    policy_count: 2
+    audit_connected: false
+    audit_rows: 0
+    rewrite_queue_len: 1
+    pending_rewrites: 0
+    policy_error: none
+    ");
 
     release_rewrite.release()?;
     drop(runner);
@@ -164,15 +164,15 @@ fn status_tracks_pending_rewrite_count_changes() -> anyhow::Result<()> {
     let queued_status = app.status();
     assert_eq!(queued_status.pending_rewrites, 1);
     insta::assert_snapshot!(status_snapshot(&queued_status, Some(temp.path())), @"
-runtime_state: rewriting
-policy_dir: <policy-dir>
-policy_count: 3
-audit_connected: false
-audit_rows: 0
-rewrite_queue_len: 0
-pending_rewrites: 1
-policy_error: none
-");
+    runtime_state: rewriting
+    policy_dir: <policy-dir>
+    policy_count: 3
+    audit_connected: false
+    audit_rows: 0
+    rewrite_queue_len: 0
+    pending_rewrites: 1
+    policy_error: none
+    ");
 
     set_policy_states(&request.file, &request.ids, request.requested)?;
     app.finish_policy_rewrite(&firma_tui::control::PolicyRewriteCompletion {
@@ -186,15 +186,15 @@ policy_error: none
 
     assert_eq!(completed_status.pending_rewrites, 0);
     insta::assert_snapshot!(status_snapshot(&completed_status, Some(temp.path())), @"
-runtime_state: running
-policy_dir: <policy-dir>
-policy_count: 3
-audit_connected: false
-audit_rows: 0
-rewrite_queue_len: 0
-pending_rewrites: 0
-policy_error: none
-");
+    runtime_state: running
+    policy_dir: <policy-dir>
+    policy_count: 3
+    audit_connected: false
+    audit_rows: 0
+    rewrite_queue_len: 0
+    pending_rewrites: 0
+    policy_error: none
+    ");
 
     Ok(())
 }
@@ -254,15 +254,15 @@ fn status_preserves_and_clears_policy_error() -> anyhow::Result<()> {
 
     assert_eq!(error_status.policy_count, 1);
     insta::assert_snapshot!(status_snapshot(&error_status, Some(temp.path())), @"
-runtime_state: error
-policy_dir: <policy-dir>
-policy_count: 1
-audit_connected: false
-audit_rows: 0
-rewrite_queue_len: 0
-pending_rewrites: 0
-policy_error: present
-");
+    runtime_state: error
+    policy_dir: <policy-dir>
+    policy_count: 1
+    audit_connected: false
+    audit_rows: 0
+    rewrite_queue_len: 0
+    pending_rewrites: 0
+    policy_error: present
+    ");
 
     app.push_audit_row(audit_row(AuditDecision::Deny, 3));
     assert_eq!(app.status().policy_error.as_ref(), Some(&reload_error));
@@ -277,15 +277,15 @@ policy_error: present
     assert_eq!(recovered_status.policy_error, None);
     assert_eq!(recovered_status.policy_count, 2);
     insta::assert_snapshot!(status_snapshot(&recovered_status, Some(temp.path())), @"
-runtime_state: running
-policy_dir: <policy-dir>
-policy_count: 2
-audit_connected: false
-audit_rows: 1
-rewrite_queue_len: 0
-pending_rewrites: 0
-policy_error: none
-");
+    runtime_state: running
+    policy_dir: <policy-dir>
+    policy_count: 2
+    audit_connected: false
+    audit_rows: 1
+    rewrite_queue_len: 0
+    pending_rewrites: 0
+    policy_error: none
+    ");
 
     Ok(())
 }

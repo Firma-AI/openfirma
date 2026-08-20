@@ -3,10 +3,10 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use serde::Deserialize;
 
-/// Tunable timeouts and limits for [`super::BrokerClient`], deserialized from
+/// Tunable timeouts and limits for [`super::client::BrokerClient`], deserialized from
 /// the shim's `firma.toml`.
 #[derive(Debug, Copy, Clone, Deserialize)]
-pub struct BrokerClientConfig {
+pub struct BrokerConfig {
     /// Deadline for establishing the connection to the broker endpoint.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
@@ -34,7 +34,7 @@ pub struct BrokerClientConfig {
     pub max_response_size: ByteSize,
 }
 
-impl Default for BrokerClientConfig {
+impl Default for BrokerConfig {
     fn default() -> Self {
         Self {
             connection_timeout: default_connection_timeout(),
@@ -42,6 +42,24 @@ impl Default for BrokerClientConfig {
             max_request_size: default_max_request_size(),
             max_response_size: default_max_response_size(),
         }
+    }
+}
+
+impl BrokerConfig {
+    /// Byte size of the request-line cap, as a `usize` the reader can bound with.
+    #[inline]
+    pub(crate) fn max_request_size(&self) -> usize {
+        // The only way this conversion can fail is on a 32-bit system with a
+        // configured max_request_size larger than usize::MAX.
+        usize::try_from(self.max_request_size.as_u64()).unwrap_or(usize::MAX)
+    }
+
+    /// Byte size of the response-line cap, as a `usize` the reader can bound with.
+    #[inline]
+    pub(crate) fn max_response_size(&self) -> usize {
+        // The only way this conversion can fail is on a 32-bit system with a
+        // configured max_response_size larger than usize::MAX.
+        usize::try_from(self.max_response_size.as_u64()).unwrap_or(usize::MAX)
     }
 }
 

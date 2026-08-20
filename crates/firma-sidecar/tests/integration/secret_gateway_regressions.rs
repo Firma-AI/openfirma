@@ -14,7 +14,7 @@ use firma_secret_provider::endpoint::client::ClientEndpoint;
 use firma_secret_provider::{CompiledMatcher, MatcherError};
 use firma_secret_provider::{
     SecretPlaceholder,
-    gateway::{client::GatewayClient, client::GatewayClientConfig},
+    gateway::{client::GatewayClient, config::GatewayConfig},
     non_empty::NonEmptyString,
     spec::http::{HttpIntegrationSpec, HttpMatcherRule, PathAndMatcher, PathOnly},
 };
@@ -264,7 +264,7 @@ async fn fake_resolve_gateway(secret: &str) -> anyhow::Result<GatewayClient> {
     });
     Ok(GatewayClient::new(
         ClientEndpoint::from_str(&format!("tcp://{address}"))?,
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     ))
 }
 
@@ -283,7 +283,7 @@ async fn gateway_contact_probe() -> anyhow::Result<(
     });
     let client = GatewayClient::new(
         ClientEndpoint::from_str(&format!("tcp://{address}"))?,
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
     Ok((client, contacted_rx, server))
 }
@@ -380,7 +380,7 @@ async fn fake_push_gateway() -> anyhow::Result<(
     });
     let client = GatewayClient::new(
         ClientEndpoint::from_str(&format!("tcp://{address}"))?,
-        GatewayClientConfig::default(),
+        GatewayConfig::default(),
     );
     Ok((client, pushed_rx, server))
 }

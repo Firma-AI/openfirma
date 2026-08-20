@@ -1,0 +1,5 @@
+---
+source: crates/firma-secret-provider/tests/integration/wire_types.rs
+expression: wire
+---
+{"action":"secret.push","placeholder":"[placeholder]","value_b64":"aGVsbG8=","domain":["example.com"]}

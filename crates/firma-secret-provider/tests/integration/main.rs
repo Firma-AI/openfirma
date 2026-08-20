@@ -11,5 +11,6 @@ mod redaction;
 mod regex;
 mod registry;
 mod spec;
+mod store;
 mod support;
 mod wire_types;

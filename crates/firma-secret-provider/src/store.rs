@@ -12,7 +12,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use firma_http::Authority;
-use firma_secret_provider::{SecretPlaceholder, SecretString};
+
+use crate::{SecretPlaceholder, SecretString};
 
 /// A stored secret with its optional domain scope.
 #[derive(Debug, Clone)]
@@ -69,10 +70,13 @@ impl SecretStore {
     /// Returns `None` when the placeholder is unknown or its stored domain does
     /// not match `domain`.
     #[must_use]
-    pub fn resolve(&self, placeholder: &SecretPlaceholder, domain: &str) -> Option<&SecretString> {
+    pub fn resolve(
+        &self,
+        placeholder: &SecretPlaceholder,
+        domain: &Authority,
+    ) -> Option<&SecretString> {
         self.by_placeholder.get(placeholder).and_then(|entry| {
-            (entry.domain.is_empty() || entry.domain.iter().any(|d| d.as_str() == domain))
-                .then_some(&entry.value)
+            (entry.domain.is_empty() || entry.domain.contains(domain)).then_some(&entry.value)
         })
     }
 
@@ -93,92 +97,5 @@ impl SecretStore {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_placeholder.is_empty()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use firma_secret_provider::ExposeSecret;
-
-    use super::*;
-
-    #[test]
-    fn wildcard_entry_resolves_for_any_domain() {
-        let mut store = SecretStore::new();
-        let placeholder = SecretPlaceholder::new();
-        store.insert(
-            placeholder.clone(),
-            HashSet::new(),
-            SecretString::from("s3cr3t"),
-        );
-
-        assert_eq!(
-            store
-                .resolve(&placeholder, "api.github.com")
-                .map(SecretString::expose_secret),
-            Some("s3cr3t")
-        );
-        assert_eq!(
-            store
-                .resolve(&placeholder, "api.stripe.com")
-                .map(SecretString::expose_secret),
-            Some("s3cr3t")
-        );
-        assert_eq!(
-            store
-                .resolve(&SecretPlaceholder::new(), "api.github.com")
-                .map(SecretString::expose_secret),
-            None
-        );
-        assert_eq!(store.len(), 1);
-        assert!(!store.is_empty());
-    }
-
-    #[test]
-    fn same_domain_insert_replaces_existing_entry() {
-        let mut store = SecretStore::new();
-        let placeholder = SecretPlaceholder::new();
-        store.insert(
-            placeholder.clone(),
-            HashSet::new(),
-            SecretString::from("old-value"),
-        );
-        store.insert(
-            placeholder.clone(),
-            HashSet::new(),
-            SecretString::from("new-value"),
-        );
-
-        assert_eq!(store.len(), 1);
-        assert_eq!(
-            store
-                .resolve(&placeholder, "any.domain")
-                .map(SecretString::expose_secret),
-            Some("new-value")
-        );
-    }
-
-    #[test]
-    fn domain_scoped_entry_does_not_match_wrong_domain() {
-        let mut store = SecretStore::new();
-        let placeholder = SecretPlaceholder::new();
-        store.insert(
-            placeholder.clone(),
-            std::iter::once(Authority::from_static("api.github.com")).collect(),
-            SecretString::from("ghp_xxx"),
-        );
-
-        assert_eq!(
-            store
-                .resolve(&placeholder, "api.github.com")
-                .map(SecretString::expose_secret),
-            Some("ghp_xxx")
-        );
-        assert_eq!(
-            store
-                .resolve(&placeholder, "api.stripe.com")
-                .map(SecretString::expose_secret),
-            None
-        );
     }
 }

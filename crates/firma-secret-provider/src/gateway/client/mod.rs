@@ -30,14 +30,11 @@ use crate::{
     ExposeSecret, GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder, SecretString,
     endpoint::{EndpointInner, client::ClientEndpoint},
-    gateway::client::error::{GatewayClientError, ProtocolViolation, TransportError},
+    gateway::{
+        client::error::{GatewayClientError, ProtocolViolation, TransportError},
+        config::GatewayConfig,
+    },
 };
-
-/// Secret-gateway client tuning. The representation lives in
-/// `firma-config-schema` (the single source of truth for config shape); it is
-/// re-exported here so the canonical `gateway::client::GatewayClientConfig`
-/// path — and every consumer — stays unchanged.
-pub use firma_config_schema::gateway::GatewayClientConfig;
 
 pub mod error;
 
@@ -53,12 +50,12 @@ pub const GATEWAY_ADDR_ENV: &str = "FIRMA_SECRET_GATEWAY_ADDR";
 #[derive(Debug)]
 pub struct GatewayClient {
     endpoint: ClientEndpoint,
-    config: GatewayClientConfig,
+    config: GatewayConfig,
 }
 
 impl GatewayClient {
     #[must_use]
-    pub fn new(endpoint: ClientEndpoint, config: GatewayClientConfig) -> Self {
+    pub fn new(endpoint: ClientEndpoint, config: GatewayConfig) -> Self {
         Self { endpoint, config }
     }
 
@@ -87,7 +84,7 @@ impl GatewayClient {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn resolve_batch(
         &self,
-        placeholders: &[SecretPlaceholder],
+        placeholders: Vec<SecretPlaceholder>,
         domain: Authority,
     ) -> Result<Result<Vec<SecretString>, ResolveError>, GatewayClientError> {
         use base64::Engine as _;
@@ -95,13 +92,10 @@ impl GatewayClient {
         if placeholders.is_empty() {
             return Ok(Ok(Vec::new()));
         }
+        let placeholders_len = placeholders.len();
 
         let request = GatewayRequest::Resolve(ResolveRequest {
-            placeholders: placeholders
-                .iter()
-                .map(ToString::to_string)
-                .map(Str::from)
-                .collect(),
+            placeholders,
             domain,
         });
         let payload = serde_json::to_string(&request).map_err(GatewayClientError::Bug)?;
@@ -135,11 +129,11 @@ impl GatewayClient {
                 GatewayClientError::ProtocolViolation(ProtocolViolation::Deserialize(error))
             })?;
 
-        if results.len() != placeholders.len() {
+        if results.len() != placeholders_len {
             return Err(GatewayClientError::ProtocolViolation(
                 ProtocolViolation::Mismatch {
                     results: results.len(),
-                    placeholders: placeholders.len(),
+                    placeholders: placeholders_len,
                 },
             ));
         }
@@ -196,7 +190,7 @@ impl GatewayClient {
         use base64::Engine as _;
 
         let request = GatewayRequest::Push(PushRequest {
-            placeholder: Str::from(placeholder.to_string()),
+            placeholder: placeholder.clone(),
             value_b64: Str::from(
                 base64::engine::general_purpose::STANDARD.encode(value.expose_secret()),
             ),

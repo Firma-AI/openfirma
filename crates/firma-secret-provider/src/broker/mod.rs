@@ -28,14 +28,13 @@
 //! and response lines; tune them together.
 
 pub mod client;
+pub mod config;
 pub mod server;
 pub mod stream;
 
 use std::{fmt::Display, io, ops::Deref};
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-#[cfg(unix)]
-use tokio::net::UnixStream;
 
 use base64::Engine as _;
 use firma_http::Str;
@@ -383,19 +382,4 @@ pub(crate) async fn drain_remaining<S: AsyncRead + Unpin>(stream: &mut S) -> io:
             Err(e) => return Err(e),
         }
     }
-}
-
-/// The effective uid of the process on the other side of `stream`.
-///
-/// Tokio selects the platform credential API: `SO_PEERCRED`, `getpeereid`, or
-/// `getpeerucred`, depending on the Unix target.
-#[cfg(unix)]
-fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
-    stream.peer_cred().map(|credentials| credentials.uid())
-}
-
-/// The uid of the current process.
-#[cfg(unix)]
-fn current_uid() -> u32 {
-    nix::unistd::Uid::current().as_raw()
 }

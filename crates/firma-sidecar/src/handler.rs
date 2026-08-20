@@ -841,7 +841,10 @@ impl RequestHandler {
         let host = request.host.clone();
 
         let mut store = SidecarSecretStore::new();
-        match gateway_client.resolve_batch(&placeholders, host).await {
+        match gateway_client
+            .resolve_batch(placeholders.clone(), host)
+            .await
+        {
             Ok(Ok(results)) => {
                 for (placeholder, secret) in placeholders.iter().zip(results) {
                     if let Err(e) = store.insert(placeholder.clone(), secret) {
@@ -2114,7 +2117,7 @@ pub(crate) mod tests {
     use firma_secret_provider::{
         MatcherError,
         endpoint::client::ClientEndpoint,
-        gateway::client::GatewayClientConfig,
+        gateway::config::GatewayConfig,
         non_empty::NonEmptyString,
         spec::http::{HttpMatcherRule, PathAndMatcher, PathOnly},
     };
@@ -3134,7 +3137,7 @@ pub(crate) mod tests {
         )
         .with_gateway_client(GatewayClient::new(
             ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
-            GatewayClientConfig::default(),
+            GatewayConfig::default(),
         ));
 
         let mut request = raw_request(
@@ -3198,7 +3201,7 @@ pub(crate) mod tests {
         )
         .with_gateway_client(GatewayClient::new(
             ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
-            GatewayClientConfig::default(),
+            GatewayConfig::default(),
         ));
 
         let mut request = raw_request(
@@ -3271,7 +3274,7 @@ pub(crate) mod tests {
         )
         .with_gateway_client(GatewayClient::new(
             ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
-            GatewayClientConfig::default(),
+            GatewayConfig::default(),
         ));
 
         let mut request = raw_request(
@@ -3352,7 +3355,7 @@ pub(crate) mod tests {
         )
         .with_gateway_client(GatewayClient::new(
             ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
-            GatewayClientConfig::default(),
+            GatewayConfig::default(),
         ))
         .with_http_secret_providers(vec![
             aws_secrets_manager_provider(&host).expect("valid provider"),
@@ -3454,7 +3457,7 @@ pub(crate) mod tests {
         )
         .with_gateway_client(GatewayClient::new(
             ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
-            GatewayClientConfig::default(),
+            GatewayConfig::default(),
         ))
         .with_http_secret_providers(vec![
             aws_secrets_manager_provider(&host).expect("valid provider"),
@@ -3577,7 +3580,7 @@ pub(crate) mod tests {
         )
         .with_gateway_client(GatewayClient::new(
             ClientEndpoint::from_str(&format!("tcp://{gateway_addr}")).expect("valid addr"),
-            GatewayClientConfig::default(),
+            GatewayConfig::default(),
         ))
         .with_http_secret_providers(vec![
             aws_secrets_manager_provider(&host).expect("valid provider"),
