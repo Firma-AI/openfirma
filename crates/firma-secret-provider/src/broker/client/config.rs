@@ -23,10 +23,15 @@ pub struct BrokerClientConfig {
         default = "default_operation_timeout"
     )]
     pub operation_timeout: Duration,
-    /// Cap on the inbound response line and outbound request line size,
-    /// enforced by [`super::BrokerClient`].
-    #[serde(default = "default_max_buffer_size")]
-    pub max_buffer_size: ByteSize,
+    /// Cap on the outbound request line size, enforced before connecting.
+    #[serde(default = "default_max_request_size")]
+    pub max_request_size: ByteSize,
+    /// Cap on the inbound response line size.
+    ///
+    /// Responses can include encoded process output, so this is deliberately
+    /// larger than [`Self::max_request_size`].
+    #[serde(default = "default_max_response_size")]
+    pub max_response_size: ByteSize,
 }
 
 impl Default for BrokerClientConfig {
@@ -34,7 +39,8 @@ impl Default for BrokerClientConfig {
         Self {
             connection_timeout: default_connection_timeout(),
             operation_timeout: default_operation_timeout(),
-            max_buffer_size: default_max_buffer_size(),
+            max_request_size: default_max_request_size(),
+            max_response_size: default_max_response_size(),
         }
     }
 }
@@ -47,6 +53,10 @@ fn default_operation_timeout() -> Duration {
     Duration::from_secs(5)
 }
 
-fn default_max_buffer_size() -> ByteSize {
+fn default_max_request_size() -> ByteSize {
+    ByteSize::kib(64)
+}
+
+fn default_max_response_size() -> ByteSize {
     ByteSize::mb(10)
 }

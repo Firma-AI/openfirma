@@ -94,10 +94,12 @@ impl BrokerClient {
         exec: impl Fn(BrokerResponse<'_>) -> Result<T, BrokerClientError>,
     ) -> Result<T, BrokerClientError> {
         let payload = serde_json::to_string(request).map_err(BrokerClientError::Bug)?;
-        if payload.len() > self.max_buffer_size() {
-            return Err(BrokerClientError::ProtocolViolation(
-                ProtocolViolation::MaxBufferSizeExceeded,
-            ));
+        let max_request_size = self.max_request_size();
+        if payload.len() > max_request_size {
+            return Err(BrokerClientError::RequestTooLarge {
+                size: payload.len(),
+                max: max_request_size,
+            });
         }
         let stream = self.connect().await?;
         self.send_and_receive(stream, &payload, exec).await
@@ -143,12 +145,12 @@ impl BrokerClient {
                 .await
                 .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Write(error)))?;
 
-            // Cap the underlying reads at max_buffer_size + 1 (see
+            // Cap the underlying reads at max_response_size + 1 (see
             // [`read_bounded_line`]) and reject any response whose newline-stripped
             // line exceeds the limit. Padding an over-limit response with boundary
             // whitespace must not let it pass, so the check measures the raw line,
             // not the trimmed content.
-            read_bounded_line(&mut stream, self.max_buffer_size() as u64)
+            read_bounded_line(&mut stream, self.max_response_size() as u64)
                 .await
                 .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Read(error)))
         })
@@ -158,9 +160,9 @@ impl BrokerClient {
         // Size-check the raw line before UTF-8 decoding so an over-limit
         // response that truncates mid-character is reported as an oversized
         // payload rather than a decode failure.
-        if line.len() > self.max_buffer_size() {
+        if line.len() > self.max_response_size() {
             return Err(BrokerClientError::ProtocolViolation(
-                ProtocolViolation::MaxBufferSizeExceeded,
+                ProtocolViolation::ResponseTooLarge,
             ));
         }
         let line = String::from_utf8(line).map_err(|error| {
@@ -192,10 +194,15 @@ impl BrokerClient {
     }
 
     #[inline]
-    fn max_buffer_size(&self) -> usize {
+    fn max_request_size(&self) -> usize {
         // The only way this conversion can fail is on a 32-bit system with a
-        // configured max_buffer_size larger than usize::MAX.
-        usize::try_from(self.config.max_buffer_size.as_u64()).unwrap_or(usize::MAX)
+        // configured max_request_size larger than usize::MAX.
+        usize::try_from(self.config.max_request_size.as_u64()).unwrap_or(usize::MAX)
+    }
+
+    #[inline]
+    fn max_response_size(&self) -> usize {
+        usize::try_from(self.config.max_response_size.as_u64()).unwrap_or(usize::MAX)
     }
 }
 
