@@ -186,6 +186,39 @@ struct ParsedPolicy {
     source_policy_sha256: String,
 }
 
+/// Files produced for one policy version and target architecture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SeccompArtifactLayout {
+    directory: PathBuf,
+}
+
+impl SeccompArtifactLayout {
+    /// Construct the artifact layout for one policy version and target architecture.
+    fn new(root: &Path, policy_id: &str, policy_version: &str, target_arch: TargetArch) -> Self {
+        Self {
+            directory: root
+                .join(sanitize_path_segment(policy_id))
+                .join(sanitize_path_segment(policy_version))
+                .join(target_arch.as_str()),
+        }
+    }
+
+    /// Return the directory containing this artifact's files.
+    fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Return the compiled BPF program path.
+    fn bpf(&self) -> PathBuf {
+        self.directory.join("policy.bpf")
+    }
+
+    /// Return the artifact metadata path.
+    fn metadata(&self) -> PathBuf {
+        self.directory.join("policy.metadata.json")
+    }
+}
+
 fn materialize_seccomp_policy(
     managed: &SeccompPolicyConfig,
 ) -> Result<SeccompMaterialized, RunError> {
@@ -207,13 +240,12 @@ fn materialize_seccomp_policy(
         )));
     }
     let expected_denied_syscalls = expected_denied_syscalls(target_arch, &syscalls);
-    let output_dir = managed.artifact_dir.join(artifact_relative_dir(
+    let artifact_layout = SeccompArtifactLayout::new(
+        &managed.artifact_dir,
         &parsed_policy.parsed.policy_id,
         &parsed_policy.parsed.policy_version,
         target_arch,
-    ));
-    let bpf_path = output_dir.join("policy.bpf");
-    let metadata_path = output_dir.join("policy.metadata.json");
+    );
 
     match managed.runtime_mode {
         SeccompRuntimeMode::CompileOnLaunch => compile_and_write_artifact(
@@ -222,16 +254,14 @@ fn materialize_seccomp_policy(
             &parsed_policy,
             &syscalls,
             &expected_denied_syscalls,
-            bpf_path,
-            metadata_path,
+            &artifact_layout,
         ),
         SeccompRuntimeMode::PrecompiledOnly => load_precompiled_artifact(
             managed,
             target_arch,
             &parsed_policy,
             &expected_denied_syscalls,
-            bpf_path,
-            metadata_path,
+            &artifact_layout,
         ),
     }
 }
@@ -281,22 +311,16 @@ fn compile_and_write_artifact(
     parsed_policy: &ParsedPolicy,
     syscalls: &[SyscallId],
     expected_denied_syscalls: &[String],
-    bpf_path: PathBuf,
-    metadata_path: PathBuf,
+    artifact_layout: &SeccompArtifactLayout,
 ) -> Result<SeccompMaterialized, RunError> {
-    fs::create_dir_all(
-        bpf_path
-            .parent()
-            .ok_or_else(|| RunError::Internal("seccomp artifact parent dir missing".to_string()))?,
-    )
-    .map_err(|error| {
+    fs::create_dir_all(artifact_layout.directory()).map_err(|error| {
         RunError::ConfigValidation(format!(
             "failed to create seccomp artifact dir {}: {error}",
-            bpf_path
-                .parent()
-                .map_or_else(|| "<unknown>".to_string(), |p| p.display().to_string())
+            artifact_layout.directory().display()
         ))
     })?;
+    let bpf_path = artifact_layout.bpf();
+    let metadata_path = artifact_layout.metadata();
 
     let (bpf_bytes, effective_syscalls) = emit_bpf_program(target_arch, syscalls);
     let bpf_sha = sha256_hex(&bpf_bytes);
@@ -347,9 +371,10 @@ fn load_precompiled_artifact(
     target_arch: TargetArch,
     parsed_policy: &ParsedPolicy,
     expected_denied_syscalls: &[String],
-    bpf_path: PathBuf,
-    metadata_path: PathBuf,
+    artifact_layout: &SeccompArtifactLayout,
 ) -> Result<SeccompMaterialized, RunError> {
+    let bpf_path = artifact_layout.bpf();
+    let metadata_path = artifact_layout.metadata();
     let metadata = read_metadata(&metadata_path)?;
     verify_artifact_trust_paths(managed, &bpf_path, &metadata_path)?;
     validate_metadata_contract(
@@ -365,15 +390,6 @@ fn load_precompiled_artifact(
         metadata_path,
         metadata,
     })
-}
-
-fn artifact_relative_dir(policy_id: &str, policy_version: &str, target_arch: TargetArch) -> String {
-    format!(
-        "{}/{}/{}",
-        sanitize_path_segment(policy_id),
-        sanitize_path_segment(policy_version),
-        target_arch.as_str()
-    )
 }
 
 fn expected_denied_syscalls(target_arch: TargetArch, syscalls: &[SyscallId]) -> Vec<String> {
@@ -1053,14 +1069,11 @@ deny_actions = ["filesystem.delete"]
         .unwrap_or_else(|e| panic!("{e}"));
 
         let arch = current_target_arch().unwrap_or_else(|e| panic!("{e}"));
-        let out_dir =
-            tempdir
-                .path()
-                .join(artifact_relative_dir("generic-local-command", "v1", arch));
-        fs::create_dir_all(&out_dir).unwrap_or_else(|e| panic!("{e}"));
-        fs::write(out_dir.join("policy.bpf"), [0_u8; 16]).unwrap_or_else(|e| panic!("{e}"));
-        fs::write(out_dir.join("policy.metadata.json"), b"{not-json")
-            .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_layout =
+            SeccompArtifactLayout::new(tempdir.path(), "generic-local-command", "v1", arch);
+        fs::create_dir_all(artifact_layout.directory()).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(artifact_layout.bpf(), [0_u8; 16]).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(artifact_layout.metadata(), b"{not-json").unwrap_or_else(|e| panic!("{e}"));
 
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
@@ -1233,15 +1246,11 @@ deny_actions = ["filesystem.delete"]
 
         let bad_artifact_dir = tempdir.path().join("artifacts-bad");
         let arch = current_target_arch().unwrap_or_else(|e| panic!("{e}"));
-        let rel = artifact_relative_dir("generic-local-command", "v1", arch);
-        let bad_leaf = bad_artifact_dir.join(rel);
-        fs::create_dir_all(&bad_leaf).unwrap_or_else(|e| panic!("{e}"));
-        fs::copy(&compiled.bpf_path, bad_leaf.join("policy.bpf")).unwrap_or_else(|e| panic!("{e}"));
-        symlink(
-            &compiled.metadata_path,
-            bad_leaf.join("policy.metadata.json"),
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        let bad_layout =
+            SeccompArtifactLayout::new(&bad_artifact_dir, "generic-local-command", "v1", arch);
+        fs::create_dir_all(bad_layout.directory()).unwrap_or_else(|e| panic!("{e}"));
+        fs::copy(&compiled.bpf_path, bad_layout.bpf()).unwrap_or_else(|e| panic!("{e}"));
+        symlink(&compiled.metadata_path, bad_layout.metadata()).unwrap_or_else(|e| panic!("{e}"));
 
         let precompiled_mode = SeccompPolicyConfig {
             source_policy_path: policy_path,
