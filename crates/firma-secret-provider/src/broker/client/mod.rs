@@ -19,7 +19,10 @@ use base64::Engine as _;
 use firma_http::Str;
 
 use crate::{
-    broker::{BrokerRequest, BrokerResponse, read_bounded_line, stream::BrokerStream, write_all},
+    broker::{
+        BinaryName, BrokerRequest, BrokerResponse, read_bounded_line, stream::BrokerStream,
+        write_all,
+    },
     endpoint::{EndpointInner, client::ClientEndpoint},
 };
 
@@ -62,7 +65,7 @@ impl BrokerClient {
     /// usable output.
     pub async fn run(&self, bin: &str, args: &[&str]) -> Result<Vec<u8>, BrokerClientError> {
         let request = BrokerRequest {
-            bin: Str::from(bin),
+            bin: BinaryName::new(bin)?,
             args: args.iter().map(Str::from).collect(),
         };
         self.request(&request, |response| match response {

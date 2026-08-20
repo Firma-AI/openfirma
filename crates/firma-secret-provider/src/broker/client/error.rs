@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::endpoint::client::ClientEndpoint;
+use crate::{broker::BinaryNameError, endpoint::client::ClientEndpoint};
 
 /// Whole-request failures from talking to the out-of-sandbox secret broker.
 ///
@@ -43,6 +43,9 @@ pub enum BrokerClientError {
     /// The endpoint fails an address-level invariant. Configuration error.
     #[error("invalid secret broker endpoint: {0}")]
     InvalidEndpoint(String),
+    /// The executable is not a portable basename.
+    #[error("invalid secret broker binary: {0}")]
+    InvalidBinaryName(#[from] BinaryNameError),
     /// Encoding our own outbound request as JSON failed. Should never happen
     /// given internally-constructed request data; indicates a bug.
     #[error("bug: failed to serialize broker request: {0}")]
