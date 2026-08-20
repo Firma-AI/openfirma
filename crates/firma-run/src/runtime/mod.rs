@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
 use crate::capability::read_capability_token;
 use crate::config::{
-    CaTrustMode, CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile,
+    CaTrustMode, CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile_with_layout,
 };
 use crate::error::RunError;
 use crate::identity::RunIdentity;
@@ -128,7 +128,9 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         crate::identity::read_configured_agent_id,
     )?;
 
-    let profile = resolve_profile(args)?;
+    let runtime_layout = RuntimeLayout::resolve(None)
+        .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
+    let profile = resolve_profile_with_layout(args, &runtime_layout)?;
     let identity = RunIdentity::new(agent_id, profile.id.clone());
     if args.print_effective_config {
         print_effective_config(&identity, &profile)?;
@@ -234,6 +236,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             &mut prompt,
         )?;
         let network_runtime = prepare_network_runtime(
+            &runtime_layout,
             handle_ref,
             &proof,
             &profile.sidecar_endpoint,
@@ -324,13 +327,11 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 let handle_ref = handle
                     .as_ref()
                     .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
-                backend.start_agent(handle_ref, &launch)?
+                backend.start_agent(&runtime_layout, handle_ref, &launch)?
             };
             // Per-run marker dir under the persistent runtime root, alongside
             // `sidecar.log` / `authority.log`. The caller redirects its foreground
             // logs here while the agent's TUI owns the terminal.
-            let runtime_layout = RuntimeLayout::resolve(None)
-                .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
             let marker_dir = runtime_layout.run_entry(&identity.sandbox_id);
             if let Some(hook) = hooks.on_agent_launch {
                 hook(&marker_dir);

@@ -12,7 +12,6 @@ use firma_process_orchestrator::{
     ComponentEndpoint, ComponentSpec, LifecycleTimeouts, StackTopology, UnixEndpoint,
     spawn_stack_from_plan,
 };
-#[cfg(unix)]
 use firma_runtime_state::RuntimeLayout;
 
 #[cfg(unix)]
@@ -424,7 +423,12 @@ impl RuntimeParts {
 /// - [`RunError::UnsupportedPlatform`] when autostart is required on a
 ///   platform that does not support it.
 /// - [`RunError::Backend`] for adapter socket failures.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the lifecycle-owned runtime layout remains explicit alongside the existing launch inputs"
+)]
 pub fn prepare_network_runtime(
+    runtime_layout: &RuntimeLayout,
     handle: &SandboxHandle,
     proof: &EnforcementProof,
     sidecar_endpoint: &SidecarEndpoint,
@@ -437,6 +441,7 @@ pub fn prepare_network_runtime(
     let _ = proof;
 
     let prepared = prepare_run_components(
+        runtime_layout,
         handle,
         sidecar_endpoint,
         identity,
@@ -838,6 +843,7 @@ struct PreparedRunComponents {
     reason = "the staged planner keeps topology-dependent preparation and ownership transitions in one auditable sequence"
 )]
 fn prepare_run_components(
+    runtime_layout: &RuntimeLayout,
     handle: &SandboxHandle,
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
@@ -865,7 +871,7 @@ fn prepare_run_components(
     }
     #[cfg(not(unix))]
     {
-        let _ = (identity, capability_lease);
+        let _ = (runtime_layout, identity, capability_lease);
         drop(authority);
         Err(RunError::UnsupportedPlatform {
             reason: "firma run local component autostart requires Unix".into(),
@@ -874,8 +880,6 @@ fn prepare_run_components(
     #[cfg(unix)]
     {
         let mut authority = authority;
-        let runtime_layout = RuntimeLayout::resolve(None)
-            .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
         let marker_dir = runtime_layout.run_entry(&identity.sandbox_id);
         let orchestrator_dir = marker_dir.join("orchestrator");
         let names: Vec<&str> = match (owns_authority, owns_sidecar) {
@@ -1984,6 +1988,7 @@ mod non_structural_env_tests {
             network_confinement: crate::backend::NetworkConfinement::ProxyOnly,
         };
         let runtime = prepare_network_runtime(
+            &firma_runtime_state::RuntimeLayout::from_root(&handle.runtime_dir),
             &handle,
             &proof,
             &SidecarEndpoint::Tcp {
@@ -2077,6 +2082,7 @@ mod non_structural_env_tests {
             };
 
             let runtime = prepare_network_runtime(
+                &firma_runtime_state::RuntimeLayout::from_root(&handle.runtime_dir),
                 &handle,
                 &structural_proof,
                 &SidecarEndpoint::Tcp { addr: sidecar_addr },
@@ -2147,6 +2153,7 @@ mod non_structural_env_tests {
         };
 
         let runtime = prepare_network_runtime(
+            &firma_runtime_state::RuntimeLayout::from_root(&handle.runtime_dir),
             &handle,
             &proof,
             &SidecarEndpoint::Tcp { addr: sidecar_addr },

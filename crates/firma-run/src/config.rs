@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
+use firma_runtime_state::RuntimeLayout;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::BackendKind;
@@ -548,11 +549,19 @@ impl ProfilePatch {
 ///
 /// Returns an error when profile resolution fails due to invalid inputs,
 /// parse errors, or resulting validation failures.
+pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
+    let runtime_layout = resolved_runtime_layout();
+    resolve_profile_with_layout(args, &runtime_layout)
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "sequential profile resolution (patch merge + endpoint/selection + network + capability) reads more clearly inline"
 )]
-pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
+pub(crate) fn resolve_profile_with_layout(
+    args: &RunInput,
+    runtime_layout: &RuntimeLayout,
+) -> Result<ResolvedProfile, RunError> {
     let profile_id = AgentProfile::from_name(&args.profile).map_or_else(
         || args.profile.clone(),
         |profile| profile.as_str().to_string(),
@@ -649,10 +658,15 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let executable_policies =
         resolve_executable_policies(patch.executable_policies, patch.codex_cli);
 
-    let seccomp_policy = patch
-        .seccomp_policy
-        .map(seccomp_policy_from_patch)
-        .or(default_managed_seccomp_policy(&profile_id, backend)?);
+    let seccomp_policy =
+        patch
+            .seccomp_policy
+            .map(seccomp_policy_from_patch)
+            .or(default_managed_seccomp_policy(
+                runtime_layout,
+                &profile_id,
+                backend,
+            )?);
     let resolved = ResolvedProfile {
         id: profile_id,
         backend,
@@ -962,6 +976,7 @@ fn managed_seccomp_applies(profile_id: &str, backend: BackendKind) -> bool {
 }
 
 fn default_managed_seccomp_policy(
+    runtime_layout: &RuntimeLayout,
     profile_id: &str,
     backend: BackendKind,
 ) -> Result<Option<SeccompPolicyConfig>, RunError> {
@@ -981,12 +996,18 @@ fn default_managed_seccomp_policy(
     let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map_or_else(|| ensure_managed_policy_path(profile_id), PathBuf::from);
+        .map_or_else(
+            || ensure_managed_policy_path(runtime_layout, profile_id),
+            PathBuf::from,
+        );
 
     let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map_or_else(default_managed_artifact_dir, PathBuf::from);
+        .map_or_else(
+            || default_managed_artifact_dir(runtime_layout),
+            PathBuf::from,
+        );
 
     let runtime_mode = std::env::var(MANAGED_RUNTIME_MODE_ENV)
         .ok()
@@ -1046,8 +1067,8 @@ fn managed_policy_for_profile(profile_id: &str) -> (&'static str, &'static str) 
 /// Always overwrites — this is a binary-embedded fallback, not a user-editable file.
 /// To override, set `FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH` or `seccomp_policy.source_policy_path` in the profile config.
 /// Creates the directory with restricted permissions (0o700/0o600).
-fn ensure_managed_policy_path(profile_id: &str) -> PathBuf {
-    let dir = resolved_runtime_root().join("seccomp");
+fn ensure_managed_policy_path(runtime_layout: &RuntimeLayout, profile_id: &str) -> PathBuf {
+    let dir = runtime_layout.root().join("seccomp");
     write_managed_policy_to_dir(&dir, profile_id)
 }
 
@@ -1067,21 +1088,18 @@ fn write_managed_policy_to_dir(dir: &std::path::Path, profile_id: &str) -> PathB
     path
 }
 
-fn default_managed_artifact_dir() -> PathBuf {
-    let dir = resolved_runtime_root().join("seccomp-artifacts");
+fn default_managed_artifact_dir(runtime_layout: &RuntimeLayout) -> PathBuf {
+    let dir = runtime_layout.root().join("seccomp-artifacts");
     tracing::debug!(path = %dir.display(), "seccomp artifact dir");
     dir
 }
 
-fn resolved_runtime_root() -> PathBuf {
-    firma_runtime_state::RuntimeLayout::resolve(None).map_or_else(
-        |error| {
-            let fallback = std::env::temp_dir().join("firma");
-            tracing::warn!(%error, path = %fallback.display(), "runtime layout unavailable; using temporary fallback");
-            fallback
-        },
-        firma_runtime_state::RuntimeLayout::into_root,
-    )
+fn resolved_runtime_layout() -> RuntimeLayout {
+    RuntimeLayout::resolve(None).unwrap_or_else(|error| {
+        let fallback = std::env::temp_dir().join("firma");
+        tracing::warn!(%error, path = %fallback.display(), "runtime layout unavailable; using temporary fallback");
+        RuntimeLayout::from_root(fallback)
+    })
 }
 
 pub(crate) fn env_truthy(name: &str) -> bool {

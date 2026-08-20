@@ -193,7 +193,12 @@ impl SandboxBackend for BwrapBackend {
         Ok(())
     }
 
-    fn start_agent(&self, handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
+    fn start_agent(
+        &self,
+        runtime_layout: &firma_runtime_state::RuntimeLayout,
+        handle: &SandboxHandle,
+        launch: &LaunchSpec,
+    ) -> Result<Child, RunError> {
         if !cfg!(target_os = "linux") {
             return Err(RunError::UnsupportedBackend {
                 backend: BackendKind::Bwrap.to_string(),
@@ -203,7 +208,7 @@ impl SandboxBackend for BwrapBackend {
 
         mount::reject_symlinked_firma_dirs(launch)?;
         let hardening = BwrapHardening::from_env(&launch.env);
-        let mount_plan = BwrapMountPlan::build(handle, launch, &hardening)?;
+        let mount_plan = BwrapMountPlan::build(runtime_layout, handle, launch, &hardening)?;
 
         let mut command = Command::new("bwrap");
         command.arg("--die-with-parent");
