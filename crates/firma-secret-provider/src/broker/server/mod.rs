@@ -45,7 +45,18 @@ pub mod config;
 enum BrokerListenerInner {
     Tcp(TcpListener),
     #[cfg(unix)]
-    Unix(UnixListener, PathBuf),
+    Unix {
+        listener: UnixListener,
+        path: PathBuf,
+        identity: SocketIdentity,
+    },
+}
+
+#[cfg(unix)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct SocketIdentity {
+    device: u64,
+    inode: u64,
 }
 
 /// Broker-side listener: accepts shim connections and dispatches requests.
@@ -60,10 +71,11 @@ impl BrokerListener {
     /// The endpoint must pass the transport's address-level invariants (see
     /// [`EndpointInner::parse_server`]): on Unix hosts only a Unix socket is accepted,
     /// and on any platform a non-loopback TCP endpoint is rejected. For Unix
-    /// endpoints, any stale socket file is removed before binding and the new
-    /// socket is created owner-only (`0600`), so only the owning user can
-    /// connect. For TCP endpoints with port `0`, the OS assigns a free port;
-    /// retrieve it with [`bound_endpoint`][Self::bound_endpoint].
+    /// endpoints, a stale socket is reclaimed, but an active socket or any
+    /// non-socket filesystem entry is never removed. The new socket is created
+    /// owner-only (`0600`), so only the owning user can connect. For TCP
+    /// endpoints with port `0`, the OS assigns a free port; retrieve it with
+    /// [`bound_endpoint`][Self::bound_endpoint].
     ///
     /// # Errors
     ///
@@ -84,15 +96,19 @@ impl BrokerListener {
             }
             #[cfg(unix)]
             EndpointInner::Unix(path) => {
-                if let Err(e) = std::fs::remove_file(path)
-                    && e.kind() != io::ErrorKind::NotFound
-                {
-                    return Err(e);
-                }
+                prepare_unix_socket_path(path).await?;
                 let listener = UnixListener::bind(path)?;
-                set_socket_permissions(path).await?;
+                let identity = socket_identity(path)?;
+                if let Err(error) = set_socket_permissions(path).await {
+                    let _ = remove_socket_if_same(path, identity);
+                    return Err(error);
+                }
                 Ok(Self {
-                    inner: BrokerListenerInner::Unix(listener, path.clone()),
+                    inner: BrokerListenerInner::Unix {
+                        listener,
+                        path: path.clone(),
+                        identity,
+                    },
                     config,
                 })
             }
@@ -108,7 +124,7 @@ impl BrokerListener {
         match &self.inner {
             BrokerListenerInner::Tcp(l) => Ok(EndpointInner::Tcp(l.local_addr()?)),
             #[cfg(unix)]
-            BrokerListenerInner::Unix(_, path) => Ok(EndpointInner::Unix(path.clone())),
+            BrokerListenerInner::Unix { path, .. } => Ok(EndpointInner::Unix(path.clone())),
         }
     }
 
@@ -136,7 +152,7 @@ impl BrokerListener {
                 stream: listener.accept().await?.0,
             },
             #[cfg(unix)]
-            BrokerListenerInner::Unix(listener, _) => {
+            BrokerListenerInner::Unix { listener, .. } => {
                 let (stream, _) = listener.accept().await?;
                 if let Err(error) = reject_mismatched_peer(&stream) {
                     let response = BrokerResponse::rejected(format!(
@@ -178,8 +194,8 @@ impl BrokerListener {
 impl Drop for BrokerListener {
     fn drop(&mut self) {
         #[cfg(unix)]
-        if let BrokerListenerInner::Unix(_, path) = &self.inner {
-            let _ = std::fs::remove_file(path);
+        if let BrokerListenerInner::Unix { path, identity, .. } = &self.inner {
+            let _ = remove_socket_if_same(path, *identity);
         }
     }
 }
@@ -297,6 +313,78 @@ async fn write_response(
         return write_all(stream, &payload).await;
     };
     write_all(stream, &payload).await
+}
+
+/// Reclaim `path` only when it still names the same stale Unix socket observed
+/// before the connect probe.
+#[cfg(unix)]
+async fn prepare_unix_socket_path(path: &std::path::Path) -> io::Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.file_type().is_socket() {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!("broker socket path is occupied: {}", path.display()),
+        ));
+    }
+    let identity = SocketIdentity::from_metadata(&metadata);
+    match tokio::net::UnixStream::connect(path).await {
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!("broker socket is already active: {}", path.display()),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+            if remove_socket_if_same(path, identity)? {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    format!(
+                        "broker socket path changed while binding: {}",
+                        path.display()
+                    ),
+                ))
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+impl SocketIdentity {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn socket_identity(path: &std::path::Path) -> io::Result<SocketIdentity> {
+    std::fs::symlink_metadata(path).map(|metadata| SocketIdentity::from_metadata(&metadata))
+}
+
+#[cfg(unix)]
+fn remove_socket_if_same(path: &std::path::Path, expected: SocketIdentity) -> io::Result<bool> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if SocketIdentity::from_metadata(&metadata) != expected {
+        return Ok(false);
+    }
+    std::fs::remove_file(path)?;
+    Ok(true)
 }
 
 /// Make a freshly-bound Unix socket owner-only.

@@ -448,3 +448,61 @@ async fn unix_socket_is_owner_only() {
     drop(listener);
     assert!(!path.exists(), "drop must remove the socket file");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn binding_over_active_unix_socket_is_rejected_without_unlinking_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("broker.sock");
+    let endpoint =
+        ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
+    let first = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+        .await
+        .expect("first bind");
+    let error = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+        .await
+        .err()
+        .expect("second bind must fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+    let _connection = tokio::net::UnixStream::connect(&path)
+        .await
+        .expect("first socket remains reachable");
+    drop(first);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stale_unix_socket_is_reclaimed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("broker.sock");
+    let endpoint =
+        ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
+    let stale = std::os::unix::net::UnixListener::bind(&path).expect("create stale socket");
+    drop(stale);
+    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+        .await
+        .expect("reclaim stale socket");
+    let _connection = tokio::net::UnixStream::connect(&path)
+        .await
+        .expect("replacement socket is reachable");
+    drop(listener);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_listener_does_not_remove_replacement_socket() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("broker.sock");
+    let endpoint =
+        ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
+    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+        .await
+        .expect("bind");
+    std::fs::remove_file(&path).expect("unlink original socket path");
+    let replacement =
+        std::os::unix::net::UnixListener::bind(&path).expect("bind replacement socket");
+    drop(listener);
+    assert!(path.exists(), "drop must preserve the replacement socket");
+    drop(replacement);
+    std::fs::remove_file(path).expect("remove replacement socket");
+}
