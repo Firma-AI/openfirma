@@ -79,7 +79,7 @@ fn parse_truthy(value: &str) -> bool {
 /// authority is checked against [`SandboxHandle::runtime_dir`].
 #[derive(Debug)]
 pub(super) struct BwrapMountPlan {
-    /// Backend-owned baseline filesystem and namespace setup.
+    /// Backend-owned baseline filesystem setup.
     layout: BwrapMountPhase,
     /// Ordinary operator and framework overlays.
     overlays: BwrapMountPhase,
