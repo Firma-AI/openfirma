@@ -123,10 +123,10 @@ impl BrokerListener {
     /// # Errors
     ///
     /// Returns an I/O error if accepting, reading, or writing fails, or if the
-    /// peer fails credential validation. Handler errors are serialized and
-    /// written as `{"error":"..."}` responses rather than returned here. A
-    /// returned error only affects the current connection; a robust accept
-    /// loop must keep accepting.
+    /// peer fails credential validation. Handler rejections are serialized as
+    /// `{"type":"rejected","error":"..."}` responses rather than returned
+    /// here. A returned error only affects the current connection; a robust
+    /// accept loop must keep accepting.
     pub async fn accept_one<F>(&self, handler: F) -> io::Result<()>
     where
         F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
