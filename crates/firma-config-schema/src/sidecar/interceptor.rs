@@ -3,6 +3,7 @@
 //! Representation only. `firma-sidecar` validates these values and parses
 //! them into its own interceptor configuration types.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InterceptorMode {
-    /// Pingora-based HTTP forward proxy. The agent sets
+    /// HTTP forward proxy (tokio/hyper listener). The agent sets
     /// `HTTP_PROXY=http://localhost:<port>`.
     HttpProxy,
     /// Tonic gRPC hook server. The agent calls the `Intercept` RPC directly.
@@ -34,6 +35,17 @@ impl Default for InterceptorMode {
     #[cfg(not(unix))]
     fn default() -> Self {
         Self::HttpProxy
+    }
+}
+
+impl fmt::Display for InterceptorMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HttpProxy => write!(f, "http_proxy"),
+            Self::Grpc => write!(f, "grpc"),
+            #[cfg(unix)]
+            Self::UnixSocket => write!(f, "unix_socket"),
+        }
     }
 }
 

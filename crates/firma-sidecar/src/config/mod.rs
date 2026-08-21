@@ -33,7 +33,6 @@ pub use self::tenancy::{TenancyConfig, TenancyMode};
 pub use crate::authority_credentials::SidecarCredentialsConfig;
 
 use std::collections::HashMap;
-use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
@@ -298,55 +297,10 @@ impl SidecarConfig {
 
 /// Interception mode selector.
 ///
-/// Determines which transport the sidecar uses to capture outbound
-/// agent traffic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InterceptorMode {
-    /// Pingora-based HTTP forward proxy. The agent sets
-    /// `HTTP_PROXY=http://localhost:<port>`.
-    HttpProxy,
-    /// Tonic gRPC hook server. The agent calls the `Intercept` RPC
-    /// directly.
-    Grpc,
-    /// Unix domain socket. Avoids TCP port binding in containers.
-    #[cfg(unix)]
-    #[cfg_attr(docsrs, doc(cfg(unix)))]
-    UnixSocket,
-}
-
-impl Default for InterceptorMode {
-    #[cfg(unix)]
-    fn default() -> Self {
-        Self::UnixSocket
-    }
-    #[cfg(not(unix))]
-    fn default() -> Self {
-        Self::HttpProxy
-    }
-}
-
-impl fmt::Display for InterceptorMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::HttpProxy => write!(f, "http_proxy"),
-            Self::Grpc => write!(f, "grpc"),
-            #[cfg(unix)]
-            Self::UnixSocket => write!(f, "unix_socket"),
-        }
-    }
-}
-
-impl From<schema_ic::InterceptorMode> for InterceptorMode {
-    fn from(mode: schema_ic::InterceptorMode) -> Self {
-        match mode {
-            schema_ic::InterceptorMode::HttpProxy => Self::HttpProxy,
-            schema_ic::InterceptorMode::Grpc => Self::Grpc,
-            #[cfg(unix)]
-            schema_ic::InterceptorMode::UnixSocket => Self::UnixSocket,
-        }
-    }
-}
+/// Re-exported directly from the schema crate: the enum is fieldless and
+/// identical to its representation, so a separate validated mirror would add
+/// nothing.
+pub use schema_ic::InterceptorMode;
 
 /// Interceptor settings.
 ///
@@ -395,7 +349,7 @@ impl InterceptorConfig {
     /// applied separately (see [`TryFrom`] and [`Self::validate`]).
     fn from_schema(s: schema_ic::InterceptorConfig) -> Self {
         Self {
-            mode: s.mode.into(),
+            mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
             drain_timeout_secs: s.drain_timeout_secs,
