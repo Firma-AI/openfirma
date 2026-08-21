@@ -101,12 +101,13 @@ Prefer small atomic revisions that can stand on their own when feasible.
 
 ## Planning and Review Routing
 
-Before implementing a substantial behavior, architecture, stable contract,
-migration, trust-boundary, lifecycle, or invariant-owner change, load and follow
-the [`planning-changes`](.skills/planning-changes/SKILL.md) skill. It selects a
-Full or Compact workflow and defines the evidence-backed design-plan artifact.
-Security, fail-closed, stable-contract, migration, and invariant-owner changes
-take precedence over Compact planning even when their expected diff is small.
+Before implementing any security, fail-closed, stable-contract, migration,
+lifecycle, concurrency, recovery, or invariant-owner change, load and follow
+the [`planning-changes`](.skills/planning-changes/SKILL.md) skill regardless of
+the expected size or locality. Use it for other substantial behavior or
+architecture changes as well. It selects a Full or Compact workflow and defines
+the evidence-backed design-plan artifact. Full triggers take precedence over
+both Compact planning and no-plan exemptions.
 Accepted plans and findings must have a durable, team-accessible repository path
 or URL; do not rely on an agent or private conversation as the handoff.
 

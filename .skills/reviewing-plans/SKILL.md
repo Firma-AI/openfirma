@@ -53,9 +53,10 @@ Challenge whether:
   risk reduction;
 - the artifact is decision-dense rather than a research transcript, and links
   supporting evidence instead of repeating it;
-- slices with independent invariant owners, acceptance outcomes, and failure or
-  rollback decisions are split into child plans, while deferred tactical detail
-  is planned before its slice is implemented;
+- slices with independent invariant owners or proof boundaries, acceptance
+  outcomes, and implementation, review, and shipping paths are split into child
+  plans, while deferred tactical detail is planned before its slice is
+  implemented;
 - durable facts are targeted to their canonical documentation owner; and
 - the accepted artifact, findings, and dispositions will have a durable,
   team-accessible locator independent of the planning tool or conversation.

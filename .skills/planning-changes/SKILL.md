@@ -161,9 +161,10 @@ instead of repeating research narration; place necessary inventories and raw
 evidence in a linked appendix when they would obscure the design.
 
 Split a slice into a child plan when it has its own invariant owner or proof
-boundary, independently observable acceptance outcome, and compatibility,
-rollback, or failure decisions that can be implemented and reviewed without
-the rest of the parent. The parent retains the cross-slice contract,
+boundary, an independently observable acceptance outcome, and can be
+implemented, reviewed, and shipped without the rest of the parent. Separate
+compatibility, rollback, or failure decisions are additional evidence for a
+split, not prerequisites. The parent retains the cross-slice contract,
 dependencies, and integration proof obligations.
 
 Plan at coarser granularity when a later slice's tactical choices depend on
