@@ -10,7 +10,7 @@ use firma_secret_provider::{
         client::{
             BrokerClient,
             config::BrokerClientConfig,
-            error::{BrokerClientError, ProtocolViolation, TransportError},
+            error::{BrokerClientError, OutcomeUnknownError, ProtocolViolation},
         },
         server::{BrokerListener, config::BrokerListenerConfig},
     },
@@ -356,8 +356,8 @@ async fn request_rejects_empty_response_line() {
     let error = raw_response_error(b"\n").await;
     std::assert_matches!(
         error,
-        BrokerClientError::Transport {
-            source: TransportError::Empty,
+        BrokerClientError::OutcomeUnknown {
+            source: OutcomeUnknownError::Empty,
             ..
         }
     );
@@ -427,8 +427,8 @@ async fn request_fails_closed_when_operation_times_out() {
         .await;
     std::assert_matches!(
         error,
-        Err(BrokerClientError::Transport {
-            source: TransportError::OperationTimeout,
+        Err(BrokerClientError::OutcomeUnknown {
+            source: OutcomeUnknownError::OperationTimeout,
             ..
         })
     );
@@ -448,5 +448,5 @@ async fn request_fails_fast_when_broker_is_unreachable() {
             |_| Ok(()),
         )
         .await;
-    std::assert_matches!(error, Err(BrokerClientError::Transport { .. }));
+    std::assert_matches!(error, Err(BrokerClientError::Unavailable { .. }));
 }
