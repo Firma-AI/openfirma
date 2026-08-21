@@ -9,9 +9,11 @@
 
 pub mod infra;
 pub mod interceptor;
+pub mod secret_provider;
 
 pub use infra::{
     CaConfig, CredentialConfig, CredentialMode, CredentialTransform, LogConfig, PolicyConfig,
     SidecarMode,
 };
 pub use interceptor::{ConnectRelayConfig, HttpsMitmConfig, InterceptorConfig, InterceptorMode};
+pub use secret_provider::{HttpMatcherRuleConfig, HttpSecretProviderConfig};
