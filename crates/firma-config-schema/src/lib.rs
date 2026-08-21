@@ -15,4 +15,5 @@
 //! Modules mirror the top-level `firma.toml` sections. Sections are populated
 //! incrementally as each component migrates; see the crate rollout plan.
 
+pub mod secret_matcher;
 pub mod sidecar;
