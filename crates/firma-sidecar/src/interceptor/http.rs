@@ -2490,46 +2490,63 @@ mod tests {
     }
 
     async fn start_proxy_with_mitm(
-        addr: SocketAddr,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
         mitm_config: HttpsMitmConfig,
         ca_dir: std::path::PathBuf,
-    ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
-        let interceptor = HttpInterceptor::new(addr).with_https_mitm(mitm_config, ca_dir);
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<(), super::super::InterceptorError>>,
+    ) {
+        let interceptor = HttpInterceptor::new(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .with_https_mitm(mitm_config, ca_dir);
+        let mitm_runtime = interceptor
+            .build_mitm_runtime()
+            .unwrap_or_else(|e| panic!("failed to build MITM runtime: {e}"));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|e| panic!("failed to bind proxy: {e}"));
+        let addr = listener
+            .local_addr()
+            .unwrap_or_else(|e| panic!("failed to read proxy address: {e}"));
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
-
-        for _ in 0..50 {
-            if TcpStream::connect(addr).await.is_ok() {
-                return handle;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        panic!("proxy did not become ready within 2.5 seconds");
+        let handle = tokio::spawn(async move {
+            interceptor
+                .run_with_listener_and_runtime(listener, handler, cancel_clone, mitm_runtime)
+                .await
+        });
+        (addr, handle)
     }
 
     async fn start_proxy_with_mitm_and_body_limit(
-        addr: SocketAddr,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
         mitm_config: HttpsMitmConfig,
         ca_dir: std::path::PathBuf,
         max_request_body_bytes: usize,
-    ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
-        let interceptor = HttpInterceptor::new(addr)
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<(), super::super::InterceptorError>>,
+    ) {
+        let interceptor = HttpInterceptor::new(SocketAddr::from(([127, 0, 0, 1], 0)))
             .with_https_mitm(mitm_config, ca_dir)
             .with_max_request_body_bytes(max_request_body_bytes);
+        let mitm_runtime = interceptor
+            .build_mitm_runtime()
+            .unwrap_or_else(|e| panic!("failed to build MITM runtime: {e}"));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|e| panic!("failed to bind proxy: {e}"));
+        let addr = listener
+            .local_addr()
+            .unwrap_or_else(|e| panic!("failed to read proxy address: {e}"));
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
-
-        for _ in 0..50 {
-            if TcpStream::connect(addr).await.is_ok() {
-                return handle;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        panic!("proxy did not become ready within 2.5 seconds");
+        let handle = tokio::spawn(async move {
+            interceptor
+                .run_with_listener_and_runtime(listener, handler, cancel_clone, mitm_runtime)
+                .await
+        });
+        (addr, handle)
     }
 
     async fn start_proxy_with_budget(
@@ -2674,10 +2691,8 @@ mod tests {
         });
 
         let ca_dir = tempfile::tempdir()?;
-        let proxy_address = free_addr();
         let cancel = CancellationToken::new();
-        let proxy = start_proxy_with_mitm(
-            proxy_address,
+        let (proxy_address, proxy) = start_proxy_with_mitm(
             test_handler(test_pipeline_allow_method(Method::GET, "/socket")),
             cancel.clone(),
             HttpsMitmConfig {
@@ -3213,7 +3228,6 @@ mod tests {
     #[tokio::test]
     async fn test_proxy_connect_mitm_intercepts_and_applies_l7_deny() {
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         let handler = test_handler(test_pipeline_deny_for_host("*"));
         let cancel = CancellationToken::new();
 
@@ -3226,8 +3240,7 @@ mod tests {
             ..HttpsMitmConfig::default()
         };
 
-        let server_handle = start_proxy_with_mitm(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
             handler,
             cancel.clone(),
             mitm_config,
@@ -3293,7 +3306,6 @@ Content-Length: 2\r\n\
     #[tokio::test]
     async fn test_proxy_connect_mitm_non_strict_falls_back_for_non_tls_payload() {
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         let handler = test_handler(test_pipeline_allow_connect());
         let cancel = CancellationToken::new();
 
@@ -3308,8 +3320,7 @@ Content-Length: 2\r\n\
         };
 
         let (target_addr, target_cancel) = mock_connect_target().await;
-        let server_handle = start_proxy_with_mitm(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
             handler,
             cancel.clone(),
             mitm_config,
@@ -3355,7 +3366,6 @@ Content-Length: 2\r\n\
     #[tokio::test]
     async fn test_proxy_connect_mitm_tolerates_crlf_preface_before_tls() {
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         let handler = test_handler(test_pipeline_deny_for_host("*"));
         let cancel = CancellationToken::new();
 
@@ -3368,8 +3378,7 @@ Content-Length: 2\r\n\
             ..HttpsMitmConfig::default()
         };
 
-        let server_handle = start_proxy_with_mitm(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
             handler,
             cancel.clone(),
             mitm_config,
@@ -3441,7 +3450,6 @@ Content-Length: 2\r\n\
     #[tokio::test]
     async fn test_proxy_connect_mitm_non_strict_non_tls_still_enforces_connect_policy() {
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         // Deny all CONNECT destinations.
         let handler = test_handler(test_pipeline_deny_connect_for_host("*"));
         let cancel = CancellationToken::new();
@@ -3455,8 +3463,7 @@ Content-Length: 2\r\n\
             ..HttpsMitmConfig::default()
         };
 
-        let server_handle = start_proxy_with_mitm(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
             handler,
             cancel.clone(),
             mitm_config,
@@ -3481,7 +3488,6 @@ Content-Length: 2\r\n\
     #[tokio::test]
     async fn test_proxy_connect_mitm_rejects_oversized_tunneled_body() {
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         let handler = test_handler(test_pipeline_allow_connect());
         let cancel = CancellationToken::new();
 
@@ -3494,8 +3500,7 @@ Content-Length: 2\r\n\
             ..HttpsMitmConfig::default()
         };
 
-        let server_handle = start_proxy_with_mitm_and_body_limit(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm_and_body_limit(
             handler,
             cancel.clone(),
             mitm_config,
@@ -3563,7 +3568,6 @@ Content-Length: 10\r\n\
     #[tokio::test]
     async fn test_proxy_connect_strict_mitm_preflight_failure_denies_fail_closed() {
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         let handler = test_handler(test_pipeline_allow_connect());
         let cancel = CancellationToken::new();
         let invalid_dns_host = "exa_mple.com".to_string();
@@ -3578,8 +3582,7 @@ Content-Length: 10\r\n\
             ..HttpsMitmConfig::default()
         };
 
-        let server_handle = start_proxy_with_mitm(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
             handler,
             cancel.clone(),
             mitm_config,
@@ -3619,7 +3622,6 @@ Content-Length: 10\r\n\
         // fail-closed network-layer DENY. It must surface in monitor, so
         // the proxy has to emit an audit event — not just return 403.
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         let (handler, mut audit_rx) = test_handler_with_audit(test_pipeline_allow_connect());
         let cancel = CancellationToken::new();
         let invalid_dns_host = "exa_mple.com".to_string();
@@ -3634,8 +3636,7 @@ Content-Length: 10\r\n\
             ..HttpsMitmConfig::default()
         };
 
-        let server_handle = start_proxy_with_mitm(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
             handler,
             cancel.clone(),
             mitm_config,
@@ -3672,7 +3673,6 @@ Content-Length: 10\r\n\
         // silently fall back to a blind tunnel. The CONNECT-level policy must
         // run; if it denies, the client must receive a 403 instead of a 200.
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let proxy_addr = free_addr();
         let invalid_dns_host = "exa_mple.com".to_string();
         let connect_authority = format!("{invalid_dns_host}:443");
 
@@ -3689,8 +3689,7 @@ Content-Length: 10\r\n\
             ..HttpsMitmConfig::default()
         };
 
-        let server_handle = start_proxy_with_mitm(
-            proxy_addr,
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
             handler,
             cancel.clone(),
             mitm_config,
