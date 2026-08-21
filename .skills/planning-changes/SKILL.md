@@ -15,6 +15,20 @@ questions, research notes, and drafts are transient unless the user requests
 them or they contain durable facts that belong in an existing ADR,
 architecture document, interface, or user guide.
 
+The accepted artifact and its plan-review findings must be available through a
+durable, team-accessible repository path or URL that does not depend on any
+particular agent, chat product, or private conversation. A conversation link
+may supplement that locator but cannot replace it.
+
+## Decide whether formal planning applies
+
+Do not create a formal plan for typos, prose-only corrections, formatting,
+generated-file refreshes, procedural metadata changes with an established
+workflow, behavior-preserving local refactors with no contract or invariant
+change, or single-site fixes whose cause, owner, call path, and regression proof
+are already established. Follow the repository's normal implementation and
+verification guidance instead.
+
 ## Select the planning mode
 
 Evaluate these rules in order. The first matching rule wins.
@@ -33,10 +47,10 @@ Use the full workflow when the change affects any of these:
 7. a current call path or repository contract that remains unclear or
    contradictory after initial inspection.
 
-These triggers override Compact and None even when the diff is expected to be
-small. A lower mode requires concrete repository evidence and a recorded
-reason; it must not weaken a user-requested security posture or stable
-contract.
+These triggers override Compact even when the diff is expected to be small. A
+Compact choice where Full initially appears applicable requires concrete
+repository evidence and a recorded reason; it must not weaken a user-requested
+security posture or stable contract.
 
 ### Compact
 
@@ -46,21 +60,6 @@ implementation slices are expected.
 
 Compact mode may combine research, design, and structure in one working
 context. It still requires an independent plan review.
-
-### None
-
-Do not create a formal plan for:
-
-- typos and prose-only corrections;
-- formatting or generated-file refreshes;
-- procedural metadata changes with an established workflow;
-- behavior-preserving local refactors with no contract or invariant change; or
-- single-site fixes whose cause, owner, call path, and regression proof are
-  already established.
-
-Confirm that no Full trigger applies. Record the reason in the thread or
-handoff, then follow the repository's normal implementation and verification
-guidance.
 
 ## Full workflow
 
@@ -169,6 +168,26 @@ compatibility, security posture, migration, or a public contract.
 
 Plan review never replaces post-implementation adversarial review.
 
+### 8. Publish the accepted artifact
+
+After dispositions are recorded, publish the accepted artifact and unchanged
+reviewer-authored findings at a durable location that the implementation owner,
+human reviewers, and later agents can open without access to the planning
+conversation. Suitable locations include a repository-tracked Markdown file or
+a stable team-accessible issue, pull request, or design-document URL.
+
+The artifact must record:
+
+- its durable locator and status;
+- the repository revision researched;
+- the task or requirement source;
+- any artifact it supersedes; and
+- the complete finding disposition log.
+
+Record the same locator in the implementation handoff and eventual pull request
+description. If the plan changes during implementation, update or supersede the
+durable artifact explicitly.
+
 ## Compact workflow
 
 For Compact mode:
@@ -177,8 +196,10 @@ For Compact mode:
 2. combine repository research and design;
 3. include only applicable program-design views;
 4. produce one or two vertical slices with proof obligations;
-5. assemble a concise artifact from the same template; and
-6. obtain a fresh independent review using `reviewing-plans`.
+5. assemble a concise artifact from the same template;
+6. obtain a fresh independent review using `reviewing-plans`; and
+7. publish the accepted artifact and findings at a durable, team-accessible
+   locator under the same contract as Full mode.
 
 Do not skip independent challenge merely because research and design shared a
 context.
@@ -187,6 +208,7 @@ context.
 
 Before implementation, ensure:
 
+- the accepted artifact has a durable, tool-agnostic locator;
 - every material Unknown is a visible gap or resolved decision;
 - each affected invariant has one primary owner;
 - runtime invariants have runtime or boundary proof obligations;

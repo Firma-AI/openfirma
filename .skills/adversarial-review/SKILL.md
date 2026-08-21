@@ -61,8 +61,8 @@ review its own work. Give the reviewer:
 - the PR URL, or the final revision when no PR exists;
 - the intended externally observable behavior, if the PR does not state it
   clearly;
-- the accepted design plan and its pre-review disposition log, when they exist;
-  and
+- the durable locator for the accepted design plan and its pre-review
+  disposition log when the planning workflow applied; and
 - any review priorities explicitly requested by the user.
 
 Do not give the reviewer:
@@ -76,7 +76,9 @@ Do not give the reviewer:
 The accepted plan is an intent and traceability input, not proof of
 correctness. Independently reconstruct actual behavior and report plan
 deviations, unmet proof obligations, newly reachable risks, and dispositions
-that implementation evidence contradicts.
+that implementation evidence contradicts. When the planning workflow applied
+but its artifact is missing or inaccessible, report the resulting conformance
+and proof-obligation gap instead of silently treating the plan as absent.
 
 Present the reviewer's findings to the user without silently dismissing or
 fixing them. If behavior-changing fixes are made after the review, obtain

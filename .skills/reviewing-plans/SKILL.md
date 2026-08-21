@@ -47,8 +47,10 @@ Challenge whether:
   disabled, alternate-entry, and bypass paths;
 - compatibility, migration, and failure semantics are explicit;
 - each vertical slice delivers independently verifiable behavior or bounded
-  risk reduction; and
-- durable facts are targeted to their canonical documentation owner.
+  risk reduction;
+- durable facts are targeted to their canonical documentation owner; and
+- the accepted artifact, findings, and dispositions will have a durable,
+  team-accessible locator independent of the planning tool or conversation.
 
 Conditional plan sections are required only when applicable. Independently
 challenge an unsupported `Not applicable` decision, especially for trust,
@@ -115,6 +117,12 @@ rationale, and artifact location recorded. A choice that materially affects
 product behavior, compatibility, security posture, migration, or a public
 contract requires user direction. Rejected and deferred findings remain
 visible with evidence.
+
+After disposition, the accepted artifact and unchanged reviewer-authored
+findings must be published at the durable locator named by the plan. The
+implementation handoff and eventual pull request must repeat that locator. A
+private chat or agent-thread link may supplement but not replace the
+team-accessible artifact.
 
 Pre-implementation review does not satisfy post-implementation adversarial
 review of the actual diff.

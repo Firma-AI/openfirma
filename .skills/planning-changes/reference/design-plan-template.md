@@ -8,6 +8,14 @@ Include conditional sections only when their applicability rule matches.
 ```markdown
 # <Change title>
 
+## Artifact metadata
+
+- Status: Candidate | Accepted | Superseded
+- Durable locator: <repository path or team-accessible URL>
+- Repository revision researched: <revision>
+- Task or requirement source: <locator>
+- Supersedes: Not applicable | <locator>
+
 ## Goal and acceptance outcomes
 
 - Goal:
@@ -62,6 +70,10 @@ Include conditional sections only when their applicability rule matches.
 ## Plan-review findings and dispositions
 
 <Preserve reviewer-authored findings and append dispositions.>
+
+The accepted artifact at the durable locator contains the complete disposition
+log. Conversation links may provide supplementary context but are not the
+handoff contract.
 
 ## Final verification
 
