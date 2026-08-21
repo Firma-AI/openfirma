@@ -79,6 +79,7 @@ fn load_mapping_rules(config: &config::SidecarConfig) -> anyhow::Result<config::
 /// Returns an error when the persistent backend is selected but its log
 /// file cannot be created or opened at the resolved path.
 fn build_session_state_store(
+    runtime_layout: &firma_runtime_state::RuntimeLayout,
     config: &config::SidecarConfig,
 ) -> anyhow::Result<Arc<dyn crate::enforcement::SessionStateStore>> {
     use crate::config::SessionStateBackend;
@@ -92,7 +93,6 @@ fn build_session_state_store(
             )))
         }
         SessionStateBackend::Persistent => {
-            let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)?;
             let path = match &ce.session_state_path {
                 Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
                 _ => runtime_layout.session_state(),
@@ -204,7 +204,10 @@ fn warn_on_composio_mitm_gaps(config: &config::SidecarConfig, rules: &config::Ma
 /// # Errors
 ///
 /// Returns an error when pipeline component construction fails.
-pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<PipelineRuntime> {
+pub fn build_pipeline_runtime(
+    runtime_layout: &firma_runtime_state::RuntimeLayout,
+    config: &config::SidecarConfig,
+) -> anyhow::Result<PipelineRuntime> {
     let merged_file = load_mapping_rules(config)?;
     let mapping_rules_loaded = merged_file.rule_count();
     warn_on_composio_mitm_gaps(config, &merged_file);
@@ -232,7 +235,6 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     tracing::debug!("Stage 1 using configured capability seed and authority public key");
     let token_verifier: Arc<dyn TokenVerifier + Send + Sync> =
         build_token_verifier(config.authority.public_key_path.as_deref())?.into();
-    let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None)?;
     let capabilities_dir = runtime_layout.capabilities_dir();
     let capability_map = load_capability_map(
         &config.capability_seed,
@@ -276,7 +278,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     let readiness = Arc::new(readiness);
 
     let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
-        build_session_state_store(config)?;
+        build_session_state_store(runtime_layout, config)?;
 
     let monitor_env_value = std::env::var(MONITOR_MODE_ENV).ok();
     let effective_mode = resolve_effective_mode(&config.mode, monitor_env_value.as_deref());

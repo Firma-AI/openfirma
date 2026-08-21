@@ -112,7 +112,8 @@ default_protected = false
         ),
     )?;
     let config = SidecarConfig::load_from_path(&config_path).map_err(anyhow::Error::msg)?;
-    Ok(build_pipeline_runtime(&config)?.pipeline)
+    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(directory.path());
+    Ok(build_pipeline_runtime(&runtime_layout, &config)?.pipeline)
 }
 
 fn fixed_handler(

@@ -132,6 +132,7 @@ async fn reload_hot_swaps_map_on_seed_rewrite() {
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
+        &firma_runtime_state::RuntimeLayout::from_root(dir.path()),
         &seed_config,
         Arc::clone(&verifier),
         handle.clone(),
@@ -170,6 +171,7 @@ async fn reload_keeps_previous_map_when_seed_removed() {
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
+        &firma_runtime_state::RuntimeLayout::from_root(dir.path()),
         &seed_config,
         Arc::clone(&verifier),
         handle.clone(),
@@ -210,6 +212,7 @@ async fn reload_keeps_previous_map_on_invalid_seed() {
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
+        &firma_runtime_state::RuntimeLayout::from_root(dir.path()),
         &seed_config,
         Arc::clone(&verifier),
         handle.clone(),

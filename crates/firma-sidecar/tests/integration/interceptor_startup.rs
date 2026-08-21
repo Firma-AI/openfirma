@@ -45,7 +45,8 @@ default_protected = false
     )?;
 
     let config = SidecarConfig::load_from_path(&config_path).map_err(anyhow::Error::msg)?;
-    let runtime = build_pipeline_runtime(&config)?;
+    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(temp.path());
+    let runtime = build_pipeline_runtime(&runtime_layout, &config)?;
     let connectors = build_connector_registry(&config.connector)?;
     let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(1);
     let handler = Arc::new(RequestHandler::new(runtime.pipeline, connectors, audit_tx));
