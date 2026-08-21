@@ -5,8 +5,8 @@
 //! broker dispatches each request to its handler, which applies config
 //! matching and authorization to decide whether the real CLI runs out of the
 //! sandbox; when it does, the handler intercepts the output, and the broker
-//! writes back a newline-terminated JSON response containing the base64-encoded
-//! stdout.
+//! writes back a newline-terminated JSON response containing base64-encoded,
+//! stream-tagged output chunks in observed capture order.
 //!
 //! Protocol (one round-trip per connection):
 //!
@@ -20,10 +20,12 @@
 //! [`client`] is the shim-side connector, and [`server`] is the broker-side
 //! listener.
 //!
-//! Size caps: stdout is base64-encoded onto the wire, so a configured
-//! response cap of `N` bytes admits roughly `3N/4` bytes of raw tool stdout.
-//! The [`client`] and [`server`] defaults are aligned so both sides agree on
-//! the largest request and response lines; tune them together.
+//! Size caps: process output is base64-encoded onto the wire, so a configured
+//! response cap of `N` bytes admits at most roughly `3N/4` bytes of total raw
+//! output. JSON framing and per-chunk stream metadata reduce the usable payload,
+//! especially when output is split into many small chunks. The [`client`] and
+//! [`server`] defaults are aligned so both sides agree on the largest request
+//! and response lines; tune them together.
 
 pub mod client;
 pub mod server;
