@@ -16,6 +16,7 @@ ctrlc.workspace = true
 dialoguer.workspace = true
 firma-authority.workspace = true
 firma-config-loader.workspace = true
+firma-config-schema.workspace = true
 firma-core.workspace = true
 firma-fs.workspace = true
 firma-identifiers.workspace = true

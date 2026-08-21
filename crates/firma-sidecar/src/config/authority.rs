@@ -3,12 +3,12 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use firma_identifiers::AgentId;
+use firma_config_schema::sidecar::authority::AuthorityConfig as SchemaAuthorityConfig;
+use firma_identifiers::{AgentId, AgentIdParseError};
 use hyper::Uri;
-use serde::Deserialize;
 
 use super::AuthorityTarget;
-use crate::authority_credentials::SidecarCredentialsConfig;
+use crate::authority_credentials::{SidecarCredentialsConfig, SidecarCredentialsConfigError};
 
 /// A validated Authority destination.
 ///
@@ -111,68 +111,83 @@ pub enum AuthorityEndpointError {
     UnspecifiedPhysicalIp,
 }
 
-/// Tuning for background Authority stream clients.
-#[derive(Debug, Clone, Deserialize)]
+/// Validated tuning for background Authority stream clients.
+#[derive(Debug, Clone)]
 pub struct AuthorityConfig {
     /// Authority-registered `TypeID` for the agent represented by this Sidecar.
-    #[serde(default)]
     #[expect(dead_code, reason = "accepted for configuration compatibility")]
     pub(crate) agent_id: Option<AgentId>,
-    /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`). When set, the
-    /// sidecar streams policy bundles and revocations from the Authority.
-    #[serde(default)]
+    /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
     pub url: Option<String>,
     /// Optional physical TCP destination for the Authority connection.
-    ///
-    /// `url` remains the logical HTTP and TLS origin. This override is useful
-    /// when a composition layer discovers the Authority's endpoint at runtime.
-    #[serde(default)]
     pub connect_addr: Option<SocketAddr>,
     /// Connection timeout in seconds.
-    #[serde(default = "default_connect_timeout_secs")]
     pub(crate) connect_timeout_secs: u64,
     /// Minimum reconnect backoff in milliseconds.
-    #[serde(default = "default_min_backoff_ms")]
     pub(crate) reconnect_min_backoff_ms: u64,
     /// Maximum reconnect backoff in seconds.
-    #[serde(default = "default_max_backoff_secs")]
     pub(crate) reconnect_max_backoff_secs: u64,
     /// Grace period before the revocation stream is considered ready.
-    #[serde(default = "default_readiness_grace_ms")]
     pub(crate) revocation_readiness_grace_ms: u64,
     /// Flip revocation readiness back to false on disconnect.
-    #[serde(default)]
     pub(crate) revocation_fail_closed_on_disconnect: bool,
-    /// Path to the Authority's PASETO v4 Ed25519 public key (32 raw
-    /// bytes, as written by `firma-authority generate-key`). Required
-    /// when `[capability_seed].paths` is non-empty so the sidecar can
-    /// verify the seed signatures.
-    #[serde(default)]
+    /// Path to the Authority's PASETO v4 Ed25519 public key.
     pub(crate) public_key_path: Option<PathBuf>,
     /// Path to the PEM-encoded CA certificate used to verify the Authority's
-    /// TLS certificate.
-    ///
-    /// Requirement is context-dependent and enforced in `SidecarConfig::validate`:
-    /// required for `https://` authority URLs, optional for loopback `http://`.
-    #[serde(default)]
+    /// TLS certificate. Requirement is context-dependent and enforced in
+    /// `SidecarConfig`: required for `https://` authority URLs, optional for
+    /// loopback `http://`.
     pub(crate) ca_cert_path: Option<PathBuf>,
-    /// Allow an insecure plain `http://` authority URL to a non-loopback
-    /// host. Defaults to `false` (secure-by-default).
-    #[serde(default)]
+    /// Allow an insecure plain `http://` authority URL to a non-loopback host.
     pub(crate) allow_insecure_remote_authority: bool,
     /// Path to the PEM-encoded mTLS client certificate presented to the
-    /// Authority during the TLS handshake. Required when the Authority is
-    /// configured with `mtls_client_ca_cert_path`. Must be set together
-    /// with `tls_client_key_path` or not at all.
-    #[serde(default)]
+    /// Authority. Must be set together with `tls_client_key_path` or not at all.
     pub(crate) tls_client_cert_path: Option<PathBuf>,
-    /// Path to the PEM-encoded mTLS client private key. Must be set
-    /// together with `tls_client_cert_path` or not at all.
-    #[serde(default)]
+    /// Path to the PEM-encoded mTLS client private key. Must be set together
+    /// with `tls_client_cert_path` or not at all.
     pub(crate) tls_client_key_path: Option<PathBuf>,
     /// Credentials presented on each outbound Authority RPC.
-    #[serde(default)]
     pub(crate) credentials: Option<SidecarCredentialsConfig>,
+}
+
+/// Error validating an [`AuthorityConfig`].
+#[derive(Debug, thiserror::Error)]
+pub enum AuthorityConfigError {
+    /// `agent_id` was not a valid `TypeID`.
+    #[error("authority.agent_id: {0}")]
+    AgentId(#[from] AgentIdParseError),
+    /// `connect_timeout_secs` was zero.
+    #[error("authority.connect_timeout_secs must be > 0")]
+    ZeroConnectTimeout,
+    /// `reconnect_min_backoff_ms` was zero.
+    #[error("authority.reconnect_min_backoff_ms must be > 0")]
+    ZeroMinBackoff,
+    /// `reconnect_max_backoff_secs` was zero.
+    #[error("authority.reconnect_max_backoff_secs must be > 0")]
+    ZeroMaxBackoff,
+    /// The maximum reconnect backoff was below the minimum.
+    #[error("authority.reconnect_max_backoff_secs must be >= reconnect_min_backoff_ms")]
+    MaxBackoffLessThanMin,
+    /// `public_key_path` was set but empty.
+    #[error("authority.public_key_path must not be empty when set")]
+    EmptyPublicKeyPath,
+    /// `ca_cert_path` was set but empty.
+    #[error("authority.ca_cert_path must not be empty when set")]
+    EmptyCaCertPath,
+    /// Exactly one of the mTLS client cert/key pair was set.
+    #[error(
+        "authority.tls_client_cert_path and authority.tls_client_key_path must both be set or both be unset"
+    )]
+    TlsClientPairMismatch,
+    /// `tls_client_cert_path` was set but empty.
+    #[error("authority.tls_client_cert_path must not be empty when set")]
+    EmptyTlsClientCertPath,
+    /// `tls_client_key_path` was set but empty.
+    #[error("authority.tls_client_key_path must not be empty when set")]
+    EmptyTlsClientKeyPath,
+    /// The nested credentials were invalid.
+    #[error("authority.credentials: {0}")]
+    Credentials(#[from] SidecarCredentialsConfigError),
 }
 
 impl AuthorityConfig {
@@ -187,60 +202,72 @@ impl AuthorityConfig {
             None => Ok(AuthorityTarget::Disabled),
         }
     }
+}
 
-    /// Validate authority client tuning.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable field error for invalid values.
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.connect_timeout_secs == 0 {
-            return Err("connect_timeout_secs must be > 0".to_string());
+fn require_non_empty_path(
+    path: Option<PathBuf>,
+    empty: AuthorityConfigError,
+) -> Result<Option<PathBuf>, AuthorityConfigError> {
+    if let Some(ref p) = path
+        && p.as_os_str().is_empty()
+    {
+        return Err(empty);
+    }
+    Ok(path)
+}
+
+impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
+    type Error = AuthorityConfigError;
+
+    fn try_from(s: SchemaAuthorityConfig) -> Result<Self, Self::Error> {
+        let agent_id = s.agent_id.map(|id| id.parse::<AgentId>()).transpose()?;
+        if s.connect_timeout_secs == 0 {
+            return Err(AuthorityConfigError::ZeroConnectTimeout);
         }
-        if self.reconnect_min_backoff_ms == 0 {
-            return Err("reconnect_min_backoff_ms must be > 0".to_string());
+        if s.reconnect_min_backoff_ms == 0 {
+            return Err(AuthorityConfigError::ZeroMinBackoff);
         }
-        if self.reconnect_max_backoff_secs == 0 {
-            return Err("reconnect_max_backoff_secs must be > 0".to_string());
+        if s.reconnect_max_backoff_secs == 0 {
+            return Err(AuthorityConfigError::ZeroMaxBackoff);
         }
-        let max_backoff_ms = self.reconnect_max_backoff_secs.saturating_mul(1000);
-        if max_backoff_ms < self.reconnect_min_backoff_ms {
-            return Err(
-                "reconnect_max_backoff_secs must be >= reconnect_min_backoff_ms".to_string(),
-            );
+        if s.reconnect_max_backoff_secs.saturating_mul(1000) < s.reconnect_min_backoff_ms {
+            return Err(AuthorityConfigError::MaxBackoffLessThanMin);
         }
-        if let Some(ref p) = self.public_key_path
-            && p.as_os_str().is_empty()
-        {
-            return Err("public_key_path must not be empty when set".to_string());
+        let public_key_path =
+            require_non_empty_path(s.public_key_path, AuthorityConfigError::EmptyPublicKeyPath)?;
+        let ca_cert_path =
+            require_non_empty_path(s.ca_cert_path, AuthorityConfigError::EmptyCaCertPath)?;
+        if s.tls_client_cert_path.is_some() != s.tls_client_key_path.is_some() {
+            return Err(AuthorityConfigError::TlsClientPairMismatch);
         }
-        if let Some(ref p) = self.ca_cert_path
-            && p.as_os_str().is_empty()
-        {
-            return Err("ca_cert_path must not be empty when set".to_string());
-        }
-        if self.tls_client_cert_path.is_some() != self.tls_client_key_path.is_some() {
-            return Err(
-                "tls_client_cert_path and tls_client_key_path must both be set or both be unset"
-                    .to_string(),
-            );
-        }
-        if let Some(ref p) = self.tls_client_cert_path
-            && p.as_os_str().is_empty()
-        {
-            return Err("tls_client_cert_path must not be empty when set".to_string());
-        }
-        if let Some(ref p) = self.tls_client_key_path
-            && p.as_os_str().is_empty()
-        {
-            return Err("tls_client_key_path must not be empty when set".to_string());
-        }
-        if let Some(ref credentials) = self.credentials {
-            credentials
-                .validate()
-                .map_err(|error| format!("credentials: {error}"))?;
-        }
-        Ok(())
+        let tls_client_cert_path = require_non_empty_path(
+            s.tls_client_cert_path,
+            AuthorityConfigError::EmptyTlsClientCertPath,
+        )?;
+        let tls_client_key_path = require_non_empty_path(
+            s.tls_client_key_path,
+            AuthorityConfigError::EmptyTlsClientKeyPath,
+        )?;
+        let credentials = s
+            .credentials
+            .map(SidecarCredentialsConfig::try_from)
+            .transpose()?;
+        Ok(Self {
+            agent_id,
+            url: s.url,
+            connect_addr: s.connect_addr,
+            connect_timeout_secs: s.connect_timeout_secs,
+            reconnect_min_backoff_ms: s.reconnect_min_backoff_ms,
+            reconnect_max_backoff_secs: s.reconnect_max_backoff_secs,
+            revocation_readiness_grace_ms: s.revocation_readiness_grace_ms,
+            revocation_fail_closed_on_disconnect: s.revocation_fail_closed_on_disconnect,
+            public_key_path,
+            ca_cert_path,
+            allow_insecure_remote_authority: s.allow_insecure_remote_authority,
+            tls_client_cert_path,
+            tls_client_key_path,
+            credentials,
+        })
     }
 }
 

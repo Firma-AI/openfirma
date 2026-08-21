@@ -20,16 +20,17 @@ mod enforcement;
 mod revocation;
 mod tenancy;
 
-pub use self::audit::{AuditConfig, AuditSink};
-pub use self::authority::{AuthorityConfig, AuthorityEndpoint, AuthorityEndpointError};
-pub use self::capability_seed::{CapabilitySeedConfig, SeedFile};
-pub use self::connector::ConnectorConfig;
-
-pub use self::enforcement::{
-    EnforcementConfig, MappingRuleConfig, MappingRulesFile, SessionStateBackend,
+pub use self::audit::{AuditConfig, AuditConfigError};
+pub use self::authority::{
+    AuthorityConfig, AuthorityConfigError, AuthorityEndpoint, AuthorityEndpointError,
 };
-pub use self::revocation::RevocationConfig;
-pub use self::tenancy::{TenancyConfig, TenancyMode};
+pub use self::capability_seed::{CapabilitySeedConfig, CapabilitySeedConfigError, SeedFile};
+pub use self::connector::{ConnectorConfig, ConnectorConfigError};
+pub use self::enforcement::{
+    EnforcementConfig, EnforcementConfigError, MappingRuleConfig, MappingRulesFile,
+};
+pub use self::revocation::{RevocationConfig, RevocationConfigError};
+pub use self::tenancy::TenancyConfig;
 pub use crate::authority_credentials::SidecarCredentialsConfig;
 
 use std::collections::HashMap;
@@ -39,33 +40,22 @@ use std::path::PathBuf;
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra as schema_infra;
 use firma_config_schema::sidecar::interceptor as schema_ic;
+use firma_config_schema::sidecar::local_exec as schema_le;
 use firma_core::SecretMatcher;
 use firma_http::HeaderName;
 use firma_secret_provider::{
     gateway::client::config::GatewayClientConfig, spec::http::HttpIntegrationSpec,
 };
-use serde::{Deserialize, Deserializer};
-
-/// Credential injection mode selector.
-pub use schema_infra::CredentialMode;
-/// Optional transformation applied to resolved credential material before
-/// injection.
-pub use schema_infra::CredentialTransform;
-/// Enforcement mode for the sidecar.
-///
-/// `enforce` (default): normal fail-closed operation — DENY blocks the call.
-/// `monitor`: observe-only — all calls are allowed through, but the pipeline
-/// still classifies and evaluates every request. Decisions that would have
-/// been DENY are logged as ALLOW with a `monitor_mode: <reason>` annotation
-/// so operators can audit traffic before tightening policy.
-///
-/// **Never deploy `monitor` to production.** Monitor mode is gated behind
-/// the `FIRMA_ALLOW_MONITOR_MODE=1` environment variable: setting
-/// `mode = "monitor"` without that opt-in downgrades to `enforce` at startup
-/// with an error log, so a dev config left on `monitor` cannot accidentally
-/// bypass enforcement in production. When honored, the sidecar emits a
-/// startup warning.
-pub use schema_infra::SidecarMode;
+// One-to-one config enums live in `firma_config_schema`. They are re-exported
+// only crate-internally (`pub(crate)`), never as public API, so in-crate call
+// sites keep the short `config::` path while the schema stays the single owner.
+pub(crate) use firma_config_schema::sidecar::audit::AuditSink;
+pub(crate) use firma_config_schema::sidecar::enforcement::SessionStateBackend;
+pub(crate) use firma_config_schema::sidecar::infra::{
+    CredentialMode, CredentialTransform, SidecarMode,
+};
+pub(crate) use firma_config_schema::sidecar::interceptor::InterceptorMode;
+pub(crate) use firma_config_schema::sidecar::tenancy::TenancyMode;
 
 pub(crate) enum AuthorityTarget {
     Disabled,
@@ -82,153 +72,166 @@ pub(crate) enum AuthorityTarget {
 /// logging, credentials) and enforcement-engine settings (mapping,
 /// capability validation, constraint enforcement) via
 /// [`EnforcementConfig`].
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct SidecarConfig {
-    /// Enforcement mode: `"enforce"` (default) or `"monitor"`.
-    ///
-    /// Set `mode = "monitor"` in `firma.toml` to enable observe-only mode.
-    /// Never use in production.
-    #[serde(default)]
+    /// Enforcement mode: `"enforce"` (default) or `"monitor"`. Never use
+    /// `monitor` in production.
     pub mode: SidecarMode,
-    /// Interceptor settings (mode, listen address or socket path,
-    /// drain timeout).
-    #[serde(default)]
+    /// Interceptor settings (mode, listen address or socket path, drain timeout).
     pub interceptor: InterceptorConfig,
-    /// Policy directory and optional authority URL.
-    #[serde(default)]
+    /// Policy directory.
     pub policy: PolicyConfig,
     /// Certificate authority directory.
-    #[serde(default)]
     pub(crate) ca: CaConfig,
     /// Log settings (level only; file/filter come from CLI args).
-    #[serde(default)]
     log: LogConfig,
-    /// Per-target credential injection entries, keyed by an arbitrary
-    /// label (e.g. `[credentials.openai]`).
-    #[serde(default)]
+    /// Per-target credential injection entries, keyed by an arbitrary label.
     pub(crate) credentials: HashMap<String, CredentialConfig>,
-    /// Outbound connector settings (default timeout + per-host
-    /// overrides with rate limits).
-    #[serde(default)]
+    /// Outbound connector settings (default timeout + per-host overrides).
     pub connector: ConnectorConfig,
     /// Background Authority stream client tuning.
-    #[serde(default)]
     pub authority: AuthorityConfig,
-    /// Enforcement engine settings (mapping rules, capability
-    /// validation, constraint enforcement).
-    #[serde(flatten)]
+    /// Enforcement engine settings (mapping, capability validation, constraint
+    /// enforcement).
     pub(crate) enforcement: EnforcementConfig,
     /// Revocation cache settings (bloom filter + LRU sizing).
-    #[serde(default)]
     pub(crate) revocation: RevocationConfig,
-    /// Static capability provisioning for the demo path. Until the
-    /// sidecar wires the gRPC `IssueCapability` client, operators can
-    /// pre-issue tokens via `firma-authority issue` and list the
-    /// resulting TOML files here.
-    #[serde(default)]
+    /// Static capability provisioning seed files.
     pub capability_seed: CapabilitySeedConfig,
     /// Audit event emitter settings.
-    #[serde(default)]
     pub audit: AuditConfig,
-    /// Local-exec governance endpoint configuration.
-    ///
-    /// When set, the sidecar binds a UDS endpoint that `firma-run` clients
-    /// contact for pre-execution governance decisions. If absent, the
+    /// Local-exec governance endpoint configuration. When absent, the
     /// local-exec endpoint is not started.
-    #[serde(default)]
     pub(crate) local_exec: Option<LocalExecConfig>,
     /// Tenancy settings (agent isolation mode).
-    #[serde(default)]
     pub(crate) tenancy: TenancyConfig,
-    /// HTTP secret-provider registry for MITM interception — a distinct
-    /// field name from firma-run's own `secret_providers` so the two are
-    /// never confused. Loaded once at startup; not hot-reloaded.
-    ///
-    /// As of this writing, `firma-run`'s `sidecar::config::synthesize` does
-    /// **not** yet populate this field from its own resolved
-    /// `secret_providers` config at autostart; an operator (or an
-    /// integration ahead of that work landing) must hand-write it directly
-    /// into the sidecar's `firma.toml`. Treat that as the currently
-    /// supported path until the autostart mirroring lands.
-    #[serde(default)]
+    /// HTTP secret-provider registry for MITM interception.
     pub http_secret_providers: Vec<HttpIntegrationSpec<SecretMatcher>>,
-    /// Tunable timeouts and limits for the secret-gateway client used to
-    /// resolve and push placeholders against firma-run's broker. The
-    /// gateway's address itself is not configured here: it comes from the
-    /// `FIRMA_SECRET_GATEWAY_ADDR` environment variable. Rehydration stays
-    /// disabled when that variable is unset; configuring HTTP providers
-    /// without it rejects Sidecar startup.
-    ///
-    /// As of this writing, `firma-run` does not yet set this variable at
-    /// autostart; an operator must set it in the sidecar's process
-    /// environment directly until that wiring lands.
-    #[serde(default)]
+    /// Tunable timeouts and limits for the secret-gateway client.
     pub secret_gateway: GatewayClientConfig,
 }
 
+/// Error building or loading a validated [`SidecarConfig`].
+#[derive(Debug, thiserror::Error)]
+pub enum SidecarConfigError {
+    /// The config file could not be read.
+    #[error("failed to read config file {path}: {source}")]
+    Read {
+        /// The config file path.
+        path: PathBuf,
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The config file could not be parsed as TOML.
+    #[error("failed to parse config file {path}: {source}")]
+    Parse {
+        /// The config file path.
+        path: PathBuf,
+        /// The underlying TOML error.
+        #[source]
+        source: toml::de::Error,
+    },
+    /// The `[interceptor]` section was invalid.
+    #[error("interceptor: {0}")]
+    Interceptor(#[from] InterceptorConfigError),
+    /// The `[policy]` section was invalid.
+    #[error("{0}")]
+    Policy(#[from] PolicyConfigError),
+    /// The `[ca]` section was invalid.
+    #[error("{0}")]
+    Ca(#[from] CaConfigError),
+    /// The `[log]` section was invalid.
+    #[error("{0}")]
+    Log(#[from] LogConfigError),
+    /// A `[credentials.*]` entry was invalid.
+    #[error("credentials.{label}: {source}")]
+    Credential {
+        /// The credential label.
+        label: String,
+        /// The credential validation failure.
+        #[source]
+        source: CredentialConfigError,
+    },
+    /// The `[connector]` section was invalid.
+    #[error("connector: {0}")]
+    Connector(#[from] ConnectorConfigError),
+    /// The `[authority]` section was invalid.
+    #[error("authority: {0}")]
+    Authority(#[from] AuthorityConfigError),
+    /// An enforcement section was invalid.
+    #[error("{0}")]
+    Enforcement(#[from] EnforcementConfigError),
+    /// The `[revocation]` section was invalid.
+    #[error("revocation: {0}")]
+    Revocation(#[from] RevocationConfigError),
+    /// The `[capability_seed]` section was invalid.
+    #[error("{0}")]
+    CapabilitySeed(#[from] CapabilitySeedConfigError),
+    /// The `[audit]` section was invalid.
+    #[error("audit: {0}")]
+    Audit(#[from] AuditConfigError),
+    /// The `[local_exec]` section was invalid.
+    #[error("local_exec: {0}")]
+    LocalExec(#[from] LocalExecConfigError),
+    /// An `[[http_secret_providers]]` entry was invalid.
+    #[error("http_secret_providers: {0}")]
+    HttpSecretProvider(
+        #[from] firma_secret_provider::spec::http::HttpSecretProviderConfigError,
+    ),
+    /// The Authority endpoint (`url` / `connect_addr`) was invalid.
+    #[error("authority: {0}")]
+    AuthorityEndpoint(#[from] AuthorityEndpointError),
+    /// A validated Authority endpoint unexpectedly had no host.
+    #[error("authority: validated endpoint unexpectedly has no host")]
+    AuthorityEndpointMissingHost,
+    /// `capability_seed.paths` was non-empty without an Authority public key.
+    #[error("authority.public_key_path must be set when capability_seed.paths is non-empty")]
+    MissingPublicKeyForSeeds,
+    /// An `https://` Authority URL was configured without a CA certificate.
+    #[error("authority.ca_cert_path must be set when authority.url uses https://")]
+    MissingCaCertForHttps,
+    /// An insecure `http://` Authority URL targeted a non-loopback host.
+    #[error(
+        "authority.url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true"
+    )]
+    InsecureNonLoopbackAuthority,
+}
+
 impl SidecarConfig {
-    /// Load a sidecar configuration from a TOML file and validate it.
+    /// Load and validate a sidecar configuration from a TOML file.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read, the TOML is invalid, or
-    /// validation fails.
-    pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let config: Self = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        config.validate()?;
-        Ok(config)
+    /// Returns [`SidecarConfigError`] if the file cannot be read, the TOML is
+    /// invalid, or any section fails validation.
+    pub fn load_from_path(path: &std::path::Path) -> Result<Self, SidecarConfigError> {
+        let text =
+            std::fs::read_to_string(path).map_err(|source| SidecarConfigError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        let schema: firma_config_schema::sidecar::SidecarConfig =
+            toml::from_str(&text).map_err(|source| SidecarConfigError::Parse {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        Self::try_from(schema)
     }
 
-    /// Validate the entire configuration tree.
-    ///
-    /// Call immediately after deserialization to surface
-    /// misconfigurations at startup rather than at request time.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable message identifying the first invalid
-    /// field.
-    pub fn validate(&self) -> Result<(), String> {
-        self.interceptor.validate()?;
-        self.policy.validate()?;
-        self.ca.validate()?;
-        self.log.validate()?;
-        for (label, cred) in &self.credentials {
-            cred.validate()
-                .map_err(|e| format!("credentials.{label}: {e}"))?;
-        }
-        self.connector
-            .validate()
-            .map_err(|e| format!("connector: {e}"))?;
-        self.authority
-            .validate()
-            .map_err(|e| format!("authority: {e}"))?;
-        let authority_target = self
-            .authority
-            .target()
-            .map_err(|e| format!("authority: {e}"))?;
-        self.enforcement.validate()?;
-        self.revocation.validate()?;
-        self.capability_seed
-            .validate()
-            .map_err(|e| format!("capability_seed: {e}"))?;
+    /// Cross-section validations that span more than one config section.
+    fn validate_cross_fields(&self) -> Result<(), SidecarConfigError> {
         if !self.capability_seed.paths.is_empty() && self.authority.public_key_path.is_none() {
-            return Err(
-                "authority.public_key_path must be set when capability_seed.paths is non-empty"
-                    .to_string(),
-            );
+            return Err(SidecarConfigError::MissingPublicKeyForSeeds);
         }
-        if let AuthorityTarget::Enabled(endpoint) = authority_target {
-            let host = endpoint.origin().host().ok_or_else(|| {
-                "authority: validated endpoint unexpectedly has no host".to_string()
-            })?;
+        if let AuthorityTarget::Enabled(endpoint) = self.authority.target()? {
+            let host = endpoint
+                .origin()
+                .host()
+                .ok_or(SidecarConfigError::AuthorityEndpointMissingHost)?;
             if endpoint.is_https() {
                 if self.authority.ca_cert_path.is_none() {
-                    return Err(
-                        "authority.ca_cert_path must be set when authority.url uses https://"
-                            .to_string(),
-                    );
+                    return Err(SidecarConfigError::MissingCaCertForHttps);
                 }
             } else {
                 let is_loopback = endpoint.connect_addr().map_or_else(
@@ -242,13 +245,9 @@ impl SidecarConfig {
                     |connect_addr| connect_addr.ip().is_loopback(),
                 );
                 if !is_loopback && !self.authority.allow_insecure_remote_authority {
-                    return Err("authority.url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true".to_string());
+                    return Err(SidecarConfigError::InsecureNonLoopbackAuthority);
                 }
             }
-        }
-        self.audit.validate().map_err(|e| format!("audit: {e}"))?;
-        if let Some(ref le) = self.local_exec {
-            le.validate().map_err(|e| format!("local_exec: {e}"))?;
         }
         Ok(())
     }
@@ -291,17 +290,54 @@ impl SidecarConfig {
     }
 }
 
+impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
+    type Error = SidecarConfigError;
+
+    fn try_from(s: firma_config_schema::sidecar::SidecarConfig) -> Result<Self, Self::Error> {
+        let mut credentials = HashMap::with_capacity(s.credentials.len());
+        for (label, cred) in s.credentials {
+            let validated = CredentialConfig::try_from(cred).map_err(|source| {
+                SidecarConfigError::Credential {
+                    label: label.clone(),
+                    source,
+                }
+            })?;
+            credentials.insert(label, validated);
+        }
+        let http_secret_providers = s
+            .http_secret_providers
+            .into_iter()
+            .map(HttpIntegrationSpec::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        let config = Self {
+            mode: s.mode,
+            interceptor: s.interceptor.try_into()?,
+            policy: s.policy.try_into()?,
+            ca: s.ca.try_into()?,
+            log: s.log.try_into()?,
+            credentials,
+            connector: s.connector.try_into()?,
+            authority: s.authority.try_into()?,
+            enforcement: s.enforcement.try_into()?,
+            revocation: s.revocation.try_into()?,
+            capability_seed: s.capability_seed.try_into()?,
+            audit: s.audit.try_into()?,
+            local_exec: s.local_exec.map(LocalExecConfig::try_from).transpose()?,
+            tenancy: s.tenancy,
+            http_secret_providers,
+            secret_gateway: s.secret_gateway,
+        };
+        config.validate_cross_fields()?;
+        Ok(config)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Infrastructure sections
 // ---------------------------------------------------------------------------
 
 /// Interception mode selector.
 ///
-/// Re-exported directly from the schema crate: the enum is fieldless and
-/// identical to its representation, so a separate validated mirror would add
-/// nothing.
-pub use schema_ic::InterceptorMode;
-
 /// Interceptor settings.
 ///
 /// Selects the interception mode and supplies mode-specific
@@ -344,85 +380,91 @@ pub struct InterceptorConfig {
     pub(crate) total_body_budget_bytes: usize,
 }
 
-impl InterceptorConfig {
-    /// Infallible field mapping from the schema representation. Validation is
-    /// applied separately (see [`TryFrom`] and [`Self::validate`]).
-    fn from_schema(s: schema_ic::InterceptorConfig) -> Self {
-        Self {
+/// Error validating an [`InterceptorConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InterceptorConfigError {
+    /// `drain_timeout_secs` was zero.
+    #[error("interceptor.drain_timeout_secs must be > 0")]
+    ZeroDrainTimeout,
+    /// `max_request_body_bytes` was zero.
+    #[error("interceptor.max_request_body_bytes must be > 0")]
+    ZeroMaxRequestBody,
+    /// `max_decompressed_body_size` was zero.
+    #[error("interceptor.max_decompressed_body_size must be > 0")]
+    ZeroMaxDecompressedBody,
+    /// `max_decompressed_body_size` was too large for this platform's `usize`.
+    #[error("interceptor.max_decompressed_body_size is too large for this platform")]
+    MaxDecompressedBodyTooLarge,
+    /// `total_body_budget_bytes` was zero.
+    #[error("interceptor.total_body_budget_bytes must be > 0")]
+    ZeroTotalBodyBudget,
+    /// The total body budget was below the per-request maximum.
+    #[error("interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_bytes")]
+    TotalBodyBudgetBelowRequest,
+    /// The CONNECT/MITM relay settings were invalid.
+    #[error(transparent)]
+    ConnectRelay(#[from] ConnectRelayConfigError),
+    /// The HTTPS MITM settings were invalid.
+    #[error(transparent)]
+    HttpsMitm(#[from] HttpsMitmConfigError),
+    /// `unix_socket` mode was selected but `socket_path` was empty.
+    #[cfg(unix)]
+    #[error("interceptor.socket_path must not be empty when mode is unix_socket")]
+    SocketPathEmpty,
+    /// `unix_socket` mode was selected without a `socket_path`.
+    #[cfg(unix)]
+    #[error("interceptor.socket_path is required when mode is unix_socket")]
+    SocketPathRequired,
+}
+
+impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
+    type Error = InterceptorConfigError;
+
+    fn try_from(s: schema_ic::InterceptorConfig) -> Result<Self, Self::Error> {
+        let config = Self {
             mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
             drain_timeout_secs: s.drain_timeout_secs,
             max_request_body_bytes: s.max_request_body_bytes,
             max_decompressed_body_size: s.max_decompressed_body_size,
-            connect_relay: s.connect_relay.into(),
-            https_mitm: s.https_mitm.into(),
+            connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
+            https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
             total_body_budget_bytes: s.total_body_budget_bytes,
+        };
+        if config.drain_timeout_secs == 0 {
+            return Err(InterceptorConfigError::ZeroDrainTimeout);
         }
-    }
-}
-
-impl<'de> Deserialize<'de> for InterceptorConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Map only. Validation is deferred to `SidecarConfig::validate` so the
-        // whole tree surfaces its first invalid field consistently, matching
-        // the other infra sub-configs (`PolicyConfig`, `CaConfig`, `LogConfig`).
-        Ok(Self::from_schema(
-            schema_ic::InterceptorConfig::deserialize(deserializer)?,
-        ))
+        if config.max_request_body_bytes == 0 {
+            return Err(InterceptorConfigError::ZeroMaxRequestBody);
+        }
+        if config.max_decompressed_body_size.as_u64() == 0 {
+            return Err(InterceptorConfigError::ZeroMaxDecompressedBody);
+        }
+        if config.max_decompressed_body_bytes() == usize::MAX {
+            return Err(InterceptorConfigError::MaxDecompressedBodyTooLarge);
+        }
+        if config.total_body_budget_bytes == 0 {
+            return Err(InterceptorConfigError::ZeroTotalBodyBudget);
+        }
+        if config.total_body_budget_bytes < config.max_request_body_bytes {
+            return Err(InterceptorConfigError::TotalBodyBudgetBelowRequest);
+        }
+        #[cfg(unix)]
+        if config.mode == InterceptorMode::UnixSocket {
+            match &config.socket_path {
+                Some(p) if p.as_os_str().is_empty() => {
+                    return Err(InterceptorConfigError::SocketPathEmpty);
+                }
+                None => return Err(InterceptorConfigError::SocketPathRequired),
+                _ => {}
+            }
+        }
+        Ok(config)
     }
 }
 
 impl InterceptorConfig {
-    fn validate(&self) -> Result<(), String> {
-        if self.drain_timeout_secs == 0 {
-            return Err("interceptor.drain_timeout_secs must be > 0".into());
-        }
-        if self.max_request_body_bytes == 0 {
-            return Err("interceptor.max_request_body_bytes must be > 0".into());
-        }
-        if self.max_decompressed_body_size.as_u64() == 0 {
-            return Err("interceptor.max_decompressed_body_size must be > 0".into());
-        }
-        if self.max_decompressed_body_bytes() == usize::MAX {
-            return Err(format!(
-                "interceptor.max_decompressed_body_size can't be >= {}",
-                ByteSize::b(u64::try_from(usize::MAX).unwrap_or(u64::MAX))
-            ));
-        }
-        if self.total_body_budget_bytes == 0 {
-            return Err("interceptor.total_body_budget_bytes must be > 0".into());
-        }
-        if self.total_body_budget_bytes < self.max_request_body_bytes {
-            return Err(
-                "interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_bytes"
-                    .into(),
-            );
-        }
-        self.connect_relay.validate()?;
-        self.https_mitm.validate()?;
-        #[cfg(unix)]
-        if self.mode == InterceptorMode::UnixSocket {
-            match &self.socket_path {
-                Some(p) if p.as_os_str().is_empty() => {
-                    return Err(
-                        "interceptor.socket_path must not be empty when mode is unix_socket".into(),
-                    );
-                }
-                None => {
-                    return Err(
-                        "interceptor.socket_path is required when mode is unix_socket".into(),
-                    );
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
     #[must_use]
     pub fn max_decompressed_body_bytes(&self) -> usize {
         // the only way this conversion can fail is that we're running on a 32bit system and
@@ -436,7 +478,18 @@ impl InterceptorConfig {
 
 impl Default for InterceptorConfig {
     fn default() -> Self {
-        Self::from_schema(schema_ic::InterceptorConfig::default())
+        let d = schema_ic::InterceptorConfig::default();
+        Self {
+            mode: d.mode,
+            listen_addr: d.listen_addr,
+            socket_path: d.socket_path,
+            drain_timeout_secs: d.drain_timeout_secs,
+            max_request_body_bytes: d.max_request_body_bytes,
+            max_decompressed_body_size: d.max_decompressed_body_size,
+            connect_relay: ConnectRelayConfig::default(),
+            https_mitm: HttpsMitmConfig::default(),
+            total_body_budget_bytes: d.total_body_budget_bytes,
+        }
     }
 }
 
@@ -449,30 +502,41 @@ pub struct ConnectRelayConfig {
     pub(crate) session_max_secs: u64,
 }
 
-impl From<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
-    fn from(s: schema_ic::ConnectRelayConfig) -> Self {
-        Self {
-            setup_timeout_secs: s.setup_timeout_secs,
-            session_max_secs: s.session_max_secs,
-        }
-    }
+/// Error validating a [`ConnectRelayConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ConnectRelayConfigError {
+    /// `setup_timeout_secs` was zero.
+    #[error("interceptor.connect_relay.setup_timeout_secs must be > 0")]
+    ZeroSetupTimeout,
+    /// `session_max_secs` was zero.
+    #[error("interceptor.connect_relay.session_max_secs must be > 0")]
+    ZeroSessionMax,
 }
 
-impl ConnectRelayConfig {
-    fn validate(&self) -> Result<(), String> {
-        if self.setup_timeout_secs == 0 {
-            return Err("interceptor.connect_relay.setup_timeout_secs must be > 0".into());
+impl TryFrom<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
+    type Error = ConnectRelayConfigError;
+
+    fn try_from(s: schema_ic::ConnectRelayConfig) -> Result<Self, Self::Error> {
+        if s.setup_timeout_secs == 0 {
+            return Err(ConnectRelayConfigError::ZeroSetupTimeout);
         }
-        if self.session_max_secs == 0 {
-            return Err("interceptor.connect_relay.session_max_secs must be > 0".into());
+        if s.session_max_secs == 0 {
+            return Err(ConnectRelayConfigError::ZeroSessionMax);
         }
-        Ok(())
+        Ok(Self {
+            setup_timeout_secs: s.setup_timeout_secs,
+            session_max_secs: s.session_max_secs,
+        })
     }
 }
 
 impl Default for ConnectRelayConfig {
     fn default() -> Self {
-        Self::from(schema_ic::ConnectRelayConfig::default())
+        let d = schema_ic::ConnectRelayConfig::default();
+        Self {
+            setup_timeout_secs: d.setup_timeout_secs,
+            session_max_secs: d.session_max_secs,
+        }
     }
 }
 
@@ -501,9 +565,25 @@ pub struct HttpsMitmConfig {
     pub(crate) strict_hosts: Vec<String>,
 }
 
-impl From<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
-    fn from(s: schema_ic::HttpsMitmConfig) -> Self {
-        Self {
+/// Error validating an [`HttpsMitmConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HttpsMitmConfigError {
+    /// A configured host pattern was invalid.
+    #[error(transparent)]
+    HostPattern(#[from] HostPatternError),
+    /// `cert_ttl_secs` was zero while interception was active.
+    #[error("interceptor.https_mitm.cert_ttl_secs must be > 0")]
+    ZeroCertTtl,
+    /// `cert_cache_capacity` was zero while interception was active.
+    #[error("interceptor.https_mitm.cert_cache_capacity must be > 0")]
+    ZeroCertCacheCapacity,
+}
+
+impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
+    type Error = HttpsMitmConfigError;
+
+    fn try_from(s: schema_ic::HttpsMitmConfig) -> Result<Self, Self::Error> {
+        let config = Self {
             enabled: s.enabled,
             ca_cert_path: s.ca_cert_path,
             ca_key_path: s.ca_key_path,
@@ -512,7 +592,24 @@ impl From<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
             cert_ttl_secs: s.cert_ttl_secs,
             cert_cache_capacity: s.cert_cache_capacity,
             strict_hosts: s.strict_hosts,
+        };
+        validate_host_patterns(
+            "interceptor.https_mitm.intercept_hosts",
+            &config.intercept_hosts,
+        )?;
+        validate_host_patterns("interceptor.https_mitm.bypass_hosts", &config.bypass_hosts)?;
+        validate_host_patterns("interceptor.https_mitm.strict_hosts", &config.strict_hosts)?;
+        // Empty intercept_hosts → MITM inactive (see `is_active`); skip the
+        // active-only invariants below instead of rejecting the config.
+        if config.is_active() {
+            if config.cert_ttl_secs == 0 {
+                return Err(HttpsMitmConfigError::ZeroCertTtl);
+            }
+            if config.cert_cache_capacity == 0 {
+                return Err(HttpsMitmConfigError::ZeroCertCacheCapacity);
+            }
         }
+        Ok(config)
     }
 }
 
@@ -559,34 +656,21 @@ impl HttpsMitmConfig {
         self
     }
 
-    fn validate(&self) -> Result<(), String> {
-        validate_host_patterns(
-            "interceptor.https_mitm.intercept_hosts",
-            &self.intercept_hosts,
-        )?;
-        validate_host_patterns("interceptor.https_mitm.bypass_hosts", &self.bypass_hosts)?;
-        validate_host_patterns("interceptor.https_mitm.strict_hosts", &self.strict_hosts)?;
-
-        // Empty intercept_hosts → MITM inactive (see `is_active`); skip the
-        // active-only invariants below instead of rejecting the config.
-        if !self.is_active() {
-            return Ok(());
-        }
-
-        if self.cert_ttl_secs == 0 {
-            return Err("interceptor.https_mitm.cert_ttl_secs must be > 0".to_string());
-        }
-        if self.cert_cache_capacity == 0 {
-            return Err("interceptor.https_mitm.cert_cache_capacity must be > 0".to_string());
-        }
-
-        Ok(())
-    }
 }
 
 impl Default for HttpsMitmConfig {
     fn default() -> Self {
-        Self::from(schema_ic::HttpsMitmConfig::default())
+        let d = schema_ic::HttpsMitmConfig::default();
+        Self {
+            enabled: d.enabled,
+            ca_cert_path: d.ca_cert_path,
+            ca_key_path: d.ca_key_path,
+            intercept_hosts: d.intercept_hosts,
+            bypass_hosts: d.bypass_hosts,
+            cert_ttl_secs: d.cert_ttl_secs,
+            cert_cache_capacity: d.cert_cache_capacity,
+            strict_hosts: d.strict_hosts,
+        }
     }
 }
 
@@ -597,33 +681,30 @@ pub struct PolicyConfig {
     pub dir: PathBuf,
 }
 
-impl From<schema_infra::PolicyConfig> for PolicyConfig {
-    fn from(s: schema_infra::PolicyConfig) -> Self {
-        Self { dir: s.dir }
-    }
+/// Error validating a [`PolicyConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PolicyConfigError {
+    /// `policy.dir` was empty.
+    #[error("policy.dir must not be empty")]
+    EmptyDir,
 }
 
-impl<'de> Deserialize<'de> for PolicyConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(schema_infra::PolicyConfig::deserialize(deserializer)?.into())
-    }
-}
+impl TryFrom<schema_infra::PolicyConfig> for PolicyConfig {
+    type Error = PolicyConfigError;
 
-impl PolicyConfig {
-    fn validate(&self) -> Result<(), String> {
-        if self.dir.as_os_str().is_empty() {
-            return Err("policy.dir must not be empty".into());
+    fn try_from(s: schema_infra::PolicyConfig) -> Result<Self, Self::Error> {
+        if s.dir.as_os_str().is_empty() {
+            return Err(PolicyConfigError::EmptyDir);
         }
-        Ok(())
+        Ok(Self { dir: s.dir })
     }
 }
 
 impl Default for PolicyConfig {
     fn default() -> Self {
-        schema_infra::PolicyConfig::default().into()
+        Self {
+            dir: schema_infra::PolicyConfig::default().dir,
+        }
     }
 }
 
@@ -634,33 +715,30 @@ pub struct CaConfig {
     pub(crate) dir: PathBuf,
 }
 
-impl From<schema_infra::CaConfig> for CaConfig {
-    fn from(s: schema_infra::CaConfig) -> Self {
-        Self { dir: s.dir }
-    }
+/// Error validating a [`CaConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CaConfigError {
+    /// `ca.dir` was empty.
+    #[error("ca.dir must not be empty")]
+    EmptyDir,
 }
 
-impl<'de> Deserialize<'de> for CaConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(schema_infra::CaConfig::deserialize(deserializer)?.into())
-    }
-}
+impl TryFrom<schema_infra::CaConfig> for CaConfig {
+    type Error = CaConfigError;
 
-impl CaConfig {
-    fn validate(&self) -> Result<(), String> {
-        if self.dir.as_os_str().is_empty() {
-            return Err("ca.dir must not be empty".into());
+    fn try_from(s: schema_infra::CaConfig) -> Result<Self, Self::Error> {
+        if s.dir.as_os_str().is_empty() {
+            return Err(CaConfigError::EmptyDir);
         }
-        Ok(())
+        Ok(Self { dir: s.dir })
     }
 }
 
 impl Default for CaConfig {
     fn default() -> Self {
-        schema_infra::CaConfig::default().into()
+        Self {
+            dir: schema_infra::CaConfig::default().dir,
+        }
     }
 }
 
@@ -674,38 +752,34 @@ pub struct LogConfig {
     level: String,
 }
 
-impl From<schema_infra::LogConfig> for LogConfig {
-    fn from(s: schema_infra::LogConfig) -> Self {
-        Self { level: s.level }
-    }
+/// Error validating a [`LogConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LogConfigError {
+    /// `log.level` was not a recognized level.
+    #[error("log.level '{level}' is invalid; expected one of: trace, debug, info, warn, error")]
+    InvalidLevel {
+        /// The rejected level string.
+        level: String,
+    },
 }
 
-impl<'de> Deserialize<'de> for LogConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(schema_infra::LogConfig::deserialize(deserializer)?.into())
-    }
-}
+impl TryFrom<schema_infra::LogConfig> for LogConfig {
+    type Error = LogConfigError;
 
-impl LogConfig {
-    fn validate(&self) -> Result<(), String> {
+    fn try_from(s: schema_infra::LogConfig) -> Result<Self, Self::Error> {
         let valid = ["trace", "debug", "info", "warn", "error"];
-        if !valid.contains(&self.level.to_lowercase().as_str()) {
-            return Err(format!(
-                "log.level '{}' is invalid; expected one of: {}",
-                self.level,
-                valid.join(", ")
-            ));
+        if !valid.contains(&s.level.to_lowercase().as_str()) {
+            return Err(LogConfigError::InvalidLevel { level: s.level });
         }
-        Ok(())
+        Ok(Self { level: s.level })
     }
 }
 
 impl Default for LogConfig {
     fn default() -> Self {
-        schema_infra::LogConfig::default().into()
+        Self {
+            level: schema_infra::LogConfig::default().level,
+        }
     }
 }
 
@@ -736,14 +810,62 @@ pub struct CredentialConfig {
     pub(crate) secret_path: Option<PathBuf>,
 }
 
+/// Error validating a [`CredentialConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CredentialConfigError {
+    /// `target_host` was empty.
+    #[error("target_host must not be empty")]
+    EmptyTargetHost,
+    /// `header` was not a valid HTTP header name.
+    #[error("header '{header}' is invalid")]
+    InvalidHeader {
+        /// The rejected header string.
+        header: String,
+    },
+    /// `prefix` was combined with `transform`.
+    #[error("prefix cannot be combined with transform")]
+    PrefixWithTransform,
+    /// `basic` mode was selected without `value_from_env`.
+    #[error("value_from_env is required for basic mode")]
+    ValueFromEnvRequired,
+    /// `vault` mode was selected without `secret_path`.
+    #[error("secret_path is required for vault mode")]
+    SecretPathRequired,
+}
+
 impl TryFrom<schema_infra::CredentialConfig> for CredentialConfig {
-    type Error = String;
+    type Error = CredentialConfigError;
 
     fn try_from(s: schema_infra::CredentialConfig) -> Result<Self, Self::Error> {
-        let header = s
-            .header
-            .parse::<HeaderName>()
-            .map_err(|e| format!("header '{}' is invalid: {e}", s.header))?;
+        if s.target_host.trim().is_empty() {
+            return Err(CredentialConfigError::EmptyTargetHost);
+        }
+        let header = s.header.parse::<HeaderName>().map_err(|_| {
+            CredentialConfigError::InvalidHeader {
+                header: s.header.clone(),
+            }
+        })?;
+        if s.transform.is_some() && s.prefix.is_some() {
+            return Err(CredentialConfigError::PrefixWithTransform);
+        }
+        match s.mode {
+            CredentialMode::Basic => {
+                if s.value_from_env.as_deref().unwrap_or("").trim().is_empty() {
+                    return Err(CredentialConfigError::ValueFromEnvRequired);
+                }
+            }
+            CredentialMode::Vault => {
+                if s.secret_path
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+                {
+                    return Err(CredentialConfigError::SecretPathRequired);
+                }
+            }
+        }
         Ok(Self {
             mode: s.mode,
             target_host: s.target_host,
@@ -753,49 +875,6 @@ impl TryFrom<schema_infra::CredentialConfig> for CredentialConfig {
             value_from_env: s.value_from_env,
             secret_path: s.secret_path,
         })
-    }
-}
-
-impl<'de> Deserialize<'de> for CredentialConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let schema = schema_infra::CredentialConfig::deserialize(deserializer)?;
-        Self::try_from(schema).map_err(serde::de::Error::custom)
-    }
-}
-
-impl CredentialConfig {
-    fn validate(&self) -> Result<(), String> {
-        if self.target_host.trim().is_empty() {
-            return Err("target_host must not be empty".into());
-        }
-        if self.header.as_str().trim().is_empty() {
-            return Err("header must not be empty".into());
-        }
-        if self.transform.is_some() && self.prefix.is_some() {
-            return Err("prefix cannot be combined with transform".into());
-        }
-        match self.mode {
-            CredentialMode::Basic => {
-                let env = self.value_from_env.as_deref().unwrap_or("");
-                if env.trim().is_empty() {
-                    return Err("value_from_env is required for basic mode".into());
-                }
-            }
-            CredentialMode::Vault => {
-                let path = self
-                    .secret_path
-                    .as_ref()
-                    .and_then(|p| p.to_str())
-                    .unwrap_or("");
-                if path.trim().is_empty() {
-                    return Err("secret_path is required for vault mode".into());
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -810,82 +889,169 @@ impl CredentialConfig {
 #[cfg(unix)]
 pub(crate) use schema_ic::default_socket_path;
 
-fn validate_host_patterns(field: &str, patterns: &[String]) -> Result<(), String> {
-    for (idx, pattern) in patterns.iter().enumerate() {
+/// Error validating a host-pattern list.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HostPatternError {
+    /// A pattern entry was empty.
+    #[error("{field}[{index}] must not be empty")]
+    Empty {
+        /// The offending field.
+        field: &'static str,
+        /// Index of the offending entry.
+        index: usize,
+    },
+    /// A `*.` wildcard had no suffix.
+    #[error("{field}[{index}] wildcard pattern must include a suffix after '*.'")]
+    WildcardMissingSuffix {
+        /// The offending field.
+        field: &'static str,
+        /// Index of the offending entry.
+        index: usize,
+    },
+    /// A wildcard pattern had more than a single leading `*.`.
+    #[error("{field}[{index}] wildcard pattern supports only a single leading '*.'")]
+    WildcardMultiple {
+        /// The offending field.
+        field: &'static str,
+        /// Index of the offending entry.
+        index: usize,
+    },
+    /// A wildcard suffix was an IP literal.
+    #[error("{field}[{index}] wildcard patterns do not support IP literals")]
+    WildcardIpLiteral {
+        /// The offending field.
+        field: &'static str,
+        /// Index of the offending entry.
+        index: usize,
+    },
+    /// A wildcard suffix had fewer than two DNS labels.
+    #[error("{field}[{index}] wildcard suffix must contain at least two DNS labels")]
+    WildcardTooFewLabels {
+        /// The offending field.
+        field: &'static str,
+        /// Index of the offending entry.
+        index: usize,
+    },
+    /// A non-leading `*` appeared in a pattern.
+    #[error("{field}[{index}] wildcard patterns must use only a leading '*.'")]
+    WildcardNotLeading {
+        /// The offending field.
+        field: &'static str,
+        /// Index of the offending entry.
+        index: usize,
+    },
+    /// A pattern was not a valid DNS hostname.
+    #[error("{field}[{index}]: {source}")]
+    Dns {
+        /// The offending field.
+        field: &'static str,
+        /// Index of the offending entry.
+        index: usize,
+        /// The DNS validation failure.
+        #[source]
+        source: DnsHostnameError,
+    },
+}
+
+fn validate_host_patterns(
+    field: &'static str,
+    patterns: &[String],
+) -> Result<(), HostPatternError> {
+    for (index, pattern) in patterns.iter().enumerate() {
         let normalized = pattern.trim().trim_end_matches('.').to_ascii_lowercase();
         if normalized.is_empty() {
-            return Err(format!("{field}[{idx}] must not be empty"));
+            return Err(HostPatternError::Empty { field, index });
         }
         if normalized == "*" {
             continue;
         }
         if let Some(suffix) = normalized.strip_prefix("*.") {
             if suffix.is_empty() {
-                return Err(format!(
-                    "{field}[{idx}] wildcard pattern must include a suffix after '*.'"
-                ));
+                return Err(HostPatternError::WildcardMissingSuffix { field, index });
             }
             if suffix.contains('*') {
-                return Err(format!(
-                    "{field}[{idx}] wildcard pattern supports only a single leading '*.'"
-                ));
+                return Err(HostPatternError::WildcardMultiple { field, index });
             }
             if suffix.parse::<IpAddr>().is_ok() {
-                return Err(format!(
-                    "{field}[{idx}] wildcard patterns do not support IP literals"
-                ));
+                return Err(HostPatternError::WildcardIpLiteral { field, index });
             }
             if suffix.split('.').count() < 2 {
-                return Err(format!(
-                    "{field}[{idx}] wildcard suffix must contain at least two DNS labels"
-                ));
+                return Err(HostPatternError::WildcardTooFewLabels { field, index });
             }
-            validate_dns_hostname(&normalized, suffix)?;
+            validate_dns_hostname(suffix)
+                .map_err(|source| HostPatternError::Dns { field, index, source })?;
             continue;
         }
         if normalized.contains('*') {
-            return Err(format!(
-                "{field}[{idx}] wildcard patterns must use only a leading '*.'"
-            ));
+            return Err(HostPatternError::WildcardNotLeading { field, index });
         }
         if normalized.parse::<IpAddr>().is_ok() {
             continue;
         }
-        validate_dns_hostname(&normalized, &normalized)?;
+        validate_dns_hostname(&normalized)
+            .map_err(|source| HostPatternError::Dns { field, index, source })?;
     }
     Ok(())
 }
 
-fn validate_dns_hostname(full: &str, host: &str) -> Result<(), String> {
+/// Error validating a DNS hostname.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DnsHostnameError {
+    /// The hostname was empty.
+    #[error("invalid DNS hostname: empty value")]
+    Empty,
+    /// The hostname exceeded 253 characters.
+    #[error("invalid DNS hostname: exceeds 253-character limit")]
+    TooLong,
+    /// The hostname contained an empty label.
+    #[error("invalid DNS hostname: contains empty label")]
+    EmptyLabel,
+    /// A label exceeded 63 characters.
+    #[error("invalid DNS hostname: label '{label}' exceeds 63-character limit")]
+    LabelTooLong {
+        /// The offending label.
+        label: String,
+    },
+    /// A label started or ended with `-`.
+    #[error("invalid DNS hostname: label '{label}' starts/ends with '-'")]
+    LabelHyphen {
+        /// The offending label.
+        label: String,
+    },
+    /// A label contained non-DNS characters.
+    #[error("invalid DNS hostname: label '{label}' contains non-DNS characters")]
+    LabelInvalidChars {
+        /// The offending label.
+        label: String,
+    },
+}
+
+fn validate_dns_hostname(host: &str) -> Result<(), DnsHostnameError> {
     if host.is_empty() {
-        return Err(format!("invalid DNS hostname '{full}': empty value"));
+        return Err(DnsHostnameError::Empty);
     }
     if host.len() > 253 {
-        return Err(format!(
-            "invalid DNS hostname '{full}': exceeds 253-character limit"
-        ));
+        return Err(DnsHostnameError::TooLong);
     }
 
     for label in host.split('.') {
         if label.is_empty() {
-            return Err(format!(
-                "invalid DNS hostname '{full}': contains empty label"
-            ));
+            return Err(DnsHostnameError::EmptyLabel);
         }
         if label.len() > 63 {
-            return Err(format!(
-                "invalid DNS hostname '{full}': label '{label}' exceeds 63-character limit"
-            ));
+            return Err(DnsHostnameError::LabelTooLong {
+                label: label.to_string(),
+            });
         }
         if label.starts_with('-') || label.ends_with('-') {
-            return Err(format!(
-                "invalid DNS hostname '{full}': label '{label}' starts/ends with '-'"
-            ));
+            return Err(DnsHostnameError::LabelHyphen {
+                label: label.to_string(),
+            });
         }
         if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(format!(
-                "invalid DNS hostname '{full}': label '{label}' contains non-DNS characters"
-            ));
+            return Err(DnsHostnameError::LabelInvalidChars {
+                label: label.to_string(),
+            });
         }
     }
 
@@ -902,63 +1068,52 @@ fn validate_dns_hostname(full: &str, host: &str) -> Result<(), String> {
 /// domain socket that `firma-run` clients contact for pre-execution governance
 /// decisions. This is the server-side counterpart to the
 /// `sidecar_local_exec` section in the `firma-run` profile config.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LocalExecConfig {
     /// Absolute path to the Unix domain socket file.
-    ///
-    /// Example: `/run/firma/local-exec.sock`
     pub(crate) socket_path: PathBuf,
-
     /// Policy applied to every fresh local-exec request.
-    ///
-    /// - `"allow"` — allow all executions unconditionally.
-    /// - `"deny"` — deny all executions unconditionally.
-    /// - `"pending_hitl"` — require HITL approval via the token flow.
-    #[serde(default = "LocalExecConfig::default_action")]
     pub(crate) default_action: crate::local_exec::handler::DefaultAction,
-
     /// Approval token time-to-live in seconds (default: 300).
-    #[serde(default = "LocalExecConfig::default_token_ttl_secs")]
     pub(crate) token_ttl_secs: u64,
-
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (milliseconds, default: 500).
-    #[serde(default = "LocalExecConfig::default_retry_after_ms")]
     pub(crate) retry_after_ms: u64,
 }
 
-impl LocalExecConfig {
-    fn default_action() -> crate::local_exec::handler::DefaultAction {
-        crate::local_exec::handler::DefaultAction::Deny
-    }
+/// Error validating a [`LocalExecConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LocalExecConfigError {
+    /// `socket_path` was not absolute.
+    #[error("local_exec.socket_path must be absolute, got: {}", .0.display())]
+    SocketPathNotAbsolute(PathBuf),
+    /// `token_ttl_secs` was zero.
+    #[error("local_exec.token_ttl_secs must be > 0")]
+    ZeroTokenTtl,
+    /// `retry_after_ms` was zero.
+    #[error("local_exec.retry_after_ms must be > 0")]
+    ZeroRetryAfter,
+}
 
-    const fn default_token_ttl_secs() -> u64 {
-        300
-    }
+impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
+    type Error = LocalExecConfigError;
 
-    const fn default_retry_after_ms() -> u64 {
-        500
-    }
-
-    /// Validate the local-exec configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the socket path is not absolute.
-    fn validate(&self) -> Result<(), String> {
-        if !self.socket_path.is_absolute() {
-            return Err(format!(
-                "socket_path must be absolute, got: {}",
-                self.socket_path.display()
-            ));
+    fn try_from(s: schema_le::LocalExecConfig) -> Result<Self, Self::Error> {
+        if !s.socket_path.is_absolute() {
+            return Err(LocalExecConfigError::SocketPathNotAbsolute(s.socket_path));
         }
-        if self.token_ttl_secs == 0 {
-            return Err("token_ttl_secs must be > 0".to_string());
+        if s.token_ttl_secs == 0 {
+            return Err(LocalExecConfigError::ZeroTokenTtl);
         }
-        if self.retry_after_ms == 0 {
-            return Err("retry_after_ms must be > 0".to_string());
+        if s.retry_after_ms == 0 {
+            return Err(LocalExecConfigError::ZeroRetryAfter);
         }
-        Ok(())
+        Ok(Self {
+            socket_path: s.socket_path,
+            default_action: s.default_action,
+            token_ttl_secs: s.token_ttl_secs,
+            retry_after_ms: s.retry_after_ms,
+        })
     }
 }
 
@@ -969,6 +1124,12 @@ impl LocalExecConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A default schema-level sidecar config, the deserialize target that the
+    /// validated [`SidecarConfig`] is built from via `TryFrom`.
+    fn schema_sidecar() -> firma_config_schema::sidecar::SidecarConfig {
+        firma_config_schema::sidecar::SidecarConfig::default()
+    }
 
     // -- SidecarConfig ------------------------------------------------------
 
@@ -1012,8 +1173,7 @@ mod tests {
 
     #[test]
     fn test_sidecar_config_defaults_valid() {
-        let config = SidecarConfig::default();
-        assert!(config.validate().is_ok());
+        let config = SidecarConfig::try_from(schema_sidecar()).expect("defaults valid");
         assert!(
             config.interceptor.https_mitm.enabled,
             "MITM should be enabled by default"
@@ -1054,285 +1214,199 @@ mod tests {
 
     #[test]
     fn test_sidecar_config_seeds_require_public_key() {
-        let config = SidecarConfig {
-            capability_seed: CapabilitySeedConfig {
-                paths: vec![std::path::PathBuf::from("./capability.toml")],
-                hot_reload: true,
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("authority.public_key_path"),
-            "error should mention authority.public_key_path: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.capability_seed.paths = vec![std::path::PathBuf::from("./capability.toml")];
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::MissingPublicKeyForSeeds)
+        ));
     }
 
     #[test]
     fn test_sidecar_config_seeds_with_public_key_valid() {
-        let mut config = SidecarConfig {
-            capability_seed: CapabilitySeedConfig {
-                paths: vec![std::path::PathBuf::from("./capability.toml")],
-                hot_reload: true,
-            },
-            ..SidecarConfig::default()
-        };
-        config.authority.public_key_path = Some(std::path::PathBuf::from("./authority.pub"));
-        assert!(config.validate().is_ok());
+        let mut schema = schema_sidecar();
+        schema.capability_seed.paths = vec![std::path::PathBuf::from("./capability.toml")];
+        schema.authority.public_key_path = Some(std::path::PathBuf::from("./authority.pub"));
+        assert!(SidecarConfig::try_from(schema).is_ok());
     }
 
     #[test]
     fn test_sidecar_config_invalid_log_level() {
-        let config = SidecarConfig {
-            log: LogConfig {
-                level: "verbose".to_string(),
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("log.level"),
-            "error should mention log.level: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.log.level = "verbose".to_string();
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Log(LogConfigError::InvalidLevel { .. }))
+        ));
+    }
+
+    fn credential(mode: CredentialMode) -> schema_infra::CredentialConfig {
+        schema_infra::CredentialConfig {
+            mode,
+            target_host: "api.example.com".to_string(),
+            header: "authorization".to_string(),
+            prefix: None,
+            transform: None,
+            value_from_env: None,
+            secret_path: None,
+        }
     }
 
     #[test]
     fn test_sidecar_config_invalid_credential_basic() {
-        let mut creds = HashMap::new();
-        creds.insert(
-            "bad".to_string(),
-            CredentialConfig {
-                mode: CredentialMode::Basic,
-                target_host: String::new(),
-                header: HeaderName::from_static("authorization"),
-                value_from_env: Some("KEY".to_string()),
-                prefix: None,
-                transform: None,
-                secret_path: None,
-            },
-        );
-        let config = SidecarConfig {
-            credentials: creds,
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("credentials.bad"),
-            "error should mention credential label: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.credentials.insert("bad".to_string(), schema_infra::CredentialConfig {
+            target_host: String::new(),
+            value_from_env: Some("KEY".to_string()),
+            ..credential(CredentialMode::Basic)
+        });
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Credential { label, source: CredentialConfigError::EmptyTargetHost })
+                if label == "bad"
+        ));
     }
 
     #[test]
     fn test_sidecar_config_invalid_credential_basic_missing_env() {
-        let mut creds = HashMap::new();
-        creds.insert(
-            "noenv".to_string(),
-            CredentialConfig {
-                mode: CredentialMode::Basic,
-                target_host: "api.example.com".to_string(),
-                header: HeaderName::from_static("authorization"),
-                value_from_env: None,
-                prefix: None,
-                transform: None,
-                secret_path: None,
-            },
-        );
-        let config = SidecarConfig {
-            credentials: creds,
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("value_from_env"),
-            "error should mention value_from_env: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema
+            .credentials
+            .insert("noenv".to_string(), credential(CredentialMode::Basic));
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Credential {
+                source: CredentialConfigError::ValueFromEnvRequired,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn test_sidecar_config_credential_transform_rejects_prefix() {
-        let mut creds = HashMap::new();
-        creds.insert(
-            "github".to_string(),
-            CredentialConfig {
-                mode: CredentialMode::Basic,
-                target_host: "github.com".to_string(),
-                header: HeaderName::from_static("authorization"),
-                value_from_env: Some("GITHUB_TOKEN".to_string()),
-                prefix: Some("Bearer ".to_string()),
-                transform: Some(CredentialTransform::GithubPatBasic),
-                secret_path: None,
-            },
-        );
-        let config = SidecarConfig {
-            credentials: creds,
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("prefix cannot be combined with transform"),
-            "error should mention prefix/transform conflict: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.credentials.insert("github".to_string(), schema_infra::CredentialConfig {
+            target_host: "github.com".to_string(),
+            value_from_env: Some("GITHUB_TOKEN".to_string()),
+            prefix: Some("Bearer ".to_string()),
+            transform: Some(CredentialTransform::GithubPatBasic),
+            ..credential(CredentialMode::Basic)
+        });
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Credential {
+                source: CredentialConfigError::PrefixWithTransform,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn test_sidecar_config_invalid_credential_vault_missing_path() {
-        let mut creds = HashMap::new();
-        creds.insert(
-            "novault".to_string(),
-            CredentialConfig {
-                mode: CredentialMode::Vault,
-                target_host: "api.example.com".to_string(),
-                header: HeaderName::from_static("authorization"),
-                value_from_env: None,
-                prefix: None,
-                transform: None,
-                secret_path: None,
-            },
-        );
-        let config = SidecarConfig {
-            credentials: creds,
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("secret_path"),
-            "error should mention secret_path: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema
+            .credentials
+            .insert("novault".to_string(), credential(CredentialMode::Vault));
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Credential {
+                source: CredentialConfigError::SecretPathRequired,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn test_sidecar_config_zero_drain_timeout_rejected() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                drain_timeout_secs: 0,
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("drain_timeout_secs"),
-            "error should mention drain_timeout_secs: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.drain_timeout_secs = 0;
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::ZeroDrainTimeout
+            ))
+        ));
     }
 
     #[test]
     fn test_sidecar_config_zero_max_request_body_rejected() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                max_request_body_bytes: 0,
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("max_request_body_bytes"),
-            "error should mention max_request_body_bytes: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.max_request_body_bytes = 0;
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::ZeroMaxRequestBody
+            ))
+        ));
     }
 
     #[test]
     fn test_sidecar_config_zero_max_decompressed_body_rejected() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                max_decompressed_body_size: ByteSize::b(0),
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("max_decompressed_body_size"),
-            "error should mention max_decompressed_body_size: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.max_decompressed_body_size = ByteSize::b(0);
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::ZeroMaxDecompressedBody
+            ))
+        ));
     }
 
     #[test]
     fn test_sidecar_config_zero_total_body_budget_rejected() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                total_body_budget_bytes: 0,
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("total_body_budget_bytes"),
-            "error should mention total_body_budget_bytes: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.total_body_budget_bytes = 0;
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::ZeroTotalBodyBudget
+            ))
+        ));
     }
 
     #[test]
     fn test_sidecar_config_budget_smaller_than_max_body_rejected() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                max_request_body_bytes: 8 * 1024 * 1024,
-                total_body_budget_bytes: 4 * 1024 * 1024,
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("total_body_budget_bytes"),
-            "error should mention total_body_budget_bytes: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.max_request_body_bytes = 8 * 1024 * 1024;
+        schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::TotalBodyBudgetBelowRequest
+            ))
+        ));
     }
 
     #[test]
     fn test_sidecar_config_budget_equals_max_body_valid() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                max_request_body_bytes: 4 * 1024 * 1024,
-                total_body_budget_bytes: 4 * 1024 * 1024,
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        assert!(
-            config.validate().is_ok(),
-            "budget equal to max_body should be valid"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.max_request_body_bytes = 4 * 1024 * 1024;
+        schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
+        assert!(SidecarConfig::try_from(schema).is_ok());
     }
 
     #[test]
     fn test_sidecar_config_zero_connect_setup_timeout_rejected() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                connect_relay: ConnectRelayConfig {
-                    setup_timeout_secs: 0,
-                    ..ConnectRelayConfig::default()
-                },
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("connect_relay.setup_timeout_secs"),
-            "error should mention connect relay setup timeout: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.connect_relay.setup_timeout_secs = 0;
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::ConnectRelay(ConnectRelayConfigError::ZeroSetupTimeout)
+            ))
+        ));
     }
 
     #[test]
     fn test_sidecar_config_zero_connect_session_max_rejected() {
-        let config = SidecarConfig {
-            interceptor: InterceptorConfig {
-                connect_relay: ConnectRelayConfig {
-                    session_max_secs: 0,
-                    ..ConnectRelayConfig::default()
-                },
-                ..InterceptorConfig::default()
-            },
-            ..SidecarConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("connect_relay.session_max_secs"),
-            "error should mention connect relay session timeout: {err}"
-        );
+        let mut schema = schema_sidecar();
+        schema.interceptor.connect_relay.session_max_secs = 0;
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::ConnectRelay(ConnectRelayConfigError::ZeroSessionMax)
+            ))
+        ));
     }
 
     #[test]

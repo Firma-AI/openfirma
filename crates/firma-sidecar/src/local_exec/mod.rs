@@ -30,7 +30,6 @@ pub mod handler;
 pub mod token_store;
 
 pub(crate) use self::endpoint::LocalExecEndpoint;
-pub use self::handler::{
-    DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig,
-};
+pub(crate) use self::handler::DefaultAction;
+pub use self::handler::{LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig};
 pub use self::token_store::{ApproveResult, RevokeResult, TokenStore};

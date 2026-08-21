@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Sidecar pre-shared-key credentials presented to Authority RPCs.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct SidecarCredentialsConfig {
+pub struct SidecarCredentials {
     /// Workspace the Sidecar belongs to.
     pub workspace_id: String,
     /// Authority-assigned Sidecar identity.
@@ -72,7 +72,7 @@ pub struct AuthorityConfig {
     pub tls_client_key_path: Option<PathBuf>,
     /// Credentials presented on each outbound Authority RPC.
     #[serde(default)]
-    pub credentials: Option<SidecarCredentialsConfig>,
+    pub credentials: Option<SidecarCredentials>,
 }
 
 impl Default for AuthorityConfig {

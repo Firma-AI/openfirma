@@ -21,7 +21,7 @@ pub mod secret_provider;
 pub mod tenancy;
 
 pub use audit::{AuditConfig, AuditSink};
-pub use authority::{AuthorityConfig, SidecarCredentialsConfig};
+pub use authority::{AuthorityConfig, SidecarCredentials};
 pub use capability_seed::CapabilitySeedConfig;
 pub use config::SidecarConfig;
 pub use connector::{ConnectorConfig, HostConnectorConfig};
