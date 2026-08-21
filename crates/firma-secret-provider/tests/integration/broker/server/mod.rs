@@ -3,8 +3,8 @@ use std::str::FromStr;
 use firma_http::Str;
 use firma_secret_provider::{
     broker::{
-        BinaryName, BrokerExitStatus, BrokerOutput, BrokerRequest, BrokerResponse,
-        DecodedBrokerResponse,
+        BinaryName, BrokerExitStatus, BrokerOutput, BrokerOutputChunk, BrokerRequest,
+        BrokerResponse, DecodedBrokerResponse,
         server::{BrokerListener, config::BrokerListenerConfig},
         stream::BrokerStream,
     },
@@ -24,7 +24,10 @@ struct BoundBroker {
 }
 
 fn executed_response(stdout: &[u8]) -> BrokerResponse<'static> {
-    BrokerResponse::executed(stdout, b"", BrokerExitStatus::Exited { code: 0 })
+    BrokerResponse::executed(
+        [BrokerOutputChunk::Stdout(stdout.to_vec())],
+        BrokerExitStatus::Exited { code: 0 },
+    )
 }
 
 #[expect(clippy::expect_used, reason = "this is a test")]
@@ -131,8 +134,8 @@ async fn roundtrip_ok_response() {
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
     assert_eq!(
-        decode_output(response).expect("executed").stdout,
-        b"secret-value"
+        decode_output(response).expect("executed").output,
+        [BrokerOutputChunk::Stdout(b"secret-value".to_vec())]
     );
 }
 
@@ -229,7 +232,10 @@ async fn response_exactly_at_limit_is_forwarded() {
         .expect("connect_and_send");
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
-    assert_eq!(decode_output(response).expect("executed").stdout, stdout);
+    assert_eq!(
+        decode_output(response).expect("executed").output,
+        [BrokerOutputChunk::Stdout(stdout)]
+    );
 }
 
 #[cfg(windows)]

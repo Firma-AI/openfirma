@@ -5,8 +5,8 @@ use firma_secret_provider::{
     GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder,
     broker::{
-        BinaryName, BinaryNameError, BrokerExitStatus, BrokerRequest, BrokerResponse,
-        DecodedBrokerResponse,
+        BinaryName, BinaryNameError, BrokerExitStatus, BrokerOutputChunk, BrokerRequest,
+        BrokerResponse, DecodedBrokerResponse,
     },
 };
 
@@ -122,18 +122,27 @@ fn broker_request_rejects_non_basename_binary() {
 #[test]
 fn broker_execution_response_round_trips() {
     let response = BrokerResponse::executed(
-        b"secret-value",
-        b"warning",
+        [
+            BrokerOutputChunk::Stdout(b"reading config\n".to_vec()),
+            BrokerOutputChunk::Stderr(b"warning\n".to_vec()),
+            BrokerOutputChunk::Stdout(b"secret-value".to_vec()),
+        ],
         BrokerExitStatus::Exited { code: 7 },
     );
     let wire = serde_json::to_string(&response).expect("serialize");
-    insta::assert_snapshot!(wire, @r#"{"type":"executed","stdout":"c2VjcmV0LXZhbHVl","stderr":"d2FybmluZw==","status":{"type":"exited","code":7}}"#);
+    insta::assert_snapshot!(wire, @r#"{"type":"executed","output":[{"stream":"stdout","data":"cmVhZGluZyBjb25maWcK"},{"stream":"stderr","data":"d2FybmluZwo="},{"stream":"stdout","data":"c2VjcmV0LXZhbHVl"}],"status":{"type":"exited","code":7}}"#);
     let back: BrokerResponse = serde_json::from_str(&wire).expect("deserialize");
     let DecodedBrokerResponse::Executed(output) = back.decode().expect("decode") else {
         panic!("expected executed response");
     };
-    assert_eq!(output.stdout, b"secret-value");
-    assert_eq!(output.stderr, b"warning");
+    assert_eq!(
+        output.output,
+        vec![
+            BrokerOutputChunk::Stdout(b"reading config\n".to_vec()),
+            BrokerOutputChunk::Stderr(b"warning\n".to_vec()),
+            BrokerOutputChunk::Stdout(b"secret-value".to_vec()),
+        ]
+    );
     assert_eq!(output.status, BrokerExitStatus::Exited { code: 7 });
 }
 

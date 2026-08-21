@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! shim  →  {"bin":"bws","args":["secret","get","abc"]}\n
-//! broker → {"type":"executed","stdout":"<base64>","stderr":"<base64>","status":{"type":"exited","code":0}}\n
+//! broker → {"type":"executed","output":[{"stream":"stdout","data":"<base64>"}],"status":{"type":"exited","code":0}}\n
 //! broker → {"type":"rejected","error":"<reason>"}\n
 //! ```
 //!
@@ -120,18 +120,33 @@ pub struct BrokerRequest<'a> {
     pub args: Vec<Str<'a>>,
 }
 
+/// One base64-encoded, stream-tagged output chunk in a broker response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "stream", rename_all = "snake_case")]
+pub enum BrokerResponseChunk<'a> {
+    /// Bytes observed on stdout.
+    Stdout {
+        /// Base64-encoded chunk bytes.
+        #[serde(borrow)]
+        data: Str<'a>,
+    },
+    /// Bytes observed on stderr.
+    Stderr {
+        /// Base64-encoded chunk bytes.
+        #[serde(borrow)]
+        data: Str<'a>,
+    },
+}
+
 /// Broker → shim response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrokerResponse<'a> {
     /// The real tool ran. Its complete observable process result follows.
     Executed {
-        /// Base64-encoded stdout bytes from the real tool.
+        /// Base64-encoded output chunks in observed capture order.
         #[serde(borrow)]
-        stdout: Str<'a>,
-        /// Base64-encoded stderr bytes from the real tool.
-        #[serde(borrow)]
-        stderr: Str<'a>,
+        output: Vec<BrokerResponseChunk<'a>>,
         /// How the real tool terminated.
         status: BrokerExitStatus,
     },
@@ -143,18 +158,32 @@ pub enum BrokerResponse<'a> {
 }
 
 impl BrokerResponse<'_> {
-    /// Build an execution response from raw process output and status.
+    /// Build an execution response from stream-tagged output chunks and status.
     ///
-    /// Both output streams are base64-encoded into memory here, so handlers
-    /// must cap process output capture: an unbounded payload would exhaust broker
-    /// memory before the listener's response-size check (see
+    /// Chunks preserve the order in which concurrent stdout and stderr readers
+    /// observed bytes. This is not a guarantee of the child process's exact
+    /// cross-stream write order. Chunks are base64-encoded into memory here, so
+    /// handlers must cap process output capture: an unbounded payload would
+    /// exhaust broker memory before the listener's response-size check (see
     /// [`server::config::BrokerListenerConfig::max_buffer_size`]) can
     /// reject it.
     #[must_use]
-    pub fn executed(stdout: &[u8], stderr: &[u8], status: BrokerExitStatus) -> Self {
+    pub fn executed(
+        output: impl IntoIterator<Item = BrokerOutputChunk>,
+        status: BrokerExitStatus,
+    ) -> Self {
         Self::Executed {
-            stdout: Str::from(base64::engine::general_purpose::STANDARD.encode(stdout)),
-            stderr: Str::from(base64::engine::general_purpose::STANDARD.encode(stderr)),
+            output: output
+                .into_iter()
+                .map(|chunk| match chunk {
+                    BrokerOutputChunk::Stdout(bytes) => BrokerResponseChunk::Stdout {
+                        data: Str::from(base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    },
+                    BrokerOutputChunk::Stderr(bytes) => BrokerResponseChunk::Stderr {
+                        data: Str::from(base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    },
+                })
+                .collect(),
             status,
         }
     }
@@ -167,28 +196,41 @@ impl BrokerResponse<'_> {
         }
     }
 
-    /// Decode an execution response's output streams.
+    /// Decode an execution response's output chunks.
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerResponseDecodeError`] if either output stream is not
-    /// valid base64.
+    /// Returns [`BrokerResponseDecodeError`] if an output chunk is not valid
+    /// base64.
     pub fn decode(self) -> Result<DecodedBrokerResponse, BrokerResponseDecodeError> {
         match self {
-            Self::Executed {
-                stdout,
-                stderr,
-                status,
-            } => {
-                let stdout = base64::engine::general_purpose::STANDARD
-                    .decode(&*stdout)
-                    .map_err(BrokerResponseDecodeError::Stdout)?;
-                let stderr = base64::engine::general_purpose::STANDARD
-                    .decode(&*stderr)
-                    .map_err(BrokerResponseDecodeError::Stderr)?;
+            Self::Executed { output, status } => {
+                let output = output
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, chunk)| match chunk {
+                        BrokerResponseChunk::Stdout { data } => {
+                            base64::engine::general_purpose::STANDARD
+                                .decode(&*data)
+                                .map(BrokerOutputChunk::Stdout)
+                                .map_err(|source| BrokerResponseDecodeError::Stdout {
+                                    index,
+                                    source,
+                                })
+                        }
+                        BrokerResponseChunk::Stderr { data } => {
+                            base64::engine::general_purpose::STANDARD
+                                .decode(&*data)
+                                .map(BrokerOutputChunk::Stderr)
+                                .map_err(|source| BrokerResponseDecodeError::Stderr {
+                                    index,
+                                    source,
+                                })
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
                 Ok(DecodedBrokerResponse::Executed(BrokerOutput {
-                    stdout,
-                    stderr,
+                    output,
                     status,
                 }))
             }
@@ -229,12 +271,19 @@ impl From<std::process::ExitStatus> for BrokerExitStatus {
 /// Raw output and termination status from a broker-executed tool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokerOutput {
-    /// Raw stdout bytes from the real tool.
-    pub stdout: Vec<u8>,
-    /// Raw stderr bytes from the real tool.
-    pub stderr: Vec<u8>,
+    /// Stream-tagged bytes in observed capture order.
+    pub output: Vec<BrokerOutputChunk>,
     /// How the real tool terminated.
     pub status: BrokerExitStatus,
+}
+
+/// One stream-tagged chunk of raw process output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrokerOutputChunk {
+    /// Bytes observed on stdout.
+    Stdout(Vec<u8>),
+    /// Bytes observed on stderr.
+    Stderr(Vec<u8>),
 }
 
 /// A decoded broker response.
@@ -249,12 +298,22 @@ pub enum DecodedBrokerResponse {
 /// Invalid base64 in a broker execution response.
 #[derive(Debug, thiserror::Error)]
 pub enum BrokerResponseDecodeError {
-    /// The response's stdout field is not valid base64.
-    #[error("broker returned invalid base64 stdout: {0}")]
-    Stdout(#[source] base64::DecodeError),
-    /// The response's stderr field is not valid base64.
-    #[error("broker returned invalid base64 stderr: {0}")]
-    Stderr(#[source] base64::DecodeError),
+    /// A stdout chunk is not valid base64.
+    #[error("broker returned invalid base64 stdout chunk {index}: {source}")]
+    Stdout {
+        /// Zero-based position in the observed output sequence.
+        index: usize,
+        #[source]
+        source: base64::DecodeError,
+    },
+    /// A stderr chunk is not valid base64.
+    #[error("broker returned invalid base64 stderr chunk {index}: {source}")]
+    Stderr {
+        /// Zero-based position in the observed output sequence.
+        index: usize,
+        #[source]
+        source: base64::DecodeError,
+    },
 }
 
 /// Read one newline-terminated line from `stream` with `max_bytes` as the

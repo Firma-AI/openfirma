@@ -5,8 +5,8 @@ use firma_http::Str;
 use firma_secret_provider::endpoint::EndpointInner;
 use firma_secret_provider::{
     broker::{
-        BinaryName, BrokerExitStatus, BrokerRequest, BrokerResponse, BrokerResponseDecodeError,
-        DecodedBrokerResponse,
+        BinaryName, BrokerExitStatus, BrokerOutputChunk, BrokerRequest, BrokerResponse,
+        BrokerResponseDecodeError, DecodedBrokerResponse,
         client::{
             BrokerClient,
             config::BrokerClientConfig,
@@ -30,12 +30,23 @@ struct BoundBroker {
 }
 
 fn executed_response(stdout: &[u8]) -> BrokerResponse<'static> {
-    BrokerResponse::executed(stdout, b"", BrokerExitStatus::Exited { code: 0 })
+    BrokerResponse::executed(
+        [BrokerOutputChunk::Stdout(stdout.to_vec())],
+        BrokerExitStatus::Exited { code: 0 },
+    )
 }
 
 fn decode_stdout(response: BrokerResponse<'_>) -> Result<Vec<u8>, BrokerClientError> {
     match response.decode() {
-        Ok(DecodedBrokerResponse::Executed(output)) => Ok(output.stdout),
+        Ok(DecodedBrokerResponse::Executed(output)) => Ok(output
+            .output
+            .into_iter()
+            .filter_map(|chunk| match chunk {
+                BrokerOutputChunk::Stdout(bytes) => Some(bytes),
+                BrokerOutputChunk::Stderr(_) => None,
+            })
+            .flatten()
+            .collect()),
         Ok(DecodedBrokerResponse::Rejected(error)) => Err(BrokerClientError::Rejected(error)),
         Err(error) => Err(BrokerClientError::ProtocolViolation(
             ProtocolViolation::Output(error),
@@ -96,8 +107,10 @@ async fn run_returns_decoded_stdout() {
         .run("bws", &["secret", "get", "abc"])
         .await
         .expect("run");
-    assert_eq!(output.stdout, b"secret-value");
-    assert!(output.stderr.is_empty());
+    assert_eq!(
+        output.output,
+        [BrokerOutputChunk::Stdout(b"secret-value".to_vec())]
+    );
     assert_eq!(output.status, BrokerExitStatus::Exited { code: 0 });
 }
 
@@ -294,7 +307,7 @@ async fn request_rejects_invalid_base64_stdout() {
     // malformed-payload path lives there rather than in the generic
     // `request` deserialization.
     let (endpoint, _guard) = bind_raw_responder(
-        br#"{"type":"executed","stdout":"not-base64!!","stderr":"","status":{"type":"exited","code":0}}"#
+        br#"{"type":"executed","output":[{"stream":"stdout","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
             .to_vec(),
     );
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
@@ -305,7 +318,7 @@ async fn request_rejects_invalid_base64_stdout() {
     std::assert_matches!(
         error,
         BrokerClientError::ProtocolViolation(ProtocolViolation::Output(
-            BrokerResponseDecodeError::Stdout(_)
+            BrokerResponseDecodeError::Stdout { index: 0, .. }
         ))
     );
 }
@@ -313,7 +326,7 @@ async fn request_rejects_invalid_base64_stdout() {
 #[tokio::test]
 async fn request_rejects_invalid_base64_stderr() {
     let (endpoint, _guard) = bind_raw_responder(
-        br#"{"type":"executed","stdout":"","stderr":"not-base64!!","status":{"type":"exited","code":0}}"#
+        br#"{"type":"executed","output":[{"stream":"stderr","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
             .to_vec(),
     );
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
@@ -324,7 +337,7 @@ async fn request_rejects_invalid_base64_stderr() {
     std::assert_matches!(
         error,
         BrokerClientError::ProtocolViolation(ProtocolViolation::Output(
-            BrokerResponseDecodeError::Stderr(_)
+            BrokerResponseDecodeError::Stderr { index: 0, .. }
         ))
     );
 }
