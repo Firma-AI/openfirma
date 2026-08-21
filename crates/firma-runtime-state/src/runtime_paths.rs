@@ -21,6 +21,60 @@ pub struct RuntimeLayout {
     root: PathBuf,
 }
 
+/// Canonical paths within one `<runtime>/run/<sandbox_id>` entry.
+///
+/// This layout models the files shared between the per-run Sidecar producer
+/// and runtime-state observers. Component-private files remain with their
+/// owning crates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunEntryLayout {
+    root: PathBuf,
+}
+
+impl RunEntryLayout {
+    /// Construct a run-entry layout from an already resolved root.
+    #[must_use]
+    pub fn from_root(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// Return the run-entry root.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Consume the layout and return its run-entry root.
+    #[must_use]
+    pub fn into_root(self) -> PathBuf {
+        self.root
+    }
+
+    /// Return the per-run Sidecar Unix socket path.
+    #[must_use]
+    pub fn sidecar_socket(&self) -> PathBuf {
+        self.root.join("sidecar.sock")
+    }
+
+    /// Return the generated per-run Sidecar configuration path.
+    #[must_use]
+    pub fn sidecar_config(&self) -> PathBuf {
+        self.root.join("sidecar.toml")
+    }
+
+    /// Return the per-run Sidecar PID file path.
+    #[must_use]
+    pub fn sidecar_pid(&self) -> PathBuf {
+        self.root.join("sidecar.pid")
+    }
+
+    /// Return the per-run Sidecar metadata path.
+    #[must_use]
+    pub fn sidecar_metadata(&self) -> PathBuf {
+        self.root.join("metadata.toml")
+    }
+}
+
 impl RuntimeLayout {
     /// Resolve a runtime layout from an optional explicit root and the process
     /// environment.
@@ -129,10 +183,10 @@ impl RuntimeLayout {
         self.root.join("run")
     }
 
-    /// Return `<runtime>/run/<sandbox_id>`.
+    /// Return the canonical layout for `<runtime>/run/<sandbox_id>`.
     #[must_use]
-    pub fn run_entry(&self, sandbox_id: &SandboxId) -> PathBuf {
-        self.run_dir().join(sandbox_id.to_string())
+    pub fn run_entry_layout(&self, sandbox_id: &SandboxId) -> RunEntryLayout {
+        RunEntryLayout::from_root(self.run_dir().join(sandbox_id.to_string()))
     }
 
     /// Return the default shared audit log path.

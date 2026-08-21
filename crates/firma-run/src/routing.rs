@@ -880,7 +880,9 @@ fn prepare_run_components(
     #[cfg(unix)]
     {
         let mut authority = authority;
-        let marker_dir = runtime_layout.run_entry(&identity.sandbox_id);
+        let marker_dir = runtime_layout
+            .run_entry_layout(&identity.sandbox_id)
+            .into_root();
         let orchestrator_dir = marker_dir.join("orchestrator");
         let names: Vec<&str> = match (owns_authority, owns_sidecar) {
             (true, true) => vec!["authority", "sidecar"],

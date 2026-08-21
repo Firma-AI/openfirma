@@ -1,6 +1,9 @@
 //! Persistence and observation of per-run sidecar markers.
 
-use std::io::Write as _;
+use std::fs;
+#[cfg(unix)]
+use std::fs::File;
+use std::io::{ErrorKind, Write as _};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -8,7 +11,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::process_id::UserProcessId;
-use crate::runtime_paths::RuntimeLayout;
+use crate::runtime_paths::{RunEntryLayout, RuntimeLayout};
 use firma_identifiers::SandboxId;
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
@@ -77,17 +80,18 @@ pub struct SidecarEntry {
 /// Returns serialization or filesystem errors. A failure may leave a PID file
 /// without metadata, which readers treat as an incomplete marker.
 pub fn publish(marker_dir: &Path, metadata: &MetadataFile) -> crate::error::Result<()> {
-    std::fs::create_dir_all(marker_dir)?;
-    crate::pidfile::write(&marker_dir.join("sidecar.pid"), metadata.pid)?;
+    fs::create_dir_all(marker_dir)?;
+    let layout = RunEntryLayout::from_root(marker_dir);
+    crate::pidfile::write(&layout.sidecar_pid(), metadata.pid)?;
 
     let text = toml::to_string_pretty(metadata)?;
     let mut temp = tempfile::NamedTempFile::new_in(marker_dir)?;
     temp.write_all(text.as_bytes())?;
     temp.as_file().sync_all()?;
-    temp.persist(marker_dir.join("metadata.toml"))
+    temp.persist(layout.sidecar_metadata())
         .map_err(|error| error.error)?;
     #[cfg(unix)]
-    std::fs::File::open(marker_dir)?.sync_all()?;
+    File::open(marker_dir)?.sync_all()?;
     Ok(())
 }
 
@@ -113,7 +117,7 @@ fn endpoint_responds(listen_str: &str, listen_path: &Path) -> bool {
 }
 
 fn marker_uptime_secs(marker_dir: &Path) -> Option<u64> {
-    let mtime = std::fs::metadata(marker_dir.join("sidecar.pid"))
+    let mtime = fs::metadata(RunEntryLayout::from_root(marker_dir).sidecar_pid())
         .and_then(|m| m.modified())
         .ok()?;
     SystemTime::now()
@@ -144,9 +148,9 @@ pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
     use crate::error::RuntimeStateError;
 
     let run_dir = RuntimeLayout::from_root(runtime_dir).run_dir();
-    let read = match std::fs::read_dir(&run_dir) {
+    let read = match fs::read_dir(&run_dir) {
         Ok(r) => r,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(RuntimeStateError::Io(e)),
     };
     let mut removed = Vec::new();
@@ -155,7 +159,7 @@ pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
         let path = entry.path();
         if path.is_dir()
             && is_stale(&path)
-            && std::fs::remove_dir_all(&path).is_ok()
+            && fs::remove_dir_all(&path).is_ok()
             && let Some(name) = path.file_name().and_then(|n| n.to_str())
         {
             removed.push(name.to_string());
@@ -183,9 +187,9 @@ pub fn list(runtime_dir: &Path) -> crate::error::Result<Vec<SidecarEntry>> {
     use crate::error::RuntimeStateError;
 
     let run_dir = RuntimeLayout::from_root(runtime_dir).run_dir();
-    let read = match std::fs::read_dir(&run_dir) {
+    let read = match fs::read_dir(&run_dir) {
         Ok(r) => r,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(RuntimeStateError::Io(e)),
     };
     let mut entries = Vec::new();
@@ -201,7 +205,7 @@ pub fn list(runtime_dir: &Path) -> crate::error::Result<Vec<SidecarEntry>> {
                 RuntimeStateError::MarkerParse { .. }
                 | RuntimeStateError::MarkerIdentityMismatch { .. },
             ) => {}
-            Err(RuntimeStateError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(RuntimeStateError::Io(e)) if e.kind() == ErrorKind::NotFound => {}
             Err(other) => return Err(other),
         }
     }
@@ -220,7 +224,9 @@ pub fn get(
     runtime_dir: &Path,
     sandbox_id: &SandboxId,
 ) -> crate::error::Result<Option<SidecarEntry>> {
-    let marker_dir = RuntimeLayout::from_root(runtime_dir).run_entry(sandbox_id);
+    let marker_dir = RuntimeLayout::from_root(runtime_dir)
+        .run_entry_layout(sandbox_id)
+        .into_root();
     if !marker_dir.is_dir() {
         return Ok(None);
     }
@@ -247,7 +253,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     // Legacy markers (pre-FIR-195) record no `listen`; fall back to the
     // conventional UDS path so their probe behavior is unchanged.
     let listen = if meta.listen.is_empty() {
-        marker_dir.join("sidecar.sock")
+        RunEntryLayout::from_root(marker_dir).sidecar_socket()
     } else {
         PathBuf::from(&meta.listen)
     };
@@ -281,8 +287,8 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
 pub fn read(marker_dir: &Path) -> crate::error::Result<MetadataFile> {
     use crate::error::RuntimeStateError;
 
-    let meta_path = marker_dir.join("metadata.toml");
-    let text = std::fs::read_to_string(&meta_path)?;
+    let meta_path = RunEntryLayout::from_root(marker_dir).sidecar_metadata();
+    let text = fs::read_to_string(&meta_path)?;
     let meta: MetadataFile =
         toml::from_str(&text).map_err(|source| RuntimeStateError::MarkerParse {
             path: meta_path,

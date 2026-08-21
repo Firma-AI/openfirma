@@ -90,7 +90,8 @@ fn autostart_flags(capability_seed_path: Option<PathBuf>) -> AutostartFlags {
 fn marker_dir(identity: &RunIdentity) -> PathBuf {
     firma_runtime_state::RuntimeLayout::resolve(None)
         .expect("resolve runtime layout")
-        .run_entry(&identity.sandbox_id)
+        .run_entry_layout(&identity.sandbox_id)
+        .into_root()
 }
 
 #[cfg(unix)]
