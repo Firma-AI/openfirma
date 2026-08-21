@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use firma_config_schema::sidecar::{InterceptorMode, SidecarMode};
 use firma_core::{RevocationStore, TokenVerifier};
 
 use crate::authority_client::readiness::{ReadinessFlag, ReadinessState};
@@ -82,7 +83,7 @@ fn build_session_state_store(
     runtime_layout: &firma_runtime_state::RuntimeLayout,
     config: &config::SidecarConfig,
 ) -> anyhow::Result<Arc<dyn crate::enforcement::SessionStateStore>> {
-    use crate::config::SessionStateBackend;
+    use firma_config_schema::sidecar::SessionStateBackend;
     let ce = &config.enforcement.constraint_enforcement;
     let capacity = ce.session_state_capacity;
     match ce.session_state_backend {
@@ -121,16 +122,13 @@ const MONITOR_MODE_ENV: &str = "FIRMA_ALLOW_MONITOR_MODE";
 /// Monitor mode is a silent enforcement bypass (every DENY → ALLOW). Requiring
 /// `FIRMA_ALLOW_MONITOR_MODE=1` ensures a dev config that leaves
 /// `mode = "monitor"` set cannot accidentally disable enforcement in
-/// production. Returns [`config::SidecarMode::Enforce`] when monitor mode is
+/// production. Returns [`SidecarMode::Enforce`] when monitor mode is
 /// requested without the opt-in; otherwise returns the configured mode
 /// unchanged.
 #[must_use]
-fn resolve_effective_mode(
-    configured: config::SidecarMode,
-    monitor_env_value: Option<&str>,
-) -> config::SidecarMode {
-    if configured == config::SidecarMode::Monitor && monitor_env_value != Some("1") {
-        config::SidecarMode::Enforce
+fn resolve_effective_mode(configured: SidecarMode, monitor_env_value: Option<&str>) -> SidecarMode {
+    if configured == SidecarMode::Monitor && monitor_env_value != Some("1") {
+        SidecarMode::Enforce
     } else {
         configured
     }
@@ -187,7 +185,7 @@ fn canonical_rule_host_pattern(host: &str) -> String {
 /// startup instead of silently degrading to opaque tunnels. Deployments
 /// whose rules cannot match those hosts stay quiet.
 fn warn_on_composio_mitm_gaps(config: &config::SidecarConfig, rules: &config::MappingRulesFile) {
-    if config.interceptor.mode != config::InterceptorMode::HttpProxy
+    if config.interceptor.mode != InterceptorMode::HttpProxy
         || !mapping_references_composio_hosts(rules)
     {
         return;
@@ -254,7 +252,7 @@ pub fn build_pipeline_runtime(
                 .capability_validation
                 .clock_skew_tolerance_seconds,
         ),
-        config.tenancy.mode.clone(),
+        config.tenancy.mode,
     );
 
     let initial_policy: Box<dyn pipeline::PolicyEvaluation + Send + Sync> =
@@ -282,12 +280,12 @@ pub fn build_pipeline_runtime(
 
     let monitor_env_value = std::env::var(MONITOR_MODE_ENV).ok();
     let effective_mode = resolve_effective_mode(config.mode, monitor_env_value.as_deref());
-    if effective_mode == config::SidecarMode::Monitor {
+    if effective_mode == SidecarMode::Monitor {
         tracing::warn!(
             "MONITOR MODE ACTIVE — enforcement is observing only; all calls \
              are allowed through. Never use in production."
         );
-    } else if config.mode == config::SidecarMode::Monitor {
+    } else if config.mode == SidecarMode::Monitor {
         tracing::error!(
             "monitor mode requested via config but {MONITOR_MODE_ENV} is not set \
              to '1'; downgrading to enforce mode for safety. Set \
@@ -320,7 +318,6 @@ pub fn build_pipeline_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SidecarMode;
 
     #[test]
     fn enforce_mode_is_unchanged_without_env_opt_in() {

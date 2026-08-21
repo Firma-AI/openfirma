@@ -5,6 +5,7 @@
     reason = "Authority-wired capability manifest support is defined now but not consumed yet"
 )]
 
+use firma_config_schema::sidecar::enforcement::{self as schema, SessionStateBackend};
 use firma_http::Method;
 use serde::{Deserialize, Serialize};
 
@@ -16,52 +17,42 @@ const VALID_HTTP_METHODS: &[&str] = &[
 // Enforcement configuration
 // ---------------------------------------------------------------------------
 
-/// Enforcement engine configuration.
+/// Validated enforcement engine configuration.
 ///
-/// Groups the three enforcement sub-systems: intent-mapping rules,
-/// capability validation (Stage 1), and constraint enforcement
-/// (Stage 2).
-#[derive(Debug, Clone, Default, Deserialize)]
+/// Groups the three enforcement sub-systems: intent-mapping rules, capability
+/// validation (Stage 1), and constraint enforcement (Stage 2).
+#[derive(Debug, Clone, Default)]
 pub struct EnforcementConfig {
     /// Intent normalization / mapping rules.
-    #[serde(default)]
     pub mapping: MappingConfig,
     /// Capability validation settings.
-    #[serde(default)]
     pub capability_validation: CapabilityValidationConfig,
     /// Constraint enforcement settings.
-    #[serde(default)]
     pub constraint_enforcement: ConstraintEnforcementConfig,
 }
 
-impl EnforcementConfig {
-    /// Validate the enforcement configuration tree.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable message identifying the invalid field.
-    pub fn validate(&self) -> Result<(), String> {
-        if self.mapping.rules_path.trim().is_empty() {
-            return Err("mapping.rules_path must not be empty".into());
-        }
-        for (i, p) in self.mapping.rules_paths.iter().enumerate() {
-            if p.trim().is_empty() {
-                return Err(format!("mapping.rules_paths[{i}] must not be empty"));
-            }
-        }
-        if self.constraint_enforcement.session_state_capacity == 0 {
-            return Err("constraint_enforcement.session_state_capacity must be at least 1".into());
-        }
-        Ok(())
-    }
+/// Error validating an [`EnforcementConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EnforcementConfigError {
+    /// `mapping.rules_path` was empty.
+    #[error("mapping.rules_path must not be empty")]
+    EmptyRulesPath,
+    /// A `mapping.rules_paths` entry was empty.
+    #[error("mapping.rules_paths[{index}] must not be empty")]
+    EmptyRulesPathEntry {
+        /// Index of the offending entry.
+        index: usize,
+    },
+    /// `constraint_enforcement.session_state_capacity` was zero.
+    #[error("constraint_enforcement.session_state_capacity must be at least 1")]
+    ZeroSessionStateCapacity,
+}
 
-    /// Re-base every relative mapping path (`rules_path` and each entry
-    /// of `rules_paths`) against `config_dir`; absolute paths untouched.
-    /// No default-name sentinel check — relative consistently means
-    /// "relative to the config file's directory".
+impl EnforcementConfig {
+    /// Re-base every relative mapping path (`rules_path` and each entry of
+    /// `rules_paths`) against `config_dir`; absolute paths untouched.
     pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
         let rebase = |p: &mut String| {
-            // Empty is left for the validator to reject.
             if !p.is_empty() && std::path::Path::new(p.as_str()).is_relative() {
                 *p = config_dir.join(p.as_str()).to_string_lossy().into_owned();
             }
@@ -73,19 +64,37 @@ impl EnforcementConfig {
     }
 }
 
-/// Mapping rules configuration.
-#[derive(Debug, Clone, Deserialize)]
+impl TryFrom<schema::EnforcementConfig> for EnforcementConfig {
+    type Error = EnforcementConfigError;
+
+    fn try_from(s: schema::EnforcementConfig) -> Result<Self, Self::Error> {
+        if s.mapping.rules_path.trim().is_empty() {
+            return Err(EnforcementConfigError::EmptyRulesPath);
+        }
+        for (index, p) in s.mapping.rules_paths.iter().enumerate() {
+            if p.trim().is_empty() {
+                return Err(EnforcementConfigError::EmptyRulesPathEntry { index });
+            }
+        }
+        if s.constraint_enforcement.session_state_capacity == 0 {
+            return Err(EnforcementConfigError::ZeroSessionStateCapacity);
+        }
+        Ok(Self {
+            mapping: s.mapping.into(),
+            capability_validation: s.capability_validation.into(),
+            constraint_enforcement: s.constraint_enforcement.into(),
+        })
+    }
+}
+
+/// Validated mapping rules configuration.
+#[derive(Debug, Clone)]
 pub struct MappingConfig {
     /// Path to the primary mapping rules TOML file.
-    #[serde(default = "default_mapping_path")]
     pub rules_path: String,
     /// Additional mapping rule files merged on top of `rules_path`.
-    /// Rule lists are concatenated; duplicate `(method, host, path)`
-    /// tuples across merged files fail at startup (fail-closed).
-    #[serde(default)]
     pub rules_paths: Vec<String>,
     /// Whether unlisted hosts are protected by default.
-    #[serde(default = "default_true")]
     pub default_protected: bool,
 }
 
@@ -99,43 +108,43 @@ impl Default for MappingConfig {
     }
 }
 
-/// Capability validation configuration.
-#[derive(Debug, Clone, Default, Deserialize)]
+impl From<schema::MappingConfig> for MappingConfig {
+    fn from(s: schema::MappingConfig) -> Self {
+        Self {
+            rules_path: s.rules_path,
+            rules_paths: s.rules_paths,
+            default_protected: s.default_protected,
+        }
+    }
+}
+
+/// Validated capability validation configuration.
+#[derive(Debug, Clone, Default)]
 pub struct CapabilityValidationConfig {
-    /// Clock skew tolerance for expiry checks (seconds).
-    /// Default: 0 (strict).
-    #[serde(default)]
+    /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
     pub clock_skew_tolerance_seconds: u64,
 }
 
-/// Constraint enforcement configuration.
-#[derive(Debug, Clone, Deserialize)]
+impl From<schema::CapabilityValidationConfig> for CapabilityValidationConfig {
+    fn from(s: schema::CapabilityValidationConfig) -> Self {
+        Self {
+            clock_skew_tolerance_seconds: s.clock_skew_tolerance_seconds,
+        }
+    }
+}
+
+/// Validated constraint enforcement configuration.
+#[derive(Debug, Clone)]
 pub struct ConstraintEnforcementConfig {
     /// Policy bundle TTL in seconds. Default: 30.
-    #[serde(default = "default_bundle_ttl")]
     pub bundle_ttl_seconds: u64,
     /// Optional Stage 2 evaluation timeout in milliseconds.
-    /// Any timeout must fail closed with `DenyReason::EnforcementTimeout`.
-    #[serde(default = "default_stage2_timeout_ms")]
     pub enforcement_timeout_ms: u64,
-    /// Maximum number of active sessions tracked in the session-state
-    /// cache. Default: 8192. Raising this reduces LRU eviction of
-    /// long-lived sessions, preserving per-session context (AARM R2 G4).
-    /// Minimum: 1.
-    #[serde(default = "default_session_state_capacity")]
+    /// Maximum number of active sessions tracked in the session-state cache.
     pub session_state_capacity: usize,
     /// Session-state storage backend.
-    /// `lru` (default): in-memory LRU cache; state is lost on eviction
-    /// and process restart.
-    /// `persistent`: mirrors session state to a local JSONL file under
-    /// the runtime directory so it survives eviction and process
-    /// restart (AARM R2 G4). Use for long-lived sessions.
-    #[serde(default)]
     pub session_state_backend: SessionStateBackend,
-    /// Optional path for the persistent session-state JSONL file. Only
-    /// used when `session_state_backend = "persistent"`. When unset,
-    /// defaults to `<runtime_dir>/session-state.jsonl`.
-    #[serde(default)]
+    /// Optional path for the persistent session-state JSONL file.
     pub session_state_path: Option<String>,
 }
 
@@ -151,15 +160,16 @@ impl Default for ConstraintEnforcementConfig {
     }
 }
 
-/// Session-state storage backend selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SessionStateBackend {
-    /// In-memory LRU cache (default). State lost on eviction / restart.
-    #[default]
-    Lru,
-    /// File-backed JSONL store; state survives eviction and restart.
-    Persistent,
+impl From<schema::ConstraintEnforcementConfig> for ConstraintEnforcementConfig {
+    fn from(s: schema::ConstraintEnforcementConfig) -> Self {
+        Self {
+            bundle_ttl_seconds: s.bundle_ttl_seconds,
+            enforcement_timeout_ms: s.enforcement_timeout_ms,
+            session_state_capacity: s.session_state_capacity,
+            session_state_backend: s.session_state_backend,
+            session_state_path: s.session_state_path,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -505,27 +515,31 @@ mod tests {
 
     // -- EnforcementConfig --------------------------------------------------
 
+    use firma_config_schema::sidecar::enforcement::{
+        ConstraintEnforcementConfig as SchemaConstraint, EnforcementConfig as SchemaEnforcement,
+    };
+
     #[test]
-    fn test_enforcement_config_defaults_valid() {
-        let config = EnforcementConfig::default();
-        assert!(config.validate().is_ok());
+    fn defaults_valid() {
+        assert!(EnforcementConfig::try_from(SchemaEnforcement::default()).is_ok());
     }
 
     #[test]
     fn mapping_config_rules_paths_defaults_empty() {
-        let cfg: EnforcementConfig = toml::from_str(
+        let schema: SchemaEnforcement = toml::from_str(
             r#"
             [mapping]
             rules_path = "config/mappings/default.toml"
             "#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
+        let cfg = EnforcementConfig::try_from(schema).unwrap();
         assert!(cfg.mapping.rules_paths.is_empty());
     }
 
     #[test]
     fn mapping_config_rules_paths_parses_vec() {
-        let cfg: EnforcementConfig = toml::from_str(
+        let schema: SchemaEnforcement = toml::from_str(
             r#"
             [mapping]
             rules_path = "a.toml"
@@ -533,12 +547,13 @@ mod tests {
             "#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
+        let cfg = EnforcementConfig::try_from(schema).unwrap();
         assert_eq!(cfg.mapping.rules_paths, vec!["b.toml", "c.toml"]);
     }
 
     #[test]
     fn mapping_config_empty_rules_path_entry_rejected() {
-        let cfg: EnforcementConfig = toml::from_str(
+        let schema: SchemaEnforcement = toml::from_str(
             r#"
             [mapping]
             rules_path = "a.toml"
@@ -546,24 +561,20 @@ mod tests {
             "#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        let err = cfg.validate().unwrap_err();
-        assert!(err.contains("rules_paths[1]"), "err: {err}");
+        assert!(matches!(
+            EnforcementConfig::try_from(schema),
+            Err(EnforcementConfigError::EmptyRulesPathEntry { index: 1 })
+        ));
     }
 
     #[test]
-    fn test_enforcement_config_empty_rules_path_rejected() {
-        let config = EnforcementConfig {
-            mapping: MappingConfig {
-                rules_path: String::new(),
-                ..MappingConfig::default()
-            },
-            ..EnforcementConfig::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("rules_path"),
-            "error should mention rules_path: {err}"
-        );
+    fn empty_rules_path_rejected() {
+        let mut schema = SchemaEnforcement::default();
+        schema.mapping.rules_path = String::new();
+        assert!(matches!(
+            EnforcementConfig::try_from(schema),
+            Err(EnforcementConfigError::EmptyRulesPath)
+        ));
     }
 
     // -- SessionStateBackend / capacity (AARM R2 G4) -----------------------
@@ -578,7 +589,7 @@ mod tests {
 
     #[test]
     fn session_state_backend_parses_persistent_lowercase() {
-        let cfg: ConstraintEnforcementConfig = toml::from_str(
+        let schema: SchemaConstraint = toml::from_str(
             r#"
             session_state_capacity = 4096
             session_state_backend = "persistent"
@@ -586,6 +597,7 @@ mod tests {
             "#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
+        let cfg = ConstraintEnforcementConfig::from(schema);
         assert_eq!(cfg.session_state_capacity, 4096);
         assert_eq!(cfg.session_state_backend, SessionStateBackend::Persistent);
         assert_eq!(
@@ -596,18 +608,17 @@ mod tests {
 
     #[test]
     fn session_state_zero_capacity_rejected() {
-        let mut cfg = EnforcementConfig::default();
-        cfg.constraint_enforcement.session_state_capacity = 0;
-        let err = cfg.validate().unwrap_err();
-        assert!(
-            err.contains("session_state_capacity"),
-            "error should mention session_state_capacity: {err}"
-        );
+        let mut schema = SchemaEnforcement::default();
+        schema.constraint_enforcement.session_state_capacity = 0;
+        assert!(matches!(
+            EnforcementConfig::try_from(schema),
+            Err(EnforcementConfigError::ZeroSessionStateCapacity)
+        ));
     }
 
     #[test]
     fn session_state_unknown_backend_rejected() {
-        let result: Result<ConstraintEnforcementConfig, _> = toml::from_str(
+        let result: Result<SchemaConstraint, _> = toml::from_str(
             r#"
             session_state_backend = "redis"
             "#,

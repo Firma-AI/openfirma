@@ -18,7 +18,9 @@ use firma_runtime_state::RuntimeLayout;
 use tokio_util::sync::CancellationToken;
 
 use crate::composio::PROTECTED_HOSTS;
-use crate::config::{self, HttpsMitmConfig, InterceptorMode};
+use firma_config_schema::sidecar::InterceptorMode;
+
+use crate::config::{self, HttpsMitmConfig};
 use crate::handler::RequestHandler;
 use crate::interceptor;
 use crate::interceptor::https_mitm::{host_matches_any, normalize_patterns};

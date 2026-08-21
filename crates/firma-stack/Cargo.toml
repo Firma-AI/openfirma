@@ -14,6 +14,7 @@ workspace = true
 anyhow = { workspace = true }
 firma-authority = { workspace = true }
 firma-config-loader = { workspace = true }
+firma-config-schema = { workspace = true }
 firma-process-orchestrator = { workspace = true }
 firma-sidecar = { workspace = true }
 thiserror = { workspace = true }

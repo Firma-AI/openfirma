@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use firma_http::HeaderName;
 
-use crate::config::{self, CredentialTransform};
+use firma_config_schema::sidecar::CredentialTransform;
+
+use crate::config;
 use crate::credential;
 
 /// Builds a [`CredentialInjector`](credential::CredentialInjector)
@@ -26,7 +28,7 @@ use crate::credential;
 pub fn build_credential_injector<S: std::hash::BuildHasher>(
     creds: &HashMap<String, config::CredentialConfig, S>,
 ) -> anyhow::Result<Box<dyn credential::CredentialInjector>> {
-    use config::CredentialMode;
+    use firma_config_schema::sidecar::CredentialMode;
 
     if creds.is_empty() {
         tracing::debug!("no credential entries configured; using null injector");

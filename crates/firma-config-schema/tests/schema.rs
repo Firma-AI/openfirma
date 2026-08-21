@@ -17,6 +17,11 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     let config: InterceptorConfig = serde_json::from_str("{}").expect("empty object deserializes");
 
     assert_eq!(config.mode, InterceptorMode::default());
+    // `Default` must match the deserialize default for socket_path (both
+    // `None`); the validating constructor in `firma-sidecar` resolves the
+    // built-in default path for `unix_socket` mode.
+    assert_eq!(config.socket_path, None);
+    assert_eq!(InterceptorConfig::default().socket_path, None);
     assert_eq!(config.drain_timeout_secs, 30);
     assert_eq!(config.max_request_body_bytes, 4 * 1024 * 1024);
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));

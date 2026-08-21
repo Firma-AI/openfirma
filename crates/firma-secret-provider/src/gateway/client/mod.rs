@@ -30,13 +30,15 @@ use crate::{
     ExposeSecret, GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder, SecretString,
     endpoint::{EndpointInner, client::ClientEndpoint},
-    gateway::client::{
-        config::GatewayClientConfig,
-        error::{GatewayClientError, ProtocolViolation, TransportError},
-    },
+    gateway::client::error::{GatewayClientError, ProtocolViolation, TransportError},
 };
 
-pub mod config;
+/// Secret-gateway client tuning. The representation lives in
+/// `firma-config-schema` (the single source of truth for config shape); it is
+/// re-exported here so the canonical `gateway::client::GatewayClientConfig`
+/// path — and every consumer — stays unchanged.
+pub use firma_config_schema::gateway::GatewayClientConfig;
+
 pub mod error;
 
 /// Environment variable the Sidecar reads to locate the firma-run secret

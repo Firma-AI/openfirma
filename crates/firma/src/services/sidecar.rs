@@ -6,6 +6,7 @@ use std::{path::Path, process::ExitCode, str::FromStr, sync::Arc, time::Duration
 use std::path::PathBuf;
 
 use anyhow::Context as _;
+use firma_config_schema::sidecar::InterceptorMode;
 use firma_runtime_state::RuntimeLayout;
 use firma_secret_provider::{
     MatcherCompiler,
@@ -340,13 +341,13 @@ fn write_startup_report(
         return Ok(());
     };
     let endpoint = match interceptor.mode {
-        config::InterceptorMode::HttpProxy | config::InterceptorMode::Grpc => {
+        InterceptorMode::HttpProxy | InterceptorMode::Grpc => {
             firma_stack::ComponentEndpoint::Tcp(listen_addr.parse().with_context(|| {
                 format!("interceptor reported an invalid TCP listen address: {listen_addr}")
             })?)
         }
         #[cfg(unix)]
-        config::InterceptorMode::UnixSocket => UnixEndpoint::new(PathBuf::from(listen_addr))
+        InterceptorMode::UnixSocket => UnixEndpoint::new(PathBuf::from(listen_addr))
             .map(firma_stack::ComponentEndpoint::Unix)
             .map_err(|path| {
                 anyhow::anyhow!(
@@ -500,7 +501,7 @@ async fn spawn_health_server(
 }
 
 fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr: &str) {
-    if config.interceptor.mode == config::InterceptorMode::HttpProxy {
+    if config.interceptor.mode == InterceptorMode::HttpProxy {
         let proxy = format!("http://{interceptor_addr}");
         info!(
             proxy = %proxy,
@@ -520,14 +521,13 @@ fn read_config(
         .config
         .raw_section("sidecar")
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
-    let mut config: config::SidecarConfig = toml::from_str(&body)?;
-    config.rebase_defaults(&resolved.config_dir());
+    let mut schema: firma_config_schema::sidecar::SidecarConfig = toml::from_str(&body)?;
     if let Some(connect_addr) = authority_connect_addr {
-        config.authority.connect_addr = Some(connect_addr);
+        schema.authority.connect_addr = Some(connect_addr);
     }
-    config
-        .validate()
+    let mut config = config::SidecarConfig::try_from(schema)
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
+    config.rebase_defaults(&resolved.config_dir());
     Ok(config)
 }
 

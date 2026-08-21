@@ -3,58 +3,72 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use firma_config_schema::sidecar::authority::SidecarCredentials as SchemaSidecarCredentials;
 use firma_protobuf::v1::SidecarCredentials;
-use serde::Deserialize;
 
-/// Configured source for Sidecar pre-shared-key credentials.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Validated source for Sidecar pre-shared-key credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidecarCredentialsConfig {
     /// Workspace the Sidecar belongs to.
     pub workspace_id: String,
     /// Authority-assigned Sidecar identity.
     pub sidecar_id: String,
     /// Environment variable containing the pre-shared key.
-    #[serde(default)]
     pub pre_shared_key_env: Option<String>,
     /// File containing the pre-shared key.
-    #[serde(default)]
     pub pre_shared_key_path: Option<PathBuf>,
 }
 
-impl SidecarCredentialsConfig {
-    /// Validate configured Sidecar credentials.
-    ///
-    /// # Errors
-    ///
-    /// Returns a field-level error when the identity or PSK source is invalid.
-    pub fn validate(&self) -> Result<(), String> {
-        if self.workspace_id.trim().is_empty() {
-            return Err("workspace_id must not be empty".to_string());
-        }
-        if self.sidecar_id.trim().is_empty() {
-            return Err("sidecar_id must not be empty".to_string());
-        }
+/// Error validating a [`SidecarCredentialsConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SidecarCredentialsConfigError {
+    /// `workspace_id` was empty.
+    #[error("workspace_id must not be empty")]
+    EmptyWorkspaceId,
+    /// `sidecar_id` was empty.
+    #[error("sidecar_id must not be empty")]
+    EmptySidecarId,
+    /// Neither PSK source was set.
+    #[error("exactly one of pre_shared_key_env or pre_shared_key_path must be set")]
+    MissingPreSharedKeySource,
+    /// Both PSK sources were set.
+    #[error("pre_shared_key_env and pre_shared_key_path are mutually exclusive")]
+    MultiplePreSharedKeySources,
+}
 
-        let has_env = self
+impl TryFrom<SchemaSidecarCredentials> for SidecarCredentialsConfig {
+    type Error = SidecarCredentialsConfigError;
+
+    fn try_from(schema: SchemaSidecarCredentials) -> Result<Self, Self::Error> {
+        if schema.workspace_id.trim().is_empty() {
+            return Err(SidecarCredentialsConfigError::EmptyWorkspaceId);
+        }
+        if schema.sidecar_id.trim().is_empty() {
+            return Err(SidecarCredentialsConfigError::EmptySidecarId);
+        }
+        let has_env = schema
             .pre_shared_key_env
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty());
-        let has_path = self
+        let has_path = schema
             .pre_shared_key_path
             .as_deref()
             .is_some_and(|path| !path.as_os_str().is_empty());
-
         match (has_env, has_path) {
-            (true, false) | (false, true) => Ok(()),
-            (false, false) => {
-                Err("exactly one of pre_shared_key_env or pre_shared_key_path must be set".into())
-            }
-            (true, true) => {
-                Err("pre_shared_key_env and pre_shared_key_path are mutually exclusive".into())
-            }
+            (true, false) | (false, true) => {}
+            (false, false) => return Err(SidecarCredentialsConfigError::MissingPreSharedKeySource),
+            (true, true) => return Err(SidecarCredentialsConfigError::MultiplePreSharedKeySources),
         }
+        Ok(Self {
+            workspace_id: schema.workspace_id,
+            sidecar_id: schema.sidecar_id,
+            pre_shared_key_env: schema.pre_shared_key_env,
+            pre_shared_key_path: schema.pre_shared_key_path,
+        })
     }
+}
 
+impl SidecarCredentialsConfig {
     /// Re-base a relative PSK file path against the config directory.
     pub fn rebase_defaults(&mut self, config_dir: &Path) {
         if let Some(path) = self.pre_shared_key_path.as_mut()
@@ -72,7 +86,6 @@ impl SidecarCredentialsConfig {
     /// Returns an error when validation fails or the selected PSK source cannot
     /// be read.
     pub fn resolve(&self) -> Result<ResolvedSidecarCredentials, String> {
-        self.validate()?;
         if let Some(env_name) = self
             .pre_shared_key_env
             .as_deref()
@@ -195,40 +208,44 @@ mod tests {
 
     #[test]
     fn validate_rejects_missing_psk_source() {
-        let config = SidecarCredentialsConfig {
+        let schema = SchemaSidecarCredentials {
             workspace_id: "ws".to_string(),
             sidecar_id: "sc".to_string(),
             pre_shared_key_env: None,
             pre_shared_key_path: None,
         };
-        assert!(config.validate().unwrap_err().contains("exactly one"));
+        assert!(matches!(
+            SidecarCredentialsConfig::try_from(schema),
+            Err(SidecarCredentialsConfigError::MissingPreSharedKeySource)
+        ));
     }
 
     #[test]
     fn validate_rejects_both_psk_sources() {
-        let config = SidecarCredentialsConfig {
+        let schema = SchemaSidecarCredentials {
             workspace_id: "ws".to_string(),
             sidecar_id: "sc".to_string(),
             pre_shared_key_env: Some("FIRMA_PSK".to_string()),
             pre_shared_key_path: Some(PathBuf::from("psk")),
         };
-        assert!(
-            config
-                .validate()
-                .unwrap_err()
-                .contains("mutually exclusive")
-        );
+        assert!(matches!(
+            SidecarCredentialsConfig::try_from(schema),
+            Err(SidecarCredentialsConfigError::MultiplePreSharedKeySources)
+        ));
     }
 
     #[test]
     fn validate_rejects_empty_identity() {
-        let config = SidecarCredentialsConfig {
+        let schema = SchemaSidecarCredentials {
             workspace_id: " ".to_string(),
             sidecar_id: "sc".to_string(),
             pre_shared_key_env: Some("FIRMA_PSK".to_string()),
             pre_shared_key_path: None,
         };
-        assert!(config.validate().unwrap_err().contains("workspace_id"));
+        assert!(matches!(
+            SidecarCredentialsConfig::try_from(schema),
+            Err(SidecarCredentialsConfigError::EmptyWorkspaceId)
+        ));
     }
 
     #[test]

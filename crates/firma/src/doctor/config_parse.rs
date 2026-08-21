@@ -46,9 +46,17 @@ pub fn check_loaded(parsed: &firma_config_loader::FirmaConfig) -> Check {
                 .with_detail("path", display);
         }
     };
-    if let Err(error) = toml::from_str::<firma_sidecar::config::SidecarConfig>(&sidecar_body) {
-        return Check::fail("config parsed", format!("[sidecar]: {display}: {error}"))
-            .with_detail("path", display);
+    match toml::from_str::<firma_config_schema::sidecar::SidecarConfig>(&sidecar_body) {
+        Ok(schema) => {
+            if let Err(error) = firma_sidecar::config::SidecarConfig::try_from(schema) {
+                return Check::fail("config parsed", format!("[sidecar]: {display}: {error}"))
+                    .with_detail("path", display);
+            }
+        }
+        Err(error) => {
+            return Check::fail("config parsed", format!("[sidecar]: {display}: {error}"))
+                .with_detail("path", display);
+        }
     }
 
     Check::ok("config parsed", display.clone()).with_detail("path", display)

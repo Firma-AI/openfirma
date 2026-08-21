@@ -1603,7 +1603,9 @@ mod tests {
                 let path = dir.path().join(CONFIG_FILE_NAME);
                 fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
                 let body = firma_config_loader::load_section(&path, "sidecar").unwrap();
-                let _: firma_sidecar::config::SidecarConfig = toml::from_str(&body).unwrap();
+                let schema: firma_config_schema::sidecar::SidecarConfig =
+                    toml::from_str(&body).unwrap();
+                let _ = firma_sidecar::config::SidecarConfig::try_from(schema).unwrap();
             }
         }
     }

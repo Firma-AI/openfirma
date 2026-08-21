@@ -2114,7 +2114,7 @@ pub(crate) mod tests {
     use firma_secret_provider::{
         MatcherError,
         endpoint::client::ClientEndpoint,
-        gateway::client::config::GatewayClientConfig,
+        gateway::client::GatewayClientConfig,
         non_empty::NonEmptyString,
         spec::http::{HttpMatcherRule, PathAndMatcher, PathOnly},
     };
@@ -2125,7 +2125,6 @@ pub(crate) mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::config::TenancyMode;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -2134,6 +2133,7 @@ pub(crate) mod tests {
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
         MappingTable, PipelineArgs,
     };
+    use firma_config_schema::sidecar::TenancyMode;
 
     #[expect(
         clippy::redundant_pub_crate,

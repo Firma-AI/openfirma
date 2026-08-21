@@ -46,12 +46,12 @@ fn convert_http_matcher_rule(
         HttpMatcherRuleConfig::SensitiveCommand { path, matcher } => {
             MatcherRule::SensitiveCommand(PathAndMatcher { path, matcher })
         }
-        HttpMatcherRuleConfig::SafeCommand { path } => {
-            MatcherRule::SafeCommand(PathOnly { path: non_empty_path(path)? })
-        }
-        HttpMatcherRuleConfig::BlockedCommand { path } => {
-            MatcherRule::BlockedCommand(PathOnly { path: non_empty_path(path)? })
-        }
+        HttpMatcherRuleConfig::SafeCommand { path } => MatcherRule::SafeCommand(PathOnly {
+            path: non_empty_path(path)?,
+        }),
+        HttpMatcherRuleConfig::BlockedCommand { path } => MatcherRule::BlockedCommand(PathOnly {
+            path: non_empty_path(path)?,
+        }),
     })
 }
 

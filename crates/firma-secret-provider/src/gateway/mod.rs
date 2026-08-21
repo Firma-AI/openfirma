@@ -10,7 +10,7 @@
 //! request buffer where possible to avoid copying secret material.
 //!
 //! This module defines the wire types themselves; [`client`] implements the
-//! transport that speaks the protocol over a [`client::config::GatewayClientConfig`]-tuned
+//! transport that speaks the protocol over a [`client::GatewayClientConfig`]-tuned
 //! connection to a [`crate::endpoint::client::ClientEndpoint`].
 
 use std::collections::HashSet;

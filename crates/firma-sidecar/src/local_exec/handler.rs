@@ -119,17 +119,9 @@ pub struct LocalExecManagementResponse {
 // Config
 // ---------------------------------------------------------------------------
 
-/// Policy applied to every fresh local-exec request (no approval token).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DefaultAction {
-    /// Allow all executions unconditionally.
-    Allow,
-    /// Deny all executions unconditionally.
-    Deny,
-    /// Require human approval via the HITL token flow.
-    PendingHitl,
-}
+// `DefaultAction` is the schema enum, imported for in-crate use only; consumers
+// outside this module import it from `firma_config_schema` directly.
+use firma_config_schema::sidecar::local_exec::DefaultAction;
 
 /// Construction arguments for [`LocalExecHandler`].
 pub struct LocalExecHandlerConfig {

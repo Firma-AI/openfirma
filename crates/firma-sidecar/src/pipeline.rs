@@ -29,7 +29,6 @@ use std::sync::Arc;
 use crate::audit::{AuditPayload, Decision};
 use crate::authority_client::readiness::ReadinessView;
 use crate::composio::ComposioAction;
-use crate::config::SidecarMode;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::SessionStateStore;
 pub use crate::enforcement::capability_map::CapabilityMap;
@@ -43,6 +42,7 @@ pub use crate::enforcement::registry::ActionClassRegistry;
 use crate::enforcement::session::Outcome;
 use crate::normalizer::NormalizedEnvelope;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
+use firma_config_schema::sidecar::SidecarMode;
 
 /// Default `retry_after_ms` surfaced to the agent for an AARM R4 `STEP_UP`
 /// decision raised by the general enforcement pipeline. Mirrors the
@@ -1196,7 +1196,9 @@ fn derive_thread_id(session_id: &firma_identifiers::SessionId) -> String {
 mod tests {
     use super::*;
     use crate::audit::Decision;
-    use crate::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
+    use firma_config_schema::sidecar::TenancyMode;
+
+    use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;

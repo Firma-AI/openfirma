@@ -1982,7 +1982,9 @@ mod tests {
     use tokio_rustls::TlsConnector;
 
     use super::*;
-    use crate::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
+    use firma_config_schema::sidecar::TenancyMode;
+
+    use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;

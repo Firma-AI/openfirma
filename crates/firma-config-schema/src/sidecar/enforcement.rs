@@ -102,7 +102,7 @@ pub enum SessionStateBackend {
 }
 
 /// Sentinel: default `mapping.rules_path`.
-pub const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
+const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
 
 fn default_mapping_path() -> String {
     DEFAULT_MAPPING_PATH.to_string()

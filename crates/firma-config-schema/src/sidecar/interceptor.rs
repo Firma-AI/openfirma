@@ -89,7 +89,10 @@ impl Default for InterceptorConfig {
         Self {
             mode: InterceptorMode::default(),
             listen_addr: default_listen_addr(),
-            socket_path: Some(default_socket_path()),
+            // Match serde: an absent `socket_path` deserializes to `None`. The
+            // validating constructor in `firma-sidecar` resolves the default
+            // path when `unix_socket` mode leaves it unset.
+            socket_path: None,
             drain_timeout_secs: default_drain_timeout(),
             max_request_body_bytes: default_max_request_body_bytes(),
             max_decompressed_body_size: default_max_decompressed_body_size(),
