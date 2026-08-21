@@ -145,7 +145,7 @@ impl BrokerListener {
                     let mut stream = BrokerStream::Unix { stream };
                     let _ = timeout(
                         self.config.operation_timeout,
-                        write_response(&mut stream, &response, self.config.max_buffer_size()),
+                        write_response(&mut stream, &response, self.config.max_response_size()),
                     )
                     .await;
                     return Err(error);
@@ -158,7 +158,12 @@ impl BrokerListener {
         // the connection indefinitely.
         timeout(
             self.config.operation_timeout,
-            handle_connection(&mut stream, self.config.max_buffer_size(), handler),
+            handle_connection(
+                &mut stream,
+                self.config.max_request_size(),
+                self.config.max_response_size(),
+                handler,
+            ),
         )
         .await
         .map_err(|_| {
@@ -198,25 +203,26 @@ fn reject_mismatched_peer(stream: &tokio::net::UnixStream) -> io::Result<()> {
 
 async fn handle_connection<F>(
     stream: &mut BrokerStream,
-    max_buffer_size: usize,
+    max_request_size: usize,
+    max_response_size: usize,
     handler: F,
 ) -> io::Result<()>
 where
     F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
 {
-    // The read is capped at max_buffer_size + 1 (see [`read_bounded_line`]),
+    // The read is capped at max_request_size + 1 (see [`read_bounded_line`]),
     // and any request whose newline-stripped line exceeds the limit is
     // rejected. Padding an over-limit request with boundary whitespace must
     // not let it pass, so the check measures the raw line, not the trimmed
     // content. The size check runs on the raw bytes before UTF-8 decoding so
     // an over-limit line that truncates mid-character still receives the
     // "request too large" response instead of a silent close.
-    let line = read_bounded_line(stream, max_buffer_size as u64).await?;
-    if line.len() > max_buffer_size {
+    let line = read_bounded_line(stream, max_request_size as u64).await?;
+    if line.len() > max_request_size {
         write_response(
             stream,
             &BrokerResponse::rejected("request too large"),
-            max_buffer_size,
+            max_response_size,
         )
         .await?;
         // The request line was capped, so the rest of an over-limit request is
@@ -232,7 +238,7 @@ where
         return write_response(
             stream,
             &BrokerResponse::rejected("empty broker request"),
-            max_buffer_size,
+            max_response_size,
         )
         .await;
     }
@@ -240,7 +246,7 @@ where
         Ok(request) => handler(request).await,
         Err(e) => BrokerResponse::rejected(format!("malformed broker request: {e}")),
     };
-    write_response(stream, &response, max_buffer_size).await
+    write_response(stream, &response, max_response_size).await
 }
 
 /// Serialize `response` into a newline-terminated wire line, or return `None`

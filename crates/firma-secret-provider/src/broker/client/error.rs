@@ -28,6 +28,9 @@ use crate::{
 /// - [`BrokerClientError::InvalidEndpoint`] — the endpoint fails an
 ///   address-level invariant (non-loopback TCP, relative Unix path). A
 ///   configuration error; not retryable.
+/// - [`BrokerClientError::InvalidBinaryName`] and
+///   [`BrokerClientError::RequestTooLarge`] — the request cannot be sent as
+///   configured. Caller or configuration errors; not retryable unchanged.
 /// - [`BrokerClientError::Bug`] — encoding our own outbound request failed.
 ///   Should never happen given internally-constructed request data.
 #[derive(Debug, thiserror::Error)]
@@ -69,6 +72,9 @@ pub enum BrokerClientError {
     /// The executable is not a portable basename.
     #[error("invalid secret broker binary: {0}")]
     InvalidBinaryName(#[from] BinaryNameError),
+    /// The encoded request exceeds the configured outbound limit.
+    #[error("secret broker request is {size} bytes, exceeding the {max} byte limit")]
+    RequestTooLarge { size: usize, max: usize },
     /// Encoding our own outbound request as JSON failed. Should never happen
     /// given internally-constructed request data; indicates a bug.
     #[error("bug: failed to serialize broker request: {0}")]
@@ -132,7 +138,8 @@ pub enum ProtocolViolation {
     /// The response line is not valid UTF-8.
     #[error("broker response is not valid UTF-8: {0}")]
     InvalidUtf8(#[source] std::string::FromUtf8Error),
-    /// The request or response line exceeded [`super::config::BrokerClientConfig::max_buffer_size`].
-    #[error("broker max buffer size exceeded")]
-    MaxBufferSizeExceeded,
+    /// The response line exceeded
+    /// [`super::config::BrokerClientConfig::max_response_size`].
+    #[error("broker response exceeds the configured size limit")]
+    ResponseTooLarge,
 }

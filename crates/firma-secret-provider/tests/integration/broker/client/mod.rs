@@ -144,7 +144,7 @@ async fn request_fails_closed_when_response_exceeds_buffer() {
     } = bind_broker().await.expect("bind");
     serve_ok(listener, vec![b'x'; 256]);
     let config = BrokerClientConfig {
-        max_buffer_size: bytesize::ByteSize::b(64),
+        max_response_size: bytesize::ByteSize::b(64),
         ..BrokerClientConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
@@ -160,7 +160,7 @@ async fn request_fails_closed_when_response_exceeds_buffer() {
     std::assert_matches!(
         error,
         Err(BrokerClientError::ProtocolViolation(
-            ProtocolViolation::MaxBufferSizeExceeded
+            ProtocolViolation::ResponseTooLarge
         ))
     );
 }
@@ -172,14 +172,14 @@ async fn request_accepts_response_exactly_at_buffer_limit() {
         endpoint,
         _dir,
     } = bind_broker().await.expect("bind");
-    // A response whose encoded JSON line is exactly `max_buffer_size`
+    // A response whose encoded JSON line is exactly `max_response_size`
     // bytes must be accepted (the trailing newline must not count against
     // the limit). Sizing the limit from the real serialized payload keeps
     // the boundary exact.
     let stdout = vec![b'x'; 42];
     let response_payload = serde_json::to_vec(&executed_response(&stdout)).expect("serialize");
     let config = BrokerClientConfig {
-        max_buffer_size: bytesize::ByteSize::b(response_payload.len() as u64),
+        max_response_size: bytesize::ByteSize::b(response_payload.len() as u64),
         ..BrokerClientConfig::default()
     };
     serve_ok(listener, stdout.clone());
@@ -251,7 +251,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
     let stdout = b"secret-value".to_vec();
     let response_payload = serde_json::to_vec(&executed_response(&stdout)).expect("serialize");
     // The broker pads the response line with a trailing space, so the raw
-    // line is one byte over `max_buffer_size` even though the trimmed
+    // line is one byte over `max_response_size` even though the trimmed
     // content is not. The size check must measure the line, not the
     // trimmed content.
     let mut padded = response_payload.clone();
@@ -259,7 +259,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
     padded.push(b'\n');
     let (endpoint, _guard) = bind_raw_responder(padded);
     let config = BrokerClientConfig {
-        max_buffer_size: bytesize::ByteSize::b(response_payload.len() as u64),
+        max_response_size: bytesize::ByteSize::b(response_payload.len() as u64),
         ..BrokerClientConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
@@ -276,7 +276,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
         matches!(
             error,
             Err(BrokerClientError::ProtocolViolation(
-                ProtocolViolation::MaxBufferSizeExceeded
+                ProtocolViolation::ResponseTooLarge
             ))
         ),
         "unexpected error: {error:?}"
@@ -380,7 +380,7 @@ async fn request_fails_closed_when_request_exceeds_buffer() {
         _dir,
     } = bind_broker().await.expect("bind");
     let config = BrokerClientConfig {
-        max_buffer_size: bytesize::ByteSize::b(16),
+        max_request_size: bytesize::ByteSize::b(16),
         ..BrokerClientConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
@@ -393,12 +393,7 @@ async fn request_fails_closed_when_request_exceeds_buffer() {
             |_| Ok(()),
         )
         .await;
-    std::assert_matches!(
-        error,
-        Err(BrokerClientError::ProtocolViolation(
-            ProtocolViolation::MaxBufferSizeExceeded
-        ))
-    );
+    std::assert_matches!(error, Err(BrokerClientError::RequestTooLarge { .. }));
 }
 
 #[tokio::test]

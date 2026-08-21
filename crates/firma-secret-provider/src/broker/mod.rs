@@ -167,7 +167,7 @@ impl BrokerResponse<'_> {
     /// cross-stream write order. Chunks are base64-encoded into memory here, so
     /// handlers must cap process output capture: an unbounded payload would
     /// exhaust broker memory before the listener's response-size check (see
-    /// [`server::config::BrokerListenerConfig::max_buffer_size`]) can
+    /// [`server::config::BrokerListenerConfig::max_response_size`]) can
     /// reject it.
     #[must_use]
     pub fn executed(
