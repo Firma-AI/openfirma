@@ -43,11 +43,19 @@ Challenge whether:
 - important validation happens once at the boundary that can own it;
 - proposed types and transitions prevent a reachable invalid state rather than
   merely adding abstraction;
+- type-level claims survive compile-valid attempts to swap same-typed roles,
+  supply multiple values with the same provenance, bypass constructors, and
+  take illegal transitions;
 - semantic traces include relevant success, denial, malformed, unavailable,
   disabled, alternate-entry, and bypass paths;
 - compatibility, migration, and failure semantics are explicit;
 - each vertical slice delivers independently verifiable behavior or bounded
   risk reduction;
+- the artifact is decision-dense rather than a research transcript, and links
+  supporting evidence instead of repeating it;
+- slices with independent invariant owners, acceptance outcomes, and failure or
+  rollback decisions are split into child plans, while deferred tactical detail
+  is planned before its slice is implemented;
 - durable facts are targeted to their canonical documentation owner; and
 - the accepted artifact, findings, and dispositions will have a durable,
   team-accessible locator independent of the planning tool or conversation.
@@ -72,6 +80,13 @@ Type-level restrictions prove construction properties only. Runtime invariants
 involving I/O, ordering, policy, configuration, trust, or error conversion need
 runtime or boundary evidence.
 
+For every unrepresentable-state claim, attempt to write a compile-valid illegal
+witness against the proposed signatures. Distinguish what the shape proves
+about cardinality, ownership uniqueness, semantic role or provenance, and
+transition ordering. A pair of fields with different names but the same type,
+for example, does not prove that callers cannot swap the values or provide two
+values created for the same role.
+
 ## Rust modeling questions
 
 When Rust design is involved, ask whether:
@@ -83,6 +98,11 @@ When Rust design is involved, ask whether:
 - exposed mutation can bypass an invariant owner;
 - type, API, config, wire, event, and error names drift semantically; or
 - public construction or transition APIs admit illegal states.
+
+Use constructor-level witnesses when they make the concern concrete, for
+example `Pair::new(right, left)` or `Pair::new(left_one, left_two)`. If the
+witness compiles, identify the reachable producer and consumer before reporting
+it; do not infer impact from type shape alone.
 
 Report these only with a reachable correctness, security, compatibility,
 operational, or recurring-maintenance impact. Do not report type-shape or naming

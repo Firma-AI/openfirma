@@ -20,18 +20,11 @@ durable, team-accessible repository path or URL that does not depend on any
 particular agent, chat product, or private conversation. A conversation link
 may supplement that locator but cannot replace it.
 
-## Decide whether formal planning applies
+## Route the work
 
-Do not create a formal plan for typos, prose-only corrections, formatting,
-generated-file refreshes, procedural metadata changes with an established
-workflow, behavior-preserving local refactors with no contract or invariant
-change, or single-site fixes whose cause, owner, call path, and regression proof
-are already established. Follow the repository's normal implementation and
-verification guidance instead.
-
-## Select the planning mode
-
-Evaluate these rules in order. The first matching rule wins.
+Evaluate the Full triggers before considering an exemption or Compact mode. A
+Full trigger always requires formal planning, even for a single-site fix with a
+known cause and call path.
 
 ### Full
 
@@ -51,6 +44,15 @@ These triggers override Compact even when the diff is expected to be small. A
 Compact choice where Full initially appears applicable requires concrete
 repository evidence and a recorded reason; it must not weaken a user-requested
 security posture or stable contract.
+
+### Formal planning does not apply
+
+When no Full trigger applies, do not create a formal plan for typos, prose-only
+corrections, formatting, generated-file refreshes, procedural metadata changes
+with an established workflow, behavior-preserving local refactors with no
+contract or invariant change, or single-site fixes whose cause, owner, call
+path, and regression proof are already established. Follow the repository's
+normal implementation and verification guidance instead.
 
 ### Compact
 
@@ -121,6 +123,14 @@ Use types to make invalid states harder to express when that removes a
 reachable defect or repeated validation. Do not mandate newtypes, typestate, or
 domain abstractions without a concrete ownership and lifecycle benefit.
 
+For every claim that a type makes an invalid state unrepresentable, perform a
+constructibility attack. Distinguish cardinality, ownership uniqueness,
+semantic role or provenance, and legal transition ordering. Write compile-valid
+pseudocode for plausible illegal constructions, including swapped same-typed
+roles and repeated values from the wrong provenance. If an illegal witness
+compiles, narrow the claim and select role-specific types, validating
+constructors, or runtime proof as appropriate.
+
 Call traces are not exhaustive call graphs. Follow only the paths needed to
 establish reachability, semantic transformations, invariant ownership, failure
 mapping, and externally observable effects.
@@ -141,6 +151,27 @@ For every slice state:
 
 Avoid horizontal phases such as all types, then all implementations, then all
 tests unless a compilation or migration constraint requires them.
+
+### Control scope and detail
+
+Judge a plan by decision density and cohesion, not line count. Every section or
+record must resolve a design decision, establish or locate a proof obligation,
+define an executable slice, or expose a material gap. Cite supporting evidence
+instead of repeating research narration; place necessary inventories and raw
+evidence in a linked appendix when they would obscure the design.
+
+Split a slice into a child plan when it has its own invariant owner or proof
+boundary, independently observable acceptance outcome, and compatibility,
+rollback, or failure decisions that can be implemented and reviewed without
+the rest of the parent. The parent retains the cross-slice contract,
+dependencies, and integration proof obligations.
+
+Plan at coarser granularity when a later slice's tactical choices depend on
+evidence produced by an earlier slice. Record the boundary, acceptance outcome,
+and decision to defer; complete and review the child plan before implementing
+that slice. Keep work in one plan when splitting would require a knowingly
+invalid intermediate state or obscure one invariant that must change atomically
+across boundaries.
 
 ### 6. Assemble the candidate artifact
 
@@ -213,6 +244,8 @@ Before implementation, ensure:
 - each affected invariant has one primary owner;
 - runtime invariants have runtime or boundary proof obligations;
 - slices have focused verification and can stand independently where feasible;
+- the scope and refinement assessment leaves no independently plannable change
+  hidden inside an oversized slice;
 - durable facts target their canonical owning documentation; and
 - plan findings and dispositions remain visible.
 

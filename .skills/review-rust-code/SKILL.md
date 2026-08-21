@@ -122,6 +122,13 @@ check whether:
   conflicting terms; or
 - construction and transition APIs admit illegal states or role combinations.
 
+For a claim that an API makes a state unrepresentable, try compile-valid
+constructor witnesses that swap same-typed semantic roles, provide multiple
+values from one role or provenance, bypass validation, or take an illegal
+transition. Distinguish cardinality and ownership uniqueness from semantic role
+identity; named fields do not establish that same-typed constructor arguments
+were produced for the correct roles.
+
 Report these only when the state is reachable and causes concrete correctness,
 security, compatibility, operational, or recurring-validation impact. Do not
 report a preference for a newtype, enum, typestate, rename, or abstraction

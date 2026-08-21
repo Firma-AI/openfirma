@@ -27,6 +27,8 @@ Include conditional sections only when their applicability rule matches.
 - Out of scope:
 - Assumptions:
 - Open decisions:
+- Cohesion and split assessment:
+- Deferred child plans: Not applicable | <boundary, acceptance outcome, and dependency>
 
 ## Routing
 
@@ -146,6 +148,13 @@ Show architecture-shaping contracts without implementation bodies. State which
 invalid states or duplicated checks the shape prevents. Do not sketch helpers
 whose signatures do not affect ownership or review decisions.
 
+For each unrepresentable-state claim, include the strongest plausible
+compile-valid illegal construction. Check swapped same-typed roles, multiple
+values with the same provenance, constructor bypasses, and illegal transitions.
+State separately what the design proves about cardinality, ownership
+uniqueness, semantic role or provenance, and transition ordering. If a witness
+compiles, narrow the claim and record the validating boundary or revised type.
+
 ## Conditional: Semantic call traces
 
 Use one record for each behaviorally significant current or proposed path:
@@ -195,6 +204,8 @@ Distinguish accident-prevention guardrails from security boundaries.
 
 A type can prevent invalid construction. It does not by itself prove runtime
 sequencing, I/O, configuration, policy evaluation, trust, or failure mapping.
+Named fields or parameter positions also do not prove the provenance or
+semantic role of same-typed values.
 
 ## Plan-review finding record
 
