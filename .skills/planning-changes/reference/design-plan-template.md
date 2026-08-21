@@ -61,7 +61,13 @@ instead of repeating prose.
 ## Architecture and invariant ownership
 
 - Architecture shape:
-- Invariant IDs and primary owners:
+
+### `INV-001`: <invariant>
+
+- Semantic predicate:
+- Primary owner:
+- Detailed proof: Not applicable | <technical-evidence anchor>
+
 - Compatibility, migration, and failure semantics: <reference `DEC-*` IDs>
 - Durable documentation owner:
 
@@ -218,8 +224,7 @@ Distinguish accident-prevention guardrails from security boundaries.
 
 | Field                  | Content                                                          |
 | ---------------------- | ---------------------------------------------------------------- |
-| Obligation ID          | `INV-<stable-name>`                                              |
-| Invariant or claim     | Testable semantic statement                                      |
+| Invariant              | Reference the canonical `INV-*` definition in the human path     |
 | Kind                   | Type / Runtime / Trust / Compatibility / Migration / Operational |
 | Owner/proof boundary   | Component that establishes it                                    |
 | Suite/boundary         | Unit, integration, E2E, protocol, config, or platform            |
@@ -256,6 +261,12 @@ correction: <artifact repair, research, or user decision>
 confidence: high | medium | low
 assumptions:
   - <unverified assumption>
+```
+
+The planner appends this separate block without modifying the reviewer-authored
+record:
+
+```yaml
 disposition:
   status: accepted | corrected | rejected | deferred | user-decision-required
   rationale: <evidence-backed reason>
@@ -263,7 +274,7 @@ disposition:
   decided_by: planner | user
 ```
 
-Reviewer-authored fields remain unchanged. The planner appends the disposition.
-For a material abstraction recommendation, also identify the existing owner,
-consumers, operational role, lifecycle, cost, and what it replaces or does not
-solve.
+The disposition block is absent during review. Reviewer-authored fields remain
+unchanged after it is appended. For a material abstraction recommendation, also
+identify the existing owner, consumers, operational role, lifecycle, cost, and
+what it replaces or does not solve.
