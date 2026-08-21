@@ -1,13 +1,12 @@
 //! Persistence and observation of per-run sidecar markers.
 
-use std::fs;
-#[cfg(unix)]
-use std::fs::File;
+use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write as _};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 
 use crate::process_id::UserProcessId;
@@ -16,6 +15,29 @@ use firma_identifiers::SandboxId;
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
 const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
+const NAMESPACE_LOCK_FILE: &str = ".sidecar-markers.lock";
+
+/// Process-shared ownership of marker namespace mutation.
+///
+/// The file lives outside individual marker directories so stale collection
+/// can remove an entry while retaining the lock on every supported platform.
+struct MarkerNamespaceLock {
+    _file: File,
+}
+
+impl MarkerNamespaceLock {
+    fn acquire(run_dir: &Path) -> crate::error::Result<Self> {
+        fs::create_dir_all(run_dir)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(run_dir.join(NAMESPACE_LOCK_FILE))?;
+        file.lock_exclusive()?;
+        Ok(Self { _file: file })
+    }
+}
 
 /// On-disk schema of `<runtime>/run/<sandbox_id>/metadata.toml`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -68,21 +90,23 @@ pub struct SidecarEntry {
     pub uptime_secs: Option<u64>,
 }
 
-/// Atomically publish a sidecar's PID and metadata in `marker_dir`.
+/// Publish a consistent sidecar marker generation in `marker_dir`.
 ///
-/// The PID file is written first and `metadata.toml` acts as the publication
-/// point. Readers therefore never observe metadata before its associated PID
-/// file exists. Both files are flushed and renamed from temporary files in the
-/// marker directory.
+/// Publication and stale collection hold the same process-shared namespace
+/// lock. `metadata.toml`, which is authoritative for liveness, is committed
+/// before the ancillary PID file. Both files are flushed and renamed from
+/// temporary files in the marker directory.
 ///
 /// # Errors
 ///
-/// Returns serialization or filesystem errors. A failure may leave a PID file
-/// without metadata, which readers treat as an incomplete marker.
+/// Returns serialization, locking, or filesystem errors. A failure after the
+/// metadata commit may leave a stale or absent PID file, which only suppresses
+/// the observational uptime value.
 pub fn publish(marker_dir: &Path, metadata: &MetadataFile) -> crate::error::Result<()> {
+    let run_dir = marker_dir.parent().unwrap_or_else(|| Path::new("."));
+    let _namespace_lock = MarkerNamespaceLock::acquire(run_dir)?;
     fs::create_dir_all(marker_dir)?;
     let layout = RunEntryLayout::from_root(marker_dir);
-    crate::pidfile::write(&layout.sidecar_pid(), metadata.pid)?;
 
     let text = toml::to_string_pretty(metadata)?;
     let mut temp = tempfile::NamedTempFile::new_in(marker_dir)?;
@@ -92,6 +116,7 @@ pub fn publish(marker_dir: &Path, metadata: &MetadataFile) -> crate::error::Resu
         .map_err(|error| error.error)?;
     #[cfg(unix)]
     File::open(marker_dir)?.sync_all()?;
+    crate::pidfile::write(&layout.sidecar_pid(), metadata.pid)?;
     Ok(())
 }
 
@@ -148,6 +173,10 @@ pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
     use crate::error::RuntimeStateError;
 
     let run_dir = RuntimeLayout::from_root(runtime_dir).run_dir();
+    if !run_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let _namespace_lock = MarkerNamespaceLock::acquire(&run_dir)?;
     let read = match fs::read_dir(&run_dir) {
         Ok(r) => r,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
