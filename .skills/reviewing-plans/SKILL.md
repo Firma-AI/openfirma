@@ -1,0 +1,120 @@
+---
+name: reviewing-plans
+description: Independently reviews an OpenFirma design plan before implementation by inspecting the repository, reconstructing high-risk traces, challenging proof obligations, and reporting preserved findings. Use for Full and Compact planning review.
+---
+
+# Reviewing Plans
+
+Use this skill for independent pre-implementation review. Review the intended
+outcome first, then whether the plan is supported by the repository and can be
+implemented and verified without hidden design decisions.
+
+## Independence
+
+When the current agent authored, directed, or made decisions shaping the plan,
+use a fresh reviewer. Give it the task, explicit user constraints, candidate
+plan, and repository revision. Do not provide hidden rationale, planner
+conclusions, or suggested findings.
+
+Planner citations are leads, not a closed evidence corpus. The reviewer must
+inspect the repository independently, verify cited evidence, search for omitted
+callers and consumers, and reconstruct the highest-risk relevant traces.
+
+## Review the current state
+
+Establish:
+
+- externally observable intent and non-goals;
+- canonical owners of affected types, contracts, configuration, and docs;
+- current entry-to-outcome call paths and failure conversions;
+- trust boundaries, actors, authority, and protected assets when applicable;
+- platform, feature, lifecycle, disabled-state, and migration variants; and
+- existing tests and the claims they actually prove.
+
+Label concerns as a **confirmed conflict**, **design risk**, or **unverified
+hypothesis**. Do not present a hypothesis as a current defect.
+
+## Review the proposed design
+
+Challenge whether:
+
+- terminology matches the owning repository context and avoids new synonyms;
+- every affected invariant has one primary owner;
+- important validation happens once at the boundary that can own it;
+- proposed types and transitions prevent a reachable invalid state rather than
+  merely adding abstraction;
+- semantic traces include relevant success, denial, malformed, unavailable,
+  disabled, alternate-entry, and bypass paths;
+- compatibility, migration, and failure semantics are explicit;
+- each vertical slice delivers independently verifiable behavior or bounded
+  risk reduction; and
+- durable facts are targeted to their canonical documentation owner.
+
+Conditional plan sections are required only when applicable. Independently
+challenge an unsupported `Not applicable` decision, especially for trust,
+compatibility, migration, type ownership, call traces, and proof obligations.
+
+## Review proof obligations
+
+For every material claim, check:
+
+- the production entry or launch path used by the stimulus;
+- observable outputs, side effects, state, decisions, and audit evidence;
+- positive and negative controls needed to rule out vacuous success;
+- substitutions, mocks, clocks, fixtures, and transports that narrow the claim;
+- platform or configuration variants;
+- existing, planned, or missing status; and
+- what the proposed evidence does not prove.
+
+Type-level restrictions prove construction properties only. Runtime invariants
+involving I/O, ordering, policy, configuration, trust, or error conversion need
+runtime or boundary evidence.
+
+## Rust modeling questions
+
+When Rust design is involved, ask whether:
+
+- a security or domain concept is an unconstrained raw primitive;
+- `Option<T>` conflates absence, invalidity, and lifecycle state;
+- a `bool` hides multiple states or legal transitions;
+- validation is repeated because no canonical validated type owns it;
+- exposed mutation can bypass an invariant owner;
+- type, API, config, wire, event, and error names drift semantically; or
+- public construction or transition APIs admit illegal states.
+
+Report these only with a reachable correctness, security, compatibility,
+operational, or recurring-maintenance impact. Do not report type-shape or naming
+preferences alone.
+
+## Findings
+
+Return one severity-ordered report. Give each finding a stable `PLAN-NNN` ID and
+include:
+
+- severity, category, and classification;
+- concrete file/line/symbol evidence or an explicit evidence gap;
+- the reachable entry, conditions, causal path, and observable outcome;
+- implicated invariant owner or trust boundary;
+- practical impact;
+- a concrete correction, research need, or user decision;
+- confidence and unverified assumptions; and
+- for material abstractions, the existing owner, consumers, operational role,
+  lifecycle, cost, and replacement or non-goals.
+
+Report only actionable findings. Do not duplicate concerns or report a style
+preference without a causal impact. If there are no findings, say so and state
+residual uncertainty or untested areas.
+
+## Dispositions
+
+Reviewer-authored finding fields are immutable. The planner may append a
+disposition but must not erase or rewrite the original concern.
+
+An evidence-backed factual repair may be incorporated with its finding,
+rationale, and artifact location recorded. A choice that materially affects
+product behavior, compatibility, security posture, migration, or a public
+contract requires user direction. Rejected and deferred findings remain
+visible with evidence.
+
+Pre-implementation review does not satisfy post-implementation adversarial
+review of the actual diff.

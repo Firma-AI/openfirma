@@ -1,42 +1,68 @@
 ---
 name: adversarial-review
-description: Review changes ahead of opening a new PR, modifying an existing one or on demand by the user.
+description: Selects an independent reviewer for OpenFirma design plans and implemented changes without duplicating review work. Use before implementation, before opening or modifying a PR, or when the user requests adversarial review.
 ---
 
 # Adversarial Review
 
-Use this skill to decide who should review changes and how review work may be
-delegated without duplication. The [`reviewing-changes`](../reviewing-changes/SKILL.md)
-skill defines what every review must cover and how findings must be reported.
+Use this skill to decide who should review a design plan or implemented change
+and how review work may be delegated without duplication.
 
 ## Workflow
 
-Every reviewer must load and follow the
-[`reviewing-changes`](../reviewing-changes/SKILL.md) skill. When the current
-agent reviews directly, load it in the current session. When a fresh reviewer
-is required, instruct that reviewer to load it.
+First classify the review target:
 
-First determine whether the current agent participated in producing the
-changes. The current agent is implementation-involved if it:
+- For a pre-implementation design plan, load and follow
+  [`reviewing-plans`](../reviewing-plans/SKILL.md).
+- For a diff, revision, working tree, or pull request, load and follow
+  [`reviewing-changes`](../reviewing-changes/SKILL.md) plus any specialized
+  guidance it requires.
 
-- wrote or edited the changes;
-- directed or orchestrated their implementation;
-- made design decisions that shaped the implementation; or
-- is continuing in the same implementation context and therefore knows the
-  author's rationale.
+When the current agent reviews directly, load the applicable guidance in the
+current session. When a fresh reviewer is required, instruct that reviewer to
+load it.
+
+Then determine whether the current agent participated in producing the review
+target. The current agent is involved if it:
+
+- wrote or edited the plan or changes;
+- directed or orchestrated their design or implementation;
+- made decisions that shaped the target; or
+- is continuing in the same design or implementation context and therefore
+  knows the author's rationale.
 
 Merely reading the PR or beginning a review does not make the current agent
-implementation-involved.
+involved.
+
+### Pre-implementation plan review
+
+When the current agent is involved in producing the plan, launch a fresh
+reviewer. Give it:
+
+- the task and explicit user constraints;
+- the candidate plan; and
+- the repository revision the plan describes.
+
+Do not give it hidden planner rationale, the current agent's conclusions, or
+suggested findings. The reviewer must inspect the repository independently;
+plan citations are leads rather than a closed review boundary.
+
+Preserve the reviewer's original findings. The planner may append dispositions
+under the rules in `reviewing-plans`, but must not silently erase or rewrite a
+concern. Pre-implementation review does not replace independent review of the
+implemented result.
 
 ### Post-implementation adversarial review
 
-Use this mode when the current agent is implementation-involved. The current
-agent must launch a fresh reviewer because it cannot independently review its
-own work. Give the reviewer:
+Use this mode when the current agent is involved in the implementation. The
+current agent must launch a fresh reviewer because it cannot independently
+review its own work. Give the reviewer:
 
 - the PR URL, or the final revision when no PR exists;
 - the intended externally observable behavior, if the PR does not state it
-  clearly; and
+  clearly;
+- the accepted design plan and its pre-review disposition log, when they exist;
+  and
 - any review priorities explicitly requested by the user.
 
 Do not give the reviewer:
@@ -47,6 +73,11 @@ Do not give the reviewer:
 - explanations of why particular implementation choices were made; or
 - suggested findings.
 
+The accepted plan is an intent and traceability input, not proof of
+correctness. Independently reconstruct actual behavior and report plan
+deviations, unmet proof obligations, newly reachable risks, and dispositions
+that implementation evidence contradicts.
+
 Present the reviewer's findings to the user without silently dismissing or
 fixing them. If behavior-changing fixes are made after the review, obtain
 another independent review. A repeat review may be skipped when subsequent
@@ -54,10 +85,11 @@ changes are purely mechanical and cannot affect behavior or meaning.
 
 ### Independent review task
 
-Use this mode when the current agent did not participate in the implementation,
-even if it also has verification, metadata, or other responsibilities. The
-current agent is already the independent reviewer. It should perform the review
-directly and must not launch another agent merely to repeat the same review.
+Use this mode when the current agent did not participate in producing the plan
+or implementation, even if it also has verification, metadata, or other
+responsibilities. The current agent is already the independent reviewer. It
+should perform the review directly and must not launch another agent merely to
+repeat the same review.
 
 The current agent may delegate a narrowly bounded, materially distinct part of
 the review surface when that improves coverage or enables parallel
@@ -78,8 +110,9 @@ the final review.
 
 ## Output
 
-Follow the report requirements in the
-[`reviewing-changes`](../reviewing-changes/SKILL.md) skill. When the current
-agent is implementation-involved, present the independent review findings to
-the user without addressing or dismissing them until the user provides explicit
+For plan reviews, follow the finding and disposition requirements in
+[`reviewing-plans`](../reviewing-plans/SKILL.md). For implemented changes,
+follow [`reviewing-changes`](../reviewing-changes/SKILL.md). When the current
+agent is implementation-involved, present post-implementation findings to the
+user without addressing or dismissing them until the user provides explicit
 direction.

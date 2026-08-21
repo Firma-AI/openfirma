@@ -99,6 +99,24 @@ history, use the repository skills instead of improvising:
 Use commits or jj changesets as local checkpoints during substantial work.
 Prefer small atomic revisions that can stand on their own when feasible.
 
+## Planning and Review Routing
+
+Before implementing a substantial behavior, architecture, stable contract,
+migration, trust-boundary, lifecycle, or invariant-owner change, load and follow
+the [`planning-changes`](.skills/planning-changes/SKILL.md) skill. It selects a
+Full, Compact, or None workflow and defines the evidence-backed design-plan
+artifact. Security, fail-closed, stable-contract, migration, and invariant-owner
+changes take precedence over lower planning modes even when their expected diff
+is small.
+
+Use [`reviewing-plans`](.skills/reviewing-plans/SKILL.md) for independent
+pre-implementation plan review. Use
+[`adversarial-review`](.skills/adversarial-review/SKILL.md) to select an
+independent reviewer for either a plan or implemented change. Plan review does
+not replace post-implementation review under
+[`reviewing-changes`](.skills/reviewing-changes/SKILL.md) and, for Rust changes,
+[`review-rust-code`](.skills/review-rust-code/SKILL.md).
+
 ## Architecture
 
 OpenFirma is an L7 policy enforcement sidecar for AI agents. Every outbound

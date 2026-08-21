@@ -1,0 +1,214 @@
+# Design Plan Template
+
+Use this template for Full and Compact plans. Keep the mandatory core concise.
+Include conditional sections only when their applicability rule matches.
+
+## Mandatory core
+
+```markdown
+# <Change title>
+
+## Goal and acceptance outcomes
+
+- Goal:
+- Observable acceptance outcomes:
+
+## Scope
+
+- In scope:
+- Out of scope:
+- Assumptions:
+- Open decisions:
+
+## Routing
+
+- Mode: Full | Compact
+- Trigger evidence:
+- Higher-mode triggers checked:
+- Downgrade evidence and reason: Not applicable | <evidence>
+
+## Current behavior
+
+- Owners and entry points:
+- Current success and failure outcomes:
+- Evidence: `path:symbol` or `path:line`
+
+## Proposed design
+
+- Behavioral change:
+- Invariants preserved or introduced:
+- Primary invariant owners:
+- Compatibility, migration, and failure semantics:
+- Durable documentation owner:
+
+## Implementation slices
+
+### Slice 1: <observable capability or bounded risk reduction>
+
+- Production, types, tests, and docs/config:
+- Affected trace:
+- Proof obligations:
+- Focused verification:
+- Dependencies:
+- Intentionally unsupported:
+
+## Risks and gaps
+
+- Existing risks:
+- Planned mitigations:
+- Explicit evidence gaps:
+- Least-confident decisions:
+
+## Plan-review findings and dispositions
+
+<Preserve reviewer-authored findings and append dispositions.>
+
+## Final verification
+
+- Focused checks:
+- Workspace checks:
+- Post-implementation independent review:
+```
+
+## Applicability assessment
+
+Add this table before conditional sections:
+
+| Section                     | Applicability               | Reason or evidence |
+| --------------------------- | --------------------------- | ------------------ |
+| Vocabulary                  | Applicable / Not applicable |                    |
+| Alternatives                | Applicable / Not applicable |                    |
+| File-tree diff              | Applicable / Not applicable |                    |
+| Type and signature sketches | Applicable / Not applicable |                    |
+| Semantic call traces        | Applicable / Not applicable |                    |
+| Trust analysis              | Applicable / Not applicable |                    |
+| Detailed proof obligations  | Applicable / Not applicable |                    |
+
+Use these rules:
+
+- **Vocabulary:** terms are introduced, changed, overloaded, or inconsistent
+  across code, configuration, protocols, or documentation.
+- **Alternatives:** more than one plausible design has a material tradeoff.
+- **File-tree diff:** files are added, moved, or responsibility changes across
+  modules.
+- **Type and signature sketches:** type ownership, construction, transitions,
+  or illegal-state concerns shape the design.
+- **Semantic call traces:** behavior crosses components, validation stages,
+  trust boundaries, or failure conversions.
+- **Trust analysis:** actors, authority, protected assets, hostile input,
+  secrets, or fail-closed behavior are involved.
+- **Detailed proof obligations:** runtime, security, compatibility, migration,
+  or operational invariants need evidence across suites or boundaries.
+
+## Conditional: Vocabulary
+
+| Canonical term | Meaning | Owner/context | Synonyms or terms to avoid | Conflict or decision |
+| -------------- | ------- | ------------- | -------------------------- | -------------------- |
+|                |         |               |                            |                      |
+
+Keep meanings implementation-independent. Record only terms relevant to the
+change rather than building a repository-wide glossary.
+
+## Conditional: Alternatives
+
+For each viable alternative record:
+
+- shape and invariant owner;
+- benefits and costs;
+- compatibility and migration consequences;
+- evidence supporting or weakening it; and
+- why it was selected or rejected.
+
+## Conditional: File-tree diff
+
+```diff
+ path
++├── new-file.rs       # NEW — owned responsibility
+~├── changed-file.rs   # MODIFIED — changed responsibility
+-└── old-file.rs       # REMOVED — responsibility moved or deleted
+```
+
+## Conditional: Types and signatures
+
+Show architecture-shaping contracts without implementation bodies. State which
+invalid states or duplicated checks the shape prevents. Do not sketch helpers
+whose signatures do not affect ownership or review decisions.
+
+## Conditional: Semantic call traces
+
+Use one record for each behaviorally significant current or proposed path:
+
+| Field                      | Content                                         |
+| -------------------------- | ----------------------------------------------- |
+| Trace ID                   | `TRACE-<stable-name>`                           |
+| State                      | Current / Proposed                              |
+| Entry and stimulus         | External entry plus triggering input            |
+| Path                       | `owner::operation → owner::operation → outcome` |
+| Input/output types         | Types at meaningful boundaries                  |
+| Validation/trust crossings | Validation and authority changes                |
+| Invariant established      | Where and by which owner                        |
+| Invariant assumed          | Downstream assumptions                          |
+| Success outcome            | Observable result                               |
+| Failure path               | Error mapping and fail-closed/open behavior     |
+| Evidence                   | Files, symbols, tests, configuration            |
+| Proof boundary             | Suite or component that can prove the claim     |
+| Unknowns                   | Explicit gaps                                   |
+
+Do not generate a comprehensive call graph. Include allowed, denied, malformed,
+unavailable, or bypass paths only when they are relevant to the change.
+
+## Conditional: Trust analysis
+
+Record actors, authority, supported workloads and deployment modes, attacker
+capabilities, protected assets, trust transitions, and reachable abuse paths.
+Distinguish accident-prevention guardrails from security boundaries.
+
+## Conditional: Proof obligations
+
+| Field                  | Content                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| Obligation ID          | `INV-<stable-name>`                                              |
+| Invariant or claim     | Testable semantic statement                                      |
+| Kind                   | Type / Runtime / Trust / Compatibility / Migration / Operational |
+| Owner/proof boundary   | Component that establishes it                                    |
+| Suite/boundary         | Unit, integration, E2E, protocol, config, or platform            |
+| Stimulus               | Inputs and preconditions                                         |
+| Observable effects     | Outputs, state, calls, denials, or events                        |
+| Controls/substitutions | Mocks, clocks, transports, fixtures, or fault injection          |
+| Failure cases          | Negative or adversarial path                                     |
+| Evidence               | Existing type, test, or runtime evidence                         |
+| Status                 | Existing / Planned / Gap                                         |
+| Slice                  | Implementing slice                                               |
+| Limits                 | What this evidence does not prove                                |
+
+A type can prevent invalid construction. It does not by itself prove runtime
+sequencing, I/O, configuration, policy evaluation, trust, or failure mapping.
+
+## Plan-review finding record
+
+```yaml
+id: PLAN-001
+severity: critical | high | medium | low
+category: <category>
+classification: confirmed-conflict | design-risk | unverified-hypothesis
+claim: <actionable problem>
+evidence:
+  - <path, line, symbol, command, or explicit evidence gap>
+reachability: <entry → conditions → affected outcome>
+invariant_or_boundary: <owner or boundary>
+impact: <practical effect>
+correction: <artifact repair, research, or user decision>
+confidence: high | medium | low
+assumptions:
+  - <unverified assumption>
+disposition:
+  status: accepted | corrected | rejected | deferred | user-decision-required
+  rationale: <evidence-backed reason>
+  incorporated_at: <artifact section or Not applicable>
+  decided_by: planner | user
+```
+
+Reviewer-authored fields remain unchanged. The planner appends the disposition.
+For a material abstraction recommendation, also identify the existing owner,
+consumers, operational role, lifecycle, cost, and what it replaces or does not
+solve.

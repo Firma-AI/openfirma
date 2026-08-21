@@ -107,7 +107,27 @@ Look for:
   `compile_error!` implementations outside the supported Unix and Windows
   targets
 
-#### 2c. Documentation and tests
+#### 2c. Domain and type modeling
+
+Where the change affects domain, security, lifecycle, or protocol semantics,
+check whether:
+
+- a semantically distinct identity or constrained value remains an unchecked
+  raw primitive;
+- `Option<T>` conflates genuine absence, invalidity, and lifecycle state;
+- a `bool` hides multiple states or legal transitions;
+- validation is repeated because no canonical validated type owns it;
+- public fields, constructors, or mutation bypass an invariant owner;
+- type, method, variant, event, error, configuration, or wire names introduce
+  conflicting terms; or
+- construction and transition APIs admit illegal states or role combinations.
+
+Report these only when the state is reachable and causes concrete correctness,
+security, compatibility, operational, or recurring-validation impact. Do not
+report a preference for a newtype, enum, typestate, rename, or abstraction
+without that causal chain.
+
+#### 2d. Documentation and tests
 
 Confirm that:
 
@@ -121,6 +141,10 @@ Ensure the new code adheres to the policies defined in [`rust-tests-guidelines`]
 ### 3. Emit the report
 
 Report only actionable findings.
+
+For a type-model or abstraction finding, identify the reachable invalid state,
+its owner and consumers, the observable impact, and what the proposed shape
+would replace or deliberately leave unsolved.
 
 Prioritize:
 
