@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::num::NonZeroU16;
@@ -9,7 +10,7 @@ use std::process::{Child, Command};
 
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, NetworkConfinement, PrepareRequest, SandboxBackend,
-    SandboxHandle, SandboxMount,
+    SandboxHandle, SandboxMount, SandboxRuntimeLayout,
 };
 use crate::config::{MountSpec, NetworkPolicy, SidecarEndpoint};
 use crate::error::RunError;
@@ -150,9 +151,9 @@ impl SandboxBackend for VzBackend {
             }
         }
 
-        let runtime_dir = std::env::temp_dir()
-            .join("firma-run")
-            .join(request.identity.sandbox_id.to_string());
+        let runtime_dir =
+            SandboxRuntimeLayout::in_temp_dir(&env::temp_dir(), &request.identity.sandbox_id)
+                .into_root();
 
         create_vz_runtime_dir(&runtime_dir)?;
 

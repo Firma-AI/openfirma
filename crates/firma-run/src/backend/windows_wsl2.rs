@@ -1,9 +1,10 @@
+use std::env;
 use std::process::{Child, Command};
 
 use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
-    SandboxMount,
+    SandboxMount, SandboxRuntimeLayout,
 };
 use crate::config::MountSpec;
 use crate::config::NetworkPolicy;
@@ -56,9 +57,9 @@ impl SandboxBackend for Wsl2Backend {
             });
         }
 
-        let runtime_dir = std::env::temp_dir()
-            .join("firma-run")
-            .join(request.identity.sandbox_id.to_string());
+        let runtime_dir =
+            SandboxRuntimeLayout::in_temp_dir(&env::temp_dir(), &request.identity.sandbox_id)
+                .into_root();
         std::fs::create_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
             backend: BackendKind::Wsl2.to_string(),
             reason: format!(

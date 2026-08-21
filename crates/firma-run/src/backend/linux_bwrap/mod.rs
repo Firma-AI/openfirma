@@ -1,5 +1,6 @@
 mod mount;
 
+use std::env;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 #[cfg(target_os = "linux")]
@@ -13,7 +14,7 @@ use self::mount::{BwrapHardening, BwrapMountPlan};
 use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
-    SandboxInfrastructureKind, SandboxMount,
+    SandboxInfrastructureKind, SandboxMount, SandboxRuntimeLayout,
 };
 use crate::config::{NetworkPolicy, SandboxIdentityMode};
 use crate::error::RunError;
@@ -381,7 +382,8 @@ fn command_available(binary: &str) -> bool {
 }
 
 fn create_bwrap_runtime_dir(sandbox_id: &SandboxId) -> Result<PathBuf, RunError> {
-    let runtime_root = std::env::temp_dir().join("firma-run");
+    let temp_dir = env::temp_dir();
+    let runtime_root = temp_dir.join("firma-run");
     firma_fs::create_private_dir_all(&runtime_root).map_err(|error| RunError::Backend {
         backend: BackendKind::Bwrap.to_string(),
         reason: format!(
@@ -389,7 +391,7 @@ fn create_bwrap_runtime_dir(sandbox_id: &SandboxId) -> Result<PathBuf, RunError>
             runtime_root.display()
         ),
     })?;
-    let runtime_dir = runtime_root.join(sandbox_id.to_string());
+    let runtime_dir = SandboxRuntimeLayout::in_temp_dir(&temp_dir, sandbox_id).into_root();
     firma_fs::create_private_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
         backend: BackendKind::Bwrap.to_string(),
         reason: format!(

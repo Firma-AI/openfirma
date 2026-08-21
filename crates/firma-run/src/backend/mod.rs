@@ -6,9 +6,10 @@ mod windows_wsl2;
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Child;
 
+use firma_identifiers::SandboxId;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -55,6 +56,25 @@ pub(crate) const DEFAULT_SENSITIVE_HOME_SUFFIXES: &[&str] = &[
     ".config",
     ".config/gcloud",
 ];
+
+/// Host-side scratch directory owned by one sandbox backend instance.
+struct SandboxRuntimeLayout {
+    root: PathBuf,
+}
+
+impl SandboxRuntimeLayout {
+    /// Create the standard layout beneath `temp_dir` for `sandbox_id`.
+    fn in_temp_dir(temp_dir: &Path, sandbox_id: &SandboxId) -> Self {
+        Self {
+            root: temp_dir.join("firma-run").join(sandbox_id.to_string()),
+        }
+    }
+
+    /// Consume the layout and return its sandbox-specific root directory.
+    fn into_root(self) -> PathBuf {
+        self.root
+    }
+}
 
 /// Supported runtime backend choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
