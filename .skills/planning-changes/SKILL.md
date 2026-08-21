@@ -160,6 +160,22 @@ define an executable slice, or expose a material gap. Cite supporting evidence
 instead of repeating research narration; place necessary inventories and raw
 evidence in a linked appendix when they would obscure the design.
 
+Optimize the main review path for a human implementer or reviewer. It must
+stand on its own for understanding and deciding the goal, scope, key tradeoffs,
+architecture and ownership shape, implementation slices, risks, gaps, and
+review outcomes. Put type sketches, constructibility witnesses, expanded
+traces, proof matrices, test inventories, and research evidence in technical
+evidence appendices unless a small excerpt is essential to a design decision.
+The appendices support deeper review and agent handoff; they must not hide a
+material decision from the human review path.
+
+Give each decision, invariant, trace, constructibility witness, and finding one
+canonical stable ID and definition. Other sections reference those IDs instead
+of restating the content. Before independent review, perform a deduplication
+pass. When scope or verbosity is in question, compare main-path and appendix
+word and byte counts as diagnostics, not limits. Long table rows do not count as
+compression.
+
 Split a slice into a child plan when it has its own invariant owner or proof
 boundary, an independently observable acceptance outcome, and can be
 implemented, reviewed, and shipped without the rest of the parent. Separate
@@ -179,7 +195,10 @@ across boundaries.
 Write one candidate using the
 [`design-plan-template`](reference/design-plan-template.md). Complete its
 mandatory core. Include conditional sections only when their applicability
-rules match, and explain risk-relevant `Not applicable` decisions.
+rules match, and explain risk-relevant `Not applicable` decisions. Read the
+human review path without its appendices before handoff; if a material decision
+or dependency is understandable only from technical evidence, repair the main
+path rather than expecting reviewers to reconstruct it.
 
 ### 7. Obtain independent plan review
 

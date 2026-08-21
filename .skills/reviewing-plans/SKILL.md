@@ -36,6 +36,19 @@ hypothesis**. Do not present a hypothesis as a current defect.
 
 ## Review the proposed design
 
+Read the human review path first without relying on technical evidence
+appendices. A human implementer or reviewer must be able to understand and
+decide the goal, scope, key tradeoffs, architecture and ownership shape,
+slices, risks, gaps, and prior review outcomes from that path. Report a material
+decision hidden only in an appendix; do not report an appendix merely because
+it contains supporting detail.
+
+Then inspect the technical evidence. Verify that every decision, invariant,
+trace, constructibility witness, and finding has one canonical stable ID and
+definition, with references rather than divergent restatements. Treat word and
+byte counts as review-cost diagnostics, not pass/fail limits, and reject
+line-count reductions achieved through long table rows.
+
 Challenge whether:
 
 - terminology matches the owning repository context and avoids new synonyms;
@@ -76,6 +89,13 @@ For every material claim, check:
 - platform or configuration variants;
 - existing, planned, or missing status; and
 - what the proposed evidence does not prove.
+
+Require the proof stimulus and assertion to establish the exact terminal
+predicate in the invariant, not merely a successful proxy operation. For
+ownership or lifecycle traces, follow every capability through success and
+failure until it has an explicit terminal owner or is definitively consumed;
+"state retained" or "cleanup attempted" does not establish who owns a live
+capability after the function returns or its owner is dropped.
 
 Type-level restrictions prove construction properties only. Runtime invariants
 involving I/O, ordering, policy, configuration, trust, or error conversion need

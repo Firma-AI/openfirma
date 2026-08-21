@@ -3,6 +3,13 @@
 Use this template for Full and Compact plans. Keep the mandatory core concise.
 Include conditional sections only when their applicability rule matches.
 
+The mandatory core is the human review path. Optimize it for a human
+implementer or reviewer; it must support a design decision without reading the
+technical evidence appendices. Appendices support deep review, implementation,
+and tool-agnostic agent handoff. Give each `DEC-*`, `INV-*`, `TRACE-*`, `CW-*`,
+and `PLAN-*` item one canonical definition and reference its ID elsewhere
+instead of repeating prose.
+
 ## Mandatory core
 
 ```markdown
@@ -37,18 +44,25 @@ Include conditional sections only when their applicability rule matches.
 - Higher-mode triggers checked:
 - Downgrade evidence and reason: Not applicable | <evidence>
 
-## Current behavior
+## Current behavior and problem
 
 - Owners and entry points:
 - Current success and failure outcomes:
 - Evidence: `path:symbol` or `path:line`
 
-## Proposed design
+## Key decisions and tradeoffs
 
-- Behavioral change:
-- Invariants preserved or introduced:
-- Primary invariant owners:
-- Compatibility, migration, and failure semantics:
+### `DEC-001`: <decision>
+
+- Choice:
+- Rationale and evidence:
+- Consequences and rejected alternatives:
+
+## Architecture and invariant ownership
+
+- Architecture shape:
+- Invariant IDs and primary owners:
+- Compatibility, migration, and failure semantics: <reference `DEC-*` IDs>
 - Durable documentation owner:
 
 ## Implementation slices
@@ -56,8 +70,8 @@ Include conditional sections only when their applicability rule matches.
 ### Slice 1: <observable capability or bounded risk reduction>
 
 - Production, types, tests, and docs/config:
-- Affected trace:
-- Proof obligations:
+- Affected decisions and traces: <reference `DEC-*` and `TRACE-*` IDs>
+- Proof obligations: <reference `INV-*` IDs>
 - Focused verification:
 - Dependencies:
 - Intentionally unsupported:
@@ -84,7 +98,20 @@ handoff contract.
 - Post-implementation independent review:
 ```
 
-## Applicability assessment
+Do not repeat technical evidence in the human review path. Include only the
+architecture-shaping excerpt needed to understand a decision, then reference
+its canonical appendix item. When scope or verbosity is disputed, use main-path
+and appendix word and byte counts as diagnostics rather than budgets.
+
+## Technical evidence appendices
+
+Place applicable conditional sections after the mandatory core under a
+`## Technical evidence` heading. A section may remain in the human review path
+only when its complete content is necessary to decide the design. Research
+inventories, expanded current-state traces, failure matrices, and test
+inventories belong in appendices by default.
+
+### Applicability assessment
 
 Add this table before conditional sections:
 
@@ -114,7 +141,7 @@ Use these rules:
 - **Detailed proof obligations:** runtime, security, compatibility, migration,
   or operational invariants need evidence across suites or boundaries.
 
-## Conditional: Vocabulary
+### Conditional: Vocabulary
 
 | Canonical term | Meaning | Owner/context | Synonyms or terms to avoid | Conflict or decision |
 | -------------- | ------- | ------------- | -------------------------- | -------------------- |
@@ -123,7 +150,7 @@ Use these rules:
 Keep meanings implementation-independent. Record only terms relevant to the
 change rather than building a repository-wide glossary.
 
-## Conditional: Alternatives
+### Conditional: Alternatives
 
 For each viable alternative record:
 
@@ -133,7 +160,7 @@ For each viable alternative record:
 - evidence supporting or weakening it; and
 - why it was selected or rejected.
 
-## Conditional: File-tree diff
+### Conditional: File-tree diff
 
 ```diff
  path
@@ -142,7 +169,7 @@ For each viable alternative record:
 -└── old-file.rs       # REMOVED — responsibility moved or deleted
 ```
 
-## Conditional: Types and signatures
+### Conditional: Types and signatures
 
 Show architecture-shaping contracts without implementation bodies. State which
 invalid states or duplicated checks the shape prevents. Do not sketch helpers
@@ -154,8 +181,9 @@ values with the same provenance, constructor bypasses, and illegal transitions.
 State separately what the design proves about cardinality, ownership
 uniqueness, semantic role or provenance, and transition ordering. If a witness
 compiles, narrow the claim and record the validating boundary or revised type.
+Give each witness a stable `CW-*` ID.
 
-## Conditional: Semantic call traces
+### Conditional: Semantic call traces
 
 Use one record for each behaviorally significant current or proposed path:
 
@@ -177,14 +205,16 @@ Use one record for each behaviorally significant current or proposed path:
 
 Do not generate a comprehensive call graph. Include allowed, denied, malformed,
 unavailable, or bypass paths only when they are relevant to the change.
+For ownership and lifecycle paths, continue each success and failure trace to a
+terminal owner or definitive consumption of every capability.
 
-## Conditional: Trust analysis
+### Conditional: Trust analysis
 
 Record actors, authority, supported workloads and deployment modes, attacker
 capabilities, protected assets, trust transitions, and reachable abuse paths.
 Distinguish accident-prevention guardrails from security boundaries.
 
-## Conditional: Proof obligations
+### Conditional: Proof obligations
 
 | Field                  | Content                                                          |
 | ---------------------- | ---------------------------------------------------------------- |
@@ -206,8 +236,10 @@ A type can prevent invalid construction. It does not by itself prove runtime
 sequencing, I/O, configuration, policy evaluation, trust, or failure mapping.
 Named fields or parameter positions also do not prove the provenance or
 semantic role of same-typed values.
+Proof assertions must establish the invariant's exact terminal predicate, not a
+weaker proxy such as successful probing, signaling, or cleanup initiation.
 
-## Plan-review finding record
+### Plan-review finding record
 
 ```yaml
 id: PLAN-001
