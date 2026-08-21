@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
+use crate::guest::{GUEST_HEARTBEAT_FILE, GUEST_RESULT_FILE};
+
 /// Paths shared by VZ launch preparation, execution, and result handling.
 pub struct VzGuestLayout {
     runtime_dir: PathBuf,
@@ -41,12 +44,12 @@ impl VzGuestLayout {
     /// Return the guest heartbeat path used for startup diagnostics.
     #[cfg(target_os = "macos")]
     pub fn heartbeat(&self) -> PathBuf {
-        self.guest_file("guest-heartbeat.json")
+        self.guest_file(GUEST_HEARTBEAT_FILE)
     }
 
     /// Return the guest command-result path used to determine runner exit status.
     #[cfg(target_os = "macos")]
     pub fn result(&self) -> PathBuf {
-        self.guest_file("guest-result.json")
+        self.guest_file(GUEST_RESULT_FILE)
     }
 }
