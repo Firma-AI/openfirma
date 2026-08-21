@@ -16,6 +16,7 @@ arbitrary = { workspace = true, optional = true }
 async-trait = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
+firma-config-schema = { workspace = true }
 firma-http = { workspace = true }
 firma-identifiers = { workspace = true }
 http = { workspace = true }
