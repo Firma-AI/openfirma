@@ -20,6 +20,58 @@ const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r"// Local autostart profile for 
 permit(principal, action, resource);
 ";
 
+/// Files owned by one locally autostarted Authority instance.
+struct AuthorityAutostartLayout {
+    root: PathBuf,
+}
+
+impl AuthorityAutostartLayout {
+    /// Create a layout rooted at the Authority's per-run marker directory.
+    fn from_root(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// Return the generated Authority configuration path.
+    fn config(&self) -> PathBuf {
+        self.root.join("authority.toml")
+    }
+
+    /// Return the Authority process-ID marker path.
+    fn pid(&self) -> PathBuf {
+        self.root.join("authority.pid")
+    }
+
+    /// Return the Authority metadata marker path.
+    fn metadata(&self) -> PathBuf {
+        self.root.join("metadata.toml")
+    }
+
+    /// Return the directory containing generated issuance policies.
+    fn policy_dir(&self) -> PathBuf {
+        self.root.join("policy_dir")
+    }
+
+    /// Return the generated issuance policy path for `profile_name`.
+    fn policy(&self, profile_name: &str) -> PathBuf {
+        self.policy_dir().join(format!("{profile_name}.cedar"))
+    }
+
+    /// Return the directory containing the generated Authority keypair.
+    fn keys_dir(&self) -> PathBuf {
+        self.root.join("keys")
+    }
+
+    /// Return the generated Authority private-key path.
+    fn private_key(&self) -> PathBuf {
+        self.keys_dir().join("authority.key")
+    }
+
+    /// Return the generated revocation-list path.
+    fn revocations(&self) -> PathBuf {
+        self.root.join("revocations.txt")
+    }
+}
+
 /// A fully materialized local Authority launch, without process ownership.
 ///
 /// Preparation has already performed all validation and filesystem bootstrap;
@@ -88,14 +140,15 @@ pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunE
 
     firma_fs::create_private_dir_all(&req.marker_dir)
         .map_err(|error| RunError::Internal(error.to_string()))?;
-    let authority_toml = req.marker_dir.join("authority.toml");
-    let pid_path = req.marker_dir.join("authority.pid");
-    let metadata_path = req.marker_dir.join("metadata.toml");
+    let layout = AuthorityAutostartLayout::from_root(&req.marker_dir);
+    let authority_toml = layout.config();
+    let pid_path = layout.pid();
+    let metadata_path = layout.metadata();
 
     let authority_config = if let Some(ref user_config) = req.user_config_path {
         persisted_authority_config(user_config)?
     } else {
-        ephemeral_authority_config(req)?
+        ephemeral_authority_config(req, &layout)?
     };
     let pub_key_path = authority_config.key_file.with_extension("pub");
     let inner = toml::to_string_pretty(&authority_config).map_err(|error| {
@@ -168,12 +221,15 @@ fn ensure_authority_key(key_path: &Path) -> Result<(), RunError> {
         })
 }
 
-fn ephemeral_authority_config(req: &PrepareRequest<'_>) -> Result<AuthorityConfig, RunError> {
-    let policy_dir = req.marker_dir.join("policy_dir");
-    let keys_dir = req.marker_dir.join("keys");
-    let cedar_path = policy_dir.join(format!("{}.cedar", req.profile_name));
-    let key_path = keys_dir.join("authority.key");
-    let revocation_file = req.marker_dir.join("revocations.txt");
+fn ephemeral_authority_config(
+    req: &PrepareRequest<'_>,
+    layout: &AuthorityAutostartLayout,
+) -> Result<AuthorityConfig, RunError> {
+    let policy_dir = layout.policy_dir();
+    let keys_dir = layout.keys_dir();
+    let cedar_path = layout.policy(req.profile_name);
+    let key_path = layout.private_key();
+    let revocation_file = layout.revocations();
     firma_fs::create_private_dir_all(&policy_dir)
         .map_err(|error| RunError::Internal(error.to_string()))?;
     firma_fs::create_private_dir_all(&keys_dir)
