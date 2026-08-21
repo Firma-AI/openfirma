@@ -1,3 +1,6 @@
+use firma_config_schema::sidecar::secret_provider::{
+    HttpMatcherRuleConfig, HttpSecretProviderConfig,
+};
 use firma_core::SecretMatcher;
 
 use crate::{CompiledMatcher, MatcherCompiler, MatcherError, glob::glob_match};
@@ -5,6 +8,56 @@ use crate::{CompiledMatcher, MatcherCompiler, MatcherError, glob::glob_match};
 use super::{MatcherRule, MatchingResolution, NonEmptyString};
 
 pub type HttpMatcherRule<Matcher> = MatcherRule<PathAndMatcher<Matcher>, PathOnly>;
+
+/// Error converting a [`HttpSecretProviderConfig`] (the concrete `firma.toml`
+/// representation) into a runtime [`HttpIntegrationSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HttpSecretProviderConfigError {
+    /// A `safe_command` / `blocked_command` rule had an empty `path`.
+    #[error("matcher path must not be empty")]
+    EmptyPath,
+}
+
+impl TryFrom<HttpSecretProviderConfig> for HttpIntegrationSpec<SecretMatcher> {
+    type Error = HttpSecretProviderConfigError;
+
+    fn try_from(config: HttpSecretProviderConfig) -> Result<Self, Self::Error> {
+        let HttpSecretProviderConfig {
+            provider_id,
+            host,
+            matchers,
+        } = config;
+        let matchers = matchers
+            .into_iter()
+            .map(convert_http_matcher_rule)
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            provider_id,
+            host,
+            matchers,
+        })
+    }
+}
+
+fn convert_http_matcher_rule(
+    rule: HttpMatcherRuleConfig,
+) -> Result<HttpMatcherRule<SecretMatcher>, HttpSecretProviderConfigError> {
+    Ok(match rule {
+        HttpMatcherRuleConfig::SensitiveCommand { path, matcher } => {
+            MatcherRule::SensitiveCommand(PathAndMatcher { path, matcher })
+        }
+        HttpMatcherRuleConfig::SafeCommand { path } => {
+            MatcherRule::SafeCommand(PathOnly { path: non_empty_path(path)? })
+        }
+        HttpMatcherRuleConfig::BlockedCommand { path } => {
+            MatcherRule::BlockedCommand(PathOnly { path: non_empty_path(path)? })
+        }
+    })
+}
+
+fn non_empty_path(path: String) -> Result<NonEmptyString, HttpSecretProviderConfigError> {
+    NonEmptyString::new(path).map_err(|_| HttpSecretProviderConfigError::EmptyPath)
+}
 
 /// Per-HTTP-vault behavior spec: which traffic to intercept and how to extract
 /// secrets from the response body. Callers own placeholder minting and
