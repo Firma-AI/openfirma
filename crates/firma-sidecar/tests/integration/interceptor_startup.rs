@@ -1,10 +1,18 @@
 use std::collections::HashMap;
+use std::env;
+use std::fs;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+#[cfg(unix)]
+use std::path::Path;
+
 use firma_grpc_interceptor_proto::InterceptRequest;
 use firma_grpc_interceptor_proto::interceptor_hook_client::InterceptorHookClient;
+use firma_runtime_state::RuntimeLayout;
+#[cfg(unix)]
+use firma_sidecar::config::InterceptorMode;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::handler::RequestHandler;
 use firma_sidecar::interceptor::grpc::GrpcInterceptor;
@@ -17,7 +25,7 @@ fn grpc_config_and_handler(
 ) -> anyhow::Result<(SidecarConfig, Arc<RequestHandler>)> {
     let temp = tempfile::tempdir()?;
     let rules_path = temp.path().join("mapping-rules.toml");
-    std::fs::write(
+    fs::write(
         &rules_path,
         r#"
 [[rules]]
@@ -28,7 +36,7 @@ action_class = "communication.external.send"
 "#,
     )?;
     let config_path = temp.path().join("firma.toml");
-    std::fs::write(
+    fs::write(
         &config_path,
         format!(
             r#"
@@ -45,7 +53,7 @@ default_protected = false
     )?;
 
     let config = SidecarConfig::load_from_path(&config_path).map_err(anyhow::Error::msg)?;
-    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(temp.path());
+    let runtime_layout = RuntimeLayout::from_root(temp.path());
     let runtime = build_pipeline_runtime(&runtime_layout, &config)?;
     let connectors = build_connector_registry(&config.connector)?;
     let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(1);
@@ -58,8 +66,9 @@ async fn grpc_spawn_reports_connectable_dynamic_endpoint() -> anyhow::Result<()>
     let requested_addr = "127.0.0.1:0".parse()?;
     let (config, handler) = grpc_config_and_handler(requested_addr)?;
     let cancel = CancellationToken::new();
+    let runtime_layout = RuntimeLayout::from_root(env::temp_dir());
 
-    let spawned = spawn_interceptor(&config, handler, cancel.clone())?;
+    let spawned = spawn_interceptor(&runtime_layout, &config, handler, cancel.clone())?;
     let effective_addr: SocketAddr = spawned.listen_addr.parse()?;
 
     assert_eq!(effective_addr.ip(), requested_addr.ip());
@@ -77,7 +86,8 @@ async fn grpc_malformed_request_fields_return_structured_denials() -> anyhow::Re
     let requested_addr = "127.0.0.1:0".parse()?;
     let (config, handler) = grpc_config_and_handler(requested_addr)?;
     let cancel = CancellationToken::new();
-    let spawned = spawn_interceptor(&config, handler, cancel.clone())?;
+    let runtime_layout = RuntimeLayout::from_root(env::temp_dir());
+    let spawned = spawn_interceptor(&runtime_layout, &config, handler, cancel.clone())?;
     let mut client =
         InterceptorHookClient::connect(format!("http://{}", spawned.listen_addr)).await?;
 
@@ -161,8 +171,9 @@ async fn grpc_spawn_fails_synchronously_when_fixed_endpoint_is_occupied() -> any
     let occupied = std::net::TcpListener::bind("127.0.0.1:0")?;
     let occupied_addr = occupied.local_addr()?;
     let (config, handler) = grpc_config_and_handler(occupied_addr)?;
+    let runtime_layout = RuntimeLayout::from_root(env::temp_dir());
 
-    let error = spawn_interceptor(&config, handler, CancellationToken::new())
+    let error = spawn_interceptor(&runtime_layout, &config, handler, CancellationToken::new())
         .err()
         .ok_or_else(|| anyhow::anyhow!("occupied endpoint unexpectedly accepted"))?;
     let io_error = error
@@ -171,5 +182,27 @@ async fn grpc_spawn_fails_synchronously_when_fixed_endpoint_is_occupied() -> any
 
     assert_eq!(io_error.kind(), io::ErrorKind::AddrInUse);
     drop(occupied);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_socket_default_uses_lifecycle_runtime_layout() -> anyhow::Result<()> {
+    let runtime = tempfile::tempdir()?;
+    let requested_addr = "127.0.0.1:0".parse()?;
+    let (mut config, handler) = grpc_config_and_handler(requested_addr)?;
+    config.interceptor.mode = InterceptorMode::UnixSocket;
+    config.interceptor.socket_path = None;
+    let runtime_layout = RuntimeLayout::from_root(runtime.path());
+    let cancel = CancellationToken::new();
+
+    let spawned = spawn_interceptor(&runtime_layout, &config, handler, cancel.clone())?;
+
+    assert_eq!(
+        Path::new(&spawned.listen_addr),
+        runtime_layout.sidecar_socket()
+    );
+    cancel.cancel();
+    spawned.handle.await?;
     Ok(())
 }

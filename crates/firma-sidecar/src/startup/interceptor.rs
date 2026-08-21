@@ -5,9 +5,16 @@
 //! returns a [`tokio::task::JoinHandle`] that resolves when the
 //! interceptor shuts down.
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 
+#[cfg(unix)]
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use firma_runtime_state::RuntimeLayout;
 use tokio_util::sync::CancellationToken;
 
 use crate::composio::PROTECTED_HOSTS;
@@ -73,7 +80,7 @@ fn spawn_grpc_interceptor(
     cancel: CancellationToken,
 ) -> anyhow::Result<SpawnedInterceptor> {
     let interceptor = interceptor::grpc::GrpcInterceptor::new(addr);
-    let listener = std::net::TcpListener::bind(addr)?;
+    let listener = TcpListener::bind(addr)?;
     listener.set_nonblocking(true)?;
     let bound_addr = listener.local_addr()?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
@@ -98,10 +105,17 @@ fn spawn_grpc_interceptor(
 ///
 /// Returns an error when a TCP listener cannot be bound or converted for Tokio.
 /// TCP binding completes synchronously before the server task is spawned.
-/// Also returns an error when the interceptor mode is `unix_socket` but the
-/// required `socket_path` is missing (should be caught by validation, but
-/// enforced here defensively).
+/// Unix-socket mode derives its path from `runtime_layout` when the
+/// configuration does not provide an explicit override.
 pub fn spawn_interceptor(
+    #[cfg_attr(
+        windows,
+        expect(
+            unused_variables,
+            reason = "the runtime layout supplies only the Unix socket default"
+        )
+    )]
+    runtime_layout: &RuntimeLayout,
     config: &config::SidecarConfig,
     handler: Arc<RequestHandler>,
     cancel: CancellationToken,
@@ -134,7 +148,7 @@ pub fn spawn_interceptor(
             // failure surfaces synchronously here (the sidecar exits non-zero)
             // rather than leaving a dead bound port to time out.
             let mitm_runtime = interceptor.build_mitm_runtime()?;
-            let std_listener = std::net::TcpListener::bind(ic.listen_addr)?;
+            let std_listener = TcpListener::bind(ic.listen_addr)?;
             std_listener.set_nonblocking(true)?;
             let bound_addr = std_listener.local_addr()?;
             let listener = tokio::net::TcpListener::from_std(std_listener)?;
@@ -158,12 +172,11 @@ pub fn spawn_interceptor(
             let socket_path = ic
                 .socket_path
                 .clone()
-                .unwrap_or_else(config::default_socket_path);
-            let parent_dir = socket_path.parent().map_or_else(
-                || std::path::PathBuf::from("."),
-                std::path::Path::to_path_buf,
-            );
-            if let Err(e) = std::fs::create_dir_all(&parent_dir) {
+                .unwrap_or_else(|| runtime_layout.sidecar_socket());
+            let parent_dir = socket_path
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+            if let Err(e) = fs::create_dir_all(&parent_dir) {
                 tracing::warn!(
                     dir = %parent_dir.display(),
                     error = %e,
@@ -173,7 +186,7 @@ pub fn spawn_interceptor(
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&parent_dir) {
+                if let Ok(meta) = fs::metadata(&parent_dir) {
                     let perms = meta.permissions();
                     let mode = perms.mode() & 0o777;
                     if mode != 0o700 {

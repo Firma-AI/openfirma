@@ -5,6 +5,7 @@ use std::str::FromStr as _;
 use std::time::Duration;
 
 use firma_authority::config::AuthorityConfig;
+use firma_runtime_state::RuntimeLayout;
 use firma_sidecar::config::{InterceptorMode, SidecarConfig};
 use tokio::net::TcpStream;
 #[cfg(unix)]
@@ -46,17 +47,27 @@ pub enum Endpoint {
 /// Extract a probable [`Endpoint`] from a sidecar config's interceptor section.
 ///
 /// - `http_proxy` / `grpc` modes → [`Endpoint::Tcp`] from `listen_addr`.
-/// - `unix_socket` mode → [`Endpoint::Uds`] from `socket_path`, or an empty
-///   path when `socket_path` is `None`.
+/// - `unix_socket` mode → [`Endpoint::Uds`] from an explicit `socket_path`, or
+///   the lifecycle runtime layout when `socket_path` is omitted.
 #[must_use]
-pub fn endpoint_from_sidecar(cfg: &SidecarConfig) -> Endpoint {
+pub fn endpoint_from_sidecar(
+    cfg: &SidecarConfig,
+    #[cfg_attr(
+        windows,
+        expect(
+            unused_variables,
+            reason = "the runtime layout supplies only the Unix socket default"
+        )
+    )]
+    runtime_layout: &RuntimeLayout,
+) -> Endpoint {
     match cfg.interceptor.mode {
         #[cfg(unix)]
         InterceptorMode::UnixSocket => Endpoint::Uds(
             cfg.interceptor
                 .socket_path
                 .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("")),
+                .unwrap_or_else(|| runtime_layout.sidecar_socket()),
         ),
         InterceptorMode::HttpProxy | InterceptorMode::Grpc => {
             Endpoint::Tcp(cfg.interceptor.listen_addr)
