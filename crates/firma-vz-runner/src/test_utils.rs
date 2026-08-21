@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 
 use crate::contract::{Contract, ContractDocument};
+use crate::layout::VzGuestLayout;
 #[cfg(target_os = "macos")]
 use crate::vm::VmPlan;
 
@@ -43,7 +44,7 @@ pub fn write_contract_with_rootfs_size(
     rootfs_size: u64,
 ) -> Result<PathBuf> {
     let runtime_dir = root.join("runtime");
-    let contract_path = runtime_dir.join("vz-guest").join("vz-guest-launch.json");
+    let contract_path = VzGuestLayout::from_runtime_dir(&runtime_dir).launch_contract();
 
     write_contract_at(
         root,

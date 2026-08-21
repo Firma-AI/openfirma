@@ -7,6 +7,8 @@ use clap::Parser;
 mod contract;
 #[cfg(any(target_os = "macos", test))]
 mod guest;
+#[cfg(any(target_os = "macos", test))]
+mod layout;
 mod runner;
 mod vm;
 
@@ -60,7 +62,8 @@ fn run(args: &Args) -> Result<ExitCode> {
 mod tests {
     use anyhow::Result;
 
-    use super::{Args, run};
+    use super::{Args, ExitCode, run};
+    use crate::layout::VzGuestLayout;
     use crate::test_utils::{
         UNALIGNED_ROOTFS_SIZE_BYTES, VALID_ROOTFS_SIZE_BYTES, make_contract_file_owner_only,
         write_contract_at,
@@ -69,15 +72,12 @@ mod tests {
     #[test]
     fn validate_only_succeeds_after_vm_plan_preparation() -> Result<()> {
         let temp = tempfile::tempdir()?;
-        let contract_path = temp
-            .path()
-            .join("runtime")
-            .join("vz-guest")
-            .join("vz-guest-launch.json");
+        let runtime_dir = temp.path().join("runtime");
+        let contract_path = VzGuestLayout::from_runtime_dir(&runtime_dir).launch_contract();
         write_contract_at(
             temp.path(),
             temp.path(),
-            &temp.path().join("runtime"),
+            &runtime_dir,
             &contract_path,
             VALID_ROOTFS_SIZE_BYTES,
         )?;
@@ -88,22 +88,19 @@ mod tests {
             validate_only: true,
         })?;
 
-        assert_eq!(code, super::ExitCode::SUCCESS);
+        assert_eq!(code, ExitCode::SUCCESS);
         Ok(())
     }
 
     #[test]
     fn validate_only_fails_when_vm_plan_is_not_launchable() -> Result<()> {
         let temp = tempfile::tempdir()?;
-        let contract_path = temp
-            .path()
-            .join("runtime")
-            .join("vz-guest")
-            .join("vz-guest-launch.json");
+        let runtime_dir = temp.path().join("runtime");
+        let contract_path = VzGuestLayout::from_runtime_dir(&runtime_dir).launch_contract();
         write_contract_at(
             temp.path(),
             temp.path(),
-            &temp.path().join("runtime"),
+            &runtime_dir,
             &contract_path,
             UNALIGNED_ROOTFS_SIZE_BYTES,
         )?;

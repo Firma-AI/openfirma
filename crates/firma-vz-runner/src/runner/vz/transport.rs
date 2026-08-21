@@ -83,6 +83,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::layout::VzGuestLayout;
     use crate::test_utils::{
         VZ_TEST_ROOTFS_SIZE_BYTES, read_contract_without_custody, valid_contract_json,
         vm_plan_fixture,
@@ -212,11 +213,8 @@ mod tests {
 
     fn pty_vm_plan() -> Result<(tempfile::TempDir, VmPlan)> {
         let temp = tempfile::tempdir()?;
-        let contract_path = temp
-            .path()
-            .join("runtime")
-            .join("vz-guest")
-            .join("vz-guest-launch.json");
+        let runtime_dir = temp.path().join("runtime");
+        let contract_path = VzGuestLayout::from_runtime_dir(&runtime_dir).launch_contract();
         let mut json = valid_contract_json(temp.path())?;
         json["terminal"]["interactive"] = json!(true);
         json["terminal"]["pty"] = json!(true);

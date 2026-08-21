@@ -22,8 +22,6 @@ const VZ_GUEST_KERNEL_ENV: &str = "FIRMA_RUN_VZ_GUEST_KERNEL";
 const VZ_GUEST_INITRD_ENV: &str = "FIRMA_RUN_VZ_GUEST_INITRD";
 const VZ_GUEST_ROOTFS_ENV: &str = "FIRMA_RUN_VZ_GUEST_ROOTFS";
 const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 1;
-const VZ_GUEST_CONTRACT_DIR: &str = "vz-guest";
-const VZ_GUEST_CONTRACT_FILE: &str = "vz-guest-launch.json";
 const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
 const VZ_GUEST_HOST_NETWORK_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
@@ -42,6 +40,30 @@ const VZ_GUEST_DNS_STUB_ADDR: &str = "127.0.0.1:1053";
 const VZ_GUEST_SIDECAR_VSOCK_PORT: u32 = 18080;
 const VZ_GUEST_COMMAND_PTY_VSOCK_PORT: u32 = 18081;
 const VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT: u32 = 18082;
+
+/// Host paths owned by the VZ guest-launch handoff.
+struct VzGuestLayout {
+    runtime_dir: PathBuf,
+}
+
+impl VzGuestLayout {
+    /// Create a VZ guest layout beneath the sandbox runtime directory.
+    fn from_runtime_dir(runtime_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            runtime_dir: runtime_dir.into(),
+        }
+    }
+
+    /// Return the private directory containing VZ guest artifacts.
+    fn guest_dir(&self) -> PathBuf {
+        self.runtime_dir.join("vz-guest")
+    }
+
+    /// Return the launch contract consumed by `firma-vz-runner`.
+    fn launch_contract(&self) -> PathBuf {
+        self.guest_dir().join("vz-guest-launch.json")
+    }
+}
 
 /// macOS runtime backend.
 ///
@@ -749,7 +771,8 @@ fn write_vz_guest_launch_contract(
     handle: &SandboxHandle,
     contract: &VzGuestLaunchContract,
 ) -> Result<PathBuf, RunError> {
-    let contract_dir = handle.runtime_dir.join(VZ_GUEST_CONTRACT_DIR);
+    let layout = VzGuestLayout::from_runtime_dir(&handle.runtime_dir);
+    let contract_dir = layout.guest_dir();
     firma_fs::create_private_dir_all(&contract_dir).map_err(|error| RunError::Backend {
         backend: BackendKind::Vz.to_string(),
         reason: format!(
@@ -758,7 +781,7 @@ fn write_vz_guest_launch_contract(
         ),
     })?;
 
-    let contract_path = contract_dir.join(VZ_GUEST_CONTRACT_FILE);
+    let contract_path = layout.launch_contract();
     let json = serde_json::to_vec_pretty(contract).map_err(|error| {
         RunError::Internal(format!(
             "failed to serialize macOS VZ guest launch contract: {error}"
@@ -1005,13 +1028,14 @@ mod tests {
     use super::{
         GuestPtyRequest, GuestTerminalSelection, TerminalSize, TerminalSnapshot,
         VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT, VZ_GUEST_COMMAND_PTY_VSOCK_PORT,
-        VzGuestLaunchContract, VzGuestLaunchInputs, VzGuestTerminalContract, VzStructuralMode,
-        build_sandbox_profile, loopback_port_from, vz_structural_mode_from_flags,
+        VzGuestLaunchContract, VzGuestLaunchInputs, VzGuestLayout, VzGuestTerminalContract,
+        VzStructuralMode, build_sandbox_profile, loopback_port_from, vz_structural_mode_from_flags,
+        write_vz_guest_launch_contract,
     };
     #[cfg(unix)]
     use super::{
-        VZ_GUEST_CONTRACT_DIR, VZ_GUEST_CONTRACT_FILE, VZ_GUEST_INITRD_ENV, VZ_GUEST_KERNEL_ENV,
-        VZ_GUEST_ROOTFS_ENV, VZ_GUEST_RUNNER_ENV, start_vz_guest_runner_with_inputs,
+        VZ_GUEST_INITRD_ENV, VZ_GUEST_KERNEL_ENV, VZ_GUEST_ROOTFS_ENV, VZ_GUEST_RUNNER_ENV,
+        start_vz_guest_runner_with_inputs,
     };
 
     fn test_launch(profile_name: &str) -> LaunchSpec {
@@ -1745,30 +1769,31 @@ mod tests {
         let runtime_file = tempdir.path().join("runtime-file");
         std::fs::write(&runtime_file, b"not a directory").expect("write blocker file");
         let handle = test_handle(runtime_file);
+        let layout = VzGuestLayout::from_runtime_dir(&handle.runtime_dir);
         let contract = test_contract(&handle);
 
-        let error = super::write_vz_guest_launch_contract(&handle, &contract)
+        let error = write_vz_guest_launch_contract(&handle, &contract)
             .expect_err("contract dir creation should fail");
 
         assert_backend_error_contains(&error, "failed to create private VZ guest contract dir");
-        assert_backend_error_contains(&error, super::VZ_GUEST_CONTRACT_DIR);
+        assert_backend_error_contains(&error, &layout.guest_dir().display().to_string());
     }
 
     #[test]
     fn vz_guest_contract_write_reports_contract_file_error() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let handle = test_handle(tempdir.path().join("runtime"));
-        let contract_dir = handle.runtime_dir.join(super::VZ_GUEST_CONTRACT_DIR);
+        let layout = VzGuestLayout::from_runtime_dir(&handle.runtime_dir);
+        let contract_dir = layout.guest_dir();
         std::fs::create_dir_all(&contract_dir).expect("create contract dir");
-        std::fs::create_dir(contract_dir.join(super::VZ_GUEST_CONTRACT_FILE))
-            .expect("create contract path directory");
+        std::fs::create_dir(layout.launch_contract()).expect("create contract path directory");
         let contract = test_contract(&handle);
 
-        let error = super::write_vz_guest_launch_contract(&handle, &contract)
+        let error = write_vz_guest_launch_contract(&handle, &contract)
             .expect_err("contract file write should fail");
 
         assert_backend_error_contains(&error, "failed to write VZ guest launch contract");
-        assert_backend_error_contains(&error, super::VZ_GUEST_CONTRACT_FILE);
+        assert_backend_error_contains(&error, &layout.launch_contract().display().to_string());
     }
 
     #[test]
@@ -1810,10 +1835,6 @@ mod tests {
     fn vz_guest_contract_file_is_private() {
         use std::os::unix::fs::PermissionsExt;
         use std::time::{SystemTime, UNIX_EPOCH};
-
-        use super::{
-            VZ_GUEST_CONTRACT_DIR, VZ_GUEST_CONTRACT_FILE, write_vz_guest_launch_contract,
-        };
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1866,17 +1887,8 @@ mod tests {
         let contract_path =
             write_vz_guest_launch_contract(&handle, &contract).expect("write contract");
 
-        assert_eq!(
-            contract_path.file_name().expect("file name"),
-            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_FILE)
-        );
-        assert_eq!(
-            contract_path
-                .parent()
-                .and_then(|path| path.file_name())
-                .expect("contract dir name"),
-            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_DIR)
-        );
+        let layout = VzGuestLayout::from_runtime_dir(&runtime_dir);
+        assert_eq!(contract_path, layout.launch_contract());
 
         let dir_mode = std::fs::metadata(contract_path.parent().expect("contract dir"))
             .expect("contract dir metadata")
@@ -1968,17 +1980,8 @@ mod tests {
         );
         assert_eq!(args[0], "--launch-contract");
         let contract_path = PathBuf::from(args[1]);
-        assert_eq!(
-            contract_path.file_name().expect("contract file name"),
-            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_FILE)
-        );
-        assert_eq!(
-            contract_path
-                .parent()
-                .and_then(|path| path.file_name())
-                .expect("contract dir name"),
-            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_DIR)
-        );
+        let layout = VzGuestLayout::from_runtime_dir(&handle.runtime_dir);
+        assert_eq!(contract_path, layout.launch_contract());
         assert!(
             contract_path.exists(),
             "firma-run should write the source launch contract before spawning the runner"
