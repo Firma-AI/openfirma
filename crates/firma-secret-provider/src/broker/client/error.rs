@@ -1,6 +1,9 @@
 use std::io;
 
-use crate::{broker::BinaryNameError, endpoint::client::ClientEndpoint};
+use crate::{
+    broker::{BinaryNameError, BrokerResponseDecodeError},
+    endpoint::client::ClientEndpoint,
+};
 
 /// Whole-request failures from talking to the out-of-sandbox secret broker.
 ///
@@ -16,8 +19,8 @@ use crate::{broker::BinaryNameError, endpoint::client::ClientEndpoint};
 ///   request is unlikely to help.
 /// - [`BrokerClientError::Rejected`] — the broker understood the request and
 ///   explicitly refused it: the handler's config matching or authorization did
-///   not allow the tool to run, or the tool ran and exited non-zero. Retrying
-///   without changing the input is pointless.
+///   not allow the tool to run, or the tool could not be launched. Retrying
+///   without changing the input is unlikely to help.
 /// - [`BrokerClientError::InvalidEndpoint`] — the endpoint fails an
 ///   address-level invariant (non-loopback TCP, relative Unix path). A
 ///   configuration error; not retryable.
@@ -36,7 +39,8 @@ pub enum BrokerClientError {
     /// without a code or protocol fix.
     #[error("secret broker protocol violation: {0}")]
     ProtocolViolation(#[source] ProtocolViolation),
-    /// The broker explicitly rejected the request (via [`super::super::BrokerResponse::Err`]).
+    /// The broker explicitly rejected the request (via
+    /// [`super::super::BrokerResponse::Rejected`]).
     /// Retrying with the same input is pointless.
     #[error("secret broker rejected the request: {0}")]
     Rejected(String),
@@ -97,9 +101,9 @@ pub enum ProtocolViolation {
     /// shape ([`super::super::BrokerResponse`]).
     #[error("failed to decode broker response: {0}")]
     Deserialize(#[source] serde_json::Error),
-    /// A success response carried a stdout payload that is not valid base64.
-    #[error("broker returned invalid base64: {0}")]
-    Base64(#[source] base64::DecodeError),
+    /// An execution response carried malformed process output.
+    #[error("failed to decode broker process output: {0}")]
+    Output(#[source] BrokerResponseDecodeError),
     /// The response line is not valid UTF-8.
     #[error("broker response is not valid UTF-8: {0}")]
     InvalidUtf8(#[source] std::string::FromUtf8Error),

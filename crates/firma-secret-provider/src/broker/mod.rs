@@ -5,25 +5,27 @@
 //! broker dispatches each request to its handler, which applies config
 //! matching and authorization to decide whether the real CLI runs out of the
 //! sandbox; when it does, the handler intercepts the output, and the broker
-//! writes back a newline-terminated JSON response containing the base64-encoded
-//! stdout.
+//! writes back a newline-terminated JSON response containing base64-encoded,
+//! stream-tagged output chunks in observed capture order.
 //!
 //! Protocol (one round-trip per connection):
 //!
 //! ```text
 //! shim  →  {"bin":"bws","args":["secret","get","abc"]}\n
-//! broker → {"type":"ok","stdout":"<base64>"}\n     (on success)
-//! broker → {"type":"err","error":"<reason>"}\n     (on failure — shim exits non-zero)
+//! broker → {"type":"executed","output":[{"stream":"stdout","data":"<base64>"}],"status":{"type":"exited","code":0}}\n
+//! broker → {"type":"rejected","error":"<reason>"}\n
 //! ```
 //!
 //! Layout mirrors the secret gateway's: shared wire types live here,
 //! [`client`] is the shim-side connector, and [`server`] is the broker-side
 //! listener.
 //!
-//! Size caps: stdout is base64-encoded onto the wire, so a configured
-//! response cap of `N` bytes admits roughly `3N/4` bytes of raw tool stdout.
-//! The [`client`] and [`server`] defaults are aligned so both sides agree on
-//! the largest request and response lines; tune them together.
+//! Size caps: process output is base64-encoded onto the wire, so a configured
+//! response cap of `N` bytes admits at most roughly `3N/4` bytes of total raw
+//! output. JSON framing and per-chunk stream metadata reduce the usable payload,
+//! especially when output is split into many small chunks. The [`client`] and
+//! [`server`] defaults are aligned so both sides agree on the largest request
+//! and response lines; tune them together.
 
 pub mod client;
 pub mod server;
@@ -120,58 +122,200 @@ pub struct BrokerRequest<'a> {
     pub args: Vec<Str<'a>>,
 }
 
+/// One base64-encoded, stream-tagged output chunk in a broker response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "stream", rename_all = "snake_case")]
+pub enum BrokerResponseChunk<'a> {
+    /// Bytes observed on stdout.
+    Stdout {
+        /// Base64-encoded chunk bytes.
+        #[serde(borrow)]
+        data: Str<'a>,
+    },
+    /// Bytes observed on stderr.
+    Stderr {
+        /// Base64-encoded chunk bytes.
+        #[serde(borrow)]
+        data: Str<'a>,
+    },
+}
+
 /// Broker → shim response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrokerResponse<'a> {
-    Ok {
-        /// Base64-encoded stdout bytes from the real tool.
+    /// The real tool ran. Its complete observable process result follows.
+    Executed {
+        /// Base64-encoded output chunks in observed capture order.
         #[serde(borrow)]
-        stdout: Str<'a>,
+        output: Vec<BrokerResponseChunk<'a>>,
+        /// How the real tool terminated.
+        status: BrokerExitStatus,
     },
-    Err {
+    /// The broker refused or failed to launch the real tool.
+    Rejected {
         #[serde(borrow)]
         error: Str<'a>,
     },
 }
 
 impl BrokerResponse<'_> {
-    /// Build a success response from raw stdout bytes.
+    /// Build an execution response from stream-tagged output chunks and status.
     ///
-    /// The whole payload is base64-encoded into memory here, so handlers must
-    /// cap tool stdout capture: an unbounded payload would exhaust broker
-    /// memory before the listener's response-size check (see
+    /// Chunks preserve the order in which concurrent stdout and stderr readers
+    /// observed bytes. This is not a guarantee of the child process's exact
+    /// cross-stream write order. Chunks are base64-encoded into memory here, so
+    /// handlers must cap process output capture: an unbounded payload would
+    /// exhaust broker memory before the listener's response-size check (see
     /// [`server::config::BrokerListenerConfig::max_buffer_size`]) can
     /// reject it.
     #[must_use]
-    pub fn ok(stdout: &[u8]) -> Self {
-        Self::Ok {
-            stdout: Str::from(base64::engine::general_purpose::STANDARD.encode(stdout)),
+    pub fn executed(
+        output: impl IntoIterator<Item = BrokerOutputChunk>,
+        status: BrokerExitStatus,
+    ) -> Self {
+        Self::Executed {
+            output: output
+                .into_iter()
+                .map(|chunk| match chunk {
+                    BrokerOutputChunk::Stdout(bytes) => BrokerResponseChunk::Stdout {
+                        data: Str::from(base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    },
+                    BrokerOutputChunk::Stderr(bytes) => BrokerResponseChunk::Stderr {
+                        data: Str::from(base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    },
+                })
+                .collect(),
+            status,
         }
     }
 
-    /// Build an error response.
+    /// Build a rejection response.
     #[must_use]
-    pub fn err<'a>(reason: impl Into<Str<'a>>) -> BrokerResponse<'a> {
-        BrokerResponse::Err {
+    pub fn rejected<'a>(reason: impl Into<Str<'a>>) -> BrokerResponse<'a> {
+        BrokerResponse::Rejected {
             error: reason.into(),
         }
     }
 
-    /// Decode the stdout bytes from a success response.
+    /// Decode an execution response's output chunks.
     ///
     /// # Errors
     ///
-    /// Returns an error if the payload is an error response or the base64 is
-    /// malformed.
-    pub fn into_stdout(self) -> Result<Vec<u8>, String> {
+    /// Returns [`BrokerResponseDecodeError`] if an output chunk is not valid
+    /// base64.
+    pub fn decode(self) -> Result<DecodedBrokerResponse, BrokerResponseDecodeError> {
         match self {
-            Self::Ok { stdout } => base64::engine::general_purpose::STANDARD
-                .decode(&*stdout)
-                .map_err(|e| format!("broker response base64 decode failed: {e}")),
-            Self::Err { error } => Err(error.to_string()),
+            Self::Executed { output, status } => {
+                let output = output
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, chunk)| match chunk {
+                        BrokerResponseChunk::Stdout { data } => {
+                            base64::engine::general_purpose::STANDARD
+                                .decode(&*data)
+                                .map(BrokerOutputChunk::Stdout)
+                                .map_err(|source| BrokerResponseDecodeError::Stdout {
+                                    index,
+                                    source,
+                                })
+                        }
+                        BrokerResponseChunk::Stderr { data } => {
+                            base64::engine::general_purpose::STANDARD
+                                .decode(&*data)
+                                .map(BrokerOutputChunk::Stderr)
+                                .map_err(|source| BrokerResponseDecodeError::Stderr {
+                                    index,
+                                    source,
+                                })
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(DecodedBrokerResponse::Executed(BrokerOutput {
+                    output,
+                    status,
+                }))
+            }
+            Self::Rejected { error } => Ok(DecodedBrokerResponse::Rejected(error.to_string())),
         }
     }
+}
+
+/// A platform-neutral process termination status returned by the broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BrokerExitStatus {
+    /// The process exited normally with `code`.
+    Exited { code: i32 },
+    /// The process was terminated by a Unix signal.
+    Signaled { signal: i32 },
+    /// The platform reported neither an exit code nor a Unix signal.
+    Unknown,
+}
+
+impl From<std::process::ExitStatus> for BrokerExitStatus {
+    fn from(status: std::process::ExitStatus) -> Self {
+        if let Some(code) = status.code() {
+            return Self::Exited { code };
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt as _;
+
+            if let Some(signal) = status.signal() {
+                return Self::Signaled { signal };
+            }
+        }
+        Self::Unknown
+    }
+}
+
+/// Raw output and termination status from a broker-executed tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokerOutput {
+    /// Stream-tagged bytes in observed capture order.
+    pub output: Vec<BrokerOutputChunk>,
+    /// How the real tool terminated.
+    pub status: BrokerExitStatus,
+}
+
+/// One stream-tagged chunk of raw process output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrokerOutputChunk {
+    /// Bytes observed on stdout.
+    Stdout(Vec<u8>),
+    /// Bytes observed on stderr.
+    Stderr(Vec<u8>),
+}
+
+/// A decoded broker response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodedBrokerResponse {
+    /// The real tool ran and produced this observable result.
+    Executed(BrokerOutput),
+    /// The broker refused or failed to launch the real tool.
+    Rejected(String),
+}
+
+/// Invalid base64 in a broker execution response.
+#[derive(Debug, thiserror::Error)]
+pub enum BrokerResponseDecodeError {
+    /// A stdout chunk is not valid base64.
+    #[error("broker returned invalid base64 stdout chunk {index}: {source}")]
+    Stdout {
+        /// Zero-based position in the observed output sequence.
+        index: usize,
+        #[source]
+        source: base64::DecodeError,
+    },
+    /// A stderr chunk is not valid base64.
+    #[error("broker returned invalid base64 stderr chunk {index}: {source}")]
+    Stderr {
+        /// Zero-based position in the observed output sequence.
+        index: usize,
+        #[source]
+        source: base64::DecodeError,
+    },
 }
 
 /// Read one newline-terminated line from `stream` with `max_bytes` as the

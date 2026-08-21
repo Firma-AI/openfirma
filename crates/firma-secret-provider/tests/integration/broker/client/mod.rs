@@ -5,7 +5,8 @@ use firma_http::Str;
 use firma_secret_provider::endpoint::EndpointInner;
 use firma_secret_provider::{
     broker::{
-        BinaryName, BrokerRequest, BrokerResponse,
+        BinaryName, BrokerExitStatus, BrokerOutputChunk, BrokerRequest, BrokerResponse,
+        BrokerResponseDecodeError, DecodedBrokerResponse,
         client::{
             BrokerClient,
             config::BrokerClientConfig,
@@ -26,6 +27,31 @@ struct BoundBroker {
     #[cfg(not(unix))]
     _dir: (),
     endpoint: ClientEndpoint,
+}
+
+fn executed_response(stdout: &[u8]) -> BrokerResponse<'static> {
+    BrokerResponse::executed(
+        [BrokerOutputChunk::Stdout(stdout.to_vec())],
+        BrokerExitStatus::Exited { code: 0 },
+    )
+}
+
+fn decode_stdout(response: BrokerResponse<'_>) -> Result<Vec<u8>, BrokerClientError> {
+    match response.decode() {
+        Ok(DecodedBrokerResponse::Executed(output)) => Ok(output
+            .output
+            .into_iter()
+            .filter_map(|chunk| match chunk {
+                BrokerOutputChunk::Stdout(bytes) => Some(bytes),
+                BrokerOutputChunk::Stderr(_) => None,
+            })
+            .flatten()
+            .collect()),
+        Ok(DecodedBrokerResponse::Rejected(error)) => Err(BrokerClientError::Rejected(error)),
+        Err(error) => Err(BrokerClientError::ProtocolViolation(
+            ProtocolViolation::Output(error),
+        )),
+    }
 }
 
 /// Bind a listener on a fresh Unix socket in a temp dir.
@@ -62,7 +88,7 @@ fn serve_ok(listener: BrokerListener, stdout: Vec<u8>) {
     tokio::spawn(async move {
         #[expect(clippy::expect_used, reason = "this is a test")]
         listener
-            .accept_one(async move |_req| BrokerResponse::ok(&stdout))
+            .accept_one(async move |_req| executed_response(&stdout))
             .await
             .expect("accept_one");
     });
@@ -77,13 +103,15 @@ async fn run_returns_decoded_stdout() {
     } = bind_broker().await.expect("bind");
     serve_ok(listener, b"secret-value".to_vec());
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let output = client
+        .run("bws", &["secret", "get", "abc"])
+        .await
+        .expect("run");
     assert_eq!(
-        client
-            .run("bws", &["secret", "get", "abc"])
-            .await
-            .expect("run"),
-        b"secret-value"
+        output.output,
+        [BrokerOutputChunk::Stdout(b"secret-value".to_vec())]
     );
+    assert_eq!(output.status, BrokerExitStatus::Exited { code: 0 });
 }
 
 #[tokio::test]
@@ -95,7 +123,7 @@ async fn run_propagates_broker_rejection() {
     } = bind_broker().await.expect("bind");
     tokio::spawn(async move {
         listener
-            .accept_one(async |_req| BrokerResponse::err("tool not found"))
+            .accept_one(async |_req| BrokerResponse::rejected("tool not found"))
             .await
             .expect("accept_one");
     });
@@ -149,7 +177,7 @@ async fn request_accepts_response_exactly_at_buffer_limit() {
     // the limit). Sizing the limit from the real serialized payload keeps
     // the boundary exact.
     let stdout = vec![b'x'; 42];
-    let response_payload = serde_json::to_vec(&BrokerResponse::ok(&stdout)).expect("serialize");
+    let response_payload = serde_json::to_vec(&executed_response(&stdout)).expect("serialize");
     let config = BrokerClientConfig {
         max_buffer_size: bytesize::ByteSize::b(response_payload.len() as u64),
         ..BrokerClientConfig::default()
@@ -162,7 +190,7 @@ async fn request_accepts_response_exactly_at_buffer_limit() {
                 bin: BinaryName::new("bws").expect("valid binary name"),
                 args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
             },
-            |response| response.into_stdout().map_err(BrokerClientError::Rejected),
+            decode_stdout,
         )
         .await;
     assert_eq!(response.expect("response"), stdout);
@@ -221,7 +249,7 @@ fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, ()) {
 #[tokio::test]
 async fn request_rejects_over_limit_line_padded_with_whitespace() {
     let stdout = b"secret-value".to_vec();
-    let response_payload = serde_json::to_vec(&BrokerResponse::ok(&stdout)).expect("serialize");
+    let response_payload = serde_json::to_vec(&executed_response(&stdout)).expect("serialize");
     // The broker pads the response line with a trailing space, so the raw
     // line is one byte over `max_buffer_size` even though the trimmed
     // content is not. The size check must measure the line, not the
@@ -278,8 +306,10 @@ async fn request_rejects_invalid_base64_stdout() {
     // `run`'s exec closure decodes the success payload's base64, so the
     // malformed-payload path lives there rather than in the generic
     // `request` deserialization.
-    let (endpoint, _guard) =
-        bind_raw_responder(br#"{"type":"ok","stdout":"not-base64!!"}"#.to_vec());
+    let (endpoint, _guard) = bind_raw_responder(
+        br#"{"type":"executed","output":[{"stream":"stdout","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
+            .to_vec(),
+    );
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
     let error = client
         .run("bws", &["secret", "get", "abc"])
@@ -287,7 +317,28 @@ async fn request_rejects_invalid_base64_stdout() {
         .expect_err("invalid base64 must fail closed");
     std::assert_matches!(
         error,
-        BrokerClientError::ProtocolViolation(ProtocolViolation::Base64(_))
+        BrokerClientError::ProtocolViolation(ProtocolViolation::Output(
+            BrokerResponseDecodeError::Stdout { index: 0, .. }
+        ))
+    );
+}
+
+#[tokio::test]
+async fn request_rejects_invalid_base64_stderr() {
+    let (endpoint, _guard) = bind_raw_responder(
+        br#"{"type":"executed","output":[{"stream":"stderr","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
+            .to_vec(),
+    );
+    let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
+    let error = client
+        .run("bws", &["secret", "get", "abc"])
+        .await
+        .expect_err("invalid base64 must fail closed");
+    std::assert_matches!(
+        error,
+        BrokerClientError::ProtocolViolation(ProtocolViolation::Output(
+            BrokerResponseDecodeError::Stderr { index: 0, .. }
+        ))
     );
 }
 

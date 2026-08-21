@@ -3,7 +3,8 @@ use std::str::FromStr;
 use firma_http::Str;
 use firma_secret_provider::{
     broker::{
-        BinaryName, BrokerRequest, BrokerResponse,
+        BinaryName, BrokerExitStatus, BrokerOutput, BrokerOutputChunk, BrokerRequest,
+        BrokerResponse, DecodedBrokerResponse,
         server::{BrokerListener, config::BrokerListenerConfig},
         stream::BrokerStream,
     },
@@ -20,6 +21,21 @@ struct BoundBroker {
     #[cfg(not(unix))]
     _dir: (),
     endpoint: ServerEndpoint,
+}
+
+fn executed_response(stdout: &[u8]) -> BrokerResponse<'static> {
+    BrokerResponse::executed(
+        [BrokerOutputChunk::Stdout(stdout.to_vec())],
+        BrokerExitStatus::Exited { code: 0 },
+    )
+}
+
+#[expect(clippy::expect_used, reason = "this is a test")]
+fn decode_output(response: BrokerResponse<'_>) -> Result<BrokerOutput, String> {
+    match response.decode().expect("valid response output") {
+        DecodedBrokerResponse::Executed(output) => Ok(output),
+        DecodedBrokerResponse::Rejected(error) => Err(error),
+    }
 }
 
 /// Bind a listener on a fresh Unix socket in a temp dir.
@@ -107,7 +123,7 @@ async fn roundtrip_ok_response() {
         listener
             .accept_one(async |req| {
                 assert_eq!(req, request_clone);
-                BrokerResponse::ok(b"secret-value")
+                executed_response(b"secret-value")
             })
             .await
             .expect("accept_one");
@@ -118,8 +134,8 @@ async fn roundtrip_ok_response() {
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
     assert_eq!(
-        response.into_stdout().expect("ok response"),
-        b"secret-value"
+        decode_output(response).expect("executed").output,
+        [BrokerOutputChunk::Stdout(b"secret-value".to_vec())]
     );
 }
 
@@ -138,7 +154,7 @@ async fn handler_error_written_as_error_response() {
     };
     let server = tokio::spawn(async move {
         listener
-            .accept_one(async |_req| BrokerResponse::err("tool not found"))
+            .accept_one(async |_req| BrokerResponse::rejected("tool not found"))
             .await
             .expect("accept_one");
     });
@@ -147,7 +163,7 @@ async fn handler_error_written_as_error_response() {
         .expect("connect_and_send");
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
-    assert!(response.into_stdout().is_err());
+    assert_eq!(decode_output(response), Err(String::from("tool not found")));
 }
 
 #[tokio::test]
@@ -168,7 +184,7 @@ async fn oversized_response_is_replaced_with_clean_error() {
     };
     let server = tokio::spawn(async move {
         listener
-            .accept_one(async |_req| BrokerResponse::ok(&vec![b'x'; 256]))
+            .accept_one(async |_req| executed_response(&vec![b'x'; 256]))
             .await
             .expect("accept_one");
     });
@@ -178,7 +194,7 @@ async fn oversized_response_is_replaced_with_clean_error() {
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
     assert_eq!(
-        response.into_stdout().expect_err("must be an error"),
+        decode_output(response).expect_err("must be an error"),
         "response too large"
     );
 }
@@ -189,7 +205,7 @@ async fn response_exactly_at_limit_is_forwarded() {
     // a response line equal to `max_response_bytes` must pass, the trailing
     // newline must not count against the limit.
     let stdout = vec![b'y'; 42];
-    let payload = serde_json::to_vec(&BrokerResponse::ok(&stdout)).expect("serialize");
+    let payload = serde_json::to_vec(&executed_response(&stdout)).expect("serialize");
     let BoundBroker {
         listener,
         endpoint,
@@ -207,7 +223,7 @@ async fn response_exactly_at_limit_is_forwarded() {
     let served_stdout = stdout.clone();
     let server = tokio::spawn(async move {
         listener
-            .accept_one(async |_req| BrokerResponse::ok(&served_stdout))
+            .accept_one(async |_req| executed_response(&served_stdout))
             .await
             .expect("accept_one");
     });
@@ -216,7 +232,10 @@ async fn response_exactly_at_limit_is_forwarded() {
         .expect("connect_and_send");
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
-    assert_eq!(response.into_stdout().expect("ok response"), stdout);
+    assert_eq!(
+        decode_output(response).expect("executed").output,
+        [BrokerOutputChunk::Stdout(stdout)]
+    );
 }
 
 #[cfg(windows)]
@@ -253,7 +272,7 @@ async fn oversize_request_is_rejected() {
         .expect("connect_and_send_raw");
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
-    assert!(response.into_stdout().is_err());
+    assert!(decode_output(response).is_err());
 }
 
 #[tokio::test]
@@ -292,7 +311,7 @@ async fn request_padded_with_whitespace_over_limit_is_rejected() {
         .expect("connect_and_send_raw");
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
-    assert!(response.into_stdout().is_err());
+    assert!(decode_output(response).is_err());
 }
 
 #[tokio::test]
@@ -315,7 +334,7 @@ async fn malformed_request_is_rejected_without_reaching_handler() {
         .expect("connect_and_send_raw");
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
-    assert!(response.into_stdout().is_err());
+    assert!(decode_output(response).is_err());
 }
 
 #[tokio::test]
@@ -338,7 +357,7 @@ async fn empty_request_is_rejected_without_reaching_handler() {
         .expect("connect_and_send_raw");
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
-    assert!(response.into_stdout().is_err());
+    assert!(decode_output(response).is_err());
 }
 
 #[tokio::test]

@@ -123,10 +123,10 @@ impl BrokerListener {
     /// # Errors
     ///
     /// Returns an I/O error if accepting, reading, or writing fails, or if the
-    /// peer fails credential validation. Handler errors are serialized and
-    /// written as `{"error":"..."}` responses rather than returned here. A
-    /// returned error only affects the current connection; a robust accept
-    /// loop must keep accepting.
+    /// peer fails credential validation. Handler rejections are serialized as
+    /// `{"type":"rejected","error":"..."}` responses rather than returned
+    /// here. A returned error only affects the current connection; a robust
+    /// accept loop must keep accepting.
     pub async fn accept_one<F>(&self, handler: F) -> io::Result<()>
     where
         F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
@@ -139,8 +139,9 @@ impl BrokerListener {
             BrokerListenerInner::Unix(listener, _) => {
                 let (stream, _) = listener.accept().await?;
                 if let Err(error) = reject_mismatched_peer(&stream) {
-                    let response =
-                        BrokerResponse::err(format!("peer credential validation failed: {error}"));
+                    let response = BrokerResponse::rejected(format!(
+                        "peer credential validation failed: {error}"
+                    ));
                     let mut stream = BrokerStream::Unix { stream };
                     let _ = timeout(
                         self.config.operation_timeout,
@@ -214,7 +215,7 @@ where
     if line.len() > max_buffer_size {
         write_response(
             stream,
-            &BrokerResponse::err("request too large"),
+            &BrokerResponse::rejected("request too large"),
             max_buffer_size,
         )
         .await?;
@@ -230,14 +231,14 @@ where
     if trimmed.is_empty() {
         return write_response(
             stream,
-            &BrokerResponse::err("empty broker request"),
+            &BrokerResponse::rejected("empty broker request"),
             max_buffer_size,
         )
         .await;
     }
     let response = match serde_json::from_str::<BrokerRequest>(trimmed) {
         Ok(request) => handler(request).await,
-        Err(e) => BrokerResponse::err(format!("malformed broker request: {e}")),
+        Err(e) => BrokerResponse::rejected(format!("malformed broker request: {e}")),
     };
     write_response(stream, &response, max_buffer_size).await
 }
@@ -272,7 +273,7 @@ async fn write_response(
         // Answer with a fixed-size error instead so the shim fails closed
         // with a meaningful reason.
         let Some(payload) = serialize_response(
-            &BrokerResponse::err("response too large"),
+            &BrokerResponse::rejected("response too large"),
             max_response_bytes,
         )?
         else {
