@@ -2,11 +2,11 @@
 //!
 //! The shim binary runs inside the sandbox and uses [`BrokerClient`] to ask
 //! the broker (running out of the sandbox, inside firma-run) to run the real
-//! CLI tool and return its [`BrokerOutput`](super::BrokerOutput): stream-tagged
-//! chunks in observed capture order plus termination status. Whether the tool
-//! is authorized to run is decided downstream by the broker's handler (config
-//! matching and authorization), which reports a refused or failed launch back
-//! as an error. [`BrokerClient`] opens a fresh connection per call rather than
+//! CLI tool and return its [`BrokerOutput`]: stream-tagged chunks in observed
+//! capture order plus termination status. Whether the tool is authorized to
+//! run is decided downstream by the broker's handler (config matching and
+//! authorization), which reports a refused or failed launch back as an error.
+//! [`BrokerClient`] opens a fresh connection per call rather than
 //! pooling, since broker calls are infrequent relative to tool launches, and
 //! applies the timeouts and buffer limits from [`BrokerClientConfig`] to every
 //! operation.
