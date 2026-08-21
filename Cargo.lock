@@ -1547,8 +1547,10 @@ name = "firma-config-schema"
 version = "0.1.6"
 dependencies = [
  "bytesize",
+ "jiff",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -1760,6 +1762,7 @@ dependencies = [
  "base64",
  "bytesize",
  "either",
+ "firma-config-schema",
  "firma-core",
  "firma-http",
  "http",
