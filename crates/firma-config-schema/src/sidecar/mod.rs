@@ -10,6 +10,7 @@
 pub mod infra;
 pub mod interceptor;
 pub mod secret_provider;
+pub mod tenancy;
 
 pub use infra::{
     CaConfig, CredentialConfig, CredentialMode, CredentialTransform, LogConfig, PolicyConfig,
@@ -17,3 +18,4 @@ pub use infra::{
 };
 pub use interceptor::{ConnectRelayConfig, HttpsMitmConfig, InterceptorConfig, InterceptorMode};
 pub use secret_provider::{HttpMatcherRuleConfig, HttpSecretProviderConfig};
+pub use tenancy::{TenancyConfig, TenancyMode};
