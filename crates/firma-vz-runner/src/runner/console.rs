@@ -8,10 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{RunnerError, RunnerResult};
-use crate::guest::{
-    GUEST_HEARTBEAT_FILE, GUEST_RESULT_FILE, GUEST_STDERR_FILE, GUEST_STDIN_FILE,
-    GUEST_STDOUT_FILE, GuestResult,
-};
+use crate::guest::{GUEST_STDERR_FILE, GUEST_STDIN_FILE, GUEST_STDOUT_FILE, GuestResult};
+use crate::layout::VzGuestLayout;
 use crate::vm::VmPlan;
 
 const SERIAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -141,7 +139,7 @@ pub fn create_pipe() -> RunnerResult<(OwnedFd, OwnedFd)> {
 
 /// Creates the private serial log file under the runtime directory.
 pub fn create_serial_log(plan: &VmPlan) -> RunnerResult<File> {
-    let log_path = plan.runtime_dir.join("vz-guest").join("serial.log");
+    let log_path = VzGuestLayout::from_runtime_dir(&plan.runtime_dir).serial_log();
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| RunnerError::HostIo {
             action: "create serial log directory",
@@ -202,7 +200,8 @@ pub fn capture_piped_stdin(plan: &VmPlan) -> RunnerResult<()> {
         return Ok(());
     }
 
-    let stdin_path = guest_file_path(plan, GUEST_STDIN_FILE);
+    let stdin_path =
+        VzGuestLayout::from_runtime_dir(&plan.runtime_dir).guest_file(GUEST_STDIN_FILE);
     std::fs::write(&stdin_path, input).map_err(|source| RunnerError::HostIo {
         action: "write guest stdin",
         path: stdin_path.clone(),
@@ -241,7 +240,7 @@ pub fn replay_guest_stdio(plan: &VmPlan) -> RunnerResult<()> {
 
 /// Replays one guest stream file if it exists.
 fn replay_guest_stream(plan: &VmPlan, file_name: &str, mut output: impl Write) -> RunnerResult<()> {
-    let path = guest_file_path(plan, file_name);
+    let path = VzGuestLayout::from_runtime_dir(&plan.runtime_dir).guest_file(file_name);
     match File::open(&path) {
         Ok(mut file) => {
             io::copy(&mut file, &mut output).map_err(|source| RunnerError::HostIo {
@@ -265,18 +264,13 @@ fn replay_guest_stream(plan: &VmPlan, file_name: &str, mut output: impl Write) -
     }
 }
 
-/// Builds the host path for one guest-produced runtime file.
-fn guest_file_path(plan: &VmPlan, file_name: &str) -> std::path::PathBuf {
-    plan.runtime_dir.join("vz-guest").join(file_name)
-}
-
 /// Reads the guest result file and converts it into the runner exit code.
 pub fn read_guest_exit_code(plan: &VmPlan) -> RunnerResult<std::process::ExitCode> {
-    let guest_dir = plan.runtime_dir.join("vz-guest");
-    let result_path = guest_dir.join(GUEST_RESULT_FILE);
+    let layout = VzGuestLayout::from_runtime_dir(&plan.runtime_dir);
+    let result_path = layout.result();
     let result = GuestResult::read(&result_path)
         .inspect_err(|_| {
-            let heartbeat_path = guest_dir.join(GUEST_HEARTBEAT_FILE);
+            let heartbeat_path = layout.heartbeat();
             if let Ok(heartbeat) = std::fs::read_to_string(&heartbeat_path) {
                 eprintln!(
                     "firma-vz-runner: latest guest heartbeat {}:\n{}",
@@ -311,7 +305,7 @@ mod tests {
     #[test]
     fn guest_result_file_drives_runner_exit_code() -> Result<()> {
         let (_temp, plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
-        let result_path = guest_file_path(&plan, GUEST_RESULT_FILE);
+        let result_path = VzGuestLayout::from_runtime_dir(&plan.runtime_dir).result();
         std::fs::write(
             &result_path,
             r#"{"version":1,"status":"exited","exit_code":42,"signal":null,"error":null}"#,
@@ -326,7 +320,8 @@ mod tests {
     #[test]
     fn replay_guest_stream_copies_runtime_file_to_host_output() -> Result<()> {
         let (_temp, plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
-        std::fs::write(guest_file_path(&plan, GUEST_STDOUT_FILE), b"guest stdout")?;
+        let layout = VzGuestLayout::from_runtime_dir(&plan.runtime_dir);
+        std::fs::write(layout.guest_file(GUEST_STDOUT_FILE), b"guest stdout")?;
         let mut output = Vec::new();
 
         replay_guest_stream(&plan, GUEST_STDOUT_FILE, &mut output)?;

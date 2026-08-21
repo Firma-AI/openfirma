@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
 
+use crate::layout::VzGuestLayout;
 use crate::test_utils::{
     UNALIGNED_ROOTFS_SIZE_BYTES, VALID_ROOTFS_SIZE_BYTES, read_contract_without_custody,
     valid_contract_json, write_contract, write_contract_at, write_contract_with_rootfs_size,
@@ -65,11 +66,8 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
 #[test]
 fn vm_plan_records_command_pty_vsock_listeners_when_requested() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    let contract_path = temp
-        .path()
-        .join("runtime")
-        .join("vz-guest")
-        .join("vz-guest-launch.json");
+    let runtime_dir = temp.path().join("runtime");
+    let contract_path = VzGuestLayout::from_runtime_dir(&runtime_dir).launch_contract();
     let mut json = valid_contract_json(temp.path())?;
     json["terminal"]["interactive"] = json!(true);
     json["terminal"]["pty"] = json!(true);
@@ -184,7 +182,7 @@ fn vm_plan_rejects_missing_runtime_dir() -> Result<()> {
     let workspace = temp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
     let runtime_dir = temp.path().join("runtime");
-    let contract_path = runtime_dir.join("vz-guest").join("vz-guest-launch.json");
+    let contract_path = VzGuestLayout::from_runtime_dir(&runtime_dir).launch_contract();
     write_contract_at(
         temp.path(),
         &workspace,
