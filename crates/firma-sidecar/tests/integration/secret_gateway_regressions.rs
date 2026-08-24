@@ -14,7 +14,7 @@ use firma_secret_provider::endpoint::client::ClientEndpoint;
 use firma_secret_provider::{CompiledMatcher, MatcherError};
 use firma_secret_provider::{
     SecretPlaceholder,
-    gateway::{client::GatewayClient, client::config::GatewayClientConfig},
+    gateway::{client::GatewayClient, client::GatewayClientConfig},
     non_empty::NonEmptyString,
     spec::http::{HttpIntegrationSpec, HttpMatcherRule, PathAndMatcher, PathOnly},
 };

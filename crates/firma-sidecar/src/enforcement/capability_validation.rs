@@ -38,8 +38,8 @@ use firma_identifiers::AgentId;
 #[cfg(test)]
 use firma_identifiers::TokenId;
 
-use crate::config::TenancyMode;
 use crate::normalizer::NormalizedEnvelope;
+use firma_config_schema::sidecar::TenancyMode;
 
 use super::capability_map::CapabilityMap;
 use super::decision::{

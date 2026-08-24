@@ -1,11 +1,16 @@
+//! Schema for the sidecar's `[sidecar.secret_gateway]` client tuning.
+//!
+//! Representation only. `firma-secret-provider`'s `GatewayClient` consumes
+//! these values directly; the type carries no behavior of its own.
+
 use std::time::Duration;
 
 use bytesize::ByteSize;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-/// Tunable timeouts and limits for [`super::GatewayClient`], deserialized
+/// Tunable timeouts and limits for the secret-gateway client, deserialized
 /// from the Sidecar's `firma.toml`.
-#[derive(Debug, Copy, Clone, Deserialize)]
+#[derive(Debug, Copy, Clone, Deserialize, Serialize)]
 pub struct GatewayClientConfig {
     /// Deadline for establishing the connection to the gateway endpoint.
     #[serde(
@@ -19,8 +24,7 @@ pub struct GatewayClientConfig {
         default = "default_operation_timeout"
     )]
     pub operation_timeout: Duration,
-    /// Cap on the outbound payload and inbound response line size, enforced
-    /// by [`super::GatewayClient`].
+    /// Cap on the outbound payload and inbound response line size.
     #[serde(default = "default_max_buffer_size")]
     pub max_buffer_size: ByteSize,
 }

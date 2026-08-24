@@ -6,9 +6,10 @@
 use std::assert_matches;
 use std::time::Duration;
 
+use firma_config_schema::sidecar::local_exec::DefaultAction;
 use firma_identifiers::SandboxId;
 use firma_sidecar::local_exec::handler::{
-    DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig, LocalExecRequest,
+    LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig, LocalExecRequest,
 };
 
 fn sandbox_id(value: &str) -> SandboxId {

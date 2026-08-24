@@ -15,12 +15,13 @@ use std::process::Command;
 
 use firma_authority::AuthorityConfig;
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
+use firma_config_schema::sidecar::InterceptorMode;
 #[cfg(unix)]
 use firma_process_orchestrator::UnixEndpoint;
 use firma_process_orchestrator::{
     ComponentEndpoint, ComponentPlanContext, ComponentSpec, OrchestratorError, StackTopology,
 };
-use firma_sidecar::config::{InterceptorMode, SidecarConfig};
+use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
 
 use crate::config::StackConfig;
@@ -280,9 +281,12 @@ impl FirmaToml {
     /// Returns [`StackError::ConfigValidation`] when the `[sidecar]` section is missing
     /// or does not deserialize.
     pub fn sidecar_config(&self) -> Result<SidecarConfig, StackError> {
-        self.config
+        let schema: firma_config_schema::sidecar::SidecarConfig = self
+            .config
             .section("sidecar")
-            .map_err(|source| StackError::ConfigValidation { source })
+            .map_err(|source| StackError::ConfigValidation { source })?;
+        SidecarConfig::try_from(schema)
+            .map_err(|e| StackError::ConfigValidation { source: e.into() })
     }
 }
 

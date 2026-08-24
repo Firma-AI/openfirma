@@ -9,55 +9,53 @@
 
 use std::path::PathBuf;
 
+use firma_config_schema::sidecar::capability_seed::CapabilitySeedConfig as SchemaCapabilitySeedConfig;
+
 pub use firma_core::CapabilitySeed as SeedFile;
 
-/// `[capability_seed]` TOML section.
-///
-/// Lists pre-issued capability seed files that the sidecar loads at
-/// startup to pre-populate its `CapabilityMap`. Empty by default.
-#[derive(Debug, Clone, serde::Deserialize)]
+/// Validated `[capability_seed]` section.
+#[derive(Debug, Clone)]
 pub struct CapabilitySeedConfig {
     /// Paths to seed TOML files produced by `firma-authority issue`.
-    /// Empty list means no static seeding (Stage 1 will deny every
-    /// protected request).
-    #[serde(default)]
     pub paths: Vec<PathBuf>,
-    /// When `true` (default), the sidecar watches the seed file(s) and hot-swaps
-    /// its `CapabilityMap` when they change, so a token re-minted by `firma run`
-    /// is picked up without a restart. Set `false` to pin the map loaded at
-    /// startup.
-    #[serde(default = "default_hot_reload")]
+    /// When `true` (default), the sidecar watches the seed file(s) and
+    /// hot-swaps its `CapabilityMap` when they change.
     pub hot_reload: bool,
 }
 
-/// Default for [`CapabilitySeedConfig::hot_reload`].
-const fn default_hot_reload() -> bool {
-    true
+/// Error validating a [`CapabilitySeedConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CapabilitySeedConfigError {
+    /// A seed path entry was empty.
+    #[error("capability_seed.paths[{index}] must not be empty")]
+    EmptyPath {
+        /// Index of the offending entry.
+        index: usize,
+    },
 }
 
 impl Default for CapabilitySeedConfig {
     fn default() -> Self {
         Self {
             paths: Vec::new(),
-            hot_reload: default_hot_reload(),
+            hot_reload: true,
         }
     }
 }
 
-impl CapabilitySeedConfig {
-    /// Validate the section.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable message identifying the first invalid
-    /// path entry.
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        for (i, p) in self.paths.iter().enumerate() {
-            if p.as_os_str().is_empty() {
-                return Err(format!("paths[{i}] must not be empty"));
+impl TryFrom<SchemaCapabilitySeedConfig> for CapabilitySeedConfig {
+    type Error = CapabilitySeedConfigError;
+
+    fn try_from(schema: SchemaCapabilitySeedConfig) -> Result<Self, Self::Error> {
+        for (index, path) in schema.paths.iter().enumerate() {
+            if path.as_os_str().is_empty() {
+                return Err(CapabilitySeedConfigError::EmptyPath { index });
             }
         }
-        Ok(())
+        Ok(Self {
+            paths: schema.paths,
+            hot_reload: schema.hot_reload,
+        })
     }
 }
 
@@ -86,9 +84,6 @@ context_hash = "deadbeef"
 
     #[test]
     fn parses_seed_with_offset_timestamps() {
-        // Authority's CLI writes `issued_at`/`expiry` via
-        // `DateTime<Utc>::to_rfc3339()`, which renders the offset as
-        // `+00:00` rather than `Z`. Make sure both spellings parse.
         let body = r#"
 raw_token = "v4.public.test"
 token_id = "ctok_01j0000000e008000000000001"
@@ -106,18 +101,20 @@ context_hash = "cafebabe"
 
     #[test]
     fn rejects_empty_path() {
-        let cfg = CapabilitySeedConfig {
+        let schema = SchemaCapabilitySeedConfig {
             paths: vec![PathBuf::new()],
             hot_reload: true,
         };
-        let err = cfg.validate().unwrap_err();
-        assert!(err.contains("paths[0]"));
+        assert!(matches!(
+            CapabilitySeedConfig::try_from(schema),
+            Err(CapabilitySeedConfigError::EmptyPath { index: 0 })
+        ));
     }
 
     #[test]
     fn default_is_empty_and_valid() {
         let cfg = CapabilitySeedConfig::default();
         assert!(cfg.paths.is_empty());
-        assert!(cfg.validate().is_ok());
+        assert!(cfg.hot_reload);
     }
 }

@@ -1,157 +1,82 @@
 //! Audit emitter configuration.
 
-use std::fmt;
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use firma_config_schema::sidecar::audit::{
+    AuditConfig as SchemaAuditConfig, AuditSink as SchemaAuditSink,
+};
 
-/// Audit event output sink selector.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuditSink {
-    /// Structured JSON lines written to stdout (default for containers).
-    #[default]
-    Stdout,
-    /// Append-only file sink.
-    File,
-    /// Streaming gRPC sink to a downstream audit service.
-    Grpc,
-    /// Write-ahead log: buffers events locally when gRPC is
-    /// unavailable and replays on reconnect.
-    Wal,
-}
-
-impl fmt::Display for AuditSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Stdout => write!(f, "stdout"),
-            Self::File => write!(f, "file"),
-            Self::Grpc => write!(f, "grpc"),
-            Self::Wal => write!(f, "wal"),
-        }
-    }
-}
-
-/// Audit emitter configuration.
+/// Validated audit emitter configuration.
 ///
-/// Controls where enforcement events are written and how they are
-/// signed.
-///
-/// | Sink   | Required fields                                    |
-/// |--------|----------------------------------------------------|
-/// | `stdout` | none                                             |
-/// | `file`   | `file_path`                                      |
-/// | `grpc`   | `grpc_url`                                       |
-/// | `wal`    | `grpc_url`, `wal_path`                            |
-#[derive(Debug, Clone, Deserialize)]
+/// | Sink   | Required fields          |
+/// |--------|--------------------------|
+/// | `stdout` | none                   |
+/// | `file`   | `file_path`            |
+/// | `grpc`   | `grpc_url`             |
+/// | `wal`    | `grpc_url`, `wal_path` |
+#[derive(Debug, Clone)]
 pub struct AuditConfig {
     /// Output sink. Default: `stdout`.
-    #[serde(default)]
-    pub(crate) sink: AuditSink,
-    /// Path for the `file` sink. Ignored by other sinks.
-    #[serde(default)]
+    pub(crate) sink: SchemaAuditSink,
+    /// Path for the `file` sink.
     pub(crate) file_path: Option<PathBuf>,
     /// Downstream audit service URL for `grpc` and `wal` sinks.
-    #[serde(default)]
     pub(crate) grpc_url: Option<String>,
     /// Local WAL directory for the `wal` sink.
-    #[serde(default)]
     pub(crate) wal_path: Option<PathBuf>,
-    /// Maximum WAL size in bytes. Default: 100 MiB.
-    #[serde(default = "default_wal_max_bytes")]
+    /// Maximum WAL size in bytes.
     pub(crate) wal_max_bytes: u64,
     /// Path to the ECDSA private key used for event signing.
-    /// Mutually exclusive with `signing_key_env`.
-    #[serde(default)]
     pub(crate) signing_key_path: Option<PathBuf>,
     /// Environment variable containing the ECDSA private key (PEM).
-    /// Mutually exclusive with `signing_key_path`.
-    #[serde(default)]
     pub(crate) signing_key_env: Option<String>,
     /// Additional query parameter names to redact in audit logs.
-    /// Case-insensitive. Extends the built-in deny-list:
-    /// `api_key`, `apikey`, `key`, `token`, `access_token`,
-    /// `refresh_token`, `auth`, `password`, `secret`, `signature`,
-    /// `sig`, `sas`.
-    #[serde(default)]
     pub(crate) redact_query_params: Vec<String>,
 }
 
-impl AuditConfig {
-    /// Validate the audit configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable message identifying the first invalid
-    /// field.
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        match self.sink {
-            AuditSink::File => match &self.file_path {
-                Some(p) if p.as_os_str().is_empty() => {
-                    return Err("file_path must not be empty when sink is file".into());
-                }
-                None => {
-                    return Err("file_path is required when sink is file".into());
-                }
-                _ => {}
-            },
-            AuditSink::Grpc => {
-                Self::validate_grpc_url(self.grpc_url.as_ref())?;
-            }
-            AuditSink::Wal => {
-                Self::validate_grpc_url(self.grpc_url.as_ref())?;
-                match &self.wal_path {
-                    Some(p) if p.as_os_str().is_empty() => {
-                        return Err("wal_path must not be empty when sink is wal".into());
-                    }
-                    None => {
-                        return Err("wal_path is required when sink is wal".into());
-                    }
-                    _ => {}
-                }
-                if self.wal_max_bytes == 0 {
-                    return Err("wal_max_bytes must be > 0".into());
-                }
-            }
-            AuditSink::Stdout => {}
-        }
-
-        if self.signing_key_path.is_some() && self.signing_key_env.is_some() {
-            return Err("signing_key_path and signing_key_env are mutually exclusive".into());
-        }
-        if let Some(ref p) = self.signing_key_path
-            && p.as_os_str().is_empty()
-        {
-            return Err("signing_key_path must not be empty when set".into());
-        }
-        if let Some(ref v) = self.signing_key_env
-            && v.trim().is_empty()
-        {
-            return Err("signing_key_env must not be empty when set".into());
-        }
-
-        Ok(())
-    }
-
-    fn validate_grpc_url(url: Option<&String>) -> Result<(), String> {
-        match url {
-            Some(u) if u.trim().is_empty() => {
-                Err("grpc_url must not be empty when sink is grpc or wal".into())
-            }
-            None => Err("grpc_url is required when sink is grpc or wal".into()),
-            _ => Ok(()),
-        }
-    }
+/// Error validating an [`AuditConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AuditConfigError {
+    /// `file` sink was selected without a `file_path`.
+    #[error("audit.file_path is required when sink is file")]
+    FileSinkRequiresPath,
+    /// `file_path` was empty.
+    #[error("audit.file_path must not be empty when sink is file")]
+    EmptyFilePath,
+    /// `grpc`/`wal` sink was selected without a `grpc_url`.
+    #[error("audit.grpc_url is required when sink is grpc or wal")]
+    GrpcUrlRequired,
+    /// `grpc_url` was empty.
+    #[error("audit.grpc_url must not be empty when sink is grpc or wal")]
+    EmptyGrpcUrl,
+    /// `wal` sink was selected without a `wal_path`.
+    #[error("audit.wal_path is required when sink is wal")]
+    WalPathRequired,
+    /// `wal_path` was empty.
+    #[error("audit.wal_path must not be empty when sink is wal")]
+    EmptyWalPath,
+    /// `wal_max_bytes` was zero.
+    #[error("audit.wal_max_bytes must be > 0")]
+    ZeroWalMaxBytes,
+    /// Both signing-key sources were set.
+    #[error("audit.signing_key_path and audit.signing_key_env are mutually exclusive")]
+    SigningKeyMutuallyExclusive,
+    /// `signing_key_path` was empty.
+    #[error("audit.signing_key_path must not be empty when set")]
+    EmptySigningKeyPath,
+    /// `signing_key_env` was empty.
+    #[error("audit.signing_key_env must not be empty when set")]
+    EmptySigningKeyEnv,
 }
 
 impl Default for AuditConfig {
     fn default() -> Self {
         Self {
-            sink: AuditSink::default(),
+            sink: SchemaAuditSink::default(),
             file_path: None,
             grpc_url: None,
             wal_path: None,
-            wal_max_bytes: default_wal_max_bytes(),
+            wal_max_bytes: 100 * 1024 * 1024,
             signing_key_path: None,
             signing_key_env: None,
             redact_query_params: Vec::new(),
@@ -159,174 +84,206 @@ impl Default for AuditConfig {
     }
 }
 
-/// 100 MiB default WAL cap.
-const fn default_wal_max_bytes() -> u64 {
-    100 * 1024 * 1024
+impl TryFrom<SchemaAuditConfig> for AuditConfig {
+    type Error = AuditConfigError;
+
+    fn try_from(schema: SchemaAuditConfig) -> Result<Self, Self::Error> {
+        match schema.sink {
+            SchemaAuditSink::File => match &schema.file_path {
+                Some(p) if p.as_os_str().is_empty() => {
+                    return Err(AuditConfigError::EmptyFilePath);
+                }
+                None => return Err(AuditConfigError::FileSinkRequiresPath),
+                _ => {}
+            },
+            SchemaAuditSink::Grpc => validate_grpc_url(schema.grpc_url.as_ref())?,
+            SchemaAuditSink::Wal => {
+                validate_grpc_url(schema.grpc_url.as_ref())?;
+                match &schema.wal_path {
+                    Some(p) if p.as_os_str().is_empty() => {
+                        return Err(AuditConfigError::EmptyWalPath);
+                    }
+                    None => return Err(AuditConfigError::WalPathRequired),
+                    _ => {}
+                }
+                if schema.wal_max_bytes == 0 {
+                    return Err(AuditConfigError::ZeroWalMaxBytes);
+                }
+            }
+            SchemaAuditSink::Stdout => {}
+        }
+
+        if schema.signing_key_path.is_some() && schema.signing_key_env.is_some() {
+            return Err(AuditConfigError::SigningKeyMutuallyExclusive);
+        }
+        if let Some(ref p) = schema.signing_key_path
+            && p.as_os_str().is_empty()
+        {
+            return Err(AuditConfigError::EmptySigningKeyPath);
+        }
+        if let Some(ref v) = schema.signing_key_env
+            && v.trim().is_empty()
+        {
+            return Err(AuditConfigError::EmptySigningKeyEnv);
+        }
+
+        Ok(Self {
+            sink: schema.sink,
+            file_path: schema.file_path,
+            grpc_url: schema.grpc_url,
+            wal_path: schema.wal_path,
+            wal_max_bytes: schema.wal_max_bytes,
+            signing_key_path: schema.signing_key_path,
+            signing_key_env: schema.signing_key_env,
+            redact_query_params: schema.redact_query_params,
+        })
+    }
+}
+
+fn validate_grpc_url(url: Option<&String>) -> Result<(), AuditConfigError> {
+    match url {
+        Some(u) if u.trim().is_empty() => Err(AuditConfigError::EmptyGrpcUrl),
+        None => Err(AuditConfigError::GrpcUrlRequired),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_audit_config_defaults_valid() {
-        let config = AuditConfig::default();
-        assert!(config.validate().is_ok());
+    fn schema() -> SchemaAuditConfig {
+        SchemaAuditConfig::default()
     }
 
     #[test]
-    fn test_audit_file_sink_requires_file_path() {
-        let config = AuditConfig {
-            sink: AuditSink::File,
+    fn defaults_valid() {
+        assert!(AuditConfig::try_from(schema()).is_ok());
+    }
+
+    #[test]
+    fn file_sink_requires_file_path() {
+        let s = SchemaAuditConfig {
+            sink: SchemaAuditSink::File,
             file_path: None,
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("file_path"),
-            "error should mention file_path: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::FileSinkRequiresPath)
+        ));
     }
 
     #[test]
-    fn test_audit_file_sink_rejects_empty_path() {
-        let config = AuditConfig {
-            sink: AuditSink::File,
+    fn file_sink_rejects_empty_path() {
+        let s = SchemaAuditConfig {
+            sink: SchemaAuditSink::File,
             file_path: Some(PathBuf::new()),
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("file_path"),
-            "error should mention file_path: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::EmptyFilePath)
+        ));
     }
 
     #[test]
-    fn test_audit_file_sink_valid() {
-        let config = AuditConfig {
-            sink: AuditSink::File,
+    fn file_sink_valid() {
+        let s = SchemaAuditConfig {
+            sink: SchemaAuditSink::File,
             file_path: Some(PathBuf::from("/var/log/audit.jsonl")),
-            ..AuditConfig::default()
+            ..schema()
         };
-        assert!(config.validate().is_ok());
+        assert!(AuditConfig::try_from(s).is_ok());
     }
 
     #[test]
-    fn test_audit_grpc_sink_requires_grpc_url() {
-        let config = AuditConfig {
-            sink: AuditSink::Grpc,
+    fn grpc_sink_requires_grpc_url() {
+        let s = SchemaAuditConfig {
+            sink: SchemaAuditSink::Grpc,
             grpc_url: None,
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("grpc_url"),
-            "error should mention grpc_url: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::GrpcUrlRequired)
+        ));
     }
 
     #[test]
-    fn test_audit_grpc_sink_valid() {
-        let config = AuditConfig {
-            sink: AuditSink::Grpc,
-            grpc_url: Some("https://audit.example.com".into()),
-            ..AuditConfig::default()
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_audit_wal_sink_requires_grpc_url_and_wal_path() {
-        let config = AuditConfig {
-            sink: AuditSink::Wal,
+    fn wal_sink_requires_grpc_url_and_wal_path() {
+        let s = SchemaAuditConfig {
+            sink: SchemaAuditSink::Wal,
             grpc_url: None,
             wal_path: None,
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("grpc_url"),
-            "error should mention grpc_url: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::GrpcUrlRequired)
+        ));
 
-        let config = AuditConfig {
-            sink: AuditSink::Wal,
+        let s = SchemaAuditConfig {
+            sink: SchemaAuditSink::Wal,
             grpc_url: Some("https://audit.example.com".into()),
             wal_path: None,
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("wal_path"),
-            "error should mention wal_path: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::WalPathRequired)
+        ));
     }
 
     #[test]
-    fn test_audit_wal_sink_rejects_zero_max_bytes() {
-        let config = AuditConfig {
-            sink: AuditSink::Wal,
+    fn wal_sink_rejects_zero_max_bytes() {
+        let s = SchemaAuditConfig {
+            sink: SchemaAuditSink::Wal,
             grpc_url: Some("https://audit.example.com".into()),
             wal_path: Some(PathBuf::from("/var/lib/firma/wal")),
             wal_max_bytes: 0,
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("wal_max_bytes"),
-            "error should mention wal_max_bytes: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::ZeroWalMaxBytes)
+        ));
     }
 
     #[test]
-    fn test_audit_wal_sink_valid() {
-        let config = AuditConfig {
-            sink: AuditSink::Wal,
-            grpc_url: Some("https://audit.example.com".into()),
-            wal_path: Some(PathBuf::from("/var/lib/firma/wal")),
-            ..AuditConfig::default()
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_audit_signing_key_mutual_exclusion() {
-        let config = AuditConfig {
+    fn signing_key_mutual_exclusion() {
+        let s = SchemaAuditConfig {
             signing_key_path: Some(PathBuf::from("/etc/firma/audit.pem")),
             signing_key_env: Some("FIRMA_AUDIT_KEY".into()),
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("mutually exclusive"),
-            "error should mention mutual exclusion: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::SigningKeyMutuallyExclusive)
+        ));
     }
 
     #[test]
-    fn test_audit_signing_key_path_rejects_empty() {
-        let config = AuditConfig {
+    fn signing_key_path_rejects_empty() {
+        let s = SchemaAuditConfig {
             signing_key_path: Some(PathBuf::new()),
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("signing_key_path"),
-            "error should mention signing_key_path: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::EmptySigningKeyPath)
+        ));
     }
 
     #[test]
-    fn test_audit_signing_key_env_rejects_empty() {
-        let config = AuditConfig {
+    fn signing_key_env_rejects_empty() {
+        let s = SchemaAuditConfig {
             signing_key_env: Some("  ".into()),
-            ..AuditConfig::default()
+            ..schema()
         };
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("signing_key_env"),
-            "error should mention signing_key_env: {err}"
-        );
+        assert!(matches!(
+            AuditConfig::try_from(s),
+            Err(AuditConfigError::EmptySigningKeyEnv)
+        ));
     }
 }

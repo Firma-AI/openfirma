@@ -30,6 +30,7 @@ dialoguer = { workspace = true }
 firma-audit-schema = { workspace = true }
 firma-authority = { workspace = true }
 firma-config-loader = { workspace = true, features = ["clap"] }
+firma-config-schema = { workspace = true }
 firma-core = { workspace = true }
 firma-fs = { workspace = true }
 firma-http = { workspace = true }

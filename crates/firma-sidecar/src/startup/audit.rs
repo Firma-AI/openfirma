@@ -14,6 +14,8 @@
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use firma_config_schema::sidecar::AuditSink;
+
 use crate::audit;
 use crate::audit::AuditSink as _;
 use crate::audit::sink as audit_sink;
@@ -46,7 +48,7 @@ pub fn spawn_audit_sink(
     });
 
     match config.sink {
-        config::AuditSink::File => {
+        AuditSink::File => {
             let path = config.file_path.clone().ok_or_else(|| {
                 anyhow::anyhow!("file sink requires file_path in audit configuration")
             })?;
@@ -56,7 +58,7 @@ pub fn spawn_audit_sink(
                     .await
             }))
         }
-        config::AuditSink::Grpc => {
+        AuditSink::Grpc => {
             let endpoint = config.grpc_url.clone().ok_or_else(|| {
                 anyhow::anyhow!("gRPC sink requires grpc_url in audit configuration")
             })?;
@@ -66,10 +68,10 @@ pub fn spawn_audit_sink(
                     .await
             }))
         }
-        config::AuditSink::Stdout => Ok(tokio::spawn(async move {
+        AuditSink::Stdout => Ok(tokio::spawn(async move {
             audit_sink::StdoutAuditSink::new().run(event_rx, exit).await
         })),
-        config::AuditSink::Wal => {
+        AuditSink::Wal => {
             let path = config.wal_path.clone().ok_or_else(|| {
                 anyhow::anyhow!("WAL sink requires wal_path in audit configuration")
             })?;

@@ -8,11 +8,11 @@ use std::sync::Arc;
 #[cfg(unix)]
 use std::path::Path;
 
+#[cfg(unix)]
+use firma_config_schema::sidecar::InterceptorMode;
 use firma_grpc_interceptor_proto::InterceptRequest;
 use firma_grpc_interceptor_proto::interceptor_hook_client::InterceptorHookClient;
 use firma_runtime_state::RuntimeLayout;
-#[cfg(unix)]
-use firma_sidecar::config::InterceptorMode;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::handler::RequestHandler;
 use firma_sidecar::interceptor::grpc::GrpcInterceptor;

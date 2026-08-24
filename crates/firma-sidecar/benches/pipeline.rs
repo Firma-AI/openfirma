@@ -8,10 +8,11 @@ use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
+use firma_config_schema::sidecar::TenancyMode;
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 use firma_http::{Authority, HeaderMap, Method};
 use firma_identifiers::TokenId;
-use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
+use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::credential::NullCredentialInjector;
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use firma_sidecar::enforcement::capability_validation::CapabilityValidator;

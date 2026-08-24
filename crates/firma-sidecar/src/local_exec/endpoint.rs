@@ -374,7 +374,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::local_exec::handler::{DefaultAction, LocalExecDecision, LocalExecHandlerConfig};
+    use firma_config_schema::sidecar::local_exec::DefaultAction;
+
+    use crate::local_exec::handler::{LocalExecDecision, LocalExecHandlerConfig};
 
     async fn start_endpoint(
         tmp: &tempfile::TempDir,

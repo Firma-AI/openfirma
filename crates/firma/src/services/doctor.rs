@@ -147,8 +147,14 @@ async fn build_report(args: Args) -> RenderedReport {
                     return None;
                 }
             };
-            match toml::from_str::<firma_sidecar::config::SidecarConfig>(&body) {
-                Ok(sc) => Some(sc),
+            match toml::from_str::<firma_config_schema::sidecar::SidecarConfig>(&body) {
+                Ok(schema) => match firma_sidecar::config::SidecarConfig::try_from(schema) {
+                    Ok(sc) => Some(sc),
+                    Err(error) => {
+                        warn!(?error, "could not validate sidecar config");
+                        None
+                    }
+                },
                 Err(error) => {
                     warn!(?error, "could not parse sidecar config");
                     None
@@ -156,7 +162,7 @@ async fn build_report(args: Args) -> RenderedReport {
             }
         });
     if let Some(ref sc) = parsed_sidecar {
-        use firma_sidecar::config::SidecarMode;
+        use firma_config_schema::sidecar::SidecarMode;
         report.push(match sc.mode {
             SidecarMode::Monitor => Check::warn(
                 "sidecar mode",

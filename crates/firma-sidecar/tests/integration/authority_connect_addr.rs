@@ -6,7 +6,7 @@ fn load_authority(body: &str) -> Result<SidecarConfig, String> {
     let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
     let path = dir.path().join("firma.toml");
     std::fs::write(&path, body).map_err(|error| error.to_string())?;
-    SidecarConfig::load_from_path(&path)
+    SidecarConfig::load_from_path(&path).map_err(|error| error.to_string())
 }
 
 #[test]

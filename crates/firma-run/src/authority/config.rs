@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::RunError;
+use firma_config_schema::sidecar::authority::SidecarCredentials;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Client-side connect coordinates lifted from `[sidecar.authority]`.
@@ -56,7 +57,7 @@ struct SidecarAuthorityOnDisk {
     #[serde(default)]
     public_key_path: Option<PathBuf>,
     #[serde(default)]
-    credentials: Option<SidecarCredentialsConfig>,
+    credentials: Option<SidecarCredentials>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -114,13 +115,7 @@ pub(crate) fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, Ru
     let connect = parsed
         .sidecar
         .and_then(|s| s.authority)
-        .map(|a| AuthorityConnectSection {
-            url: a.url,
-            ca_cert_path: a.ca_cert_path,
-            public_key_path: a.public_key_path,
-            credentials: a.credentials,
-        })
-        .map(validate_connect_section)
+        .map(build_connect_section)
         .transpose()?
         .filter(|c| {
             c.url.is_some()
@@ -138,15 +133,20 @@ pub(crate) fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, Ru
     }))
 }
 
-fn validate_connect_section(
-    section: AuthorityConnectSection,
+fn build_connect_section(
+    section: SidecarAuthorityOnDisk,
 ) -> Result<AuthorityConnectSection, RunError> {
-    if let Some(ref credentials) = section.credentials {
-        credentials.validate().map_err(|reason| {
-            RunError::ConfigValidation(format!("sidecar.authority.credentials: {reason}"))
-        })?;
-    }
-    Ok(section)
+    let credentials = section
+        .credentials
+        .map(SidecarCredentialsConfig::try_from)
+        .transpose()
+        .map_err(|e| RunError::ConfigValidation(format!("sidecar.authority.credentials: {e}")))?;
+    Ok(AuthorityConnectSection {
+        url: section.url,
+        ca_cert_path: section.ca_cert_path,
+        public_key_path: section.public_key_path,
+        credentials,
+    })
 }
 
 #[cfg(test)]

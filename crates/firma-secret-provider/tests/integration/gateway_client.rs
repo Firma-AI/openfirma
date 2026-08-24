@@ -5,8 +5,7 @@ use firma_secret_provider::{
     ExposeSecret, SecretPlaceholder,
     endpoint::{client::ClientEndpoint, error::EndpointParseError},
     gateway::client::{
-        GatewayClient, ResolveError,
-        config::GatewayClientConfig,
+        GatewayClient, GatewayClientConfig, ResolveError,
         error::{GatewayClientError, ProtocolViolation, TransportError},
     },
 };

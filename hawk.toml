@@ -39,14 +39,6 @@ reason = "used by the separate firma-fuzz workspace"
 [[override]]
 lint = "hawk::unnecessary_public"
 crate = "firma_identifiers"
-item = "AgentIdParseError"
-kind = "reexport"
-level = "expect"
-reason = "preserves the crate-root identifier parsing API"
-
-[[override]]
-lint = "hawk::unnecessary_public"
-crate = "firma_identifiers"
 item = "ApprovalTokenIdParseError"
 kind = "reexport"
 level = "expect"

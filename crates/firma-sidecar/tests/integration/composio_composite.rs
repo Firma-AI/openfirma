@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use firma_config_schema::sidecar::{SidecarMode, TenancyMode};
 use firma_core::{
     AbortReason, ActionParams, CapabilityClaims, Connector, ConnectorError, ConnectorResponse,
     DenyReason, ExecutionEnvelope, InjectedCredentials, ModificationSpec, RevocationStore,
@@ -14,9 +15,7 @@ use firma_core::{
 use firma_http::{Authority, HeaderMap, HeaderName, Method};
 use firma_identifiers::{AgentId, TokenId};
 use firma_sidecar::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode};
-use firma_sidecar::config::{
-    HttpsMitmConfig, MappingRuleConfig, MappingRulesFile, SidecarMode, TenancyMode,
-};
+use firma_sidecar::config::{HttpsMitmConfig, MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::connector::ConnectorRegistry;
 use firma_sidecar::credential::{CredentialInjectionError, CredentialInjector};
 use firma_sidecar::handler::{HandledResponse, RequestHandler, UpgradeAuthorization};

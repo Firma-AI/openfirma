@@ -5,8 +5,9 @@ use std::str::FromStr as _;
 use std::time::Duration;
 
 use firma_authority::config::AuthorityConfig;
+use firma_config_schema::sidecar::interceptor::InterceptorMode;
 use firma_runtime_state::RuntimeLayout;
-use firma_sidecar::config::{InterceptorMode, SidecarConfig};
+use firma_sidecar::config::SidecarConfig;
 use tokio::net::TcpStream;
 #[cfg(unix)]
 use tokio::net::UnixStream;

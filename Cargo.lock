@@ -1431,6 +1431,7 @@ dependencies = [
  "firma-audit-schema",
  "firma-authority",
  "firma-config-loader",
+ "firma-config-schema",
  "firma-core",
  "firma-fs",
  "firma-http",
@@ -1543,6 +1544,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "firma-config-schema"
+version = "0.1.6"
+dependencies = [
+ "bytesize",
+ "jiff",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "firma-core"
 version = "0.1.6"
 dependencies = [
@@ -1551,6 +1563,7 @@ dependencies = [
  "cedar-policy",
  "chrono",
  "criterion",
+ "firma-config-schema",
  "firma-http",
  "firma-identifiers",
  "http",
@@ -1694,6 +1707,7 @@ dependencies = [
  "dialoguer",
  "firma-authority",
  "firma-config-loader",
+ "firma-config-schema",
  "firma-core",
  "firma-fs",
  "firma-http",
@@ -1752,6 +1766,7 @@ dependencies = [
  "base64",
  "bytesize",
  "either",
+ "firma-config-schema",
  "firma-core",
  "firma-http",
  "http",
@@ -1789,6 +1804,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "firma-audit-schema",
+ "firma-config-schema",
  "firma-core",
  "firma-fs",
  "firma-grpc-interceptor-proto",
@@ -1858,6 +1874,7 @@ dependencies = [
  "camino",
  "firma-authority",
  "firma-config-loader",
+ "firma-config-schema",
  "firma-process-orchestrator",
  "firma-runtime-state",
  "firma-sidecar",
