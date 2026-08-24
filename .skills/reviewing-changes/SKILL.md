@@ -8,6 +8,14 @@ description: Defines the baseline scope and reporting requirements for code and 
 Use these guidelines for every review, whether the reviewer works directly or
 as an independent reviewer delegated by another agent.
 
+## Establish the review target
+
+Resolve the exact working tree, path set, revision range, stack, or pull request
+base and head before loading specialized guidance. Use
+[`collect-review-target`](reference/collect-review-target.md) when command-level
+Git or Jujutsu instructions are needed. Pass the resolved scope to specialized
+guidance; language-specific skills do not reacquire or redefine it.
+
 ## Review Scope
 
 Inspect the complete change and read enough surrounding code or documentation

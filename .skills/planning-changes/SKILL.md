@@ -202,15 +202,10 @@ path rather than expecting reviewers to reconstruct it.
 
 ### 7. Obtain independent plan review
 
-Use a fresh reviewer and require it to load
-[`reviewing-plans`](../reviewing-plans/SKILL.md). Give it:
-
-- the task and explicit user constraints;
-- the candidate artifact; and
-- access to the repository revision it describes.
-
-Do not give it hidden planner rationale, planner conclusions, or suggested
-findings. Citations in the plan are leads, not the review boundary.
+Invoke [`adversarial-review`](../adversarial-review/SKILL.md) for the candidate
+artifact and researched revision. It owns reviewer selection, independence, and
+handoff isolation, and routes the review through
+[`reviewing-plans`](../reviewing-plans/SKILL.md).
 
 Preserve each finding and append its disposition. Evidence-backed factual
 repairs may be incorporated only with the finding and repair recorded. Ask the

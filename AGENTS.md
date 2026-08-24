@@ -110,13 +110,12 @@ the expected size or locality.
 Accepted plans and findings must have a durable, team-accessible repository path
 or URL; do not rely on an agent or private conversation as the handoff.
 
-Use [`reviewing-plans`](.skills/reviewing-plans/SKILL.md) for independent
-pre-implementation plan review. Use
-[`adversarial-review`](.skills/adversarial-review/SKILL.md) to select an
-independent reviewer for either a plan or implemented change. Plan review does
-not replace post-implementation review under
-[`reviewing-changes`](.skills/reviewing-changes/SKILL.md) and, for Rust changes,
-[`review-rust-code`](.skills/review-rust-code/SKILL.md).
+Use [`adversarial-review`](.skills/adversarial-review/SKILL.md) to select an
+independent reviewer. It routes plan reviews to
+[`reviewing-plans`](.skills/reviewing-plans/SKILL.md) and implemented changes to
+[`reviewing-changes`](.skills/reviewing-changes/SKILL.md), with
+[`review-rust-code`](.skills/review-rust-code/SKILL.md) added for Rust changes.
+Plan review does not replace post-implementation review.
 
 ## Architecture
 

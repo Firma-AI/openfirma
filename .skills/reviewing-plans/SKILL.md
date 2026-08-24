@@ -11,10 +11,10 @@ implemented and verified without hidden design decisions.
 
 ## Independence
 
-When the current agent authored, directed, or made decisions shaping the plan,
-use a fresh reviewer. Give it the task, explicit user constraints, candidate
-plan, and repository revision. Do not provide hidden rationale, planner
-conclusions, or suggested findings.
+Reviewer selection, involvement classification, and handoff isolation are
+preconditions owned by
+[`adversarial-review`](../adversarial-review/SKILL.md). Apply this skill after
+that routing decision has been made.
 
 Planner citations are leads, not a closed evidence corpus. The reviewer must
 inspect the repository independently, verify cited evidence, search for omitted
