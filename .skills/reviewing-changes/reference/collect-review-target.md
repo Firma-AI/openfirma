@@ -86,9 +86,9 @@ Record an immutable base immediately before the stack and its immutable tip.
 Review revisions oldest first, then review the cumulative endpoint diff.
 
 ```bash
-# Git: enumerate the ancestry path, inspect each commit, then the cumulative
-# base-to-tip result.
-git rev-list --ancestry-path --reverse <base>..<tip>
+# Git: enumerate every commit reachable from the tip but not the base, inspect
+# each commit, then the cumulative base-to-tip result.
+git rev-list --topo-order --reverse <base>..<tip>
 git show <commit-from-list>
 git diff <base> <tip>
 
@@ -100,9 +100,18 @@ jj diff --from <base> --to <tip> --git
 ```
 
 Run the per-revision command for every listed revision. If the stack contains a
-merge, inspect its parent relationships and each relevant parent diff rather
-than assuming a linear predecessor. Apply the path arguments from the previous
-section when the user requested a path-scoped stack review.
+merge, inspect its parent relationships and every parent diff rather than
+assuming a linear predecessor:
+
+```bash
+git show --no-patch --format='%H %P' <merge-commit>
+for parent in $(git show --no-patch --format='%P' <merge-commit>); do
+  git diff "$parent" <merge-commit>
+done
+```
+
+Apply the path arguments from the previous section when the user requested a
+path-scoped stack review.
 
 ## GitHub pull request
 
@@ -112,14 +121,16 @@ to it, verify both objects, and compute the merge base used for the review
 range:
 
 ```bash
-metadata=$(gh pr view <number> --json url,baseRefName,baseRefOid,headRefOid)
+input_pr_url='<pr-url>'
+metadata=$(gh pr view "$input_pr_url" --json url,baseRefName,baseRefOid,headRefOid)
 pr_url=$(printf '%s' "$metadata" | jq -r .url)
+pr_number=${pr_url##*/}
 base_repo_url=${pr_url%/pull/*}
 base_ref=$(printf '%s' "$metadata" | jq -r .baseRefName)
 base_oid=$(printf '%s' "$metadata" | jq -r .baseRefOid)
 head_oid=$(printf '%s' "$metadata" | jq -r .headRefOid)
 
-git fetch "$base_repo_url.git" "$base_ref" "refs/pull/<number>/head"
+git fetch "$base_repo_url.git" "$base_ref" "refs/pull/$pr_number/head"
 git cat-file -e "$base_oid^{commit}"
 git cat-file -e "$head_oid^{commit}"
 merge_base=$(git merge-base "$base_oid" "$head_oid")
