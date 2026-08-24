@@ -1,86 +1,22 @@
 ---
 name: review-rust-code
-description: Review Rust changes for correctness, robustness, documentation quality, and test coverage.
+description: Applies Rust-specific correctness, robustness, documentation, and test-coverage checks to a review target already resolved by reviewing-changes.
 ---
 
 # Rust Review
 
-Review Rust code changes for correctness, robustness, documentation quality, and test coverage.
-
-## Arguments
-
-Exactly one of the following forms:
-
-- `<revset>`: review a jj revset when the repo uses Jujutsu
-- `<commit>` or `<commit1>..<commit2>`: review git commit diff
-- `pr:<number>`: review a GitHub pull request locally
-- `<path>` or `<path1> <path2>`: review one or more Rust files or directories
-- no argument: review uncommitted working tree changes
-
-## Instructions
-
-### 1. Collect the code to review
-
-Use the repository's active VCS as described in
-[`AGENTS.md`](../../AGENTS.md).
-
-#### Working-tree review
-
-If no argument was provided, review uncommitted Rust changes:
-
-```bash
-# Git
-git diff -- '*.rs'
-
-# jj
-jj diff --git -- glob:'**/*.rs'
-```
-
-#### Revision review
-
-If the input is a Git commit or commit range:
-
-```bash
-git show <commit> -- '*.rs'
-git diff <commit1>..<commit2> -- '*.rs'
-```
-
-If the input is a jj revset:
-
-```bash
-jj diff -r <revset> --git -- glob:'**/*.rs'
-```
-
-#### PR review
-
-Fetch the PR head locally, then diff it against the default remote branch.
-
-```bash
-# Git
-git fetch origin refs/pull/<number>/head
-git diff origin/main...FETCH_HEAD -- '*.rs'
-
-# jj
-git fetch origin refs/pull/<number>/head
-pr_sha=$(git rev-parse FETCH_HEAD)
-jj git import
-jj diff -r "main@origin..$pr_sha" --git -- glob:'**/*.rs'
-```
-
-Use Git for fetching `refs/pull/<number>/head`; it is the simplest way to
-materialize GitHub PR refs in a jj-backed clone before `jj git import`.
-
-#### Path review
-
-For path-based review, read the full source of all `.rs` files in scope.
+Apply this specialization after
+[`reviewing-changes`](../reviewing-changes/SKILL.md) has established the exact
+review target. Use its baseline scope and reporting contract; do not reacquire
+or redefine the diff.
 
 Always read full files for anything added or modified, not just diff hunks.
 
-### 2. Review checklist
+## Review checklist
 
 For each issue, record the file, line, explanation, and suggested fix.
 
-#### 2a. Error handling and repo lint rules
+### Error handling and repo lint rules
 
 Check for violations of repo constraints:
 
@@ -91,7 +27,7 @@ Check for violations of repo constraints:
 
 Prefer explicit error propagation with `Result<T, E>` and `thiserror`.
 
-#### 2b. Boundary handling and robustness
+### Boundary handling and robustness
 
 Look for:
 
@@ -107,7 +43,34 @@ Look for:
   `compile_error!` implementations outside the supported Unix and Windows
   targets
 
-#### 2c. Documentation and tests
+### Domain and type modeling
+
+Where the change affects domain, security, lifecycle, or protocol semantics,
+check whether:
+
+- a semantically distinct identity or constrained value remains an unchecked
+  raw primitive;
+- `Option<T>` conflates genuine absence, invalidity, and lifecycle state;
+- a `bool` hides multiple states or legal transitions;
+- validation is repeated because no canonical validated type owns it;
+- public fields, constructors, or mutation bypass an invariant owner;
+- type, method, variant, event, error, configuration, or wire names introduce
+  conflicting terms; or
+- construction and transition APIs admit illegal states or role combinations.
+
+For a claim that an API makes a state unrepresentable, try compile-valid
+constructor witnesses that swap same-typed semantic roles, provide multiple
+values from one role or provenance, bypass validation, or take an illegal
+transition. Distinguish cardinality and ownership uniqueness from semantic role
+identity; named fields do not establish that same-typed constructor arguments
+were produced for the correct roles.
+
+Report these only when the state is reachable and causes concrete correctness,
+security, compatibility, operational, or recurring-validation impact. Do not
+report a preference for a newtype, enum, typestate, rename, or abstraction
+without that causal chain.
+
+### Documentation and tests
 
 Confirm that:
 
@@ -118,15 +81,10 @@ Confirm that:
 
 Ensure the new code adheres to the policies defined in [`rust-tests-guidelines`](../rust-tests-guidelines/SKILL.md) and [`rust-docs-guidelines`](../rust-docs-guidelines/SKILL.md).
 
-### 3. Emit the report
+## Rust-specific reporting requirements
 
-Report only actionable findings.
+Follow the baseline report and prioritization contract in `reviewing-changes`.
 
-Prioritize:
-
-- bugs and regressions
-- security weaknesses
-- missing tests for changed behavior
-- documentation gaps that would mislead contributors or users
-
-If there are no findings, say so plainly and note any residual risk or untested areas.
+For a type-model or abstraction finding, identify the reachable invalid state,
+its owner and consumers, the observable impact, and what the proposed shape
+would replace or deliberately leave unsolved.
