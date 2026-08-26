@@ -6,7 +6,14 @@ use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
 use firma_runtime_state::RuntimeLayout;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+
+pub use firma_config_schema::run::SandboxIdentityMode;
+pub(crate) use firma_config_schema::run::{
+    CaTrustMode, CapabilityLeasePatch, CapabilitySourcePatch, CommandMediatorHitlMode,
+    ExecutableLaunchPolicyPatch, MountPatch, NetworkPolicyPatch, ProfilePatch, SeccompRuntimeMode,
+};
+use firma_config_schema::run::{CommandMediatorPatch, FileConfig, SeccompPolicyPatch};
 
 use crate::backend::BackendKind;
 use crate::backend::platform::detect_wsl;
@@ -229,14 +236,6 @@ pub struct NetworkPolicy {
     pub fail_closed: bool,
 }
 
-/// Identity mode used inside sandboxed execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SandboxIdentityMode {
-    SandboxUser,
-    HostUser,
-}
-
 /// Capability lease refresh settings.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CapabilityLeaseConfig {
@@ -301,13 +300,6 @@ pub enum CommandMediatorEndpoint {
     Unix { path: PathBuf },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandMediatorHitlMode {
-    SyncWait,
-    AsyncToken,
-}
-
 /// Seccomp policy compilation settings for Linux bwrap backend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SeccompPolicyConfig {
@@ -315,30 +307,6 @@ pub struct SeccompPolicyConfig {
     pub(crate) artifact_dir: PathBuf,
     pub(crate) verify_checksum: bool,
     pub(crate) runtime_mode: SeccompRuntimeMode,
-}
-
-/// How the sandbox CA trust store is assembled for the agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum CaTrustMode {
-    /// Inject only the firma-ca path (current behavior). System roots are not
-    /// added; correct when every reachable host is MITM'd by firma.
-    #[default]
-    Sole,
-    /// Inject a bundle of system roots + firma-ca. Needed for agents that talk
-    /// to non-MITM'd hosts (e.g. Copilot → real GitHub) while still trusting
-    /// firma-ca for intercepted hosts.
-    AppendSystemRoots,
-}
-
-/// Runtime behavior for managed seccomp artifact selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SeccompRuntimeMode {
-    /// Compile/update managed seccomp artifacts during launch and then load.
-    CompileOnLaunch,
-    /// Require a precompiled managed seccomp artifact; do not compile at launch.
-    PrecompiledOnly,
 }
 
 /// Fallback sidecar endpoint used only to keep `ResolvedProfile.sidecar_endpoint`
@@ -359,96 +327,14 @@ pub enum CapabilitySource {
     File { path: PathBuf },
 }
 
-/// Top-level file config.
-#[derive(Debug, Clone, Deserialize, Default)]
-struct FileConfig {
-    /// Profile used by `firma run` when `--profile` is not supplied.
-    profile: Option<String>,
-    #[serde(default)]
-    defaults: ProfilePatch,
-    #[serde(default)]
-    profiles: BTreeMap<String, ProfilePatch>,
+/// Layered merge for `[run]` profile patches, where `higher` wins over the
+/// lower layer. This is resolution behavior over the schema representation, so
+/// it lives in `firma-run` rather than `firma-config-schema`.
+trait Merge {
+    fn merge(self, higher: Self) -> Self;
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-pub(crate) struct ProfilePatch {
-    pub(crate) backend: Option<BackendKind>,
-    pub(crate) sidecar_endpoint: Option<String>,
-    pub(crate) seccomp_policy: Option<SeccompPolicyPatch>,
-    #[serde(default)]
-    pub(crate) env_passthrough: Vec<String>,
-    #[serde(default)]
-    pub(crate) env_set: BTreeMap<String, String>,
-    #[serde(default)]
-    pub(crate) mounts: Vec<MountPatch>,
-    #[serde(default)]
-    pub(crate) allowed_domains: Vec<String>,
-    pub(crate) network: Option<NetworkPolicyPatch>,
-    pub(crate) identity_mode: Option<SandboxIdentityMode>,
-    pub(crate) capability: Option<CapabilityLeasePatch>,
-    /// Preferred governance config path. This routes local tool execution
-    /// decisions through a Sidecar-owned endpoint.
-    pub(crate) sidecar_local_exec: Option<CommandMediatorPatch>,
-    #[serde(default)]
-    pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
-    #[serde(default)]
-    pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
-    /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
-    /// Should be `true` for profiles whose agent uses standard HTTP proxy env vars.
-    #[serde(default)]
-    pub(crate) use_http_proxy_sidecar: bool,
-    /// Allow non-structural (proxy-only) backends to run without failing closed.
-    /// Intentional opt-in: proxy-only enforcement can be bypassed by clients
-    /// that ignore `HTTP_PROXY`, open raw sockets, or spawn children with
-    /// a clean environment.
-    #[serde(default)]
-    pub(crate) allow_non_structural: bool,
-    /// Home-relative paths to mask with a tmpfs overlay inside the bwrap sandbox.
-    /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
-    /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.
-    pub(crate) mask_home_paths: Option<Vec<String>>,
-    /// How the sandbox CA trust store is assembled. `None` resolves to the
-    /// default `CaTrustMode::Sole`.
-    pub(crate) ca_trust_mode: Option<CaTrustMode>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub(crate) struct MountPatch {
-    pub(crate) source: PathBuf,
-    pub(crate) target: PathBuf,
-    #[serde(default)]
-    pub(crate) read_only: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct NetworkPolicyPatch {
-    pub(crate) enforce_network_namespace: Option<bool>,
-    pub(crate) fail_closed: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct SeccompPolicyPatch {
-    source_policy_path: PathBuf,
-    artifact_dir: PathBuf,
-    verify_checksum: Option<bool>,
-    runtime_mode: Option<SeccompRuntimeMode>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct CapabilityLeasePatch {
-    pub(crate) source: Option<CapabilitySourcePatch>,
-    #[serde(default)]
-    pub(crate) kind: Option<String>,
-    #[serde(default)]
-    pub(crate) path: Option<PathBuf>,
-    pub(crate) public_key_path: Option<PathBuf>,
-    pub(crate) refresh_ratio: Option<f64>,
-    pub(crate) grace_seconds: Option<u64>,
-    #[serde(default)]
-    pub(crate) requested_actions: Option<Vec<String>>,
-}
-
-impl CapabilityLeasePatch {
+impl Merge for CapabilityLeasePatch {
     fn merge(self, higher: Self) -> Self {
         let (source, kind, path) = if higher.source.is_some() {
             (higher.source, None, None)
@@ -469,34 +355,7 @@ impl CapabilityLeasePatch {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ExecutableLaunchPolicyPatch {
-    pub(crate) enforce_wrapper_defaults: Option<bool>,
-    pub(crate) sandbox_mode: Option<String>,
-    pub(crate) approval_policy: Option<String>,
-    #[serde(default)]
-    pub(crate) config_overrides: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct CommandMediatorPatch {
-    endpoint: Option<String>,
-    timeout_ms: Option<u64>,
-    hitl_mode: Option<CommandMediatorHitlMode>,
-    hitl_max_wait_ms: Option<u64>,
-    enforce_known_executables: Option<bool>,
-    #[serde(default)]
-    allowed_executables: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum CapabilitySourcePatch {
-    Disabled,
-    File { path: PathBuf },
-}
-
-impl ProfilePatch {
+impl Merge for ProfilePatch {
     fn merge(self, higher: Self) -> Self {
         let mut env_set = self.env_set;
         env_set.extend(higher.env_set);
@@ -576,7 +435,13 @@ pub(crate) fn resolve_profile_with_layout(
     let cli_patch = cli_profile_patch(args);
     patch = patch.merge(cli_patch);
 
-    let backend = resolve_backend(patch.backend);
+    let configured_backend = patch
+        .backend
+        .as_deref()
+        .map(str::parse::<BackendKind>)
+        .transpose()
+        .map_err(RunError::ConfigValidation)?;
+    let backend = resolve_backend(configured_backend);
 
     // The explicitly-configured endpoint (config file or env), without the
     // hard-coded fallback. `None` means "nothing was set" — which lets the
@@ -756,7 +621,7 @@ fn resolve_backend_for_linux(
 
 fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
     ProfilePatch {
-        backend: args.backend,
+        backend: args.backend.map(|backend| backend.to_string()),
         sidecar_endpoint: None,
         seccomp_policy: None,
         env_passthrough: Vec::new(),
