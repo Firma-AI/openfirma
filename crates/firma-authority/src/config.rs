@@ -1,24 +1,28 @@
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-
-/// Sentinel: unset `policy_dir`.
-const DEFAULT_POLICY_DIR: &str = "policies/";
-/// Sentinel: unset `issuance_policy_dir`.
-const DEFAULT_ISSUANCE_POLICY_DIR: &str = "issuance-policies/";
-/// Sentinel: unset `key_file`.
-const DEFAULT_KEY_FILE: &str = "firma-authority.key";
+use firma_config_schema::authority as schema;
+use std::path::{Path, PathBuf};
 
 /// Authority configuration loaded from TOML file and/or environment variables.
 ///
-/// Environment variables take precedence over TOML values and use the
-/// `FIRMA_AUTHORITY_` prefix (e.g., `FIRMA_AUTHORITY_LISTEN_ADDR`).
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+/// The field shape and default values live in
+/// [`firma_config_schema::authority::AuthorityConfig`]; this type adds the
+/// Authority's behavior: path re-basing against the config directory and
+/// `FIRMA_AUTHORITY_`-prefixed environment overrides, which take precedence
+/// over TOML values (e.g., `FIRMA_AUTHORITY_LISTEN_ADDR`).
+///
+/// Fields are private: the only way to obtain an `AuthorityConfig` is
+/// [`Default`] (a valid, TLS-free configuration) or
+/// [`AuthorityConfigBuilder::build`], which validates cross-field TLS
+/// invariants. An invalid `AuthorityConfig` therefore cannot be constructed;
+/// read access is through the accessors below.
+///
+/// This type is deliberately not `Serialize`: the wire representation is
+/// [`schema::AuthorityConfig`], obtained via [`AuthorityConfig::to_schema`].
+#[derive(Debug, Clone)]
 pub struct AuthorityConfig {
     /// gRPC listen address (default: `[::1]:50051`).
-    pub listen_addr: String,
+    pub(crate) listen_addr: String,
     /// Directory containing `.cedar` policy files streamed to sidecars for enforcement.
-    pub policy_dir: PathBuf,
+    pub(crate) policy_dir: PathBuf,
     /// Directory containing `.cedar` policy files used to gate capability issuance.
     ///
     /// The Authority evaluates issuance requests against this policy set.
@@ -26,54 +30,417 @@ pub struct AuthorityConfig {
     /// issuance policies differ from enforcement policies (e.g. permit issuance
     /// of `communication.external.send` while the sidecar's enforcement policy
     /// forbids the actual call).
-    pub issuance_policy_dir: PathBuf,
+    pub(crate) issuance_policy_dir: PathBuf,
     /// Optional path to the Cedar schema file.
     /// Overrides `policy_dir/schema.cedarschema`. When unset, falls back to
     /// the schema found in `policy_dir`, then to the embedded canonical schema.
-    pub schema_path: Option<PathBuf>,
+    pub(crate) schema_path: Option<PathBuf>,
     /// Path to the revocation file (one token ID per line).
-    pub revocation_file: PathBuf,
+    pub(crate) revocation_file: PathBuf,
     /// Maximum token TTL in seconds (default: 3600).
-    pub max_ttl_seconds: i32,
+    pub(crate) max_ttl_seconds: i32,
     /// Path to the Ed25519 signing key file (64-byte raw or PEM).
-    pub key_file: PathBuf,
+    pub(crate) key_file: PathBuf,
     /// Log level filter (default: `info`).
-    pub log_level: String,
+    log_level: String,
     /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
-    pub bundle_ttl_seconds: u32,
+    pub(crate) bundle_ttl_seconds: u32,
     /// Authority TLS configuration.
-    ///
-    /// Uses `tls_cert_path` + `tls_key_path` keys in TOML via flattening.
-    #[serde(flatten)]
-    pub tls: AuthorityTlsConfig,
+    pub(crate) tls: AuthorityTlsConfig,
+}
+
+/// Read accessors. Construction stays gated behind [`AuthorityConfigBuilder`],
+/// so these expose fields for consumers without letting them build or mutate an
+/// unvalidated config.
+impl AuthorityConfig {
+    /// gRPC listen address.
+    #[must_use]
+    pub fn listen_addr(&self) -> &str {
+        &self.listen_addr
+    }
+
+    /// Directory of `.cedar` policies streamed to sidecars for enforcement.
+    #[must_use]
+    pub fn policy_dir(&self) -> &Path {
+        &self.policy_dir
+    }
+
+    /// Optional override path to the Cedar schema file.
+    #[must_use]
+    pub fn schema_path(&self) -> Option<&Path> {
+        self.schema_path.as_deref()
+    }
+
+    /// Path to the revocation file.
+    #[must_use]
+    pub fn revocation_file(&self) -> &Path {
+        &self.revocation_file
+    }
+
+    /// Maximum token TTL in seconds.
+    #[must_use]
+    pub fn max_ttl_seconds(&self) -> i32 {
+        self.max_ttl_seconds
+    }
+
+    /// Path to the Ed25519 signing key file.
+    #[must_use]
+    pub fn key_file(&self) -> &Path {
+        &self.key_file
+    }
+
+    /// Policy bundle TTL advertised to sidecars in seconds.
+    #[must_use]
+    pub fn bundle_ttl_seconds(&self) -> u32 {
+        self.bundle_ttl_seconds
+    }
+
+    /// TLS configuration.
+    #[must_use]
+    pub fn tls(&self) -> &AuthorityTlsConfig {
+        &self.tls
+    }
 }
 
 /// TLS configuration for the Authority gRPC server.
 ///
-/// Both values are required together to enable TLS.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+/// Both values are required together to enable TLS. The corresponding wire keys
+/// (`tls_cert_path`, `tls_key_path`, …) live on [`schema::AuthorityTlsConfig`];
+/// these fields are the validated in-memory representation.
+#[derive(Debug, Clone, Default)]
 pub struct AuthorityTlsConfig {
-    /// Path to the TLS certificate file (PEM). Must be set together with
-    /// `tls_key_path`.
-    #[serde(default)]
-    pub tls_cert_path: Option<PathBuf>,
-    /// Path to the TLS private key file (PEM). Must be set together with
-    /// `tls_cert_path`.
-    #[serde(default)]
-    pub tls_key_path: Option<PathBuf>,
+    /// Path to the TLS certificate file (PEM). Must be set together with `key`.
+    pub(crate) cert: Option<PathBuf>,
+    /// Path to the TLS private key file (PEM). Must be set together with `cert`.
+    pub(crate) key: Option<PathBuf>,
     /// Path to the PEM CA certificate used to verify Sidecar mTLS client
-    /// certificates. When set (together with `authorized_clients_path`),
-    /// the server requires client certificates and rejects connections whose
-    /// identity is not in the allow-list at the TLS handshake level.
-    /// Requires `tls_cert_path` / `tls_key_path` to also be configured.
-    pub mtls_client_ca_cert_path: Option<PathBuf>,
+    /// certificates. When set (together with `authorized_clients`), the server
+    /// requires client certificates and rejects connections whose identity is
+    /// not in the allow-list at the TLS handshake level. Requires `cert` / `key`
+    /// to also be configured.
+    pub(crate) mtls_client_ca_cert: Option<PathBuf>,
     /// Path to the PEM CA private key used by `firma authority issue-client-cert`
     /// to sign new Sidecar client certificates. Not loaded at server startup;
     /// only the `issue-client-cert` subcommand reads this file.
-    pub mtls_client_ca_key_path: Option<PathBuf>,
+    mtls_client_ca_key: Option<PathBuf>,
     /// Path to the TOML file listing authorized client identities (CN or DNS
-    /// SAN). Required together with `mtls_client_ca_cert_path`.
-    pub authorized_clients_path: Option<PathBuf>,
+    /// SAN). Required together with `mtls_client_ca_cert`.
+    pub(crate) authorized_clients: Option<PathBuf>,
+}
+
+impl AuthorityTlsConfig {
+    /// Path to the PEM CA certificate used to verify Sidecar mTLS client certs.
+    #[must_use]
+    pub fn mtls_client_ca_cert_path(&self) -> Option<&Path> {
+        self.mtls_client_ca_cert.as_deref()
+    }
+
+    /// Path to the PEM CA private key used to sign new Sidecar client certs.
+    #[must_use]
+    pub fn mtls_client_ca_key_path(&self) -> Option<&Path> {
+        self.mtls_client_ca_key.as_deref()
+    }
+}
+
+impl From<schema::AuthorityTlsConfig> for AuthorityTlsConfig {
+    fn from(s: schema::AuthorityTlsConfig) -> Self {
+        Self {
+            cert: s.tls_cert_path,
+            key: s.tls_key_path,
+            mtls_client_ca_cert: s.mtls_client_ca_cert_path,
+            mtls_client_ca_key: s.mtls_client_ca_key_path,
+            authorized_clients: s.authorized_clients_path,
+        }
+    }
+}
+
+impl From<&AuthorityTlsConfig> for schema::AuthorityTlsConfig {
+    fn from(t: &AuthorityTlsConfig) -> Self {
+        Self {
+            tls_cert_path: t.cert.clone(),
+            tls_key_path: t.key.clone(),
+            mtls_client_ca_cert_path: t.mtls_client_ca_cert.clone(),
+            mtls_client_ca_key_path: t.mtls_client_ca_key.clone(),
+            authorized_clients_path: t.authorized_clients.clone(),
+        }
+    }
+}
+
+/// Error validating an [`AuthorityConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AuthorityConfigError {
+    /// `tls_cert_path` and `tls_key_path` were not both set or both unset.
+    #[error("tls_cert_path and tls_key_path must both be set or both be unset")]
+    TlsPairMismatch,
+    /// `mtls_client_ca_cert_path` and `authorized_clients_path` were not paired.
+    #[error(
+        "mtls_client_ca_cert_path and authorized_clients_path must both be set or both be unset"
+    )]
+    MtlsPairMismatch,
+    /// mTLS was configured without the base server TLS cert/key.
+    #[error(
+        "mtls_client_ca_cert_path requires tls_cert_path and tls_key_path to also be configured"
+    )]
+    MtlsRequiresServerTls,
+}
+
+impl AuthorityConfig {
+    /// Infallible field-by-field mapping from the schema representation. Only
+    /// the [`AuthorityConfigBuilder`] (and [`Default`]) construct an
+    /// `AuthorityConfig` from the schema; validation is deferred to
+    /// [`AuthorityConfigBuilder::build`].
+    fn from_schema(s: schema::AuthorityConfig) -> Self {
+        Self {
+            listen_addr: s.listen_addr,
+            policy_dir: s.policy_dir,
+            issuance_policy_dir: s.issuance_policy_dir,
+            schema_path: s.schema_path,
+            revocation_file: s.revocation_file,
+            max_ttl_seconds: s.max_ttl_seconds,
+            key_file: s.key_file,
+            log_level: s.log_level,
+            bundle_ttl_seconds: s.bundle_ttl_seconds,
+            tls: s.tls.into(),
+        }
+    }
+
+    /// Map back to the behavior-free [`schema::AuthorityConfig`] wire shape.
+    ///
+    /// Autostart serializes this schema form (not the validated type) so the
+    /// synthetic `[authority]` TOML uses the stable wire keys.
+    #[must_use]
+    pub fn to_schema(&self) -> schema::AuthorityConfig {
+        schema::AuthorityConfig {
+            listen_addr: self.listen_addr.clone(),
+            policy_dir: self.policy_dir.clone(),
+            issuance_policy_dir: self.issuance_policy_dir.clone(),
+            schema_path: self.schema_path.clone(),
+            revocation_file: self.revocation_file.clone(),
+            max_ttl_seconds: self.max_ttl_seconds,
+            key_file: self.key_file.clone(),
+            log_level: self.log_level.clone(),
+            bundle_ttl_seconds: self.bundle_ttl_seconds,
+            tls: (&self.tls).into(),
+        }
+    }
+}
+
+/// Assembles a validated [`AuthorityConfig`].
+///
+/// The schema is mapped into an `AuthorityConfig` up front; the Authority's
+/// behavior — path rebasing against the config directory and
+/// `FIRMA_AUTHORITY_`-prefixed environment overrides — is then applied to that
+/// `AuthorityConfig`, and [`build`](Self::build) validates it. A built
+/// `AuthorityConfig` is therefore always valid: nothing after `build` mutates
+/// or re-validates it.
+///
+/// Typical order is rebase, then env overrides (kept verbatim), then build:
+///
+/// ```ignore
+/// let config = AuthorityConfigBuilder::from_toml_str(&body)?
+///     .rebase_defaults(config_dir)
+///     .apply_env_overrides()
+///     .build()?;
+/// ```
+pub struct AuthorityConfigBuilder {
+    config: AuthorityConfig,
+}
+
+impl AuthorityConfigBuilder {
+    /// Start from a schema representation (typically deserialized from TOML).
+    #[must_use]
+    pub fn new(schema: schema::AuthorityConfig) -> Self {
+        Self {
+            config: AuthorityConfig::from_schema(schema),
+        }
+    }
+
+    /// Start from an `[authority]` TOML fragment.
+    ///
+    /// # Errors
+    ///
+    /// Returns the TOML deserialization error if the fragment is malformed.
+    pub fn from_toml_str(contents: &str) -> Result<Self, toml::de::Error> {
+        Ok(Self::new(toml::from_str::<schema::AuthorityConfig>(
+            contents,
+        )?))
+    }
+
+    /// Start from a TOML file at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::IoError`] if the file cannot be read, or
+    /// [`ConfigError::ParseError`] if its contents are not valid TOML.
+    #[cfg(test)]
+    fn from_toml_file(path: &std::path::Path) -> Result<Self, ConfigError> {
+        let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+        Self::from_toml_str(&contents).map_err(|e| ConfigError::ParseError {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })
+    }
+
+    /// Re-base the config's relative resource paths against `config_dir`.
+    #[must_use]
+    pub fn rebase_defaults(mut self, config_dir: &std::path::Path) -> Self {
+        self.config.rebase_defaults(config_dir);
+        self
+    }
+
+    /// Fold `FIRMA_AUTHORITY_`-prefixed env overrides into the config, verbatim.
+    #[must_use]
+    fn apply_env_overrides(mut self) -> Self {
+        self.config.apply_env_overrides();
+        self
+    }
+
+    /// Override the listen address on the in-progress config.
+    ///
+    /// Used by autostart to force a loopback listener before building.
+    #[must_use]
+    pub fn listen_addr(mut self, addr: impl Into<String>) -> Self {
+        self.config.listen_addr = addr.into();
+        self
+    }
+
+    /// Clear all TLS settings on the in-progress config.
+    ///
+    /// Used by autostart, which serves the Authority over loopback without TLS.
+    #[must_use]
+    pub fn without_tls(mut self) -> Self {
+        self.config.tls = AuthorityTlsConfig::default();
+        self
+    }
+
+    /// Validate the fully-resolved config and return it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorityConfigError`] if a cross-field invariant is violated.
+    pub fn build(self) -> Result<AuthorityConfig, AuthorityConfigError> {
+        self.config.validate()?;
+        Ok(self.config)
+    }
+}
+
+impl Default for AuthorityConfigBuilder {
+    /// Start from the schema defaults (a valid, TLS-free configuration).
+    fn default() -> Self {
+        Self {
+            config: AuthorityConfig::default(),
+        }
+    }
+}
+
+impl AuthorityConfig {
+    /// Re-base relative resource paths against `config_dir`; absolute paths are
+    /// left untouched. `revocation_file` is intentionally excluded — it is
+    /// state-managed.
+    fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
+        let rebase = |p: &mut PathBuf| {
+            // Empty is left for the validator to reject.
+            if !p.as_os_str().is_empty() && p.is_relative() {
+                *p = config_dir.join(&*p);
+            }
+        };
+        rebase(&mut self.policy_dir);
+        rebase(&mut self.issuance_policy_dir);
+        rebase(&mut self.key_file);
+        for path in [
+            &mut self.tls.cert,
+            &mut self.tls.key,
+            &mut self.tls.mtls_client_ca_cert,
+            &mut self.tls.mtls_client_ca_key,
+            &mut self.tls.authorized_clients,
+            &mut self.schema_path,
+        ] {
+            if let Some(p) = path.as_mut()
+                && !p.as_os_str().is_empty()
+                && p.is_relative()
+            {
+                *p = config_dir.join(&*p);
+            }
+        }
+    }
+
+    /// Apply `FIRMA_AUTHORITY_`-prefixed env overrides verbatim.
+    ///
+    /// Applied *after* [`Self::rebase_defaults`] and *before*
+    /// [`AuthorityConfigBuilder::build`], so an operator-supplied path env var
+    /// is kept exactly as written (no re-basing) yet the built config is still
+    /// validated with the overrides folded in.
+    fn apply_env_overrides(&mut self) {
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LISTEN_ADDR") {
+            self.listen_addr = v;
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_POLICY_DIR") {
+            self.policy_dir = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_ISSUANCE_POLICY_DIR") {
+            self.issuance_policy_dir = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_SCHEMA_PATH") {
+            self.schema_path = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_REVOCATION_FILE") {
+            self.revocation_file = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MAX_TTL_SECONDS")
+            && let Ok(n) = v.parse::<i32>()
+        {
+            self.max_ttl_seconds = n;
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
+            self.key_file = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LOG_LEVEL") {
+            self.log_level = v;
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.bundle_ttl_seconds = n;
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_CERT_PATH") {
+            self.tls.cert = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_KEY_PATH") {
+            self.tls.key = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MTLS_CLIENT_CA_CERT_PATH") {
+            self.tls.mtls_client_ca_cert = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MTLS_CLIENT_CA_KEY_PATH") {
+            self.tls.mtls_client_ca_key = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_AUTHORIZED_CLIENTS_PATH") {
+            self.tls.authorized_clients = Some(PathBuf::from(v));
+        }
+    }
+
+    /// Validate the cross-field TLS invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorityConfigError`] on the first violated invariant.
+    fn validate(&self) -> Result<(), AuthorityConfigError> {
+        if self.tls.cert.is_some() != self.tls.key.is_some() {
+            return Err(AuthorityConfigError::TlsPairMismatch);
+        }
+        if self.tls.mtls_client_ca_cert.is_some() != self.tls.authorized_clients.is_some() {
+            return Err(AuthorityConfigError::MtlsPairMismatch);
+        }
+        if self.tls.mtls_client_ca_cert.is_some()
+            && (self.tls.cert.is_none() || self.tls.key.is_none())
+        {
+            return Err(AuthorityConfigError::MtlsRequiresServerTls);
+        }
+        Ok(())
+    }
 }
 
 impl AuthorityConfig {
@@ -84,82 +451,17 @@ impl AuthorityConfig {
     /// Returns an error if the config file exists but cannot be parsed.
     #[cfg(test)]
     fn load(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
-        let mut config = Self::parse_file(config_path)?;
-        config.apply_env_overrides();
-        Ok(config)
-    }
-
-    /// Parse the TOML file (or take defaults) without env overrides.
-    #[cfg(test)]
-    fn parse_file(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
-        match config_path {
-            Some(path) => {
-                let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
-                    path: path.clone(),
-                    reason: e.to_string(),
-                })?;
-                toml::from_str::<Self>(&contents).map_err(|e| ConfigError::ParseError {
-                    path: path.clone(),
-                    reason: e.to_string(),
-                })
-            }
-            None => Ok(Self::default()),
-        }
-    }
-
-    /// Apply `FIRMA_AUTHORITY_`-prefixed env overrides verbatim.
-    ///
-    /// Called *after* [`Self::rebase_defaults`] so an operator-supplied
-    /// path env var is preserved exactly as written (no re-basing of a
-    /// relative value against the config dir).
-    fn apply_env_overrides(&mut self) {
-        let config = self;
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LISTEN_ADDR") {
-            config.listen_addr = v;
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_POLICY_DIR") {
-            config.policy_dir = PathBuf::from(v);
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_ISSUANCE_POLICY_DIR") {
-            config.issuance_policy_dir = PathBuf::from(v);
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_SCHEMA_PATH") {
-            config.schema_path = Some(PathBuf::from(v));
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_REVOCATION_FILE") {
-            config.revocation_file = PathBuf::from(v);
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MAX_TTL_SECONDS")
-            && let Ok(n) = v.parse::<i32>()
-        {
-            config.max_ttl_seconds = n;
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
-            config.key_file = PathBuf::from(v);
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LOG_LEVEL") {
-            config.log_level = v;
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
-            && let Ok(n) = v.parse::<u32>()
-        {
-            config.bundle_ttl_seconds = n;
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_CERT_PATH") {
-            config.tls.tls_cert_path = Some(PathBuf::from(v));
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_KEY_PATH") {
-            config.tls.tls_key_path = Some(PathBuf::from(v));
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MTLS_CLIENT_CA_CERT_PATH") {
-            config.tls.mtls_client_ca_cert_path = Some(PathBuf::from(v));
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MTLS_CLIENT_CA_KEY_PATH") {
-            config.tls.mtls_client_ca_key_path = Some(PathBuf::from(v));
-        }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_AUTHORIZED_CLIENTS_PATH") {
-            config.tls.authorized_clients_path = Some(PathBuf::from(v));
-        }
+        let builder = match config_path {
+            Some(path) => AuthorityConfigBuilder::from_toml_file(path)?,
+            None => AuthorityConfigBuilder::default(),
+        };
+        builder
+            .apply_env_overrides()
+            .build()
+            .map_err(|e| ConfigError::ParseError {
+                path: config_path.cloned().unwrap_or_default(),
+                reason: e.to_string(),
+            })
     }
 
     /// Parse a resolved config file (flat or `[authority]`-sectioned via
@@ -174,10 +476,14 @@ impl AuthorityConfig {
         file: &std::path::Path,
         config_dir: &std::path::Path,
     ) -> Result<Self, ConfigError> {
-        let mut config = Self::parse_file(Some(&file.to_path_buf()))?;
-        config.rebase_defaults(config_dir);
-        config.apply_env_overrides();
-        Ok(config)
+        AuthorityConfigBuilder::from_toml_file(file)?
+            .rebase_defaults(config_dir)
+            .apply_env_overrides()
+            .build()
+            .map_err(|e| ConfigError::ParseError {
+                path: file.to_path_buf(),
+                reason: e.to_string(),
+            })
     }
 
     /// Load Authority configuration from the `[authority]` section of a
@@ -195,94 +501,37 @@ impl AuthorityConfig {
         resolved: &firma_config_loader::ResolvedConfig,
     ) -> Result<Option<Self>, ConfigError> {
         let config_path = resolved.config_file().to_path_buf();
-        let Some(mut config) = resolved
+        let Some(schema) = resolved
             .config
-            .optional_section::<Self>("authority")
+            .optional_section::<schema::AuthorityConfig>("authority")
             .map_err(|error| ConfigError::ParseError {
-                path: config_path,
+                path: config_path.clone(),
                 reason: error.to_string(),
             })?
         else {
             return Ok(None);
         };
 
-        config.rebase_defaults(&resolved.config_dir());
-        config.apply_env_overrides();
+        // Rebase paths and fold env overrides into the config, then validate on
+        // build. Env overrides run last so they stay verbatim.
+        let config = AuthorityConfigBuilder::new(schema)
+            .rebase_defaults(&resolved.config_dir())
+            .apply_env_overrides()
+            .build()
+            .map_err(|error| ConfigError::ParseError {
+                path: config_path,
+                reason: error.to_string(),
+            })?;
 
         Ok(Some(config))
-    }
-
-    /// Re-base every relative resource path against `config_dir`;
-    /// absolute paths are left untouched. No default-name sentinel
-    /// check — relative always means "relative to the config file's
-    /// directory" for consistency.
-    ///
-    /// `revocation_file` is intentionally excluded — state-managed.
-    /// Env overrides are applied *after* this so an env-supplied path is kept
-    /// exactly as the operator wrote it.
-    pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
-        let rebase = |p: &mut PathBuf| {
-            // Empty is left for the validator to reject.
-            if !p.as_os_str().is_empty() && p.is_relative() {
-                *p = config_dir.join(&*p);
-            }
-        };
-        rebase(&mut self.policy_dir);
-        rebase(&mut self.issuance_policy_dir);
-        rebase(&mut self.key_file);
-        if let Some(cert_path) = self.tls.tls_cert_path.as_mut()
-            && !cert_path.as_os_str().is_empty()
-            && cert_path.is_relative()
-        {
-            *cert_path = config_dir.join(&*cert_path);
-        }
-        if let Some(key_path) = self.tls.tls_key_path.as_mut()
-            && !key_path.as_os_str().is_empty()
-            && key_path.is_relative()
-        {
-            *key_path = config_dir.join(&*key_path);
-        }
-        if let Some(ca_cert_path) = self.tls.mtls_client_ca_cert_path.as_mut()
-            && !ca_cert_path.as_os_str().is_empty()
-            && ca_cert_path.is_relative()
-        {
-            *ca_cert_path = config_dir.join(&*ca_cert_path);
-        }
-        if let Some(ca_key_path) = self.tls.mtls_client_ca_key_path.as_mut()
-            && !ca_key_path.as_os_str().is_empty()
-            && ca_key_path.is_relative()
-        {
-            *ca_key_path = config_dir.join(&*ca_key_path);
-        }
-        if let Some(authorized_clients_path) = self.tls.authorized_clients_path.as_mut()
-            && !authorized_clients_path.as_os_str().is_empty()
-            && authorized_clients_path.is_relative()
-        {
-            *authorized_clients_path = config_dir.join(&*authorized_clients_path);
-        }
-        if let Some(schema_path) = self.schema_path.as_mut()
-            && !schema_path.as_os_str().is_empty()
-            && schema_path.is_relative()
-        {
-            *schema_path = config_dir.join(&*schema_path);
-        }
     }
 }
 
 impl Default for AuthorityConfig {
     fn default() -> Self {
-        Self {
-            listen_addr: "[::1]:50051".to_string(),
-            policy_dir: PathBuf::from(DEFAULT_POLICY_DIR),
-            issuance_policy_dir: PathBuf::from(DEFAULT_ISSUANCE_POLICY_DIR),
-            schema_path: None,
-            revocation_file: PathBuf::from("revocations.txt"),
-            max_ttl_seconds: 3600,
-            key_file: PathBuf::from(DEFAULT_KEY_FILE),
-            log_level: "info".to_string(),
-            bundle_ttl_seconds: 30,
-            tls: AuthorityTlsConfig::default(),
-        }
+        // The schema default carries no TLS, so it is trivially valid; map it
+        // directly to keep `Default` infallible.
+        Self::from_schema(schema::AuthorityConfig::default())
     }
 }
 
@@ -326,8 +575,10 @@ mod tests {
 
     #[test]
     fn rebase_rewrites_defaults_not_revocation() {
-        let mut c = AuthorityConfig::default();
-        c.rebase_defaults(std::path::Path::new("/cfg"));
+        let c = AuthorityConfigBuilder::new(schema::AuthorityConfig::default())
+            .rebase_defaults(std::path::Path::new("/cfg"))
+            .build()
+            .unwrap();
         assert_eq!(c.policy_dir, PathBuf::from("/cfg/policies"));
         assert_eq!(
             c.issuance_policy_dir,
@@ -341,12 +592,14 @@ mod tests {
     fn rebase_rewrites_relative_non_default_paths() {
         // Consistency: a relative operator-set path is config-relative,
         // not cwd-relative, even though it is not the default sentinel.
-        let mut c = AuthorityConfig {
+        let c = AuthorityConfigBuilder::new(schema::AuthorityConfig {
             policy_dir: PathBuf::from("custom/policies"),
             schema_path: Some(PathBuf::from("schema.cedarschema")),
-            ..AuthorityConfig::default()
-        };
-        c.rebase_defaults(std::path::Path::new("/cfg"));
+            ..schema::AuthorityConfig::default()
+        })
+        .rebase_defaults(std::path::Path::new("/cfg"))
+        .build()
+        .unwrap();
         assert_eq!(c.policy_dir, PathBuf::from("/cfg/custom/policies"));
         assert_eq!(
             c.schema_path,
@@ -356,21 +609,25 @@ mod tests {
 
     #[test]
     fn rebase_skips_empty_path_for_validator() {
-        let mut c = AuthorityConfig {
+        let c = AuthorityConfigBuilder::new(schema::AuthorityConfig {
             policy_dir: PathBuf::new(),
-            ..AuthorityConfig::default()
-        };
-        c.rebase_defaults(std::path::Path::new("/cfg"));
+            ..schema::AuthorityConfig::default()
+        })
+        .rebase_defaults(std::path::Path::new("/cfg"))
+        .build()
+        .unwrap();
         assert_eq!(c.policy_dir, PathBuf::new());
     }
 
     #[test]
     fn rebase_preserves_explicit_policy_dir() {
-        let mut c = AuthorityConfig {
+        let c = AuthorityConfigBuilder::new(schema::AuthorityConfig {
             policy_dir: PathBuf::from("/explicit"),
-            ..AuthorityConfig::default()
-        };
-        c.rebase_defaults(std::path::Path::new("/cfg"));
+            ..schema::AuthorityConfig::default()
+        })
+        .rebase_defaults(std::path::Path::new("/cfg"))
+        .build()
+        .unwrap();
         assert_eq!(c.policy_dir, PathBuf::from("/explicit"));
     }
 
@@ -386,8 +643,8 @@ mod tests {
         let c = AuthorityConfig::load_resolved(&p, tmp.path()).unwrap();
         assert_eq!(c.max_ttl_seconds, 1800);
         assert_eq!(c.policy_dir, tmp.path().join("policies"));
-        assert_eq!(c.tls.tls_cert_path, Some(tmp.path().join("authority.crt")));
-        assert_eq!(c.tls.tls_key_path, Some(tmp.path().join("authority.key")));
+        assert_eq!(c.tls.cert, Some(tmp.path().join("authority.crt")));
+        assert_eq!(c.tls.key, Some(tmp.path().join("authority.key")));
     }
 
     #[test]
@@ -397,7 +654,10 @@ listen_addr = "0.0.0.0:9090"
 policy_dir = "/etc/firma/policies"
 max_ttl_seconds = 1800
 "#;
-        let config: AuthorityConfig = toml::from_str(toml_str).unwrap_or_else(|e| panic!("{e}"));
+        let config = AuthorityConfigBuilder::from_toml_str(toml_str)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .build()
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(config.listen_addr, "0.0.0.0:9090");
         assert_eq!(config.max_ttl_seconds, 1800);
         // Defaults for unspecified fields

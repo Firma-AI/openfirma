@@ -4,7 +4,8 @@ use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use firma_authority::{AuthorityConfig, AuthorityTlsConfig};
+use firma_authority::{AuthorityConfig, AuthorityConfigBuilder};
+use firma_config_schema::authority as authority_schema;
 use firma_identifiers::{AgentId, SandboxId};
 
 use crate::error::RunError;
@@ -150,8 +151,10 @@ pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunE
     } else {
         ephemeral_authority_config(req, &layout)?
     };
-    let pub_key_path = authority_config.key_file.with_extension("pub");
-    let inner = toml::to_string_pretty(&authority_config).map_err(|error| {
+    let pub_key_path = authority_config.key_file().with_extension("pub");
+    // Serialize the schema (wire) form, not the validated config: the schema
+    // owns the stable TOML keys the child process reads back.
+    let inner = toml::to_string_pretty(&authority_config.to_schema()).map_err(|error| {
         RunError::Internal(format!("invalid synthetic authority config: {error}"))
     })?;
     std::fs::write(&authority_toml, format!("[authority]\n{inner}")).map_err(|error| {
@@ -194,12 +197,17 @@ fn persisted_authority_config(user_config: &Path) -> Result<AuthorityConfig, Run
             user_config.display()
         ))
     })?;
-    let mut config = toml::from_str::<AuthorityConfig>(&body)
-        .map_err(|error| RunError::Internal(format!("parse authority config: {error}")))?;
-    config.rebase_defaults(config_dir);
-    config.tls = AuthorityTlsConfig::default();
-    config.listen_addr = LOOPBACK_EPHEMERAL.to_string();
-    ensure_authority_key(&config.key_file)?;
+    // Build via the Authority's own builder: rebase paths, then force the
+    // autostart overrides (loopback listener, no TLS) on the config, then
+    // validate on build.
+    let config = AuthorityConfigBuilder::from_toml_str(&body)
+        .map_err(|error| RunError::Internal(format!("parse authority config: {error}")))?
+        .rebase_defaults(config_dir)
+        .without_tls()
+        .listen_addr(LOOPBACK_EPHEMERAL.to_string())
+        .build()
+        .map_err(|error| RunError::Internal(format!("invalid authority config: {error}")))?;
+    ensure_authority_key(config.key_file())?;
     Ok(config)
 }
 
@@ -254,16 +262,18 @@ fn ephemeral_authority_config(
             key_path.display()
         ))
     })?;
-    Ok(AuthorityConfig {
+    // Build the ephemeral config through the validating builder so it cannot
+    // be constructed in an invalid state. The schema carries the shape and
+    // defaults (no TLS, `max_ttl_seconds = 3600`, etc.); only the non-default
+    // paths and loopback listener are set here.
+    AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
         listen_addr: LOOPBACK_EPHEMERAL.to_string(),
         policy_dir: policy_dir.clone(),
         issuance_policy_dir: policy_dir,
-        schema_path: None,
         revocation_file,
-        max_ttl_seconds: 3600,
         key_file: key_path,
-        log_level: "info".to_string(),
-        bundle_ttl_seconds: 30,
-        tls: AuthorityTlsConfig::default(),
+        ..authority_schema::AuthorityConfig::default()
     })
+    .build()
+    .map_err(|error| RunError::Internal(format!("invalid authority config: {error}")))
 }

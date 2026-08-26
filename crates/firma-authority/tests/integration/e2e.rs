@@ -12,7 +12,8 @@ use prost_types::Timestamp;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
-use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
+use firma_authority::{AuthorityConfigBuilder, Server};
+use firma_config_schema::authority as authority_schema;
 
 struct TestServer {
     addr: String,
@@ -58,18 +59,17 @@ impl TestServer {
             path
         });
 
-        let config = AuthorityConfig {
+        let config = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
             listen_addr: "127.0.0.1:0".to_string(),
             policy_dir: policy_dir.clone(),
             issuance_policy_dir: issuance_policy_dir.clone(),
             schema_path,
             revocation_file: revocation_file.clone(),
             key_file,
-            max_ttl_seconds: 3600,
-            log_level: "info".to_string(),
-            bundle_ttl_seconds: 30,
-            tls: AuthorityTlsConfig::default(),
-        };
+            ..authority_schema::AuthorityConfig::default()
+        })
+        .build()
+        .expect("valid authority config");
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let shutdown_signal = async {
