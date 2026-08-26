@@ -83,7 +83,7 @@ fn backend_kind_parses_every_supported_name() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
-fn unknown_backend_string_in_config_fails_resolution() -> Result<(), Box<dyn std::error::Error>> {
+fn unknown_backend_in_selected_profile_fails_parsing() -> Result<(), Box<dyn std::error::Error>> {
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join(firma_config_loader::CONFIG_FILE_NAME);
     fs_err::write(
@@ -97,12 +97,40 @@ backend = "does-not-exist"
     let error = resolve_profile(&run_input_inner(None, Some(config_path)))
         .expect_err("unknown backend string must fail resolution");
 
-    let RunError::ConfigValidation(reason) = error else {
-        return Err(format!("expected ConfigValidation, got {error:?}").into());
+    let RunError::ConfigParse { reason, .. } = error else {
+        return Err(format!("expected ConfigParse, got {error:?}").into());
     };
-    assert_eq!(
-        reason,
-        "unsupported backend 'does-not-exist'; expected one of: bwrap, vz, wsl2, firecracker"
+    assert!(
+        reason.contains("does-not-exist"),
+        "error names rejected backend: {reason}"
+    );
+    Ok(())
+}
+
+#[test]
+fn unknown_backend_in_unselected_profile_fails_parsing() -> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join(firma_config_loader::CONFIG_FILE_NAME);
+    fs_err::write(
+        &config_path,
+        r#"
+[run.profiles.generic]
+backend = "bwrap"
+
+[run.profiles.unselected]
+backend = "does-not-exist"
+"#,
+    )?;
+
+    let error = resolve_profile(&run_input_inner(None, Some(config_path)))
+        .expect_err("unknown backend in any profile must fail parsing");
+
+    let RunError::ConfigParse { reason, .. } = error else {
+        return Err(format!("expected ConfigParse, got {error:?}").into());
+    };
+    assert!(
+        reason.contains("does-not-exist"),
+        "error names rejected backend: {reason}"
     );
     Ok(())
 }

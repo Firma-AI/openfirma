@@ -72,7 +72,7 @@ If `examples/demos/.env.sample` exists, the TUI presents each key as an editable
 ### Phase 3 — Running
 
 1. `runtime::boot` executes the startup sequence (see below).
-2. `agent_bridge::spawn_agent` launches the Python script via `uv run`, injecting `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, and `FIRMA_SESSION_ID`.
+2. `agent_bridge::spawn_agent` launches the Python script via `uv run`, injecting `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and `SSL_CERT_FILE`.
 3. The event loop tails four log streams simultaneously: authority, sidecar, audit (`audit.jsonl`), and script stdout/stderr.
 
 **Layout:**
@@ -178,14 +178,6 @@ reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
-
-[sidecar.preflight]
-agent_id = "agt_01j0000000e008000000000001"
-session_id = "demo0-session-001"
-requested_actions = ["code.review.read", "filesystem.read"]
-resource_scope = "*"
-authority_pub_key_path = "examples/demos/demo0/.runtime/authority.pub"
-ttl_seconds = 3600
 ```
 
 `default_protected = true` is the demo default — every unmapped host is DENY.
@@ -298,7 +290,6 @@ uv run demo0/agent.py                    (skipped with --no-script)
   HTTP_PROXY=http://127.0.0.1:8080
   HTTPS_PROXY=http://127.0.0.1:8080
   SSL_CERT_FILE=.runtime/generated-firma-ca/firma-ca.crt
-  FIRMA_SESSION_ID=<from [sidecar.preflight] in firma.toml>
 ```
 
 ## Runtime Loop

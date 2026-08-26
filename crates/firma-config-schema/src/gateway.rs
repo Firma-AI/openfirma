@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Tunable timeouts and limits for the secret-gateway client, deserialized
 /// from the Sidecar's `firma.toml`.
 #[derive(Debug, Copy, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct GatewayClientConfig {
     /// Deadline for establishing the connection to the gateway endpoint.
     #[serde(

@@ -30,6 +30,14 @@ impl FirmaConfig {
         let table: toml::Table = text
             .parse()
             .with_context(|| format!("parse {}", origin.display()))?;
+        for key in table.keys() {
+            if !matches!(key.as_str(), "authority" | "sidecar" | "run") {
+                bail!(
+                    "{}: unknown top-level key `{key}`; expected `authority`, `sidecar`, or `run`",
+                    origin.display()
+                );
+            }
+        }
         Ok(Self { table, origin })
     }
 

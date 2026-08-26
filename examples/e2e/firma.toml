@@ -79,11 +79,3 @@ reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
-
-[sidecar.preflight]
-agent_id = "agt_01j0000000e008000000000001"
-session_id = "demo-session-001"
-requested_actions = ["communication.external.send"]
-resource_scope = "*"
-authority_pub_key_path = "examples/e2e/authority.pub"
-ttl_seconds = 3600

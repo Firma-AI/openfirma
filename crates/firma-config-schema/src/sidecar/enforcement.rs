@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Groups the three enforcement sub-systems: intent-mapping rules, capability
 /// validation (Stage 1), and constraint enforcement (Stage 2).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnforcementConfig {
     /// Intent normalization / mapping rules.
     #[serde(default)]
@@ -26,6 +27,7 @@ pub struct EnforcementConfig {
 
 /// Mapping rules configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MappingConfig {
     /// Path to the primary mapping rules TOML file.
     #[serde(default = "default_mapping_path")]
@@ -50,6 +52,7 @@ impl Default for MappingConfig {
 
 /// Capability validation configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityValidationConfig {
     /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
     #[serde(default)]
@@ -58,6 +61,7 @@ pub struct CapabilityValidationConfig {
 
 /// Constraint enforcement configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConstraintEnforcementConfig {
     /// Maximum number of active sessions tracked in the session-state cache.
     /// Default: 8192. Minimum: 1.

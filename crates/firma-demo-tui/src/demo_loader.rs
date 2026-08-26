@@ -16,7 +16,6 @@ pub struct DemoManifest {
     /// `[authority]` and `[sidecar.*]`).
     pub config_file: PathBuf,
     pub agent_script: PathBuf,
-    pub session_id: String,
     /// Human-readable description of what the script will do, shown in
     /// the agent pane before the user presses Enter to start. Loaded
     /// from `prompt.md` in the demo directory; empty if absent.
@@ -130,43 +129,14 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
 
     let config_file = required_path(&root, CONFIG_FILE_NAME)?;
     let agent_script = required_path(&root, "agent.py")?;
-    let session_id = parse_preflight_session_id(&config_file);
     let prompt = std::fs::read_to_string(root.join("prompt.md")).unwrap_or_default();
 
     Ok(DemoManifest {
         root,
         config_file,
         agent_script,
-        session_id,
         prompt,
     })
-}
-
-/// Extract `session_id` from the `[sidecar.preflight]` section of the
-/// unified `firma.toml`.
-fn parse_preflight_session_id(firma_toml: &Path) -> String {
-    #[derive(serde::Deserialize)]
-    struct FirmaToml {
-        sidecar: Option<SidecarSection>,
-    }
-    #[derive(serde::Deserialize)]
-    struct SidecarSection {
-        preflight: Option<PreflightSection>,
-    }
-    #[derive(serde::Deserialize)]
-    struct PreflightSection {
-        session_id: Option<String>,
-    }
-
-    let Ok(content) = std::fs::read_to_string(firma_toml) else {
-        return String::new();
-    };
-    toml::from_str::<FirmaToml>(&content)
-        .ok()
-        .and_then(|t| t.sidecar)
-        .and_then(|s| s.preflight)
-        .and_then(|p| p.session_id)
-        .unwrap_or_default()
 }
 
 fn required_path(root: &Path, file: &str) -> Result<PathBuf> {

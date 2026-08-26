@@ -181,18 +181,18 @@ HITL gating; downgrade to `forbid` if running unattended.
 
 ## Smoke tests
 
-The proxy expects `x-firma-session-id: preflight-session` on each
-request to bind it to the preflight-issued capability token. The
-`run.sh` output prints the exact curl invocations.
+The standalone proxy has no pre-issued capability. The `run.sh` output prints
+curl invocations that prove protected requests fail closed at Stage 1. Launch
+an agent through `firma run` for automatic per-session capability issuance.
 
 | Target                                    | Expected                 |
 | ----------------------------------------- | ------------------------ |
-| crates.io GET                             | 200                      |
-| pypi.org GET                              | 200                      |
-| api.github.com GET /repos/*               | 200                      |
+| crates.io GET                             | 403 (missing capability) |
+| pypi.org GET                              | 403 (missing capability) |
+| api.github.com GET /repos/*               | 403 (missing capability) |
 | api.github.com DELETE /repos/_/git/refs/_ | 403 (`code.destructive`) |
 | evil.com GET                              | 403 (unmapped)           |
-| 169.254.169.254 GET                       | 403 (Cedar forbid)       |
+| 169.254.169.254 GET                       | 403 (missing capability) |
 
 ## Pointing an agent at the proxy
 
@@ -204,9 +204,8 @@ export SSL_CERT_FILE=$REQUESTS_CA_BUNDLE
 export NODE_EXTRA_CA_CERTS=$REQUESTS_CA_BUNDLE
 ```
 
-The agent must inject `x-firma-session-id: preflight-session` on every
-outbound HTTP request. Long-term this header should default to the
-preflight session_id when absent — tracked separately.
+Launch the agent through `firma run` so the wrapper issues and refreshes a
+per-session capability and propagates the matching session identity.
 
 ## NOT FOR PRODUCTION
 

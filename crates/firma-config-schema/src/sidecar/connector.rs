@@ -11,6 +11,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
 /// Top-level connector configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectorConfig {
     /// Timeout in milliseconds applied to the registry default.
     #[serde(default = "default_timeout_ms")]
@@ -34,6 +35,7 @@ impl Default for ConnectorConfig {
 /// All fields are required for explicit host entries — operators state their
 /// per-host constraints explicitly rather than inherit global defaults.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostConnectorConfig {
     /// Target host this entry applies to (exact match against the host portion
     /// of the envelope resource).

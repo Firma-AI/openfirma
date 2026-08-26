@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// `{"Json": {...}}`) so it nests as a flat table when embedded in TOML (e.g.
 /// the Sidecar's `http_secret_providers` config) as well as JSON.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SecretMatcher {
     /// `JSONPath` extraction over structured output.
     Json {
@@ -65,7 +65,7 @@ pub enum SecretMatcher {
 /// encode the name as the record's own key in its parent JSON object; use
 /// [`RecordKey`](Self::RecordKey) when `record_path` selects records that way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "source", rename_all = "snake_case")]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SecretNameSource {
     /// Record-relative `JSONPath` selecting the name string, aligned by
     /// document order with `value_path`. Must select exactly one non-empty
@@ -89,6 +89,7 @@ pub enum SecretNameSource {
 /// require one or more valid string matches at every applicable root. See the
 /// field docs on [`SecretMatcher::Json`] for failure behavior.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecretJsonSelector {
     /// `JSONPath` evaluated at the root selected by [`Self::scope`].
     pub path: String,

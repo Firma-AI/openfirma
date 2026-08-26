@@ -103,7 +103,7 @@ impl AuthorityConfig {
 /// TLS configuration for the Authority gRPC server.
 ///
 /// Both values are required together to enable TLS. The corresponding wire keys
-/// (`tls_cert_path`, `tls_key_path`, …) live on [`schema::AuthorityTlsConfig`];
+/// (`tls_cert_path`, `tls_key_path`, …) live on [`schema::AuthorityConfig`];
 /// these fields are the validated in-memory representation.
 #[derive(Debug, Clone, Default)]
 pub struct AuthorityTlsConfig {
@@ -140,30 +140,6 @@ impl AuthorityTlsConfig {
     }
 }
 
-impl From<schema::AuthorityTlsConfig> for AuthorityTlsConfig {
-    fn from(s: schema::AuthorityTlsConfig) -> Self {
-        Self {
-            cert: s.tls_cert_path,
-            key: s.tls_key_path,
-            mtls_client_ca_cert: s.mtls_client_ca_cert_path,
-            mtls_client_ca_key: s.mtls_client_ca_key_path,
-            authorized_clients: s.authorized_clients_path,
-        }
-    }
-}
-
-impl From<&AuthorityTlsConfig> for schema::AuthorityTlsConfig {
-    fn from(t: &AuthorityTlsConfig) -> Self {
-        Self {
-            tls_cert_path: t.cert.clone(),
-            tls_key_path: t.key.clone(),
-            mtls_client_ca_cert_path: t.mtls_client_ca_cert.clone(),
-            mtls_client_ca_key_path: t.mtls_client_ca_key.clone(),
-            authorized_clients_path: t.authorized_clients.clone(),
-        }
-    }
-}
-
 /// Error validating an [`AuthorityConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AuthorityConfigError {
@@ -197,7 +173,13 @@ impl AuthorityConfig {
             max_ttl_seconds: s.max_ttl_seconds,
             key_file: s.key_file,
             bundle_ttl_seconds: s.bundle_ttl_seconds,
-            tls: s.tls.into(),
+            tls: AuthorityTlsConfig {
+                cert: s.tls_cert_path,
+                key: s.tls_key_path,
+                mtls_client_ca_cert: s.mtls_client_ca_cert_path,
+                mtls_client_ca_key: s.mtls_client_ca_key_path,
+                authorized_clients: s.authorized_clients_path,
+            },
         }
     }
 
@@ -216,7 +198,11 @@ impl AuthorityConfig {
             max_ttl_seconds: self.max_ttl_seconds,
             key_file: self.key_file.clone(),
             bundle_ttl_seconds: self.bundle_ttl_seconds,
-            tls: (&self.tls).into(),
+            tls_cert_path: self.tls.cert.clone(),
+            tls_key_path: self.tls.key.clone(),
+            mtls_client_ca_cert_path: self.tls.mtls_client_ca_cert.clone(),
+            mtls_client_ca_key_path: self.tls.mtls_client_ca_key.clone(),
+            authorized_clients_path: self.tls.authorized_clients.clone(),
         }
     }
 }

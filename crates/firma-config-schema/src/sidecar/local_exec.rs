@@ -23,6 +23,7 @@ pub enum DefaultAction {
 
 /// Local-exec governance endpoint configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalExecConfig {
     /// Absolute path to the Unix domain socket file.
     pub socket_path: PathBuf,

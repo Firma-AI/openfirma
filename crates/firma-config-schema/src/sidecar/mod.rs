@@ -45,8 +45,9 @@ pub use tenancy::{TenancyConfig, TenancyMode};
 ///
 /// Contains both infrastructure settings (interceptor, policy, CA,
 /// credentials) and enforcement-engine settings (mapping, capability
-/// validation, constraint enforcement) via a flattened [`EnforcementConfig`].
+/// validation, constraint enforcement).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SidecarConfig {
     /// Enforcement mode: `"enforce"` (default) or `"monitor"`.
     #[serde(default)]
@@ -72,10 +73,15 @@ pub struct SidecarConfig {
     /// Background Authority stream client tuning.
     #[serde(default)]
     pub authority: AuthorityConfig,
-    /// Enforcement engine settings (mapping rules, capability validation,
-    /// constraint enforcement), flattened to top-level TOML tables.
-    #[serde(flatten)]
-    pub enforcement: EnforcementConfig,
+    /// Intent normalization / mapping rules.
+    #[serde(default)]
+    pub mapping: MappingConfig,
+    /// Capability validation settings.
+    #[serde(default)]
+    pub capability_validation: CapabilityValidationConfig,
+    /// Constraint enforcement settings.
+    #[serde(default)]
+    pub constraint_enforcement: ConstraintEnforcementConfig,
     /// Revocation cache settings (bloom filter + LRU sizing).
     #[serde(default)]
     pub revocation: RevocationConfig,

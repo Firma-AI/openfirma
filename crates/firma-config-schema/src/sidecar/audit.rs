@@ -44,6 +44,7 @@ impl fmt::Display for AuditSink {
 /// | `grpc`   | `grpc_url`             |
 /// | `wal`    | `grpc_url`, `wal_path` |
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuditConfig {
     /// Output sink. Default: `stdout`.
     #[serde(default)]
