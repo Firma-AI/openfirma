@@ -13,7 +13,6 @@ revocation_file = "examples/generic-agent/.runtime/revocations.txt"
 key_file = ".runtime/authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 
 # schema_path is optional. Omit to use the schema embedded in the binary.
 # schema_path = "examples/generic-agent/policies/schema.cedarschema"

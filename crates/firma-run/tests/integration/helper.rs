@@ -57,7 +57,6 @@ impl RealAuthority {
             issuance_policy_dir,
             revocation_file: dir.path().join("revocations.txt"),
             key_file: key_path,
-            log_level: "warn".to_string(),
             ..authority_schema::AuthorityConfig::default()
         })
         .build()

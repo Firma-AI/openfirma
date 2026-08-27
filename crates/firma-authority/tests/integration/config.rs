@@ -69,7 +69,6 @@ fn schema_with_tls() -> schema::AuthorityConfig {
         revocation_file: "/srv/revocations.txt".into(),
         max_ttl_seconds: 1200,
         key_file: "/srv/authority.key".into(),
-        log_level: "debug".to_string(),
         bundle_ttl_seconds: 45,
         tls: schema::AuthorityTlsConfig {
             tls_cert_path: Some("/srv/tls.crt".into()),

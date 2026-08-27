@@ -56,7 +56,6 @@ revocation_file = "revocations.txt"
 key_file = "firma-authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 ```
 
 Start the Authority (discovers `firma.toml`, or pass `--config`):
@@ -88,7 +87,6 @@ The output file contains the signed token and matching claims. Configure the Sid
 | `key_file`           | `firma-authority.key` | Authority private signing key.               |
 | `max_ttl_seconds`    | `3600`                | Maximum token lifetime.                      |
 | `bundle_ttl_seconds` | `30`                  | TTL advertised with streamed policy bundles. |
-| `log_level`          | `info`                | Logging filter.                              |
 
 Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`.
 

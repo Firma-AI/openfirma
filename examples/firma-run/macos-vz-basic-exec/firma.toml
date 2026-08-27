@@ -8,7 +8,6 @@ revocation_file = "examples/firma-run/macos-vz-basic-exec/.runtime/revocations.t
 key_file = ".runtime/authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 
 [sidecar]
 mode = "enforce"

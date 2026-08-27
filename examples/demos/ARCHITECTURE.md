@@ -127,7 +127,6 @@ revocation_file = "examples/demos/demo0/.runtime/revocations.txt"
 key_file = "examples/demos/demo0/.runtime/authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 # schema_path = "..."  # optional; omit to use embedded schema
 ```
 

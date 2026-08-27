@@ -119,7 +119,6 @@ revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/firma-authority.key"
 max_ttl_seconds     = 3600
 bundle_ttl_seconds  = 30
-log_level           = "info"
 EOF
 
 # Permissive issuance policy for development

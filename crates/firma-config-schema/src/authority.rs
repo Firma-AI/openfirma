@@ -44,8 +44,6 @@ pub struct AuthorityConfig {
     pub max_ttl_seconds: i32,
     /// Path to the Ed25519 signing key file (64-byte raw or PEM).
     pub key_file: PathBuf,
-    /// Log level filter (default: `info`).
-    pub log_level: String,
     /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
     pub bundle_ttl_seconds: u32,
     /// Authority TLS configuration.
@@ -94,7 +92,6 @@ impl Default for AuthorityConfig {
             revocation_file: PathBuf::from("revocations.txt"),
             max_ttl_seconds: 3600,
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
-            log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
             tls: AuthorityTlsConfig::default(),
         }

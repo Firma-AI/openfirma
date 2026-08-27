@@ -70,7 +70,6 @@ revocation_file     = "/var/lib/firma/revocations.txt"
 key_file            = "/etc/firma/firma-authority.key"
 max_ttl_seconds     = 3600              # capabilities live at most 1h
 bundle_ttl_seconds  = 30                # push bundle updates every 30s
-log_level           = "info"
 ```
 
 In production, run the Authority on a hardened host with limited access. Treat its signing key with the same care as a CA key.

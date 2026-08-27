@@ -41,8 +41,6 @@ pub struct AuthorityConfig {
     pub(crate) max_ttl_seconds: i32,
     /// Path to the Ed25519 signing key file (64-byte raw or PEM).
     pub(crate) key_file: PathBuf,
-    /// Log level filter (default: `info`).
-    log_level: String,
     /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
     pub(crate) bundle_ttl_seconds: u32,
     /// Authority TLS configuration.
@@ -198,7 +196,6 @@ impl AuthorityConfig {
             revocation_file: s.revocation_file,
             max_ttl_seconds: s.max_ttl_seconds,
             key_file: s.key_file,
-            log_level: s.log_level,
             bundle_ttl_seconds: s.bundle_ttl_seconds,
             tls: s.tls.into(),
         }
@@ -218,7 +215,6 @@ impl AuthorityConfig {
             revocation_file: self.revocation_file.clone(),
             max_ttl_seconds: self.max_ttl_seconds,
             key_file: self.key_file.clone(),
-            log_level: self.log_level.clone(),
             bundle_ttl_seconds: self.bundle_ttl_seconds,
             tls: (&self.tls).into(),
         }
@@ -397,9 +393,6 @@ impl AuthorityConfig {
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
             self.key_file = PathBuf::from(v);
         }
-        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LOG_LEVEL") {
-            self.log_level = v;
-        }
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
             && let Ok(n) = v.parse::<u32>()
         {
@@ -555,7 +548,6 @@ mod tests {
         assert_eq!(config.listen_addr, "[::1]:50051");
         assert_eq!(config.max_ttl_seconds, 3600);
         assert_eq!(config.bundle_ttl_seconds, 30);
-        assert_eq!(config.log_level, "info");
     }
 
     #[test]
