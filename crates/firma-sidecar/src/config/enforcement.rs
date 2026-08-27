@@ -143,7 +143,7 @@ pub struct ConstraintEnforcementConfig {
     /// Session-state storage backend.
     pub backend: SessionStateBackend,
     /// Optional path for the persistent session-state JSONL file.
-    pub path: Option<String>,
+    pub path: Option<PathBuf>,
 }
 
 impl Default for ConstraintEnforcementConfig {
@@ -589,7 +589,10 @@ mod tests {
         let cfg = ConstraintEnforcementConfig::from(schema);
         assert_eq!(cfg.capacity, 4096);
         assert_eq!(cfg.backend, SessionStateBackend::Persistent);
-        assert_eq!(cfg.path.as_deref(), Some("/var/lib/firma/sessions.jsonl"));
+        assert_eq!(
+            cfg.path.as_deref(),
+            Some(std::path::Path::new("/var/lib/firma/sessions.jsonl"))
+        );
     }
 
     #[test]

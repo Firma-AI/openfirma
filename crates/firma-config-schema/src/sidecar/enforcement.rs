@@ -79,7 +79,7 @@ pub struct ConstraintEnforcementConfig {
     /// Optional path for the persistent session-state JSONL file. Only used
     /// when `session_state_backend = "persistent"`.
     #[serde(default)]
-    pub session_state_path: Option<String>,
+    pub session_state_path: Option<PathBuf>,
 }
 
 impl Default for ConstraintEnforcementConfig {

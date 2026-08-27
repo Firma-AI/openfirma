@@ -110,7 +110,7 @@ fn build_session_state_store(
         }
         SessionStateBackend::Persistent => {
             let path = match &ce.path {
-                Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+                Some(p) if !p.as_os_str().is_empty() => p.clone(),
                 _ => runtime_layout.session_state(),
             };
             tracing::debug!(capacity, ?path, "session-state backend: persistent");
