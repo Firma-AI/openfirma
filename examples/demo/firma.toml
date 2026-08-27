@@ -63,19 +63,19 @@ default_timeout = "30s"
 host = "wttr.in"
 rps = 60
 burst = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host = "paste.rs"
 rps = 60
 burst = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host = "127.0.0.1:9100"
 rps = 200
 burst = 50
-timeout_ms = 30000
+timeout = "30s"
 
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"

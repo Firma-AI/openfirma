@@ -221,7 +221,7 @@ default_timeout = "15s"
 host = "api.openai.com"
 rps = 60
 burst = 10
-timeout_ms = 60000
+timeout = "1m"
 
 [authority]
 connect_timeout = "10s"
@@ -611,18 +611,18 @@ Outbound dispatch defaults and per-host overrides.
 Each `[[connector.hosts]]` entry is required to state every field
 explicitly — inheriting silent global defaults is not allowed.
 
-| Field        | Type   | Required | Description                                |
-| ------------ | ------ | -------- | ------------------------------------------ |
-| `host`       | string | yes      | Target host (exact match)                  |
-| `rps`        | u32    | yes      | Sustained token-bucket refill rate (req/s) |
-| `burst`      | u32    | yes      | Token-bucket burst capacity                |
-| `timeout_ms` | u64    | yes      | Dispatch timeout in milliseconds           |
+| Field     | Type     | Required | Description                                |
+| --------- | -------- | -------- | ------------------------------------------ |
+| `host`    | string   | yes      | Target host (exact match)                  |
+| `rps`     | u32      | yes      | Sustained token-bucket refill rate (req/s) |
+| `burst`   | u32      | yes      | Token-bucket burst capacity                |
+| `timeout` | duration | yes      | Dispatch timeout                           |
 
 Validation:
 
 - `default_timeout` must be greater than zero.
 - Each host entry must set a non-empty `host`, and each of `rps`,
-  `burst`, and `timeout_ms` must be greater than `0`.
+  `burst`, and `timeout` must be greater than zero.
 - Duplicate `host` entries are rejected.
 
 ### `[authority]`

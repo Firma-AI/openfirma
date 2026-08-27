@@ -50,8 +50,9 @@ pub struct HostConnectorConfig {
     pub rps: u32,
     /// Token-bucket capacity. Bounds the instantaneous burst.
     pub burst: u32,
-    /// Dispatch timeout in milliseconds applied to this host.
-    pub timeout_ms: u64,
+    /// Dispatch timeout applied to this host.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub timeout: Duration,
 }
 
 const fn default_timeout() -> Duration {

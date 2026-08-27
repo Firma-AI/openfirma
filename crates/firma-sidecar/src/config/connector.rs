@@ -30,8 +30,8 @@ pub struct HostConnectorConfig {
     pub rps: u32,
     /// Token-bucket capacity.
     pub burst: u32,
-    /// Dispatch timeout in milliseconds applied to this host.
-    pub timeout_ms: u64,
+    /// Dispatch timeout applied to this host.
+    pub timeout: Duration,
 }
 
 /// Error validating a [`ConnectorConfig`].
@@ -63,8 +63,8 @@ pub enum HostConnectorConfigError {
     /// `host` was empty.
     #[error("host must not be empty")]
     EmptyHost,
-    /// `timeout_ms` was zero.
-    #[error("timeout_ms must be > 0")]
+    /// `timeout` was zero.
+    #[error("timeout must be > 0")]
     ZeroTimeout,
     /// `rps` was zero.
     #[error("rps must be > 0")]
@@ -90,7 +90,7 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
         if schema.host.trim().is_empty() {
             return Err(HostConnectorConfigError::EmptyHost);
         }
-        if schema.timeout_ms == 0 {
+        if schema.timeout.is_zero() {
             return Err(HostConnectorConfigError::ZeroTimeout);
         }
         if schema.rps == 0 {
@@ -103,7 +103,7 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
             host: schema.host,
             rps: schema.rps,
             burst: schema.burst,
-            timeout_ms: schema.timeout_ms,
+            timeout: schema.timeout,
         })
     }
 }
@@ -143,12 +143,12 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
 mod tests {
     use super::*;
 
-    fn host(host: &str, rps: u32, burst: u32, timeout_ms: u64) -> SchemaHostConnectorConfig {
+    fn host(host: &str, rps: u32, burst: u32, timeout: Duration) -> SchemaHostConnectorConfig {
         SchemaHostConnectorConfig {
             host: host.to_string(),
             rps,
             burst,
-            timeout_ms,
+            timeout,
         }
     }
 
@@ -181,7 +181,7 @@ mod tests {
         assert!(matches!(
             ConnectorConfig::try_from(schema(
                 Duration::from_secs(30),
-                vec![host("api.example.com", 10, 5, 0)]
+                vec![host("api.example.com", 10, 5, Duration::ZERO)]
             )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::ZeroTimeout,
@@ -195,7 +195,7 @@ mod tests {
         assert!(matches!(
             ConnectorConfig::try_from(schema(
                 Duration::from_secs(30),
-                vec![host("api.example.com", 0, 5, 10_000)]
+                vec![host("api.example.com", 0, 5, Duration::from_secs(10))]
             )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::ZeroRps,
@@ -209,7 +209,7 @@ mod tests {
         assert!(matches!(
             ConnectorConfig::try_from(schema(
                 Duration::from_secs(30),
-                vec![host("api.example.com", 10, 0, 10_000)]
+                vec![host("api.example.com", 10, 0, Duration::from_secs(10))]
             )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::ZeroBurst,
@@ -223,7 +223,7 @@ mod tests {
         assert!(matches!(
             ConnectorConfig::try_from(schema(
                 Duration::from_secs(30),
-                vec![host("", 10, 5, 10_000)]
+                vec![host("", 10, 5, Duration::from_secs(10))]
             )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::EmptyHost,
@@ -238,8 +238,8 @@ mod tests {
             ConnectorConfig::try_from(schema(
                 Duration::from_secs(30),
                 vec![
-                    host("api.example.com", 10, 5, 10_000),
-                    host("api.example.com", 20, 10, 5_000),
+                    host("api.example.com", 10, 5, Duration::from_secs(10)),
+                    host("api.example.com", 20, 10, Duration::from_secs(5)),
                 ],
             )),
             Err(ConnectorConfigError::DuplicateHost { .. })
@@ -251,14 +251,14 @@ mod tests {
         let config = ConnectorConfig::try_from(schema(
             Duration::from_secs(15),
             vec![
-                host("api.openai.com", 60, 10, 60_000),
-                host("api.internal", 1_000, 100, 5_000),
+                host("api.openai.com", 60, 10, Duration::from_mins(1)),
+                host("api.internal", 1_000, 100, Duration::from_secs(5)),
             ],
         ))
         .expect("valid");
         assert_eq!(config.default_timeout, Duration::from_secs(15));
         assert_eq!(config.hosts.len(), 2);
         assert_eq!(config.hosts[0].host, "api.openai.com");
-        assert_eq!(config.hosts[1].timeout_ms, 5_000);
+        assert_eq!(config.hosts[1].timeout, Duration::from_secs(5));
     }
 }

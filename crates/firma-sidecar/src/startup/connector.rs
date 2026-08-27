@@ -42,7 +42,7 @@ pub fn build_connector_registry(
             anyhow::anyhow!("connector host {}: burst must be > 0", host_cfg.host)
         })?;
         let http = GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: std::time::Duration::from_millis(host_cfg.timeout_ms),
+            timeout: host_cfg.timeout,
             rate_limit: Some(RateLimitConfig { rps, burst }),
         })
         .map_err(|e| anyhow::anyhow!("failed to build connector for {}: {e}", host_cfg.host))?;
@@ -51,7 +51,7 @@ pub fn build_connector_registry(
             host = host_cfg.host.as_str(),
             rps = host_cfg.rps,
             burst = host_cfg.burst,
-            timeout_ms = host_cfg.timeout_ms,
+            timeout_ms = u64::try_from(host_cfg.timeout.as_millis()).unwrap_or(u64::MAX),
             "connector host override registered"
         );
     }

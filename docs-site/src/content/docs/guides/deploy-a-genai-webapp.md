@@ -186,13 +186,13 @@ default_timeout = "30s"
 host       = "api.openai.com"
 rps        = 100
 burst      = 20
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "api.acme-vendor.com"
 rps        = 50
 burst      = 10
-timeout_ms = 15000
+timeout = "15s"
 
 [sidecar.credentials.openai]
 target_host    = "api.openai.com"

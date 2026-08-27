@@ -42,19 +42,19 @@ default_timeout = "30s"
 host       = "wttr.in"
 rps        = 60
 burst      = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "paste.rs"
 rps        = 60
 burst      = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "127.0.0.1:9100"
 rps        = 200
 burst      = 50
-timeout_ms = 30000
+timeout = "30s"
 ```
 
 | Field        | Meaning                                                                                          |
@@ -62,7 +62,7 @@ timeout_ms = 30000
 | `host`       | The upstream the limits apply to. Exact match — wildcards aren't supported here.                 |
 | `rps`        | Steady-state allowed requests per second.                                                        |
 | `burst`      | Token-bucket burst size; absorbs short spikes above `rps`.                                       |
-| `timeout_ms` | Per-request timeout. Beyond this, the connector returns `ConnectorError::Timeout` and denies.    |
+| `timeout` | Per-request timeout. Beyond this, the connector returns `ConnectorError::Timeout` and denies. |
 
 Hosts not listed use `default_timeout` and no rate limit. Set sensible defaults for any host that's part of your normal agent workload — both to protect the upstream and to bound the blast radius of a runaway agent loop.
 
@@ -97,7 +97,7 @@ When the connector dispatches a call, four things can happen:
 | Outcome         | What it means                                                  | Audit shape                            |
 | --------------- | -------------------------------------------------------------- | -------------------------------------- |
 | Success         | Upstream returned a response (any HTTP status).                | `Decision::Allow` + upstream status    |
-| `Timeout`       | Upstream did not respond within `timeout_ms`.                  | `Decision::Allow` (policy-allowed) + connector error |
+| `Timeout`       | Upstream did not respond within `timeout`.                     | `Decision::Allow` (policy-allowed) + connector error |
 | `Network`       | Connection failed (DNS, TCP, TLS handshake).                   | `Decision::Allow` + connector error    |
 | `InvalidRequest`| Upstream rejected the request shape (e.g. malformed body).     | `Decision::Allow` + connector error    |
 
