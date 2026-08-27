@@ -569,3 +569,65 @@ remain runtime obligations.
 | One above maximum          | Existing lower value retained              |
 | Non-Unicode                | Existing lower value retained              |
 | Both variables positive    | Each independently overrides its own field |
+
+## Post-implementation adversarial review
+
+A fresh independent reviewer inspected
+`aab452655a76395f99c48eeedb7c2be500a137ea..1854dd041794e93bb679c02406c8d3a942a5d229`
+under the repository `reviewing-changes` and `review-rust-code` workflows.
+
+Verdict: **approved with no code findings**.
+
+The reviewer independently reconstructed standalone Authority, `firma run`,
+stack planning, doctor/config parsing, control-service, issuance, migration,
+and Cedar bundle-generation paths. It confirmed the following:
+
+- both schema fields establish the non-zero invariant;
+- schema/runtime conversions retain whole-second and range checks;
+- environment compatibility preserves positive precedence and every deliberate
+  ignore case while rejecting exact zero;
+- reverse conversion rejects invalid directly constructed runtime values;
+- raw migration checks effective legacy zero before mutation, canonical values
+  win collisions, and migration errors prevent config and scaffold writes;
+- issuance and bundle consumers are unchanged, with the Sidecar wire check
+  retained; and
+- `PROOF-001` through `PROOF-006` are materially covered.
+
+The only pending plan step noted by the reviewer was the scheduled standalone
+removal of this plan from the final branch tree. No behavior or meaning changes
+were requested, so there are no implementation findings to disposition.
+
+Independent verification:
+
+- `git diff --check aab45265..1854dd04`;
+- `cargo nextest run -p firma-config-schema -p firma-authority` (138 passed);
+- `cargo nextest run -p firma --test cli scalar_migration` (5 passed); and
+- `cargo clippy -p firma-config-schema -p firma-authority -p firma-run -p firma --all-targets -- -D warnings`.
+
+## Post-restack builder reconciliation review
+
+After PR #605 merged, a fresh independent reviewer inspected the Authority
+configuration flow reconstructed through implementation commit
+`4f540d32c23877b1c3725fcc0121a047d2c9df15` under the repository
+`reviewing-changes` and `review-rust-code` workflows.
+
+Verdict: **approved with no findings**.
+
+The reviewer confirmed that:
+
+- schema and environment values flow through `AuthorityConfigBuilder`;
+- rebasing precedes environment overrides and validation follows them;
+- runtime construction remains builder-gated;
+- strict unknown-field and whole-file parsing behavior is preserved;
+- TLS/mTLS cross-field validation applies after environment merging;
+- non-zero duration syntax, defaults, whole-second values, range errors, and
+  field-specific legacy environment zero errors are preserved; and
+- malformed, negative, unit-suffixed, overflowing, and non-Unicode legacy
+  environment values retain their compatibility behavior.
+
+No finding required disposition. Independent verification reported by the
+reviewer:
+
+- `cargo nextest run -p firma-authority -p firma-config-schema -p firma-config-loader`
+  (185 passed); and
+- `git diff --check`.
