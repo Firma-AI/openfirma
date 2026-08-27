@@ -294,8 +294,8 @@ fn resolved_config(path: &Path) -> anyhow::Result<ResolvedConfig> {
 
 /// A fully-populated schema fragment, including TLS, so conversions and
 /// accessors are exercised on non-default values.
-fn schema_with_tls() -> schema::AuthorityConfig {
-    schema::AuthorityConfig {
+fn schema_with_tls() -> anyhow::Result<schema::AuthorityConfig> {
+    Ok(schema::AuthorityConfig {
         listen_addr: "127.0.0.1:9443".to_string(),
         policy_dir: "/srv/policies".into(),
         issuance_policy_dir: "/srv/issuance".into(),
@@ -303,21 +303,22 @@ fn schema_with_tls() -> schema::AuthorityConfig {
         revocation_file: "/srv/revocations.txt".into(),
         max_ttl: firma_config_schema::utils::NonZeroDuration::new(std::time::Duration::from_mins(
             20,
-        ))
-        .unwrap_or_else(|error| panic!("{error}")),
+        ))?,
         key_file: "/srv/authority.key".into(),
-        bundle_ttl: std::time::Duration::from_secs(45),
+        bundle_ttl: firma_config_schema::utils::NonZeroDuration::new(
+            std::time::Duration::from_secs(45),
+        )?,
         tls_cert_path: Some("/srv/tls.crt".into()),
         tls_key_path: Some("/srv/tls.key".into()),
         mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),
         mtls_client_ca_key_path: Some("/srv/ca.key".into()),
         authorized_clients_path: Some("/srv/clients.toml".into()),
-    }
+    })
 }
 
 #[test]
 fn accessors_expose_built_values() -> anyhow::Result<()> {
-    let config = AuthorityConfigBuilder::new(schema_with_tls()).build()?;
+    let config = AuthorityConfigBuilder::new(schema_with_tls()?).build()?;
 
     assert_eq!(config.listen_addr(), "127.0.0.1:9443");
     assert_eq!(config.policy_dir(), Path::new("/srv/policies"));
@@ -342,7 +343,7 @@ fn accessors_expose_built_values() -> anyhow::Result<()> {
 
 #[test]
 fn to_schema_round_trips_through_builder() -> anyhow::Result<()> {
-    let original = AuthorityConfigBuilder::new(schema_with_tls()).build()?;
+    let original = AuthorityConfigBuilder::new(schema_with_tls()?).build()?;
 
     // `to_schema` maps the validated config back to the wire shape; rebuilding
     // from it must reproduce the same validated config.
@@ -364,7 +365,7 @@ fn to_schema_round_trips_through_builder() -> anyhow::Result<()> {
 
 #[test]
 fn without_tls_and_listen_addr_setters_apply() -> anyhow::Result<()> {
-    let config = AuthorityConfigBuilder::new(schema_with_tls())
+    let config = AuthorityConfigBuilder::new(schema_with_tls()?)
         .without_tls()
         .listen_addr("[::1]:7000")
         .build()?;
