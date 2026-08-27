@@ -15,7 +15,7 @@ The `[sidecar.audit]` block in `firma.toml` selects a sink:
 | -------- | ------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `stdout` | `sink = "stdout"`                                       | Local dev or production on Cloud Run; pipe into `jq` or ship structured JSON. |
 | `file`   | `sink = "file"`, `file_path = "..."`                    | Single-host deployments with rotation handled outside.                        |
-| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_bytes = N` | High-throughput; resilient to crashes; consume with a separate tail process.  |
+| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_size = "100 MiB"` | High-throughput; resilient to crashes; consume with a separate tail process. |
 | `grpc`   | `sink = "grpc"`, `grpc_url = "..."`                     | Centralized collector ingesting from many Sidecars.                           |
 
 For this guide, assume `sink = "file"` and `file_path = "/tmp/firma-standalone/logs/audit.jsonl"`.

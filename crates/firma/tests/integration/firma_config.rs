@@ -956,6 +956,10 @@ fn scalar_migration_preserves_attached_comments() {
 # Keep the operator's duration rationale.
 max_ttl_seconds = 3600 # duration inline note
 
+[sidecar.interceptor]
+# Keep the operator's size rationale.
+max_request_body_bytes = 4194304 # size inline note
+
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"
 "#,
@@ -966,11 +970,18 @@ agent_id = "agt_01j0000000e008000000000001"
 
     let migrated = std::fs::read_to_string(config_path).expect("read migrated config");
     assert!(!migrated.contains("max_ttl_seconds"));
+    assert!(!migrated.contains("max_request_body_bytes"));
     assert!(
         migrated.contains(
             "# Keep the operator's duration rationale.\nmax_ttl = \"3600s\" # duration inline note"
         ),
         "duration comments were not preserved:\n{migrated}"
+    );
+    assert!(
+        migrated.contains(
+            "# Keep the operator's size rationale.\nmax_request_body_size = \"4194304 B\" # size inline note"
+        ),
+        "size comments were not preserved:\n{migrated}"
     );
 }
 

@@ -55,8 +55,8 @@ pub enum AuditConfigError {
     /// `wal_path` was empty.
     #[error("audit.wal_path must not be empty when sink is wal")]
     EmptyWalPath,
-    /// `wal_max_bytes` was zero.
-    #[error("audit.wal_max_bytes must be > 0")]
+    /// `wal_max_size` was zero.
+    #[error("audit.wal_max_size must be > 0")]
     ZeroWalMaxBytes,
     /// Both signing-key sources were set.
     #[error("audit.signing_key_path and audit.signing_key_env are mutually exclusive")]
@@ -106,7 +106,7 @@ impl TryFrom<SchemaAuditConfig> for AuditConfig {
                     None => return Err(AuditConfigError::WalPathRequired),
                     _ => {}
                 }
-                if schema.wal_max_bytes == 0 {
+                if schema.wal_max_size.as_u64() == 0 {
                     return Err(AuditConfigError::ZeroWalMaxBytes);
                 }
             }
@@ -132,7 +132,7 @@ impl TryFrom<SchemaAuditConfig> for AuditConfig {
             file_path: schema.file_path,
             grpc_url: schema.grpc_url,
             wal_path: schema.wal_path,
-            wal_max_bytes: schema.wal_max_bytes,
+            wal_max_bytes: schema.wal_max_size.as_u64(),
             signing_key_path: schema.signing_key_path,
             signing_key_env: schema.signing_key_env,
             redact_query_params: schema.redact_query_params,
@@ -241,7 +241,7 @@ mod tests {
             sink: SchemaAuditSink::Wal,
             grpc_url: Some("https://audit.example.com".into()),
             wal_path: Some(PathBuf::from("/var/lib/firma/wal")),
-            wal_max_bytes: 0,
+            wal_max_size: bytesize::ByteSize::b(0),
             ..schema()
         };
         assert!(matches!(

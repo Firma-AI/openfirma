@@ -14,7 +14,6 @@ pub mod swappable_policy;
 mod integration_tests;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use firma_core::RevocationStore;
 use tokio::task::JoinHandle;

@@ -1578,7 +1578,7 @@ lru_capacity = 50000
 sink = "wal"
 grpc_url = "https://audit.example.com"
 wal_path = "/var/lib/firma/wal"
-wal_max_bytes = 52428800
+wal_max_size = 52428800
 signing_key_path = "/etc/firma/audit.pem"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =

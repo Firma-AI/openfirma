@@ -8,6 +8,7 @@
 )]
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use firma_run::config::{CapabilitySource, resolve_profile};
 use firma_run::runtime::RunInput;

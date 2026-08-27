@@ -168,8 +168,13 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "assembles the complete sidecar table"
+)]
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
+    migrate_sidecar_scalars(sidecar)?;
 
     if let Some(local_exec) = optional_table_mut(sidecar, "local_exec")? {
         migrate_integer_duration(local_exec, "token_ttl_secs", "token_ttl", "s");
@@ -654,6 +659,12 @@ fn set_str_if_absent(table: &mut Table, key: &str, val: &str) {
 fn migrate_integer_duration(table: &mut impl TableLike, old_key: &str, new_key: &str, unit: &str) {
     migrate_integer_scalar(table, old_key, new_key, |old_value| {
         format!("{old_value}{unit}")
+    });
+}
+
+fn migrate_integer_size(table: &mut impl TableLike, old_key: &str, new_key: &str) {
+    migrate_integer_scalar(table, old_key, new_key, |old_value| {
+        format!("{old_value} B")
     });
 }
 

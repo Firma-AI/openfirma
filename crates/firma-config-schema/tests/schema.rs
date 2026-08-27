@@ -26,9 +26,9 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     assert_eq!(config.socket_path, None);
     assert_eq!(InterceptorConfig::default().socket_path, None);
     assert_eq!(config.drain_timeout, Duration::from_secs(30));
-    assert_eq!(config.max_request_body_size, 4 * 1024 * 1024);
+    assert_eq!(config.max_request_body_size, ByteSize::mib(4));
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
-    assert_eq!(config.total_body_budget, 64 * 1024 * 1024);
+    assert_eq!(config.total_body_budget, ByteSize::mib(64));
     assert_eq!(config.connect_relay.setup_timeout, Duration::from_secs(10));
     assert_eq!(config.connect_relay.session_max, Duration::from_mins(10));
     assert!(config.https_mitm.enabled);
@@ -37,6 +37,25 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
         config.https_mitm.intercept_hosts,
         config.https_mitm.strict_hosts,
     );
+}
+
+#[test]
+fn sidecar_byte_sizes_accept_human_readable_units() {
+    let config: sidecar::SidecarConfig = toml::from_str(
+        r#"
+        [interceptor]
+        max_request_body_size = "4 MiB"
+        total_body_budget = "64 MiB"
+
+        [audit]
+        wal_max_size = "100 MiB"
+        "#,
+    )
+    .expect("human-readable byte sizes deserialize");
+
+    assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
+    assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
+    assert_eq!(config.audit.wal_max_size, ByteSize::mib(100));
 }
 
 #[test]

@@ -43,12 +43,7 @@ keys are rejected; migrate them as follows (equivalent values shown):
 | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait_ms = 300000` | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait = "5m"` |
 | `sidecar.interceptor.max_request_body_size = 4194304`            | `sidecar.interceptor.max_request_body_size = "4 MiB"`       |
 | `sidecar.interceptor.total_body_budget = 67108864`               | `sidecar.interceptor.total_body_budget = "64 MiB"`          |
-| `sidecar.audit.wal_max_bytes = 104857600`                        | `sidecar.audit.wal_max_size = "100 MiB"`                    |
-
-Existing `max_decompressed_body_size` and secret-gateway byte-size fields also
-require human-readable strings such as `"4 MiB"`. Counts, capacities, and rates
-remain numeric. Re-running `firma config` migrates the legacy integer keys in
-the table above while preserving their values and existing comments.
+| `sidecar.audit.wal_max_size = 104857600`                         | `sidecar.audit.wal_max_size = "100 MiB"`                    |
 
 Unknown keys are rejected recursively rather than ignored. The only top-level
 keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
@@ -275,7 +270,7 @@ sink = "wal"
 file_path = "/var/log/firma/audit.jsonl"
 grpc_url = "https://audit.example.com"
 wal_path = "/var/lib/firma/wal"
-wal_max_bytes = 104857600
+wal_max_size = 104857600
 signing_key_path = "/etc/firma/audit.pem"
 # signing_key_env = "FIRMA_AUDIT_SIGNING_KEY"
 ```
@@ -754,7 +749,7 @@ how they are signed.
 | `file_path`        | path   | none        | Append-only file path (required for `file` sink) |
 | `grpc_url`         | string | none        | Audit service URL (required for `grpc`/`wal`)    |
 | `wal_path`         | path   | none        | Local WAL directory (required for `wal` sink)    |
-| `wal_max_bytes`    | u64    | `104857600` | Maximum WAL size in bytes (100 MiB)              |
+| `wal_max_size`     | u64    | `104857600` | Maximum WAL size in bytes (100 MiB)              |
 | `signing_key_path` | path   | none        | ECDSA private key file path                      |
 | `signing_key_env`  | string | none        | Env var containing ECDSA private key (PEM)       |
 
@@ -763,7 +758,7 @@ Validation:
 - `file_path` must be set and non-empty when sink is `file`.
 - `grpc_url` must be set and non-empty when sink is `grpc` or `wal`.
 - `wal_path` must be set and non-empty when sink is `wal`.
-- `wal_max_bytes` must be greater than `0`.
+- `wal_max_size` must be greater than `0`.
 - `signing_key_path` and `signing_key_env` are mutually exclusive.
 
 ### `[capability_seed]`
