@@ -396,6 +396,12 @@ firma run --profile generic --print-effective-config -- echo hi
 
 This prints the resolved profile as JSON: which backend, which env vars are injected, which mounts are visible inside the sandbox, which identity remap applies. No agent is launched. Use this to audit your wrapper config the same way you'd `terraform plan` infrastructure.
 
+### Profile precedence
+
+Profile values resolve from the built-in profile, then `[run.defaults]`, then the selected `[run.profiles.<name>]`, and finally supplied CLI values. Higher explicit values win.
+
+Boolean profile fields distinguish omission from `false`. Omitting `use_http_proxy_sidecar` or `allow_non_structural` inherits the lower layer; setting either to `false` disables an inherited `true`. This replaces the previous logical-OR behavior. Passing `--allow-non-structural` still enables the setting at highest profile precedence, while omitting the flag leaves file configuration unchanged. `FIRMA_RUN_ALLOW_NON_STRUCTURAL` remains a separate post-resolution enable-only override.
+
 ## Useful flags
 
 `firma run --help` is the full reference. The flags that come up most often:

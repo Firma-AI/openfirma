@@ -129,6 +129,20 @@ copy the agent ID returned by FirmaTeam registration and use
 `firma run` never generates or edits identity in an existing config. A missing
 or invalid agent ID fails closed before backend or component startup.
 
+## Run profile layering
+
+`firma run` resolves configuration in this order: built-in profile,
+`[run.defaults]`, the selected `[run.profiles.<name>]`, then supplied CLI
+values. Higher explicit values win.
+
+Profile booleans distinguish omission from `false`: an omitted
+`use_http_proxy_sidecar` or `allow_non_structural` inherits the lower layer,
+while an explicit `false` disables an inherited `true`. This intentionally
+replaces the previous logical-OR behavior. The enable-only
+`--allow-non-structural` flag still has highest profile precedence when passed;
+when omitted it does not override the file. `FIRMA_RUN_ALLOW_NON_STRUCTURAL`
+remains a separate post-resolution enable-only override.
+
 ## Config-Relative Resource Resolution
 
 A resource field holding a **relative** path resolves under the resolved

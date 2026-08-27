@@ -82,8 +82,8 @@ fn generic_profile() -> ProfilePatch {
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
-        use_http_proxy_sidecar: true,
-        allow_non_structural: false,
+        use_http_proxy_sidecar: Some(true),
+        allow_non_structural: Some(false),
         mask_home_paths: None,
         ca_trust_mode: None,
     }
@@ -154,7 +154,7 @@ fn claude_code_profile() -> ProfilePatch {
         "CLAUDE_CODE_USE_VERTEX".to_string(),
         "CLAUDE_CODE_USE_BEDROCK".to_string(),
     ]);
-    base.use_http_proxy_sidecar = true;
+    base.use_http_proxy_sidecar = Some(true);
     base
 }
 
@@ -174,7 +174,7 @@ fn copilot_profile() -> ProfilePatch {
     // session store relies on filesystem.delete, which the managed seccomp
     // baseline permits (scoped structurally by the read-only rootfs mount).
     base.ca_trust_mode = Some(CaTrustMode::AppendSystemRoots);
-    base.use_http_proxy_sidecar = true;
+    base.use_http_proxy_sidecar = Some(true);
     base
 }
 
@@ -198,7 +198,7 @@ fn vscode_profile() -> ProfilePatch {
         });
     }
     base.ca_trust_mode = Some(CaTrustMode::AppendSystemRoots);
-    base.use_http_proxy_sidecar = true;
+    base.use_http_proxy_sidecar = Some(true);
     base
 }
 
@@ -221,7 +221,7 @@ mod tests {
     fn vscode_profile_sets_append_ca_and_profile_env() {
         let patch = built_in_profile("vscode").unwrap();
         assert_eq!(patch.ca_trust_mode, Some(CaTrustMode::AppendSystemRoots));
-        assert!(patch.use_http_proxy_sidecar);
+        assert_eq!(patch.use_http_proxy_sidecar, Some(true));
         assert_eq!(
             patch.env_set.get("FIRMA_RUN_PROFILE"),
             Some(&"vscode".to_string())

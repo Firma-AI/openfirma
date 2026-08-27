@@ -100,15 +100,16 @@ pub struct ProfilePatch {
     #[serde(default)]
     pub codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
-    /// Should be `true` for profiles whose agent uses standard HTTP proxy env vars.
-    #[serde(default)]
-    pub use_http_proxy_sidecar: bool,
+    /// Should be `true` for profiles whose agent uses standard HTTP proxy env
+    /// vars. `None` inherits the lower profile layer; explicit `false` disables
+    /// an inherited `true` value.
+    pub use_http_proxy_sidecar: Option<bool>,
     /// Allow non-structural (proxy-only) backends to run without failing closed.
     /// Intentional opt-in: proxy-only enforcement can be bypassed by clients
     /// that ignore `HTTP_PROXY`, open raw sockets, or spawn children with
-    /// a clean environment.
-    #[serde(default)]
-    pub allow_non_structural: bool,
+    /// a clean environment. `None` inherits the lower profile layer; explicit
+    /// `false` revokes a lower layer's opt-in.
+    pub allow_non_structural: Option<bool>,
     /// Home-relative paths to mask with a tmpfs overlay inside the bwrap sandbox.
     /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
     /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.

@@ -624,6 +624,25 @@ fn run_rejects_unknown_fields_in_defaults_and_every_profile() {
 }
 
 #[test]
+fn run_profile_booleans_distinguish_absent_false_and_true() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+        [defaults]
+        use_http_proxy_sidecar = false
+
+        [profiles.selected]
+        allow_non_structural = true
+        "#,
+    )
+    .expect("profile booleans must parse");
+
+    assert_eq!(config.defaults.use_http_proxy_sidecar, Some(false));
+    assert_eq!(config.defaults.allow_non_structural, None);
+    assert_eq!(config.profiles["selected"].use_http_proxy_sidecar, None);
+    assert_eq!(config.profiles["selected"].allow_non_structural, Some(true));
+}
+
+#[test]
 fn run_validates_backends_in_defaults_and_unselected_profiles() {
     for config in [
         "[defaults]\nbackend = \"bworp\"\n",

@@ -72,9 +72,10 @@ pub struct ResolvedProfile {
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
     pub(crate) use_http_proxy_sidecar: bool,
     /// When `true`, allow non-structural (proxy-only) backends to run without
-    /// failing closed. Comes from config `[defaults] allow_non_structural = true`
-    /// and is OR'd with the CLI `--allow-non-structural` flag and env var
-    /// `FIRMA_RUN_ALLOW_NON_STRUCTURAL`.
+    /// failing closed. Profile layers replace lower explicit values, the CLI
+    /// `--allow-non-structural` flag enables it at highest profile precedence,
+    /// and `FIRMA_RUN_ALLOW_NON_STRUCTURAL` remains a post-resolution
+    /// enable-only override.
     pub(crate) allow_non_structural: bool,
     /// How the sandbox CA trust store is assembled (sole firma-ca vs. appended
     /// to system roots).
@@ -402,8 +403,10 @@ impl Merge for ProfilePatch {
             sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
-            use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
-            allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
+            use_http_proxy_sidecar: higher
+                .use_http_proxy_sidecar
+                .or(self.use_http_proxy_sidecar),
+            allow_non_structural: higher.allow_non_structural.or(self.allow_non_structural),
             mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
             ca_trust_mode: higher.ca_trust_mode.or(self.ca_trust_mode),
         }
@@ -553,8 +556,8 @@ pub(crate) fn resolve_profile_with_layout(
         capability,
         sidecar_local_exec,
         executable_policies,
-        use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
-        allow_non_structural: patch.allow_non_structural,
+        use_http_proxy_sidecar: patch.use_http_proxy_sidecar.unwrap_or(false),
+        allow_non_structural: patch.allow_non_structural.unwrap_or(false),
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
     };
 
@@ -654,8 +657,8 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
-        use_http_proxy_sidecar: false,
-        allow_non_structural: args.allow_non_structural,
+        use_http_proxy_sidecar: None,
+        allow_non_structural: args.allow_non_structural.then_some(true),
         mask_home_paths: None,
         ca_trust_mode: None,
     }
@@ -1127,8 +1130,9 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        CapabilitySourcePatch, FileConfig, SandboxIdentityMode, SeccompRuntimeMode,
-        SidecarEndpoint, capability_from_patch, rebase_file_paths, resolve_profile,
+        CapabilitySourcePatch, FileConfig, Merge, ProfilePatch, SandboxIdentityMode,
+        SeccompRuntimeMode, SidecarEndpoint, capability_from_patch, cli_profile_patch,
+        rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -1546,6 +1550,73 @@ approval_policy = "never"
 
         let resolved = resolve_profile(&run_args).unwrap();
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
+    }
+
+    #[test]
+    fn profile_boolean_merge_distinguishes_absent_false_and_true() {
+        for lower in [None, Some(false), Some(true)] {
+            for higher in [None, Some(false), Some(true)] {
+                let merged = ProfilePatch {
+                    use_http_proxy_sidecar: lower,
+                    allow_non_structural: lower,
+                    ..ProfilePatch::default()
+                }
+                .merge(ProfilePatch {
+                    use_http_proxy_sidecar: higher,
+                    allow_non_structural: higher,
+                    ..ProfilePatch::default()
+                });
+
+                assert_eq!(merged.use_http_proxy_sidecar, higher.or(lower));
+                assert_eq!(merged.allow_non_structural, higher.or(lower));
+            }
+        }
+    }
+
+    #[test]
+    fn profile_booleans_follow_file_layers_and_cli_precedence() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.defaults]
+            use_http_proxy_sidecar = false
+            allow_non_structural = true
+
+            [run.profiles.generic]
+            allow_non_structural = false
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        run_args.allow_non_structural = false;
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        assert!(!resolved.use_http_proxy_sidecar);
+        assert!(!resolved.allow_non_structural);
+
+        run_args.allow_non_structural = true;
+        let cli_resolved = resolve_profile(&run_args).unwrap();
+        assert!(cli_resolved.allow_non_structural);
+        assert!(!cli_resolved.use_http_proxy_sidecar);
+    }
+
+    #[test]
+    fn unsupplied_enable_only_cli_boolean_is_absent() {
+        let mut run_args = args("generic");
+        run_args.allow_non_structural = false;
+        let absent = cli_profile_patch(&run_args);
+        assert_eq!(absent.allow_non_structural, None);
+        assert_eq!(absent.use_http_proxy_sidecar, None);
+
+        run_args.allow_non_structural = true;
+        assert_eq!(
+            cli_profile_patch(&run_args).allow_non_structural,
+            Some(true)
+        );
     }
 
     #[test]
