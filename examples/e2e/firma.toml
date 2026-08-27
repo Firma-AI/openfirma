@@ -58,7 +58,7 @@ clock_skew_tolerance = "0s"
 # session_state_path = "/var/lib/firma/session-state.jsonl"
 
 [sidecar.connector]
-default_timeout_ms = 120000
+default_timeout = "2m"
 
 # Local agent configuration (lm-studio)
 [[sidecar.connector.hosts]]

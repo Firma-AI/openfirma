@@ -1,6 +1,6 @@
 //! Build the connector [`ConnectorRegistry`] from `[connector]` config.
 //!
-//! The registry default is built from `default_timeout_ms` (30s uses
+//! The registry default is built from `default_timeout` (30s uses
 //! the [`GenericHttpConnector::default_for_unconfigured`] shortcut);
 //! every host connector entry becomes a
 //! [`GenericHttpConnector`] registered under its host string.
@@ -23,11 +23,11 @@ use crate::connector::provider::{GenericHttpConnector, HttpConnectorConfig, Rate
 pub fn build_connector_registry(
     cfg: &config::ConnectorConfig,
 ) -> anyhow::Result<Arc<ConnectorRegistry>> {
-    let default = if cfg.default_timeout_ms == 30_000 {
+    let default = if cfg.default_timeout == std::time::Duration::from_secs(30) {
         GenericHttpConnector::default_for_unconfigured()
     } else {
         GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: std::time::Duration::from_millis(cfg.default_timeout_ms),
+            timeout: cfg.default_timeout,
             rate_limit: None,
         })
     }

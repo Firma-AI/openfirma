@@ -180,7 +180,7 @@ public_key_path = "/etc/firma/firma-authority.pub"
 ca_cert_path    = "/etc/firma/authority-ca.crt"
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "api.openai.com"

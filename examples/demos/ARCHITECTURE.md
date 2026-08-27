@@ -165,7 +165,7 @@ default_protected = true # demos default to fail-closed
 clock_skew_tolerance = "0s"
 
 [sidecar.connector]
-default_timeout_ms = 10000
+default_timeout = "10s"
 
 [sidecar.audit]
 sink = "file"

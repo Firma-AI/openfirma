@@ -215,7 +215,7 @@ session_state_capacity = 8192
 session_state_backend = "lru"
 
 [connector]
-default_timeout_ms = 15000
+default_timeout = "15s"
 
 [[connector.hosts]]
 host = "api.openai.com"
@@ -603,10 +603,10 @@ advertised deadline expires. Cedar evaluation has no user-configurable timeout.
 
 Outbound dispatch defaults and per-host overrides.
 
-| Field                | Type | Default | Description                               |
-| -------------------- | ---- | ------- | ----------------------------------------- |
-| `default_timeout_ms` | u64  | `30000` | Fallback dispatch timeout in milliseconds |
-| `hosts`              | list | empty   | Per-host overrides, see table below       |
+| Field             | Type     | Default | Description                         |
+| ----------------- | -------- | ------- | ----------------------------------- |
+| `default_timeout` | duration | `"30s"` | Fallback dispatch timeout           |
+| `hosts`           | list     | empty   | Per-host overrides, see table below |
 
 Each `[[connector.hosts]]` entry is required to state every field
 explicitly — inheriting silent global defaults is not allowed.
@@ -620,7 +620,7 @@ explicitly — inheriting silent global defaults is not allowed.
 
 Validation:
 
-- `default_timeout_ms` must be greater than `0`.
+- `default_timeout` must be greater than zero.
 - Each host entry must set a non-empty `host`, and each of `rps`,
   `burst`, and `timeout_ms` must be greater than `0`.
 - Duplicate `host` entries are rejected.

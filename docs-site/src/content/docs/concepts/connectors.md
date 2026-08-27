@@ -36,7 +36,7 @@ Default timeout and per-host overrides live under `[sidecar.connector]` in `firm
 
 ```toml
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "wttr.in"
@@ -64,7 +64,7 @@ timeout_ms = 30000
 | `burst`      | Token-bucket burst size; absorbs short spikes above `rps`.                                       |
 | `timeout_ms` | Per-request timeout. Beyond this, the connector returns `ConnectorError::Timeout` and denies.    |
 
-Hosts not listed use `default_timeout_ms` and no rate limit. Set sensible defaults for any host that's part of your normal agent workload — both to protect the upstream and to bound the blast radius of a runaway agent loop.
+Hosts not listed use `default_timeout` and no rate limit. Set sensible defaults for any host that's part of your normal agent workload — both to protect the upstream and to bound the blast radius of a runaway agent loop.
 
 ## Credential injection
 

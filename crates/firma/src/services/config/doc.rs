@@ -269,7 +269,8 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
     {
         let conn = ensure_table(sidecar, "connector")?;
-        set_int_if_absent(conn, "default_timeout_ms", 120_000);
+        migrate_integer_duration(conn, "default_timeout_ms", "default_timeout", "ms");
+        set_str_if_absent(conn, "default_timeout", "2m");
     }
 
     {
@@ -1101,6 +1102,20 @@ enabled = false
             .collect();
         // Seeded fail-closed: defaults to the intercepted hosts.
         assert_eq!(strict, vec!["api.github.com", "gmail.googleapis.com"]);
+    }
+
+    #[test]
+    fn migrates_connector_default_timeout() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.connector]\ndefault_timeout_ms = 30000 # Keep timeout note.\n";
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        assert!(!out.contains("default_timeout_ms"));
+        assert!(out.contains("default_timeout = \"30000ms\" # Keep timeout note."));
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["sidecar"]["connector"]["default_timeout"].as_str(),
+            Some("30000ms")
+        );
     }
 
     #[test]

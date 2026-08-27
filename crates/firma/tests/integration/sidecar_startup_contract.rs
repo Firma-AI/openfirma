@@ -101,7 +101,7 @@ rules_path = '{mapping}'
 default_protected = true
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [sidecar.audit]
 sink = "stdout"

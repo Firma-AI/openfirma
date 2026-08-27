@@ -26,7 +26,7 @@ default_protected = true
 clock_skew_tolerance = "0s"
 
 [sidecar.connector]
-default_timeout_ms = 120000
+default_timeout = "2m"
 
 [sidecar.audit]
 sink = "file"
