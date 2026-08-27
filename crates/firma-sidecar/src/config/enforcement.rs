@@ -137,19 +137,19 @@ impl From<schema::CapabilityValidationConfig> for CapabilityValidationConfig {
 #[derive(Debug, Clone)]
 pub struct ConstraintEnforcementConfig {
     /// Maximum number of active sessions tracked in the session-state cache.
-    pub session_state_capacity: usize,
+    pub capacity: usize,
     /// Session-state storage backend.
-    pub session_state_backend: SessionStateBackend,
+    pub backend: SessionStateBackend,
     /// Optional path for the persistent session-state JSONL file.
-    pub session_state_path: Option<String>,
+    pub path: Option<String>,
 }
 
 impl Default for ConstraintEnforcementConfig {
     fn default() -> Self {
         Self {
-            session_state_capacity: default_session_state_capacity(),
-            session_state_backend: SessionStateBackend::default(),
-            session_state_path: None,
+            capacity: default_session_state_capacity(),
+            backend: SessionStateBackend::default(),
+            path: None,
         }
     }
 }
@@ -157,9 +157,9 @@ impl Default for ConstraintEnforcementConfig {
 impl From<schema::ConstraintEnforcementConfig> for ConstraintEnforcementConfig {
     fn from(s: schema::ConstraintEnforcementConfig) -> Self {
         Self {
-            session_state_capacity: s.session_state_capacity,
-            session_state_backend: s.session_state_backend,
-            session_state_path: s.session_state_path,
+            capacity: s.session_state_capacity,
+            backend: s.session_state_backend,
+            path: s.session_state_path,
         }
     }
 }
@@ -566,9 +566,9 @@ mod tests {
     #[test]
     fn session_state_defaults_to_lru_and_8192() {
         let ce = ConstraintEnforcementConfig::default();
-        assert_eq!(ce.session_state_capacity, 8192);
-        assert_eq!(ce.session_state_backend, SessionStateBackend::Lru);
-        assert!(ce.session_state_path.is_none());
+        assert_eq!(ce.capacity, 8192);
+        assert_eq!(ce.backend, SessionStateBackend::Lru);
+        assert!(ce.path.is_none());
     }
 
     #[test]
@@ -582,12 +582,9 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
         let cfg = ConstraintEnforcementConfig::from(schema);
-        assert_eq!(cfg.session_state_capacity, 4096);
-        assert_eq!(cfg.session_state_backend, SessionStateBackend::Persistent);
-        assert_eq!(
-            cfg.session_state_path.as_deref(),
-            Some("/var/lib/firma/sessions.jsonl")
-        );
+        assert_eq!(cfg.capacity, 4096);
+        assert_eq!(cfg.backend, SessionStateBackend::Persistent);
+        assert_eq!(cfg.path.as_deref(), Some("/var/lib/firma/sessions.jsonl"));
     }
 
     #[test]
