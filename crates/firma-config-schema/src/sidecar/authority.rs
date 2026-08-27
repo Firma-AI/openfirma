@@ -16,6 +16,7 @@ const DEFAULT_CONNECT_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(10));
 const DEFAULT_MIN_BACKOFF: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_millis(250));
+const DEFAULT_MAX_BACKOFF: NonZeroDuration = NonZeroDuration::from_static(Duration::from_secs(30));
 
 /// Sidecar pre-shared-key credentials presented to Authority RPCs.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -55,11 +56,8 @@ pub struct AuthorityConfig {
     #[serde(default = "default_min_backoff")]
     pub reconnect_min_backoff: NonZeroDuration,
     /// Maximum reconnect backoff.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_max_backoff"
-    )]
-    pub reconnect_max_backoff: Duration,
+    #[serde(default = "default_max_backoff")]
+    pub reconnect_max_backoff: NonZeroDuration,
     /// Grace period before the revocation stream is considered ready.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
@@ -121,8 +119,8 @@ const fn default_min_backoff() -> NonZeroDuration {
     DEFAULT_MIN_BACKOFF
 }
 
-const fn default_max_backoff() -> Duration {
-    Duration::from_secs(30)
+const fn default_max_backoff() -> NonZeroDuration {
+    DEFAULT_MAX_BACKOFF
 }
 
 const fn default_readiness_grace() -> Duration {
