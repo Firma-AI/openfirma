@@ -174,7 +174,7 @@ signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 
 [sidecar.authority]
 connect_timeout = "10s"
-reconnect_min_backoff_ms = 250
+reconnect_min_backoff = "250ms"
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false

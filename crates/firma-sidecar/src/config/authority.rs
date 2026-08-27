@@ -124,8 +124,8 @@ pub struct AuthorityConfig {
     pub connect_addr: Option<SocketAddr>,
     /// Connection timeout.
     pub(crate) connect_timeout: Duration,
-    /// Minimum reconnect backoff in milliseconds.
-    pub(crate) reconnect_min_backoff_ms: u64,
+    /// Minimum reconnect backoff.
+    pub(crate) reconnect_min_backoff: Duration,
     /// Maximum reconnect backoff in seconds.
     pub(crate) reconnect_max_backoff_secs: u64,
     /// Grace period before the revocation stream is considered ready.
@@ -160,14 +160,14 @@ pub enum AuthorityConfigError {
     /// `connect_timeout` was zero.
     #[error("authority.connect_timeout must be > 0")]
     ZeroConnectTimeout,
-    /// `reconnect_min_backoff_ms` was zero.
-    #[error("authority.reconnect_min_backoff_ms must be > 0")]
+    /// `reconnect_min_backoff` was zero.
+    #[error("authority.reconnect_min_backoff must be > 0")]
     ZeroMinBackoff,
     /// `reconnect_max_backoff_secs` was zero.
     #[error("authority.reconnect_max_backoff_secs must be > 0")]
     ZeroMaxBackoff,
     /// The maximum reconnect backoff was below the minimum.
-    #[error("authority.reconnect_max_backoff_secs must be >= reconnect_min_backoff_ms")]
+    #[error("authority.reconnect_max_backoff_secs must be >= reconnect_min_backoff")]
     MaxBackoffLessThanMin,
     /// `public_key_path` was set but empty.
     #[error("authority.public_key_path must not be empty when set")]
@@ -225,13 +225,13 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
         if s.connect_timeout.is_zero() {
             return Err(AuthorityConfigError::ZeroConnectTimeout);
         }
-        if s.reconnect_min_backoff_ms == 0 {
+        if s.reconnect_min_backoff.is_zero() {
             return Err(AuthorityConfigError::ZeroMinBackoff);
         }
         if s.reconnect_max_backoff_secs == 0 {
             return Err(AuthorityConfigError::ZeroMaxBackoff);
         }
-        if s.reconnect_max_backoff_secs.saturating_mul(1000) < s.reconnect_min_backoff_ms {
+        if Duration::from_secs(s.reconnect_max_backoff_secs) < s.reconnect_min_backoff {
             return Err(AuthorityConfigError::MaxBackoffLessThanMin);
         }
         let public_key_path =
@@ -258,7 +258,7 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             url: s.url,
             connect_addr: s.connect_addr,
             connect_timeout: s.connect_timeout,
-            reconnect_min_backoff_ms: s.reconnect_min_backoff_ms,
+            reconnect_min_backoff: s.reconnect_min_backoff,
             reconnect_max_backoff_secs: s.reconnect_max_backoff_secs,
             revocation_readiness_grace_ms: s.revocation_readiness_grace_ms,
             revocation_fail_closed_on_disconnect: s.revocation_fail_closed_on_disconnect,
@@ -279,7 +279,7 @@ impl Default for AuthorityConfig {
             url: None,
             connect_addr: None,
             connect_timeout: Duration::from_secs(10),
-            reconnect_min_backoff_ms: default_min_backoff_ms(),
+            reconnect_min_backoff: Duration::from_millis(250),
             reconnect_max_backoff_secs: default_max_backoff_secs(),
             revocation_readiness_grace_ms: default_readiness_grace_ms(),
             revocation_fail_closed_on_disconnect: false,
@@ -291,10 +291,6 @@ impl Default for AuthorityConfig {
             credentials: None,
         }
     }
-}
-
-const fn default_min_backoff_ms() -> u64 {
-    250
 }
 
 const fn default_max_backoff_secs() -> u64 {

@@ -218,7 +218,7 @@ A few things worth highlighting:
 
 - **`default_protected = true`** — anything not in mapping rules denies. Production posture.
 - **`[sidecar.authority].url` uses `https://` + `[sidecar.authority].ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
-- **`reconnect_min_backoff_ms` / `reconnect_max_backoff_secs`** — Sidecars retry Authority streams with bounded exponential backoff. The defaults are `250` ms and `30` s.
+- **`reconnect_min_backoff` / `reconnect_max_backoff_secs`** — Sidecars retry Authority streams with bounded exponential backoff. The defaults are `"250ms"` and `30` s.
 - **`grpc` audit sink** — events go to a centralized collector, not to a local file. Multiple Sidecars feed one collector.
 - **Vault Agent for credentials** — no API keys in the app. Vault Agent renders short-lived files and the Sidecar reads them per call.
 - **`strict_hosts` on the vendor** — if MITM fails (e.g. cert mismatch), the call denies rather than falling back to weaker CONNECT-only policy.
@@ -250,7 +250,7 @@ needs different timing:
 url                           = "https://firma-authority.internal:50051"
 public_key_path               = "/etc/firma/firma-authority.pub"
 ca_cert_path                  = "/etc/firma/authority-ca.crt"
-reconnect_min_backoff_ms      = 250
+reconnect_min_backoff         = "250ms"
 reconnect_max_backoff_secs    = 30
 revocation_readiness_grace_ms = 500
 ```

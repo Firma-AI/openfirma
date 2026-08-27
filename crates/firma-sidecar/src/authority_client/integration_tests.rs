@@ -474,7 +474,7 @@ fn test_config() -> AuthorityConfig {
         url: None,
         connect_addr: None,
         connect_timeout: Duration::from_secs(2),
-        reconnect_min_backoff_ms: 50,
+        reconnect_min_backoff: Duration::from_millis(50),
         reconnect_max_backoff_secs: 1,
         revocation_readiness_grace_ms: 100,
         revocation_fail_closed_on_disconnect: false,
@@ -651,7 +651,7 @@ async fn revocation_disconnect_loses_readiness_when_fail_closed() -> anyhow::Res
     let mut config = test_config();
     config.revocation_fail_closed_on_disconnect = true;
     config.revocation_readiness_grace_ms = 10;
-    config.reconnect_min_backoff_ms = 500;
+    config.reconnect_min_backoff = Duration::from_millis(500);
     let harness = spawn_sidecar(&server.url, config, None, None, None)?;
 
     let became_ready = wait_for(Duration::from_secs(2), || {

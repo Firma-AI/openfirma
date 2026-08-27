@@ -46,9 +46,12 @@ pub struct AuthorityConfig {
         default = "default_connect_timeout"
     )]
     pub connect_timeout: Duration,
-    /// Minimum reconnect backoff in milliseconds.
-    #[serde(default = "default_min_backoff_ms")]
-    pub reconnect_min_backoff_ms: u64,
+    /// Minimum reconnect backoff.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_min_backoff"
+    )]
+    pub reconnect_min_backoff: Duration,
     /// Maximum reconnect backoff in seconds.
     #[serde(default = "default_max_backoff_secs")]
     pub reconnect_max_backoff_secs: u64,
@@ -88,7 +91,7 @@ impl Default for AuthorityConfig {
             url: None,
             connect_addr: None,
             connect_timeout: default_connect_timeout(),
-            reconnect_min_backoff_ms: default_min_backoff_ms(),
+            reconnect_min_backoff: default_min_backoff(),
             reconnect_max_backoff_secs: default_max_backoff_secs(),
             revocation_readiness_grace_ms: default_readiness_grace_ms(),
             revocation_fail_closed_on_disconnect: false,
@@ -106,8 +109,8 @@ const fn default_connect_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
-const fn default_min_backoff_ms() -> u64 {
-    250
+const fn default_min_backoff() -> Duration {
+    Duration::from_millis(250)
 }
 
 const fn default_max_backoff_secs() -> u64 {
