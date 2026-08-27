@@ -8,8 +8,9 @@ use firma_config_schema::authority as schema;
 use fs_err as fs;
 
 #[test]
-fn loads_authority_config_from_resolved_section() -> anyhow::Result<()> {
-    let tmp = tempfile::tempdir()?;
+fn relative_flag_config_rebases_authority_resources_from_an_absolute_dir() -> anyhow::Result<()> {
+    let current_dir = std::env::current_dir()?;
+    let tmp = tempfile::tempdir_in(&current_dir)?;
     let config_path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(
         &config_path,
@@ -19,10 +20,13 @@ fn loads_authority_config_from_resolved_section() -> anyhow::Result<()> {
         "#,
     )?;
 
-    let resolved = resolved_config(&config_path)?;
+    let relative_config_path = config_path.strip_prefix(&current_dir)?;
+    let resolved = resolved_config(relative_config_path)?;
     let config = AuthorityConfig::from_resolved_section(&resolved)?
         .ok_or_else(|| anyhow!("authority section should be present"))?;
 
+    assert_eq!(resolved.config_file(), config_path);
+    assert!(resolved.config_dir().is_absolute());
     assert_eq!(
         config.policy_dir(),
         tmp.path().join("custom-policies").as_path()

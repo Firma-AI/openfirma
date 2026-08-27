@@ -20,10 +20,13 @@ fn resolves_explicit_override() {
 
 #[test]
 fn explicit_override_errors_if_missing() {
-    let cfg_path = std::path::Path::new("/definitely/not/here/firma.toml");
+    let cfg_path = std::path::Path::new("definitely-not-here-firma.toml");
     let error = resolve_stack_config(Some(cfg_path)).expect_err("missing override must fail");
     let StackError::ConfigResolution { source } = error else {
         panic!("expected typed config resolution error, got {error:?}");
     };
-    assert_eq!(source.path, cfg_path);
+    assert_eq!(
+        source.path,
+        std::path::absolute(cfg_path).expect("absolutize missing override")
+    );
 }
