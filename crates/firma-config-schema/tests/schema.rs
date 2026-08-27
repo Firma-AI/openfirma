@@ -222,6 +222,23 @@ fn sidecar_authority_connect_timeout_rejects_zero() {
 }
 
 #[test]
+fn sidecar_authority_reconnect_min_backoff_rejects_zero() {
+    let error =
+        toml::from_str::<sidecar::SidecarConfig>("[authority]\nreconnect_min_backoff = \"0ms\"\n")
+            .expect_err(
+                "zero Authority minimum reconnect backoff must fail during deserialization",
+            );
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"

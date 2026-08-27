@@ -157,9 +157,6 @@ pub enum AuthorityConfigError {
     /// `agent_id` was not a valid `TypeID`.
     #[error("authority.agent_id: {0}")]
     AgentId(#[from] AgentIdParseError),
-    /// `reconnect_min_backoff` was zero.
-    #[error("authority.reconnect_min_backoff must be > 0")]
-    ZeroMinBackoff,
     /// `reconnect_max_backoff` was zero.
     #[error("authority.reconnect_max_backoff must be > 0")]
     ZeroMaxBackoff,
@@ -219,13 +216,11 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
 
     fn try_from(s: SchemaAuthorityConfig) -> Result<Self, Self::Error> {
         let agent_id = s.agent_id.map(|id| id.parse::<AgentId>()).transpose()?;
-        if s.reconnect_min_backoff.is_zero() {
-            return Err(AuthorityConfigError::ZeroMinBackoff);
-        }
+        let reconnect_min_backoff = s.reconnect_min_backoff.duration();
         if s.reconnect_max_backoff.is_zero() {
             return Err(AuthorityConfigError::ZeroMaxBackoff);
         }
-        if s.reconnect_max_backoff < s.reconnect_min_backoff {
+        if s.reconnect_max_backoff < reconnect_min_backoff {
             return Err(AuthorityConfigError::MaxBackoffLessThanMin);
         }
         let public_key_path =
@@ -252,7 +247,7 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             url: s.url,
             connect_addr: s.connect_addr,
             connect_timeout: s.connect_timeout.duration(),
-            reconnect_min_backoff: s.reconnect_min_backoff,
+            reconnect_min_backoff,
             reconnect_max_backoff: s.reconnect_max_backoff,
             revocation_readiness_grace: s.revocation_readiness_grace,
             revocation_fail_closed_on_disconnect: s.revocation_fail_closed_on_disconnect,

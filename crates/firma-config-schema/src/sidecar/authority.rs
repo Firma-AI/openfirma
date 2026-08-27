@@ -14,6 +14,8 @@ use crate::utils::NonZeroDuration;
 
 const DEFAULT_CONNECT_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(10));
+const DEFAULT_MIN_BACKOFF: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_millis(250));
 
 /// Sidecar pre-shared-key credentials presented to Authority RPCs.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -50,11 +52,8 @@ pub struct AuthorityConfig {
     #[serde(default = "default_connect_timeout")]
     pub connect_timeout: NonZeroDuration,
     /// Minimum reconnect backoff.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_min_backoff"
-    )]
-    pub reconnect_min_backoff: Duration,
+    #[serde(default = "default_min_backoff")]
+    pub reconnect_min_backoff: NonZeroDuration,
     /// Maximum reconnect backoff.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
@@ -118,8 +117,8 @@ const fn default_connect_timeout() -> NonZeroDuration {
     DEFAULT_CONNECT_TIMEOUT
 }
 
-const fn default_min_backoff() -> Duration {
-    Duration::from_millis(250)
+const fn default_min_backoff() -> NonZeroDuration {
+    DEFAULT_MIN_BACKOFF
 }
 
 const fn default_max_backoff() -> Duration {
