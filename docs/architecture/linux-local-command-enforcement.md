@@ -142,7 +142,7 @@ Optional governance controls:
 
 1. `hitl_mode = "sync_wait" | "async_token"` (default: `sync_wait`).
 2. `enforce_known_executables = true|false` (default: `false`).
-3. `allowed_executables = ["/usr/bin/bash", "/bin/sh", "/usr/bin/python3"]` (required when enforcement is enabled; entries must be absolute canonical paths).
+3. `allowed_executables = ["/usr/bin/bash", "/bin/sh", "/usr/bin/python3"]` (required when enforcement is enabled; entries must be absolute paths to existing files and are canonicalized when loaded).
 4. If `endpoint` is omitted and sidecar endpoint is unix socket, runtime derives `*-tools.sock` next to sidecar socket.
 5. On Unix hosts, `sidecar_endpoint` must also use `unix://` when `sidecar_local_exec` is enabled.
 

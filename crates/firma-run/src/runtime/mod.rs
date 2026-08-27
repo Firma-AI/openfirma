@@ -536,7 +536,10 @@ fn enforce_known_executable_policy(
         return Ok(());
     }
 
-    if mediator.allowed_executables.contains(canonical) {
+    if mediator
+        .allowed_executables
+        .contains(std::path::Path::new(canonical))
+    {
         return Ok(());
     }
 

@@ -316,7 +316,7 @@ pub struct CommandMediatorConfig {
     #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
     pub(crate) hitl_max_wait: Duration,
     pub(crate) enforce_known_executables: bool,
-    pub(crate) allowed_executables: BTreeSet<String>,
+    pub(crate) allowed_executables: BTreeSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -761,13 +761,7 @@ fn sidecar_local_exec_from_patch(
     } else {
         derive_sidecar_local_exec_endpoint(sidecar_endpoint)?
     };
-    let allowed_executables = patch
-        .allowed_executables
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
+    let allowed_executables = canonicalize_allowed_executables(&patch.allowed_executables)?;
     Ok(CommandMediatorConfig {
         endpoint,
         timeout: patch.timeout.unwrap_or(Duration::from_millis(500)),
@@ -776,6 +770,33 @@ fn sidecar_local_exec_from_patch(
         enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
         allowed_executables,
     })
+}
+
+fn canonicalize_allowed_executables(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, RunError> {
+    paths
+        .iter()
+        .map(|path| {
+            if !path.is_absolute() {
+                return Err(RunError::ConfigValidation(format!(
+                    "sidecar_local_exec.allowed_executables entries must be absolute paths: {}",
+                    path.display()
+                )));
+            }
+            let canonical = std::fs::canonicalize(path).map_err(|error| {
+                RunError::ConfigValidation(format!(
+                    "sidecar_local_exec.allowed_executables entry could not be canonicalized ({}): {error}",
+                    path.display()
+                ))
+            })?;
+            if !canonical.is_file() {
+                return Err(RunError::ConfigValidation(format!(
+                    "sidecar_local_exec.allowed_executables entries must point to existing regular files: {}",
+                    path.display()
+                )));
+            }
+            Ok(canonical)
+        })
+        .collect()
 }
 
 fn resolve_sidecar_local_exec_config(
@@ -1055,6 +1076,7 @@ pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -1769,6 +1791,12 @@ deny_actions = ["filesystem.delete"]
 "#,
         )
         .unwrap();
+        let allowed_codex = tmpdir.path().join("codex");
+        let allowed_claude = tmpdir.path().join("claude");
+        let allowed_bash = tmpdir.path().join("bash");
+        for path in [&allowed_codex, &allowed_claude, &allowed_bash] {
+            fs::write(path, "test executable").unwrap();
+        }
         let artifact_dir = tmpdir.path().join("artifacts");
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let endpoint = if cfg!(target_family = "unix") {
@@ -1792,10 +1820,13 @@ endpoint = "{endpoint}"
 timeout = "800ms"
 hitl_mode = "async_token"
 enforce_known_executables = true
-allowed_executables = ["codex", "claude", "bash"]
+allowed_executables = ['{}', '{}', '{}']
 "#,
             policy_path.display(),
-            artifact_dir.display()
+            artifact_dir.display(),
+            allowed_codex.display(),
+            allowed_claude.display(),
+            allowed_bash.display()
         );
         fs::write(&config_path, toml).unwrap();
         let mut run_args = args("generic");
@@ -1803,11 +1834,81 @@ allowed_executables = ["codex", "claude", "bash"]
         let resolved = resolve_profile(&run_args).unwrap();
         let mediator = resolved.sidecar_local_exec.unwrap();
         assert!(mediator.enforce_known_executables);
-        assert!(mediator.allowed_executables.contains("codex"));
+        assert!(
+            mediator
+                .allowed_executables
+                .contains(&fs::canonicalize(allowed_codex).unwrap())
+        );
         assert_eq!(
             mediator.hitl_mode,
             super::CommandMediatorHitlMode::AsyncToken
         );
+    }
+
+    #[test]
+    fn allowed_executable_paths_are_canonicalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        let nested = bin_dir.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let executable = bin_dir.join("agent");
+        fs::write(&executable, "test executable").unwrap();
+        let alias = nested.join("..").join("agent");
+
+        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
+
+        assert_eq!(
+            allowed,
+            BTreeSet::from([fs::canonicalize(executable).unwrap()])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn allowed_executable_symlinks_are_canonicalized() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("agent");
+        let alias = dir.path().join("agent-alias");
+        fs::write(&executable, "test executable").unwrap();
+        symlink(&executable, &alias).unwrap();
+
+        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
+
+        assert_eq!(
+            allowed,
+            BTreeSet::from([fs::canonicalize(executable).unwrap()])
+        );
+    }
+
+    #[test]
+    fn allowed_executable_must_be_absolute_and_resolvable() {
+        let relative = super::canonicalize_allowed_executables(&[PathBuf::from("bin/agent")])
+            .expect_err("relative path must fail");
+        assert!(relative.to_string().contains("must be absolute paths"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("agent");
+        fs::write(&executable, "test executable").unwrap();
+        let empty = super::canonicalize_allowed_executables(&[PathBuf::new(), executable])
+            .expect_err("empty path must fail even when another entry is valid");
+        assert!(empty.to_string().contains("must be absolute paths"));
+
+        let missing = dir.path().join("missing-agent");
+        let unresolved = super::canonicalize_allowed_executables(&[missing])
+            .expect_err("missing path must fail");
+        assert!(
+            unresolved
+                .to_string()
+                .contains("could not be canonicalized")
+        );
+
+        let directory = dir.path().join("not-a-file");
+        fs::create_dir(&directory).unwrap();
+        let not_file =
+            super::canonicalize_allowed_executables(&[directory]).expect_err("directory must fail");
+        assert!(not_file.to_string().contains("existing regular files"));
     }
 
     #[test]

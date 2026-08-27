@@ -192,7 +192,7 @@ pub struct CommandMediatorPatch {
     pub hitl_max_wait: Option<Duration>,
     pub enforce_known_executables: Option<bool>,
     #[serde(default)]
-    pub allowed_executables: Vec<String>,
+    pub allowed_executables: Vec<PathBuf>,
 }
 
 /// Source for capability material patch.
