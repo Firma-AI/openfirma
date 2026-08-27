@@ -5,6 +5,7 @@
 //! `[constraint_enforcement]`). `firma-sidecar` validates them and re-bases the
 //! mapping paths.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -33,10 +34,10 @@ pub struct EnforcementConfig {
 pub struct MappingConfig {
     /// Path to the primary mapping rules TOML file.
     #[serde(default = "default_mapping_path")]
-    pub rules_path: String,
+    pub rules_path: PathBuf,
     /// Additional mapping rule files merged on top of `rules_path`.
     #[serde(default)]
-    pub rules_paths: Vec<String>,
+    pub rules_paths: Vec<PathBuf>,
     /// Whether unlisted hosts are protected by default.
     #[serde(default = "default_true")]
     pub default_protected: bool,
@@ -105,8 +106,8 @@ pub enum SessionStateBackend {
 /// Sentinel: default `mapping.rules_path`.
 const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
 
-fn default_mapping_path() -> String {
-    DEFAULT_MAPPING_PATH.to_string()
+fn default_mapping_path() -> PathBuf {
+    PathBuf::from(DEFAULT_MAPPING_PATH)
 }
 
 const fn default_true() -> bool {

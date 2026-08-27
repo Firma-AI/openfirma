@@ -1635,7 +1635,7 @@ signing_key_path = "/etc/firma/audit.pem"
         assert_eq!(openai.prefix.as_deref(), Some("Bearer "));
         assert_eq!(
             config.enforcement.mapping.rules_path,
-            "/etc/firma/rules.toml"
+            PathBuf::from("/etc/firma/rules.toml")
         );
         assert!(!config.enforcement.mapping.default_protected);
         assert_eq!(
