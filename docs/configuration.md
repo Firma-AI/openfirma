@@ -155,37 +155,49 @@ _after_ re-basing, so an env-supplied path is preserved exactly as written
 Every config-declared resource path re-bases, except the state-managed paths
 listed further below. The re-basing fields are:
 
-| Field                                               | Relative value resolves under |
-| --------------------------------------------------- | ----------------------------- |
-| `sidecar.policy.dir`                                | `<config_dir>/<value>`        |
-| `sidecar.mapping.rules_path`                        | `<config_dir>/<value>`        |
-| `sidecar.mapping.rules_paths[]`                     | `<config_dir>/<value>`        |
-| `sidecar.authority.public_key_path`                 | `<config_dir>/<value>`        |
-| `sidecar.authority.ca_cert_path`                    | `<config_dir>/<value>`        |
-| `sidecar.authority.tls_client_cert_path`            | `<config_dir>/<value>`        |
-| `sidecar.authority.tls_client_key_path`             | `<config_dir>/<value>`        |
-| `sidecar.authority.credentials.pre_shared_key_path` | `<config_dir>/<value>`        |
-| `sidecar.credentials.<name>.secret_path`            | `<config_dir>/<value>`        |
-| `sidecar.interceptor.https_mitm.ca_cert_path`       | `<config_dir>/<value>`        |
-| `sidecar.interceptor.https_mitm.ca_key_path`        | `<config_dir>/<value>`        |
-| `sidecar.capability_seed.paths[]`                   | `<config_dir>/<value>`        |
-| `sidecar.audit.file_path`                           | `<config_dir>/<value>`        |
-| `sidecar.audit.signing_key_path`                    | `<config_dir>/<value>`        |
-| authority `policy_dir`                              | `<config_dir>/<value>`        |
-| authority `issuance_policy_dir`                     | `<config_dir>/<value>`        |
-| authority `schema_path`                             | `<config_dir>/<value>`        |
-| authority `key_file`                                | `<config_dir>/<value>`        |
-| authority `tls_cert_path`                           | `<config_dir>/<value>`        |
-| authority `tls_key_path`                            | `<config_dir>/<value>`        |
-| authority `mtls_client_ca_cert_path`                | `<config_dir>/<value>`        |
-| authority `mtls_client_ca_key_path`                 | `<config_dir>/<value>`        |
-| authority `authorized_clients_path`                 | `<config_dir>/<value>`        |
+| Field                                                    | Relative value resolves under |
+| -------------------------------------------------------- | ----------------------------- |
+| `sidecar.policy.dir`                                     | `<config_dir>/<value>`        |
+| `sidecar.mapping.rules_path`                             | `<config_dir>/<value>`        |
+| `sidecar.mapping.rules_paths[]`                          | `<config_dir>/<value>`        |
+| `sidecar.authority.public_key_path`                      | `<config_dir>/<value>`        |
+| `sidecar.authority.ca_cert_path`                         | `<config_dir>/<value>`        |
+| `sidecar.authority.tls_client_cert_path`                 | `<config_dir>/<value>`        |
+| `sidecar.authority.tls_client_key_path`                  | `<config_dir>/<value>`        |
+| `sidecar.authority.credentials.pre_shared_key_path`      | `<config_dir>/<value>`        |
+| `sidecar.credentials.<name>.secret_path`                 | `<config_dir>/<value>`        |
+| `sidecar.interceptor.https_mitm.ca_cert_path`            | `<config_dir>/<value>`        |
+| `sidecar.interceptor.https_mitm.ca_key_path`             | `<config_dir>/<value>`        |
+| `sidecar.capability_seed.paths[]`                        | `<config_dir>/<value>`        |
+| `sidecar.audit.file_path`                                | `<config_dir>/<value>`        |
+| `sidecar.audit.signing_key_path`                         | `<config_dir>/<value>`        |
+| authority `policy_dir`                                   | `<config_dir>/<value>`        |
+| authority `issuance_policy_dir`                          | `<config_dir>/<value>`        |
+| authority `schema_path`                                  | `<config_dir>/<value>`        |
+| authority `key_file`                                     | `<config_dir>/<value>`        |
+| authority `tls_cert_path`                                | `<config_dir>/<value>`        |
+| authority `tls_key_path`                                 | `<config_dir>/<value>`        |
+| authority `mtls_client_ca_cert_path`                     | `<config_dir>/<value>`        |
+| authority `mtls_client_ca_key_path`                      | `<config_dir>/<value>`        |
+| authority `authorized_clients_path`                      | `<config_dir>/<value>`        |
+| `run.defaults.mounts[].source`                           | `<config_dir>/<value>`        |
+| `run.profiles.<id>.mounts[].source`                      | `<config_dir>/<value>`        |
+| Run defaults/profile `seccomp_policy.source_policy_path` | `<config_dir>/<value>`        |
+| Run defaults/profile `seccomp_policy.artifact_dir`       | `<config_dir>/<value>`        |
+| Run defaults/profile capability `source.path`            | `<config_dir>/<value>`        |
+| Run defaults/profile capability legacy `path`            | `<config_dir>/<value>`        |
+| Run defaults/profile capability `public_key_path`        | `<config_dir>/<value>`        |
 
 State-managed paths and endpoints are explicitly excluded from re-basing and
 retain their existing state/runtime semantics. Sidecar exclusions include
 `sidecar.ca.dir`, interceptor and local-exec sockets, audit WAL paths,
 constraint-enforcement session paths, revocation paths, runtime paths, and
 network endpoints.
+
+Run re-bases these file-declared resources in defaults and every profile before
+selecting and merging the active profile. Mount targets remain sandbox paths;
+endpoints, mask-home values, executable allowlists, and CLI path arguments keep
+their existing semantics.
 
 | Field                       | Resolves to                               |
 | --------------------------- | ----------------------------------------- |

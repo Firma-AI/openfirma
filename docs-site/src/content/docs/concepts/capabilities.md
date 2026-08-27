@@ -86,8 +86,10 @@ firma-authority export-workspace-public-key \
 ```
 
 The file must contain exactly the 32 raw bytes of an Ed25519 public key. PEM,
-OpenSSH, DER, hex, base64, and TOML encodings are not accepted. A relative
-`public_key_path` is resolved from the `firma run` working directory.
+OpenSSH, DER, hex, base64, and TOML encodings are not accepted. When declared
+in `firma.toml`, a relative `public_key_path` resolves relative to that
+file's containing directory. A `--capability-file` CLI path keeps its existing
+CLI path semantics.
 
 `firma run` reads and validates the key before calling `IssueCapability`, then
 uses it to verify the returned PASETO token. The same effective key is written

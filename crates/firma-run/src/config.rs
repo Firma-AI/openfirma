@@ -1014,10 +1014,14 @@ pub(crate) fn env_truthy(name: &str) -> bool {
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
-    let config = firma_config_loader::FirmaConfig::load(path).map_err(|reason| {
+    let absolute_path = std::path::absolute(path).map_err(|reason| RunError::ConfigParse {
+        path: path.to_path_buf(),
+        reason: format!("failed to resolve config path: {reason}"),
+    })?;
+    let config = firma_config_loader::FirmaConfig::load(&absolute_path).map_err(|reason| {
         // FirmaConfig prefixes the path; strip it to avoid doubling in the
         // RunError::ConfigParse display ("{path}: {reason}").
-        let prefix = format!("{}: ", path.display());
+        let prefix = format!("{}: ", absolute_path.display());
         let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
         let hint = if reason.contains("[run]") {
@@ -1030,8 +1034,8 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
             reason: format!("{reason}{hint}"),
         }
     })?;
-    let parsed = config.section::<FileConfig>("run").map_err(|reason| {
-        let prefix = format!("{}: ", path.display());
+    let mut parsed = config.section::<FileConfig>("run").map_err(|reason| {
+        let prefix = format!("{}: ", absolute_path.display());
         let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
         let hint = if reason.contains("[run]") {
@@ -1044,9 +1048,50 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
             reason: format!("{reason}{hint}"),
         }
     })?;
+    let Some(config_dir) = absolute_path.parent() else {
+        return Err(RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: "resolved config path has no containing directory".to_string(),
+        });
+    };
+    rebase_file_paths(&mut parsed, config_dir);
 
     let profile_patch = parsed.profiles.get(profile).cloned().unwrap_or_default();
     Ok(parsed.defaults.merge(profile_patch))
+}
+
+fn rebase_file_paths(config: &mut FileConfig, config_dir: &Path) {
+    rebase_profile_paths(&mut config.defaults, config_dir);
+    for profile in config.profiles.values_mut() {
+        rebase_profile_paths(profile, config_dir);
+    }
+}
+
+fn rebase_profile_paths(profile: &mut ProfilePatch, config_dir: &Path) {
+    for mount in &mut profile.mounts {
+        rebase_path(&mut mount.source, config_dir);
+    }
+    if let Some(seccomp) = &mut profile.seccomp_policy {
+        rebase_path(&mut seccomp.source_policy_path, config_dir);
+        rebase_path(&mut seccomp.artifact_dir, config_dir);
+    }
+    if let Some(capability) = &mut profile.capability {
+        if let Some(CapabilitySourcePatch::File { path }) = &mut capability.source {
+            rebase_path(path, config_dir);
+        }
+        if let Some(path) = &mut capability.path {
+            rebase_path(path, config_dir);
+        }
+        if let Some(path) = &mut capability.public_key_path {
+            rebase_path(path, config_dir);
+        }
+    }
+}
+
+fn rebase_path(path: &mut PathBuf, config_dir: &Path) {
+    if path.is_relative() {
+        *path = config_dir.join(&*path);
+    }
 }
 
 /// Read `[run].profile` from `firma.toml`, if present.

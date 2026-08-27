@@ -5,6 +5,7 @@
 backend = "bwrap"
 
 [profiles.generic.seccomp_policy]
+# These file resource paths resolve relative to the containing firma.toml.
 source_policy_path = "__POLICY_PATH__"
 artifact_dir = "__ARTIFACT_DIR__"
 runtime_mode = "compile_on_launch"
