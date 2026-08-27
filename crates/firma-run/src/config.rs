@@ -150,9 +150,14 @@ impl ResolvedProfile {
         }
 
         if let Some(mediator) = &self.sidecar_local_exec {
-            if mediator.timeout_ms == 0 {
+            if mediator.timeout.is_zero() {
                 return Err(RunError::ConfigValidation(
-                    "sidecar_local_exec.timeout_ms must be > 0".to_string(),
+                    "sidecar_local_exec.timeout must be > 0".to_string(),
+                ));
+            }
+            if mediator.hitl_max_wait_ms == 0 {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec.hitl_max_wait_ms must be > 0".to_string(),
                 ));
             }
             #[cfg(target_family = "unix")]
@@ -301,7 +306,8 @@ pub struct ExecutableLaunchPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandMediatorConfig {
     pub(crate) endpoint: CommandMediatorEndpoint,
-    pub(crate) timeout_ms: u64,
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub(crate) timeout: Duration,
     pub(crate) hitl_mode: CommandMediatorHitlMode,
     /// Maximum total wall-clock time `firma-run` will block waiting for a
     /// human to approve a `pending_hitl` token. Applies only when
@@ -759,7 +765,7 @@ fn sidecar_local_exec_from_patch(
         .collect::<BTreeSet<_>>();
     Ok(CommandMediatorConfig {
         endpoint,
-        timeout_ms: patch.timeout_ms.unwrap_or(500),
+        timeout: patch.timeout.unwrap_or(Duration::from_millis(500)),
         hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
         hitl_max_wait_ms: patch.hitl_max_wait_ms.unwrap_or(300_000),
         enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
@@ -1630,7 +1636,7 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = 'unix://{}'
-timeout_ms = 700
+timeout = "700ms"
 "#,
             policy_path.display(),
             artifact_dir.display(),
@@ -1641,7 +1647,7 @@ timeout_ms = 700
         run_args.config = Some(config_path);
         let resolved = resolve_profile(&run_args).unwrap();
         let mediator = resolved.sidecar_local_exec.unwrap();
-        assert_eq!(mediator.timeout_ms, 700);
+        assert_eq!(mediator.timeout, Duration::from_millis(700));
     }
 
     #[test]
@@ -1674,7 +1680,7 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = "unix://relative.sock"
-timeout_ms = 500
+timeout = "500ms"
 "#,
             policy_path.display(),
             artifact_dir.display()
@@ -1725,7 +1731,7 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = "{endpoint}"
-timeout_ms = 500
+timeout = "500ms"
 enforce_known_executables = true
 "#,
             policy_path.display(),
@@ -1777,7 +1783,7 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = "{endpoint}"
-timeout_ms = 800
+timeout = "800ms"
 hitl_mode = "async_token"
 enforce_known_executables = true
 allowed_executables = ["codex", "claude", "bash"]
@@ -1828,7 +1834,7 @@ artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
-timeout_ms = 700
+timeout = "700ms"
 "#,
             sidecar_sock.display(),
             policy_path.display(),

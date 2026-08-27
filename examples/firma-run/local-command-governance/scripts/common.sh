@@ -49,7 +49,7 @@ runtime_mode = "compile_on_launch"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = "${MEDIATOR_ENDPOINT}"
-timeout_ms = 600
+timeout = "600ms"
 hitl_mode = "${hitl_mode}"
 enforce_known_executables = ${enforce_allowlist}
 allowed_executables = [${allowlist_csv}]

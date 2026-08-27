@@ -39,7 +39,7 @@ pub(super) fn patch_local_exec_allowlist(
         "{anchor}sidecar_endpoint = \"unix://{traffic}\"\n\n\
          [run.profiles.generic.sidecar_local_exec]\n\
          endpoint = \"unix://{governance}\"\n\
-         timeout_ms = 2000\n\
+         timeout = \"2s\"\n\
          enforce_known_executables = true\n\
          allowed_executables = [\"{bash}\"]\n",
         traffic = traffic_sock.display(),

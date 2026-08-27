@@ -179,7 +179,11 @@ pub struct ExecutableLaunchPolicyPatch {
 #[serde(deny_unknown_fields)]
 pub struct CommandMediatorPatch {
     pub endpoint: Option<String>,
-    pub timeout_ms: Option<u64>,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
+        default
+    )]
+    pub timeout: Option<Duration>,
     pub hitl_mode: Option<CommandMediatorHitlMode>,
     pub hitl_max_wait_ms: Option<u64>,
     pub enforce_known_executables: Option<bool>,

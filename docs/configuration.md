@@ -257,7 +257,8 @@ rps = 60
 burst = 10
 timeout = "1m"
 
-[authority]
+[sidecar.authority]
+url = "https://authority.example.com"
 connect_timeout = "10s"
 reconnect_min_backoff = "250ms"
 reconnect_max_backoff = "30s"
@@ -285,13 +286,13 @@ signing_key_path = "/etc/firma/audit.pem"
 
 Selects the interception mode and transport-specific parameters.
 
-| Field                    | Type        | Default        | Description                           |
-| ------------------------ | ----------- | -------------- | ------------------------------------- |
-| `mode`                   | string      | `http_proxy`   | `http_proxy`, `grpc`, `unix_socket`   |
-| `listen_addr`            | socket addr | `0.0.0.0:8080` | TCP address for HTTP proxy and gRPC   |
-| `socket_path`            | path        | none           | Required when mode is `unix_socket`   |
-| `drain_timeout`          | u64         | `30`           | Shutdown drain timeout in seconds     |
-| `max_request_body_bytes` | usize       | `4194304`      | Max inbound request body size (bytes) |
+| Field                   | Type        | Default        | Description                         |
+| ----------------------- | ----------- | -------------- | ----------------------------------- |
+| `mode`                  | string      | `http_proxy`   | `http_proxy`, `grpc`, `unix_socket` |
+| `listen_addr`           | socket addr | `0.0.0.0:8080` | TCP address for HTTP proxy and gRPC |
+| `socket_path`           | path        | none           | Required when mode is `unix_socket` |
+| `drain_timeout`         | duration    | `"30s"`        | Shutdown drain timeout              |
+| `max_request_body_size` | byte size   | `"4 MiB"`      | Max inbound request body size       |
 
 Validation:
 
@@ -633,7 +634,7 @@ Authority embeds `[authority].bundle_ttl` in each streamed bundle,
 periodically refreshes it, and Stage 2 denies with `PolicyBundleStale` if that
 advertised deadline expires. Cedar evaluation has no user-configurable timeout.
 
-### `[connector]`
+### `[sidecar.connector]`
 
 Outbound dispatch defaults and per-host overrides.
 
@@ -666,16 +667,16 @@ Tuning for the background Authority stream clients
 `authority.url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
-| Field                                  | Type     | Default   | Description                                                                                                                 |
-| -------------------------------------- | -------- | --------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `connect_addr`                         | address  | none      | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                            |
-| `connect_timeout`                      | duration | `"10s"`   | Connection timeout for the tonic channel                                                                                    |
-| `reconnect_min_backoff`                | duration | `"250ms"` | Minimum reconnect backoff                                                                                                   |
-| `reconnect_max_backoff`                | duration | `"30s"`   | Maximum reconnect backoff                                                                                                   |
-| `revocation_readiness_grace`           | duration | `"500ms"` | Grace period after revocation stream opens before readiness                                                                 |
-| `revocation_fail_closed_on_disconnect` | bool     | `false`   | Flip revocation readiness back to false when the stream drops                                                               |
-| `public_key_path`                      | path     | none      | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
-| `credentials`                          | section  | none      | Optional Sidecar PSK credentials sent on every Authority RPC.                                                               |
+| Field                                  | Type     | Default   | Description                                                                                                                         |
+| -------------------------------------- | -------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `connect_addr`                         | address  | none      | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                                    |
+| `connect_timeout`                      | duration | `"10s"`   | Connection timeout for the tonic channel                                                                                            |
+| `reconnect_min_backoff`                | duration | `"250ms"` | Minimum reconnect backoff                                                                                                           |
+| `reconnect_max_backoff`                | duration | `"30s"`   | Maximum reconnect backoff                                                                                                           |
+| `revocation_readiness_grace`           | duration | `"500ms"` | Grace period after revocation stream opens before readiness                                                                         |
+| `revocation_fail_closed_on_disconnect` | bool     | `false`   | Flip revocation readiness back to false when the stream drops                                                                       |
+| `public_key_path`                      | path     | none      | Authority Ed25519 public key. Required when `[sidecar.capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
+| `credentials`                          | section  | none      | Optional Sidecar PSK credentials sent on every Authority RPC.                                                                       |
 
 Validation:
 

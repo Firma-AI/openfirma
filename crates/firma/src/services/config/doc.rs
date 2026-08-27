@@ -274,21 +274,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
     {
         let conn = ensure_table(sidecar, "connector")?;
-        migrate_integer_duration(conn, "default_timeout_ms", "default_timeout", "ms");
-        if let Some(hosts) = conn.get_mut("hosts").and_then(Item::as_array_of_tables_mut) {
-            for host in hosts.iter_mut() {
-                migrate_integer_duration(host, "timeout_ms", "timeout", "ms");
-            }
-        } else if let Some(hosts) = conn.get_mut("hosts").and_then(Item::as_array_mut) {
-            for host in hosts.iter_mut() {
-                let Some(host) = host.as_inline_table_mut() else {
-                    bail!("`hosts` array entries must be inline tables");
-                };
-                migrate_integer_duration(host, "timeout_ms", "timeout", "ms");
-            }
-        } else if conn.contains_key("hosts") {
-            bail!("`hosts` must be an array of tables or an inline array");
-        }
         set_str_if_absent(conn, "default_timeout", "2m");
     }
 
@@ -1347,61 +1332,6 @@ enabled = false
             .collect();
         // Seeded fail-closed: defaults to the intercepted hosts.
         assert_eq!(strict, vec!["api.github.com", "gmail.googleapis.com"]);
-    }
-
-    #[test]
-    fn migrates_connector_default_timeout() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.connector]\ndefault_timeout_ms = 30000 # Keep timeout note.\n";
-        let out = render_firma_toml(existing, &inputs).unwrap();
-        assert!(!out.contains("default_timeout_ms"));
-        assert!(out.contains("default_timeout = \"30000ms\" # Keep timeout note."));
-        let parsed: toml::Value = toml::from_str(&out).unwrap();
-        assert_eq!(
-            parsed["sidecar"]["connector"]["default_timeout"].as_str(),
-            Some("30000ms")
-        );
-    }
-
-    #[test]
-    fn migrates_connector_host_timeout_in_array_of_tables() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "\
-[sidecar.connector]
-[[sidecar.connector.hosts]]
-host = \"api.example.com\"
-rps = 1
-burst = 1
-timeout_ms = 5000 # Keep host timeout note.
-";
-        let out = render_firma_toml(existing, &inputs).unwrap();
-        assert!(!out.contains("timeout_ms"));
-        assert!(out.contains("timeout = \"5000ms\" # Keep host timeout note."));
-        let parsed: toml::Value = toml::from_str(&out).unwrap();
-        assert_eq!(
-            parsed["sidecar"]["connector"]["hosts"][0]["timeout"].as_str(),
-            Some("5000ms")
-        );
-    }
-
-    #[test]
-    fn migrates_connector_host_timeout_in_inline_array() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "\
-[sidecar.connector]
-hosts = [
-  { host = \"api.example.com\", rps = 1, burst = 1, timeout_ms = 5000 }, # Keep host note.
-]
-";
-        let out = render_firma_toml(existing, &inputs).unwrap();
-        assert!(!out.contains("timeout_ms"));
-        assert!(out.contains("timeout = \"5000ms\""));
-        assert!(out.contains("# Keep host note."));
-        let parsed: toml::Value = toml::from_str(&out).unwrap();
-        assert_eq!(
-            parsed["sidecar"]["connector"]["hosts"][0]["timeout"].as_str(),
-            Some("5000ms")
-        );
     }
 
     #[test]

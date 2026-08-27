@@ -1008,6 +1008,38 @@ agent_id = "agt_01j0000000e008000000000001"
     assert_eq!(migrated.matches("max_ttl = \"2h\"").count(), 1);
 }
 
+#[test]
+fn scalar_migration_accepts_inline_connector_hosts() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let config_path = config_dir.join(CONFIG_FILE_NAME);
+    std::fs::write(
+        &config_path,
+        r#"[sidecar.connector]
+default_timeout_ms = 30000
+hosts = [
+  { host = "api.example.com", rps = 1, burst = 1, timeout_ms = 5000 }, # Keep this host note.
+]
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
+"#,
+    )
+    .expect("write legacy inline connector hosts");
+
+    run_init(&config_dir, &state_dir);
+
+    let migrated = std::fs::read_to_string(&config_path).expect("read migrated config");
+    assert!(!migrated.contains("default_timeout_ms"));
+    assert!(!migrated.contains("timeout_ms"));
+    assert!(migrated.contains("default_timeout = \"30000ms\""));
+    assert!(migrated.contains("timeout = \"5000ms\""));
+    assert!(migrated.contains("# Keep this host note."));
+    assert_unified_config_parses(&config_path);
+}
+
 #[cfg(unix)]
 #[test]
 fn init_writes_sensitive_dirs_with_mode_0700() {

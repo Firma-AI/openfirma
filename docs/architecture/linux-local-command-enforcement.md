@@ -136,7 +136,7 @@ Artifact layout:
 2. `unix:///absolute/path.sock`
 3. On Unix hosts, governed mode requires `unix://` endpoint for peer-credential validation.
 
-`timeout_ms` must be `> 0`.
+`timeout` must be greater than zero.
 
 Optional governance controls:
 
@@ -305,7 +305,7 @@ runtime_mode = "compile_on_launch"
 
 [profiles.generic.sidecar_local_exec]
 endpoint = "unix:///tmp/firma-sidecar-tools.sock"
-timeout_ms = 500
+timeout = "500ms"
 hitl_mode = "async_token"
 enforce_known_executables = true
 allowed_executables = ["/usr/bin/echo", "/usr/bin/bash", "/bin/sh"]
@@ -361,7 +361,7 @@ Repeat with decision responses:
 ### Step 5: Negative Config Validation
 
 1. `endpoint = "unix://relative.sock"` -> validation error (requires absolute path).
-2. `timeout_ms = 0` -> validation error.
+2. `timeout = "0s"` -> validation error.
 
 ### Step 6: Final Acceptance
 

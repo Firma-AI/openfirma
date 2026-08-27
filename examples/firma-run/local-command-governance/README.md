@@ -80,7 +80,7 @@ runtime_mode = "compile_on_launch"
 
 [profiles.generic.sidecar_local_exec]
 endpoint = "unix:///tmp/firma-sidecar-tools.sock"
-timeout_ms = 500
+timeout = "500ms"
 hitl_mode = "async_token"
 enforce_known_executables = true
 allowed_executables = ["/usr/bin/echo", "/usr/bin/bash", "/usr/bin/sh"]
