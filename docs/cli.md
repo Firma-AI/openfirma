@@ -257,14 +257,14 @@ ready
 ```
 
 `policy bundle loaded version` is the eight-character hex prefix of
-the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
-fires unconditionally; when `authority.url` is unset the
+the SHA-256 of the concatenated `.cedar` files in `sidecar.policy.dir`. Line 4
+fires unconditionally; when `sidecar.authority.url` is unset the
 endpoint is reported as `(disabled)`.
 
 Line 7 (`ready`) is held until the Authority streams have hydrated —
 both the policy bundle stream and the revocation stream must report
 themselves ready before the line is emitted. When
-`authority.url` is unset, both flags are pre-seeded as ready, so
+`sidecar.authority.url` is unset, both flags are pre-seeded as ready, so
 the gate is a no-op and `ready` fires immediately after line 6. This
 prevents the first wrapped-agent call from racing the readiness gate
 and hitting a DENY before policy is in place.
@@ -406,7 +406,7 @@ revocations. Pre-flight only, never on the hot path.
 
 Issues a signed capability token directly from the loaded Cedar
 bundle and writes it to a TOML seed file consumable by the
-sidecar `[capability_seed]` section. Stop-gap until the sidecar
+sidecar `[sidecar.capability_seed]` section. Stop-gap until the sidecar
 wires the gRPC `IssueCapability` client; not intended for
 production traffic.
 
@@ -435,8 +435,8 @@ with `issuance failed: cedar denied issuance (...): ...`.
 
 The output TOML carries the raw `v4.public....` token plus the
 matching claims; the sidecar consumes it via
-`[capability_seed].paths` and verifies the signature with
-`[authority].public_key_path`.
+`[sidecar.capability_seed].paths` and verifies the signature with
+`[sidecar.authority].public_key_path`.
 
 ## `firma run`
 
@@ -465,10 +465,10 @@ When autostart fires, `firma run`:
    `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux), `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback), or `%LOCALAPPDATA%\firma\runtime\run\<sandbox_id>\` (Windows; see platform caveat below).
 2. Synthesizes a sidecar TOML by inheriting the operator template
    (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → the discovered
-   `firma.toml` → minimal) and overriding the `[interceptor]` section to
+   `firma.toml` → minimal) and overriding the `[sidecar.interceptor]` section to
    bind a Unix-domain socket at `<marker_dir>/sidecar.sock`. Relative
-   resource paths in the inherited template (e.g. `audit.signing_key_path`,
-   `policy.dir`, `mapping.rules_path`, `authority.public_key_path`) are
+   resource paths in the inherited template (e.g. `sidecar.audit.signing_key_path`,
+   `sidecar.policy.dir`, `sidecar.mapping.rules_path`, `sidecar.authority.public_key_path`) are
    rebased to absolute paths anchored on the **template's** config
    directory so they keep pointing at the operator's files after the
    synthesized config is written into `<marker_dir>/`.
@@ -509,7 +509,7 @@ inputs for recovery. Set `FIRMA_RUN_KEEP_MARKERS` to retain them deliberately.
 
 ### Operator caveats
 
-- A template with `interceptor.https_mitm.enabled = true` may fail
+- A template with `sidecar.interceptor.https_mitm.enabled = true` may fail
   validation when the interceptor is forced to `unix_socket` mode.
   Either disable MITM in the template or use `--sidecar <url>` with a
   long-lived externally-managed sidecar.
