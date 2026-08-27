@@ -168,55 +168,18 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "assembles the complete sidecar table"
-)]
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
     migrate_sidecar_scalars(sidecar)?;
-
-    if let Some(local_exec) = optional_table_mut(sidecar, "local_exec")? {
-        migrate_integer_duration(local_exec, "token_ttl_secs", "token_ttl", "s");
-        migrate_integer_duration(local_exec, "retry_after_ms", "retry_after", "ms");
-    }
-
-    if let Some(authority) = optional_table_mut(sidecar, "authority")? {
-        migrate_integer_duration(authority, "connect_timeout_secs", "connect_timeout", "s");
-        migrate_integer_duration(
-            authority,
-            "reconnect_min_backoff_ms",
-            "reconnect_min_backoff",
-            "ms",
-        );
-        migrate_integer_duration(
-            authority,
-            "reconnect_max_backoff_secs",
-            "reconnect_max_backoff",
-            "s",
-        );
-        migrate_integer_duration(
-            authority,
-            "revocation_readiness_grace_ms",
-            "revocation_readiness_grace",
-            "ms",
-        );
-    }
 
     set_str_if_absent(sidecar, "mode", "enforce");
 
     // sidecar.interceptor.{mode, listen_addr} + https_mitm hosts
     {
         let interceptor = ensure_table(sidecar, "interceptor")?;
-        migrate_integer_duration(interceptor, "drain_timeout_secs", "drain_timeout", "s");
-        if let Some(relay) = optional_table_mut(interceptor, "connect_relay")? {
-            migrate_integer_duration(relay, "setup_timeout_secs", "setup_timeout", "s");
-            migrate_integer_duration(relay, "session_max_secs", "session_max", "s");
-        }
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
-        migrate_integer_duration(https, "cert_ttl_secs", "cert_ttl", "s");
         let has_intercept = !inputs.mitm_hosts.is_empty();
         let has_bypass = !inputs.mitm_bypass_hosts.is_empty();
         if !has_intercept && !has_bypass {
@@ -268,12 +231,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
     {
         let cap = ensure_table(sidecar, "capability_validation")?;
-        migrate_integer_duration(
-            cap,
-            "clock_skew_tolerance_seconds",
-            "clock_skew_tolerance",
-            "s",
-        );
         set_str_if_absent(cap, "clock_skew_tolerance", "0s");
     }
 
@@ -371,7 +328,16 @@ fn backend_for_linux(wsl: firma_run::backend::platform::WslKind) -> &'static str
 
 fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let run = ensure_table(doc.as_table_mut(), "run")?;
+    if let Some(defaults) = optional_table_mut(run, "defaults")? {
+        migrate_run_profile_scalars(defaults)?;
+    }
     let profiles = ensure_table(run, "profiles")?;
+    for (profile, item) in profiles.iter_mut() {
+        let Some(table) = item.as_table_mut() else {
+            bail!("`run.profiles.{profile}` must be a table");
+        };
+        migrate_run_profile_scalars(table)?;
+    }
     let profile_table = ensure_table(profiles, inputs.profile)?;
     set_str_if_absent(profile_table, "backend", default_run_backend());
 
@@ -623,16 +589,6 @@ fn ensure_table<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table> {
     Ok(table)
 }
 
-fn optional_table_mut<'a>(parent: &'a mut Table, key: &str) -> Result<Option<&'a mut Table>> {
-    let Some(item) = parent.get_mut(key) else {
-        return Ok(None);
-    };
-    let Some(table) = item.as_table_mut() else {
-        bail!("`{key}` must be a table");
-    };
-    Ok(Some(table))
-}
-
 fn ensure_array_of_tables<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut ArrayOfTables> {
     if !parent.contains_key(key) {
         parent.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
@@ -644,6 +600,16 @@ fn ensure_array_of_tables<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mu
         bail!("`{key}` must be an array of tables");
     };
     Ok(array)
+}
+
+fn optional_table_mut<'a>(parent: &'a mut Table, key: &str) -> Result<Option<&'a mut Table>> {
+    let Some(item) = parent.get_mut(key) else {
+        return Ok(None);
+    };
+    let Some(table) = item.as_table_mut() else {
+        bail!("`{key}` must be a table");
+    };
+    Ok(Some(table))
 }
 
 fn set_str(table: &mut Table, key: &str, val: &str) {
@@ -743,12 +709,6 @@ fn append_comment_decor(
     output.push_str(raw);
     if !output.ends_with('\n') {
         output.push('\n');
-    }
-}
-
-fn set_int_if_absent(table: &mut Table, key: &str, val: i64) {
-    if !table.contains_key(key) {
-        table.insert(key, value(val));
     }
 }
 
@@ -875,133 +835,12 @@ mod tests {
     }
 
     #[test]
-    fn merge_migrates_legacy_interceptor_drain_timeout() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.interceptor]\ndrain_timeout_secs = 30\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("drain_timeout = \"30s\""));
-        assert!(!out.contains("drain_timeout_secs"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_connect_setup_timeout() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.interceptor.connect_relay]\nsetup_timeout_secs = 10\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("setup_timeout = \"10s\""));
-        assert!(!out.contains("setup_timeout_secs"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_connect_session_max() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.interceptor.connect_relay]\nsession_max_secs = 600\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("session_max = \"600s\""));
-        assert!(!out.contains("session_max_secs"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_https_mitm_cert_ttl() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.interceptor.https_mitm]\ncert_ttl_secs = 86400\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("cert_ttl = \"86400s\""));
-        assert!(!out.contains("cert_ttl_secs"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_authority_connect_timeout() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.authority]\nconnect_timeout_secs = 10\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("connect_timeout = \"10s\""));
-        assert!(!out.contains("connect_timeout_secs"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_authority_reconnect_min_backoff() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.authority]\nreconnect_min_backoff_ms = 250\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("reconnect_min_backoff = \"250ms\""));
-        assert!(!out.contains("reconnect_min_backoff_ms"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_authority_reconnect_max_backoff() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.authority]\nreconnect_max_backoff_secs = 30\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("reconnect_max_backoff = \"30s\""));
-        assert!(!out.contains("reconnect_max_backoff_secs"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_authority_revocation_readiness_grace() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.authority]\nrevocation_readiness_grace_ms = 500\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("revocation_readiness_grace = \"500ms\""));
-        assert!(!out.contains("revocation_readiness_grace_ms"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_clock_skew_tolerance() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.capability_validation]\nclock_skew_tolerance_seconds = 5\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("clock_skew_tolerance = \"5s\""));
-        assert!(!out.contains("clock_skew_tolerance_seconds"));
-    }
-
-    #[test]
     fn authority_mode_drops_sidecar() {
         let inputs = dummy_inputs(&Mode::Authority);
         let out = render_firma_toml("", &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
         assert!(parsed.get("authority").is_some());
         assert!(parsed.get("sidecar").is_none(), "got: {out}");
-    }
-
-    #[test]
-    fn merge_migrates_legacy_local_exec_token_ttl() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.local_exec]\nsocket_path = \"/run/firma/local-exec.sock\"\ntoken_ttl_secs = 300\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("token_ttl = \"300s\""));
-        assert!(!out.contains("token_ttl_secs"));
-    }
-
-    #[test]
-    fn merge_migrates_legacy_local_exec_retry_after() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = "[sidecar.local_exec]\nsocket_path = \"/run/firma/local-exec.sock\"\nretry_after_ms = 500\n";
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-
-        assert!(out.contains("retry_after = \"500ms\""));
-        assert!(!out.contains("retry_after_ms"));
     }
 
     #[test]
