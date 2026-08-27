@@ -126,8 +126,8 @@ pub struct AuthorityConfig {
     pub(crate) connect_timeout: Duration,
     /// Minimum reconnect backoff.
     pub(crate) reconnect_min_backoff: Duration,
-    /// Maximum reconnect backoff in seconds.
-    pub(crate) reconnect_max_backoff_secs: u64,
+    /// Maximum reconnect backoff.
+    pub(crate) reconnect_max_backoff: Duration,
     /// Grace period before the revocation stream is considered ready.
     pub(crate) revocation_readiness_grace_ms: u64,
     /// Flip revocation readiness back to false on disconnect.
@@ -163,11 +163,11 @@ pub enum AuthorityConfigError {
     /// `reconnect_min_backoff` was zero.
     #[error("authority.reconnect_min_backoff must be > 0")]
     ZeroMinBackoff,
-    /// `reconnect_max_backoff_secs` was zero.
-    #[error("authority.reconnect_max_backoff_secs must be > 0")]
+    /// `reconnect_max_backoff` was zero.
+    #[error("authority.reconnect_max_backoff must be > 0")]
     ZeroMaxBackoff,
     /// The maximum reconnect backoff was below the minimum.
-    #[error("authority.reconnect_max_backoff_secs must be >= reconnect_min_backoff")]
+    #[error("authority.reconnect_max_backoff must be >= reconnect_min_backoff")]
     MaxBackoffLessThanMin,
     /// `public_key_path` was set but empty.
     #[error("authority.public_key_path must not be empty when set")]
@@ -228,10 +228,10 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
         if s.reconnect_min_backoff.is_zero() {
             return Err(AuthorityConfigError::ZeroMinBackoff);
         }
-        if s.reconnect_max_backoff_secs == 0 {
+        if s.reconnect_max_backoff.is_zero() {
             return Err(AuthorityConfigError::ZeroMaxBackoff);
         }
-        if Duration::from_secs(s.reconnect_max_backoff_secs) < s.reconnect_min_backoff {
+        if s.reconnect_max_backoff < s.reconnect_min_backoff {
             return Err(AuthorityConfigError::MaxBackoffLessThanMin);
         }
         let public_key_path =
@@ -259,7 +259,7 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             connect_addr: s.connect_addr,
             connect_timeout: s.connect_timeout,
             reconnect_min_backoff: s.reconnect_min_backoff,
-            reconnect_max_backoff_secs: s.reconnect_max_backoff_secs,
+            reconnect_max_backoff: s.reconnect_max_backoff,
             revocation_readiness_grace_ms: s.revocation_readiness_grace_ms,
             revocation_fail_closed_on_disconnect: s.revocation_fail_closed_on_disconnect,
             public_key_path,
@@ -280,7 +280,7 @@ impl Default for AuthorityConfig {
             connect_addr: None,
             connect_timeout: Duration::from_secs(10),
             reconnect_min_backoff: Duration::from_millis(250),
-            reconnect_max_backoff_secs: default_max_backoff_secs(),
+            reconnect_max_backoff: Duration::from_secs(30),
             revocation_readiness_grace_ms: default_readiness_grace_ms(),
             revocation_fail_closed_on_disconnect: false,
             public_key_path: None,
@@ -291,10 +291,6 @@ impl Default for AuthorityConfig {
             credentials: None,
         }
     }
-}
-
-const fn default_max_backoff_secs() -> u64 {
-    30
 }
 
 const fn default_readiness_grace_ms() -> u64 {

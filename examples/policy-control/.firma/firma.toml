@@ -41,7 +41,7 @@ url = "http://127.0.0.1:50151"
 public_key_path = "state/authority.pub"
 connect_timeout = "5s"
 reconnect_min_backoff = "250ms"
-reconnect_max_backoff_secs = 5
+reconnect_max_backoff = "5s"
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 

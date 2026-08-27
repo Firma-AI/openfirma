@@ -62,7 +62,7 @@ pub struct AuthorityClientHandle {
 #[must_use]
 pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHandle {
     let min = deps.config.reconnect_min_backoff;
-    let max = Duration::from_secs(deps.config.reconnect_max_backoff_secs);
+    let max = deps.config.reconnect_max_backoff;
 
     let policy_task = PolicyBundleTask {
         channel: deps.channel.clone(),

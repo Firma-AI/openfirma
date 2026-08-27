@@ -405,7 +405,7 @@ tasks from `authority_client`:
 
 Both tasks share a single lazy `tonic::transport::Channel` but run
 independent reconnect loops with exponential backoff
-(`reconnect_min_backoff` / `reconnect_max_backoff_secs`) and
+(`reconnect_min_backoff` / `reconnect_max_backoff`) and
 symmetric jitter. Shutdown is driven by the same `CancellationToken`
 that shuts the rest of the runtime down.
 

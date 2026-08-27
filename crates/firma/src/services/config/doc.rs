@@ -179,6 +179,12 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
             "reconnect_min_backoff",
             "ms",
         );
+        migrate_integer_duration(
+            authority,
+            "reconnect_max_backoff_secs",
+            "reconnect_max_backoff",
+            "s",
+        );
     }
 
     set_str_if_absent(sidecar, "mode", "enforce");
@@ -278,7 +284,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         }
         set_str_if_absent(auth, "connect_timeout", "10s");
         set_str_if_absent(auth, "reconnect_min_backoff", "250ms");
-        set_int_if_absent(auth, "reconnect_max_backoff_secs", 30);
+        set_str_if_absent(auth, "reconnect_max_backoff", "30s");
         set_int_if_absent(auth, "revocation_readiness_grace_ms", 500);
         set_bool_if_absent(auth, "revocation_fail_closed_on_disconnect", false);
     }
@@ -817,6 +823,17 @@ mod tests {
 
         assert!(out.contains("reconnect_min_backoff = \"250ms\""));
         assert!(!out.contains("reconnect_min_backoff_ms"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_authority_reconnect_max_backoff() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.authority]\nreconnect_max_backoff_secs = 30\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("reconnect_max_backoff = \"30s\""));
+        assert!(!out.contains("reconnect_max_backoff_secs"));
     }
 
     #[test]

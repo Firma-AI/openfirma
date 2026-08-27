@@ -226,7 +226,7 @@ timeout_ms = 60000
 [authority]
 connect_timeout = "10s"
 reconnect_min_backoff = "250ms"
-reconnect_max_backoff_secs = 30
+reconnect_max_backoff = "30s"
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
@@ -637,7 +637,7 @@ mode and this section is ignored.
 | `connect_addr`                         | address  | none      | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                            |
 | `connect_timeout`                      | duration | `"10s"`   | Connection timeout for the tonic channel                                                                                    |
 | `reconnect_min_backoff`                | duration | `"250ms"` | Minimum reconnect backoff                                                                                                   |
-| `reconnect_max_backoff_secs`           | u64      | `30`      | Maximum reconnect backoff                                                                                                   |
+| `reconnect_max_backoff`                | duration | `"30s"`   | Maximum reconnect backoff                                                                                                   |
 | `revocation_readiness_grace_ms`        | u64      | `500`     | Grace period after revocation stream opens before readiness                                                                 |
 | `revocation_fail_closed_on_disconnect` | bool     | `false`   | Flip revocation readiness back to false when the stream drops                                                               |
 | `public_key_path`                      | path     | none      | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
@@ -646,11 +646,10 @@ mode and this section is ignored.
 Validation:
 
 - `connect_timeout`, `reconnect_min_backoff`, and
-  `reconnect_max_backoff_secs` must all be greater than `0`.
+  `reconnect_max_backoff` must all be greater than zero.
 - `connect_addr` requires `url` and must use a nonzero port. For plaintext
   URLs, the insecure-remote check uses this physical address when present.
-- `reconnect_max_backoff_secs * 1000` must be ≥
-  `reconnect_min_backoff`.
+- `reconnect_max_backoff` must be ≥ `reconnect_min_backoff`.
 - When `credentials` is present, `workspace_id` and `sidecar_id`
   must be non-empty, and exactly one PSK source must be configured.
 
