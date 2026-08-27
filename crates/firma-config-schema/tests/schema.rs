@@ -11,8 +11,78 @@ use firma_config_schema::sidecar::infra::{
     CaConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
+use firma_config_schema::utils::{NonZeroDuration, ZeroDurationError};
 use firma_config_schema::{authority, run, secret_matcher, sidecar};
+use serde::Deserialize;
 use std::time::Duration;
+
+#[test]
+fn non_zero_duration_accepts_friendly_compact_durations() {
+    for (json, expected) in [
+        (r#""1h""#, Duration::from_hours(1)),
+        (r#""30s""#, Duration::from_secs(30)),
+        (r#""500ms""#, Duration::from_millis(500)),
+    ] {
+        let non_zero_duration: NonZeroDuration =
+            serde_json::from_str(json).expect("friendly non-zero duration parses");
+        assert_eq!(non_zero_duration.duration(), expected);
+    }
+}
+
+#[test]
+fn non_zero_duration_rejects_equivalent_friendly_zero_values() {
+    for value in ["0ns", "0ms", "0s", "0m", "0h"] {
+        let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value);
+        let error =
+            NonZeroDuration::deserialize(deserializer).expect_err("zero duration must fail");
+        assert_eq!(error.to_string(), "duration must be greater than zero");
+    }
+}
+
+#[test]
+fn non_zero_duration_accepts_sub_millisecond_non_zero_duration() {
+    let non_zero_duration: NonZeroDuration =
+        serde_json::from_str(r#""1ns""#).expect("nanosecond duration parses");
+
+    assert_eq!(non_zero_duration.duration(), Duration::from_nanos(1));
+}
+
+#[test]
+fn non_zero_duration_construction_rejects_zero() {
+    assert_eq!(NonZeroDuration::new(Duration::ZERO), Err(ZeroDurationError));
+    assert_eq!(
+        NonZeroDuration::try_from(Duration::ZERO),
+        Err(ZeroDurationError)
+    );
+    assert_eq!(
+        ZeroDurationError.to_string(),
+        "duration must be greater than zero"
+    );
+
+    let duration = Duration::from_nanos(1);
+    let non_zero_duration =
+        NonZeroDuration::try_from(duration).expect("non-zero duration constructs successfully");
+    assert_eq!(Duration::from(non_zero_duration), duration);
+}
+
+#[test]
+fn non_zero_duration_serialization_round_trips_with_friendly_representation() {
+    let non_zero_duration = NonZeroDuration::new(Duration::new(65, 123_456_789))
+        .expect("non-zero duration constructs successfully");
+
+    let serialized =
+        serde_json::to_string(&non_zero_duration).expect("non-zero duration serializes");
+    let value: serde_json::Value =
+        serde_json::from_str(&serialized).expect("serialized non-zero duration is JSON");
+    assert!(
+        value.is_string(),
+        "non-zero duration must serialize as a string"
+    );
+
+    let deserialized: NonZeroDuration =
+        serde_json::from_str(&serialized).expect("serialized non-zero duration deserializes");
+    assert_eq!(deserialized, non_zero_duration);
+}
 
 #[test]
 fn interceptor_config_fills_defaults_for_missing_fields() {
