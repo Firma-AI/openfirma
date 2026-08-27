@@ -25,7 +25,7 @@ rules_path = "mapping-rules.toml"
 default_protected = true
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 0
+clock_skew_tolerance = "0s"
 
 [sidecar.connector]
 default_timeout_ms = 5000

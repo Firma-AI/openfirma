@@ -1544,7 +1544,7 @@ rules_path = "/etc/firma/rules.toml"
 default_protected = false
 
 [capability_validation]
-clock_skew_tolerance_seconds = 5
+clock_skew_tolerance = "5s"
 
 [revocation]
 capacity = 500000
@@ -1619,8 +1619,8 @@ signing_key_path = "/etc/firma/audit.pem"
             config
                 .enforcement
                 .capability_validation
-                .clock_skew_tolerance_seconds,
-            5
+                .clock_skew_tolerance,
+            Duration::from_secs(5)
         );
         // New AARM R2 G4 session-state fields default when unset.
         assert_eq!(config.enforcement.constraint_enforcement.capacity, 8192);

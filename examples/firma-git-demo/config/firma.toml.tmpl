@@ -28,7 +28,7 @@ rules_path = "{{ROOT}}/crates/firma-sidecar/config/mappings/github.toml"
 default_protected = true
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 5
+clock_skew_tolerance = "5s"
 
 [sidecar.revocation]
 capacity = 100000

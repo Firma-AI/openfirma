@@ -208,7 +208,7 @@ rules_path = "/etc/firma/rules.toml"
 default_protected = false
 
 [capability_validation]
-clock_skew_tolerance_seconds = 5
+clock_skew_tolerance = "5s"
 
 [constraint_enforcement]
 session_state_capacity = 8192
@@ -578,9 +578,9 @@ Validation:
 
 Stage 1 settings.
 
-| Field                          | Type | Default | Description                    |
-| ------------------------------ | ---- | ------- | ------------------------------ |
-| `clock_skew_tolerance_seconds` | u64  | `0`     | Token expiry clock skew window |
+| Field                  | Type     | Default | Description                    |
+| ---------------------- | -------- | ------- | ------------------------------ |
+| `clock_skew_tolerance` | duration | `"0s"`  | Token expiry clock skew window |
 
 ### `[constraint_enforcement]`
 

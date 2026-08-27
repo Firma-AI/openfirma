@@ -246,12 +246,10 @@ pub fn build_pipeline_runtime(
         capability_handle.clone(),
         Arc::clone(&token_verifier),
         Arc::clone(&revocation_store_dyn),
-        std::time::Duration::from_secs(
-            config
-                .enforcement
-                .capability_validation
-                .clock_skew_tolerance_seconds,
-        ),
+        config
+            .enforcement
+            .capability_validation
+            .clock_skew_tolerance,
         config.tenancy.mode,
     );
 

@@ -264,7 +264,7 @@ firma authority -c /tmp/firma-standalone/config/firma.toml revocations compact
 
 **`TokenInvalid` for matching agent.** The map is keyed by `(session_id, action_class, resource)`. If the request's normalized resource doesn't fall inside `resource_scope`, the lookup misses. Loosen `--resource-scope` or add multiple capabilities for different scopes.
 
-**`TokenExpired` right after issuance.** Clock drift between Authority and Sidecar. Set `[sidecar.capability_validation].clock_skew_tolerance_seconds` (default 0) higher if your clocks aren't tight.
+**`TokenExpired` right after issuance.** Clock drift between Authority and Sidecar. Set `[sidecar.capability_validation].clock_skew_tolerance` (default `"0s"`) higher if your clocks aren't tight.
 
 **Authority refuses to mint.** Issuance policy denied the request. Check the Authority's stderr for the matched policy id. Loosen issuance policy or pick a different action class.
 

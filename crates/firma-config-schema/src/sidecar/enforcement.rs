@@ -5,6 +5,8 @@
 //! `[constraint_enforcement]`). `firma-sidecar` validates them and re-bases the
 //! mapping paths.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 /// Enforcement engine configuration.
@@ -54,9 +56,12 @@ impl Default for MappingConfig {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityValidationConfig {
-    /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
-    #[serde(default)]
-    pub clock_skew_tolerance_seconds: u64,
+    /// Clock skew tolerance for expiry checks. Default: zero (strict).
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default
+    )]
+    pub clock_skew_tolerance: Duration,
 }
 
 /// Constraint enforcement configuration.

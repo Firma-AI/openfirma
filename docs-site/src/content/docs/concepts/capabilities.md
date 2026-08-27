@@ -167,7 +167,7 @@ When the agent makes an outbound call, Stage 1 of the pipeline runs the validati
 
 1. **Selection.** The Sidecar's `CapabilityMap` is keyed by `(session_id, action_class, resource)`. It picks the capability that matches the normalized envelope. If none does, the result is `CapabilityNotFound` (a DENY).
 2. **Signature verification.** The PASETO library verifies the Ed25519 signature against the Authority's public key, which the Sidecar holds in memory and never re-fetches on the hot path.
-3. **Expiry check.** `now()` is compared against `expiry` with a configurable `clock_skew_tolerance_seconds` (default 5). Past expiry → `CapabilityExpired`.
+3. **Expiry check.** `now()` is compared against `expiry` with a configurable `clock_skew_tolerance` (default `"5s"`). Past expiry → `CapabilityExpired`.
 4. **Revocation check.** `token_id` is looked up in the local revocation store — a bloom filter front, LRU cache for false positives. A hit → `CapabilityRevoked`.
 5. **Scope match.** The request's normalized action class must be in `action_set`, and the resource must match `resource_scope`. A miss → `CapabilityScopeMismatch`.
 

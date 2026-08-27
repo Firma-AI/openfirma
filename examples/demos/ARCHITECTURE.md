@@ -162,7 +162,7 @@ rules_path = "examples/demos/demo0/mapping-rules.toml"
 default_protected = true # demos default to fail-closed
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 0
+clock_skew_tolerance = "0s"
 
 [sidecar.connector]
 default_timeout_ms = 10000

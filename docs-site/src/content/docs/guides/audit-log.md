@@ -208,7 +208,7 @@ The Sidecar could not find or verify a capability matching `(session_id, action,
 
 ### Stage 1: `TokenExpired`
 
-The token is past its `expiry`. Issue a fresh one. If this happens "right after" issuance, you have clock drift between Authority and Sidecar — bump `[sidecar.capability_validation].clock_skew_tolerance_seconds`.
+The token is past its `expiry`. Issue a fresh one. If this happens "right after" issuance, you have clock drift between Authority and Sidecar — bump `[sidecar.capability_validation].clock_skew_tolerance`.
 
 ### Stage 1: `TokenRevoked`
 

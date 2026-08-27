@@ -129,7 +129,7 @@ pub fn build_token_verifier(
             )
         })?;
         // PASETO's verifier has its own clock-skew leeway (10s by default).
-        // Stage 1 already applies `clock_skew_tolerance_seconds` from config,
+        // Stage 1 already applies `clock_skew_tolerance` from config,
         // so we zero out the verifier's leeway to keep that knob authoritative
         // — otherwise the hard-coded 10s caps any operator setting above it.
         let verifier = PasetoV4Verifier::try_new(&bytes)

@@ -49,7 +49,7 @@ rules_path = "mapping-rules.toml"
 default_protected = false
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 5
+clock_skew_tolerance = "5s"
 
 [sidecar.revocation]
 capacity = 100000

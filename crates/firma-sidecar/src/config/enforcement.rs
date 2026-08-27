@@ -8,6 +8,7 @@
 use firma_config_schema::sidecar::enforcement::{self as schema, SessionStateBackend};
 use firma_http::Method;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 const VALID_HTTP_METHODS: &[&str] = &[
     "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT",
@@ -121,14 +122,14 @@ impl From<schema::MappingConfig> for MappingConfig {
 /// Validated capability validation configuration.
 #[derive(Debug, Clone, Default)]
 pub struct CapabilityValidationConfig {
-    /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
-    pub clock_skew_tolerance_seconds: u64,
+    /// Clock skew tolerance for expiry checks. Default: zero (strict).
+    pub clock_skew_tolerance: Duration,
 }
 
 impl From<schema::CapabilityValidationConfig> for CapabilityValidationConfig {
     fn from(s: schema::CapabilityValidationConfig) -> Self {
         Self {
-            clock_skew_tolerance_seconds: s.clock_skew_tolerance_seconds,
+            clock_skew_tolerance: s.clock_skew_tolerance,
         }
     }
 }

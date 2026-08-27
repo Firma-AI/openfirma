@@ -258,7 +258,13 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
     {
         let cap = ensure_table(sidecar, "capability_validation")?;
-        set_int_if_absent(cap, "clock_skew_tolerance_seconds", 0);
+        migrate_integer_duration(
+            cap,
+            "clock_skew_tolerance_seconds",
+            "clock_skew_tolerance",
+            "s",
+        );
+        set_str_if_absent(cap, "clock_skew_tolerance", "0s");
     }
 
     {
@@ -851,6 +857,17 @@ mod tests {
 
         assert!(out.contains("revocation_readiness_grace = \"500ms\""));
         assert!(!out.contains("revocation_readiness_grace_ms"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_clock_skew_tolerance() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.capability_validation]\nclock_skew_tolerance_seconds = 5\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("clock_skew_tolerance = \"5s\""));
+        assert!(!out.contains("clock_skew_tolerance_seconds"));
     }
 
     #[test]
