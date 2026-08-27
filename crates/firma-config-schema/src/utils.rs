@@ -17,6 +17,7 @@ pub(crate) mod byte_size {
 }
 
 use std::fmt;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -74,6 +75,12 @@ impl TryFrom<Duration> for NonZeroDuration {
 impl From<NonZeroDuration> for Duration {
     fn from(duration: NonZeroDuration) -> Self {
         duration.0
+    }
+}
+
+impl From<NonZeroU64> for NonZeroDuration {
+    fn from(seconds: NonZeroU64) -> Self {
+        Self(Duration::from_secs(seconds.get()))
     }
 }
 

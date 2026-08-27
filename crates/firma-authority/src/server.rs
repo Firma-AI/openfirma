@@ -146,7 +146,7 @@ fn load_authority_service(config: &AuthorityConfig) -> Result<AuthorityServiceIm
         config.bundle_ttl_seconds,
     )?;
 
-    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
+    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds().get()));
     let revocation_store = RevocationStore::try_new(&config.revocation_file, token_ttl)?;
 
     AuthorityServiceImpl::try_new(
@@ -154,7 +154,7 @@ fn load_authority_service(config: &AuthorityConfig) -> Result<AuthorityServiceIm
         policy_store,
         revocation_store,
         signer,
-        config.max_ttl_seconds,
+        config.max_ttl_seconds(),
     )
 }
 

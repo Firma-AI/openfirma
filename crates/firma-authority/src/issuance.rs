@@ -6,6 +6,7 @@
 //! transport (`tonic`) or process-IO dependency so it is straightforward
 //! to call from a CLI in-process and to unit-test.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
@@ -57,7 +58,7 @@ pub enum IssuanceError {
 pub async fn issue_capability(
     policy_store: &CedarPolicyStore,
     signer: &Arc<PasetoV4Signer>,
-    max_ttl_seconds: i32,
+    max_ttl_seconds: NonZeroU32,
     req: &IssuanceRequest<'_>,
 ) -> Result<IssuanceResult, IssuanceError> {
     let snapshot = policy_store.snapshot().await;
@@ -79,7 +80,7 @@ pub async fn issue_capability(
 
     let ttl = clamp_ttl(req.requested_ttl_seconds, max_ttl_seconds);
     let now: DateTime<Utc> = Utc::now();
-    let expiry = now + Duration::seconds(i64::from(ttl));
+    let expiry = now + Duration::seconds(i64::from(ttl.get()));
     let token_id = TokenId::generate();
     let bundle_version = policy_store.bundle().version;
     let agent_id = req.agent_id.to_string();
@@ -111,6 +112,11 @@ mod tests {
     use pasetors::keys::{AsymmetricKeyPair, Generate};
     use pasetors::version4::V4;
 
+    fn max_ttl(seconds: u32) -> NonZeroU32 {
+        assert!(seconds > 0);
+        NonZeroU32::new(seconds).unwrap_or(NonZeroU32::MIN)
+    }
+
     fn fixture_policy_store() -> Arc<CedarPolicyStore> {
         let dir = tempfile::tempdir().unwrap().keep();
         std::fs::write(
@@ -141,10 +147,42 @@ mod tests {
             resource_scope: "wttr.in*",
             requested_ttl_seconds: 300,
         };
-        let out = issue_capability(&store, &signer, 600, &req).await.unwrap();
+        let out = issue_capability(&store, &signer, max_ttl(600), &req)
+            .await
+            .unwrap();
         assert!(!out.raw_token.is_empty());
         assert_eq!(out.claims.action_set, actions);
         assert_eq!(out.claims.resource_scope, "wttr.in*");
+    }
+
+    #[tokio::test]
+    async fn signed_request_ttl_preserves_exact_expiry_semantics() {
+        let store = fixture_policy_store();
+        let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
+        let signer = Arc::new(PasetoV4Signer::try_new(kp.secret.as_bytes()).unwrap());
+        let agent: AgentId = "agt_01j0000000e008000000000001".parse().unwrap();
+        let session: SessionId = "sess_1".parse().unwrap();
+        let actions = vec!["communication.external.send".to_string()];
+
+        for (requested_ttl_seconds, expected_ttl_seconds) in
+            [(-1, 600), (0, 600), (300, 300), (900, 600)]
+        {
+            let req = IssuanceRequest {
+                agent_id: &agent,
+                session_id: &session,
+                requested_actions: &actions,
+                resource_scope: "wttr.in*",
+                requested_ttl_seconds,
+            };
+            let out = issue_capability(&store, &signer, max_ttl(600), &req)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                (out.claims.expiry - out.claims.issued_at).num_seconds(),
+                expected_ttl_seconds
+            );
+        }
     }
 
     /// Policy store that permits exactly one action class; all others
@@ -183,7 +221,9 @@ mod tests {
             resource_scope: "*",
             requested_ttl_seconds: 300,
         };
-        let out = issue_capability(&store, &signer, 600, &req).await.unwrap();
+        let out = issue_capability(&store, &signer, max_ttl(600), &req)
+            .await
+            .unwrap();
         assert_eq!(out.claims.action_set, vec!["code.read".to_string()]);
     }
 
@@ -202,7 +242,7 @@ mod tests {
             resource_scope: "*",
             requested_ttl_seconds: 300,
         };
-        let err = issue_capability(&store, &signer, 600, &req)
+        let err = issue_capability(&store, &signer, max_ttl(600), &req)
             .await
             .unwrap_err();
         match err {
@@ -238,7 +278,7 @@ mod tests {
             resource_scope: "wttr.in*",
             requested_ttl_seconds: 300,
         };
-        let err = issue_capability(&store, &signer, 600, &req)
+        let err = issue_capability(&store, &signer, max_ttl(600), &req)
             .await
             .unwrap_err();
         match err {

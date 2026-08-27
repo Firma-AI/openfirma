@@ -151,6 +151,10 @@ async fn issue_capability_e2e() {
         ["communication.external.send", "filesystem.read"]
     );
     assert!(!token.signature.is_empty());
+    let issued_at = token.issued_at.as_ref().expect("issued_at missing");
+    let expiry = token.expiry.as_ref().expect("expiry missing");
+    assert_eq!(expiry.seconds - issued_at.seconds, 300);
+    assert_eq!(expiry.nanos, issued_at.nanos);
 
     let canonical_response = client
         .issue_capability(IssueCapabilityRequest {
