@@ -345,6 +345,22 @@ fn sidecar_connector_host_timeout_rejects_zero() {
 }
 
 #[test]
+fn sidecar_local_exec_retry_after_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        "[local_exec]\nsocket_path = \"/run/firma/local-exec.sock\"\nretry_after = \"0s\"\n",
+    )
+    .expect_err("zero local-exec retry interval must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"

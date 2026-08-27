@@ -1039,9 +1039,6 @@ pub enum LocalExecConfigError {
     /// `token_ttl` was zero.
     #[error("local_exec.token_ttl must be > 0")]
     ZeroTokenTtl,
-    /// `retry_after` was zero.
-    #[error("local_exec.retry_after must be > 0")]
-    ZeroRetryAfter,
     /// `retry_after` was positive but shorter than the millisecond wire unit.
     #[error("local_exec.retry_after must be at least 1ms")]
     RetryAfterBelowOneMillisecond,
@@ -1060,10 +1057,8 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         if s.token_ttl.is_zero() {
             return Err(LocalExecConfigError::ZeroTokenTtl);
         }
-        if s.retry_after.is_zero() {
-            return Err(LocalExecConfigError::ZeroRetryAfter);
-        }
-        let retry_after_ms = u64::try_from(s.retry_after.as_millis())
+        let retry_after = s.retry_after.duration();
+        let retry_after_ms = u64::try_from(retry_after.as_millis())
             .map_err(|_| LocalExecConfigError::RetryAfterTooLarge)?;
         if retry_after_ms == 0 {
             return Err(LocalExecConfigError::RetryAfterBelowOneMillisecond);
@@ -1072,7 +1067,7 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
             socket_path: s.socket_path,
             default_action: s.default_action,
             token_ttl: s.token_ttl,
-            retry_after: s.retry_after,
+            retry_after,
         })
     }
 }
