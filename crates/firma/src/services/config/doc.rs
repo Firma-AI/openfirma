@@ -171,6 +171,10 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
 
+    if let Some(local_exec) = optional_table_mut(sidecar, "local_exec")? {
+        migrate_integer_duration(local_exec, "token_ttl_secs", "token_ttl", "s");
+    }
+
     if let Some(authority) = optional_table_mut(sidecar, "authority")? {
         migrate_integer_duration(authority, "connect_timeout_secs", "connect_timeout", "s");
         migrate_integer_duration(
@@ -892,6 +896,17 @@ mod tests {
         let parsed: toml::Value = toml::from_str(&out).unwrap();
         assert!(parsed.get("authority").is_some());
         assert!(parsed.get("sidecar").is_none(), "got: {out}");
+    }
+
+    #[test]
+    fn merge_migrates_legacy_local_exec_token_ttl() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.local_exec]\nsocket_path = \"/run/firma/local-exec.sock\"\ntoken_ttl_secs = 300\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("token_ttl = \"300s\""));
+        assert!(!out.contains("token_ttl_secs"));
     }
 
     #[test]

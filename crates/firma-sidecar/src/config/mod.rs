@@ -1018,8 +1018,8 @@ pub struct LocalExecConfig {
     pub(crate) socket_path: PathBuf,
     /// Policy applied to every fresh local-exec request.
     pub(crate) default_action: firma_config_schema::sidecar::local_exec::DefaultAction,
-    /// Approval token time-to-live in seconds (default: 300).
-    pub(crate) token_ttl_secs: u64,
+    /// Approval token time-to-live.
+    pub(crate) token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (milliseconds, default: 500).
     pub(crate) retry_after_ms: u64,
@@ -1031,8 +1031,8 @@ pub enum LocalExecConfigError {
     /// `socket_path` was not absolute.
     #[error("local_exec.socket_path must be absolute, got: {}", .0.display())]
     SocketPathNotAbsolute(PathBuf),
-    /// `token_ttl_secs` was zero.
-    #[error("local_exec.token_ttl_secs must be > 0")]
+    /// `token_ttl` was zero.
+    #[error("local_exec.token_ttl must be > 0")]
     ZeroTokenTtl,
     /// `retry_after_ms` was zero.
     #[error("local_exec.retry_after_ms must be > 0")]
@@ -1046,7 +1046,7 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         if !s.socket_path.is_absolute() {
             return Err(LocalExecConfigError::SocketPathNotAbsolute(s.socket_path));
         }
-        if s.token_ttl_secs == 0 {
+        if s.token_ttl.is_zero() {
             return Err(LocalExecConfigError::ZeroTokenTtl);
         }
         if s.retry_after_ms == 0 {
@@ -1055,7 +1055,7 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         Ok(Self {
             socket_path: s.socket_path,
             default_action: s.default_action,
-            token_ttl_secs: s.token_ttl_secs,
+            token_ttl: s.token_ttl,
             retry_after_ms: s.retry_after_ms,
         })
     }
