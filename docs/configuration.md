@@ -22,10 +22,6 @@ binary to exit before accepting requests.
 absolutised under the resolved config and state directories. The shape is:
 
 ```toml
-[project]
-agent = "generic"
-provider = "anthropic"
-
 [authority]
 type = "local"
 listen_addr = "127.0.0.1:50051"

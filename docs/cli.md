@@ -357,7 +357,7 @@ on FIR-104.
 When `--config` is **omitted**, every subcommand — `sidecar`
 (`start`/`stop`/`status`), `authority`, `run`, `config`, `monitor`, and
 `doctor` — discovers the same single shared `firma.toml`. That one file holds top-level
-`[project]` / `[sidecar]` / `[authority]` / `[run]` sections; each
+`[sidecar]` / `[authority]` / `[run]` sections; each
 subcommand reads only its own section. The first selected file wins:
 
 1. `--config <path>` flag — always wins. It only relocates the file;
