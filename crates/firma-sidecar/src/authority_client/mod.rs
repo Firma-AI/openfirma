@@ -80,7 +80,7 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
         backoff: ExponentialBackoff::new(min, max),
         cancel: deps.cancel,
         fail_closed_on_disconnect: deps.config.revocation_fail_closed_on_disconnect,
-        readiness_grace_ms: deps.config.revocation_readiness_grace_ms,
+        readiness_grace: deps.config.revocation_readiness_grace,
         last_event_time: None,
         credentials: deps.credentials,
     };

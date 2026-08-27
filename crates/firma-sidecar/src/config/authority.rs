@@ -129,7 +129,7 @@ pub struct AuthorityConfig {
     /// Maximum reconnect backoff.
     pub(crate) reconnect_max_backoff: Duration,
     /// Grace period before the revocation stream is considered ready.
-    pub(crate) revocation_readiness_grace_ms: u64,
+    pub(crate) revocation_readiness_grace: Duration,
     /// Flip revocation readiness back to false on disconnect.
     pub(crate) revocation_fail_closed_on_disconnect: bool,
     /// Path to the Authority's PASETO v4 Ed25519 public key.
@@ -260,7 +260,7 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             connect_timeout: s.connect_timeout,
             reconnect_min_backoff: s.reconnect_min_backoff,
             reconnect_max_backoff: s.reconnect_max_backoff,
-            revocation_readiness_grace_ms: s.revocation_readiness_grace_ms,
+            revocation_readiness_grace: s.revocation_readiness_grace,
             revocation_fail_closed_on_disconnect: s.revocation_fail_closed_on_disconnect,
             public_key_path,
             ca_cert_path,
@@ -281,7 +281,7 @@ impl Default for AuthorityConfig {
             connect_timeout: Duration::from_secs(10),
             reconnect_min_backoff: Duration::from_millis(250),
             reconnect_max_backoff: Duration::from_secs(30),
-            revocation_readiness_grace_ms: default_readiness_grace_ms(),
+            revocation_readiness_grace: Duration::from_millis(500),
             revocation_fail_closed_on_disconnect: false,
             public_key_path: None,
             ca_cert_path: None,
@@ -291,8 +291,4 @@ impl Default for AuthorityConfig {
             credentials: None,
         }
     }
-}
-
-const fn default_readiness_grace_ms() -> u64 {
-    500
 }

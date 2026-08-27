@@ -235,7 +235,7 @@ The request path is blocked until both Authority-backed stores are ready:
 
 - The policy bundle stream has delivered and applied its first bundle.
 - The revocation stream has either delivered its first event or the
-  `revocation_readiness_grace_ms` window has elapsed.
+  `revocation_readiness_grace` window has elapsed.
 
 Only after both gates pass does the Sidecar emit `sidecar ready`. Before
 that point, protected traffic denies locally with readiness errors such as
@@ -252,7 +252,7 @@ public_key_path               = "/etc/firma/firma-authority.pub"
 ca_cert_path                  = "/etc/firma/authority-ca.crt"
 reconnect_min_backoff         = "250ms"
 reconnect_max_backoff         = "30s"
-revocation_readiness_grace_ms = 500
+revocation_readiness_grace    = "500ms"
 ```
 
 For Cloud Run multi-container services, make the Sidecar's health endpoint

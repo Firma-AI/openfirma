@@ -59,8 +59,11 @@ pub struct AuthorityConfig {
     )]
     pub reconnect_max_backoff: Duration,
     /// Grace period before the revocation stream is considered ready.
-    #[serde(default = "default_readiness_grace_ms")]
-    pub revocation_readiness_grace_ms: u64,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_readiness_grace"
+    )]
+    pub revocation_readiness_grace: Duration,
     /// Flip revocation readiness back to false on disconnect.
     #[serde(default)]
     pub revocation_fail_closed_on_disconnect: bool,
@@ -96,7 +99,7 @@ impl Default for AuthorityConfig {
             connect_timeout: default_connect_timeout(),
             reconnect_min_backoff: default_min_backoff(),
             reconnect_max_backoff: default_max_backoff(),
-            revocation_readiness_grace_ms: default_readiness_grace_ms(),
+            revocation_readiness_grace: default_readiness_grace(),
             revocation_fail_closed_on_disconnect: false,
             public_key_path: None,
             ca_cert_path: None,
@@ -120,6 +123,6 @@ const fn default_max_backoff() -> Duration {
     Duration::from_secs(30)
 }
 
-const fn default_readiness_grace_ms() -> u64 {
-    500
+const fn default_readiness_grace() -> Duration {
+    Duration::from_millis(500)
 }

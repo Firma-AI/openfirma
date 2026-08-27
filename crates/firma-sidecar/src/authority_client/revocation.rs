@@ -29,8 +29,8 @@ pub(crate) struct RevocationTask {
     pub(crate) cancel: CancellationToken,
     /// Whether disconnects make the revocation cache not-ready.
     pub(crate) fail_closed_on_disconnect: bool,
-    /// Milliseconds after a successful connect before readiness flips.
-    pub(crate) readiness_grace_ms: u64,
+    /// Delay after a successful connect before readiness flips.
+    pub(crate) readiness_grace: Duration,
     /// Last seen revocation timestamp for replay.
     pub(crate) last_event_time: Option<Timestamp>,
     /// Credentials presented on each stream connection.
@@ -89,7 +89,7 @@ impl RevocationTask {
         tracing::info!(stream = "revocations", "authority stream connected");
 
         let mut stream = response.into_inner();
-        let grace = tokio::time::sleep(Duration::from_millis(self.readiness_grace_ms));
+        let grace = tokio::time::sleep(self.readiness_grace);
         tokio::pin!(grace);
         let mut ready = false;
 

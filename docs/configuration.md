@@ -227,7 +227,7 @@ timeout_ms = 60000
 connect_timeout = "10s"
 reconnect_min_backoff = "250ms"
 reconnect_max_backoff = "30s"
-revocation_readiness_grace_ms = 500
+revocation_readiness_grace = "500ms"
 revocation_fail_closed_on_disconnect = false
 
 [revocation]
@@ -638,7 +638,7 @@ mode and this section is ignored.
 | `connect_timeout`                      | duration | `"10s"`   | Connection timeout for the tonic channel                                                                                    |
 | `reconnect_min_backoff`                | duration | `"250ms"` | Minimum reconnect backoff                                                                                                   |
 | `reconnect_max_backoff`                | duration | `"30s"`   | Maximum reconnect backoff                                                                                                   |
-| `revocation_readiness_grace_ms`        | u64      | `500`     | Grace period after revocation stream opens before readiness                                                                 |
+| `revocation_readiness_grace`           | duration | `"500ms"` | Grace period after revocation stream opens before readiness                                                                 |
 | `revocation_fail_closed_on_disconnect` | bool     | `false`   | Flip revocation readiness back to false when the stream drops                                                               |
 | `public_key_path`                      | path     | none      | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
 | `credentials`                          | section  | none      | Optional Sidecar PSK credentials sent on every Authority RPC.                                                               |

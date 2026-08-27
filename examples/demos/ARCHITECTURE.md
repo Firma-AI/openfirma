@@ -176,7 +176,7 @@ signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 connect_timeout = "10s"
 reconnect_min_backoff = "250ms"
 reconnect_max_backoff = "30s"
-revocation_readiness_grace_ms = 500
+revocation_readiness_grace = "500ms"
 revocation_fail_closed_on_disconnect = false
 ```
 

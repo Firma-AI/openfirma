@@ -397,7 +397,7 @@ tasks from `authority_client`:
   resends it as `since` on reconnect so the Authority can replay any
   missed events. `ReadinessFlag::revocation_ready` flips on the first
   event OR after a configurable grace period
-  (`revocation_readiness_grace_ms`, default 500 ms) after the stream
+  (`revocation_readiness_grace`, default `"500ms"`) after the stream
   opens — whichever comes first. When
   `revocation_fail_closed_on_disconnect` is true, the readiness bit
   flips back to `false` on disconnect; by default it stays set and

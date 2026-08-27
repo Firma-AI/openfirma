@@ -185,6 +185,12 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
             "reconnect_max_backoff",
             "s",
         );
+        migrate_integer_duration(
+            authority,
+            "revocation_readiness_grace_ms",
+            "revocation_readiness_grace",
+            "ms",
+        );
     }
 
     set_str_if_absent(sidecar, "mode", "enforce");
@@ -285,7 +291,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         set_str_if_absent(auth, "connect_timeout", "10s");
         set_str_if_absent(auth, "reconnect_min_backoff", "250ms");
         set_str_if_absent(auth, "reconnect_max_backoff", "30s");
-        set_int_if_absent(auth, "revocation_readiness_grace_ms", 500);
+        set_str_if_absent(auth, "revocation_readiness_grace", "500ms");
         set_bool_if_absent(auth, "revocation_fail_closed_on_disconnect", false);
     }
 
@@ -834,6 +840,17 @@ mod tests {
 
         assert!(out.contains("reconnect_max_backoff = \"30s\""));
         assert!(!out.contains("reconnect_max_backoff_secs"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_authority_revocation_readiness_grace() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.authority]\nrevocation_readiness_grace_ms = 500\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("revocation_readiness_grace = \"500ms\""));
+        assert!(!out.contains("revocation_readiness_grace_ms"));
     }
 
     #[test]
