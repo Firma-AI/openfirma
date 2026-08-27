@@ -57,13 +57,17 @@ fn generic_profile() -> ProfilePatch {
         backend: None,
         sidecar_endpoint: None,
         seccomp_policy: None,
-        env_passthrough: vec!["HOME".to_string(), "PATH".to_string(), "TERM".to_string()],
-        env_set,
-        mounts: vec![MountPatch {
+        env_passthrough: Some(vec![
+            "HOME".to_string(),
+            "PATH".to_string(),
+            "TERM".to_string(),
+        ]),
+        env_set: Some(env_set),
+        mounts: Some(vec![MountPatch {
             source: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             target: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             read_only: false,
-        }],
+        }]),
         network: Some(NetworkPolicyPatch {
             // Structural confinement default is backend-aware and resolved later.
             enforce_network_namespace: None,
@@ -92,8 +96,9 @@ fn generic_profile() -> ProfilePatch {
 fn codex_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
+        .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "codex".to_string());
-    base.env_passthrough.extend([
+    base.env_passthrough.get_or_insert_default().extend([
         "OPENAI_API_KEY".to_string(),
         "ANTHROPIC_API_KEY".to_string(),
         "CODEX_HOME".to_string(),
@@ -145,9 +150,10 @@ fn codex_executable_policy(restricted: bool) -> ExecutableLaunchPolicyPatch {
 fn claude_code_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
+        .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "claude-code".to_string());
     // Read-only rootfs and sensitive-home masking are inherited from generic_profile.
-    base.env_passthrough.extend([
+    base.env_passthrough.get_or_insert_default().extend([
         "ANTHROPIC_API_KEY".to_string(),
         "ANTHROPIC_AUTH_TOKEN".to_string(),
         "ANTHROPIC_BASE_URL".to_string(),
@@ -161,10 +167,11 @@ fn claude_code_profile() -> ProfilePatch {
 fn copilot_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
+        .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "copilot".to_string());
     // Copilot authenticates to GitHub via env-provided tokens; the SQLite
     // session store lives on the per-session runtime home (no host persistence).
-    base.env_passthrough.extend([
+    base.env_passthrough.get_or_insert_default().extend([
         "GITHUB_TOKEN".to_string(),
         "GH_TOKEN".to_string(),
         "GH_COPILOT_TOKEN".to_string(),
@@ -181,17 +188,19 @@ fn copilot_profile() -> ProfilePatch {
 fn vscode_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
+        .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "vscode".to_string());
     base.env_set
+        .get_or_insert_default()
         .insert("FIRMA_RUN_VSCODE_SHIM".to_string(), "true".to_string());
-    base.env_passthrough.extend([
+    base.env_passthrough.get_or_insert_default().extend([
         "DISPLAY".to_string(),
         "WAYLAND_DISPLAY".to_string(),
         "XAUTHORITY".to_string(),
         "XDG_RUNTIME_DIR".to_string(),
     ]);
     if std::path::Path::new("/tmp/.X11-unix").exists() {
-        base.mounts.push(MountPatch {
+        base.mounts.get_or_insert_default().push(MountPatch {
             source: PathBuf::from("/tmp/.X11-unix"),
             target: PathBuf::from("/tmp/.X11-unix"),
             read_only: false,
@@ -210,9 +219,17 @@ mod tests {
     fn copilot_profile_sets_append_ca_and_github_env() {
         let patch = built_in_profile("copilot").unwrap();
         assert_eq!(patch.ca_trust_mode, Some(CaTrustMode::AppendSystemRoots));
-        assert!(patch.env_passthrough.contains(&"GITHUB_TOKEN".to_string()));
+        assert!(
+            patch
+                .env_passthrough
+                .as_ref()
+                .is_some_and(|values| values.contains(&"GITHUB_TOKEN".to_string()))
+        );
         assert_eq!(
-            patch.env_set.get("FIRMA_RUN_PROFILE"),
+            patch
+                .env_set
+                .as_ref()
+                .and_then(|values| values.get("FIRMA_RUN_PROFILE")),
             Some(&"copilot".to_string())
         );
     }
@@ -223,24 +240,42 @@ mod tests {
         assert_eq!(patch.ca_trust_mode, Some(CaTrustMode::AppendSystemRoots));
         assert_eq!(patch.use_http_proxy_sidecar, Some(true));
         assert_eq!(
-            patch.env_set.get("FIRMA_RUN_PROFILE"),
+            patch
+                .env_set
+                .as_ref()
+                .and_then(|values| values.get("FIRMA_RUN_PROFILE")),
             Some(&"vscode".to_string())
         );
         assert_eq!(
-            patch.env_set.get("FIRMA_RUN_VSCODE_SHIM"),
+            patch
+                .env_set
+                .as_ref()
+                .and_then(|values| values.get("FIRMA_RUN_VSCODE_SHIM")),
             Some(&"true".to_string())
         );
-        assert!(patch.env_passthrough.contains(&"DISPLAY".to_string()));
         assert!(
             patch
                 .env_passthrough
-                .contains(&"WAYLAND_DISPLAY".to_string())
+                .as_ref()
+                .is_some_and(|values| values.contains(&"DISPLAY".to_string()))
         );
-        assert!(patch.env_passthrough.contains(&"XAUTHORITY".to_string()));
         assert!(
             patch
                 .env_passthrough
-                .contains(&"XDG_RUNTIME_DIR".to_string())
+                .as_ref()
+                .is_some_and(|values| values.contains(&"WAYLAND_DISPLAY".to_string()))
+        );
+        assert!(
+            patch
+                .env_passthrough
+                .as_ref()
+                .is_some_and(|values| values.contains(&"XAUTHORITY".to_string()))
+        );
+        assert!(
+            patch
+                .env_passthrough
+                .as_ref()
+                .is_some_and(|values| values.contains(&"XDG_RUNTIME_DIR".to_string()))
         );
     }
 

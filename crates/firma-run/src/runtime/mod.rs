@@ -1274,6 +1274,61 @@ mod tests {
     }
 
     #[test]
+    fn explicit_empty_env_set_reaches_launch_without_built_in_controls() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.profiles.generic]
+            env_passthrough = []
+
+            [run.profiles.generic.env_set]
+            "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        let run_args = super::RunInput {
+            profile: "generic".to_string(),
+            config: Some(config_path),
+            backend: None,
+            sidecar_cli: crate::sidecar::SidecarCli::Unset,
+            capability_file: None,
+            identity_mode: None,
+            preserve_host_user: false,
+            print_effective_config: false,
+            no_autostart: false,
+            sidecar_template_path: None,
+            sidecar_startup_timeout_secs: 10,
+            command: vec!["echo".to_string(), "ok".to_string()],
+            authority_cli: crate::authority::AuthorityCli::Unset,
+            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
+            user_config_path: None,
+            allow_non_structural: true,
+            monitor_mode: false,
+        };
+        let profile =
+            crate::config::resolve_profile(&run_args).unwrap_or_else(|error| panic!("{error}"));
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let env = build_execution_env(
+            &profile,
+            &identity,
+            None,
+            &profile.sidecar_endpoint,
+            &BTreeMap::new(),
+        );
+
+        for cleared in [
+            "FIRMA_RUN_BWRAP_ROOTFS_MODE",
+            "FIRMA_RUN_BWRAP_RUNTIME_HOME",
+            "FIRMA_RUN_BWRAP_MASK_HOME_PATHS",
+            "NO_PROXY",
+            "no_proxy",
+        ] {
+            assert!(!env.contains_key(cleared), "{cleared} must remain cleared");
+        }
+    }
+
+    #[test]
     fn codex_policy_respects_explicit_cli_flags() {
         let profile = ResolvedProfile {
             id: "codex".to_string(),

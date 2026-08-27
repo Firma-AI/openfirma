@@ -402,6 +402,10 @@ Profile values resolve from the built-in profile, then `[run.defaults]`, then th
 
 Boolean profile fields distinguish omission from `false`. Omitting `use_http_proxy_sidecar` or `allow_non_structural` inherits the lower layer; setting either to `false` disables an inherited `true`. This replaces the previous logical-OR behavior. Passing `--allow-non-structural` still enables the setting at highest profile precedence, while omitting the flag leaves file configuration unchanged. `FIRMA_RUN_ALLOW_NON_STRUCTURAL` remains a separate post-resolution enable-only override.
 
+Top-level collections preserve the same absent/present distinction. `env_passthrough` and `mounts` are replaceable lists: omission inherits, a present list replaces, and `[]` clears. `env_set` is a map: omission inherits, a non-empty table merges by key, and a present empty table clears every lower entry. This replaces the previous passthrough append and non-empty-only mount behavior, so repeat inherited list entries you still need.
+
+An empty `env_set` table is a broad opt-out: it removes the built-in bwrap root-filesystem and home masking values plus the `NO_PROXY`/`no_proxy` proxy-bypass safeguards. Prefer non-empty key overrides for narrow changes. Selective deletion of one inherited map key is not supported.
+
 ## Useful flags
 
 `firma run --help` is the full reference. The flags that come up most often:

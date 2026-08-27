@@ -143,6 +143,20 @@ replaces the previous logical-OR behavior. The enable-only
 when omitted it does not override the file. `FIRMA_RUN_ALLOW_NON_STRUCTURAL`
 remains a separate post-resolution enable-only override.
 
+Top-level profile collections also distinguish omission from an explicit empty
+value. `env_passthrough` and `mounts` are replaceable lists: omission inherits,
+a present list replaces the lower list, and `[]` clears it. `env_set` is a map:
+omission inherits, a non-empty map merges by key, and a present empty table
+clears every lower entry. These rules replace the previous passthrough append
+and non-empty-only mount behavior. Repeat any inherited list entries that must
+remain.
+
+Clearing `env_set` deliberately removes built-in bwrap root-filesystem and home
+masking controls as well as the `NO_PROXY`/`no_proxy` proxy-bypass safeguards.
+Prefer a non-empty key override for narrow changes; use an empty table only as
+an explicit broad opt-out. Selective removal of one inherited map key is not
+supported.
+
 ## Config-Relative Resource Resolution
 
 A resource field holding a **relative** path resolves under the resolved

@@ -14,6 +14,7 @@ use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMo
 use firma_config_schema::utils::{NonZeroDuration, ZeroDurationError};
 use firma_config_schema::{authority, gateway, run, secret_matcher, sidecar};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 #[test]
@@ -640,6 +641,29 @@ fn run_profile_booleans_distinguish_absent_false_and_true() {
     assert_eq!(config.defaults.allow_non_structural, None);
     assert_eq!(config.profiles["selected"].use_http_proxy_sidecar, None);
     assert_eq!(config.profiles["selected"].allow_non_structural, Some(true));
+}
+
+#[test]
+fn run_profile_collections_distinguish_absent_and_empty() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+        [defaults]
+        env_passthrough = []
+        mounts = []
+
+        [defaults.env_set]
+
+        [profiles.selected]
+        "#,
+    )
+    .expect("empty profile collections must parse as present");
+
+    assert_eq!(config.defaults.env_passthrough, Some(Vec::new()));
+    assert_eq!(config.defaults.env_set, Some(BTreeMap::new()));
+    assert!(config.defaults.mounts.as_ref().is_some_and(Vec::is_empty));
+    assert_eq!(config.profiles["selected"].env_passthrough, None);
+    assert_eq!(config.profiles["selected"].env_set, None);
+    assert!(config.profiles["selected"].mounts.is_none());
 }
 
 #[test]

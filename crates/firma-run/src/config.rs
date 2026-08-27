@@ -373,27 +373,25 @@ impl Merge for CapabilityLeasePatch {
 
 impl Merge for ProfilePatch {
     fn merge(self, higher: Self) -> Self {
-        let mut env_set = self.env_set;
-        env_set.extend(higher.env_set);
-
-        let mut env_passthrough = self.env_passthrough;
-        env_passthrough.extend(higher.env_passthrough);
+        let env_set = match higher.env_set {
+            Some(higher) if higher.is_empty() => Some(higher),
+            Some(higher) => {
+                let mut merged = self.env_set.unwrap_or_default();
+                merged.extend(higher);
+                Some(merged)
+            }
+            None => self.env_set,
+        };
         let mut executable_policies = self.executable_policies;
         executable_policies.extend(higher.executable_policies);
-
-        let mounts = if higher.mounts.is_empty() {
-            self.mounts
-        } else {
-            higher.mounts
-        };
 
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
             seccomp_policy: higher.seccomp_policy.or(self.seccomp_policy),
-            env_passthrough,
+            env_passthrough: higher.env_passthrough.or(self.env_passthrough),
             env_set,
-            mounts,
+            mounts: higher.mounts.or(self.mounts),
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: match (self.capability, higher.capability) {
@@ -478,11 +476,12 @@ pub(crate) fn resolve_profile_with_layout(
 
     let env_passthrough = patch
         .env_passthrough
+        .unwrap_or_default()
         .into_iter()
         .filter(|item: &String| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
 
-    let mut env_set = patch.env_set;
+    let mut env_set = patch.env_set.unwrap_or_default();
     if let Some(paths) = patch.mask_home_paths {
         env_set.insert(
             "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
@@ -496,6 +495,7 @@ pub(crate) fn resolve_profile_with_layout(
 
     let mounts = patch
         .mounts
+        .unwrap_or_default()
         .into_iter()
         .map(|mount| MountSpec {
             source: mount.source,
@@ -633,9 +633,9 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         backend: args.backend.map(SchemaBackendKind::from),
         sidecar_endpoint: None,
         seccomp_policy: None,
-        env_passthrough: Vec::new(),
-        env_set: BTreeMap::new(),
-        mounts: Vec::new(),
+        env_passthrough: None,
+        env_set: None,
+        mounts: None,
         network: None,
         identity_mode: if args.preserve_host_user {
             Some(SandboxIdentityMode::HostUser)
@@ -1065,8 +1065,10 @@ fn rebase_file_paths(config: &mut FileConfig, config_dir: &Path) {
 }
 
 fn rebase_profile_paths(profile: &mut ProfilePatch, config_dir: &Path) {
-    for mount in &mut profile.mounts {
-        rebase_path(&mut mount.source, config_dir);
+    if let Some(mounts) = &mut profile.mounts {
+        for mount in mounts {
+            rebase_path(&mut mount.source, config_dir);
+        }
     }
     if let Some(seccomp) = &mut profile.seccomp_policy {
         rebase_path(&mut seccomp.source_policy_path, config_dir);
@@ -1118,7 +1120,7 @@ pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -1130,7 +1132,7 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        CapabilitySourcePatch, FileConfig, Merge, ProfilePatch, SandboxIdentityMode,
+        CapabilitySourcePatch, FileConfig, Merge, MountPatch, ProfilePatch, SandboxIdentityMode,
         SeccompRuntimeMode, SidecarEndpoint, capability_from_patch, cli_profile_patch,
         rebase_file_paths, resolve_profile,
     };
@@ -1192,11 +1194,11 @@ mod tests {
         rebase_file_paths(&mut config, std::path::Path::new("/cfg"));
 
         assert_eq!(
-            config.defaults.mounts[0].source,
+            config.defaults.mounts.as_ref().unwrap()[0].source,
             PathBuf::from("/cfg/workspace")
         );
         assert_eq!(
-            config.defaults.mounts[0].target,
+            config.defaults.mounts.as_ref().unwrap()[0].target,
             PathBuf::from("/sandbox/workspace")
         );
         let seccomp = config.defaults.seccomp_policy.as_ref().unwrap();
@@ -1218,7 +1220,7 @@ mod tests {
         );
         let unselected = &config.profiles["unselected"];
         assert_eq!(
-            unselected.mounts[0].source,
+            unselected.mounts.as_ref().unwrap()[0].source,
             PathBuf::from("/cfg/other-workspace")
         );
         match unselected
@@ -1571,6 +1573,93 @@ approval_policy = "never"
                 assert_eq!(merged.allow_non_structural, higher.or(lower));
             }
         }
+    }
+
+    #[test]
+    fn top_level_collection_merge_obeys_each_shape_contract() {
+        let lower = ProfilePatch {
+            env_passthrough: Some(vec!["LOWER".to_string()]),
+            env_set: Some(BTreeMap::from([
+                ("LOWER".to_string(), "preserved".to_string()),
+                ("SHARED".to_string(), "lower".to_string()),
+            ])),
+            mounts: Some(vec![MountPatch {
+                source: PathBuf::from("/lower"),
+                target: PathBuf::from("/workspace"),
+                read_only: true,
+            }]),
+            ..ProfilePatch::default()
+        };
+
+        let inherited = lower.clone().merge(ProfilePatch::default());
+        assert_eq!(inherited.env_passthrough, lower.env_passthrough);
+        assert_eq!(inherited.env_set, lower.env_set);
+        assert_eq!(
+            inherited.mounts.as_ref().map(|mounts| &mounts[0].source),
+            Some(&PathBuf::from("/lower"))
+        );
+
+        let replaced = lower.clone().merge(ProfilePatch {
+            env_passthrough: Some(vec!["HIGHER".to_string()]),
+            env_set: Some(BTreeMap::from([
+                ("HIGHER".to_string(), "added".to_string()),
+                ("SHARED".to_string(), "higher".to_string()),
+            ])),
+            mounts: Some(vec![MountPatch {
+                source: PathBuf::from("/higher"),
+                target: PathBuf::from("/workspace"),
+                read_only: false,
+            }]),
+            ..ProfilePatch::default()
+        });
+        assert_eq!(replaced.env_passthrough, Some(vec!["HIGHER".to_string()]));
+        assert_eq!(
+            replaced.env_set,
+            Some(BTreeMap::from([
+                ("HIGHER".to_string(), "added".to_string()),
+                ("LOWER".to_string(), "preserved".to_string()),
+                ("SHARED".to_string(), "higher".to_string()),
+            ]))
+        );
+        assert_eq!(
+            replaced.mounts.as_ref().map(|mounts| &mounts[0].source),
+            Some(&PathBuf::from("/higher"))
+        );
+
+        let cleared = lower.merge(ProfilePatch {
+            env_passthrough: Some(Vec::new()),
+            env_set: Some(BTreeMap::new()),
+            mounts: Some(Vec::new()),
+            ..ProfilePatch::default()
+        });
+        assert_eq!(cleared.env_passthrough, Some(Vec::new()));
+        assert_eq!(cleared.env_set, Some(BTreeMap::new()));
+        assert!(cleared.mounts.as_ref().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn explicit_empty_top_level_collections_clear_built_in_values() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.profiles.generic]
+            env_passthrough = []
+            mounts = []
+
+            [run.profiles.generic.env_set]
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+
+        assert!(resolved.env_passthrough.is_empty());
+        assert!(resolved.env_set.is_empty());
+        assert!(resolved.mounts.is_empty());
     }
 
     #[test]

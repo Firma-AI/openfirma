@@ -83,12 +83,15 @@ pub struct ProfilePatch {
     pub backend: Option<BackendKind>,
     pub sidecar_endpoint: Option<String>,
     pub seccomp_policy: Option<SeccompPolicyPatch>,
-    #[serde(default)]
-    pub env_passthrough: Vec<String>,
-    #[serde(default)]
-    pub env_set: BTreeMap<String, String>,
-    #[serde(default)]
-    pub mounts: Vec<MountPatch>,
+    /// Environment variable names inherited from the host. `None` inherits the
+    /// lower profile layer; a present list replaces it, including an empty list.
+    pub env_passthrough: Option<Vec<String>>,
+    /// Fixed environment values. `None` inherits the lower profile layer, a
+    /// present empty map clears it, and a non-empty map merges by key.
+    pub env_set: Option<BTreeMap<String, String>>,
+    /// Sandbox mounts. `None` inherits the lower profile layer; a present list
+    /// replaces it, including an empty list.
+    pub mounts: Option<Vec<MountPatch>>,
     pub network: Option<NetworkPolicyPatch>,
     pub identity_mode: Option<SandboxIdentityMode>,
     pub capability: Option<CapabilityLeasePatch>,

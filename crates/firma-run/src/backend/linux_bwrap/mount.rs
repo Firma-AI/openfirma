@@ -1103,6 +1103,15 @@ mod tests {
     }
 
     #[test]
+    fn hardening_from_cleared_profile_env_is_disabled() {
+        let hardening = super::BwrapHardening::from_env(&BTreeMap::new());
+
+        assert!(!hardening.readonly_rootfs);
+        assert!(!hardening.runtime_home_isolation);
+        assert!(hardening.mask_home_paths.is_empty());
+    }
+
+    #[test]
     #[cfg(target_os = "linux")]
     fn mask_sensitive_paths_adds_expected_mounts() {
         let mut plan = super::BwrapMountPlan::empty();
