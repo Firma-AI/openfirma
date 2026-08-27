@@ -371,6 +371,21 @@ impl Merge for SeccompPolicyPatch {
     }
 }
 
+impl Merge for CommandMediatorPatch {
+    fn merge(self, higher: Self) -> Self {
+        Self {
+            endpoint: higher.endpoint.or(self.endpoint),
+            timeout: higher.timeout.or(self.timeout),
+            hitl_mode: higher.hitl_mode.or(self.hitl_mode),
+            hitl_max_wait: higher.hitl_max_wait.or(self.hitl_max_wait),
+            enforce_known_executables: higher
+                .enforce_known_executables
+                .or(self.enforce_known_executables),
+            allowed_executables: higher.allowed_executables.or(self.allowed_executables),
+        }
+    }
+}
+
 impl Merge for CapabilityLeasePatch {
     fn merge(self, higher: Self) -> Self {
         let (source, kind, path) = if higher.source.is_some() {
@@ -425,7 +440,10 @@ impl Merge for ProfilePatch {
                 (Some(lower), Some(higher)) => Some(lower.merge(higher)),
                 (lower, higher) => higher.or(lower),
             },
-            sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
+            sidecar_local_exec: match (self.sidecar_local_exec, higher.sidecar_local_exec) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher
@@ -790,7 +808,8 @@ fn sidecar_local_exec_from_patch(
     } else {
         derive_sidecar_local_exec_endpoint(sidecar_endpoint)?
     };
-    let allowed_executables = canonicalize_allowed_executables(&patch.allowed_executables)?;
+    let allowed_executables =
+        canonicalize_allowed_executables(patch.allowed_executables.as_deref().unwrap_or_default())?;
     Ok(CommandMediatorConfig {
         endpoint,
         timeout: patch
@@ -1166,15 +1185,17 @@ mod tests {
     use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
+    use firma_config_schema::utils::NonZeroDuration;
     use pretty_assertions::assert_eq;
 
     use crate::runtime::RunInput;
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        CapabilitySourcePatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch, ProfilePatch,
-        SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode, SidecarEndpoint,
-        capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
+        CapabilitySourcePatch, CommandMediatorHitlMode, CommandMediatorPatch, FileConfig, Merge,
+        MountPatch, NetworkPolicyPatch, ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch,
+        SeccompRuntimeMode, SidecarEndpoint, capability_from_patch, cli_profile_patch,
+        rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -1281,7 +1302,7 @@ mod tests {
             unselected
                 .sidecar_local_exec
                 .as_ref()
-                .map(|mediator| &mediator.allowed_executables),
+                .and_then(|mediator| mediator.allowed_executables.as_ref()),
             Some(&vec![PathBuf::from("/usr/bin/bash")])
         );
     }
@@ -1817,6 +1838,85 @@ approval_policy = "never"
                 "unexpected error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn command_mediator_patch_merges_siblings_and_replaces_allowlist() {
+        let merged = CommandMediatorPatch {
+            endpoint: Some("unix:///run/firma/tools.sock".to_string()),
+            timeout: Some(NonZeroDuration::try_from(Duration::from_secs(1)).unwrap()),
+            hitl_mode: Some(CommandMediatorHitlMode::SyncWait),
+            hitl_max_wait: Some(NonZeroDuration::try_from(Duration::from_mins(5)).unwrap()),
+            enforce_known_executables: Some(true),
+            allowed_executables: Some(vec![PathBuf::from("/usr/bin/lower")]),
+        }
+        .merge(CommandMediatorPatch {
+            endpoint: None,
+            timeout: None,
+            hitl_mode: Some(CommandMediatorHitlMode::AsyncToken),
+            hitl_max_wait: Some(NonZeroDuration::try_from(Duration::from_mins(2)).unwrap()),
+            enforce_known_executables: Some(false),
+            allowed_executables: Some(Vec::new()),
+        });
+
+        assert_eq!(
+            merged.endpoint.as_deref(),
+            Some("unix:///run/firma/tools.sock")
+        );
+        assert_eq!(
+            merged.timeout.map(|timeout| timeout.duration()),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(merged.hitl_mode, Some(CommandMediatorHitlMode::AsyncToken));
+        assert_eq!(
+            merged.hitl_max_wait.map(|timeout| timeout.duration()),
+            Some(Duration::from_mins(2))
+        );
+        assert_eq!(merged.enforce_known_executables, Some(false));
+        assert!(
+            merged
+                .allowed_executables
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_mediator_file_layers_merge_and_empty_allowlist_clears() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.defaults]
+            sidecar_endpoint = "unix:///run/firma/sidecar.sock"
+
+            [run.defaults.sidecar_local_exec]
+            timeout = "1s"
+            hitl_mode = "sync_wait"
+            hitl_max_wait = "5m"
+            enforce_known_executables = true
+            allowed_executables = ["/lower/will-be-cleared"]
+
+            [run.profiles.generic.sidecar_local_exec]
+            hitl_mode = "async_token"
+            enforce_known_executables = false
+            allowed_executables = []
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+        let mediator = resolved.sidecar_local_exec.unwrap();
+
+        assert_eq!(mediator.timeout, Duration::from_secs(1));
+        assert_eq!(mediator.hitl_mode, CommandMediatorHitlMode::AsyncToken);
+        assert_eq!(mediator.hitl_max_wait, Duration::from_mins(5));
+        assert!(!mediator.enforce_known_executables);
+        assert!(mediator.allowed_executables.is_empty());
     }
 
     #[test]

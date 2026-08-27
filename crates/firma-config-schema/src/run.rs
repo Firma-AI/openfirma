@@ -193,8 +193,9 @@ pub struct CommandMediatorPatch {
     #[serde(default)]
     pub hitl_max_wait: Option<NonZeroDuration>,
     pub enforce_known_executables: Option<bool>,
-    #[serde(default)]
-    pub allowed_executables: Vec<PathBuf>,
+    /// Executables allowed when enforcement is enabled. `None` inherits the
+    /// lower profile layer; a present list replaces it, including an empty list.
+    pub allowed_executables: Option<Vec<PathBuf>>,
 }
 
 /// Source for capability material patch.

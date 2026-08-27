@@ -410,6 +410,8 @@ Nested `network` and `seccomp_policy` tables merge field-by-field, so a higher l
 
 Capability `requested_actions` is a replaceable list. Omission keeps the inherited or existing all-action request default, a present list replaces it, and `[]` stays empty. Automatic Authority issuance rejects that empty request with `NO_ACTIONS` before agent launch, without creating a seed or refresher. Disabled and pre-staged capability sources remain unchanged because they do not issue a capability.
 
+`sidecar_local_exec` merges field-by-field. A higher layer can change one timeout, HITL mode, endpoint, or enforcement boolean while retaining lower siblings. `allowed_executables` is replaceable: omission inherits, a present list replaces, and `[]` clears. Final validation still rejects `enforce_known_executables = true` with an empty allowlist.
+
 ## Useful flags
 
 `firma run --help` is the full reference. The flags that come up most often:

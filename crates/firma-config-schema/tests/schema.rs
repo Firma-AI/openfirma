@@ -699,6 +699,39 @@ fn run_nested_policy_patches_allow_partial_overrides() {
 }
 
 #[test]
+fn run_command_mediator_patch_distinguishes_absent_and_empty_allowlist() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+        [defaults.sidecar_local_exec]
+        timeout = "1s"
+
+        [profiles.selected.sidecar_local_exec]
+        enforce_known_executables = false
+        allowed_executables = []
+        "#,
+    )
+    .expect("partial command mediator patches must parse");
+
+    let defaults = config.defaults.sidecar_local_exec.as_ref().unwrap();
+    assert_eq!(
+        defaults.timeout.map(|timeout| timeout.duration()),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(defaults.allowed_executables, None);
+    let selected = config.profiles["selected"]
+        .sidecar_local_exec
+        .as_ref()
+        .unwrap();
+    assert_eq!(selected.enforce_known_executables, Some(false));
+    assert!(
+        selected
+            .allowed_executables
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+    );
+}
+
+#[test]
 fn run_validates_backends_in_defaults_and_unselected_profiles() {
     for config in [
         "[defaults]\nbackend = \"bworp\"\n",

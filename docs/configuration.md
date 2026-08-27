@@ -172,6 +172,13 @@ before launch with Authority reason `NO_ACTIONS`, so no capability seed or
 refresh lifecycle starts. Disabled and pre-staged capability sources do not
 issue and retain their existing behavior.
 
+`sidecar_local_exec` also merges field-by-field. Higher layers can change one
+timeout, HITL mode, endpoint, or enforcement boolean without replacing lower
+siblings. `allowed_executables` is a replaceable list: omission inherits, a
+present list replaces, and `[]` clears. Existing cross-field validation remains:
+the final configuration cannot combine `enforce_known_executables = true` with
+an empty allowlist.
+
 ## Config-Relative Resource Resolution
 
 A resource field holding a **relative** path resolves under the resolved
