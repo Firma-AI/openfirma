@@ -522,9 +522,6 @@ pub struct ConnectRelayConfig {
 /// Error validating a [`ConnectRelayConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectRelayConfigError {
-    /// `setup_timeout` was zero.
-    #[error("interceptor.connect_relay.setup_timeout must be > 0")]
-    ZeroSetupTimeout,
     /// `session_max` was zero.
     #[error("interceptor.connect_relay.session_max must be > 0")]
     ZeroSessionMax,
@@ -534,14 +531,11 @@ impl TryFrom<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
     type Error = ConnectRelayConfigError;
 
     fn try_from(s: schema_ic::ConnectRelayConfig) -> Result<Self, Self::Error> {
-        if s.setup_timeout.is_zero() {
-            return Err(ConnectRelayConfigError::ZeroSetupTimeout);
-        }
         if s.session_max.is_zero() {
             return Err(ConnectRelayConfigError::ZeroSessionMax);
         }
         Ok(Self {
-            setup_timeout: s.setup_timeout,
+            setup_timeout: s.setup_timeout.duration(),
             session_max: s.session_max,
         })
     }
@@ -551,7 +545,7 @@ impl Default for ConnectRelayConfig {
     fn default() -> Self {
         let d = schema_ic::ConnectRelayConfig::default();
         Self {
-            setup_timeout: d.setup_timeout,
+            setup_timeout: d.setup_timeout.duration(),
             session_max: d.session_max,
         }
     }
@@ -1419,18 +1413,6 @@ mod tests {
         schema.interceptor.max_request_body_size = ByteSize::mib(4);
         schema.interceptor.total_body_budget = ByteSize::mib(4);
         assert!(SidecarConfig::try_from(schema).is_ok());
-    }
-
-    #[test]
-    fn test_sidecar_config_zero_connect_setup_timeout_rejected() {
-        let mut schema = schema_sidecar();
-        schema.interceptor.connect_relay.setup_timeout = Duration::ZERO;
-        assert!(matches!(
-            SidecarConfig::try_from(schema),
-            Err(SidecarConfigError::Interceptor(
-                InterceptorConfigError::ConnectRelay(ConnectRelayConfigError::ZeroSetupTimeout)
-            ))
-        ));
     }
 
     #[test]

@@ -16,6 +16,8 @@ use crate::utils::NonZeroDuration;
 
 const DEFAULT_DRAIN_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(30));
+const DEFAULT_CONNECT_SETUP_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_secs(10));
 
 /// Interception mode selector.
 ///
@@ -125,11 +127,8 @@ impl Default for InterceptorConfig {
 #[serde(deny_unknown_fields)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_connect_setup_timeout"
-    )]
-    pub setup_timeout: Duration,
+    #[serde(default = "default_connect_setup_timeout")]
+    pub setup_timeout: NonZeroDuration,
     /// Hard cap for the full tunnel/MITM session lifetime.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
@@ -223,8 +222,8 @@ const fn default_total_body_budget() -> ByteSize {
     ByteSize::mib(64)
 }
 
-const fn default_connect_setup_timeout() -> Duration {
-    Duration::from_secs(10)
+const fn default_connect_setup_timeout() -> NonZeroDuration {
+    DEFAULT_CONNECT_SETUP_TIMEOUT
 }
 
 const fn default_connect_session_max() -> Duration {
