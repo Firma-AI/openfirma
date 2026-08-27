@@ -92,13 +92,19 @@ mod tests {
     #[test]
     fn fail_when_authority_section_invalid() {
         let tmp = tempfile::tempdir().unwrap();
-        let p = write(
-            tmp.path(),
-            "[authority]\nmax_ttl_seconds = \"not-a-number\"\n",
-        );
+        let p = write(tmp.path(), "[authority]\nmax_ttl = \"not-a-duration\"\n");
         let c = check(&p);
         assert_eq!(c.status, Status::Fail);
         assert!(c.reason.contains("[authority]"), "got {c:?}");
+    }
+
+    #[test]
+    fn fail_when_authority_duration_cannot_be_represented_at_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = write(tmp.path(), "[authority]\nmax_ttl = \"500ms\"\n");
+        let c = check(&p);
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.reason.contains("whole number of seconds"), "got {c:?}");
     }
 
     #[test]

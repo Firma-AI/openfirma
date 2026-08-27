@@ -141,7 +141,7 @@ pub struct IssueArgs {
     /// Resource scope pattern (e.g. `wttr.in*`).
     #[arg(long, default_value = "*")]
     pub resource_scope: String,
-    /// Requested TTL in seconds. Clamped by `max_ttl_seconds` in config.
+    /// Requested TTL in seconds. Clamped by `max_ttl` in config.
     #[arg(long, default_value_t = 3600)]
     pub ttl_seconds: i32,
     /// Output TOML path.

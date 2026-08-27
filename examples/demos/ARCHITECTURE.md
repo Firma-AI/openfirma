@@ -125,7 +125,7 @@ listen_addr = "127.0.0.1:50051"
 policy_dir = "examples/demos/demo0/policies" # note: policies/ subdir
 revocation_file = "examples/demos/demo0/.runtime/revocations.txt"
 key_file = "examples/demos/demo0/.runtime/authority.key"
-max_ttl_seconds = 3600
+max_ttl = "1h"
 bundle_ttl_seconds = 30
 # schema_path = "..."  # optional; omit to use embedded schema
 ```

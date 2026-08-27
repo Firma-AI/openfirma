@@ -60,6 +60,11 @@ fn max_decompressed_body_size_accepts_human_readable_units() {
 }
 
 #[test]
+fn legacy_authority_max_ttl_seconds_key_is_rejected() {
+    assert!(toml::from_str::<authority::AuthorityConfig>("max_ttl_seconds = 3600\n").is_err());
+}
+
+#[test]
 fn sidecar_infra_enums_use_snake_case() {
     assert_eq!(
         serde_json::from_str::<SidecarMode>(r#""enforce""#).expect("mode"),

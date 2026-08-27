@@ -943,6 +943,71 @@ fn init_handles_relative_paths() {
     assert_unified_config_parses(&firma_toml);
 }
 
+#[test]
+fn scalar_migration_preserves_attached_comments() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let config_path = config_dir.join(CONFIG_FILE_NAME);
+    std::fs::write(
+        &config_path,
+        r#"[authority]
+# Keep the operator's duration rationale.
+max_ttl_seconds = 3600 # duration inline note
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
+"#,
+    )
+    .expect("write legacy config");
+
+    run_init(&config_dir, &state_dir);
+
+    let migrated = std::fs::read_to_string(config_path).expect("read migrated config");
+    assert!(!migrated.contains("max_ttl_seconds"));
+    assert!(
+        migrated.contains(
+            "# Keep the operator's duration rationale.\nmax_ttl = \"3600s\" # duration inline note"
+        ),
+        "duration comments were not preserved:\n{migrated}"
+    );
+}
+
+#[test]
+fn scalar_migration_preserves_legacy_comments_when_replacement_exists() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let config_path = config_dir.join(CONFIG_FILE_NAME);
+    std::fs::write(
+        &config_path,
+        r#"[authority]
+# Keep the legacy rationale.
+max_ttl_seconds = 3600 # legacy inline note
+# Keep the replacement rationale.
+max_ttl = "2h" # replacement inline note
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
+"#,
+    )
+    .expect("write partially migrated config");
+
+    run_init(&config_dir, &state_dir);
+
+    let migrated = std::fs::read_to_string(config_path).expect("read migrated config");
+    assert!(!migrated.contains("max_ttl_seconds"));
+    assert!(
+        migrated.contains(
+            "# Keep the legacy rationale.\n# legacy inline note\n# Keep the replacement rationale.\nmax_ttl = \"2h\" # replacement inline note"
+        ),
+        "migration did not merge comments deterministically:\n{migrated}"
+    );
+    assert_eq!(migrated.matches("max_ttl = \"2h\"").count(), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn init_writes_sensitive_dirs_with_mode_0700() {

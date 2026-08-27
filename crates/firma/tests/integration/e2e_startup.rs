@@ -68,7 +68,7 @@ listen_addr = "127.0.0.1:0"
 policy_dir = "{policy_dir}"
 issuance_policy_dir = "{issuance_policy_dir}"
 revocation_file = "{revocation_file}"
-max_ttl_seconds = 3600
+max_ttl = "1h"
 key_file = "{key_file}"
 bundle_ttl_seconds = 30
 "#,

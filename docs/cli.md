@@ -420,14 +420,14 @@ firma authority --config firma.toml issue \
   --output capability-demo-agent.toml
 ```
 
-| Flag               | Required | Default | Description                                            |
-| ------------------ | -------- | ------- | ------------------------------------------------------ |
-| `--agent-id`       | yes      |         | Token agent identity.                                  |
-| `--session-id`     | yes      |         | Token session identity.                                |
-| `--action`         | yes      |         | Action class. Repeat the flag for multiple.            |
-| `--resource-scope` | no       | `*`     | Resource scope pattern.                                |
-| `--ttl-seconds`    | no       | `3600`  | Requested TTL. Clamped by `max_ttl_seconds` in config. |
-| `--output`/`-o`    | yes      |         | Path to write the seed TOML.                           |
+| Flag               | Required | Default | Description                                    |
+| ------------------ | -------- | ------- | ---------------------------------------------- |
+| `--agent-id`       | yes      |         | Token agent identity.                          |
+| `--session-id`     | yes      |         | Token session identity.                        |
+| `--action`         | yes      |         | Action class. Repeat the flag for multiple.    |
+| `--resource-scope` | no       | `*`     | Resource scope pattern.                        |
+| `--ttl-seconds`    | no       | `3600`  | Requested TTL. Clamped by `max_ttl` in config. |
+| `--output`/`-o`    | yes      |         | Path to write the seed TOML.                   |
 
 The subcommand evaluates the loaded Cedar bundle exactly like
 the gRPC `IssueCapability` handler — a Cedar deny exits non-zero

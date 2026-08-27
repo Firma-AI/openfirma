@@ -68,7 +68,7 @@ fn schema_with_tls() -> schema::AuthorityConfig {
         issuance_policy_dir: "/srv/issuance".into(),
         schema_path: Some("/srv/schema.cedarschema".into()),
         revocation_file: "/srv/revocations.txt".into(),
-        max_ttl_seconds: 1200,
+        max_ttl: std::time::Duration::from_mins(20),
         key_file: "/srv/authority.key".into(),
         bundle_ttl_seconds: 45,
         tls_cert_path: Some("/srv/tls.crt".into()),

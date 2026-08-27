@@ -68,7 +68,7 @@ policy_dir          = "/etc/firma/policies"
 issuance_policy_dir = "/etc/firma/issuance"
 revocation_file     = "/var/lib/firma/revocations.txt"
 key_file            = "/etc/firma/firma-authority.key"
-max_ttl_seconds     = 3600              # capabilities live at most 1h
+max_ttl = "1h"              # capabilities live at most 1h
 bundle_ttl_seconds  = 30                # Sidecars deny if a bundle is not refreshed before this TTL
 ```
 

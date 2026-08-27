@@ -99,14 +99,14 @@ Subcommands:
 
 `issue` flags:
 
-| Flag               | Default            | Description                                              |
-| ------------------ | ------------------ | -------------------------------------------------------- |
-| `--agent-id`       | _required_         | Agent identity for the issued token.                     |
-| `--session-id`     | _required_         | Session identity (UUID).                                 |
-| `--action`         | _required, repeat_ | Action class(es) the token covers.                       |
-| `--resource-scope` | `*`                | Resource scope pattern (e.g. `wttr.in*`).                |
-| `--ttl-seconds`    | `3600`             | Requested TTL; clamped by `max_ttl_seconds` from config. |
-| `-o, --output`     | _required_         | Output seed TOML path.                                   |
+| Flag               | Default            | Description                                      |
+| ------------------ | ------------------ | ------------------------------------------------ |
+| `--agent-id`       | _required_         | Agent identity for the issued token.             |
+| `--session-id`     | _required_         | Session identity (UUID).                         |
+| `--action`         | _required, repeat_ | Action class(es) the token covers.               |
+| `--resource-scope` | `*`                | Resource scope pattern (e.g. `wttr.in*`).        |
+| `--ttl-seconds`    | `3600`             | Requested TTL; clamped by `max_ttl` from config. |
+| `-o, --output`     | _required_         | Output seed TOML path.                           |
 
 `revocations add` flags:
 

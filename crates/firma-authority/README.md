@@ -54,7 +54,7 @@ listen_addr = "[::1]:50051"
 policy_dir = "examples/policies"
 revocation_file = "revocations.txt"
 key_file = "firma-authority.key"
-max_ttl_seconds = 3600
+max_ttl = "1h"
 bundle_ttl_seconds = 30
 ```
 
@@ -85,7 +85,7 @@ The output file contains the signed token and matching claims. Configure the Sid
 | `schema_path`        | unset                 | Optional schema override.                    |
 | `revocation_file`    | `revocations.txt`     | File containing canonical `ctok` token IDs.  |
 | `key_file`           | `firma-authority.key` | Authority private signing key.               |
-| `max_ttl_seconds`    | `3600`                | Maximum token lifetime.                      |
+| `max_ttl`            | `"1h"`                | Maximum token lifetime.                      |
 | `bundle_ttl_seconds` | `30`                  | TTL advertised with streamed policy bundles. |
 
 Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`.

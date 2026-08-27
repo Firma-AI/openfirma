@@ -14,7 +14,7 @@
 //!   always overwrite on merge — they are the whole point of re-running
 //!   `firma config`.
 //! - **static defaults** are only seeded when absent; an operator's manual
-//!   tweak (e.g. `max_ttl_seconds = 7200`) survives.
+//!   tweak (e.g. `max_ttl = "2h"`) survives.
 //! - **array selections** (intercept hosts, mapping paths, extra-host
 //!   rules) are fully replaced because they reflect the *current*
 //!   selection — keeping stale entries would silently widen the policy
@@ -36,7 +36,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use firma_identifiers::AgentId;
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Key, Table, TableLike, Value, value};
 
 use crate::args::config::Mode;
 
@@ -154,12 +154,13 @@ fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()>
 
 fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let table = ensure_table(doc.as_table_mut(), "authority")?;
+    migrate_integer_duration(table, "max_ttl_seconds", "max_ttl", "s");
     set_str(table, "listen_addr", inputs.authority_listen);
     set_str_if_absent(table, "policy_dir", "policies/");
     set_str_if_absent(table, "issuance_policy_dir", "issuance-policies/");
     set_str(table, "revocation_file", inputs.revocation_file);
     set_str(table, "key_file", inputs.key_file);
-    set_int_if_absent(table, "max_ttl_seconds", 3600);
+    set_str_if_absent(table, "max_ttl", "1h");
     set_int_if_absent(table, "bundle_ttl_seconds", 30);
     set_str(table, "tls_cert_path", inputs.tls_cert_path);
     set_str(table, "tls_key_path", inputs.tls_key_path);
@@ -510,6 +511,90 @@ fn set_str(table: &mut Table, key: &str, val: &str) {
 fn set_str_if_absent(table: &mut Table, key: &str, val: &str) {
     if !table.contains_key(key) {
         table.insert(key, value(val));
+    }
+}
+
+fn migrate_integer_duration(table: &mut impl TableLike, old_key: &str, new_key: &str, unit: &str) {
+    migrate_integer_scalar(table, old_key, new_key, |old_value| {
+        format!("{old_value}{unit}")
+    });
+}
+
+fn migrate_integer_scalar(
+    table: &mut impl TableLike,
+    old_key: &str,
+    new_key: &str,
+    render: impl FnOnce(i64) -> String,
+) {
+    if table.contains_key(new_key) {
+        let old_decor = table
+            .get_key_value(old_key)
+            .map(|(key, item)| (key.clone(), item.clone()));
+        table.remove(old_key);
+        if let Some((old_key, old_item)) = old_decor
+            && let Some((mut new_key, _)) = table.get_key_value_mut(new_key)
+        {
+            let mut prefix = String::new();
+            append_comment_decor(&mut prefix, old_key.leaf_decor().prefix(), false);
+            append_comment_decor(
+                &mut prefix,
+                old_item.as_value().and_then(|value| value.decor().suffix()),
+                true,
+            );
+            if let Some(existing) = new_key
+                .leaf_decor()
+                .prefix()
+                .and_then(toml_edit::RawString::as_str)
+            {
+                prefix.push_str(existing);
+            }
+            new_key.leaf_decor_mut().set_prefix(prefix);
+        }
+        return;
+    }
+    let Some(old_value) = table.get(old_key).and_then(Item::as_integer) else {
+        return;
+    };
+    let Some((old_formatted_key, old_item)) = table
+        .get_key_value(old_key)
+        .map(|(key, item)| (key.clone(), item.clone()))
+    else {
+        return;
+    };
+    table.remove(old_key);
+
+    let mut migrated_key = Key::new(new_key);
+    *migrated_key.leaf_decor_mut() = old_formatted_key.leaf_decor().clone();
+    *migrated_key.dotted_decor_mut() = old_formatted_key.dotted_decor().clone();
+
+    let mut migrated_item = value(render(old_value));
+    if let (Some(old_value), Some(migrated_value)) =
+        (old_item.as_value(), migrated_item.as_value_mut())
+    {
+        *migrated_value.decor_mut() = old_value.decor().clone();
+    }
+    table.entry_format(&migrated_key).or_insert(migrated_item);
+}
+
+fn append_comment_decor(
+    output: &mut String,
+    raw: Option<&toml_edit::RawString>,
+    trim_leading_whitespace: bool,
+) {
+    let Some(raw) = raw.and_then(toml_edit::RawString::as_str) else {
+        return;
+    };
+    if !raw.contains('#') {
+        return;
+    }
+    let raw = if trim_leading_whitespace {
+        raw.trim_start()
+    } else {
+        raw
+    };
+    output.push_str(raw);
+    if !output.ends_with('\n') {
+        output.push('\n');
     }
 }
 

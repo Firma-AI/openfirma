@@ -103,7 +103,7 @@ policy_dir = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/issuance"
 revocation_file = "/tmp/firma-standalone/revocations.txt"
 key_file = "/tmp/firma-standalone/firma-authority.key"
-max_ttl_seconds = 3600
+max_ttl = "1h"
 bundle_ttl_seconds = 30
 ```
 
@@ -112,7 +112,7 @@ Notable fields:
 - `policy_dir` — the **runtime** Cedar bundle the Authority streams to Sidecars. Same directory the Sidecar would have read directly; using the Authority makes hot-reload work.
 - `issuance_policy_dir` — the issuance bundle from Step 2.
 - `revocation_file` — append-only file. Each line is a `token_id` to revoke. The Authority broadcasts revocations to connected Sidecars over gRPC.
-- `max_ttl_seconds` — clamps `--ttl-seconds` requests. Even if a CLI invocation asks for a year, the Authority issues at most this much.
+- `max_ttl` — clamps `--ttl-seconds` requests. Even if a CLI invocation asks for a year, the Authority issues at most this much.
 - `bundle_ttl_seconds` — freshness deadline advertised in streamed policy bundles. The Authority periodically refreshes connected Sidecars; protected requests fail closed with `PolicyBundleStale` if the advertised deadline expires.
 
 Touch the revocations file so the Authority finds it:

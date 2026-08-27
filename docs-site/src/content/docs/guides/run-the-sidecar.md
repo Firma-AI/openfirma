@@ -127,7 +127,7 @@ policy_dir          = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/config/issuance"
 revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/authority.key"
-max_ttl_seconds     = 3600
+max_ttl = "1h"
 bundle_ttl_seconds  = 30
 
 [sidecar.interceptor]
