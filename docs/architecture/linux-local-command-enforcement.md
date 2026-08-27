@@ -294,16 +294,16 @@ just managed-seccomp-guardrail
 Create `/tmp/firma-run.mediator.toml`:
 
 ```toml
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = "/ABS/PATH/TO/crates/firma-run/policies/generic-local-command-v1.toml"
 artifact_dir = "/ABS/PATH/TO/.artifacts/seccomp-artifacts"
 runtime_mode = "compile_on_launch"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = "unix:///tmp/firma-sidecar-tools.sock"
 timeout = "500ms"
 hitl_mode = "async_token"
@@ -312,7 +312,7 @@ allowed_executables = ["/usr/bin/echo", "/usr/bin/bash", "/bin/sh"]
 ```
 
 Allow response server example (for isolated local testing only; production uses the
-real sidecar `[local_exec]` endpoint — see `docs/configuration.md`):
+real `[sidecar.local_exec]` endpoint — see `docs/configuration.md`):
 
 ```bash
 python3 - <<'PY'

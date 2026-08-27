@@ -24,7 +24,8 @@ Primary objective:
 - CONNECT authorization/audit surface in `crates/firma-sidecar/src/handler.rs` (`handle_connect`)
 - CONNECT integration tests in `crates/firma-sidecar/src/interceptor/http.rs` (allow/deny + byte relay)
 - HTTPS MITM runtime in `crates/firma-sidecar/src/interceptor/https_mitm.rs`
-- MITM config + validation in `crates/firma-sidecar/src/config.rs` (`interceptor.https_mitm`)
+- MITM config + validation in `crates/firma-sidecar/src/config/mod.rs`
+  (`sidecar.interceptor.https_mitm`)
 - startup wiring in `crates/firma-sidecar/src/startup/interceptor.rs`
 - HTTPS L7 integration test (`test_proxy_connect_mitm_intercepts_and_applies_l7_deny`)
 
@@ -77,14 +78,14 @@ Primary objective:
 
 ## Configuration Model (Implemented)
 
-Add explicit MITM section under `[interceptor.https_mitm]`:
+Add an explicit MITM section under `[sidecar.interceptor.https_mitm]`:
 
 - `enabled` (bool, default `true`)
-- `ca_cert_path` (optional; default under `ca.dir`)
-- `ca_key_path` (optional; default under `ca.dir`)
+- `ca_cert_path` (optional; default under `sidecar.ca.dir`)
+- `ca_key_path` (optional; default under `sidecar.ca.dir`)
 - `intercept_hosts` (list, explicit allowlist)
 - `bypass_hosts` (list)
-- `cert_ttl` (default 86400)
+- `cert_ttl` (default `"1d"`)
 - `cert_cache_capacity` (bounded cache)
 - `strict_hosts` (optional list; deny if MITM cannot be applied)
 
@@ -115,7 +116,7 @@ Gate:
 
 Scope:
 
-- Implement CA first-run bootstrap under `ca.dir`, then load the existing CA on
+- Implement CA first-run bootstrap under `sidecar.ca.dir`, then load the existing CA on
   subsequent startups.
 - Never regenerate or repair existing CA material in place; partial,
   malformed, unreadable, or mismatched CA state must fail startup to
@@ -125,7 +126,7 @@ Scope:
 
 Code touchpoints:
 
-- `crates/firma-sidecar/src/config.rs`
+- `crates/firma-sidecar/src/config/mod.rs`
 - new startup/helper module for CA state (e.g., `startup/https_mitm.rs`)
 
 Gate:

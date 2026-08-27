@@ -11,8 +11,7 @@ The Authority ↔ Sidecar gRPC channel carries the policy bundle stream and revo
 ## Sidecar authentication
 
 OpenFirma can present pre-shared-key credentials on Authority RPCs when the
-Sidecar config includes `[authority.credentials]` or unified
-`[sidecar.authority.credentials]`. The Sidecar sends `workspace_id`,
+Sidecar config includes `[sidecar.authority.credentials]`. The Sidecar sends `workspace_id`,
 `sidecar_id`, and the resolved PSK on `IssueCapability`, `WatchPolicyBundle`,
 and `WatchRevocations`.
 
@@ -112,23 +111,21 @@ openssl x509 -req \
 
 Distribute `authority-ca.crt` to every Sidecar host. Keep `authority-ca.key` offline.
 
-Authority config:
-
-```toml
-tls_cert_path = "./authority.crt"
-tls_key_path = "./authority.key"
-```
-
-Sidecar config:
+Unified `firma.toml`:
 
 ```toml
 [authority]
+tls_cert_path = "./authority.crt"
+tls_key_path = "./authority.key"
+
+[sidecar.authority]
+url = "https://authority.internal:50051"
 ca_cert_path = "./authority-ca.crt"
 ```
 
 ### Internal CA (team / staging)
 
-Request a certificate from your internal CA for the hostname the Authority listens on. The Subject Alternative Name must include the hostname (or IP) that Sidecars use in `authority_url`.
+Request a certificate from your internal CA for the hostname the Authority listens on. The Subject Alternative Name must include the hostname (or IP) that Sidecars use in `sidecar.authority.url`.
 
 Distribute the internal CA bundle (or the issuing intermediate CA cert) to Sidecars as `ca_cert_path`.
 
