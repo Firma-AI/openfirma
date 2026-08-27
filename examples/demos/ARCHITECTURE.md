@@ -164,9 +164,6 @@ default_protected = true # demos default to fail-closed
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
-[sidecar.constraint_enforcement]
-enforcement_timeout_ms = 50
-
 [sidecar.connector]
 default_timeout_ms = 10000
 

@@ -136,8 +136,6 @@ impl From<schema::CapabilityValidationConfig> for CapabilityValidationConfig {
 /// Validated constraint enforcement configuration.
 #[derive(Debug, Clone)]
 pub struct ConstraintEnforcementConfig {
-    /// Optional Stage 2 evaluation timeout in milliseconds.
-    pub enforcement_timeout_ms: u64,
     /// Maximum number of active sessions tracked in the session-state cache.
     pub session_state_capacity: usize,
     /// Session-state storage backend.
@@ -149,7 +147,6 @@ pub struct ConstraintEnforcementConfig {
 impl Default for ConstraintEnforcementConfig {
     fn default() -> Self {
         Self {
-            enforcement_timeout_ms: default_stage2_timeout_ms(),
             session_state_capacity: default_session_state_capacity(),
             session_state_backend: SessionStateBackend::default(),
             session_state_path: None,
@@ -160,7 +157,6 @@ impl Default for ConstraintEnforcementConfig {
 impl From<schema::ConstraintEnforcementConfig> for ConstraintEnforcementConfig {
     fn from(s: schema::ConstraintEnforcementConfig) -> Self {
         Self {
-            enforcement_timeout_ms: s.enforcement_timeout_ms,
             session_state_capacity: s.session_state_capacity,
             session_state_backend: s.session_state_backend,
             session_state_path: s.session_state_path,
@@ -336,10 +332,6 @@ fn default_mapping_path() -> String {
 
 const fn default_true() -> bool {
     true
-}
-
-const fn default_stage2_timeout_ms() -> u64 {
-    50
 }
 
 const fn default_session_state_capacity() -> usize {

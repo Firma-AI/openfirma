@@ -586,7 +586,7 @@ Stage 2 settings.
 Policy-bundle freshness is not configured in this Sidecar section. The
 Authority embeds `[authority].bundle_ttl_seconds` in each streamed bundle,
 periodically refreshes it, and Stage 2 denies with `PolicyBundleStale` if that
-advertised deadline expires.
+advertised deadline expires. Cedar evaluation has no user-configurable timeout.
 
 ### `[connector]`
 

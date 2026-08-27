@@ -59,9 +59,6 @@ pub struct CapabilityValidationConfig {
 /// Constraint enforcement configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConstraintEnforcementConfig {
-    /// Optional Stage 2 evaluation timeout in milliseconds.
-    #[serde(default = "default_stage2_timeout_ms")]
-    pub enforcement_timeout_ms: u64,
     /// Maximum number of active sessions tracked in the session-state cache.
     /// Default: 8192. Minimum: 1.
     #[serde(default = "default_session_state_capacity")]
@@ -78,7 +75,6 @@ pub struct ConstraintEnforcementConfig {
 impl Default for ConstraintEnforcementConfig {
     fn default() -> Self {
         Self {
-            enforcement_timeout_ms: default_stage2_timeout_ms(),
             session_state_capacity: default_session_state_capacity(),
             session_state_backend: SessionStateBackend::default(),
             session_state_path: None,
@@ -106,10 +102,6 @@ fn default_mapping_path() -> String {
 
 const fn default_true() -> bool {
     true
-}
-
-const fn default_stage2_timeout_ms() -> u64 {
-    50
 }
 
 const fn default_session_state_capacity() -> usize {

@@ -69,7 +69,7 @@ issuance_policy_dir = "/etc/firma/issuance"
 revocation_file     = "/var/lib/firma/revocations.txt"
 key_file            = "/etc/firma/firma-authority.key"
 max_ttl_seconds     = 3600              # capabilities live at most 1h
-bundle_ttl_seconds  = 30                # push bundle updates every 30s
+bundle_ttl_seconds  = 30                # Sidecars deny if a bundle is not refreshed before this TTL
 ```
 
 In production, run the Authority on a hardened host with limited access. Treat its signing key with the same care as a CA key.
@@ -170,10 +170,6 @@ default_protected = true                      # production!
 
 [sidecar.policy]
 dir           = "/etc/firma/cache/policies"   # populated by Authority stream
-
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds     = 90
-enforcement_timeout_ms = 50
 
 [sidecar.capability_seed]
 paths = []                                   # capabilities arrive via gRPC, not seed files
@@ -372,13 +368,13 @@ A few practices that come up only at production scale.
 
 **Authority HA.** The Authority is a single point of contact for capability issuance. Run two of them behind a load balancer; both point at the same `policy_dir` and key file. The Sidecar's gRPC stream is independent per-Sidecar, and Sidecars reconnect automatically.
 
-**Bundle propagation latency.** A new policy version takes `bundle_ttl_seconds` to propagate worst-case (Sidecars pull, Authority pushes). Plan for this when rolling out tightening rules — start with a stricter rule, deploy, wait for propagation, only then announce the change to tenants.
+**Bundle propagation latency.** Policy updates travel over the Authority's gRPC stream. Monitor stream health and confirm that Sidecars received a new version before relying on tightened rules.
 
 **Revocation propagation.** A `firma authority revocations add <token_id>` propagates within a second on the gRPC stream. For "kill this tenant immediately", run revocation against every active capability for that tenant.
 
 **Capacity planning.** Each Sidecar holds active capabilities + the policy bundle in memory. With 1000 active sessions and a 100 KB bundle, you're well under 100 MB resident. The hot path stays bounded by the perf budgets (Stage 1 < 1ms, Stage 2 < 200µs) regardless of session count.
 
-**Failure modes.** If the Authority is unreachable for longer than `bundle_ttl_seconds`, the Sidecar denies everything (PolicyBundleStale). This is the right shape — stale policy is not safe — but it means the Authority is effectively a critical dependency for your app's availability. Monitor accordingly.
+**Failure modes.** If the Authority is unreachable past its configured `bundle_ttl_seconds`, Sidecars deny protected requests with `PolicyBundleStale`. They also cannot receive policy or revocation updates, and capability issuance is unavailable. Monitor the Authority streams and Sidecar readiness accordingly.
 
 ## Tenant onboarding flow
 
@@ -386,7 +382,7 @@ Putting it all together, the new-tenant workflow is:
 
 1. Register NewCo and store its Authority-issued `agt_` agent ID.
 2. Add that ID to the issuance policy and any tenant-specific runtime rules.
-3. Push the policy bundle. Sidecars pick it up within `bundle_ttl_seconds`.
+3. Push the policy bundle and confirm that Sidecars received the streamed update.
 4. Configure the app's tenant mapping to use NewCo's registered agent ID.
 5. First session for the tenant: app calls `IssueCapability`, gets a token, app makes calls, Sidecar validates.
 
@@ -394,7 +390,7 @@ Offboarding is the inverse: remove the entries from issuance + runtime policy, p
 
 ## Common gotchas
 
-**`PolicyBundleStale` denials in production.** Your Sidecars lost contact with the Authority. Check the network path, the Authority's health, and consider raising `bundle_ttl_seconds` slightly to give yourself headroom for transient blips.
+**`PolicyBundleStale` denials in production.** The Sidecars did not receive a refresh before the Authority-advertised bundle TTL expired. Check the network path, the Authority's health, and the Sidecars' stream and readiness logs.
 
 **`ScopeViolation` for legitimate calls.** The capability's `resource_scope` doesn't match the request. Either tighten the scope at issuance time or loosen it. Match the scope to the agent's mission, not to a wildcard — `'*'` is a smell in production.
 

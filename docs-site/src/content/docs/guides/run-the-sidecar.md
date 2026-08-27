@@ -152,15 +152,10 @@ session_id        = "standalone-session"
 requested_actions = ["communication.external.send"]
 resource_scope    = "*"
 
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds     = 3600
-enforcement_timeout_ms = 50
-
 [sidecar.audit]
 sink             = "file"
 file_path        = "/tmp/firma-standalone/logs/audit.jsonl"
 signing_key_path = "/tmp/firma-standalone/audit.key"
-
 ```
 
 Notes:
@@ -243,9 +238,9 @@ For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
 **HTTPS calls show up as method `CONNECT`.** Without MITM, the only thing the Sidecar sees about HTTPS is the CONNECT line. The path is `/` and the action class will be whatever your rule maps `CONNECT host:443` to — probably nothing. To enforce on the inner HTTP details, set up MITM ([guide](../https-mitm/)).
 
-**`policy bundle stale` or readiness denies.** This appears when the
-Sidecar cannot use a fresh Authority-backed policy bundle or revocation
-view. You do not need to sequence the Authority before the Sidecar by hand:
+**`policy bundle stale` or readiness denies.** These appear when the Sidecar
+cannot use a fresh Authority-backed policy bundle or revocation view. You do
+not need to sequence the Authority before the Sidecar by hand:
 the Sidecar retries Authority streams with backoff, stays fail-closed, and
 emits `sidecar ready` only after the required streams hydrate. For
 deployment probe guidance, see

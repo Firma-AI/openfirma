@@ -202,15 +202,9 @@ for how each decision is dispatched and audited.
 
 ## Bundle freshness
 
-The Sidecar holds the policy bundle in memory and reloads it from the Authority's `WatchPolicyBundle` gRPC stream. Two configuration knobs in `firma.toml` govern freshness:
+The Sidecar holds the policy bundle in memory and reloads it from the Authority's `WatchPolicyBundle` gRPC stream. The Authority embeds its `[authority].bundle_ttl_seconds` value in every bundle and periodically refreshes the stream. The Sidecar enforces that advertised deadline; if it expires without a refresh, Stage 2 returns `PolicyBundleStale` and protected requests fail closed.
 
-```toml
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds     = 60   # bundles older than this are considered stale
-enforcement_timeout_ms = 50   # max time Stage 2 will spend evaluating
-```
-
-If the bundle hasn't been refreshed within `bundle_ttl_seconds`, Stage 2 returns `PolicyBundleStale` — every request denies. This is fail-closed by design: stale policy is *not* better than no policy, because the world might have changed in ways the stale policy doesn't reflect.
+There is no separate Sidecar bundle-TTL setting or configurable Cedar evaluation timeout.
 
 When the Authority comes back, the next bundle update atomically swaps the evaluator. There's no flush-and-reload window.
 

@@ -232,12 +232,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     }
 
     {
-        let ce = ensure_table(sidecar, "constraint_enforcement")?;
-        set_int_if_absent(ce, "bundle_ttl_seconds", 3600);
-        set_int_if_absent(ce, "enforcement_timeout_ms", 50);
-    }
-
-    {
         let conn = ensure_table(sidecar, "connector")?;
         set_int_if_absent(conn, "default_timeout_ms", 120_000);
     }
