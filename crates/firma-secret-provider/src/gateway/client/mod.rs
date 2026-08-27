@@ -263,7 +263,7 @@ impl GatewayClient {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        timeout(self.config.operation_timeout, async {
+        timeout(self.config.operation_timeout.duration(), async {
             let mut stream = stream;
             stream
                 .write_all(payload.as_bytes())

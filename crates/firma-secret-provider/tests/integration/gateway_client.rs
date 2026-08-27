@@ -192,7 +192,8 @@ async fn resolve_batch_reports_operation_timeout() {
     let client = GatewayClient::new(
         mock_gateway_silent().await.expect("silent mock gateway"),
         GatewayClientConfig {
-            operation_timeout: std::time::Duration::from_millis(100),
+            operation_timeout: NonZeroDuration::new(std::time::Duration::from_millis(100))
+                .expect("non-zero operation timeout"),
             ..Default::default()
         },
     );

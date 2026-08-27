@@ -162,6 +162,20 @@ fn secret_gateway_connection_timeout_rejects_zero() {
 }
 
 #[test]
+fn secret_gateway_operation_timeout_rejects_zero() {
+    let error = toml::from_str::<gateway::GatewayClientConfig>("operation_timeout = \"0ms\"")
+        .expect_err("zero operation timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"
