@@ -37,7 +37,6 @@ pub struct ResolvedProfile {
     pub env_set: BTreeMap<String, String>,
     pub(crate) mounts: Vec<MountSpec>,
     pub(crate) seccomp_policy: Option<SeccompPolicyConfig>,
-    pub(crate) allowed_domains: Vec<String>,
     pub(crate) network: NetworkPolicy,
     pub(crate) identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
@@ -371,12 +370,6 @@ impl Merge for ProfilePatch {
             higher.mounts
         };
 
-        let allowed_domains = if higher.allowed_domains.is_empty() {
-            self.allowed_domains
-        } else {
-            higher.allowed_domains
-        };
-
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
@@ -384,7 +377,6 @@ impl Merge for ProfilePatch {
             env_passthrough,
             env_set,
             mounts,
-            allowed_domains,
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: match (self.capability, higher.capability) {
@@ -541,7 +533,6 @@ pub(crate) fn resolve_profile_with_layout(
         env_set,
         mounts,
         seccomp_policy,
-        allowed_domains: patch.allowed_domains,
         network,
         identity_mode,
         capability,
@@ -627,7 +618,6 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         env_passthrough: Vec::new(),
         env_set: BTreeMap::new(),
         mounts: Vec::new(),
-        allowed_domains: Vec::new(),
         network: None,
         identity_mode: if args.preserve_host_user {
             Some(SandboxIdentityMode::HostUser)

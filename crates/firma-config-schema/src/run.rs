@@ -79,8 +79,6 @@ pub struct ProfilePatch {
     pub env_set: BTreeMap<String, String>,
     #[serde(default)]
     pub mounts: Vec<MountPatch>,
-    #[serde(default)]
-    pub allowed_domains: Vec<String>,
     pub network: Option<NetworkPolicyPatch>,
     pub identity_mode: Option<SandboxIdentityMode>,
     pub capability: Option<CapabilityLeasePatch>,
