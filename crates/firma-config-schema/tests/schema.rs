@@ -667,6 +667,38 @@ fn run_profile_collections_distinguish_absent_and_empty() {
 }
 
 #[test]
+fn run_nested_policy_patches_allow_partial_overrides() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+        [defaults.network]
+        fail_closed = true
+
+        [profiles.selected.network]
+        enforce_network_namespace = false
+
+        [profiles.selected.seccomp_policy]
+        runtime_mode = "precompiled_only"
+        "#,
+    )
+    .expect("partial nested policy patches must parse");
+
+    let defaults_network = config.defaults.network.as_ref().unwrap();
+    assert_eq!(defaults_network.fail_closed, Some(true));
+    assert_eq!(defaults_network.enforce_network_namespace, None);
+    let profile = &config.profiles["selected"];
+    let profile_network = profile.network.as_ref().unwrap();
+    assert_eq!(profile_network.fail_closed, None);
+    assert_eq!(profile_network.enforce_network_namespace, Some(false));
+    let seccomp = profile.seccomp_policy.as_ref().unwrap();
+    assert_eq!(seccomp.source_policy_path, None);
+    assert_eq!(seccomp.artifact_dir, None);
+    assert_eq!(
+        seccomp.runtime_mode,
+        Some(run::SeccompRuntimeMode::PrecompiledOnly)
+    );
+}
+
+#[test]
 fn run_validates_backends_in_defaults_and_unselected_profiles() {
     for config in [
         "[defaults]\nbackend = \"bworp\"\n",

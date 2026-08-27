@@ -157,6 +157,13 @@ Prefer a non-empty key override for narrow changes; use an empty table only as
 an explicit broad opt-out. Selective removal of one inherited map key is not
 supported.
 
+Nested `network` and `seccomp_policy` tables merge field-by-field. A higher
+layer can override one network toggle or only `seccomp_policy.runtime_mode`
+without repeating lower siblings. If a seccomp table remains after merging,
+the final result must contain both `source_policy_path` and `artifact_dir`;
+otherwise profile resolution reports the missing field. Complete, single-layer
+seccomp configurations keep their existing syntax and runtime behavior.
+
 ## Config-Relative Resource Resolution
 
 A resource field holding a **relative** path resolves under the resolved

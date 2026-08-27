@@ -406,6 +406,8 @@ Top-level collections preserve the same absent/present distinction. `env_passthr
 
 An empty `env_set` table is a broad opt-out: it removes the built-in bwrap root-filesystem and home masking values plus the `NO_PROXY`/`no_proxy` proxy-bypass safeguards. Prefer non-empty key overrides for narrow changes. Selective deletion of one inherited map key is not supported.
 
+Nested `network` and `seccomp_policy` tables merge field-by-field, so a higher layer can override one network toggle or only `seccomp_policy.runtime_mode` without repeating lower siblings. A final seccomp policy still requires both `source_policy_path` and `artifact_dir`; resolution names the missing field when layered patches remain incomplete.
+
 ## Useful flags
 
 `firma run --help` is the full reference. The flags that come up most often:

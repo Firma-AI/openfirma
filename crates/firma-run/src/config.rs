@@ -350,6 +350,27 @@ trait Merge {
     fn merge(self, higher: Self) -> Self;
 }
 
+impl Merge for NetworkPolicyPatch {
+    fn merge(self, higher: Self) -> Self {
+        Self {
+            enforce_network_namespace: higher
+                .enforce_network_namespace
+                .or(self.enforce_network_namespace),
+            fail_closed: higher.fail_closed.or(self.fail_closed),
+        }
+    }
+}
+
+impl Merge for SeccompPolicyPatch {
+    fn merge(self, higher: Self) -> Self {
+        Self {
+            source_policy_path: higher.source_policy_path.or(self.source_policy_path),
+            artifact_dir: higher.artifact_dir.or(self.artifact_dir),
+            runtime_mode: higher.runtime_mode.or(self.runtime_mode),
+        }
+    }
+}
+
 impl Merge for CapabilityLeasePatch {
     fn merge(self, higher: Self) -> Self {
         let (source, kind, path) = if higher.source.is_some() {
@@ -388,11 +409,17 @@ impl Merge for ProfilePatch {
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
-            seccomp_policy: higher.seccomp_policy.or(self.seccomp_policy),
+            seccomp_policy: match (self.seccomp_policy, higher.seccomp_policy) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
             env_passthrough: higher.env_passthrough.or(self.env_passthrough),
             env_set,
             mounts: higher.mounts.or(self.mounts),
-            network: higher.network.or(self.network),
+            network: match (self.network, higher.network) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: match (self.capability, higher.capability) {
                 (Some(lower), Some(higher)) => Some(lower.merge(higher)),
@@ -533,15 +560,15 @@ pub(crate) fn resolve_profile_with_layout(
     let executable_policies =
         resolve_executable_policies(patch.executable_policies, patch.codex_cli);
 
-    let seccomp_policy =
-        patch
-            .seccomp_policy
-            .map(seccomp_policy_from_patch)
-            .or(default_managed_seccomp_policy(
-                runtime_layout,
-                &profile_id,
-                backend,
-            )?);
+    let seccomp_policy = patch
+        .seccomp_policy
+        .map(seccomp_policy_from_patch)
+        .transpose()?
+        .or(default_managed_seccomp_policy(
+            runtime_layout,
+            &profile_id,
+            backend,
+        )?);
     let resolved = ResolvedProfile {
         id: profile_id,
         backend,
@@ -735,14 +762,24 @@ fn default_capability_config() -> CapabilityLeaseConfig {
     }
 }
 
-fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
-    SeccompPolicyConfig {
-        source_policy_path: patch.source_policy_path,
-        artifact_dir: patch.artifact_dir,
+fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> Result<SeccompPolicyConfig, RunError> {
+    let source_policy_path = patch.source_policy_path.ok_or_else(|| {
+        RunError::ConfigValidation(
+            "seccomp_policy.source_policy_path is required after profile merging".to_string(),
+        )
+    })?;
+    let artifact_dir = patch.artifact_dir.ok_or_else(|| {
+        RunError::ConfigValidation(
+            "seccomp_policy.artifact_dir is required after profile merging".to_string(),
+        )
+    })?;
+    Ok(SeccompPolicyConfig {
+        source_policy_path,
+        artifact_dir,
         runtime_mode: patch
             .runtime_mode
             .unwrap_or(SeccompRuntimeMode::CompileOnLaunch),
-    }
+    })
 }
 
 fn sidecar_local_exec_from_patch(
@@ -1071,8 +1108,12 @@ fn rebase_profile_paths(profile: &mut ProfilePatch, config_dir: &Path) {
         }
     }
     if let Some(seccomp) = &mut profile.seccomp_policy {
-        rebase_path(&mut seccomp.source_policy_path, config_dir);
-        rebase_path(&mut seccomp.artifact_dir, config_dir);
+        if let Some(path) = &mut seccomp.source_policy_path {
+            rebase_path(path, config_dir);
+        }
+        if let Some(path) = &mut seccomp.artifact_dir {
+            rebase_path(path, config_dir);
+        }
     }
     if let Some(capability) = &mut profile.capability {
         if let Some(CapabilitySourcePatch::File { path }) = &mut capability.source {
@@ -1132,9 +1173,9 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        CapabilitySourcePatch, FileConfig, Merge, MountPatch, ProfilePatch, SandboxIdentityMode,
-        SeccompRuntimeMode, SidecarEndpoint, capability_from_patch, cli_profile_patch,
-        rebase_file_paths, resolve_profile,
+        CapabilitySourcePatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch, ProfilePatch,
+        SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode, SidecarEndpoint,
+        capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -1204,11 +1245,11 @@ mod tests {
         let seccomp = config.defaults.seccomp_policy.as_ref().unwrap();
         assert_eq!(
             seccomp.source_policy_path,
-            PathBuf::from("/cfg/seccomp/policy.toml")
+            Some(PathBuf::from("/cfg/seccomp/policy.toml"))
         );
         assert_eq!(
             seccomp.artifact_dir,
-            PathBuf::from("/cfg/seccomp/artifacts")
+            Some(PathBuf::from("/cfg/seccomp/artifacts"))
         );
         assert_eq!(
             config
@@ -1635,6 +1676,128 @@ approval_policy = "never"
         assert_eq!(cleared.env_passthrough, Some(Vec::new()));
         assert_eq!(cleared.env_set, Some(BTreeMap::new()));
         assert!(cleared.mounts.as_ref().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn network_and_seccomp_patches_merge_field_by_field() {
+        let merged = ProfilePatch {
+            network: Some(NetworkPolicyPatch {
+                enforce_network_namespace: Some(true),
+                fail_closed: Some(true),
+            }),
+            seccomp_policy: Some(SeccompPolicyPatch {
+                source_policy_path: Some(PathBuf::from("/policy/lower.toml")),
+                artifact_dir: Some(PathBuf::from("/artifacts/lower")),
+                runtime_mode: Some(SeccompRuntimeMode::CompileOnLaunch),
+            }),
+            ..ProfilePatch::default()
+        }
+        .merge(ProfilePatch {
+            network: Some(NetworkPolicyPatch {
+                enforce_network_namespace: Some(false),
+                fail_closed: None,
+            }),
+            seccomp_policy: Some(SeccompPolicyPatch {
+                source_policy_path: None,
+                artifact_dir: Some(PathBuf::from("/artifacts/higher")),
+                runtime_mode: Some(SeccompRuntimeMode::PrecompiledOnly),
+            }),
+            ..ProfilePatch::default()
+        });
+
+        let network = merged.network.unwrap();
+        assert_eq!(network.enforce_network_namespace, Some(false));
+        assert_eq!(network.fail_closed, Some(true));
+        let seccomp = merged.seccomp_policy.unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            Some(PathBuf::from("/policy/lower.toml"))
+        );
+        assert_eq!(
+            seccomp.artifact_dir,
+            Some(PathBuf::from("/artifacts/higher"))
+        );
+        assert_eq!(
+            seccomp.runtime_mode,
+            Some(SeccompRuntimeMode::PrecompiledOnly)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
+    fn file_network_and_seccomp_layers_preserve_lower_siblings() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tmpdir.path().join("policy.toml"),
+            "default_action = \"allow\"\n",
+        )
+        .unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.defaults.network]
+            enforce_network_namespace = false
+            fail_closed = false
+
+            [run.defaults.seccomp_policy]
+            source_policy_path = "policy.toml"
+            artifact_dir = "artifacts"
+
+            [run.profiles.generic.network]
+            fail_closed = true
+
+            [run.profiles.generic.seccomp_policy]
+            runtime_mode = "precompiled_only"
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+
+        assert!(!resolved.network.enforce_network_namespace);
+        assert!(resolved.network.fail_closed);
+        let seccomp = resolved.seccomp_policy.unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            tmpdir.path().join("policy.toml")
+        );
+        assert_eq!(seccomp.artifact_dir, tmpdir.path().join("artifacts"));
+        assert_eq!(seccomp.runtime_mode, SeccompRuntimeMode::PrecompiledOnly);
+    }
+
+    #[test]
+    fn incomplete_final_seccomp_patch_reports_missing_field() {
+        for (body, missing) in [
+            (
+                r#"
+                [run.profiles.generic.seccomp_policy]
+                runtime_mode = "precompiled_only"
+                "#,
+                "seccomp_policy.source_policy_path",
+            ),
+            (
+                r#"
+                [run.profiles.generic.seccomp_policy]
+                source_policy_path = "policy.toml"
+                "#,
+                "seccomp_policy.artifact_dir",
+            ),
+        ] {
+            let tmpdir = tempfile::tempdir().unwrap();
+            let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+            fs::write(&config_path, body).unwrap();
+            let mut run_args = args("generic");
+            run_args.config = Some(config_path);
+
+            let error = resolve_profile(&run_args).expect_err("incomplete seccomp must fail");
+            assert!(
+                error.to_string().contains(missing),
+                "unexpected error: {error}"
+            );
+        }
     }
 
     #[test]

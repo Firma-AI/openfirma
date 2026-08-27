@@ -144,8 +144,10 @@ pub struct NetworkPolicyPatch {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeccompPolicyPatch {
-    pub source_policy_path: PathBuf,
-    pub artifact_dir: PathBuf,
+    /// Policy source path. Required after all profile layers merge.
+    pub source_policy_path: Option<PathBuf>,
+    /// Managed artifact directory. Required after all profile layers merge.
+    pub artifact_dir: Option<PathBuf>,
     pub runtime_mode: Option<SeccompRuntimeMode>,
 }
 
