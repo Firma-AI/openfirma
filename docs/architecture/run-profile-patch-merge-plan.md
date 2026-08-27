@@ -739,3 +739,43 @@ confirmed:
   dispositioned before plan removal.
 - Final base/head/merge-base checks, no-plan-at-tip/no-plan-in-diff proof, and
   required latest-head CI success after opening the stacked PR.
+
+## Post-implementation review
+
+A fresh independent reviewer inspected revision range
+`dc82f6d655ffa6421c25bc91a77e9f24e35ba8d1..d8437bc3aae7e4637ab962d782b684c3d71b0d6c`
+against this accepted plan. The reviewer inspected all changed files, schema
+cardinality and Serde behavior, every merge implementation, four-layer
+resolution, built-ins, CLI patch construction, environment fallbacks, path
+rebasing, final validation and conversion, runtime consumers, capability
+denial routing, tests, and migration documentation. Its targeted verification
+ran 455 tests successfully with four skipped.
+
+### REVIEW-001 — Low — Accepted cleanup/proof obligation remains incomplete
+
+**Finding:** The final reviewed tip still contains this plan, contrary to the
+accepted no-plan-at-tip obligation. The artifact also has trailing whitespace
+in the preserved original plan-review transcript, so a base-to-tip
+`git diff --check` fails until the artifact is removed.
+
+**Evidence:** The no-plan-at-tip obligation and standalone deletion are stated
+in Scope and Slice 8. At reviewed revision `d8437bc3`, this file remains, and
+line 658 of that revision contains the trailing whitespace.
+
+**Failure trace:** Merge the reviewed tip, and the plan remains in the branch
+diff; the no-plan proof is false and the base-to-tip whitespace check fails.
+
+**Required correction:** Delete only this plan in the planned standalone final
+revision, preserving the first plan commit as the durable historical locator.
+
+**Disposition:** Accepted. The next and final revision deletes only this file.
+The deletion simultaneously satisfies the no-plan-at-tip requirement and
+removes the preserved transcript whitespace from the final PR diff. This is a
+purely mechanical change, so the adversarial-review workflow does not require
+another behavior review.
+
+The reviewer reported no correctness, security, merge-algebra, path-rebasing,
+runtime-consumer, compatibility-beyond-documented-breakage, or test-coverage
+findings. Full local verification independently passed before this record:
+`just check` ran 2,577 tests plus all workspace Clippy, doctests, builds,
+dependency checks, and release-script checks; the docs site built all 35 pages.
