@@ -116,12 +116,6 @@ impl ResolvedProfile {
                     managed.artifact_dir.display()
                 )));
             }
-            if !managed.verify_checksum {
-                return Err(RunError::ConfigValidation(
-                    "seccomp_policy.verify_checksum=false is unsupported; checksum verification is mandatory"
-                        .to_string(),
-                ));
-            }
             if self.backend != BackendKind::Bwrap {
                 return Err(RunError::ConfigValidation(format!(
                     "seccomp_policy is only supported with backend 'bwrap', got '{backend}'",
@@ -304,7 +298,6 @@ pub enum CommandMediatorEndpoint {
 pub struct SeccompPolicyConfig {
     pub(crate) source_policy_path: PathBuf,
     pub(crate) artifact_dir: PathBuf,
-    pub(crate) verify_checksum: bool,
     pub(crate) runtime_mode: SeccompRuntimeMode,
 }
 
@@ -718,7 +711,6 @@ fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
     SeccompPolicyConfig {
         source_policy_path: patch.source_policy_path,
         artifact_dir: patch.artifact_dir,
-        verify_checksum: patch.verify_checksum.unwrap_or(true),
         runtime_mode: patch
             .runtime_mode
             .unwrap_or(SeccompRuntimeMode::CompileOnLaunch),
@@ -874,7 +866,6 @@ fn default_managed_seccomp_policy(
     Ok(Some(SeccompPolicyConfig {
         source_policy_path,
         artifact_dir,
-        verify_checksum: true,
         runtime_mode,
     }))
 }
@@ -1134,7 +1125,6 @@ mod tests {
             && !super::env_truthy(super::MANAGED_DEFAULT_DISABLE_ENV)
         {
             let managed = resolved.seccomp_policy.as_ref().unwrap();
-            assert!(managed.verify_checksum);
             assert_eq!(managed.runtime_mode, SeccompRuntimeMode::CompileOnLaunch);
             assert!(
                 managed
@@ -1456,7 +1446,6 @@ sidecar_endpoint = "unix:///tmp/sidecar.sock"
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
-verify_checksum = true
 "#,
             policy_path.display(),
             artifact_dir.display()
@@ -1572,49 +1561,6 @@ runtime_mode = "precompiled_only"
                 .to_string()
                 .contains("compile_on_launch' or 'precompiled_only"),
             "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn seccomp_policy_rejects_checksum_disable() {
-        let tmpdir = tempfile::tempdir().unwrap();
-        let policy_path = tmpdir.path().join("policy.toml");
-        fs::write(
-            &policy_path,
-            r#"
-policy_id = "generic-local-command"
-policy_version = "v1"
-default_action = "allow"
-deny_actions = ["filesystem.delete"]
-"#,
-        )
-        .unwrap();
-        let artifact_dir = tmpdir.path().join("artifacts");
-
-        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
-        let toml = format!(
-            r#"
-[run.profiles.generic]
-backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
-
-[run.profiles.generic.seccomp_policy]
-source_policy_path = '{}'
-artifact_dir = '{}'
-verify_checksum = false
-"#,
-            policy_path.display(),
-            artifact_dir.display()
-        );
-        fs::write(&config_path, toml).unwrap();
-
-        let mut run_args = args("generic");
-        run_args.config = Some(config_path);
-        let err = resolve_profile(&run_args).expect_err("expected checksum validation error");
-        assert!(
-            err.to_string()
-                .contains("seccomp_policy.verify_checksum=false is unsupported"),
-            "unexpected error: {err}"
         );
     }
 

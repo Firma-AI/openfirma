@@ -866,7 +866,6 @@ deny_actions = ["filesystem.delete", "system.execute"]
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: artifacts,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
 
@@ -894,7 +893,6 @@ deny_actions = ["filesystem.delete", "credential.write"]
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: artifacts,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
 
@@ -930,7 +928,6 @@ deny_actions = ["filesystem.delete"]
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: artifacts,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
 
@@ -952,7 +949,6 @@ deny_actions = ["filesystem.delete"]
         let managed = SeccompPolicyConfig {
             source_policy_path: tempdir.path().join("missing.toml"),
             artifact_dir: tempdir.path().join("artifacts"),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let err =
@@ -981,7 +977,6 @@ deny_actions = ["system.install"]
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: tempdir.path().join("artifacts"),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let err =
@@ -1011,7 +1006,6 @@ deny_actions = ["filesystem.delete"]
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: tempdir.path().join("artifacts"),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let err = materialize_seccomp_policy(&managed)
@@ -1041,7 +1035,6 @@ deny_actions = ["filesystem.delete"]
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: tempdir.path().join("artifacts"),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
         };
         let err = materialize_seccomp_policy(&managed)
@@ -1078,7 +1071,6 @@ deny_actions = ["filesystem.delete"]
         let managed = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: tempdir.path().to_path_buf(),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
         };
         let err =
@@ -1109,7 +1101,6 @@ deny_actions = ["filesystem.delete"]
         let compile_mode = SeccompPolicyConfig {
             source_policy_path: policy_path.clone(),
             artifact_dir: artifact_dir.clone(),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
@@ -1118,7 +1109,6 @@ deny_actions = ["filesystem.delete"]
         let precompiled_mode = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
         };
         let err = materialize_seccomp_policy(&precompiled_mode)
@@ -1149,7 +1139,6 @@ deny_actions = ["filesystem.delete"]
         let compile_mode = SeccompPolicyConfig {
             source_policy_path: policy_path.clone(),
             artifact_dir: artifact_dir.clone(),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
@@ -1162,7 +1151,6 @@ deny_actions = ["filesystem.delete"]
         let precompiled_mode = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
         };
         let err = materialize_seccomp_policy(&precompiled_mode)
@@ -1194,7 +1182,6 @@ deny_actions = ["filesystem.delete"]
         let compile_mode = SeccompPolicyConfig {
             source_policy_path: policy_path.clone(),
             artifact_dir: artifact_dir.clone(),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
@@ -1208,7 +1195,6 @@ deny_actions = ["filesystem.delete"]
         let precompiled_mode = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
         };
         let err = materialize_seccomp_policy(&precompiled_mode)
@@ -1239,7 +1225,6 @@ deny_actions = ["filesystem.delete"]
         let compile_mode = SeccompPolicyConfig {
             source_policy_path: policy_path.clone(),
             artifact_dir: good_artifact_dir,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
@@ -1255,7 +1240,6 @@ deny_actions = ["filesystem.delete"]
         let precompiled_mode = SeccompPolicyConfig {
             source_policy_path: policy_path,
             artifact_dir: bad_artifact_dir,
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
         };
         let err = materialize_seccomp_policy(&precompiled_mode)
@@ -1280,7 +1264,6 @@ deny_actions = ["filesystem.delete"]
         let managed = SeccompPolicyConfig {
             source_policy_path: PathBuf::from("/tmp/unused.toml"),
             artifact_dir: PathBuf::from("/tmp/artifacts"),
-            verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
         let err = materialize_seccomp_policy(&managed).expect_err("expected non-linux rejection");

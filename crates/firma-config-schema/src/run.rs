@@ -129,7 +129,6 @@ pub struct NetworkPolicyPatch {
 pub struct SeccompPolicyPatch {
     pub source_policy_path: PathBuf,
     pub artifact_dir: PathBuf,
-    pub verify_checksum: Option<bool>,
     pub runtime_mode: Option<SeccompRuntimeMode>,
 }
 
