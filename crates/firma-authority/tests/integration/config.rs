@@ -16,7 +16,15 @@ fn relative_flag_config_rebases_authority_resources_from_an_absolute_dir() -> an
         &config_path,
         r#"[authority]
            policy_dir = "custom-policies"
+           issuance_policy_dir = "custom-issuance-policies"
+           schema_path = "schema.cedarschema"
+           revocation_file = "state/revocations.txt"
            key_file = "authority.key"
+           tls_cert_path = "tls/authority.crt"
+           tls_key_path = "tls/authority.key"
+           mtls_client_ca_cert_path = "tls/client-ca.crt"
+           mtls_client_ca_key_path = "tls/client-ca.key"
+           authorized_clients_path = "tls/authorized-clients.toml"
         "#,
     )?;
 
@@ -27,13 +35,37 @@ fn relative_flag_config_rebases_authority_resources_from_an_absolute_dir() -> an
 
     assert_eq!(resolved.config_file(), config_path);
     assert!(resolved.config_dir().is_absolute());
+    let schema = config.to_schema();
+    assert_eq!(schema.policy_dir, tmp.path().join("custom-policies"));
     assert_eq!(
-        config.policy_dir(),
-        tmp.path().join("custom-policies").as_path()
+        schema.issuance_policy_dir,
+        tmp.path().join("custom-issuance-policies")
     );
     assert_eq!(
-        config.key_file(),
-        tmp.path().join("authority.key").as_path()
+        schema.schema_path,
+        Some(tmp.path().join("schema.cedarschema"))
+    );
+    assert_eq!(schema.revocation_file, Path::new("state/revocations.txt"));
+    assert_eq!(schema.key_file, tmp.path().join("authority.key"));
+    assert_eq!(
+        schema.tls_cert_path,
+        Some(tmp.path().join("tls/authority.crt"))
+    );
+    assert_eq!(
+        schema.tls_key_path,
+        Some(tmp.path().join("tls/authority.key"))
+    );
+    assert_eq!(
+        schema.mtls_client_ca_cert_path,
+        Some(tmp.path().join("tls/client-ca.crt"))
+    );
+    assert_eq!(
+        schema.mtls_client_ca_key_path,
+        Some(tmp.path().join("tls/client-ca.key"))
+    );
+    assert_eq!(
+        schema.authorized_clients_path,
+        Some(tmp.path().join("tls/authorized-clients.toml"))
     );
     Ok(())
 }

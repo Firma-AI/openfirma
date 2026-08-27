@@ -90,6 +90,14 @@ The output file contains the signed token and matching claims. Configure the Sid
 
 Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`.
 
+Relative resource paths in `[authority]` resolve from the directory containing
+the resolved `firma.toml`. This applies to `policy_dir`,
+`issuance_policy_dir`, `schema_path`, `key_file`, `tls_cert_path`,
+`tls_key_path`, `mtls_client_ca_cert_path`, `mtls_client_ca_key_path`, and
+`authorized_clients_path`. `revocation_file` is state-managed and is not
+re-based. Environment path overrides are applied last and remain verbatim,
+including relative values.
+
 ## Policy files
 
 The Authority loads every `.cedar` file in `policy_dir` and streams the resulting bundle to connected Sidecars. Cedar is default-deny: if no permit applies, the request is denied. Forbid rules override permit rules.

@@ -155,19 +155,24 @@ _after_ re-basing, so an env-supplied path is preserved exactly as written
 Every config-declared resource path re-bases, except the two
 state-managed paths listed further below. The re-basing fields are:
 
-| Field                               | Relative value resolves under |
-| ----------------------------------- | ----------------------------- |
-| sidecar `policy.dir`                | `<config_dir>/<value>`        |
-| sidecar `mapping.rules_path`        | `<config_dir>/<value>`        |
-| sidecar `mapping.rules_paths[]`     | `<config_dir>/<value>`        |
-| sidecar `authority.public_key_path` | `<config_dir>/<value>`        |
-| sidecar `capability_seed.paths[]`   | `<config_dir>/<value>`        |
-| sidecar `audit.file_path`           | `<config_dir>/<value>`        |
-| sidecar `audit.signing_key_path`    | `<config_dir>/<value>`        |
-| authority `policy_dir`              | `<config_dir>/<value>`        |
-| authority `issuance_policy_dir`     | `<config_dir>/<value>`        |
-| authority `schema_path`             | `<config_dir>/<value>`        |
-| authority `key_file`                | `<config_dir>/<value>`        |
+| Field                                | Relative value resolves under |
+| ------------------------------------ | ----------------------------- |
+| sidecar `policy.dir`                 | `<config_dir>/<value>`        |
+| sidecar `mapping.rules_path`         | `<config_dir>/<value>`        |
+| sidecar `mapping.rules_paths[]`      | `<config_dir>/<value>`        |
+| sidecar `authority.public_key_path`  | `<config_dir>/<value>`        |
+| sidecar `capability_seed.paths[]`    | `<config_dir>/<value>`        |
+| sidecar `audit.file_path`            | `<config_dir>/<value>`        |
+| sidecar `audit.signing_key_path`     | `<config_dir>/<value>`        |
+| authority `policy_dir`               | `<config_dir>/<value>`        |
+| authority `issuance_policy_dir`      | `<config_dir>/<value>`        |
+| authority `schema_path`              | `<config_dir>/<value>`        |
+| authority `key_file`                 | `<config_dir>/<value>`        |
+| authority `tls_cert_path`            | `<config_dir>/<value>`        |
+| authority `tls_key_path`             | `<config_dir>/<value>`        |
+| authority `mtls_client_ca_cert_path` | `<config_dir>/<value>`        |
+| authority `mtls_client_ca_key_path`  | `<config_dir>/<value>`        |
+| authority `authorized_clients_path`  | `<config_dir>/<value>`        |
 
 State-managed paths are explicitly excluded from re-basing and stay in the
 state/runtime dir:
