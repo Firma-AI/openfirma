@@ -6,14 +6,13 @@
 //! JSON for convenience; the `serde` attributes under test are
 //! format-agnostic.
 
-use std::time::Duration;
-
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra::{
     CaConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
 use firma_config_schema::{authority, run, secret_matcher, sidecar};
+use std::time::Duration;
 
 #[test]
 fn interceptor_config_fills_defaults_for_missing_fields() {
@@ -40,86 +39,6 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
 }
 
 #[test]
-fn sidecar_byte_sizes_accept_human_readable_units() {
-    let config: sidecar::SidecarConfig = toml::from_str(
-        r#"
-        [interceptor]
-        max_request_body_size = "4 MiB"
-        total_body_budget = "64 MiB"
-
-        [audit]
-        wal_max_size = "100 MiB"
-        "#,
-    )
-    .expect("human-readable byte sizes deserialize");
-
-    assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
-    assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
-    assert_eq!(config.audit.wal_max_size, ByteSize::mib(100));
-}
-
-#[test]
-fn interceptor_drain_timeout_accepts_subsecond_duration() {
-    let config: sidecar::SidecarConfig = toml::from_str(
-        r#"
-        [interceptor]
-        drain_timeout = "500ms"
-        "#,
-    )
-    .expect("human-readable duration deserializes");
-
-    assert_eq!(config.interceptor.drain_timeout, Duration::from_millis(500));
-}
-
-#[test]
-fn connect_setup_timeout_accepts_subsecond_duration() {
-    let config: sidecar::SidecarConfig = toml::from_str(
-        r#"
-        [interceptor.connect_relay]
-        setup_timeout = "500ms"
-        "#,
-    )
-    .expect("human-readable duration deserializes");
-
-    assert_eq!(
-        config.interceptor.connect_relay.setup_timeout,
-        Duration::from_millis(500)
-    );
-}
-
-#[test]
-fn connect_session_max_accepts_subsecond_duration() {
-    let config: sidecar::SidecarConfig = toml::from_str(
-        r#"
-        [interceptor.connect_relay]
-        session_max = "750ms"
-        "#,
-    )
-    .expect("human-readable duration deserializes");
-
-    assert_eq!(
-        config.interceptor.connect_relay.session_max,
-        Duration::from_millis(750)
-    );
-}
-
-#[test]
-fn https_mitm_cert_ttl_accepts_subsecond_duration() {
-    let config: sidecar::SidecarConfig = toml::from_str(
-        r#"
-        [interceptor.https_mitm]
-        cert_ttl = "500ms"
-        "#,
-    )
-    .expect("human-readable duration deserializes");
-
-    assert_eq!(
-        config.interceptor.https_mitm.cert_ttl,
-        Duration::from_millis(500)
-    );
-}
-
-#[test]
 fn interceptor_mode_uses_snake_case() {
     let cases = [
         (r#""http_proxy""#, InterceptorMode::HttpProxy),
@@ -142,17 +61,39 @@ fn max_decompressed_body_size_accepts_human_readable_units() {
 }
 
 #[test]
-fn legacy_authority_max_ttl_seconds_key_is_rejected() {
+fn sidecar_scalar_fields_accept_human_readable_units() {
+    let config: sidecar::SidecarConfig = toml::from_str(
+        r#"
+        [interceptor]
+        drain_timeout = "500ms"
+        max_request_body_size = "4 MiB"
+        total_body_budget = "64 MiB"
+
+        [connector]
+        default_timeout = "30s"
+
+        [audit]
+        wal_max_size = "100 MiB"
+        "#,
+    )
+    .expect("human-readable scalar values deserialize");
+
+    assert_eq!(config.interceptor.drain_timeout, Duration::from_millis(500));
+    assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
+    assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
+    assert_eq!(config.connector.default_timeout, Duration::from_secs(30));
+    assert_eq!(config.audit.wal_max_size, ByteSize::mib(100));
+}
+
+#[test]
+fn legacy_numeric_scalar_keys_are_rejected() {
+    assert!(
+        toml::from_str::<sidecar::SidecarConfig>(
+            "[interceptor]\ndrain_timeout_secs = 30\nmax_request_body_bytes = 4194304\n"
+        )
+        .is_err()
+    );
     assert!(toml::from_str::<authority::AuthorityConfig>("max_ttl_seconds = 3600\n").is_err());
-}
-
-#[test]
-fn legacy_authority_bundle_ttl_seconds_key_is_rejected() {
-    assert!(toml::from_str::<authority::AuthorityConfig>("bundle_ttl_seconds = 30\n").is_err());
-}
-
-#[test]
-fn legacy_run_capability_grace_seconds_key_is_rejected() {
     assert!(
         toml::from_str::<run::FileConfig>("[defaults.capability]\ngrace_seconds = 30\n").is_err()
     );

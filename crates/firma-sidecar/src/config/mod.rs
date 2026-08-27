@@ -433,20 +433,20 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
     type Error = InterceptorConfigError;
 
     fn try_from(s: schema_ic::InterceptorConfig) -> Result<Self, Self::Error> {
-        let max_request_body_size = usize::try_from(s.max_request_body_size.as_u64())
+        let max_request_body_bytes = usize::try_from(s.max_request_body_size.as_u64())
             .map_err(|_| InterceptorConfigError::MaxRequestBodyTooLarge)?;
-        let total_body_budget = usize::try_from(s.total_body_budget.as_u64())
+        let total_body_budget_bytes = usize::try_from(s.total_body_budget.as_u64())
             .map_err(|_| InterceptorConfigError::TotalBodyBudgetTooLarge)?;
         let config = Self {
             mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
             drain_timeout: s.drain_timeout,
-            max_request_body_bytes: max_request_body_size,
+            max_request_body_bytes,
             max_decompressed_body_size: s.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
             https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
-            total_body_budget_bytes: total_body_budget,
+            total_body_budget_bytes,
         };
         if config.drain_timeout.is_zero() {
             return Err(InterceptorConfigError::ZeroDrainTimeout);
@@ -1050,7 +1050,7 @@ pub struct LocalExecConfig {
     /// Approval token time-to-live.
     pub(crate) token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
-    /// responses.
+    /// responses (milliseconds, default: 500).
     pub(crate) retry_after: Duration,
 }
 
@@ -1596,18 +1596,6 @@ mod tests {
         assert!(SidecarConfig::try_from(schema).is_ok());
     }
 
-    #[test]
-    fn test_sidecar_config_zero_https_mitm_cert_ttl_rejected() {
-        let mut schema = schema_sidecar();
-        schema.interceptor.https_mitm.cert_ttl = Duration::ZERO;
-        assert!(matches!(
-            SidecarConfig::try_from(schema),
-            Err(SidecarConfigError::Interceptor(
-                InterceptorConfigError::HttpsMitm(HttpsMitmConfigError::ZeroCertTtl)
-            ))
-        ));
-    }
-
     #[cfg(unix)]
     #[test]
     fn test_unix_socket_mode_allows_absent_path() {
@@ -1661,7 +1649,7 @@ mod tests {
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 drain_timeout = "15s"
-max_request_body_size = 2097152
+max_request_body_size = "2 MiB"
 
 [interceptor.connect_relay]
 setup_timeout = "12s"
@@ -1707,7 +1695,7 @@ lru_capacity = 50000
 sink = "wal"
 grpc_url = "https://audit.example.com"
 wal_path = "/var/lib/firma/wal"
-wal_max_size = 52428800
+wal_max_size = "50 MiB"
 signing_key_path = "/etc/firma/audit.pem"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =

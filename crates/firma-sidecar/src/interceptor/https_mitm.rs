@@ -14,6 +14,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(test)]
+use std::time::Duration;
+
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
@@ -555,8 +558,6 @@ fn validate_dns_hostname(host: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use tempfile::tempdir;
 
     use super::*;
