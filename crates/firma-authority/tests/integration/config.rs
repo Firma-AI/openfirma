@@ -53,6 +53,85 @@ fn missing_authority_section_returns_none() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn legacy_seconds_env_overrides_preserve_the_compatibility_matrix() -> anyhow::Result<()> {
+    assert_eq!(
+        std::env::var("NEXTEST").as_deref(),
+        Ok("1"),
+        "this test mutates process environment and must run under cargo nextest"
+    );
+    let tmp = tempfile::tempdir()?;
+    let config_path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &config_path,
+        r#"[authority]
+max_ttl = "11s"
+bundle_ttl = "12s"
+"#,
+    )?;
+    let resolved = resolved_config(&config_path)?;
+
+    for (value, expected) in [
+        ("60", 60),
+        ("invalid", 11),
+        ("-1", 11),
+        ("0", 0),
+        ("2147483648", 11),
+    ] {
+        set_legacy_seconds_env(Some(value), None);
+        let config = AuthorityConfig::from_resolved_section(&resolved)?
+            .ok_or_else(|| anyhow!("authority section should be present"))?;
+        assert_eq!(
+            config.max_ttl_seconds(),
+            expected,
+            "unexpected max TTL override result for {value:?}"
+        );
+        assert_eq!(config.bundle_ttl_seconds(), 12);
+    }
+
+    for (value, expected) in [
+        ("60", 60),
+        ("invalid", 12),
+        ("-1", 12),
+        ("0", 0),
+        ("4294967296", 12),
+    ] {
+        set_legacy_seconds_env(None, Some(value));
+        let config = AuthorityConfig::from_resolved_section(&resolved)?
+            .ok_or_else(|| anyhow!("authority section should be present"))?;
+        assert_eq!(config.max_ttl_seconds(), 11);
+        assert_eq!(
+            config.bundle_ttl_seconds(),
+            expected,
+            "unexpected bundle TTL override result for {value:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[expect(
+    unsafe_code,
+    reason = "nextest gives this environment-mutating integration test its own process"
+)]
+fn set_legacy_seconds_env(max_ttl: Option<&str>, bundle_ttl: Option<&str>) {
+    const MAX_TTL: &str = "FIRMA_AUTHORITY_MAX_TTL_SECONDS";
+    const BUNDLE_TTL: &str = "FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS";
+
+    // SAFETY: the test verifies `NEXTEST=1` before calling this helper;
+    // nextest executes each test in an isolated process.
+    unsafe {
+        std::env::remove_var(MAX_TTL);
+        std::env::remove_var(BUNDLE_TTL);
+        if let Some(value) = max_ttl {
+            std::env::set_var(MAX_TTL, value);
+        }
+        if let Some(value) = bundle_ttl {
+            std::env::set_var(BUNDLE_TTL, value);
+        }
+    }
+}
+
 fn resolved_config(path: &Path) -> anyhow::Result<ResolvedConfig> {
     ConfigResolver::default()
         .resolve_config(Some(path))?
