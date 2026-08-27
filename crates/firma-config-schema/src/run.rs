@@ -98,8 +98,9 @@ pub struct ProfilePatch {
     /// Preferred governance config path. This routes local tool execution
     /// decisions through a Sidecar-owned endpoint.
     pub sidecar_local_exec: Option<CommandMediatorPatch>,
-    #[serde(default)]
-    pub executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    /// Per-executable launch policies. `None` inherits the lower profile layer,
+    /// a present empty map clears it, and matching entries merge field-by-field.
+    pub executable_policies: Option<BTreeMap<String, ExecutableLaunchPolicyPatch>>,
     #[serde(default)]
     pub codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
@@ -178,8 +179,9 @@ pub struct ExecutableLaunchPolicyPatch {
     pub enforce_wrapper_defaults: Option<bool>,
     pub sandbox_mode: Option<String>,
     pub approval_policy: Option<String>,
-    #[serde(default)]
-    pub config_overrides: BTreeMap<String, String>,
+    /// Wrapper configuration values. `None` inherits the lower policy, a
+    /// present empty map clears it, and a non-empty map merges by key.
+    pub config_overrides: Option<BTreeMap<String, String>>,
 }
 
 /// Runtime command mediation settings patch.

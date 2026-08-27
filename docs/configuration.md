@@ -179,6 +179,15 @@ present list replaces, and `[]` clears. Existing cross-field validation remains:
 the final configuration cannot combine `enforce_known_executables = true` with
 an empty allowlist.
 
+`executable_policies` is a key-merged map: omission inherits, an empty table
+clears every lower executable, and a non-empty table merges executable names.
+Matching executable policies merge `enforce_wrapper_defaults`, `sandbox_mode`,
+and `approval_policy` field-by-field. Their `config_overrides` maps inherit when
+omitted, clear when empty, and otherwise merge by key. Selectively deleting one
+inherited map key is not supported. The temporary legacy `codex_cli` table uses
+the same nested merge behavior while it remains accepted; a canonical
+`executable_policies.codex` entry still takes precedence at final resolution.
+
 ## Config-Relative Resource Resolution
 
 A resource field holding a **relative** path resolves under the resolved

@@ -386,6 +386,28 @@ impl Merge for CommandMediatorPatch {
     }
 }
 
+impl Merge for ExecutableLaunchPolicyPatch {
+    fn merge(self, higher: Self) -> Self {
+        let config_overrides = match higher.config_overrides {
+            Some(higher) if higher.is_empty() => Some(higher),
+            Some(higher) => {
+                let mut merged = self.config_overrides.unwrap_or_default();
+                merged.extend(higher);
+                Some(merged)
+            }
+            None => self.config_overrides,
+        };
+        Self {
+            enforce_wrapper_defaults: higher
+                .enforce_wrapper_defaults
+                .or(self.enforce_wrapper_defaults),
+            sandbox_mode: higher.sandbox_mode.or(self.sandbox_mode),
+            approval_policy: higher.approval_policy.or(self.approval_policy),
+            config_overrides,
+        }
+    }
+}
+
 impl Merge for CapabilityLeasePatch {
     fn merge(self, higher: Self) -> Self {
         let (source, kind, path) = if higher.source.is_some() {
@@ -418,8 +440,22 @@ impl Merge for ProfilePatch {
             }
             None => self.env_set,
         };
-        let mut executable_policies = self.executable_policies;
-        executable_policies.extend(higher.executable_policies);
+        let executable_policies = match higher.executable_policies {
+            Some(higher) if higher.is_empty() => Some(higher),
+            Some(higher) => {
+                let mut merged = self.executable_policies.unwrap_or_default();
+                for (executable, higher_policy) in higher {
+                    let policy = if let Some(lower) = merged.remove(&executable) {
+                        lower.merge(higher_policy)
+                    } else {
+                        higher_policy
+                    };
+                    merged.insert(executable, policy);
+                }
+                Some(merged)
+            }
+            None => self.executable_policies,
+        };
 
         Self {
             backend: higher.backend.or(self.backend),
@@ -445,7 +481,10 @@ impl Merge for ProfilePatch {
                 (lower, higher) => higher.or(lower),
             },
             executable_policies,
-            codex_cli: higher.codex_cli.or(self.codex_cli),
+            codex_cli: match (self.codex_cli, higher.codex_cli) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
             use_http_proxy_sidecar: higher
                 .use_http_proxy_sidecar
                 .or(self.use_http_proxy_sidecar),
@@ -575,8 +614,10 @@ pub(crate) fn resolve_profile_with_layout(
         .identity_mode
         .unwrap_or(SandboxIdentityMode::SandboxUser);
 
-    let executable_policies =
-        resolve_executable_policies(patch.executable_policies, patch.codex_cli);
+    let executable_policies = resolve_executable_policies(
+        patch.executable_policies.unwrap_or_default(),
+        patch.codex_cli,
+    );
 
     let seccomp_policy = patch
         .seccomp_policy
@@ -700,7 +741,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 requested_actions: None,
             }),
         sidecar_local_exec: None,
-        executable_policies: BTreeMap::new(),
+        executable_policies: None,
         codex_cli: None,
         use_http_proxy_sidecar: None,
         allow_non_structural: args.allow_non_structural.then_some(true),
@@ -732,7 +773,7 @@ fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableL
         enforce_wrapper_defaults: policy.enforce_wrapper_defaults.unwrap_or(true),
         sandbox_mode: policy.sandbox_mode,
         approval_policy: policy.approval_policy,
-        config_overrides: policy.config_overrides,
+        config_overrides: policy.config_overrides.unwrap_or_default(),
     }
 }
 
@@ -1192,10 +1233,10 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        CapabilitySourcePatch, CommandMediatorHitlMode, CommandMediatorPatch, FileConfig, Merge,
-        MountPatch, NetworkPolicyPatch, ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch,
-        SeccompRuntimeMode, SidecarEndpoint, capability_from_patch, cli_profile_patch,
-        rebase_file_paths, resolve_profile,
+        CapabilitySourcePatch, CommandMediatorHitlMode, CommandMediatorPatch,
+        ExecutableLaunchPolicyPatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch,
+        ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode, SidecarEndpoint,
+        capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -1917,6 +1958,144 @@ approval_policy = "never"
         assert_eq!(mediator.hitl_max_wait, Duration::from_mins(5));
         assert!(!mediator.enforce_known_executables);
         assert!(mediator.allowed_executables.is_empty());
+    }
+
+    #[test]
+    fn executable_policy_maps_merge_entries_fields_and_config_keys() {
+        let lower = ProfilePatch {
+            executable_policies: Some(BTreeMap::from([
+                (
+                    "codex".to_string(),
+                    ExecutableLaunchPolicyPatch {
+                        enforce_wrapper_defaults: Some(true),
+                        sandbox_mode: Some("workspace-write".to_string()),
+                        approval_policy: Some("on-request".to_string()),
+                        config_overrides: Some(BTreeMap::from([
+                            ("lower".to_string(), "preserved".to_string()),
+                            ("shared".to_string(), "lower".to_string()),
+                        ])),
+                    },
+                ),
+                (
+                    "other".to_string(),
+                    ExecutableLaunchPolicyPatch {
+                        enforce_wrapper_defaults: Some(true),
+                        sandbox_mode: None,
+                        approval_policy: None,
+                        config_overrides: None,
+                    },
+                ),
+            ])),
+            codex_cli: Some(ExecutableLaunchPolicyPatch {
+                enforce_wrapper_defaults: None,
+                sandbox_mode: Some("legacy-lower".to_string()),
+                approval_policy: None,
+                config_overrides: None,
+            }),
+            ..ProfilePatch::default()
+        };
+        let merged = lower.clone().merge(ProfilePatch {
+            executable_policies: Some(BTreeMap::from([(
+                "codex".to_string(),
+                ExecutableLaunchPolicyPatch {
+                    enforce_wrapper_defaults: Some(false),
+                    sandbox_mode: None,
+                    approval_policy: Some("never".to_string()),
+                    config_overrides: Some(BTreeMap::from([
+                        ("higher".to_string(), "added".to_string()),
+                        ("shared".to_string(), "higher".to_string()),
+                    ])),
+                },
+            )])),
+            codex_cli: Some(ExecutableLaunchPolicyPatch {
+                enforce_wrapper_defaults: Some(false),
+                sandbox_mode: None,
+                approval_policy: Some("legacy-higher".to_string()),
+                config_overrides: Some(BTreeMap::new()),
+            }),
+            ..ProfilePatch::default()
+        });
+
+        let policies = merged.executable_policies.as_ref().unwrap();
+        assert!(policies.contains_key("other"));
+        let codex = &policies["codex"];
+        assert_eq!(codex.enforce_wrapper_defaults, Some(false));
+        assert_eq!(codex.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(codex.approval_policy.as_deref(), Some("never"));
+        assert_eq!(
+            codex.config_overrides,
+            Some(BTreeMap::from([
+                ("higher".to_string(), "added".to_string()),
+                ("lower".to_string(), "preserved".to_string()),
+                ("shared".to_string(), "higher".to_string()),
+            ]))
+        );
+        let legacy = merged.codex_cli.unwrap();
+        assert_eq!(legacy.enforce_wrapper_defaults, Some(false));
+        assert_eq!(legacy.sandbox_mode.as_deref(), Some("legacy-lower"));
+        assert_eq!(legacy.approval_policy.as_deref(), Some("legacy-higher"));
+        assert_eq!(legacy.config_overrides, Some(BTreeMap::new()));
+
+        let cleared = lower.merge(ProfilePatch {
+            executable_policies: Some(BTreeMap::new()),
+            ..ProfilePatch::default()
+        });
+        assert!(
+            cleared
+                .executable_policies
+                .as_ref()
+                .is_some_and(BTreeMap::is_empty)
+        );
+    }
+
+    #[test]
+    fn executable_policy_file_layer_partially_overrides_built_in_entry() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.profiles.codex.executable_policies.codex]
+            enforce_wrapper_defaults = false
+
+            [run.profiles.codex.executable_policies.codex.config_overrides]
+            custom = "higher"
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+        let policy = &resolved.executable_policies["codex"];
+
+        assert!(!policy.enforce_wrapper_defaults);
+        assert!(policy.sandbox_mode.is_some());
+        assert_eq!(policy.approval_policy.as_deref(), Some("never"));
+        assert_eq!(
+            policy.config_overrides.get("custom").map(String::as_str),
+            Some("higher")
+        );
+        assert_eq!(
+            policy
+                .config_overrides
+                .get("shell_environment_policy.inherit")
+                .map(String::as_str),
+            Some("all")
+        );
+    }
+
+    #[test]
+    fn explicit_empty_executable_policy_map_clears_built_in_entries() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "[run.profiles.codex.executable_policies]\n").unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+
+        assert!(resolved.executable_policies.is_empty());
     }
 
     #[test]

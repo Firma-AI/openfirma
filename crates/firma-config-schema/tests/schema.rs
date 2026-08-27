@@ -732,6 +732,41 @@ fn run_command_mediator_patch_distinguishes_absent_and_empty_allowlist() {
 }
 
 #[test]
+fn run_executable_policy_maps_distinguish_absent_and_empty() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+        [defaults.executable_policies]
+
+        [profiles.selected.executable_policies.codex]
+        enforce_wrapper_defaults = false
+
+        [profiles.selected.executable_policies.codex.config_overrides]
+        "#,
+    )
+    .expect("empty executable policy maps must parse as present");
+
+    assert!(
+        config
+            .defaults
+            .executable_policies
+            .as_ref()
+            .is_some_and(BTreeMap::is_empty)
+    );
+    let selected = config.profiles["selected"]
+        .executable_policies
+        .as_ref()
+        .unwrap();
+    let codex = &selected["codex"];
+    assert_eq!(codex.enforce_wrapper_defaults, Some(false));
+    assert!(
+        codex
+            .config_overrides
+            .as_ref()
+            .is_some_and(BTreeMap::is_empty)
+    );
+}
+
+#[test]
 fn run_validates_backends_in_defaults_and_unselected_profiles() {
     for config in [
         "[defaults]\nbackend = \"bworp\"\n",

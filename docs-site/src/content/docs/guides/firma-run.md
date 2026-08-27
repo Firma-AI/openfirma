@@ -412,6 +412,8 @@ Capability `requested_actions` is a replaceable list. Omission keeps the inherit
 
 `sidecar_local_exec` merges field-by-field. A higher layer can change one timeout, HITL mode, endpoint, or enforcement boolean while retaining lower siblings. `allowed_executables` is replaceable: omission inherits, a present list replaces, and `[]` clears. Final validation still rejects `enforce_known_executables = true` with an empty allowlist.
 
+`executable_policies` merges executable names by key; omission inherits and an empty table clears all lower entries. Matching policies merge their scalar fields, while `config_overrides` inherits when omitted, clears when empty, and otherwise merges by key. Selective inherited-key deletion is not supported. Legacy `codex_cli` temporarily follows the same nested rule, but a canonical `executable_policies.codex` entry still wins during final resolution.
+
 ## Useful flags
 
 `firma run --help` is the full reference. The flags that come up most often:

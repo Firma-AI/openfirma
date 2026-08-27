@@ -84,7 +84,7 @@ fn generic_profile() -> ProfilePatch {
             requested_actions: None,
         }),
         sidecar_local_exec: None,
-        executable_policies: BTreeMap::new(),
+        executable_policies: Some(BTreeMap::new()),
         codex_cli: None,
         use_http_proxy_sidecar: Some(true),
         allow_non_structural: Some(false),
@@ -108,7 +108,7 @@ fn codex_profile() -> ProfilePatch {
     // codex's internal bwrap sandbox cannot run inside firma's outer sandbox.
     // danger-full-access disables codex's internal sandbox; firma's outer
     // sandbox provides equivalent isolation. Elsewhere keep workspace-write.
-    base.executable_policies.insert(
+    base.executable_policies.get_or_insert_default().insert(
         "codex".to_string(),
         codex_executable_policy(crate::backend::platform::nested_userns_restricted()),
     );
@@ -143,7 +143,7 @@ fn codex_executable_policy(restricted: bool) -> ExecutableLaunchPolicyPatch {
         enforce_wrapper_defaults: Some(true),
         sandbox_mode: Some(sandbox_mode),
         approval_policy: Some("never".to_string()),
-        config_overrides,
+        config_overrides: Some(config_overrides),
     }
 }
 
@@ -286,13 +286,15 @@ mod tests {
         assert_eq!(
             policy
                 .config_overrides
-                .get("sandbox_workspace_write.network_access"),
+                .as_ref()
+                .and_then(|values| values.get("sandbox_workspace_write.network_access")),
             Some(&"true".to_string())
         );
         assert_eq!(
             policy
                 .config_overrides
-                .get("shell_environment_policy.inherit"),
+                .as_ref()
+                .and_then(|values| values.get("shell_environment_policy.inherit")),
             Some(&"all".to_string())
         );
     }
@@ -304,12 +306,15 @@ mod tests {
         assert!(
             !policy
                 .config_overrides
-                .contains_key("sandbox_workspace_write.network_access")
+                .as_ref()
+                .is_some_and(|values| values
+                    .contains_key("sandbox_workspace_write.network_access"))
         );
         assert_eq!(
             policy
                 .config_overrides
-                .get("shell_environment_policy.inherit"),
+                .as_ref()
+                .and_then(|values| values.get("shell_environment_policy.inherit")),
             Some(&"all".to_string())
         );
     }
