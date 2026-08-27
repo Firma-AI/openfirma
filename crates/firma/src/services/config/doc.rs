@@ -184,6 +184,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
+        migrate_integer_duration(https, "cert_ttl_secs", "cert_ttl", "s");
         let has_intercept = !inputs.mitm_hosts.is_empty();
         let has_bypass = !inputs.mitm_bypass_hosts.is_empty();
         if !has_intercept && !has_bypass {
@@ -773,6 +774,17 @@ mod tests {
 
         assert!(out.contains("session_max = \"600s\""));
         assert!(!out.contains("session_max_secs"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_https_mitm_cert_ttl() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.interceptor.https_mitm]\ncert_ttl_secs = 86400\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("cert_ttl = \"86400s\""));
+        assert!(!out.contains("cert_ttl_secs"));
     }
 
     #[test]

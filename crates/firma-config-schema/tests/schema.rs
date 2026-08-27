@@ -85,6 +85,22 @@ fn connect_session_max_accepts_subsecond_duration() {
 }
 
 #[test]
+fn https_mitm_cert_ttl_accepts_subsecond_duration() {
+    let config: sidecar::SidecarConfig = toml::from_str(
+        r#"
+        [interceptor.https_mitm]
+        cert_ttl = "500ms"
+        "#,
+    )
+    .expect("human-readable duration deserializes");
+
+    assert_eq!(
+        config.interceptor.https_mitm.cert_ttl,
+        Duration::from_millis(500)
+    );
+}
+
+#[test]
 fn interceptor_mode_uses_snake_case() {
     let cases = [
         (r#""http_proxy""#, InterceptorMode::HttpProxy),

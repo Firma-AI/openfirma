@@ -154,9 +154,12 @@ pub struct HttpsMitmConfig {
     /// Host patterns that should bypass interception and use CONNECT tunnel.
     #[serde(default)]
     pub bypass_hosts: Vec<String>,
-    /// Dynamic leaf certificate TTL in seconds.
-    #[serde(default = "default_https_mitm_cert_ttl_secs")]
-    pub cert_ttl_secs: u64,
+    /// Dynamic leaf certificate TTL.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_https_mitm_cert_ttl"
+    )]
+    pub cert_ttl: Duration,
     /// Maximum number of cached leaf certificates.
     #[serde(default = "default_https_mitm_cert_cache_capacity")]
     pub cert_cache_capacity: usize,
@@ -173,7 +176,7 @@ impl Default for HttpsMitmConfig {
             ca_key_path: None,
             intercept_hosts: default_https_mitm_intercept_hosts(),
             bypass_hosts: Vec::new(),
-            cert_ttl_secs: default_https_mitm_cert_ttl_secs(),
+            cert_ttl: default_https_mitm_cert_ttl(),
             cert_cache_capacity: default_https_mitm_cert_cache_capacity(),
             strict_hosts: default_https_mitm_strict_hosts(),
         }
@@ -216,8 +219,8 @@ const fn default_connect_session_max() -> Duration {
     Duration::from_mins(10)
 }
 
-const fn default_https_mitm_cert_ttl_secs() -> u64 {
-    86_400
+const fn default_https_mitm_cert_ttl() -> Duration {
+    Duration::from_hours(24)
 }
 
 const fn default_https_mitm_cert_cache_capacity() -> usize {

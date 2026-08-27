@@ -2701,7 +2701,7 @@ mod tests {
                 enabled: true,
                 intercept_hosts: vec![host.to_string()],
                 strict_hosts: vec![host.to_string()],
-                cert_ttl_secs: 300,
+                cert_ttl: Duration::from_mins(5),
                 cert_cache_capacity: 16,
                 ..HttpsMitmConfig::default()
             },
@@ -3237,7 +3237,7 @@ mod tests {
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec!["localhost".to_string()],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };
@@ -3316,7 +3316,7 @@ Content-Length: 2\r\n\
             intercept_hosts: vec!["localhost".to_string()],
             // Non-strict host should fail open to blind tunnel when payload is non-TLS.
             strict_hosts: vec![],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };
@@ -3375,7 +3375,7 @@ Content-Length: 2\r\n\
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec!["localhost".to_string()],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };
@@ -3460,7 +3460,7 @@ Content-Length: 2\r\n\
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec![],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };
@@ -3497,7 +3497,7 @@ Content-Length: 2\r\n\
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec!["localhost".to_string()],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };
@@ -3579,7 +3579,7 @@ Content-Length: 10\r\n\
             enabled: true,
             intercept_hosts: vec![invalid_dns_host.clone()],
             strict_hosts: vec![invalid_dns_host.clone()],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };
@@ -3633,7 +3633,7 @@ Content-Length: 10\r\n\
             enabled: true,
             intercept_hosts: vec![invalid_dns_host.clone()],
             strict_hosts: vec![invalid_dns_host.clone()],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };
@@ -3686,7 +3686,7 @@ Content-Length: 10\r\n\
             enabled: true,
             intercept_hosts: vec![invalid_dns_host.clone()],
             strict_hosts: vec![],
-            cert_ttl_secs: 300,
+            cert_ttl: Duration::from_mins(5),
             cert_cache_capacity: 16,
             ..HttpsMitmConfig::default()
         };

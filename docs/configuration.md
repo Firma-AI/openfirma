@@ -179,7 +179,7 @@ enabled = true
 intercept_hosts = ["api.openai.com", "api.supabase.com", "*.resend.com"]
 bypass_hosts = ["status.openai.com"]
 strict_hosts = ["api.openai.com"]
-cert_ttl_secs = 86400
+cert_ttl = "24h"
 cert_cache_capacity = 1024
 
 [policy]
@@ -294,7 +294,7 @@ enforcement only).
 | `intercept_hosts`     | list<string> | curated common API hosts | Host patterns to intercept (`*` or `*.example.com`) |
 | `bypass_hosts`        | list<string> | `[]`                     | Host patterns to force CONNECT tunnel mode          |
 | `strict_hosts`        | list<string> | `[]`                     | Host patterns that must be intercepted              |
-| `cert_ttl_secs`       | u64          | `86400`                  | Leaf certificate cache TTL in seconds               |
+| `cert_ttl`            | u64          | `86400`                  | Leaf certificate cache TTL in seconds               |
 | `cert_cache_capacity` | usize        | `1024`                   | Maximum number of cached leaf certificates          |
 
 Validation:
@@ -308,7 +308,7 @@ Validation:
 - Wildcard suffixes must contain at least two DNS labels (for example
   `*.com` is rejected).
 - If `enabled = true`, `intercept_hosts` must be non-empty.
-- If `enabled = true`, `cert_ttl_secs` and `cert_cache_capacity` must be
+- If `enabled = true`, `cert_ttl` and `cert_cache_capacity` must be
   greater than `0`.
 - If `ca_cert_path` / `ca_key_path` are omitted, first-run CA files are created
   under [`[ca].dir`](#ca) as `firma-ca.crt` and `firma-ca.key`.

@@ -547,8 +547,8 @@ pub struct HttpsMitmConfig {
     pub(crate) intercept_hosts: Vec<String>,
     /// Host patterns that should bypass interception and use CONNECT tunnel.
     pub(crate) bypass_hosts: Vec<String>,
-    /// Dynamic leaf certificate TTL in seconds.
-    pub(crate) cert_ttl_secs: u64,
+    /// Dynamic leaf certificate TTL.
+    pub(crate) cert_ttl: Duration,
     /// Maximum number of cached leaf certificates.
     pub(crate) cert_cache_capacity: usize,
     /// Host patterns that must be intercepted; failures are hard deny.
@@ -561,8 +561,8 @@ pub enum HttpsMitmConfigError {
     /// A configured host pattern was invalid.
     #[error(transparent)]
     HostPattern(#[from] HostPatternError),
-    /// `cert_ttl_secs` was zero while interception was active.
-    #[error("interceptor.https_mitm.cert_ttl_secs must be > 0")]
+    /// `cert_ttl` was zero while interception was active.
+    #[error("interceptor.https_mitm.cert_ttl must be > 0")]
     ZeroCertTtl,
     /// `cert_cache_capacity` was zero while interception was active.
     #[error("interceptor.https_mitm.cert_cache_capacity must be > 0")]
@@ -579,7 +579,7 @@ impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
             ca_key_path: s.ca_key_path,
             intercept_hosts: s.intercept_hosts,
             bypass_hosts: s.bypass_hosts,
-            cert_ttl_secs: s.cert_ttl_secs,
+            cert_ttl: s.cert_ttl,
             cert_cache_capacity: s.cert_cache_capacity,
             strict_hosts: s.strict_hosts,
         };
@@ -592,7 +592,7 @@ impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
         // Empty intercept_hosts → MITM inactive (see `is_active`); skip the
         // active-only invariants below instead of rejecting the config.
         if config.is_active() {
-            if config.cert_ttl_secs == 0 {
+            if config.cert_ttl.is_zero() {
                 return Err(HttpsMitmConfigError::ZeroCertTtl);
             }
             if config.cert_cache_capacity == 0 {
@@ -656,7 +656,7 @@ impl Default for HttpsMitmConfig {
             ca_key_path: d.ca_key_path,
             intercept_hosts: d.intercept_hosts,
             bypass_hosts: d.bypass_hosts,
-            cert_ttl_secs: d.cert_ttl_secs,
+            cert_ttl: d.cert_ttl,
             cert_cache_capacity: d.cert_cache_capacity,
             strict_hosts: d.strict_hosts,
         }
@@ -1439,9 +1439,21 @@ mod tests {
         schema.interceptor.https_mitm.intercept_hosts = vec!["api.openai.com".to_string()];
         schema.interceptor.https_mitm.bypass_hosts = vec!["example.com".to_string()];
         schema.interceptor.https_mitm.strict_hosts = vec!["api.openai.com".to_string()];
-        schema.interceptor.https_mitm.cert_ttl_secs = 60;
+        schema.interceptor.https_mitm.cert_ttl = Duration::from_mins(1);
         schema.interceptor.https_mitm.cert_cache_capacity = 8;
         assert!(SidecarConfig::try_from(schema).is_ok());
+    }
+
+    #[test]
+    fn test_sidecar_config_zero_https_mitm_cert_ttl_rejected() {
+        let mut schema = schema_sidecar();
+        schema.interceptor.https_mitm.cert_ttl = Duration::ZERO;
+        assert!(matches!(
+            SidecarConfig::try_from(schema),
+            Err(SidecarConfigError::Interceptor(
+                InterceptorConfigError::HttpsMitm(HttpsMitmConfigError::ZeroCertTtl)
+            ))
+        ));
     }
 
     #[cfg(unix)]
@@ -1508,7 +1520,7 @@ enabled = true
 intercept_hosts = ["api.openai.com"]
 bypass_hosts = ["example.com"]
 strict_hosts = ["api.openai.com"]
-cert_ttl_secs = 120
+cert_ttl = "2m"
 cert_cache_capacity = 16
 
 [policy]
@@ -1579,7 +1591,10 @@ signing_key_path = "/etc/firma/audit.pem"
             config.interceptor.https_mitm.strict_hosts,
             vec!["api.openai.com".to_string()]
         );
-        assert_eq!(config.interceptor.https_mitm.cert_ttl_secs, 120);
+        assert_eq!(
+            config.interceptor.https_mitm.cert_ttl,
+            Duration::from_mins(2)
+        );
         assert_eq!(config.interceptor.https_mitm.cert_cache_capacity, 16);
         assert_eq!(config.policy.dir, PathBuf::from("/etc/firma/policies"));
         assert_eq!(

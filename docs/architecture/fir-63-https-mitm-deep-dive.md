@@ -84,7 +84,7 @@ Add explicit MITM section under `[interceptor.https_mitm]`:
 - `ca_key_path` (optional; default under `ca.dir`)
 - `intercept_hosts` (list, explicit allowlist)
 - `bypass_hosts` (list)
-- `cert_ttl_secs` (default 86400)
+- `cert_ttl` (default 86400)
 - `cert_cache_capacity` (bounded cache)
 - `strict_hosts` (optional list; deny if MITM cannot be applied)
 

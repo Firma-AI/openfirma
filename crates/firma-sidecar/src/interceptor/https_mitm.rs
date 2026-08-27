@@ -12,7 +12,7 @@ use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
@@ -119,7 +119,7 @@ impl HttpsMitmRuntime {
             .with_no_client_auth()
             .with_single_cert(certs, key)
             .map_err(|e| format!("failed to build rustls server config: {e}"))?;
-        let expires_at = Instant::now() + Duration::from_secs(self.config.cert_ttl_secs);
+        let expires_at = Instant::now() + self.config.cert_ttl;
 
         Ok(CachedLeafCert {
             acceptor: TlsAcceptor::from(Arc::new(server_config)),
@@ -555,6 +555,8 @@ fn validate_dns_hostname(host: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use tempfile::tempdir;
 
     use super::*;
@@ -609,7 +611,7 @@ mod tests {
                 enabled: true,
                 intercept_hosts: vec!["*.openai.com".to_string()],
                 bypass_hosts: vec!["api.openai.com".to_string()],
-                cert_ttl_secs: 60,
+                cert_ttl: Duration::from_mins(1),
                 cert_cache_capacity: 8,
                 ..HttpsMitmConfig::default()
             },
@@ -629,7 +631,7 @@ mod tests {
                 enabled: true,
                 intercept_hosts: vec!["api.openai.com".to_string()],
                 strict_hosts: vec!["api.openai.com".to_string()],
-                cert_ttl_secs: 60,
+                cert_ttl: Duration::from_mins(1),
                 cert_cache_capacity: 8,
                 ..HttpsMitmConfig::default()
             },
@@ -647,7 +649,7 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl_secs: 60,
+            cert_ttl: Duration::from_mins(1),
             cert_cache_capacity: 8,
             ..HttpsMitmConfig::default()
         };
@@ -664,7 +666,7 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl_secs: 60,
+            cert_ttl: Duration::from_mins(1),
             cert_cache_capacity: 8,
             ..HttpsMitmConfig::default()
         };
@@ -693,7 +695,7 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl_secs: 60,
+            cert_ttl: Duration::from_mins(1),
             cert_cache_capacity: 8,
             ..HttpsMitmConfig::default()
         };
@@ -716,7 +718,7 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl_secs: 60,
+            cert_ttl: Duration::from_mins(1),
             cert_cache_capacity: 8,
             ..HttpsMitmConfig::default()
         };
@@ -749,7 +751,7 @@ mod tests {
             intercept_hosts: vec!["api.openai.com".to_string()],
             ca_cert_path: Some(cert_path),
             ca_key_path: Some(key_path),
-            cert_ttl_secs: 60,
+            cert_ttl: Duration::from_mins(1),
             cert_cache_capacity: 8,
             ..HttpsMitmConfig::default()
         };
@@ -770,7 +772,7 @@ mod tests {
             HttpsMitmConfig {
                 enabled: true,
                 intercept_hosts: vec!["api.openai.com".to_string()],
-                cert_ttl_secs: 300,
+                cert_ttl: Duration::from_mins(5),
                 cert_cache_capacity: 8,
                 ..HttpsMitmConfig::default()
             },
