@@ -247,10 +247,10 @@ generated filter to `bwrap` (`--seccomp`) for additional syscall restriction.
 Example:
 
 ```toml
-[profiles.claude-code]
+[run.profiles.claude-code]
 backend = "bwrap"
 
-[profiles.claude-code.seccomp_policy]
+[run.profiles.claude-code.seccomp_policy]
 source_policy_path = "/absolute/path/to/policy.toml"
 artifact_dir = "/absolute/path/to/seccomp-artifacts"
 ```

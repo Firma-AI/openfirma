@@ -152,7 +152,6 @@ drain_timeout = "30s"
 
 [sidecar.policy]
 dir = "examples/demos/demo0"
-authority_url = "http://127.0.0.1:50051"
 
 [sidecar.ca]
 dir = "examples/demos/demo0/.runtime/generated-firma-ca"
@@ -173,6 +172,7 @@ file_path = "examples/demos/demo0/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 
 [sidecar.authority]
+url = "http://127.0.0.1:50051"
 connect_timeout = "10s"
 reconnect_min_backoff = "250ms"
 reconnect_max_backoff = "30s"
@@ -438,7 +438,7 @@ Agent task: review PRs, interact with GitHub. From its own perspective the agent
 GITHUB_TOKEN=ghp_FULL_REPO_SCOPE_xxxxxxxxxxxxxxxxxxxxxxxx   # display only
 ```
 
-Reality: the agent process scrubs `GITHUB_TOKEN` from its environment at startup. The real token lives in the sidecar's `[credentials.github]` config and is injected as `Authorization: Bearer …` only after an ALLOW decision.
+Reality: the agent process scrubs `GITHUB_TOKEN` from its environment at startup. The real token lives in the sidecar's `[sidecar.credentials.github]` config and is injected as `Authorization: Bearer …` only after an ALLOW decision.
 
 Enforced capability (outside the agent):
 

@@ -48,7 +48,7 @@ session pre-provisioned outside the `firma run` autostart flow:
 
 1. Issue token for the exact session id:
    - `examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" ...`
-2. Sidecar loads token via `[capability_seed].paths` at startup (deprecated; emits warning).
+2. Sidecar loads token via `[sidecar.capability_seed].paths` at startup (deprecated; emits warning).
 3. Requests are enforced against that token until expiry.
 4. On expiry, sidecar denies with `TokenExpired`.
 5. Re-issue token for the same session id and restart sidecar.
@@ -79,7 +79,8 @@ Note: the Claude mapping sample includes both:
 - `CONNECT` destination mappings, and
 - MITM inner HTTP path mappings (for example `/v1/*`, `/api/*`)
 
-This is required when `https_mitm.enabled = true` and `default_protected = true`.
+This is required when `sidecar.interceptor.https_mitm.enabled = true` and
+`sidecar.mapping.default_protected = true`.
 
 Recommended local destinations:
 
@@ -122,7 +123,7 @@ cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local
 token issuance is required for the standard flow.
 
 If you are using the **legacy operator path** (pre-provisioned seed tokens with
-`[capability_seed]`), set a stable session id and issue a seed manually:
+`[sidecar.capability_seed]`), set a stable session id and issue a seed manually:
 
 Codex (legacy):
 

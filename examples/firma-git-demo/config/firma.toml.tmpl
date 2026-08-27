@@ -36,13 +36,13 @@ fpr = 0.001
 lru_capacity = 10000
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host = "github.com"
 rps = 30
 burst = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [sidecar.authority]
 url = "https://{{AUTHORITY_ADDR}}"
