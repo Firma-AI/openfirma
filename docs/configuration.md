@@ -171,7 +171,7 @@ max_request_body_bytes = 4194304
 # socket_path = "/tmp/firma.sock"
 
 [interceptor.connect_relay]
-setup_timeout_secs = 10
+setup_timeout = "10s"
 session_max_secs = 600
 
 [interceptor.https_mitm]
@@ -269,14 +269,14 @@ Validation:
 
 Timeout controls for CONNECT tunnel and HTTPS MITM relay sessions.
 
-| Field                | Type | Default | Description                                              |
-| -------------------- | ---- | ------- | -------------------------------------------------------- |
-| `setup_timeout_secs` | u64  | `10`    | Timeout for CONNECT upgrade and upstream setup/handshake |
-| `session_max_secs`   | u64  | `600`   | Hard cap for an individual CONNECT/MITM session lifetime |
+| Field              | Type | Default | Description                                              |
+| ------------------ | ---- | ------- | -------------------------------------------------------- |
+| `setup_timeout`    | u64  | `10`    | Timeout for CONNECT upgrade and upstream setup/handshake |
+| `session_max_secs` | u64  | `600`   | Hard cap for an individual CONNECT/MITM session lifetime |
 
 Validation:
 
-- `setup_timeout_secs` must be greater than `0`.
+- `setup_timeout` must be greater than `0`.
 - `session_max_secs` must be greater than `0`.
 
 ### `[interceptor.https_mitm]`

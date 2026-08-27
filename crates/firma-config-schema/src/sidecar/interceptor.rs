@@ -113,8 +113,11 @@ impl Default for InterceptorConfig {
 #[serde(deny_unknown_fields)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    #[serde(default = "default_connect_setup_timeout_secs")]
-    pub setup_timeout_secs: u64,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_connect_setup_timeout"
+    )]
+    pub setup_timeout: Duration,
     /// Hard cap for the full tunnel/MITM session lifetime.
     #[serde(default = "default_connect_session_max_secs")]
     pub session_max_secs: u64,
@@ -123,7 +126,7 @@ pub struct ConnectRelayConfig {
 impl Default for ConnectRelayConfig {
     fn default() -> Self {
         Self {
-            setup_timeout_secs: default_connect_setup_timeout_secs(),
+            setup_timeout: default_connect_setup_timeout(),
             session_max_secs: default_connect_session_max_secs(),
         }
     }
@@ -202,8 +205,8 @@ const fn default_total_body_budget_bytes() -> usize {
     64 * 1024 * 1024
 }
 
-const fn default_connect_setup_timeout_secs() -> u64 {
-    10
+const fn default_connect_setup_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
 const fn default_connect_session_max_secs() -> u64 {

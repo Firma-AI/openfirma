@@ -1118,7 +1118,7 @@ struct ConnectRelayLimits {
 
 fn connect_relay_limits(config: &ConnectRelayConfig) -> ConnectRelayLimits {
     ConnectRelayLimits {
-        setup_timeout: Duration::from_secs(config.setup_timeout_secs),
+        setup_timeout: config.setup_timeout,
         session_max: Duration::from_secs(config.session_max_secs),
     }
 }

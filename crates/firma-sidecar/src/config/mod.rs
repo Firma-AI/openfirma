@@ -487,7 +487,7 @@ impl Default for InterceptorConfig {
 #[derive(Debug, Clone)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    pub(crate) setup_timeout_secs: u64,
+    pub(crate) setup_timeout: Duration,
     /// Hard cap for the full tunnel/MITM session lifetime.
     pub(crate) session_max_secs: u64,
 }
@@ -495,8 +495,8 @@ pub struct ConnectRelayConfig {
 /// Error validating a [`ConnectRelayConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectRelayConfigError {
-    /// `setup_timeout_secs` was zero.
-    #[error("interceptor.connect_relay.setup_timeout_secs must be > 0")]
+    /// `setup_timeout` was zero.
+    #[error("interceptor.connect_relay.setup_timeout must be > 0")]
     ZeroSetupTimeout,
     /// `session_max_secs` was zero.
     #[error("interceptor.connect_relay.session_max_secs must be > 0")]
@@ -507,14 +507,14 @@ impl TryFrom<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
     type Error = ConnectRelayConfigError;
 
     fn try_from(s: schema_ic::ConnectRelayConfig) -> Result<Self, Self::Error> {
-        if s.setup_timeout_secs == 0 {
+        if s.setup_timeout.is_zero() {
             return Err(ConnectRelayConfigError::ZeroSetupTimeout);
         }
         if s.session_max_secs == 0 {
             return Err(ConnectRelayConfigError::ZeroSessionMax);
         }
         Ok(Self {
-            setup_timeout_secs: s.setup_timeout_secs,
+            setup_timeout: s.setup_timeout,
             session_max_secs: s.session_max_secs,
         })
     }
@@ -524,7 +524,7 @@ impl Default for ConnectRelayConfig {
     fn default() -> Self {
         let d = schema_ic::ConnectRelayConfig::default();
         Self {
-            setup_timeout_secs: d.setup_timeout_secs,
+            setup_timeout: d.setup_timeout,
             session_max_secs: d.session_max_secs,
         }
     }
@@ -1330,7 +1330,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_connect_setup_timeout_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.connect_relay.setup_timeout_secs = 0;
+        schema.interceptor.connect_relay.setup_timeout = Duration::ZERO;
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1500,7 +1500,7 @@ drain_timeout = "15s"
 max_request_body_bytes = 2097152
 
 [interceptor.connect_relay]
-setup_timeout_secs = 12
+setup_timeout = "12s"
 session_max_secs = 900
 
 [interceptor.https_mitm]
@@ -1558,7 +1558,10 @@ signing_key_path = "/etc/firma/audit.pem"
         );
         assert_eq!(config.interceptor.drain_timeout, Duration::from_secs(15));
         assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
-        assert_eq!(config.interceptor.connect_relay.setup_timeout_secs, 12);
+        assert_eq!(
+            config.interceptor.connect_relay.setup_timeout,
+            Duration::from_secs(12)
+        );
         assert_eq!(config.interceptor.connect_relay.session_max_secs, 900);
         assert!(config.interceptor.https_mitm.enabled);
         assert_eq!(

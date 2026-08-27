@@ -177,6 +177,9 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     {
         let interceptor = ensure_table(sidecar, "interceptor")?;
         migrate_integer_duration(interceptor, "drain_timeout_secs", "drain_timeout", "s");
+        if let Some(relay) = optional_table_mut(interceptor, "connect_relay")? {
+            migrate_integer_duration(relay, "setup_timeout_secs", "setup_timeout", "s");
+        }
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
@@ -493,6 +496,16 @@ fn ensure_table<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table> {
     Ok(table)
 }
 
+fn optional_table_mut<'a>(parent: &'a mut Table, key: &str) -> Result<Option<&'a mut Table>> {
+    let Some(item) = parent.get_mut(key) else {
+        return Ok(None);
+    };
+    let Some(table) = item.as_table_mut() else {
+        bail!("`{key}` must be a table");
+    };
+    Ok(Some(table))
+}
+
 fn ensure_array_of_tables<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut ArrayOfTables> {
     if !parent.contains_key(key) {
         parent.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
@@ -737,6 +750,17 @@ mod tests {
 
         assert!(out.contains("drain_timeout = \"30s\""));
         assert!(!out.contains("drain_timeout_secs"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_connect_setup_timeout() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.interceptor.connect_relay]\nsetup_timeout_secs = 10\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("setup_timeout = \"10s\""));
+        assert!(!out.contains("setup_timeout_secs"));
     }
 
     #[test]
