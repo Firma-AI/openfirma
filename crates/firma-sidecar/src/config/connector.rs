@@ -37,9 +37,6 @@ pub struct HostConnectorConfig {
 /// Error validating a [`ConnectorConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectorConfigError {
-    /// The registry-default timeout was zero.
-    #[error("connector.default_timeout must be > 0")]
-    ZeroDefaultTimeout,
     /// A per-host entry was invalid.
     #[error("connector.hosts[{host}]: {source}")]
     Host {
@@ -112,9 +109,6 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
     type Error = ConnectorConfigError;
 
     fn try_from(schema: SchemaConnectorConfig) -> Result<Self, Self::Error> {
-        if schema.default_timeout.is_zero() {
-            return Err(ConnectorConfigError::ZeroDefaultTimeout);
-        }
         let mut seen: HashSet<String> = HashSet::with_capacity(schema.hosts.len());
         let mut hosts = Vec::with_capacity(schema.hosts.len());
         for host in schema.hosts {
@@ -133,7 +127,7 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
             hosts.push(validated);
         }
         Ok(Self {
-            default_timeout: schema.default_timeout,
+            default_timeout: schema.default_timeout.duration(),
             hosts,
         })
     }
@@ -142,6 +136,7 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firma_config_schema::utils::NonZeroDuration;
 
     fn host(host: &str, rps: u32, burst: u32, timeout: Duration) -> SchemaHostConnectorConfig {
         SchemaHostConnectorConfig {
@@ -157,7 +152,8 @@ mod tests {
         hosts: Vec<SchemaHostConnectorConfig>,
     ) -> SchemaConnectorConfig {
         SchemaConnectorConfig {
-            default_timeout,
+            default_timeout: NonZeroDuration::new(default_timeout)
+                .expect("non-zero default timeout"),
             hosts,
         }
     }
@@ -166,14 +162,6 @@ mod tests {
     fn default_config_is_valid() {
         let d = ConnectorConfig::default();
         assert!(ConnectorConfig::try_from(schema(d.default_timeout, Vec::new())).is_ok());
-    }
-
-    #[test]
-    fn zero_default_timeout_rejected() {
-        assert!(matches!(
-            ConnectorConfig::try_from(schema(Duration::ZERO, Vec::new())),
-            Err(ConnectorConfigError::ZeroDefaultTimeout)
-        ));
     }
 
     #[test]

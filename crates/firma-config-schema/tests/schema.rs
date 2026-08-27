@@ -308,6 +308,21 @@ fn sidecar_connect_relay_session_max_rejects_zero() {
 }
 
 #[test]
+fn sidecar_connector_default_timeout_rejects_zero() {
+    let error =
+        toml::from_str::<sidecar::SidecarConfig>("[connector]\ndefault_timeout = \"0ns\"\n")
+            .expect_err("zero connector default timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"
@@ -331,7 +346,10 @@ fn sidecar_scalar_fields_accept_human_readable_units() {
     );
     assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
     assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
-    assert_eq!(config.connector.default_timeout, Duration::from_secs(30));
+    assert_eq!(
+        config.connector.default_timeout.duration(),
+        Duration::from_secs(30)
+    );
     assert_eq!(config.audit.wal_max_size, ByteSize::mib(100));
 }
 

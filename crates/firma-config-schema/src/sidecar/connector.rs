@@ -1,26 +1,25 @@
 //! Schema for `[sidecar.connector]`.
 //!
-//! Representation only. Describes the default dispatch timeout applied to
-//! unconfigured hosts and the per-host overrides. `firma-sidecar` validates
-//! non-zero timeouts / rate limits and rejects duplicate hosts.
+//! Describes the default dispatch timeout applied to unconfigured hosts and the
+//! per-host overrides. Schema value types own intrinsic invariants;
+//! `firma-sidecar` validates rate limits, host names, and duplicate hosts.
 
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::utils::NonZeroDuration;
+
 /// Default dispatch timeout (30s) applied to the registry default connector.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_TIMEOUT: NonZeroDuration = NonZeroDuration::from_static(Duration::from_secs(30));
 
 /// Top-level connector configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectorConfig {
     /// Timeout applied to the registry default.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_timeout"
-    )]
-    pub default_timeout: Duration,
+    #[serde(default = "default_timeout")]
+    pub default_timeout: NonZeroDuration,
     /// Per-host overrides.
     #[serde(default)]
     pub hosts: Vec<HostConnectorConfig>,
@@ -55,6 +54,6 @@ pub struct HostConnectorConfig {
     pub timeout: Duration,
 }
 
-const fn default_timeout() -> Duration {
+const fn default_timeout() -> NonZeroDuration {
     DEFAULT_TIMEOUT
 }
