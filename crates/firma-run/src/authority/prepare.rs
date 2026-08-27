@@ -154,7 +154,10 @@ pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunE
     let pub_key_path = authority_config.key_file().with_extension("pub");
     // Serialize the schema (wire) form, not the validated config: the schema
     // owns the stable TOML keys the child process reads back.
-    let inner = toml::to_string_pretty(&authority_config.to_schema()).map_err(|error| {
+    let authority_schema = authority_config.to_schema().map_err(|error| {
+        RunError::Internal(format!("invalid synthetic authority config: {error}"))
+    })?;
+    let inner = toml::to_string_pretty(&authority_schema).map_err(|error| {
         RunError::Internal(format!("invalid synthetic authority config: {error}"))
     })?;
     std::fs::write(&authority_toml, format!("[authority]\n{inner}")).map_err(|error| {

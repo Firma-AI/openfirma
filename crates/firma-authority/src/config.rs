@@ -167,7 +167,8 @@ impl AuthorityConfig {
     /// Convert the schema representation into the runtime whole-second shape.
     /// Cross-field validation remains deferred to [`AuthorityConfigBuilder::build`].
     fn from_schema(s: schema::AuthorityConfig) -> Result<Self, AuthorityConfigError> {
-        if s.max_ttl.subsec_nanos() != 0 {
+        let max_ttl = s.max_ttl.duration();
+        if max_ttl.subsec_nanos() != 0 {
             return Err(AuthorityConfigError::DurationNotWholeSeconds {
                 field: "authority.max_ttl",
             });
@@ -177,7 +178,7 @@ impl AuthorityConfig {
                 field: "authority.bundle_ttl",
             });
         }
-        let max_ttl_seconds = i32::try_from(s.max_ttl.as_secs()).map_err(|_| {
+        let max_ttl_seconds = i32::try_from(max_ttl.as_secs()).map_err(|_| {
             AuthorityConfigError::DurationOutOfRange {
                 field: "authority.max_ttl",
             }
@@ -211,17 +212,30 @@ impl AuthorityConfig {
     ///
     /// Autostart serializes this schema form (not the validated type) so the
     /// synthetic `[authority]` TOML uses the stable wire keys.
-    #[must_use]
-    pub fn to_schema(&self) -> schema::AuthorityConfig {
-        schema::AuthorityConfig {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::DurationNotPositive`] if the runtime maximum TTL
+    /// cannot be represented as a non-zero schema duration.
+    pub fn to_schema(&self) -> Result<schema::AuthorityConfig, ConfigError> {
+        let max_ttl_seconds =
+            u64::try_from(self.max_ttl_seconds).map_err(|_| ConfigError::DurationNotPositive {
+                field: "authority.max_ttl",
+            })?;
+        let max_ttl = firma_config_schema::utils::NonZeroDuration::new(
+            std::time::Duration::from_secs(max_ttl_seconds),
+        )
+        .map_err(|_| ConfigError::DurationNotPositive {
+            field: "authority.max_ttl",
+        })?;
+
+        Ok(schema::AuthorityConfig {
             listen_addr: self.listen_addr.clone(),
             policy_dir: self.policy_dir.clone(),
             issuance_policy_dir: self.issuance_policy_dir.clone(),
             schema_path: self.schema_path.clone(),
             revocation_file: self.revocation_file.clone(),
-            max_ttl: std::time::Duration::from_secs(
-                u64::try_from(self.max_ttl_seconds).unwrap_or(0),
-            ),
+            max_ttl,
             key_file: self.key_file.clone(),
             bundle_ttl: std::time::Duration::from_secs(u64::from(self.bundle_ttl_seconds)),
             tls_cert_path: self.tls.cert.clone(),
@@ -229,7 +243,7 @@ impl AuthorityConfig {
             mtls_client_ca_cert_path: self.tls.mtls_client_ca_cert.clone(),
             mtls_client_ca_key_path: self.tls.mtls_client_ca_key.clone(),
             authorized_clients_path: self.tls.authorized_clients.clone(),
-        }
+        })
     }
 }
 
@@ -342,8 +356,11 @@ impl AuthorityConfigBuilder {
             self.schema.revocation_file = PathBuf::from(value);
         }
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_MAX_TTL") {
-            self.schema.max_ttl =
-                parse_duration_env("FIRMA_AUTHORITY_MAX_TTL", "authority.max_ttl", &value)?;
+            self.schema.max_ttl = parse_non_zero_duration_env(
+                "FIRMA_AUTHORITY_MAX_TTL",
+                "authority.max_ttl",
+                &value,
+            )?;
         }
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
             self.schema.key_file = PathBuf::from(value);
@@ -436,6 +453,20 @@ fn parse_duration_env(
         });
     }
     Ok(duration)
+}
+
+fn parse_non_zero_duration_env(
+    name: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<firma_config_schema::utils::NonZeroDuration, ConfigError> {
+    let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value);
+    <firma_config_schema::utils::NonZeroDuration as serde::Deserialize>::deserialize(deserializer)
+        .map_err(|error| ConfigError::InvalidEnvironmentVariable {
+            name,
+            field,
+            reason: error.to_string(),
+        })
 }
 
 impl AuthorityConfig {
@@ -556,6 +587,8 @@ pub enum ConfigError {
         field: &'static str,
         reason: String,
     },
+    #[error("{field} must be greater than zero")]
+    DurationNotPositive { field: &'static str },
 }
 
 #[cfg(test)]
@@ -683,7 +716,10 @@ max_ttl = "30m"
     #[test]
     fn authority_duration_conversion_rejects_fractional_and_out_of_range_values() {
         let mut schema = schema::AuthorityConfig {
-            max_ttl: std::time::Duration::from_millis(500),
+            max_ttl: firma_config_schema::utils::NonZeroDuration::new(
+                std::time::Duration::from_millis(500),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
             ..schema::AuthorityConfig::default()
         };
         assert!(matches!(
@@ -693,7 +729,10 @@ max_ttl = "30m"
             })
         ));
 
-        schema.max_ttl = std::time::Duration::from_secs(2_147_483_648);
+        schema.max_ttl = firma_config_schema::utils::NonZeroDuration::new(
+            std::time::Duration::from_secs(2_147_483_648),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
         assert!(matches!(
             AuthorityConfigBuilder::new(schema.clone()).build(),
             Err(AuthorityConfigError::DurationOutOfRange {

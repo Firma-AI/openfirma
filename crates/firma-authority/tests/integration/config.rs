@@ -301,7 +301,10 @@ fn schema_with_tls() -> schema::AuthorityConfig {
         issuance_policy_dir: "/srv/issuance".into(),
         schema_path: Some("/srv/schema.cedarschema".into()),
         revocation_file: "/srv/revocations.txt".into(),
-        max_ttl: std::time::Duration::from_mins(20),
+        max_ttl: firma_config_schema::utils::NonZeroDuration::new(std::time::Duration::from_mins(
+            20,
+        ))
+        .unwrap_or_else(|error| panic!("{error}")),
         key_file: "/srv/authority.key".into(),
         bundle_ttl: std::time::Duration::from_secs(45),
         tls_cert_path: Some("/srv/tls.crt".into()),
@@ -343,7 +346,7 @@ fn to_schema_round_trips_through_builder() -> anyhow::Result<()> {
 
     // `to_schema` maps the validated config back to the wire shape; rebuilding
     // from it must reproduce the same validated config.
-    let rebuilt = AuthorityConfigBuilder::new(original.to_schema()).build()?;
+    let rebuilt = AuthorityConfigBuilder::new(original.to_schema()?).build()?;
 
     assert_eq!(rebuilt.listen_addr(), original.listen_addr());
     assert_eq!(rebuilt.policy_dir(), original.policy_dir());

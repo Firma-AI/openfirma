@@ -85,6 +85,26 @@ fn non_zero_duration_serialization_round_trips_with_friendly_representation() {
 }
 
 #[test]
+fn authority_max_ttl_is_non_zero_and_preserves_friendly_values() {
+    let default = authority::AuthorityConfig::default();
+    assert_eq!(default.max_ttl.duration(), Duration::from_hours(1));
+
+    let configured: authority::AuthorityConfig =
+        toml::from_str("max_ttl = \"90m\"\n").expect("positive maximum TTL parses");
+    assert_eq!(configured.max_ttl.duration(), Duration::from_mins(90));
+
+    let error = toml::from_str::<authority::AuthorityConfig>("max_ttl = \"0s\"\n")
+        .expect_err("zero maximum TTL must fail during deserialization");
+    assert!(error.span().is_some(), "error must identify the input span");
+    let rendered = error.to_string();
+    assert!(rendered.contains("max_ttl"), "error: {rendered}");
+    assert!(
+        rendered.contains("duration must be greater than zero"),
+        "error: {rendered}"
+    );
+}
+
+#[test]
 fn interceptor_config_fills_defaults_for_missing_fields() {
     let config: InterceptorConfig = serde_json::from_str("{}").expect("empty object deserializes");
 

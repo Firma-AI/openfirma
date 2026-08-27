@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::utils::NonZeroDuration;
+
 /// Sentinel: unset `policy_dir`.
 const DEFAULT_POLICY_DIR: &str = "policies/";
 /// Sentinel: unset `issuance_policy_dir`.
@@ -33,9 +35,8 @@ pub struct AuthorityConfig {
     pub schema_path: Option<PathBuf>,
     /// Path to the revocation file.
     pub revocation_file: PathBuf,
-    /// Maximum token TTL.
-    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
-    pub max_ttl: Duration,
+    /// Strictly non-zero maximum token TTL.
+    pub max_ttl: NonZeroDuration,
     /// Path to the Ed25519 signing key file.
     pub key_file: PathBuf,
     /// Policy bundle TTL advertised to Sidecars.
@@ -61,7 +62,7 @@ impl Default for AuthorityConfig {
             issuance_policy_dir: PathBuf::from(DEFAULT_ISSUANCE_POLICY_DIR),
             schema_path: None,
             revocation_file: PathBuf::from("revocations.txt"),
-            max_ttl: Duration::from_hours(1),
+            max_ttl: NonZeroDuration::from_static(Duration::from_hours(1)),
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
             bundle_ttl: Duration::from_secs(30),
             tls_cert_path: None,
