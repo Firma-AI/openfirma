@@ -1,14 +1,21 @@
 #![cfg(target_os = "linux")]
 
+use std::path::PathBuf;
+
 use firma_run::backend::BackendKind;
 use firma_run::backend::platform::detect_wsl;
 use firma_run::config::resolve_profile;
+use firma_run::error::RunError;
 use firma_run::runtime::RunInput;
 
 fn run_input(backend: Option<BackendKind>) -> RunInput {
+    run_input_inner(backend, None)
+}
+
+fn run_input_inner(backend: Option<BackendKind>, config: Option<PathBuf>) -> RunInput {
     RunInput {
         profile: "generic".to_string(),
-        config: None,
+        config,
         backend,
         sidecar_cli: firma_run::sidecar::SidecarCli::Unset,
         capability_file: None,
@@ -57,5 +64,45 @@ fn explicit_wsl2_is_supported_only_inside_wsl() -> Result<(), Box<dyn std::error
     let resolved = resolve_profile(&run_input(Some(BackendKind::Wsl2)))?;
 
     assert_eq!(resolved.backend, expected_linux_default());
+    Ok(())
+}
+
+#[test]
+fn backend_kind_parses_every_supported_name() -> Result<(), Box<dyn std::error::Error>> {
+    for (name, expected) in [
+        ("bwrap", BackendKind::Bwrap),
+        ("vz", BackendKind::Vz),
+        ("wsl2", BackendKind::Wsl2),
+        ("firecracker", BackendKind::Firecracker),
+    ] {
+        assert_eq!(name.parse::<BackendKind>()?, expected);
+        // round-trips through `Display`
+        assert_eq!(expected.to_string(), name);
+    }
+    Ok(())
+}
+
+#[test]
+fn unknown_backend_string_in_config_fails_resolution() -> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join(firma_config_loader::CONFIG_FILE_NAME);
+    fs_err::write(
+        &config_path,
+        r#"
+[run.profiles.generic]
+backend = "does-not-exist"
+"#,
+    )?;
+
+    let error = resolve_profile(&run_input_inner(None, Some(config_path)))
+        .expect_err("unknown backend string must fail resolution");
+
+    let RunError::ConfigValidation(reason) = error else {
+        return Err(format!("expected ConfigValidation, got {error:?}").into());
+    };
+    assert_eq!(
+        reason,
+        "unsupported backend 'does-not-exist'; expected one of: bwrap, vz, wsl2, firecracker"
+    );
     Ok(())
 }

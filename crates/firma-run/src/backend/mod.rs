@@ -129,6 +129,22 @@ impl fmt::Display for BackendKind {
     }
 }
 
+impl std::str::FromStr for BackendKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "bwrap" => Ok(Self::Bwrap),
+            "vz" => Ok(Self::Vz),
+            "wsl2" => Ok(Self::Wsl2),
+            "firecracker" => Ok(Self::Firecracker),
+            other => Err(format!(
+                "unsupported backend '{other}'; expected one of: bwrap, vz, wsl2, firecracker"
+            )),
+        }
+    }
+}
+
 /// Request payload for backend prepare stage.
 #[derive(Debug, Clone)]
 pub struct PrepareRequest {
