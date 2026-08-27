@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
 
@@ -75,7 +76,7 @@ fn generic_profile() -> ProfilePatch {
             path: None,
             public_key_path: None,
             refresh_ratio: Some(0.60),
-            grace_seconds: Some(30),
+            grace: Some(Duration::from_secs(30)),
             requested_actions: None,
         }),
         sidecar_local_exec: None,

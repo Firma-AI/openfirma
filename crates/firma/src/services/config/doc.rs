@@ -404,6 +404,93 @@ fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) ->
     Ok(())
 }
 
+fn migrate_run_profile_scalars(profile: &mut Table) -> Result<()> {
+    if let Some(capability) = optional_table_mut(profile, "capability")? {
+        migrate_integer_duration(capability, "grace_seconds", "grace", "s");
+    }
+    if let Some(local_exec) = optional_table_mut(profile, "sidecar_local_exec")? {
+        migrate_integer_duration(local_exec, "timeout_ms", "timeout", "ms");
+        migrate_integer_duration(local_exec, "hitl_max_wait_ms", "hitl_max_wait", "ms");
+    }
+    Ok(())
+}
+
+fn migrate_sidecar_scalars(sidecar: &mut Table) -> Result<()> {
+    if let Some(interceptor) = optional_table_mut(sidecar, "interceptor")? {
+        migrate_integer_duration(interceptor, "drain_timeout_secs", "drain_timeout", "s");
+        migrate_integer_size(
+            interceptor,
+            "max_request_body_bytes",
+            "max_request_body_size",
+        );
+        migrate_integer_size(interceptor, "total_body_budget_bytes", "total_body_budget");
+        if let Some(relay) = optional_table_mut(interceptor, "connect_relay")? {
+            migrate_integer_duration(relay, "setup_timeout_secs", "setup_timeout", "s");
+            migrate_integer_duration(relay, "session_max_secs", "session_max", "s");
+        }
+        if let Some(https) = optional_table_mut(interceptor, "https_mitm")? {
+            migrate_integer_duration(https, "cert_ttl_secs", "cert_ttl", "s");
+        }
+    }
+    if let Some(capability) = optional_table_mut(sidecar, "capability_validation")? {
+        migrate_integer_duration(
+            capability,
+            "clock_skew_tolerance_seconds",
+            "clock_skew_tolerance",
+            "s",
+        );
+    }
+    if let Some(connector) = optional_table_mut(sidecar, "connector")? {
+        migrate_integer_duration(connector, "default_timeout_ms", "default_timeout", "ms");
+        if let Some(hosts) = connector
+            .get_mut("hosts")
+            .and_then(Item::as_array_of_tables_mut)
+        {
+            for host in hosts.iter_mut() {
+                migrate_integer_duration(host, "timeout_ms", "timeout", "ms");
+            }
+        } else if let Some(hosts) = connector.get_mut("hosts").and_then(Item::as_array_mut) {
+            for host in hosts.iter_mut() {
+                let Some(host) = host.as_inline_table_mut() else {
+                    bail!("`hosts` array entries must be inline tables");
+                };
+                migrate_integer_duration(host, "timeout_ms", "timeout", "ms");
+            }
+        } else if connector.contains_key("hosts") {
+            bail!("`hosts` must be an array of tables or an inline array");
+        }
+    }
+    if let Some(audit) = optional_table_mut(sidecar, "audit")? {
+        migrate_integer_size(audit, "wal_max_bytes", "wal_max_size");
+    }
+    if let Some(authority) = optional_table_mut(sidecar, "authority")? {
+        migrate_integer_duration(authority, "connect_timeout_secs", "connect_timeout", "s");
+        migrate_integer_duration(
+            authority,
+            "reconnect_min_backoff_ms",
+            "reconnect_min_backoff",
+            "ms",
+        );
+        migrate_integer_duration(
+            authority,
+            "reconnect_max_backoff_secs",
+            "reconnect_max_backoff",
+            "s",
+        );
+        migrate_integer_duration(
+            authority,
+            "revocation_readiness_grace_ms",
+            "revocation_readiness_grace",
+            "ms",
+        );
+    }
+    if let Some(local_exec) = optional_table_mut(sidecar, "local_exec")? {
+        migrate_integer_duration(local_exec, "token_ttl_secs", "token_ttl", "s");
+        migrate_integer_duration(local_exec, "retry_after_ms", "retry_after", "ms");
+    }
+    Ok(())
+}
+
 fn replace_workspace_mount(mounts: &mut ArrayOfTables, workspace: &str) {
     // Drop any prior workspace mount (matched by source==target && !read_only);
     // unrelated mounts the user added are preserved.
@@ -1016,6 +1103,123 @@ custom_user_key = \"keep-me\"
             parsed["authority"]["listen_addr"].as_str(),
             Some("127.0.0.1:50051")
         );
+    }
+
+    #[test]
+    fn merge_migrates_legacy_scalar_keys_in_every_schema_section() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = r#"
+[authority]
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+
+[sidecar.interceptor]
+drain_timeout_secs = 30
+max_request_body_bytes = 4194304
+total_body_budget_bytes = 67108864
+
+[sidecar.interceptor.connect_relay]
+setup_timeout_secs = 10
+session_max_secs = 600
+
+[sidecar.interceptor.https_mitm]
+cert_ttl_secs = 86400
+
+[sidecar.connector]
+default_timeout_ms = 30000
+
+[[sidecar.connector.hosts]]
+host = "api.example.com"
+rps = 1
+burst = 1
+timeout_ms = 5000
+
+[sidecar.audit]
+wal_max_bytes = 104857600
+
+[sidecar.authority]
+connect_timeout_secs = 10
+reconnect_min_backoff_ms = 250
+reconnect_max_backoff_secs = 30
+revocation_readiness_grace_ms = 500
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 5
+
+[sidecar.local_exec]
+socket_path = "/run/firma/local-exec.sock"
+token_ttl_secs = 300
+retry_after_ms = 500
+
+[run.defaults.capability]
+grace_seconds = 30
+
+[run.defaults.sidecar_local_exec]
+timeout_ms = 500
+hitl_max_wait_ms = 300000
+
+[run.profiles.unselected.capability]
+grace_seconds = 45
+
+[run.profiles.unselected.sidecar_local_exec]
+timeout_ms = 750
+hitl_max_wait_ms = 600000
+"#;
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let _: firma_config_schema::authority::AuthorityConfig = parsed["authority"]
+            .clone()
+            .try_into()
+            .expect("migrated authority config must satisfy the strict schema");
+        let _: firma_config_schema::sidecar::SidecarConfig = parsed["sidecar"]
+            .clone()
+            .try_into()
+            .expect("migrated sidecar config must satisfy the strict schema");
+        let run: firma_config_schema::run::FileConfig = parsed["run"]
+            .clone()
+            .try_into()
+            .expect("migrated run config must satisfy the strict schema");
+
+        assert_eq!(
+            parsed["sidecar"]["interceptor"]["max_request_body_size"].as_str(),
+            Some("4194304 B")
+        );
+        assert_eq!(
+            parsed["sidecar"]["connector"]["hosts"][0]["timeout"].as_str(),
+            Some("5000ms")
+        );
+        assert_eq!(
+            run.profiles["unselected"]
+                .capability
+                .as_ref()
+                .and_then(|capability| capability.grace),
+            Some(std::time::Duration::from_secs(45))
+        );
+        for old_key in [
+            "max_ttl_seconds",
+            "bundle_ttl_seconds",
+            "drain_timeout_secs",
+            "max_request_body_bytes",
+            "total_body_budget_bytes",
+            "setup_timeout_secs",
+            "session_max_secs",
+            "cert_ttl_secs",
+            "default_timeout_ms",
+            "timeout_ms",
+            "wal_max_bytes",
+            "connect_timeout_secs",
+            "reconnect_min_backoff_ms",
+            "reconnect_max_backoff_secs",
+            "revocation_readiness_grace_ms",
+            "clock_skew_tolerance_seconds",
+            "token_ttl_secs",
+            "retry_after_ms",
+            "grace_seconds",
+            "hitl_max_wait_ms",
+        ] {
+            assert!(!out.contains(old_key), "legacy key survived: {old_key}");
+        }
     }
 
     #[test]

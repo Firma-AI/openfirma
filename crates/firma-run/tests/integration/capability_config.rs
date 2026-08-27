@@ -46,7 +46,7 @@ public_key_path = "keys/default.pub"
 refresh_ratio = 0.55
 
 [run.profiles.codex.capability]
-grace_seconds = 45
+grace = "45s"
 "#,
     )
     .expect("write config");
@@ -55,10 +55,10 @@ grace_seconds = 45
 
     assert_eq!(
         resolved.capability.public_key_path,
-        Some(PathBuf::from("keys/default.pub"))
+        Some(dir.path().join("keys/default.pub"))
     );
     assert!((resolved.capability.refresh_ratio - 0.55).abs() < f64::EPSILON);
-    assert_eq!(resolved.capability.grace_seconds, 45);
+    assert_eq!(resolved.capability.grace, Duration::from_secs(45));
 }
 
 #[test]
@@ -75,7 +75,7 @@ public_key_path = "keys/default.pub"
 refresh_ratio = 0.55
 
 [run.profiles.codex.capability]
-grace_seconds = 45
+grace = "45s"
 
 [run.profiles.codex.capability.source]
 kind = "disabled"
@@ -91,7 +91,7 @@ kind = "disabled"
         Some(PathBuf::from("keys/default.pub"))
     );
     assert!((resolved.capability.refresh_ratio - 0.55).abs() < f64::EPSILON);
-    assert_eq!(resolved.capability.grace_seconds, 45);
+    assert_eq!(resolved.capability.grace, Duration::from_secs(45));
 }
 
 #[test]
@@ -111,7 +111,7 @@ kind = "disabled"
 [run.profiles.codex.capability]
 kind = "file"
 path = "profile-capability.toml"
-grace_seconds = 45
+grace = "45s"
 "#,
     )
     .expect("write config");
@@ -121,15 +121,15 @@ grace_seconds = 45
     assert_eq!(
         resolved.capability.source,
         CapabilitySource::File {
-            path: PathBuf::from("profile-capability.toml")
+            path: dir.path().join("profile-capability.toml")
         }
     );
     assert_eq!(
         resolved.capability.public_key_path,
-        Some(PathBuf::from("keys/default.pub"))
+        Some(dir.path().join("keys/default.pub"))
     );
     assert!((resolved.capability.refresh_ratio - 0.55).abs() < f64::EPSILON);
-    assert_eq!(resolved.capability.grace_seconds, 45);
+    assert_eq!(resolved.capability.grace, Duration::from_secs(45));
 }
 
 #[test]
@@ -145,7 +145,7 @@ refresh_ratio = 0.50
 
 [run.profiles.codex.capability]
 public_key_path = "keys/profile.pub"
-grace_seconds = 60
+grace = "1m"
 "#,
     )
     .expect("write config");
@@ -163,10 +163,10 @@ grace_seconds = 60
     );
     assert_eq!(
         resolved.capability.public_key_path,
-        Some(PathBuf::from("keys/profile.pub"))
+        Some(dir.path().join("keys/profile.pub"))
     );
     assert!((resolved.capability.refresh_ratio - 0.50).abs() < f64::EPSILON);
-    assert_eq!(resolved.capability.grace_seconds, 60);
+    assert_eq!(resolved.capability.grace, Duration::from_mins(1));
 }
 
 #[test]

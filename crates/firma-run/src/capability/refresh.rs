@@ -37,7 +37,7 @@ const BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// Floor on the scheduled wait between refreshes. Guards against a tight
 /// re-mint loop (hammering the Authority with zero delay) when the token TTL is
-/// pathologically short relative to `grace_seconds`, where [`compute_wait`]
+/// pathologically short relative to `grace`, where [`compute_wait`]
 /// would otherwise return [`Duration::ZERO`] on every successful cycle.
 const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -153,7 +153,7 @@ fn run_refresh_loop(
 /// Duration to wait before the next refresh attempt.
 ///
 /// Renews at `refresh_ratio` of the remaining lifetime, but never later than
-/// `grace_seconds` before expiry. Returns [`Duration::ZERO`] when the token is
+/// `grace` before expiry. Returns [`Duration::ZERO`] when the token is
 /// already within the grace window (refresh immediately).
 fn compute_wait(
     expiry: DateTime<Utc>,

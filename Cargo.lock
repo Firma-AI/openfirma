@@ -1718,6 +1718,7 @@ dependencies = [
  "firma-test-helpers",
  "fs-err",
  "hex",
+ "jiff",
  "libc",
  "nix 0.31.3",
  "p256",

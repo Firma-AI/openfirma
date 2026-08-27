@@ -1870,7 +1870,7 @@ mod non_structural_env_tests {
             source: CapabilitySource::Disabled,
             public_key_path: None,
             refresh_ratio: 0.60,
-            grace_seconds: 30,
+            grace: Duration::from_secs(30),
             requested_actions: CapabilityLeaseConfig::default_requested_actions(),
         }
     }

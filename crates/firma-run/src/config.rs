@@ -101,9 +101,9 @@ impl ResolvedProfile {
             ));
         }
 
-        if self.capability.grace_seconds == 0 {
+        if self.capability.grace.is_zero() {
             return Err(RunError::ConfigValidation(
-                "capability.grace_seconds must be > 0".to_string(),
+                "capability.grace must be > 0".to_string(),
             ));
         }
 
@@ -261,7 +261,8 @@ pub struct CapabilityLeaseConfig {
     /// Raw Ed25519 public key used to verify Authority-issued capabilities.
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: f64,
-    pub grace_seconds: u64,
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub grace: Duration,
     /// Action classes the auto-minted per-session token requests. Defaults to
     /// every action class (`DEFAULT_REQUESTED_ACTIONS`); the Authority narrows
     /// the grant to `requested ∩ Cedar-permitted`, so over-requesting is safe
@@ -273,8 +274,8 @@ pub struct CapabilityLeaseConfig {
 
 impl CapabilityLeaseConfig {
     #[must_use]
-    pub(crate) fn grace(&self) -> Duration {
-        Duration::from_secs(self.grace_seconds)
+    pub(crate) const fn grace(&self) -> Duration {
+        self.grace
     }
 
     /// Fallback action set when a profile does not set `requested_actions`.
@@ -366,7 +367,7 @@ impl Merge for CapabilityLeasePatch {
             path,
             public_key_path: higher.public_key_path.or(self.public_key_path),
             refresh_ratio: higher.refresh_ratio.or(self.refresh_ratio),
-            grace_seconds: higher.grace_seconds.or(self.grace_seconds),
+            grace: higher.grace.or(self.grace),
             requested_actions: higher.requested_actions.or(self.requested_actions),
         }
     }
@@ -646,7 +647,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 path: None,
                 public_key_path: None,
                 refresh_ratio: None,
-                grace_seconds: None,
+                grace: None,
                 requested_actions: None,
             }),
         sidecar_local_exec: None,
@@ -700,7 +701,7 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         source,
         public_key_path: patch.public_key_path,
         refresh_ratio: patch.refresh_ratio.unwrap_or(0.60),
-        grace_seconds: patch.grace_seconds.unwrap_or(30),
+        grace: patch.grace.unwrap_or(Duration::from_secs(30)),
         requested_actions: patch
             .requested_actions
             .filter(|actions| !actions.is_empty())
@@ -725,7 +726,7 @@ fn default_capability_config() -> CapabilityLeaseConfig {
         source: CapabilitySource::Disabled,
         public_key_path: None,
         refresh_ratio: 0.60,
-        grace_seconds: 30,
+        grace: Duration::from_secs(30),
         requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
@@ -1067,7 +1068,7 @@ mod tests {
             path: None,
             public_key_path: None,
             refresh_ratio: None,
-            grace_seconds: None,
+            grace: None,
             requested_actions,
         }
     }

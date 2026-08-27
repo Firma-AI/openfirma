@@ -7,6 +7,7 @@
 //!
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -153,7 +154,11 @@ pub struct CapabilityLeasePatch {
     pub path: Option<PathBuf>,
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: Option<f64>,
-    pub grace_seconds: Option<u64>,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
+        default
+    )]
+    pub grace: Option<Duration>,
     #[serde(default)]
     pub requested_actions: Option<Vec<String>>,
 }

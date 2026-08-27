@@ -16,6 +16,40 @@ shape and must be readable and valid TOML.
 Configuration is validated at startup. Invalid fields cause the affected
 binary to exit before accepting requests.
 
+## Breaking scalar migration
+
+Duration and byte-size settings are now unit-bearing strings. Old numeric
+keys are rejected; migrate them as follows (equivalent values shown):
+
+| Old                                                              | New                                                         |
+| ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| `authority.max_ttl_seconds = 3600`                               | `authority.max_ttl = "1h"`                                  |
+| `authority.bundle_ttl_seconds = 30`                              | `authority.bundle_ttl = "30s"`                              |
+| `sidecar.interceptor.drain_timeout_secs = 30`                    | `sidecar.interceptor.drain_timeout = "30s"`                 |
+| `sidecar.interceptor.connect_relay.setup_timeout_secs = 10`      | `sidecar.interceptor.connect_relay.setup_timeout = "10s"`   |
+| `sidecar.interceptor.connect_relay.session_max_secs = 600`       | `sidecar.interceptor.connect_relay.session_max = "10m"`     |
+| `sidecar.interceptor.https_mitm.cert_ttl_secs = 86400`           | `sidecar.interceptor.https_mitm.cert_ttl = "1d"`            |
+| `sidecar.authority.connect_timeout_secs = 10`                    | `sidecar.authority.connect_timeout = "10s"`                 |
+| `sidecar.authority.reconnect_min_backoff_ms = 250`               | `sidecar.authority.reconnect_min_backoff = "250ms"`         |
+| `sidecar.authority.reconnect_max_backoff_secs = 30`              | `sidecar.authority.reconnect_max_backoff = "30s"`           |
+| `sidecar.authority.revocation_readiness_grace_ms = 500`          | `sidecar.authority.revocation_readiness_grace = "500ms"`    |
+| `sidecar.capability_validation.clock_skew_tolerance_seconds = 5` | `sidecar.capability_validation.clock_skew_tolerance = "5s"` |
+| `sidecar.connector.default_timeout_ms = 30000`                   | `sidecar.connector.default_timeout = "30s"`                 |
+| sidecar connector host `timeout_ms = 30000`                      | sidecar connector host `timeout = "30s"`                    |
+| `sidecar.local_exec.token_ttl_secs = 300`                        | `sidecar.local_exec.token_ttl = "5m"`                       |
+| `sidecar.local_exec.retry_after_ms = 500`                        | `sidecar.local_exec.retry_after = "500ms"`                  |
+| `run.profiles.<id>.capability.grace_seconds = 30`                | `run.profiles.<id>.capability.grace = "30s"`                |
+| `run.profiles.<id>.sidecar_local_exec.timeout_ms = 500`          | `run.profiles.<id>.sidecar_local_exec.timeout = "500ms"`    |
+| `run.profiles.<id>.sidecar_local_exec.hitl_max_wait_ms = 300000` | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait = "5m"` |
+| `sidecar.interceptor.max_request_body_bytes = 4194304`           | `sidecar.interceptor.max_request_body_size = "4 MiB"`       |
+| `sidecar.interceptor.total_body_budget_bytes = 67108864`         | `sidecar.interceptor.total_body_budget = "64 MiB"`          |
+| `sidecar.audit.wal_max_bytes = 104857600`                        | `sidecar.audit.wal_max_size = "100 MiB"`                    |
+
+Existing `max_decompressed_body_size` and secret-gateway byte-size fields also
+require human-readable strings such as `"4 MiB"`. Counts, capacities, and rates
+remain numeric. Re-running `firma config` migrates the legacy integer keys in
+the table above while preserving their values and existing comments.
+
 Unknown keys are rejected recursively rather than ignored. The only top-level
 keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
 are strict as well. Dynamic labels such as credential names, executable-policy

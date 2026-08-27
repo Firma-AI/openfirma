@@ -133,6 +133,13 @@ fn legacy_authority_bundle_ttl_seconds_key_is_rejected() {
 }
 
 #[test]
+fn legacy_run_capability_grace_seconds_key_is_rejected() {
+    assert!(
+        toml::from_str::<run::FileConfig>("[defaults.capability]\ngrace_seconds = 30\n").is_err()
+    );
+}
+
+#[test]
 fn sidecar_infra_enums_use_snake_case() {
     assert_eq!(
         serde_json::from_str::<SidecarMode>(r#""enforce""#).expect("mode"),

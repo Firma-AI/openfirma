@@ -74,7 +74,7 @@ public key on the run profile:
 [run.profiles.codex.capability]
 public_key_path = "/path/to/authority.pub"
 refresh_ratio = 0.60
-grace_seconds = 30
+grace = "30s"
 ```
 
 Export that key from FirmaTeam:
@@ -131,11 +131,11 @@ renewal.
 
 Tuning knobs:
 
-| Setting                      | Where               | Default | Effect                                               |
-| ---------------------------- | ------------------- | ------- | ---------------------------------------------------- |
-| `capability.refresh_ratio`   | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing.      |
-| `capability.grace_seconds`   | `firma run` profile | `30`    | Renew no later than this many seconds before expiry. |
-| `capability_seed.hot_reload` | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change.  |
+| Setting                                               | Where               | Default | Effect                                               |
+| ----------------------------------------------------- | ------------------- | ------- | ---------------------------------------------------- |
+| `run.profiles.<id>.capability.refresh_ratio`          | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing.      |
+| `run.profiles.<id>.capability.grace`                  | `firma run` profile | `"30s"` | Renew no later than this duration before expiry.     |
+| `sidecar.capability_seed.hot_reload`                  | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change.  |
 
 There is intentionally no hard session-lifetime cap: the Authority's issuance
 policy is the authority on whether a session may continue, and it is re-checked
