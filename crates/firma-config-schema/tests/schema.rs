@@ -102,7 +102,10 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
         config.connect_relay.setup_timeout.duration(),
         Duration::from_secs(10)
     );
-    assert_eq!(config.connect_relay.session_max, Duration::from_mins(10));
+    assert_eq!(
+        config.connect_relay.session_max.duration(),
+        Duration::from_mins(10)
+    );
     assert!(config.https_mitm.enabled);
     assert!(config.https_mitm.bypass_hosts.is_empty());
     assert_eq!(
@@ -278,6 +281,22 @@ fn sidecar_connect_relay_setup_timeout_rejects_zero() {
         "[interceptor.connect_relay]\nsetup_timeout = \"0h\"\n",
     )
     .expect_err("zero CONNECT relay setup timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_connect_relay_session_max_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        "[interceptor.connect_relay]\nsession_max = \"0s\"\n",
+    )
+    .expect_err("zero CONNECT relay session maximum must fail during deserialization");
 
     assert!(error.span().is_some(), "error must identify the input span");
     assert!(

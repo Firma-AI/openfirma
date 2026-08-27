@@ -18,6 +18,8 @@ const DEFAULT_DRAIN_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(30));
 const DEFAULT_CONNECT_SETUP_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(10));
+const DEFAULT_CONNECT_SESSION_MAX: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_mins(10));
 
 /// Interception mode selector.
 ///
@@ -130,11 +132,8 @@ pub struct ConnectRelayConfig {
     #[serde(default = "default_connect_setup_timeout")]
     pub setup_timeout: NonZeroDuration,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_connect_session_max"
-    )]
-    pub session_max: Duration,
+    #[serde(default = "default_connect_session_max")]
+    pub session_max: NonZeroDuration,
 }
 
 impl Default for ConnectRelayConfig {
@@ -226,8 +225,8 @@ const fn default_connect_setup_timeout() -> NonZeroDuration {
     DEFAULT_CONNECT_SETUP_TIMEOUT
 }
 
-const fn default_connect_session_max() -> Duration {
-    Duration::from_mins(10)
+const fn default_connect_session_max() -> NonZeroDuration {
+    DEFAULT_CONNECT_SESSION_MAX
 }
 
 const fn default_https_mitm_cert_ttl() -> Duration {

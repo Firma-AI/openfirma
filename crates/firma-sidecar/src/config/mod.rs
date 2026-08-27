@@ -418,9 +418,6 @@ pub enum InterceptorConfigError {
     /// The total body budget was below the per-request maximum.
     #[error("interceptor.total_body_budget must be >= interceptor.max_request_body_size")]
     TotalBodyBudgetBelowRequest,
-    /// The CONNECT/MITM relay settings were invalid.
-    #[error(transparent)]
-    ConnectRelay(#[from] ConnectRelayConfigError),
     /// The HTTPS MITM settings were invalid.
     #[error(transparent)]
     HttpsMitm(#[from] HttpsMitmConfigError),
@@ -445,7 +442,7 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
             drain_timeout: s.drain_timeout.duration(),
             max_request_body_bytes,
             max_decompressed_body_size: s.max_decompressed_body_size,
-            connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
+            connect_relay: s.connect_relay.into(),
             https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
             total_body_budget_bytes,
         };
@@ -519,25 +516,12 @@ pub struct ConnectRelayConfig {
     pub(crate) session_max: Duration,
 }
 
-/// Error validating a [`ConnectRelayConfig`].
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ConnectRelayConfigError {
-    /// `session_max` was zero.
-    #[error("interceptor.connect_relay.session_max must be > 0")]
-    ZeroSessionMax,
-}
-
-impl TryFrom<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
-    type Error = ConnectRelayConfigError;
-
-    fn try_from(s: schema_ic::ConnectRelayConfig) -> Result<Self, Self::Error> {
-        if s.session_max.is_zero() {
-            return Err(ConnectRelayConfigError::ZeroSessionMax);
-        }
-        Ok(Self {
+impl From<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
+    fn from(s: schema_ic::ConnectRelayConfig) -> Self {
+        Self {
             setup_timeout: s.setup_timeout.duration(),
-            session_max: s.session_max,
-        })
+            session_max: s.session_max.duration(),
+        }
     }
 }
 
@@ -546,7 +530,7 @@ impl Default for ConnectRelayConfig {
         let d = schema_ic::ConnectRelayConfig::default();
         Self {
             setup_timeout: d.setup_timeout.duration(),
-            session_max: d.session_max,
+            session_max: d.session_max.duration(),
         }
     }
 }
@@ -1413,18 +1397,6 @@ mod tests {
         schema.interceptor.max_request_body_size = ByteSize::mib(4);
         schema.interceptor.total_body_budget = ByteSize::mib(4);
         assert!(SidecarConfig::try_from(schema).is_ok());
-    }
-
-    #[test]
-    fn test_sidecar_config_zero_connect_session_max_rejected() {
-        let mut schema = schema_sidecar();
-        schema.interceptor.connect_relay.session_max = Duration::ZERO;
-        assert!(matches!(
-            SidecarConfig::try_from(schema),
-            Err(SidecarConfigError::Interceptor(
-                InterceptorConfigError::ConnectRelay(ConnectRelayConfigError::ZeroSessionMax)
-            ))
-        ));
     }
 
     #[test]
