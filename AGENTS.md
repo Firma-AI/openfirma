@@ -107,8 +107,14 @@ whether formal planning applies and, when it does, selects a Full or Compact
 workflow and defines the evidence-backed design-plan artifact. Full triggers
 take precedence over both Compact planning and no-plan exemptions regardless of
 the expected size or locality.
-Accepted plans and findings must have a durable, team-accessible repository path
-or URL; do not rely on an agent or private conversation as the handoff.
+
+For Full and Compact work, follow that skill's plan artifact lifecycle: the
+first commit relative to an immutable PR ownership base contains only the
+complete accepted plan and dispositions at one stable path, the PR links it by
+full commit SHA plus path, and a final mechanical deletion-only commit removes
+it after implementation review. A path at `HEAD`, an agent, or a private
+conversation is not the handoff. No-plan exemptions do not create plan
+artifacts.
 
 Use [`adversarial-review`](.skills/adversarial-review/SKILL.md) to select an
 independent reviewer. It routes plan reviews to

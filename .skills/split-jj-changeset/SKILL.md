@@ -1,6 +1,6 @@
 ---
 name: split-jj-changeset
-description: jj split, mixed changeset, atomic revision, reviewed history: split a jj changeset into atomic focused changesets without interactive commands. Use in Jujutsu clones whenever one changeset mixes multiple intents.
+description: "jj split, mixed changeset, atomic revision, reviewed history: split a jj changeset into atomic focused changesets without interactive commands. Use in Jujutsu clones whenever one changeset mixes multiple intents."
 ---
 
 # Split a jj Changeset

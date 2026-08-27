@@ -20,6 +20,12 @@ Planner citations are leads, not a closed evidence corpus. The reviewer must
 inspect the repository independently, verify cited evidence, search for omitted
 callers and consumers, and reconstruct the highest-risk relevant traces.
 
+When implementation evidence reopens planning after implementation has begun,
+review the amendment at the same stable plan path without rewriting the
+original accepted plan commit or ownership base. The reviewed amendment becomes
+a later plan-only commit with its own locator; the original accepted locator
+remains provenance.
+
 ## Review the current state
 
 Establish:
@@ -71,8 +77,19 @@ Challenge whether:
   plans, while deferred tactical detail is planned before its slice is
   implemented;
 - durable facts are targeted to their canonical documentation owner; and
-- the accepted artifact, findings, and dispositions will have a durable,
-  team-accessible locator independent of the planning tool or conversation.
+- for initial acceptance, the complete artifact, findings, and dispositions
+  will be the first plan-only commit relative to the PR's immutable ownership
+  base; for a post-implementation amendment, they will update only the same path
+  in a later plan-only commit; and every revision will be linked by full commit
+  SHA plus path rather than by a path at `HEAD`.
+
+Also check the lifecycle promised by
+[`planning-changes`](../planning-changes/SKILL.md): unresolved plan revisions
+may replace the first commit at the same path only before implementation,
+implementation must preserve the ownership base and accepted commit locator,
+post-implementation review precedes one closing deletion-only commit, and
+stacked PRs own and remove their plans independently. This lifecycle does not
+apply when formal planning is exempt.
 
 Conditional plan sections are required only when applicable. Independently
 challenge an unsupported `Not applicable` decision, especially for trust,
@@ -159,11 +176,15 @@ product behavior, compatibility, security posture, migration, or a public
 contract requires user direction. Rejected and deferred findings remain
 visible with evidence.
 
-After disposition, the accepted artifact and unchanged reviewer-authored
-findings must be published at the durable locator named by the plan. The
-implementation handoff and eventual pull request must repeat that locator. A
-private chat or agent-thread link may supplement but not replace the
-team-accessible artifact.
+After initial disposition, the accepted artifact and unchanged reviewer-authored
+findings must become the PR's first plan-only commit. After disposition of a
+post-implementation amendment, update only the same path in a later plan-only
+commit. The implementation handoff and eventual pull request must record the
+ownership base, preserve the original accepted locator, and identify the latest
+reviewed plan locator as current authority. The artifact cannot contain its own
+SHA without changing that SHA, so do not require a self-referential locator
+inside it. A private chat or agent-thread link may supplement but not replace
+the commit-pinned artifact.
 
 Pre-implementation review does not satisfy post-implementation adversarial
 review of the actual diff.

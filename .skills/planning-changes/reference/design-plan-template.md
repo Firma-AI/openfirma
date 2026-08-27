@@ -18,7 +18,11 @@ instead of repeating prose.
 ## Artifact metadata
 
 - Status: Candidate | Accepted | Superseded
-- Durable locator: <repository path or team-accessible URL>
+- Immutable PR ownership base: <full commit SHA; parent of the first plan commit>
+- Stable plan path: <repository-relative Markdown path; never rename or split>
+- Immutable locator: Pending while under review; after acceptance record
+  <full-first-commit-SHA>:<plan-path> in the handoff and PR body without
+  amending this commit to add its own SHA
 - Repository revision researched: <revision>
 - Task or requirement source: <locator>
 - Supersedes: Not applicable | <locator>
@@ -93,15 +97,18 @@ instead of repeating prose.
 
 <Preserve reviewer-authored findings and append dispositions.>
 
-The accepted artifact at the durable locator contains the complete disposition
-log. Conversation links may provide supplementary context but are not the
-handoff contract.
+The accepted first-commit artifact contains the complete disposition log. Its
+full commit-SHA-and-path locator is recorded after commit creation in the
+implementation handoff and PR body. Conversation links may provide
+supplementary context but are not the handoff contract.
 
 ## Final verification
 
 - Focused checks:
 - Workspace checks:
 - Post-implementation independent review:
+- Plan lifecycle: first plan-only commit, immutable locator, and final
+  deletion-only commit after review and finding disposition
 ```
 
 Do not repeat technical evidence in the human review path. Include only the
