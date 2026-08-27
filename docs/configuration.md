@@ -22,12 +22,16 @@ Duration settings use compact unit-bearing strings such as `"250ms"`, `"30s"`,
 `"10m"`, and `"1h"`. Byte-size settings use unit-bearing strings such as
 `"4 MiB"` and `"10MB"`. Counts, capacities, and rates remain numeric.
 
+Authority `max_ttl` and `bundle_ttl` must be strictly greater than zero. A zero
+maximum would create immediately expired capabilities, while a zero bundle
+lifetime would create immediately stale policy.
+
 ### Non-zero duration controls
 
-The unit-bearing duration syntax is unchanged. Timeout, deadline, wait, retry,
-and session-lifetime controls must be strictly greater than zero; exact zero
-values such as `"0s"`, `"0ms"`, or `"0ns"` fail while the config is being
-deserialized. This applies to:
+Timeout, deadline, wait, retry, and session-lifetime controls must use
+unit-bearing durations strictly greater than zero; exact zero values such as
+`"0s"`, `"0ms"`, or `"0ns"` fail while the config is being deserialized. This
+applies to:
 
 - `[sidecar.secret_gateway]` `connection_timeout` and `operation_timeout`;
 - Run profile `sidecar_local_exec.timeout` and `hitl_max_wait`;
@@ -40,13 +44,14 @@ deserialized. This applies to:
   its wire representation uses whole milliseconds).
 
 TTL, retention, grace, and clock-skew durations have field-specific semantics
-instead of inheriting this non-zero duration rule. In particular, `authority.max_ttl`,
-`authority.bundle_ttl`, Run profile `capability.grace`,
+instead of inheriting this general non-zero duration rule. Authority
+`max_ttl` and `bundle_ttl` are also strictly non-zero, because zero would make
+their outputs immediately expired or stale. Run profile `capability.grace`,
 `sidecar.authority.revocation_readiness_grace`,
 `sidecar.interceptor.https_mitm.cert_ttl`,
 `sidecar.capability_validation.clock_skew_tolerance`, and
-`sidecar.local_exec.token_ttl` retain their existing validation. For example,
-a zero clock-skew tolerance means strict expiry checking, and a zero revocation
+`sidecar.local_exec.token_ttl` each have their own validation. For example, a
+zero clock-skew tolerance means strict expiry checking, and a zero revocation
 readiness grace means immediate readiness.
 
 Unknown keys are rejected recursively rather than ignored. The only top-level

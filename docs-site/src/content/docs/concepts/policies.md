@@ -202,7 +202,7 @@ for how each decision is dispatched and audited.
 
 ## Bundle freshness
 
-The Sidecar holds the policy bundle in memory and reloads it from the Authority's `WatchPolicyBundle` gRPC stream. The Authority embeds its `[authority].bundle_ttl` value in every bundle and periodically refreshes the stream. The Sidecar enforces that advertised deadline; if it expires without a refresh, Stage 2 returns `PolicyBundleStale` and protected requests fail closed.
+The Sidecar holds the policy bundle in memory and reloads it from the Authority's `WatchPolicyBundle` gRPC stream. The Authority embeds its `[authority].bundle_ttl` value in every bundle and periodically refreshes the stream. The configured TTL must be greater than zero; zero is rejected during configuration instead of advertising an immediately stale bundle. The Sidecar enforces the advertised deadline; if it expires without a refresh, Stage 2 returns `PolicyBundleStale` and protected requests fail closed.
 
 There is no separate Sidecar bundle-TTL setting or configurable Cedar evaluation timeout.
 

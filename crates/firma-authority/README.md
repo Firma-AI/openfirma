@@ -90,7 +90,14 @@ Sidecar verify it with the configured Authority public key before use.
 | `max_ttl`         | `"1h"`                | Maximum token lifetime.                      |
 | `bundle_ttl`      | `"30s"`               | TTL advertised with streamed policy bundles. |
 
-Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`. Duration overrides use the same compact unit-bearing syntax as TOML: `FIRMA_AUTHORITY_MAX_TTL=1h` and `FIRMA_AUTHORITY_BUNDLE_TTL=30s`.
+`max_ttl` and `bundle_ttl` use compact unit-bearing duration strings and must be
+strictly greater than zero. Zero is rejected because it would create
+immediately expired capabilities or immediately stale policy bundles.
+
+Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For
+example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`. Duration
+overrides use the same compact unit-bearing syntax as TOML:
+`FIRMA_AUTHORITY_MAX_TTL=1h` and `FIRMA_AUTHORITY_BUNDLE_TTL=30s`.
 
 ## Policy files
 
