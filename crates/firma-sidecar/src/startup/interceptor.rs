@@ -51,15 +51,15 @@ pub fn composio_mitm_coverage_warnings(mitm: &HttpsMitmConfig) -> Vec<String> {
     for host in PROTECTED_HOSTS {
         if host_matches_any(host, &bypass) {
             warnings.push(format!(
-                "{host} is listed in interceptor.https_mitm.bypass_hosts; bypassed Composio traffic cannot be decoded or governed"
+                "{host} is listed in sidecar.interceptor.https_mitm.bypass_hosts; bypassed Composio traffic cannot be decoded or governed"
             ));
         } else if !host_matches_any(host, &intercept) {
             warnings.push(format!(
-                "{host} is not matched by interceptor.https_mitm.intercept_hosts; Composio tool calls will pass through as opaque tunnels"
+                "{host} is not matched by sidecar.interceptor.https_mitm.intercept_hosts; Composio tool calls will pass through as opaque tunnels"
             ));
         } else if !host_matches_any(host, &strict) {
             warnings.push(format!(
-                "{host} is intercepted but not in interceptor.https_mitm.strict_hosts; a TLS failure would fall back to an opaque tunnel"
+                "{host} is intercepted but not in sidecar.interceptor.https_mitm.strict_hosts; a TLS failure would fall back to an opaque tunnel"
             ));
         }
     }

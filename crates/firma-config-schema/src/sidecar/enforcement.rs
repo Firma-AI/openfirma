@@ -1,9 +1,9 @@
 //! Schema for the enforcement-engine sections of `[sidecar]`.
 //!
 //! Representation only. These sections are flattened at the top level of the
-//! sidecar config (`[mapping]`, `[capability_validation]`,
-//! `[constraint_enforcement]`). `firma-sidecar` validates them and re-bases the
-//! mapping paths.
+//! sidecar config (`[sidecar.mapping]`, `[sidecar.capability_validation]`,
+//! `[sidecar.constraint_enforcement]`). `firma-sidecar` validates them and
+//! re-bases the mapping paths.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -103,7 +103,7 @@ pub enum SessionStateBackend {
     Persistent,
 }
 
-/// Sentinel: default `mapping.rules_path`.
+/// Sentinel: default `sidecar.mapping.rules_path`.
 const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
 
 fn default_mapping_path() -> PathBuf {

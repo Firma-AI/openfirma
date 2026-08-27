@@ -1,9 +1,10 @@
 //! Build the runtime [`CapabilityMap`] and [`TokenVerifier`] from the
-//! sidecar's `[capability_seed]` and `[authority] public_key_path` config.
+//! sidecar's `[sidecar.capability_seed]` and
+//! `[sidecar.authority].public_key_path` config.
 //!
 //! Seeds are minted per session by `firma run` (via `IssueCapability`) and
 //! written under the runtime capabilities directory; operator-configured
-//! `[capability_seed]` paths are deprecated and warn at load time.
+//! `[sidecar.capability_seed]` paths are deprecated and warn at load time.
 
 use std::path::Path;
 
@@ -22,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 /// True when `path` is an operator-configured seed (NOT under the runtime
 /// capabilities dir written by `firma run`), and therefore should emit the
-/// `[capability_seed]` deprecation warning.
+/// `[sidecar.capability_seed]` deprecation warning.
 fn is_operator_seed(path: &Path, capabilities_dir: &Path) -> bool {
     !path.starts_with(capabilities_dir)
 }
@@ -48,7 +49,7 @@ pub fn load_capability_map(
         if is_operator_seed(path, capabilities_dir) {
             tracing::warn!(
                 path = %path.display(),
-                "[capability_seed] is deprecated; prefer per-session capabilities \
+                "[sidecar.capability_seed] is deprecated; prefer per-session capabilities \
                  minted by `firma run` under the runtime capabilities directory"
             );
         }

@@ -257,8 +257,9 @@ impl Mapping {
         }
     }
 
-    /// Hosts to add to `https_mitm.bypass_hosts` — intercepted-by-default hosts
-    /// this agent needs passed through untouched (real upstream TLS).
+    /// Hosts to add to `sidecar.interceptor.https_mitm.bypass_hosts` —
+    /// intercepted-by-default hosts this agent needs passed through untouched
+    /// (real upstream TLS).
     pub fn mitm_bypass_hosts(&self) -> &'static [&'static str] {
         match self {
             Self::Copilot => &["github.com", "api.github.com", "uploads.github.com"],

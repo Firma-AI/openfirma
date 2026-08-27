@@ -7,8 +7,8 @@
 //!
 //! The top-level [`SidecarConfig`] groups the enforcement-specific
 //! [`EnforcementConfig`] after the behavior-free schema has deserialized its
-//! three direct tables (`[mapping]`, `[capability_validation]`, and
-//! `[constraint_enforcement]`).
+//! three direct tables (`[sidecar.mapping]`, `[sidecar.capability_validation]`,
+//! and `[sidecar.constraint_enforcement]`).
 //!
 //! Validation runs eagerly when the schema is converted at startup, so
 //! misconfigurations surface before the first request arrives.
@@ -126,16 +126,16 @@ pub enum SidecarConfigError {
         #[source]
         source: toml::de::Error,
     },
-    /// The `[interceptor]` section was invalid.
+    /// The `[sidecar.interceptor]` section was invalid.
     #[error("interceptor: {0}")]
     Interceptor(#[from] InterceptorConfigError),
-    /// The `[policy]` section was invalid.
+    /// The `[sidecar.policy]` section was invalid.
     #[error("{0}")]
     Policy(#[from] PolicyConfigError),
-    /// The `[ca]` section was invalid.
+    /// The `[sidecar.ca]` section was invalid.
     #[error("{0}")]
     Ca(#[from] CaConfigError),
-    /// A `[credentials.*]` entry was invalid.
+    /// A `[sidecar.credentials.*]` entry was invalid.
     #[error("credentials.{label}: {source}")]
     Credential {
         /// The credential label.
@@ -144,28 +144,28 @@ pub enum SidecarConfigError {
         #[source]
         source: CredentialConfigError,
     },
-    /// The `[connector]` section was invalid.
+    /// The `[sidecar.connector]` section was invalid.
     #[error("connector: {0}")]
     Connector(#[from] ConnectorConfigError),
-    /// The `[authority]` section was invalid.
+    /// The `[sidecar.authority]` section was invalid.
     #[error("authority: {0}")]
     Authority(#[from] AuthorityConfigError),
     /// An enforcement section was invalid.
     #[error("{0}")]
     Enforcement(#[from] EnforcementConfigError),
-    /// The `[revocation]` section was invalid.
+    /// The `[sidecar.revocation]` section was invalid.
     #[error("revocation: {0}")]
     Revocation(#[from] RevocationConfigError),
-    /// The `[capability_seed]` section was invalid.
+    /// The `[sidecar.capability_seed]` section was invalid.
     #[error("{0}")]
     CapabilitySeed(#[from] CapabilitySeedConfigError),
-    /// The `[audit]` section was invalid.
+    /// The `[sidecar.audit]` section was invalid.
     #[error("audit: {0}")]
     Audit(#[from] AuditConfigError),
-    /// The `[local_exec]` section was invalid.
+    /// The `[sidecar.local_exec]` section was invalid.
     #[error("local_exec: {0}")]
     LocalExec(#[from] LocalExecConfigError),
-    /// An `[[http_secret_providers]]` entry was invalid.
+    /// An `[[sidecar.http_secret_providers]]` entry was invalid.
     #[error("http_secret_providers: {0}")]
     HttpSecretProvider(#[from] firma_secret_provider::spec::http::HttpSecretProviderConfigError),
     /// The Authority endpoint (`url` / `connect_addr`) was invalid.
@@ -174,7 +174,7 @@ pub enum SidecarConfigError {
     /// A validated Authority endpoint unexpectedly had no host.
     #[error("authority: validated endpoint unexpectedly has no host")]
     AuthorityEndpointMissingHost,
-    /// `capability_seed.paths` was non-empty without an Authority public key.
+    /// `sidecar.capability_seed.paths` was non-empty without an Authority public key.
     #[error("authority.public_key_path must be set when capability_seed.paths is non-empty")]
     MissingPublicKeyForSeeds,
     /// An `https://` Authority URL was configured without a CA certificate.
@@ -245,7 +245,7 @@ impl SidecarConfig {
     /// check — relative always means "relative to the config file's
     /// directory" for consistency.
     ///
-    /// `ca.dir` is intentionally excluded — it is state-managed (its
+    /// `sidecar.ca.dir` is intentionally excluded — it is state-managed (its
     /// location is owned by the state dir / env override, not the
     /// config file).
     pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
@@ -568,9 +568,9 @@ impl Default for ConnectRelayConfig {
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     pub(crate) enabled: bool,
-    /// Optional explicit CA certificate path. Defaults under `ca.dir`.
+    /// Optional explicit CA certificate path. Defaults under `sidecar.ca.dir`.
     pub(crate) ca_cert_path: Option<PathBuf>,
-    /// Optional explicit CA private key path. Defaults under `ca.dir`.
+    /// Optional explicit CA private key path. Defaults under `sidecar.ca.dir`.
     pub(crate) ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
     pub(crate) intercept_hosts: Vec<String>,
@@ -702,7 +702,7 @@ pub struct PolicyConfig {
 /// Error validating a [`PolicyConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyConfigError {
-    /// `policy.dir` was empty.
+    /// `sidecar.policy.dir` was empty.
     #[error("policy.dir must not be empty")]
     EmptyDir,
 }
@@ -736,7 +736,7 @@ pub struct CaConfig {
 /// Error validating a [`CaConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CaConfigError {
-    /// `ca.dir` was empty.
+    /// `sidecar.ca.dir` was empty.
     #[error("ca.dir must not be empty")]
     EmptyDir,
 }

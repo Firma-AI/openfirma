@@ -32,10 +32,10 @@ pub struct StartupReport<'a> {
     /// Filesystem path the sidecar config was read from.
     pub config_path: &'a Path,
     /// Number of mapping rules loaded across the primary file plus
-    /// every entry of `mapping.rules_paths`.
+    /// every entry of `sidecar.mapping.rules_paths`.
     pub mapping_rules: usize,
     /// Eight-character hex prefix of the SHA-256 of the concatenated
-    /// `.cedar` files in `policy.dir`.
+    /// `.cedar` files in `sidecar.policy.dir`.
     pub policy_bundle_version: String,
     /// Count of `.cedar` files contributing to the bundle hash.
     pub policy_count: usize,

@@ -1,5 +1,5 @@
-//! [`CredentialInjector`](credential::CredentialInjector) construction from the `[credentials]`
-//! config section.
+//! [`CredentialInjector`](credential::CredentialInjector) construction from the
+//! `[sidecar.credentials]` config section.
 //!
 //! Basic-mode entries resolve their `value_from_env` environment
 //! variable at startup. Vault-mode entries record the `secret_path`
@@ -16,7 +16,7 @@ use crate::config;
 use crate::credential;
 
 /// Builds a [`CredentialInjector`](credential::CredentialInjector)
-/// from the `[credentials]` configuration section.
+/// from the `[sidecar.credentials]` configuration section.
 ///
 /// If no credentials are configured, returns a
 /// [`NullCredentialInjector`](credential::NullCredentialInjector).

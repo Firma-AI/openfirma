@@ -63,7 +63,7 @@ pub struct SidecarConfig {
     #[serde(default)]
     pub ca: CaConfig,
     /// Per-target credential injection entries, keyed by an arbitrary label
-    /// (e.g. `[credentials.openai]`).
+    /// (e.g. `[sidecar.credentials.openai]`).
     #[serde(default)]
     pub credentials: HashMap<String, CredentialConfig>,
     /// Outbound connector settings (default timeout + per-host overrides with

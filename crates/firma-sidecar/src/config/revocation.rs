@@ -1,4 +1,4 @@
-//! `[revocation]` configuration section.
+//! `[sidecar.revocation]` configuration section.
 
 use firma_config_schema::sidecar::revocation::RevocationConfig as SchemaRevocationConfig;
 

@@ -1,4 +1,4 @@
-//! Build the connector [`ConnectorRegistry`] from `[connector]` config.
+//! Build the connector [`ConnectorRegistry`] from `[sidecar.connector]` config.
 //!
 //! The registry default is built from `default_timeout` (30s uses
 //! the [`GenericHttpConnector::default_for_unconfigured`] shortcut);
@@ -12,7 +12,7 @@ use crate::config;
 use crate::connector::ConnectorRegistry;
 use crate::connector::provider::{GenericHttpConnector, HttpConnectorConfig, RateLimitConfig};
 
-/// Builds the [`ConnectorRegistry`] from the `[connector]` config
+/// Builds the [`ConnectorRegistry`] from the `[sidecar.connector]` config
 /// section.
 ///
 /// # Errors

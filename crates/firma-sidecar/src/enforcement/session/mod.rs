@@ -2,7 +2,7 @@
 //!
 //! Contains the [`SessionStateStore`] trait, the in-memory [`LruSessionStateStore`]
 //! (default), and the file-backed [`PersistentSessionStateStore`] (opt-in via
-//! `constraint_enforcement.session_state_backend = "persistent"`).
+//! `sidecar.constraint_enforcement.session_state_backend = "persistent"`).
 //!
 //! # Module layout
 //!

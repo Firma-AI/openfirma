@@ -7,9 +7,9 @@
 //!
 //! - [`pipeline`] — enforcement pipeline + stubs for Authority / Cedar.
 //! - [`connector`] — [`ConnectorRegistry`](crate::connector::ConnectorRegistry)
-//!   built from the `[connector]` section.
+//!   built from the `[sidecar.connector]` section.
 //! - [`credential`] — [`CredentialInjector`](crate::credential::CredentialInjector)
-//!   built from the `[credentials]` section.
+//!   built from the `[sidecar.credentials]` section.
 //! - [`audit`] — audit event builder + sink spawn helpers.
 //! - [`interceptor`] — interceptor mode selection and spawn.
 //! - [`authority`] — Authority stream clients

@@ -36,16 +36,16 @@ pub struct EnforcementConfig {
 /// Error validating an [`EnforcementConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnforcementConfigError {
-    /// `mapping.rules_path` was empty.
+    /// `sidecar.mapping.rules_path` was empty.
     #[error("mapping.rules_path must not be empty")]
     EmptyRulesPath,
-    /// A `mapping.rules_paths` entry was empty.
+    /// A `sidecar.mapping.rules_paths` entry was empty.
     #[error("mapping.rules_paths[{index}] must not be empty")]
     EmptyRulesPathEntry {
         /// Index of the offending entry.
         index: usize,
     },
-    /// `constraint_enforcement.session_state_capacity` was zero.
+    /// `sidecar.constraint_enforcement.session_state_capacity` was zero.
     #[error("constraint_enforcement.session_state_capacity must be at least 1")]
     ZeroSessionStateCapacity,
 }
@@ -325,7 +325,7 @@ impl CapabilityManifestEntry {
 // Defaults
 // ---------------------------------------------------------------------------
 
-/// Sentinel: unset `mapping.rules_path`.
+/// Sentinel: unset `sidecar.mapping.rules_path`.
 pub const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
 
 fn default_mapping_path() -> PathBuf {

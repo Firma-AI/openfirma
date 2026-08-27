@@ -142,10 +142,10 @@ pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     #[serde(default = "default_https_mitm_enabled")]
     pub enabled: bool,
-    /// Optional explicit CA certificate path. Defaults under `ca.dir`.
+    /// Optional explicit CA certificate path. Defaults under `sidecar.ca.dir`.
     #[serde(default)]
     pub ca_cert_path: Option<PathBuf>,
-    /// Optional explicit CA private key path. Defaults under `ca.dir`.
+    /// Optional explicit CA private key path. Defaults under `sidecar.ca.dir`.
     #[serde(default)]
     pub ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).

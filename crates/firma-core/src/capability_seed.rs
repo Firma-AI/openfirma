@@ -10,7 +10,7 @@ use crate::CapabilityClaims;
 /// On-disk shape of a capability seed file.
 ///
 /// Written by `firma run` (and `firma authority issue`) and read by the
-/// sidecar's `[capability_seed]` loader. Plain-string mirror of the signed
+/// sidecar's `[sidecar.capability_seed]` loader. Plain-string mirror of the signed
 /// [`CapabilityClaims`]; the `raw_token` is authoritative and re-verified at
 /// load time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

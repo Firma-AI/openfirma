@@ -14,7 +14,7 @@ use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerCon
 /// Build and spawn the local-exec governance endpoint if configured.
 ///
 /// Returns a [`JoinHandle`](tokio::task::JoinHandle) for the endpoint task,
-/// or `None` when `[local_exec]` is absent from the config.
+/// or `None` when `[sidecar.local_exec]` is absent from the config.
 ///
 /// # Errors
 ///

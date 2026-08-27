@@ -1,4 +1,4 @@
-//! `[capability_seed]` configuration section.
+//! `[sidecar.capability_seed]` configuration section.
 //!
 //! Deprecated operator-seed input. Per-session capabilities are now minted
 //! live by `firma run` (via `IssueCapability`) and written under the runtime
@@ -13,7 +13,7 @@ use firma_config_schema::sidecar::capability_seed::CapabilitySeedConfig as Schem
 
 pub use firma_core::CapabilitySeed as SeedFile;
 
-/// Validated `[capability_seed]` section.
+/// Validated `[sidecar.capability_seed]` section.
 #[derive(Debug, Clone)]
 pub struct CapabilitySeedConfig {
     /// Paths to seed TOML files produced by `firma-authority issue`.

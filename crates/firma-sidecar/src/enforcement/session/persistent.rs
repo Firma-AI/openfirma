@@ -3,7 +3,7 @@
 //! [`PersistentSessionStateStore`] is an alternative [`SessionStateStore`]
 //! backend that mirrors per-session runtime state to a local append-only
 //! JSONL file so state survives LRU eviction and process restart. Selected
-//! by `constraint_enforcement.session_state_backend = "persistent"`.
+//! by `sidecar.constraint_enforcement.session_state_backend = "persistent"`.
 //!
 //! # Design
 //!

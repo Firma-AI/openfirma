@@ -26,7 +26,7 @@ pub struct TokenActionArgs {
     pub token_id: String,
 
     /// Path to the Sidecar's local-exec governance UDS socket. Must match
-    /// `local_exec.socket_path` in the Sidecar config. Accepts a plain
+    /// `sidecar.local_exec.socket_path` in the Sidecar config. Accepts a plain
     /// filesystem path or `unix:///path/to/sock`.
     #[arg(long, default_value = "/tmp/firma-sidecar-tools.sock")]
     pub socket: String,

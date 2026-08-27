@@ -1,4 +1,4 @@
-//! Connector configuration parsed from the `[connector]` TOML section.
+//! Connector configuration parsed from the `[sidecar.connector]` TOML section.
 //!
 //! Describes the default dispatch timeout applied to unconfigured hosts (the
 //! registry fallback) and the list of per-host overrides. Each host override

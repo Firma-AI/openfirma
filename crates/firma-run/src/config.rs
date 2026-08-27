@@ -189,7 +189,7 @@ impl ResolvedProfile {
             }
         } else if env_truthy(REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV) {
             return Err(RunError::ConfigValidation(format!(
-                "{REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV}=true requires [profiles.<id>.sidecar_local_exec] configuration"
+                "{REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV}=true requires [run.profiles.<id>.sidecar_local_exec] configuration"
             )));
         }
 
