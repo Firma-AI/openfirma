@@ -45,38 +45,32 @@ This writes:
 - `authority-ca.crt` / `authority-ca.key`
 - `authority.crt` / `authority.key`
 
-Then wire the generated paths into Authority + Sidecar config.
-
-### Authority (`firma-authority.toml`)
+Then wire the generated paths into the Authority and Sidecar sections of one
+`firma.toml`:
 
 ```toml
+[authority]
 # Path to the server's TLS certificate (PEM).
 tls_cert_path = "/etc/firma/authority.crt"
 
 # Path to the server's TLS private key (PEM).
 tls_key_path = "/etc/firma/authority.key"
-```
 
-Both fields must be set together or neither. When set, the gRPC listener becomes TLS-only.
-
-### Sidecar (`firma-sidecar.toml`)
-
-```toml
-[policy]
-authority_url = "https://authority.internal:50051"
-
-[authority]
+[sidecar.authority]
+url = "https://authority.internal:50051"
 ca_cert_path = "/etc/firma/authority-ca.crt"
 # Optional and strongly discouraged: only for explicit non-loopback
 # plaintext authority in temporary/dev environments.
 allow_insecure_remote_authority = false
 ```
 
-`authority.ca_cert_path` is required when `authority.url` uses `https://`.
+The Authority TLS fields must be set together or neither. When set, the gRPC
+listener becomes TLS-only. `sidecar.authority.ca_cert_path` is required when
+`sidecar.authority.url` uses `https://`.
 For `http://`, sidecar permits loopback (`localhost`, `127.0.0.1`, `::1`) by
 default for local dev. Non-loopback `http://` is rejected unless
-`authority.allow_insecure_remote_authority = true`. When
-`authority.connect_addr` is set, its physical IP—not the logical URL host—is
+`sidecar.authority.allow_insecure_remote_authority = true`. When
+`sidecar.authority.connect_addr` is set, its physical IP—not the logical URL host—is
 used for this locality check. The URL still determines TLS SNI and certificate
 identity for `https://` connections.
 

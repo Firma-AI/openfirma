@@ -224,18 +224,18 @@ An empty file is valid. Defaults are applied for every section:
 ## Full Example
 
 ```toml
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 drain_timeout = "15s"
-max_request_body_size = 4194304
+max_request_body_size = "4 MiB"
 # socket_path = "/tmp/firma.sock"
 
-[interceptor.connect_relay]
+[sidecar.interceptor.connect_relay]
 setup_timeout = "10s"
 session_max = "10m"
 
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 enabled = true
 intercept_hosts = ["api.openai.com", "api.supabase.com", "*.resend.com"]
 bypass_hosts = ["status.openai.com"]
@@ -243,42 +243,41 @@ strict_hosts = ["api.openai.com"]
 cert_ttl = "24h"
 cert_cache_capacity = 1024
 
-[policy]
+[sidecar.policy]
 dir = "/etc/firma/policies"
-authority_url = "https://authority.example.com"
 
-[ca]
+[sidecar.ca]
 dir = "/etc/firma/ca"
 
-[credentials.openai]
+[sidecar.credentials.openai]
 mode = "basic"
 target_host = "api.openai.com"
 header = "Authorization"
 value_from_env = "OPENAI_API_KEY"
 prefix = "Bearer "
 
-[credentials.stripe]
+[sidecar.credentials.stripe]
 mode = "vault"
 target_host = "api.stripe.com"
 header = "Authorization"
 secret_path = "/run/secrets/stripe_token"
 prefix = "Bearer "
 
-[mapping]
+[sidecar.mapping]
 rules_path = "/etc/firma/rules.toml"
 default_protected = false
 
-[capability_validation]
+[sidecar.capability_validation]
 clock_skew_tolerance = "5s"
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 session_state_capacity = 8192
 session_state_backend = "lru"
 
-[connector]
+[sidecar.connector]
 default_timeout = "15s"
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host = "api.openai.com"
 rps = 60
 burst = 10
@@ -292,17 +291,17 @@ reconnect_max_backoff = "30s"
 revocation_readiness_grace = "500ms"
 revocation_fail_closed_on_disconnect = false
 
-[revocation]
+[sidecar.revocation]
 capacity = 1000000
 fpr = 0.0001
 lru_capacity = 100000
 
-[audit]
+[sidecar.audit]
 sink = "wal"
 file_path = "/var/log/firma/audit.jsonl"
 grpc_url = "https://audit.example.com"
 wal_path = "/var/lib/firma/wal"
-wal_max_size = 104857600
+wal_max_size = "100 MiB"
 signing_key_path = "/etc/firma/audit.pem"
 # signing_key_env = "FIRMA_AUDIT_SIGNING_KEY"
 ```

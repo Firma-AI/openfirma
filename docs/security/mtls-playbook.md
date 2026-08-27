@@ -28,15 +28,16 @@ The CA cert is distributed to the Authority (`mtls_client_ca_cert_path`). Keep t
 Run this once per deployment environment. Keep the CA key offline after signing is complete.
 
 ```bash
-firma authority --config firma-authority.toml generate-client-ca \
+firma authority --config firma.toml generate-client-ca \
   --cert-out firma-client-ca.crt \
   --key-out  firma-client-ca.key \
   --cn       "Firma mTLS Client CA"
 ```
 
-Set the paths in `firma-authority.toml`:
+Set the paths in the Authority section of `firma.toml`:
 
 ```toml
+[authority]
 # Server TLS (V1, required for mTLS)
 tls_cert_path = "/etc/firma/authority.crt"
 tls_key_path = "/etc/firma/authority.key"
@@ -70,7 +71,7 @@ Restart the Authority after modifying this file (it is read once at startup).
 ### 3. Issue a client certificate for each Sidecar
 
 ```bash
-firma authority --config firma-authority.toml issue-client-cert \
+firma authority --config firma.toml issue-client-cert \
   --cn      "sidecar-production-1.internal" \
   --san     "sidecar-production-1.internal" \
   --days    365 \
@@ -82,13 +83,11 @@ The command prints the identity string you need to add to `authorized_clients.to
 
 ### 4. Configure the Sidecar
 
-In `firma-sidecar.toml`:
+Add the Sidecar client settings to the same `firma.toml`:
 
 ```toml
-[policy]
-authority_url = "https://authority.internal:50051"
-
-[authority]
+[sidecar.authority]
+url = "https://authority.internal:50051"
 ca_cert_path = "/etc/firma/authority-ca.crt" # server CA (V1)
 tls_client_cert_path = "/etc/firma/sidecar.crt" # client cert (V1.1)
 tls_client_key_path = "/etc/firma/sidecar.key" # client key (V1.1)
