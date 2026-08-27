@@ -493,7 +493,11 @@ pub(crate) fn resolve_profile_with_layout(
     if let Some(paths) = patch.mask_home_paths {
         env_set.insert(
             "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
-            paths.join(","),
+            paths
+                .iter()
+                .map(|path| path.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(","),
         );
     }
 

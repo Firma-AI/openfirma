@@ -110,7 +110,7 @@ pub struct ProfilePatch {
     /// Home-relative paths to mask with a tmpfs overlay inside the bwrap sandbox.
     /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
     /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.
-    pub mask_home_paths: Option<Vec<String>>,
+    pub mask_home_paths: Option<Vec<PathBuf>>,
     /// How the sandbox CA trust store is assembled. `None` resolves to the
     /// default `CaTrustMode::Sole`.
     pub ca_trust_mode: Option<CaTrustMode>,
