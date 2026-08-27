@@ -224,7 +224,7 @@ burst = 10
 timeout_ms = 60000
 
 [authority]
-connect_timeout_secs = 10
+connect_timeout = "10s"
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
@@ -632,20 +632,20 @@ Tuning for the background Authority stream clients
 `authority.url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
-| Field                                  | Type    | Default | Description                                                                                                                 |
-| -------------------------------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `connect_addr`                         | address | none    | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                            |
-| `connect_timeout_secs`                 | u64     | `10`    | Connection timeout for the tonic channel                                                                                    |
-| `reconnect_min_backoff_ms`             | u64     | `250`   | Minimum reconnect backoff                                                                                                   |
-| `reconnect_max_backoff_secs`           | u64     | `30`    | Maximum reconnect backoff                                                                                                   |
-| `revocation_readiness_grace_ms`        | u64     | `500`   | Grace period after revocation stream opens before readiness                                                                 |
-| `revocation_fail_closed_on_disconnect` | bool    | `false` | Flip revocation readiness back to false when the stream drops                                                               |
-| `public_key_path`                      | path    | none    | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
-| `credentials`                          | section | none    | Optional Sidecar PSK credentials sent on every Authority RPC.                                                               |
+| Field                                  | Type     | Default | Description                                                                                                                 |
+| -------------------------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `connect_addr`                         | address  | none    | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                            |
+| `connect_timeout`                      | duration | `"10s"` | Connection timeout for the tonic channel                                                                                    |
+| `reconnect_min_backoff_ms`             | u64      | `250`   | Minimum reconnect backoff                                                                                                   |
+| `reconnect_max_backoff_secs`           | u64      | `30`    | Maximum reconnect backoff                                                                                                   |
+| `revocation_readiness_grace_ms`        | u64      | `500`   | Grace period after revocation stream opens before readiness                                                                 |
+| `revocation_fail_closed_on_disconnect` | bool     | `false` | Flip revocation readiness back to false when the stream drops                                                               |
+| `public_key_path`                      | path     | none    | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
+| `credentials`                          | section  | none    | Optional Sidecar PSK credentials sent on every Authority RPC.                                                               |
 
 Validation:
 
-- `connect_timeout_secs`, `reconnect_min_backoff_ms`, and
+- `connect_timeout`, `reconnect_min_backoff_ms`, and
   `reconnect_max_backoff_secs` must all be greater than `0`.
 - `connect_addr` requires `url` and must use a nonzero port. For plaintext
   URLs, the insecure-remote check uses this physical address when present.

@@ -173,7 +173,7 @@ file_path = "examples/demos/demo0/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 
 [sidecar.authority]
-connect_timeout_secs = 10
+connect_timeout = "10s"
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500

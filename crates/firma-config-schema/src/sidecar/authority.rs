@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,9 +40,12 @@ pub struct AuthorityConfig {
     /// Optional physical TCP destination for the Authority connection.
     #[serde(default)]
     pub connect_addr: Option<SocketAddr>,
-    /// Connection timeout in seconds.
-    #[serde(default = "default_connect_timeout_secs")]
-    pub connect_timeout_secs: u64,
+    /// Connection timeout.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_connect_timeout"
+    )]
+    pub connect_timeout: Duration,
     /// Minimum reconnect backoff in milliseconds.
     #[serde(default = "default_min_backoff_ms")]
     pub reconnect_min_backoff_ms: u64,
@@ -83,7 +87,7 @@ impl Default for AuthorityConfig {
             agent_id: None,
             url: None,
             connect_addr: None,
-            connect_timeout_secs: default_connect_timeout_secs(),
+            connect_timeout: default_connect_timeout(),
             reconnect_min_backoff_ms: default_min_backoff_ms(),
             reconnect_max_backoff_secs: default_max_backoff_secs(),
             revocation_readiness_grace_ms: default_readiness_grace_ms(),
@@ -98,8 +102,8 @@ impl Default for AuthorityConfig {
     }
 }
 
-const fn default_connect_timeout_secs() -> u64 {
-    10
+const fn default_connect_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
 const fn default_min_backoff_ms() -> u64 {

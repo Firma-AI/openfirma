@@ -137,7 +137,7 @@ agent_id         = "agt_01j0000000e008000000000001"
 url             = "http://127.0.0.1:50051"
 ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
 public_key_path = "/path/to/state/authority.pub"
-# ... plus connect_timeout_secs / reconnect_* / revocation_* tuning
+# ... plus connect_timeout / reconnect_* / revocation_* tuning
 
 # Uncomment for remote Authorities that require Sidecar PSK authentication.
 # [sidecar.authority.credentials]

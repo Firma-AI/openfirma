@@ -171,6 +171,10 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
 
+    if let Some(authority) = optional_table_mut(sidecar, "authority")? {
+        migrate_integer_duration(authority, "connect_timeout_secs", "connect_timeout", "s");
+    }
+
     set_str_if_absent(sidecar, "mode", "enforce");
 
     // sidecar.interceptor.{mode, listen_addr} + https_mitm hosts
@@ -266,7 +270,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
             auth.remove("ca_cert_path");
             auth.remove("public_key_path");
         }
-        set_int_if_absent(auth, "connect_timeout_secs", 10);
+        set_str_if_absent(auth, "connect_timeout", "10s");
         set_int_if_absent(auth, "reconnect_min_backoff_ms", 250);
         set_int_if_absent(auth, "reconnect_max_backoff_secs", 30);
         set_int_if_absent(auth, "revocation_readiness_grace_ms", 500);
@@ -785,6 +789,17 @@ mod tests {
 
         assert!(out.contains("cert_ttl = \"86400s\""));
         assert!(!out.contains("cert_ttl_secs"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_authority_connect_timeout() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.authority]\nconnect_timeout_secs = 10\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("connect_timeout = \"10s\""));
+        assert!(!out.contains("connect_timeout_secs"));
     }
 
     #[test]

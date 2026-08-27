@@ -54,7 +54,7 @@ signing_key_path = ".runtime/audit.key"
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"
 url = "http://127.0.0.1:50051"
-connect_timeout_secs = 10
+connect_timeout = "10s"
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500

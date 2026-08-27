@@ -372,7 +372,7 @@ fn spawn_sidecar_with_credentials(
     let endpoint = AuthorityEndpoint::new(url, config.connect_addr)?;
     let channel = build_channel(
         &endpoint,
-        Duration::from_secs(config.connect_timeout_secs),
+        config.connect_timeout,
         ca_cert_pem,
         client_cert_pem,
         client_key_pem,
@@ -473,7 +473,7 @@ fn test_config() -> AuthorityConfig {
         agent_id: None,
         url: None,
         connect_addr: None,
-        connect_timeout_secs: 2,
+        connect_timeout: Duration::from_secs(2),
         reconnect_min_backoff_ms: 50,
         reconnect_max_backoff_secs: 1,
         revocation_readiness_grace_ms: 100,
