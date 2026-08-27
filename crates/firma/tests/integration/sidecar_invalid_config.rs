@@ -4,8 +4,8 @@
 //!
 //! The cases below exercise two distinct failure modes:
 //!
-//! - parse error (typo in `[interceptor]` field name)
-//! - validation error (`policy.dir` empty)
+//! - parse error (typo in `[sidecar.interceptor]` field name)
+//! - validation error (`sidecar.policy.dir` empty)
 
 #![allow(
     clippy::unwrap_used,
@@ -14,7 +14,7 @@
     reason = "test code: panics are acceptable test failures"
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use super::CONFIG_FILE_NAME;
@@ -82,7 +82,8 @@ dir = ""
     );
 }
 
-fn relative_resource_config() -> (tempfile::TempDir, PathBuf, PathBuf) {
+#[test]
+fn relative_env_config_rebases_sidecar_resources_from_an_absolute_dir() {
     let current_dir = std::env::current_dir().unwrap();
     let tmp = tempfile::tempdir_in(&current_dir).unwrap();
     let config_dir = tmp.path().join("config");
@@ -102,10 +103,14 @@ signing_key_path = "missing-signing.key"
     .unwrap();
     let relative_config = config_path.strip_prefix(&current_dir).unwrap();
 
-    (tmp, relative_config.to_path_buf(), config_dir)
-}
+    let output = Command::new(firma_bin())
+        .arg("sidecar")
+        .env("FIRMA_CONFIG", relative_config)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn firma sidecar");
 
-fn assert_config_relative_signing_key_failure(output: &std::process::Output, config_dir: &Path) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let expected_signing_key_path = config_dir.join("missing-signing.key");
     assert!(
@@ -117,34 +122,4 @@ fn assert_config_relative_signing_key_failure(output: &std::process::Output, con
         "diagnostic must use the absolute config-relative signing-key path {}: {stderr}",
         expected_signing_key_path.display()
     );
-}
-
-#[test]
-fn relative_sidecar_config_env_rebases_resources_from_an_absolute_dir() {
-    let (_tmp, relative_config, config_dir) = relative_resource_config();
-
-    let output = Command::new(firma_bin())
-        .arg("sidecar")
-        .env("FIRMA_SIDECAR_CONFIG_FILE", relative_config)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn firma sidecar");
-
-    assert_config_relative_signing_key_failure(&output, &config_dir);
-}
-
-#[test]
-fn relative_sidecar_config_flag_rebases_resources_from_an_absolute_dir() {
-    let (_tmp, relative_config, config_dir) = relative_resource_config();
-
-    let output = Command::new(firma_bin())
-        .args(["sidecar", "--config"])
-        .arg(relative_config)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn firma sidecar");
-
-    assert_config_relative_signing_key_failure(&output, &config_dir);
 }
