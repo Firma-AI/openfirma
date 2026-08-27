@@ -20,9 +20,6 @@ dir = "policies"
 [sidecar.ca]
 dir = ".firma/state/generated-firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = true

@@ -35,9 +35,6 @@ dir = "."
 [sidecar.ca]
 dir = "examples/demos/demo2/.runtime/generated-firma-ca"
 
-[sidecar.log]
-level = "info"
-
 # Credential injection. The real GitHub token lives only here, in the sidecar.
 # The agent process scrubs GITHUB_TOKEN from its own environment at startup
 # and never sets an Authorization header. After an ALLOW decision, the sidecar

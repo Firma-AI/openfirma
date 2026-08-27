@@ -134,9 +134,6 @@ dir = '{policy_dir}'
 [sidecar.ca]
 dir = '{ca_dir}'
 
-[sidecar.log]
-level = "warn"
-
 [sidecar.mapping]
 rules_path = '{mapping}'
 default_protected = true

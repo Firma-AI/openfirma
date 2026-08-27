@@ -211,9 +211,6 @@ default_protected = $([[ "$CLAUDE_ACCEPTANCE" -eq 1 ]] && echo "true" || echo "f
 sink = "file"
 file_path = "${AUDIT_FILE}"
 signing_key_path = "${AUDIT_KEY}"
-
-[sidecar.log]
-level = "info"
 EOF
 
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then

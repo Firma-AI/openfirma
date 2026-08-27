@@ -41,9 +41,6 @@ dir = "."
 [sidecar.ca]
 dir = "examples/generic-agent/.runtime/generated-firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 # Supplemental rules (CONNECT tunnels, package managers, localhost).
 rules_path = "mapping-rules.toml"

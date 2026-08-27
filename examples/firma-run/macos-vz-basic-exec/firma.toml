@@ -18,9 +18,6 @@ enabled = false
 [sidecar.policy]
 dir = "policies"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = true

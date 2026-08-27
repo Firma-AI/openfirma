@@ -8,7 +8,7 @@
 
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra::{
-    CaConfig, CredentialMode, CredentialTransform, LogConfig, PolicyConfig, SidecarMode,
+    CaConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
 
@@ -92,5 +92,4 @@ fn infra_sections_default_to_documented_paths() {
         CaConfig::default().dir,
         std::path::PathBuf::from("./firma-ca/"),
     );
-    assert_eq!(LogConfig::default().level, "info");
 }

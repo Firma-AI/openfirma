@@ -220,11 +220,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     }
 
     {
-        let log = ensure_table(sidecar, "log")?;
-        set_str_if_absent(log, "level", "info");
-    }
-
-    {
         let mapping = ensure_table(sidecar, "mapping")?;
         set_str_if_absent(mapping, "rules_path", "mapping-rules.toml");
         set_str_array(mapping, "rules_paths", inputs.mapping_paths);

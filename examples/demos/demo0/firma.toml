@@ -38,9 +38,6 @@ dir = "."
 [sidecar.ca]
 dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = true

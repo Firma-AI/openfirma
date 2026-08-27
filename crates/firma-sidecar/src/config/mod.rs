@@ -65,7 +65,7 @@ pub(crate) enum AuthorityTarget {
 /// Top-level sidecar configuration deserialized from TOML.
 ///
 /// Contains both infrastructure settings (interceptor, policy, CA,
-/// logging, credentials) and enforcement-engine settings (mapping,
+/// credentials) and enforcement-engine settings (mapping,
 /// capability validation, constraint enforcement) via
 /// [`EnforcementConfig`].
 #[derive(Debug, Clone, Default)]
@@ -79,17 +79,6 @@ pub struct SidecarConfig {
     pub policy: PolicyConfig,
     /// Certificate authority directory.
     pub(crate) ca: CaConfig,
-    /// Log settings (level only; file/filter come from CLI args).
-    ///
-    /// FIXME: validated on load but not yet applied. `firma` initializes tracing
-    /// from CLI args (`--log-filter` / `RUST_LOG`) before the config is parsed,
-    /// so `log.level` currently only gates the config as fail-closed. Retained
-    /// as the intended base level — wire it or remove it (see PR follow-up).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "validated on load; base-level wiring pending")
-    )]
-    log: LogConfig,
     /// Per-target credential injection entries, keyed by an arbitrary label.
     pub(crate) credentials: HashMap<String, CredentialConfig>,
     /// Outbound connector settings (default timeout + per-host overrides).
@@ -146,9 +135,6 @@ pub enum SidecarConfigError {
     /// The `[ca]` section was invalid.
     #[error("{0}")]
     Ca(#[from] CaConfigError),
-    /// The `[log]` section was invalid.
-    #[error("{0}")]
-    Log(#[from] LogConfigError),
     /// A `[credentials.*]` entry was invalid.
     #[error("credentials.{label}: {source}")]
     Credential {
@@ -316,7 +302,6 @@ impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
             interceptor: s.interceptor.try_into()?,
             policy: s.policy.try_into()?,
             ca: s.ca.try_into()?,
-            log: s.log.try_into()?,
             credentials,
             connector: s.connector.try_into()?,
             authority: s.authority.try_into()?,
@@ -736,55 +721,6 @@ impl Default for CaConfig {
     fn default() -> Self {
         Self {
             dir: schema_infra::CaConfig::default().dir,
-        }
-    }
-}
-
-/// Log settings sourced from the TOML file.
-///
-/// The log level set here acts as the base; CLI args (`--log-filter`)
-/// override it.
-#[derive(Debug, Clone)]
-pub struct LogConfig {
-    /// Log level: `trace`, `debug`, `info`, `warn`, or `error`.
-    ///
-    /// FIXME: validated in `TryFrom` but not yet applied — tracing is
-    /// initialized from CLI args before config load. Retained as the intended
-    /// base level (see PR follow-up to wire it or remove it).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "validated on load; base-level wiring pending")
-    )]
-    level: String,
-}
-
-/// Error validating a [`LogConfig`].
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum LogConfigError {
-    /// `log.level` was not a recognized level.
-    #[error("log.level '{level}' is invalid; expected one of: trace, debug, info, warn, error")]
-    InvalidLevel {
-        /// The rejected level string.
-        level: String,
-    },
-}
-
-impl TryFrom<schema_infra::LogConfig> for LogConfig {
-    type Error = LogConfigError;
-
-    fn try_from(s: schema_infra::LogConfig) -> Result<Self, Self::Error> {
-        let valid = ["trace", "debug", "info", "warn", "error"];
-        if !valid.contains(&s.level.to_lowercase().as_str()) {
-            return Err(LogConfigError::InvalidLevel { level: s.level });
-        }
-        Ok(Self { level: s.level })
-    }
-}
-
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            level: schema_infra::LogConfig::default().level,
         }
     }
 }
@@ -1234,16 +1170,6 @@ mod tests {
         assert!(SidecarConfig::try_from(schema).is_ok());
     }
 
-    #[test]
-    fn test_sidecar_config_invalid_log_level() {
-        let mut schema = schema_sidecar();
-        schema.log.level = "verbose".to_string();
-        assert!(matches!(
-            SidecarConfig::try_from(schema),
-            Err(SidecarConfigError::Log(LogConfigError::InvalidLevel { .. }))
-        ));
-    }
-
     fn credential(mode: CredentialMode) -> schema_infra::CredentialConfig {
         schema_infra::CredentialConfig {
             mode,
@@ -1589,9 +1515,6 @@ ca_cert_path = "/etc/firma/authority-ca.pem"
 [ca]
 dir = "/etc/firma/ca"
 
-[log]
-level = "debug"
-
 [credentials.openai]
 target_host = "api.openai.com"
 header = "Authorization"
@@ -1659,7 +1582,6 @@ signing_key_path = "/etc/firma/audit.pem"
             Some(std::path::Path::new("/etc/firma/authority-ca.pem"))
         );
         assert_eq!(config.ca.dir, PathBuf::from("/etc/firma/ca"));
-        assert_eq!(config.log.level, "debug");
         assert_eq!(config.credentials.len(), 1);
         let openai = &config.credentials["openai"];
         assert_eq!(openai.target_host, "api.openai.com");

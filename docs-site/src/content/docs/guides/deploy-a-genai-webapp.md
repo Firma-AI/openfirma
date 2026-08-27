@@ -216,8 +216,6 @@ sink             = "grpc"
 grpc_url         = "https://audit-collector.internal:9090"
 signing_key_path = "/etc/firma/audit.key"
 
-[sidecar.log]
-level = "info"
 ```
 
 A few things worth highlighting:

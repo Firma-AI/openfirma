@@ -157,9 +157,6 @@ authority_url = "http://127.0.0.1:50051"
 [sidecar.ca]
 dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "examples/demos/demo0/mapping-rules.toml"
 default_protected = true # demos default to fail-closed

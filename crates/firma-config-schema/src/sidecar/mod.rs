@@ -32,8 +32,7 @@ pub use enforcement::{
     SessionStateBackend,
 };
 pub use infra::{
-    CaConfig, CredentialConfig, CredentialMode, CredentialTransform, LogConfig, PolicyConfig,
-    SidecarMode,
+    CaConfig, CredentialConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
 };
 pub use interceptor::{ConnectRelayConfig, HttpsMitmConfig, InterceptorConfig, InterceptorMode};
 pub use local_exec::{DefaultAction, LocalExecConfig};
@@ -44,7 +43,7 @@ pub use tenancy::{TenancyConfig, TenancyMode};
 /// Top-level sidecar configuration, deserialized from the `[sidecar]` section
 /// of `firma.toml`.
 ///
-/// Contains both infrastructure settings (interceptor, policy, CA, logging,
+/// Contains both infrastructure settings (interceptor, policy, CA,
 /// credentials) and enforcement-engine settings (mapping, capability
 /// validation, constraint enforcement) via a flattened [`EnforcementConfig`].
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -62,9 +61,6 @@ pub struct SidecarConfig {
     /// Certificate authority directory.
     #[serde(default)]
     pub ca: CaConfig,
-    /// Log settings (level only; file/filter come from CLI args).
-    #[serde(default)]
-    pub log: LogConfig,
     /// Per-target credential injection entries, keyed by an arbitrary label
     /// (e.g. `[credentials.openai]`).
     #[serde(default)]

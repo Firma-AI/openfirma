@@ -161,8 +161,6 @@ sink             = "file"
 file_path        = "/tmp/firma-standalone/logs/audit.jsonl"
 signing_key_path = "/tmp/firma-standalone/audit.key"
 
-[sidecar.log]
-level = "info"
 ```
 
 Notes:

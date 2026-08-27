@@ -1,5 +1,5 @@
 //! Schema for the sidecar's top-level infrastructure sections:
-//! `mode`, `[policy]`, `[ca]`, `[log]`, and `[credentials.*]`.
+//! `mode`, `[policy]`, `[ca]`, and `[credentials.*]`.
 //!
 //! Representation only. `firma-sidecar` validates these values and parses
 //! them into its own configuration types (for example, the credential
@@ -51,24 +51,6 @@ impl Default for CaConfig {
     fn default() -> Self {
         Self {
             dir: default_ca_dir(),
-        }
-    }
-}
-
-/// Log settings sourced from the TOML file.
-///
-/// The log level here acts as the base; CLI args override it.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LogConfig {
-    /// Log level: `trace`, `debug`, `info`, `warn`, or `error`.
-    #[serde(default = "default_log_level")]
-    pub level: String,
-}
-
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            level: default_log_level(),
         }
     }
 }
@@ -131,8 +113,4 @@ fn default_policy_dir() -> PathBuf {
 
 fn default_ca_dir() -> PathBuf {
     PathBuf::from(DEFAULT_CA_DIR)
-}
-
-fn default_log_level() -> String {
-    "info".to_string()
 }

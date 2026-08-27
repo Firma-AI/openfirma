@@ -146,7 +146,6 @@ An empty file is valid. Defaults are applied for every section:
 # Interceptor: HTTP proxy on 0.0.0.0:8080
 # Policy dir: ./policies/
 # CA dir: ./firma-ca/
-# Log level: info
 # Mapping rules: mapping-rules.toml
 ```
 
@@ -178,9 +177,6 @@ authority_url = "https://authority.example.com"
 
 [ca]
 dir = "/etc/firma/ca"
-
-[log]
-level = "debug"
 
 [credentials.openai]
 mode = "basic"
@@ -494,19 +490,6 @@ Certificate authority directory.
 Validation:
 
 - `dir` must not be empty.
-
-### `[log]`
-
-Log settings from the configuration file. CLI logging flags override these
-settings.
-
-| Field   | Type   | Default | Description                               |
-| ------- | ------ | ------- | ----------------------------------------- |
-| `level` | string | `info`  | `trace`, `debug`, `info`, `warn`, `error` |
-
-Validation:
-
-- `level` must be one of `trace`, `debug`, `info`, `warn`, or `error`.
 
 ### `[credentials.<label>]`
 

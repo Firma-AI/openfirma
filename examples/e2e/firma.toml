@@ -39,9 +39,6 @@ dir = "../policies"
 [sidecar.ca]
 dir = "examples/e2e/firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = false
