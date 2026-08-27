@@ -176,6 +176,21 @@ fn secret_gateway_operation_timeout_rejects_zero() {
 }
 
 #[test]
+fn run_mediator_timeout_rejects_zero() {
+    let error =
+        toml::from_str::<run::FileConfig>("[profiles.test.sidecar_local_exec]\ntimeout = \"0s\"\n")
+            .expect_err("zero mediator timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"
