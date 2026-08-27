@@ -129,7 +129,7 @@ guest launch path.
 - Misconfigured credential injection (wrong header, wrong env var). The connector might attach a credential to the wrong host.
 - Upstream services that accept calls without the credential the connector adds.
 
-**Mitigations:** review `[credentials.*]` blocks the same way you'd review IAM grants. Scope each credential to a single host.
+**Mitigations:** review `[sidecar.credentials.*]` blocks the same way you'd review IAM grants. Scope each credential to a single host.
 
 ## Specific bypass classes worth highlighting
 

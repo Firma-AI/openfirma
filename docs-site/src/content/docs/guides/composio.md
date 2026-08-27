@@ -35,7 +35,7 @@ both hosts. Wildcard and catch-all rule hosts count as referencing the
 Composio hosts, because such rules do govern that traffic at runtime.
 
 The check only runs in the HTTP-proxy interceptor mode. Under any other
-`interceptor.mode` it is silently skipped, so verify interception coverage
+`sidecar.interceptor.mode` it is silently skipped, so verify interception coverage
 by hand there.
 
 Continue to run your chosen command:

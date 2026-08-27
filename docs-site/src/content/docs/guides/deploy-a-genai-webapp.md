@@ -68,8 +68,8 @@ policy_dir          = "/etc/firma/policies"
 issuance_policy_dir = "/etc/firma/issuance"
 revocation_file     = "/var/lib/firma/revocations.txt"
 key_file            = "/etc/firma/firma-authority.key"
-max_ttl = "1h"              # capabilities live at most 1h
-bundle_ttl_seconds  = 30                # Sidecars deny if a bundle is not refreshed before this TTL
+max_ttl    = "1h"  # capabilities live at most 1h
+bundle_ttl = "30s" # Sidecars deny if a bundle is not refreshed before this TTL
 ```
 
 In production, run the Authority on a hardened host with limited access. Treat its signing key with the same care as a CA key.
@@ -250,9 +250,9 @@ needs different timing:
 url                           = "https://firma-authority.internal:50051"
 public_key_path               = "/etc/firma/firma-authority.pub"
 ca_cert_path                  = "/etc/firma/authority-ca.crt"
-reconnect_min_backoff         = "250ms"
-reconnect_max_backoff         = "30s"
-revocation_readiness_grace    = "500ms"
+reconnect_min_backoff = "250ms"
+reconnect_max_backoff = "30s"
+revocation_readiness_grace = "500ms"
 ```
 
 For Cloud Run multi-container services, make the Sidecar's health endpoint

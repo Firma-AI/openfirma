@@ -70,21 +70,22 @@ Hosts not listed use `default_timeout` and no rate limit. Set sensible defaults 
 
 The connector is also where credentials for upstream services are attached. This is a deliberate choice: the agent never holds the secret, the policy decides whether the call is OK, and only then does the connector add the credential.
 
-The `[credentials.*]` blocks declare what to inject for which host:
+The `[sidecar.credentials.*]` blocks declare what to inject for which host:
 
 ```toml
-[[credentials]]
-host           = "api.openai.com"
-mode           = "basic"
-header         = "Authorization"
+[sidecar.credentials.openai]
+target_host = "api.openai.com"
+mode = "basic"
+header = "Authorization"
 value_from_env = "OPENAI_API_KEY"
-prefix         = "Bearer "
+prefix = "Bearer "
 ```
 
 Two modes are supported today:
 
 - **`basic`** — pulls the value from an environment variable on the Sidecar host and prepends an optional prefix.
-- **`vault`** — pulls the value from a HashiCorp Vault path. Requires `[credentials].secret_path` and Vault auth configured.
+- **`vault`** — reads the value from a file rendered by Vault Agent. Requires
+  `secret_path` in the credential block.
 
 The injection happens after `Decision::Allow` and before dispatch. If injection fails (env var missing, Vault unreachable), the connector returns a typed error, the call is denied, and the audit event records what happened.
 
@@ -105,6 +106,6 @@ Note the subtle but important point: a connector failure does **not** retroactiv
 
 ## Where to go next
 
-- [Inject credentials](../../guides/inject-credentials/) — operator workflow for `[credentials.*]`.
+- [Inject credentials](../../guides/inject-credentials/) — operator workflow for `[sidecar.credentials.*]`.
 - [Read & verify the audit log](../../guides/audit-log/) — what connector outcomes look like in audit events.
 - [The sandbox boundary](../sandbox/) — how mandatory routing pairs with connectors.

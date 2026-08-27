@@ -49,9 +49,9 @@ This is interesting when you're shipping a managed runtime (e.g. you control the
 Same protocol as the HTTP proxy mode, but the listener is on a filesystem socket instead of a TCP port. Configured as:
 
 ```toml
-[interceptor]
-mode               = "unix_socket"
-listen_addr        = "/run/firma-sidecar.sock"
+[sidecar.interceptor]
+mode = "unix_socket"
+socket_path = "/run/firma-sidecar.sock"
 drain_timeout = "5s"
 ```
 
@@ -137,7 +137,7 @@ execution](../../guides/composio/) for the full integration.
 
 ## The CA: the most security-sensitive piece
 
-When you enable MITM, the Sidecar mints a CA on first run (under `[ca].dir`). That CA's private key is the most sensitive secret in your OpenFirma deployment: anyone who possesses it can sign certificates that the agent host will trust. Two operational rules:
+When you enable MITM, the Sidecar mints a CA on first run (under `sidecar.ca.dir`). That CA's private key is the most sensitive secret in your OpenFirma deployment: anyone who possesses it can sign certificates that the agent host will trust. Two operational rules:
 
 1. **Never regenerate the CA.** Once the agent host trusts it, you have to keep using it. Regenerating means you have to re-trust the new CA on every host. Treat the CA directory as immutable infrastructure.
 2. **Restrict trust to the agent's host.** The CA should be installed in the trust store of *the agent's process*, not the operating system's global trust store. Tools like `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, or per-language equivalents let you scope trust narrowly. The bundled demo uses `SSL_CERT_FILE` for exactly this reason.

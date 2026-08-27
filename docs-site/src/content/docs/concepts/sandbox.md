@@ -251,7 +251,7 @@ This prints the resolved config as JSON so you can see exactly what mounts, env 
 
 The preferred runtime shape keeps capability material outside the agent process:
 
-1. **Before** the sandbox starts, the operator stages capability material for the Sidecar, normally through `[capability_seed]`.
+1. **Before** the sandbox starts, the operator stages capability material for the Sidecar, normally through `[sidecar.capability_seed]`.
 2. The host-side Sidecar reads that seed outside the sandbox.
 3. Inside the sandbox, the agent only needs `HTTP_PROXY=http://127.0.0.1:18080`.
 4. When the agent makes an outbound call, the Sidecar selects the right capability based on `(session_id, action_class, resource)` — which it knows from the request, not from the agent.

@@ -14,13 +14,13 @@ The built-in `copilot` profile handles all three automatically. You opt in with 
 
 | Concern                | Generic profile        | Copilot profile                                               |
 | ---------------------- | ---------------------- | ------------------------------------------------------------- |
-| GitHub hosts           | intercepted / denied   | added to `https_mitm.bypass_hosts` (real upstream TLS)        |
+| GitHub hosts           | intercepted / denied   | added to `sidecar.interceptor.https_mitm.bypass_hosts`        |
 | Sandbox CA trust store | firma-ca only (`Sole`) | system roots + firma-ca (`AppendSystemRoots`)                 |
 | Auth                   | none                   | passes through `GITHUB_TOKEN`, `GH_TOKEN`, `GH_COPILOT_TOKEN` |
 
 Copilot's **SQLite session store** under `~/.copilot/*.db` needs `unlink`/`rename` for journal cleanup. This works under any profile: the managed seccomp baseline no longer denies `filesystem.delete`, and deletes inside the read-write workspace and runtime home succeed while the read-only rootfs still blocks deletes elsewhere.
 
-The CA-append behavior comes from the built-in profile, so you do not configure it by hand. `firma config --profile copilot` writes the matching mapping and the `https_mitm.bypass_hosts` entries.
+The CA-append behavior comes from the built-in profile, so you do not configure it by hand. `firma config --profile copilot` writes the matching mapping and the `sidecar.interceptor.https_mitm.bypass_hosts` entries.
 
 ## Step 1: Scaffold the config
 
@@ -28,11 +28,11 @@ The CA-append behavior comes from the built-in profile, so you do not configure 
 firma config --profile copilot --posture dev
 ```
 
-This selects the `copilot` mapping (CONNECT classification for the Copilot and GitHub hosts) and seeds `https_mitm.bypass_hosts` with `github.com`, `api.github.com`, and `uploads.github.com` so those hosts pass through untouched while firma-ca still covers any intercepted host.
+This selects the `copilot` mapping (CONNECT classification for the Copilot and GitHub hosts) and seeds `sidecar.interceptor.https_mitm.bypass_hosts` with `github.com`, `api.github.com`, and `uploads.github.com` so those hosts pass through untouched while firma-ca still covers any intercepted host.
 
 The generated `firma.toml` keeps MITM enabled (the bypass list alone keeps `[sidecar.interceptor.https_mitm].enabled = true`) and lists `mappings/copilot.toml` under `rules_paths`.
 
-This profile is intentionally CONNECT-only for `github.com` and `api.github.com`. If you want native GitHub git enforcement for another coding agent, remove `github.com` from `https_mitm.bypass_hosts`, add it to `https_mitm.intercept_hosts`, and use the GitHub mapping instead of the Copilot bypass mapping. Without MITM, the Sidecar cannot see `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, so it cannot classify `git push`, enforce branch/ref policy, or inject a git credential.
+This profile is intentionally CONNECT-only for `github.com` and `api.github.com`. If you want native GitHub git enforcement for another coding agent, remove `github.com` from `sidecar.interceptor.https_mitm.bypass_hosts`, add it to `sidecar.interceptor.https_mitm.intercept_hosts`, and use the GitHub mapping instead of the Copilot bypass mapping. Without MITM, the Sidecar cannot see `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, so it cannot classify `git push`, enforce branch/ref policy, or inject a git credential.
 
 ## Step 2: Run Copilot
 

@@ -10,7 +10,7 @@ A capability token is what an agent needs to clear [Stage 1](../../concepts/pipe
 > the Authority's `IssueCapability` gRPC call and writes it to
 > `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`; the sidecar picks it
 > up without any operator intervention. The manual `firma authority issue` +
-> `[capability_seed]` workflow documented in this guide is kept working but is
+> `[sidecar.capability_seed]` workflow documented in this guide is kept working but is
 > **deprecated** — use it only when you need to pre-provision a fixed, long-lived
 > session outside of `firma run` (for example, a daemon or a CI agent with a
 > known identity and scope that does not use the autostart flow).

@@ -86,10 +86,8 @@ firma-authority export-workspace-public-key \
 ```
 
 The file must contain exactly the 32 raw bytes of an Ed25519 public key. PEM,
-OpenSSH, DER, hex, base64, and TOML encodings are not accepted. When declared
-in `firma.toml`, a relative `public_key_path` resolves relative to that
-file's containing directory. A `--capability-file` CLI path keeps its existing
-CLI path semantics.
+OpenSSH, DER, hex, base64, and TOML encodings are not accepted. A relative
+`public_key_path` is resolved from the `firma run` working directory.
 
 `firma run` reads and validates the key before calling `IssueCapability`, then
 uses it to verify the returned PASETO token. The same effective key is written
@@ -157,7 +155,7 @@ firma authority issue \
 ```
 
 The output is a TOML file with both the raw PASETO and the parsed claims. It can
-be loaded into a Sidecar via `[capability_seed]` (deprecated) or used by
+be loaded into a Sidecar via `[sidecar.capability_seed]` (deprecated) or used by
 `firma run --capability-file`. See [Issue capability tokens](../../guides/issue-capability-tokens/)
 for that legacy workflow.
 
@@ -179,7 +177,7 @@ The whole stage is local. There is no network call, no Authority round-trip, no 
 
 Capabilities written under `$XDG_RUNTIME_DIR/firma/capabilities/` by `firma run`
 are loaded by the sidecar at startup using the same verification path. Operator-
-configured `[capability_seed]` paths are also loaded (deprecated; see
+configured `[sidecar.capability_seed]` paths are also loaded (deprecated; see
 [Issue capability tokens](../../guides/issue-capability-tokens/)), but emit a
 deprecation warning. In both cases the sidecar verifies each seed's `raw_token`
 and rejects the seed if the signed claims differ from the TOML mirror. This moves
@@ -203,8 +201,8 @@ The Authority appends `token_id` to its revocation file and broadcasts a `Revoca
 
 The local store has two layers:
 
-- A **bloom filter** sized for the expected number of active revocations (configurable via `[revocation].capacity` and `.fpr`). Lookups are constant-time and lock-free.
-- An **LRU cache** that absorbs false-positive hits from the bloom and confirms whether a `token_id` is _actually_ revoked (configurable via `[revocation].lru_capacity`).
+- A **bloom filter** sized for the expected number of active revocations (configurable via `sidecar.revocation.capacity` and `sidecar.revocation.fpr`). Lookups are constant-time and lock-free.
+- An **LRU cache** that absorbs false-positive hits from the bloom and confirms whether a `token_id` is _actually_ revoked (configurable via `sidecar.revocation.lru_capacity`).
 
 This split is why revocation lookups stay under microseconds and why memory cost is bounded even with millions of historical revocations.
 
