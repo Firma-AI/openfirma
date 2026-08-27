@@ -45,6 +45,11 @@ keys are rejected; migrate them as follows (equivalent values shown):
 | `sidecar.interceptor.total_body_budget = 67108864`               | `sidecar.interceptor.total_body_budget = "64 MiB"`          |
 | `sidecar.audit.wal_max_size = 104857600`                         | `sidecar.audit.wal_max_size = "100 MiB"`                    |
 
+Existing `max_decompressed_body_size` and secret-gateway byte-size fields also
+require human-readable strings such as `"4 MiB"`. Counts, capacities, and rates
+remain numeric. Re-running `firma config` migrates the legacy integer keys in
+the table above while preserving their values and existing comments.
+
 Unknown keys are rejected recursively rather than ignored. The only top-level
 keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
 are strict as well. Dynamic labels such as credential names, executable-policy
