@@ -251,7 +251,7 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
         CedarPolicyStore::load(
             config.policy_dir(),
             config.schema_path().map(std::path::Path::to_path_buf),
-            config.bundle_ttl_seconds(),
+            config.bundle_ttl_seconds().get(),
         )
         .context("failed to load Cedar policies")?,
     );

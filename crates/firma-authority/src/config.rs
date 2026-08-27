@@ -41,8 +41,8 @@ pub struct AuthorityConfig {
     max_ttl_seconds: NonZeroU32,
     /// Path to the Ed25519 signing key file (64-byte raw or PEM).
     pub(crate) key_file: PathBuf,
-    /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
-    pub(crate) bundle_ttl_seconds: u32,
+    /// Strictly positive policy bundle TTL advertised to sidecars in whole seconds.
+    bundle_ttl_seconds: NonZeroU32,
     /// Authority TLS configuration.
     pub(crate) tls: AuthorityTlsConfig,
 }
@@ -87,9 +87,9 @@ impl AuthorityConfig {
         &self.key_file
     }
 
-    /// Policy bundle TTL advertised to sidecars in seconds.
+    /// Strictly positive policy bundle TTL advertised to sidecars in whole seconds.
     #[must_use]
-    pub fn bundle_ttl_seconds(&self) -> u32 {
+    pub const fn bundle_ttl_seconds(&self) -> NonZeroU32 {
         self.bundle_ttl_seconds
     }
 
@@ -194,7 +194,12 @@ impl AuthorityConfig {
                 field: "authority.max_ttl",
             }
         })?;
-        let bundle_ttl_seconds = u32::try_from(bundle_ttl.as_secs()).map_err(|_| {
+        let bundle_ttl_seconds = NonZeroU64::new(bundle_ttl.as_secs()).ok_or(
+            AuthorityConfigError::DurationOutOfRange {
+                field: "authority.bundle_ttl",
+            },
+        )?;
+        let bundle_ttl_seconds = NonZeroU32::try_from(bundle_ttl_seconds).map_err(|_| {
             AuthorityConfigError::DurationOutOfRange {
                 field: "authority.bundle_ttl",
             }
@@ -232,12 +237,9 @@ impl AuthorityConfig {
         let max_ttl = firma_config_schema::utils::NonZeroDuration::from(NonZeroU64::from(
             self.max_ttl_seconds,
         ));
-        let bundle_ttl = firma_config_schema::utils::NonZeroDuration::new(
-            std::time::Duration::from_secs(u64::from(self.bundle_ttl_seconds)),
-        )
-        .map_err(|_| ConfigError::DurationNotPositive {
-            field: "authority.bundle_ttl",
-        })?;
+        let bundle_ttl = firma_config_schema::utils::NonZeroDuration::from(NonZeroU64::from(
+            self.bundle_ttl_seconds,
+        ));
 
         Ok(schema::AuthorityConfig {
             listen_addr: self.listen_addr.clone(),
@@ -592,7 +594,7 @@ mod tests {
         let config = AuthorityConfigBuilder::default().build()?;
         assert_eq!(config.listen_addr, "[::1]:50051");
         assert_eq!(config.max_ttl_seconds.get(), 3600);
-        assert_eq!(config.bundle_ttl_seconds, 30);
+        assert_eq!(config.bundle_ttl_seconds.get(), 30);
 
         Ok(())
     }
@@ -700,7 +702,7 @@ max_ttl = "30m"
         assert_eq!(config.listen_addr, "0.0.0.0:9090");
         assert_eq!(config.max_ttl_seconds.get(), 1800);
         // Defaults for unspecified fields
-        assert_eq!(config.bundle_ttl_seconds, 30);
+        assert_eq!(config.bundle_ttl_seconds.get(), 30);
     }
 
     #[test]

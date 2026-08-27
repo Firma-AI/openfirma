@@ -136,14 +136,14 @@ fn load_authority_service(config: &AuthorityConfig) -> Result<AuthorityServiceIm
     let policy_store = CedarPolicyStore::load(
         &config.policy_dir,
         config.schema_path.clone(),
-        config.bundle_ttl_seconds,
+        config.bundle_ttl_seconds().get(),
     )?;
 
     tracing::info!(issuance_policy_dir = %config.issuance_policy_dir.display(), "loading issuance policy store");
     let issuance_policy_store = CedarPolicyStore::load(
         &config.issuance_policy_dir,
         config.schema_path.clone(),
-        config.bundle_ttl_seconds,
+        config.bundle_ttl_seconds().get(),
     )?;
 
     let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds().get()));
