@@ -16,6 +16,16 @@ shape and must be readable and valid TOML.
 Configuration is validated at startup. Invalid fields cause the affected
 binary to exit before accepting requests.
 
+The following settings were removed because they never controlled runtime
+behavior: `[authority].log_level`, `[sidecar.log]`,
+`[sidecar.constraint_enforcement].bundle_ttl_seconds`,
+`[sidecar.constraint_enforcement].enforcement_timeout_ms`, and Run profile
+`allowed_domains`. Remove them from existing files. Configure process logging
+with `--log-filter` / `FIRMA_LOG_FILTER`. Policy-bundle freshness is controlled
+by the TTL advertised by the Authority, and seccomp artifact checksums are
+always verified; `seccomp_policy.verify_checksum` is therefore no longer a
+configurable choice.
+
 ## Scaffolded Example
 
 `firma config` writes one sectioned `firma.toml` with all paths
