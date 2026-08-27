@@ -408,6 +408,8 @@ An empty `env_set` table is a broad opt-out: it removes the built-in bwrap root-
 
 Nested `network` and `seccomp_policy` tables merge field-by-field, so a higher layer can override one network toggle or only `seccomp_policy.runtime_mode` without repeating lower siblings. A final seccomp policy still requires both `source_policy_path` and `artifact_dir`; resolution names the missing field when layered patches remain incomplete.
 
+Capability `requested_actions` is a replaceable list. Omission keeps the inherited or existing all-action request default, a present list replaces it, and `[]` stays empty. Automatic Authority issuance rejects that empty request with `NO_ACTIONS` before agent launch, without creating a seed or refresher. Disabled and pre-staged capability sources remain unchanged because they do not issue a capability.
+
 ## Useful flags
 
 `firma run --help` is the full reference. The flags that come up most often:

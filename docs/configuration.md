@@ -164,6 +164,14 @@ the final result must contain both `source_policy_path` and `artifact_dir`;
 otherwise profile resolution reports the missing field. Complete, single-layer
 seccomp configurations keep their existing syntax and runtime behavior.
 
+Capability `requested_actions` is a replaceable list. Omission inherits and
+ultimately keeps the existing all-action request default; a present non-empty
+list narrows the request; and `[]` now remains empty instead of reverting to
+the default. With automatic Authority issuance, an empty request fails closed
+before launch with Authority reason `NO_ACTIONS`, so no capability seed or
+refresh lifecycle starts. Disabled and pre-staged capability sources do not
+issue and retain their existing behavior.
+
 ## Config-Relative Resource Resolution
 
 A resource field holding a **relative** path resolves under the resolved

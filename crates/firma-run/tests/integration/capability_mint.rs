@@ -36,9 +36,17 @@ use firma_protobuf::v1::{
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
+#[cfg(unix)]
+use firma_run::backend::{BackendKind, EnforcementProof, NetworkConfinement, SandboxHandle};
 use firma_run::capability::issue::{IssueParams, mint_and_write};
 use firma_run::capability::refresh::CapabilityRefresher;
 use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
+#[cfg(unix)]
+use firma_run::config::{NetworkPolicy, SidecarEndpoint};
+#[cfg(unix)]
+use firma_run::identity::RunIdentity;
+#[cfg(unix)]
+use firma_run::routing::{AutostartFlags, ResolvedAuthority, prepare_network_runtime};
 
 use super::helper::RealAuthority;
 
@@ -338,6 +346,123 @@ async fn real_authority_token_mints_compatible_seed() {
         .verify(&entry.raw_token)
         .expect("Sidecar verifies token from real Authority");
     assert_eq!(claims.session_id.to_string(), "live-session");
+
+    authority.stop().await;
+}
+
+#[tokio::test]
+async fn real_authority_rejects_empty_actions_without_writing_seed() {
+    let authority = RealAuthority::start().await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("empty-actions.toml");
+    let params = IssueParams {
+        authority_url: authority.url.clone(),
+        authority_pub_key_path: authority.pub_key_path.clone(),
+        authority_ca_cert_path: None,
+        credentials: None,
+        agent_id: *super::helper::agent_id(),
+        session_id: "empty-actions".to_string(),
+        requested_actions: Vec::new(),
+        resource_scope: "*".to_string(),
+        ttl_seconds: 900,
+    };
+    let mint_path = seed_path.clone();
+
+    let error = tokio::task::spawn_blocking(move || mint_and_write(&params, &mint_path))
+        .await
+        .expect("join capability mint")
+        .expect_err("empty action request must fail closed");
+
+    assert!(matches!(
+        error,
+        firma_run::error::RunError::CapabilityDenied { reason, message, .. }
+            if reason == "NO_ACTIONS" && message == "no actions requested"
+    ));
+    assert!(!seed_path.exists(), "denied issuance must not write a seed");
+
+    authority.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() {
+    let authority = RealAuthority::start().await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(dir.path().join("runtime"));
+    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
+    let seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
+    let marker_dir = runtime_layout
+        .run_entry_layout(&identity.sandbox_id)
+        .into_root();
+    let sandbox_runtime = dir.path().join("sandbox");
+    std::fs::create_dir_all(&sandbox_runtime).expect("sandbox runtime");
+    let handle = SandboxHandle {
+        backend: BackendKind::Vz,
+        runtime_dir: sandbox_runtime,
+        identity: identity.clone(),
+        mounts: Vec::new(),
+        network_policy: NetworkPolicy {
+            enforce_network_namespace: false,
+            fail_closed: true,
+        },
+    };
+    let proof = EnforcementProof {
+        backend: BackendKind::Vz,
+        structural: false,
+        fail_closed: true,
+        detail: "empty capability action test".to_string(),
+        network_confinement: NetworkConfinement::ProxyOnly,
+    };
+    let flags = AutostartFlags {
+        sidecar_autostart: true,
+        startup_timeout: Duration::from_secs(1),
+        ..AutostartFlags::default()
+    };
+    let resolved_authority = ResolvedAuthority {
+        url: authority.url.clone(),
+        ca_cert_path: None,
+        pub_key_path: Some(authority.pub_key_path.clone()),
+        credentials: None,
+        credentials_config: None,
+        owned: None,
+    };
+    let capability = CapabilityLeaseConfig {
+        source: CapabilitySource::Disabled,
+        public_key_path: Some(authority.pub_key_path.clone()),
+        refresh_ratio: 0.60,
+        grace: Duration::from_secs(30),
+        requested_actions: Vec::new(),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        prepare_network_runtime(
+            &runtime_layout,
+            &handle,
+            &proof,
+            &SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:1".parse().expect("sidecar address"),
+            },
+            &identity,
+            &flags,
+            resolved_authority,
+            &capability,
+        )
+    })
+    .await
+    .expect("join routing preparation");
+    let Err(error) = result else {
+        panic!("empty actions must abort routing preparation");
+    };
+
+    assert!(
+        error.to_string().contains("NO_ACTIONS"),
+        "unexpected error: {error}"
+    );
+    assert!(!seed_path.exists(), "denied issuance must not leave a seed");
+    assert!(
+        !marker_dir.join("sidecar.toml").exists(),
+        "Sidecar preparation must not begin after denied issuance"
+    );
 
     authority.stop().await;
 }

@@ -735,7 +735,6 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         grace: patch.grace.unwrap_or(Duration::from_secs(30)),
         requested_actions: patch
             .requested_actions
-            .filter(|actions| !actions.is_empty())
             .unwrap_or_else(CapabilityLeaseConfig::default_requested_actions),
     }
 }
@@ -1357,12 +1356,32 @@ mod tests {
     }
 
     #[test]
-    fn capability_patch_empty_actions_fall_back_to_default() {
+    fn capability_patch_empty_actions_remain_explicitly_empty() {
         let resolved = capability_from_patch(lease_patch(Some(Vec::new())));
-        assert_eq!(
-            resolved.requested_actions,
-            CapabilityLeaseConfig::default_requested_actions()
-        );
+        assert!(resolved.requested_actions.is_empty());
+    }
+
+    #[test]
+    fn capability_empty_actions_replace_lower_actions_and_survive_file_resolution() {
+        let merged = lease_patch(Some(vec!["filesystem.read".to_string()]))
+            .merge(lease_patch(Some(Vec::new())));
+        assert_eq!(merged.requested_actions, Some(Vec::new()));
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.profiles.generic.capability]
+            requested_actions = []
+            "#,
+        )
+        .unwrap();
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        assert!(resolved.capability.requested_actions.is_empty());
     }
 
     fn args(profile: &str) -> RunInput {
