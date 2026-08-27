@@ -776,17 +776,18 @@ endpoint is not started.
 This is the server-side counterpart to the `sidecar_local_exec` section in the
 `firma-run` profile config.
 
-| Field            | Type     | Default | Description                                                                             |
-| ---------------- | -------- | ------- | --------------------------------------------------------------------------------------- |
-| `socket_path`    | path     |         | **Required.** Absolute path to the Unix domain socket file.                             |
-| `default_action` | string   | `deny`  | Policy for fresh requests: `allow`, `deny`, or `pending_hitl` (HITL approval required). |
-| `token_ttl`      | duration | `"5m"`  | Approval token lifetime. Must be > 0.                                                   |
-| `retry_after_ms` | u64      | `500`   | Suggested retry interval returned to `firma-run` in `pending_hitl` responses (ms). > 0. |
+| Field            | Type     | Default   | Description                                                                             |
+| ---------------- | -------- | --------- | --------------------------------------------------------------------------------------- |
+| `socket_path`    | path     |           | **Required.** Absolute path to the Unix domain socket file.                             |
+| `default_action` | string   | `deny`    | Policy for fresh requests: `allow`, `deny`, or `pending_hitl` (HITL approval required). |
+| `token_ttl`      | duration | `"5m"`    | Approval token lifetime. Must be > 0.                                                   |
+| `retry_after`    | duration | `"500ms"` | Suggested retry interval returned to `firma-run` in `pending_hitl` responses. ≥ 1 ms.   |
 
 Validation:
 
 - `socket_path` must be an absolute path.
-- `token_ttl` and `retry_after_ms` must be greater than `0`.
+- `token_ttl` must be greater than zero; `retry_after` must be at least 1 ms
+  because the local-exec wire protocol represents it in whole milliseconds.
 
 Example:
 
@@ -795,7 +796,7 @@ Example:
 socket_path = "/run/firma/local-exec.sock"
 default_action = "pending_hitl"
 token_ttl = "5m"
-retry_after_ms = 500
+retry_after = "500ms"
 ```
 
 The `pending_hitl` action triggers the HITL approval token flow: `firma-run`

@@ -38,15 +38,18 @@ pub struct LocalExecConfig {
     )]
     pub token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
-    /// responses (milliseconds, default: 500).
-    #[serde(default = "default_retry_after_ms")]
-    pub retry_after_ms: u64,
+    /// responses (default: 500 milliseconds).
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_retry_after"
+    )]
+    pub retry_after: Duration,
 }
 
 const fn default_token_ttl() -> Duration {
     Duration::from_mins(5)
 }
 
-const fn default_retry_after_ms() -> u64 {
-    500
+const fn default_retry_after() -> Duration {
+    Duration::from_millis(500)
 }

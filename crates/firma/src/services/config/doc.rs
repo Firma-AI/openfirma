@@ -173,6 +173,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
     if let Some(local_exec) = optional_table_mut(sidecar, "local_exec")? {
         migrate_integer_duration(local_exec, "token_ttl_secs", "token_ttl", "s");
+        migrate_integer_duration(local_exec, "retry_after_ms", "retry_after", "ms");
     }
 
     if let Some(authority) = optional_table_mut(sidecar, "authority")? {
@@ -907,6 +908,17 @@ mod tests {
 
         assert!(out.contains("token_ttl = \"300s\""));
         assert!(!out.contains("token_ttl_secs"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_local_exec_retry_after() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.local_exec]\nsocket_path = \"/run/firma/local-exec.sock\"\nretry_after_ms = 500\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("retry_after = \"500ms\""));
+        assert!(!out.contains("retry_after_ms"));
     }
 
     #[test]

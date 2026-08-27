@@ -1021,8 +1021,8 @@ pub struct LocalExecConfig {
     /// Approval token time-to-live.
     pub(crate) token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
-    /// responses (milliseconds, default: 500).
-    pub(crate) retry_after_ms: u64,
+    /// responses.
+    pub(crate) retry_after: Duration,
 }
 
 /// Error validating a [`LocalExecConfig`].
@@ -1034,9 +1034,15 @@ pub enum LocalExecConfigError {
     /// `token_ttl` was zero.
     #[error("local_exec.token_ttl must be > 0")]
     ZeroTokenTtl,
-    /// `retry_after_ms` was zero.
-    #[error("local_exec.retry_after_ms must be > 0")]
+    /// `retry_after` was zero.
+    #[error("local_exec.retry_after must be > 0")]
     ZeroRetryAfter,
+    /// `retry_after` was positive but shorter than the millisecond wire unit.
+    #[error("local_exec.retry_after must be at least 1ms")]
+    RetryAfterBelowOneMillisecond,
+    /// `retry_after` cannot be represented by the millisecond wire field.
+    #[error("local_exec.retry_after exceeds the supported millisecond range")]
+    RetryAfterTooLarge,
 }
 
 impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
@@ -1049,14 +1055,19 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         if s.token_ttl.is_zero() {
             return Err(LocalExecConfigError::ZeroTokenTtl);
         }
-        if s.retry_after_ms == 0 {
+        if s.retry_after.is_zero() {
             return Err(LocalExecConfigError::ZeroRetryAfter);
+        }
+        let retry_after_ms = u64::try_from(s.retry_after.as_millis())
+            .map_err(|_| LocalExecConfigError::RetryAfterTooLarge)?;
+        if retry_after_ms == 0 {
+            return Err(LocalExecConfigError::RetryAfterBelowOneMillisecond);
         }
         Ok(Self {
             socket_path: s.socket_path,
             default_action: s.default_action,
             token_ttl: s.token_ttl,
-            retry_after_ms: s.retry_after_ms,
+            retry_after: s.retry_after,
         })
     }
 }

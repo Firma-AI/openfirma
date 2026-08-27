@@ -53,6 +53,6 @@ fn build_handler(config: &LocalExecConfig, sandbox_id: Option<SandboxId>) -> Loc
         default_action: config.default_action,
         expected_sandbox_id: sandbox_id,
         token_ttl: config.token_ttl,
-        retry_after_ms: config.retry_after_ms,
+        retry_after_ms: u64::try_from(config.retry_after.as_millis()).unwrap_or(u64::MAX),
     })
 }
