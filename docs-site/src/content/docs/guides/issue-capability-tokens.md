@@ -113,7 +113,7 @@ Notable fields:
 - `issuance_policy_dir` — the issuance bundle from Step 2.
 - `revocation_file` — append-only file. Each line is a `token_id` to revoke. The Authority broadcasts revocations to connected Sidecars over gRPC.
 - `max_ttl_seconds` — clamps `--ttl-seconds` requests. Even if a CLI invocation asks for a year, the Authority issues at most this much.
-- `bundle_ttl_seconds` — how often the Authority pushes a bundle update to Sidecars (independent of the Sidecar's `[sidecar.constraint_enforcement].bundle_ttl_seconds` which is its staleness deadline).
+- `bundle_ttl_seconds` — freshness deadline advertised in streamed policy bundles. The Authority periodically refreshes connected Sidecars; protected requests fail closed with `PolicyBundleStale` if the advertised deadline expires.
 
 Touch the revocations file so the Authority finds it:
 
@@ -272,7 +272,7 @@ firma authority -c /tmp/firma-standalone/config/firma.toml revocations compact
 
 **Sidecar fails startup with `raw_token failed PASETO verification`.** The token cannot be parsed or its signature does not verify with the configured Authority public key. Check that `public_key_path` is the `.pub` file from the same keypair used by the Authority config's `key_file`, and replace any truncated or manually copied seed file with a freshly issued one.
 
-**`bundle_ttl_seconds` mismatch.** If the Authority is down for longer than the Sidecar's `[sidecar.constraint_enforcement].bundle_ttl_seconds`, the Sidecar starts denying with `PolicyBundleStale`. Run the Authority next to the Sidecar; restart it before the deadline.
+**`PolicyBundleStale` denials.** The Sidecar did not receive a refresh before the Authority-advertised bundle TTL expired. Check its connection to the Authority and the Authority's health. The Sidecar retries streams with backoff, but it cannot receive updates while disconnected.
 
 ## What's next
 

@@ -200,7 +200,8 @@ default_protected = false
 clock_skew_tolerance_seconds = 5
 
 [constraint_enforcement]
-bundle_ttl_seconds = 60
+session_state_capacity = 8192
+session_state_backend = "lru"
 
 [connector]
 default_timeout_ms = 15000
@@ -574,14 +575,18 @@ Stage 1 settings.
 
 Stage 2 settings.
 
-| Field                | Type | Default | Description                           |
-| -------------------- | ---- | ------- | ------------------------------------- |
-| `bundle_ttl_seconds` | u64  | `30`    | Policy bundle maximum age before deny |
+| Field                    | Type   | Default | Description                                      |
+| ------------------------ | ------ | ------- | ------------------------------------------------ |
+| `session_state_capacity` | usize  | `8192`  | Maximum active sessions retained in the cache    |
+| `session_state_backend`  | string | `lru`   | `lru` or file-backed `persistent` storage        |
+| `session_state_path`     | path   | none    | Optional JSONL path for the `persistent` backend |
 
-The authoritative TTL at runtime comes from the `ttl_seconds` field on
-the `PolicyBundle` pushed by the Authority over `WatchPolicyBundle`.
-`bundle_ttl_seconds` here is the dev-mode fallback used only until the
-first push arrives.
+`session_state_capacity` must be at least `1`.
+
+Policy-bundle freshness is not configured in this Sidecar section. The
+Authority embeds `[authority].bundle_ttl_seconds` in each streamed bundle,
+periodically refreshes it, and Stage 2 denies with `PolicyBundleStale` if that
+advertised deadline expires.
 
 ### `[connector]`
 
@@ -666,9 +671,9 @@ Behavior notes:
   bundle has been applied and `REVOCATION_CACHE_NOT_READY` until the
   revocation stream has either received its first event or the grace
   period has elapsed — whichever happens first.
-- The policy bundle TTL (carried in each `PolicyBundleUpdate`) is
-  authoritative for fail-closed on disconnect. When the deadline
-  elapses without a refresh, Stage 2 denies with `PolicyBundleStale`.
+- The policy bundle TTL carried in each `PolicyBundleUpdate` is authoritative.
+  When the deadline elapses without a refresh, Stage 2 denies with
+  `PolicyBundleStale`.
 - `revocation_fail_closed_on_disconnect = true` is the opt-in strict
   mode: a revocation stream drop flips readiness off and the sidecar
   denies all traffic with `REVOCATION_CACHE_NOT_READY` until the

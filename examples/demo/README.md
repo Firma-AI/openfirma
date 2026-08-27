@@ -103,8 +103,6 @@ If an expected ALLOW returns `403`, check `examples/demo/logs/sidecar.log`. The 
 
 If the Authority refuses to start after local experimentation, delete `examples/demo/firma-authority.key` and `examples/demo/firma-authority.pub`, then rerun the demo. The runner will regenerate them.
 
-If the demo pauses for a long time in a debugger, the Sidecar can treat the policy bundle as stale. Increase `bundle_ttl_seconds` under `[sidecar.constraint_enforcement]` in `firma.toml` while debugging.
-
 ## Startup signal
 
 When the Sidecar starts successfully, it ends with a `ready` log line. Automation should wait for that signal before sending traffic.

@@ -14,7 +14,7 @@
 //!   always overwrite on merge — they are the whole point of re-running
 //!   `firma config`.
 //! - **static defaults** are only seeded when absent; an operator's manual
-//!   tweak (e.g. `bundle_ttl_seconds = 60`) survives.
+//!   tweak (e.g. `max_ttl_seconds = 7200`) survives.
 //! - **array selections** (intercept hosts, mapping paths, extra-host
 //!   rules) are fully replaced because they reflect the *current*
 //!   selection — keeping stale entries would silently widen the policy

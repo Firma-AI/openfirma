@@ -59,9 +59,6 @@ pub struct CapabilityValidationConfig {
 /// Constraint enforcement configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConstraintEnforcementConfig {
-    /// Policy bundle TTL in seconds. Default: 30.
-    #[serde(default = "default_bundle_ttl")]
-    pub bundle_ttl_seconds: u64,
     /// Optional Stage 2 evaluation timeout in milliseconds.
     #[serde(default = "default_stage2_timeout_ms")]
     pub enforcement_timeout_ms: u64,
@@ -81,7 +78,6 @@ pub struct ConstraintEnforcementConfig {
 impl Default for ConstraintEnforcementConfig {
     fn default() -> Self {
         Self {
-            bundle_ttl_seconds: default_bundle_ttl(),
             enforcement_timeout_ms: default_stage2_timeout_ms(),
             session_state_capacity: default_session_state_capacity(),
             session_state_backend: SessionStateBackend::default(),
@@ -110,10 +106,6 @@ fn default_mapping_path() -> String {
 
 const fn default_true() -> bool {
     true
-}
-
-const fn default_bundle_ttl() -> u64 {
-    30
 }
 
 const fn default_stage2_timeout_ms() -> u64 {

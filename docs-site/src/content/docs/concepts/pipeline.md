@@ -173,7 +173,7 @@ This is why OpenFirma has both capabilities and policies.
 
 The capability says the agent may attempt a bounded class of action. Runtime policy decides whether the specific attempt should be allowed under current rules. A capability might authorize `payment.transfer`, while policy still forbids transfers over a configured amount. A capability might authorize outbound communication, while policy still blocks `paste.rs`.
 
-Before Cedar evaluation, Stage 2 checks that the local policy bundle is fresh. If the bundle is older than `bundle_ttl_seconds`, the request is denied with `PolicyBundleStale`. Stale policy is treated as unsafe because the operator may have tightened rules since the last update.
+Before Cedar evaluation, Stage 2 checks the local policy bundle against the TTL embedded by the Authority. If that deadline expires without a refresh, the request is denied with `PolicyBundleStale`.
 
 Then Stage 2 evaluates Cedar with the normalized request:
 

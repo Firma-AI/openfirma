@@ -165,7 +165,6 @@ default_protected = true # demos default to fail-closed
 clock_skew_tolerance_seconds = 0
 
 [sidecar.constraint_enforcement]
-bundle_ttl_seconds = 3600
 enforcement_timeout_ms = 50
 
 [sidecar.connector]

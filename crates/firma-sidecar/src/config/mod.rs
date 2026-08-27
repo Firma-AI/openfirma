@@ -1528,9 +1528,6 @@ default_protected = false
 [capability_validation]
 clock_skew_tolerance_seconds = 5
 
-[constraint_enforcement]
-bundle_ttl_seconds = 60
-
 [revocation]
 capacity = 500000
 fpr = 0.001
@@ -1598,32 +1595,13 @@ signing_key_path = "/etc/firma/audit.pem"
                 .clock_skew_tolerance_seconds,
             5
         );
-        assert_eq!(
-            config.enforcement.constraint_enforcement.bundle_ttl_seconds,
-            60
-        );
         // New AARM R2 G4 session-state fields default when unset.
+        assert_eq!(config.enforcement.constraint_enforcement.capacity, 8192);
         assert_eq!(
-            config
-                .enforcement
-                .constraint_enforcement
-                .session_state_capacity,
-            8192
-        );
-        assert_eq!(
-            config
-                .enforcement
-                .constraint_enforcement
-                .session_state_backend,
+            config.enforcement.constraint_enforcement.backend,
             SessionStateBackend::Lru
         );
-        assert!(
-            config
-                .enforcement
-                .constraint_enforcement
-                .session_state_path
-                .is_none()
-        );
+        assert!(config.enforcement.constraint_enforcement.path.is_none());
         assert_eq!(config.revocation.capacity, 500_000);
         assert!((config.revocation.fpr - 0.001).abs() < f64::EPSILON);
         assert_eq!(config.revocation.lru_capacity, 50_000);

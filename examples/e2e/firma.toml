@@ -47,7 +47,6 @@ default_protected = false
 clock_skew_tolerance_seconds = 0
 
 [sidecar.constraint_enforcement]
-bundle_ttl_seconds = 30
 enforcement_timeout_ms = 50
 # Session-state cache capacity (AARM R2 G4). Raise to reduce LRU eviction
 # of long-lived sessions. Default: 8192.
