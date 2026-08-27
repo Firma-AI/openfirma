@@ -1,13 +1,19 @@
 //! Schema for `[sidecar.authority]` and its `[sidecar.authority.credentials]`.
 //!
-//! Representation only. `firma-sidecar` validates these values, parses the
-//! `url` into an endpoint, and resolves the pre-shared-key source.
+//! Schema value types own intrinsic invariants. `firma-sidecar` validates
+//! cross-field constraints, parses the `url` into an endpoint, and resolves the
+//! pre-shared-key source.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use crate::utils::NonZeroDuration;
+
+const DEFAULT_CONNECT_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_secs(10));
 
 /// Sidecar pre-shared-key credentials presented to Authority RPCs.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -41,11 +47,8 @@ pub struct AuthorityConfig {
     #[serde(default)]
     pub connect_addr: Option<SocketAddr>,
     /// Connection timeout.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_connect_timeout"
-    )]
-    pub connect_timeout: Duration,
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout: NonZeroDuration,
     /// Minimum reconnect backoff.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
@@ -111,8 +114,8 @@ impl Default for AuthorityConfig {
     }
 }
 
-const fn default_connect_timeout() -> Duration {
-    Duration::from_secs(10)
+const fn default_connect_timeout() -> NonZeroDuration {
+    DEFAULT_CONNECT_TIMEOUT
 }
 
 const fn default_min_backoff() -> Duration {

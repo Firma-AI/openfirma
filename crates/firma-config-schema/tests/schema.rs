@@ -207,6 +207,21 @@ fn run_mediator_hitl_max_wait_rejects_zero() {
 }
 
 #[test]
+fn sidecar_authority_connect_timeout_rejects_zero() {
+    let error =
+        toml::from_str::<sidecar::SidecarConfig>("[authority]\nconnect_timeout = \"0ns\"\n")
+            .expect_err("zero Authority connect timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"

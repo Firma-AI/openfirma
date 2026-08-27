@@ -157,9 +157,6 @@ pub enum AuthorityConfigError {
     /// `agent_id` was not a valid `TypeID`.
     #[error("authority.agent_id: {0}")]
     AgentId(#[from] AgentIdParseError),
-    /// `connect_timeout` was zero.
-    #[error("authority.connect_timeout must be > 0")]
-    ZeroConnectTimeout,
     /// `reconnect_min_backoff` was zero.
     #[error("authority.reconnect_min_backoff must be > 0")]
     ZeroMinBackoff,
@@ -222,9 +219,6 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
 
     fn try_from(s: SchemaAuthorityConfig) -> Result<Self, Self::Error> {
         let agent_id = s.agent_id.map(|id| id.parse::<AgentId>()).transpose()?;
-        if s.connect_timeout.is_zero() {
-            return Err(AuthorityConfigError::ZeroConnectTimeout);
-        }
         if s.reconnect_min_backoff.is_zero() {
             return Err(AuthorityConfigError::ZeroMinBackoff);
         }
@@ -257,7 +251,7 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             agent_id,
             url: s.url,
             connect_addr: s.connect_addr,
-            connect_timeout: s.connect_timeout,
+            connect_timeout: s.connect_timeout.duration(),
             reconnect_min_backoff: s.reconnect_min_backoff,
             reconnect_max_backoff: s.reconnect_max_backoff,
             revocation_readiness_grace: s.revocation_readiness_grace,
