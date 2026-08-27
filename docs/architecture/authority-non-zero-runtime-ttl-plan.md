@@ -425,7 +425,7 @@ relationship between the two TTL roles; none is required.
 
 | Field                      | `TRACE-001`                                                                                   |
 | -------------------------- | --------------------------------------------------------------------------------------------- |
-| State                      | Proposed                                                                                      |
+| State                      | Implemented                                                                                   |
 | Entry and stimulus         | Valid Authority schema/default/env value                                                      |
 | Path                       | `NonZeroDuration → AuthorityConfigBuilder::build → AuthorityConfig::from_schema → NonZeroU32` |
 | Input/output types         | Human duration → `Duration` → `NonZeroU64` → checked target non-zero integer                  |
@@ -440,7 +440,7 @@ relationship between the two TTL roles; none is required.
 
 | Field                      | `TRACE-002`                                                                        |
 | -------------------------- | ---------------------------------------------------------------------------------- |
-| State                      | Proposed                                                                           |
+| State                      | Implemented                                                                        |
 | Entry and stimulus         | Validated Authority config reaches runtime consumer                                |
 | Path                       | accessor/private field → typed service/clamp → `.get()` → Chrono/Cedar/wire        |
 | Input/output types         | `NonZeroU32`; signed request normalized once into `NonZeroU32`                     |
@@ -455,11 +455,45 @@ relationship between the two TTL roles; none is required.
 
 ### Proof obligations
 
-| Invariant | Kind          | Owner/proof boundary        | Stimulus                        | Observable effects                                 | Status  | Slice |
-| --------- | ------------- | --------------------------- | ------------------------------- | -------------------------------------------------- | ------- | ----- |
-| `INV-001` | Type/runtime  | Builder + private fields    | Defaults, TOML, env, max ranges | Accessors return typed positive exact seconds      | Planned | 1–2   |
-| `INV-002` | Compatibility | Runtime consumer boundaries | Representative accepted values  | Exact positive terminal values are unchanged       | Planned | 1–2   |
-| `INV-002` | Compatibility | Reverse schema conversion   | Built config round-trip         | Same friendly durations and rebuilt integer values | Planned | 1–2   |
+| Invariant | Kind          | Owner/proof boundary        | Stimulus                        | Observable effects                                 | Status   | Slice |
+| --------- | ------------- | --------------------------- | ------------------------------- | -------------------------------------------------- | -------- | ----- |
+| `INV-001` | Type/runtime  | Builder + private fields    | Defaults, TOML, env, max ranges | Accessors return typed positive exact seconds      | Verified | 1–2   |
+| `INV-002` | Compatibility | Runtime consumer boundaries | Representative accepted values  | Exact positive terminal values are unchanged       | Verified | 1–2   |
+| `INV-002` | Compatibility | Reverse schema conversion   | Built config round-trip         | Same friendly durations and rebuilt integer values | Verified | 1–2   |
 
 Limits: type evidence does not prove consumer placement; focused tests and the
 base-to-tip consumer audit prove that projection separately.
+
+## Post-implementation adversarial review
+
+A fresh independent reviewer inspected the exact behavior diff
+`4523167d39b1f67b86dc483739be90cdb94696e3..de35d6298abf4fd5ba688c7df760369ed8181cf6`
+under the repository `reviewing-changes` and `review-rust-code` workflows. The
+reviewed production tree is identical to implementation tip `7295f062`; the
+only intervening change mechanically removed this plan.
+
+Verdict: **approved with no findings**.
+
+The reviewer confirmed that:
+
+- both private runtime fields and their accessors use `NonZeroU32`;
+- builder conversion preserves fractional-second rejection, the existing
+  `i32::MAX` maximum-token-TTL bound, and checked narrowing;
+- the unchanged signed protobuf request is normalized once, with `<= 0`
+  selecting the configured maximum and positive requests clamped without
+  narrowing the configured maximum to `i32`;
+- `.get()` projections occur only at Chrono, Cedar, policy-bundle, and
+  wire/library integer boundaries;
+- default, TOML, environment, range, round-trip, request-class, and exact-expiry
+  behavior is covered; and
+- this plan is absent from the reviewed final tree and base-to-tip diff.
+
+No finding required disposition. Independent verification reported by the
+reviewer:
+
+- `cargo nextest run -p firma-authority -p firma-config-schema` (150 passed);
+- `cargo nextest run -p firma authority` (37 selected tests passed);
+- `cargo test -p firma-authority -p firma-config-schema --doc`;
+- `cargo clippy -p firma-authority -p firma-config-schema -p firma --all-targets -- -D warnings`;
+  and
+- `git diff --check`.
