@@ -370,6 +370,10 @@ pub struct InterceptorConfig {
     /// mode.
     pub socket_path: Option<PathBuf>,
     /// Time to wait for in-flight requests to drain on shutdown.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "not yet consumed by interceptor shutdown")
+    )]
     drain_timeout: Duration,
     /// Maximum request body size accepted by proxy interceptors.
     pub(crate) max_request_body_bytes: usize,
@@ -393,9 +397,6 @@ pub struct InterceptorConfig {
 /// Error validating an [`InterceptorConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InterceptorConfigError {
-    /// `drain_timeout` was zero.
-    #[error("interceptor.drain_timeout must be > 0")]
-    ZeroDrainTimeout,
     /// `max_request_body_size` was zero.
     #[error("interceptor.max_request_body_size must be > 0")]
     ZeroMaxRequestBody,
@@ -441,16 +442,13 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
             mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
-            drain_timeout: s.drain_timeout,
+            drain_timeout: s.drain_timeout.duration(),
             max_request_body_bytes,
             max_decompressed_body_size: s.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
             https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
             total_body_budget_bytes,
         };
-        if config.drain_timeout.is_zero() {
-            return Err(InterceptorConfigError::ZeroDrainTimeout);
-        }
         if config.max_request_body_bytes == 0 {
             return Err(InterceptorConfigError::ZeroMaxRequestBody);
         }
@@ -500,7 +498,7 @@ impl Default for InterceptorConfig {
             mode: d.mode,
             listen_addr: d.listen_addr,
             socket_path: d.socket_path,
-            drain_timeout: d.drain_timeout,
+            drain_timeout: d.drain_timeout.duration(),
             max_request_body_bytes: usize::try_from(d.max_request_body_size.as_u64())
                 .unwrap_or(4 * 1024 * 1024),
             max_decompressed_body_size: d.max_decompressed_body_size,
@@ -1363,18 +1361,6 @@ mod tests {
                 source: CredentialConfigError::SecretPathRequired,
                 ..
             })
-        ));
-    }
-
-    #[test]
-    fn test_sidecar_config_zero_drain_timeout_rejected() {
-        let mut schema = schema_sidecar();
-        schema.interceptor.drain_timeout = Duration::ZERO;
-        assert!(matches!(
-            SidecarConfig::try_from(schema),
-            Err(SidecarConfigError::Interceptor(
-                InterceptorConfigError::ZeroDrainTimeout
-            ))
         ));
     }
 

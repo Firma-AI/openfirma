@@ -94,7 +94,7 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     // built-in default path for `unix_socket` mode.
     assert_eq!(config.socket_path, None);
     assert_eq!(InterceptorConfig::default().socket_path, None);
-    assert_eq!(config.drain_timeout, Duration::from_secs(30));
+    assert_eq!(config.drain_timeout.duration(), Duration::from_secs(30));
     assert_eq!(config.max_request_body_size, ByteSize::mib(4));
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
     assert_eq!(config.total_body_budget, ByteSize::mib(64));
@@ -256,6 +256,20 @@ fn sidecar_authority_reconnect_max_backoff_rejects_zero() {
 }
 
 #[test]
+fn sidecar_interceptor_drain_timeout_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>("[interceptor]\ndrain_timeout = \"0m\"\n")
+        .expect_err("zero interceptor drain timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"
@@ -273,7 +287,10 @@ fn sidecar_scalar_fields_accept_human_readable_units() {
     )
     .expect("human-readable scalar values deserialize");
 
-    assert_eq!(config.interceptor.drain_timeout, Duration::from_millis(500));
+    assert_eq!(
+        config.interceptor.drain_timeout.duration(),
+        Duration::from_millis(500)
+    );
     assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
     assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
     assert_eq!(config.connector.default_timeout, Duration::from_secs(30));

@@ -1,7 +1,8 @@
 //! Schema for `[sidecar.interceptor]` and its sub-tables.
 //!
-//! Representation only. `firma-sidecar` validates these values and parses
-//! them into its own interceptor configuration types.
+//! Schema value types own intrinsic invariants. `firma-sidecar` validates
+//! cross-field constraints and parses these values into its own interceptor
+//! configuration types.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -10,6 +11,11 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
+
+use crate::utils::NonZeroDuration;
+
+const DEFAULT_DRAIN_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_secs(30));
 
 /// Interception mode selector.
 ///
@@ -64,11 +70,8 @@ pub struct InterceptorConfig {
     #[serde(default)]
     pub socket_path: Option<PathBuf>,
     /// Time to wait for in-flight requests to drain on shutdown.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_drain_timeout"
-    )]
-    pub drain_timeout: Duration,
+    #[serde(default = "default_drain_timeout")]
+    pub drain_timeout: NonZeroDuration,
     /// Maximum request body size accepted by proxy interceptors.
     #[serde(
         deserialize_with = "crate::utils::byte_size::deserialize",
@@ -204,8 +207,8 @@ pub fn default_socket_path() -> PathBuf {
     PathBuf::from(xdg).join("firma/sidecar.sock")
 }
 
-const fn default_drain_timeout() -> Duration {
-    Duration::from_secs(30)
+const fn default_drain_timeout() -> NonZeroDuration {
+    DEFAULT_DRAIN_TIMEOUT
 }
 
 const fn default_max_request_body_size() -> ByteSize {
