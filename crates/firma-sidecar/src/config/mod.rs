@@ -262,8 +262,25 @@ impl SidecarConfig {
         if let Some(p) = self.authority.ca_cert_path.as_mut() {
             rebase(p);
         }
+        if let Some(p) = self.authority.tls_client_cert_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.authority.tls_client_key_path.as_mut() {
+            rebase(p);
+        }
         if let Some(credentials) = self.authority.credentials.as_mut() {
             credentials.rebase_defaults(config_dir);
+        }
+        for credential in self.credentials.values_mut() {
+            if let Some(p) = credential.secret_path.as_mut() {
+                rebase(p);
+            }
+        }
+        if let Some(p) = self.interceptor.https_mitm.ca_cert_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.interceptor.https_mitm.ca_key_path.as_mut() {
+            rebase(p);
         }
         if let Some(p) = self.audit.signing_key_path.as_mut() {
             rebase(p);
@@ -1138,6 +1155,118 @@ mod tests {
             c.authority.ca_cert_path,
             Some(PathBuf::from("/cfg/authority-ca.crt"))
         );
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table-style test keeps every resource and state path in the rebase contract visible"
+    )]
+    fn rebase_rewrites_resource_paths_and_preserves_state_paths() {
+        let mut c = SidecarConfig::default();
+        c.policy.dir = PathBuf::from("policies");
+        c.authority.public_key_path = Some(PathBuf::from("authority/public.key"));
+        c.authority.ca_cert_path = Some(PathBuf::from("authority/ca.crt"));
+        c.authority.tls_client_cert_path = Some(PathBuf::from("tls/client.crt"));
+        c.authority.tls_client_key_path = Some(PathBuf::from("tls/client.key"));
+        c.authority.credentials = Some(crate::authority_credentials::SidecarCredentialsConfig {
+            workspace_id: "workspace".to_string(),
+            sidecar_id: "sidecar".to_string(),
+            pre_shared_key_env: None,
+            pre_shared_key_path: Some(PathBuf::from("authority/client.psk")),
+        });
+        c.interceptor.https_mitm.ca_cert_path = Some(PathBuf::from("tls/mitm.crt"));
+        c.interceptor.https_mitm.ca_key_path = Some(PathBuf::from("tls/mitm.key"));
+        c.credentials.insert(
+            "vault".to_string(),
+            CredentialConfig {
+                mode: CredentialMode::Vault,
+                target_host: "api.example.com".to_string(),
+                header: "authorization".parse().unwrap(),
+                prefix: None,
+                transform: None,
+                value_from_env: None,
+                secret_path: Some(PathBuf::from("secrets/token")),
+            },
+        );
+        c.enforcement.mapping.rules_path = PathBuf::from("mappings/main.toml");
+        c.enforcement.mapping.rules_paths = vec![PathBuf::from("mappings/extra.toml")];
+        c.audit.file_path = Some(PathBuf::from("audit/events.jsonl"));
+        c.audit.signing_key_path = Some(PathBuf::from("audit/signing.key"));
+        c.capability_seed.paths = vec![PathBuf::from("capabilities/seed.toml")];
+        c.interceptor.socket_path = Some(PathBuf::from("runtime/sidecar.sock"));
+        c.audit.wal_path = Some(PathBuf::from("state/wal"));
+        c.enforcement.constraint_enforcement.path = Some(PathBuf::from("state/sessions"));
+        c.ca.dir = PathBuf::from("state/ca");
+
+        c.rebase_defaults(std::path::Path::new("/cfg"));
+
+        assert_eq!(c.policy.dir, PathBuf::from("/cfg/policies"));
+        assert_eq!(
+            c.authority.public_key_path,
+            Some(PathBuf::from("/cfg/authority/public.key"))
+        );
+        assert_eq!(
+            c.authority.ca_cert_path,
+            Some(PathBuf::from("/cfg/authority/ca.crt"))
+        );
+        assert_eq!(
+            c.authority.tls_client_cert_path,
+            Some(PathBuf::from("/cfg/tls/client.crt"))
+        );
+        assert_eq!(
+            c.authority.tls_client_key_path,
+            Some(PathBuf::from("/cfg/tls/client.key"))
+        );
+        assert_eq!(
+            c.authority
+                .credentials
+                .as_ref()
+                .and_then(|credentials| credentials.pre_shared_key_path.as_ref()),
+            Some(&PathBuf::from("/cfg/authority/client.psk"))
+        );
+        assert_eq!(
+            c.interceptor.https_mitm.ca_cert_path,
+            Some(PathBuf::from("/cfg/tls/mitm.crt"))
+        );
+        assert_eq!(
+            c.interceptor.https_mitm.ca_key_path,
+            Some(PathBuf::from("/cfg/tls/mitm.key"))
+        );
+        assert_eq!(
+            c.credentials["vault"].secret_path,
+            Some(PathBuf::from("/cfg/secrets/token"))
+        );
+        assert_eq!(
+            c.enforcement.mapping.rules_path,
+            PathBuf::from("/cfg/mappings/main.toml")
+        );
+        assert_eq!(
+            c.enforcement.mapping.rules_paths,
+            vec![PathBuf::from("/cfg/mappings/extra.toml")]
+        );
+        assert_eq!(
+            c.audit.file_path,
+            Some(PathBuf::from("/cfg/audit/events.jsonl"))
+        );
+        assert_eq!(
+            c.audit.signing_key_path,
+            Some(PathBuf::from("/cfg/audit/signing.key"))
+        );
+        assert_eq!(
+            c.capability_seed.paths,
+            vec![PathBuf::from("/cfg/capabilities/seed.toml")]
+        );
+        assert_eq!(
+            c.interceptor.socket_path,
+            Some(PathBuf::from("runtime/sidecar.sock"))
+        );
+        assert_eq!(c.audit.wal_path, Some(PathBuf::from("state/wal")));
+        assert_eq!(
+            c.enforcement.constraint_enforcement.path,
+            Some(PathBuf::from("state/sessions"))
+        );
+        assert_eq!(c.ca.dir, PathBuf::from("state/ca"));
     }
 
     #[test]
