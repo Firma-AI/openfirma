@@ -60,9 +60,6 @@ pub enum HostConnectorConfigError {
     /// `host` was empty.
     #[error("host must not be empty")]
     EmptyHost,
-    /// `timeout` was zero.
-    #[error("timeout must be > 0")]
-    ZeroTimeout,
     /// `rps` was zero.
     #[error("rps must be > 0")]
     ZeroRps,
@@ -87,9 +84,6 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
         if schema.host.trim().is_empty() {
             return Err(HostConnectorConfigError::EmptyHost);
         }
-        if schema.timeout.is_zero() {
-            return Err(HostConnectorConfigError::ZeroTimeout);
-        }
         if schema.rps == 0 {
             return Err(HostConnectorConfigError::ZeroRps);
         }
@@ -100,7 +94,7 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
             host: schema.host,
             rps: schema.rps,
             burst: schema.burst,
-            timeout: schema.timeout,
+            timeout: schema.timeout.duration(),
         })
     }
 }
@@ -143,7 +137,7 @@ mod tests {
             host: host.to_string(),
             rps,
             burst,
-            timeout,
+            timeout: NonZeroDuration::new(timeout).expect("non-zero host timeout"),
         }
     }
 
@@ -162,20 +156,6 @@ mod tests {
     fn default_config_is_valid() {
         let d = ConnectorConfig::default();
         assert!(ConnectorConfig::try_from(schema(d.default_timeout, Vec::new())).is_ok());
-    }
-
-    #[test]
-    fn zero_host_timeout_rejected() {
-        assert!(matches!(
-            ConnectorConfig::try_from(schema(
-                Duration::from_secs(30),
-                vec![host("api.example.com", 10, 5, Duration::ZERO)]
-            )),
-            Err(ConnectorConfigError::Host {
-                source: HostConnectorConfigError::ZeroTimeout,
-                ..
-            })
-        ));
     }
 
     #[test]
