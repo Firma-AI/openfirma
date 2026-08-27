@@ -10,7 +10,7 @@ issuance_policy_dir = "issuance-policies/"
 revocation_file = "examples/demos/demo2/.runtime/revocations.txt"
 key_file = ".runtime/authority.key"
 max_ttl = "1h"
-bundle_ttl_seconds = 30
+bundle_ttl = "30s"
 
 # ── Sidecar ──────────────────────────────────────────────────────────────────
 

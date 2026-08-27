@@ -48,7 +48,7 @@ issuance_policy_dir = '/home/me/.config/firma/issuance-policies'
 revocation_file = '/run/user/1000/firma/revocations.txt'
 key_file = '/home/me/.config/firma/authority.key'
 max_ttl = "1h"
-bundle_ttl_seconds = 30
+bundle_ttl = "30s"
 
 [sidecar.interceptor]
 mode = "http_proxy"
@@ -595,7 +595,7 @@ Stage 2 settings.
 `session_state_capacity` must be at least `1`.
 
 Policy-bundle freshness is not configured in this Sidecar section. The
-Authority embeds `[authority].bundle_ttl_seconds` in each streamed bundle,
+Authority embeds `[authority].bundle_ttl` in each streamed bundle,
 periodically refreshes it, and Stage 2 denies with `PolicyBundleStale` if that
 advertised deadline expires. Cedar evaluation has no user-configurable timeout.
 

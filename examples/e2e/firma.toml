@@ -16,7 +16,7 @@ issuance_policy_dir = "issuance-policies/"
 revocation_file = "examples/e2e/revocations.txt"
 key_file = "authority.key"
 max_ttl = "1h"
-bundle_ttl_seconds = 30
+bundle_ttl = "30s"
 
 # schema_path is optional. Omit to use the schema embedded in the binary.
 # Set to override with a custom schema (e.g. to add action classes or context fields):

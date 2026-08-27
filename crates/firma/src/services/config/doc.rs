@@ -155,13 +155,14 @@ fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()>
 fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let table = ensure_table(doc.as_table_mut(), "authority")?;
     migrate_integer_duration(table, "max_ttl_seconds", "max_ttl", "s");
+    migrate_integer_duration(table, "bundle_ttl_seconds", "bundle_ttl", "s");
     set_str(table, "listen_addr", inputs.authority_listen);
     set_str_if_absent(table, "policy_dir", "policies/");
     set_str_if_absent(table, "issuance_policy_dir", "issuance-policies/");
     set_str(table, "revocation_file", inputs.revocation_file);
     set_str(table, "key_file", inputs.key_file);
     set_str_if_absent(table, "max_ttl", "1h");
-    set_int_if_absent(table, "bundle_ttl_seconds", 30);
+    set_str_if_absent(table, "bundle_ttl", "30s");
     set_str(table, "tls_cert_path", inputs.tls_cert_path);
     set_str(table, "tls_key_path", inputs.tls_key_path);
     Ok(())
@@ -811,7 +812,7 @@ public_key_path = \"/old/pub.key\"
 flag = true
 
 [authority]
-bundle_ttl_seconds = 600
+bundle_ttl = \"10m\"
 custom_user_key = \"keep-me\"
 ";
         let out = render_firma_toml(existing, &inputs).unwrap();
@@ -819,10 +820,7 @@ custom_user_key = \"keep-me\"
         // Unknown section preserved verbatim.
         assert_eq!(parsed["experimental"]["flag"].as_bool(), Some(true));
         // User override of a static-default key respected.
-        assert_eq!(
-            parsed["authority"]["bundle_ttl_seconds"].as_integer(),
-            Some(600)
-        );
+        assert_eq!(parsed["authority"]["bundle_ttl"].as_str(), Some("10m"));
         // Unknown key inside authority survives.
         assert_eq!(
             parsed["authority"]["custom_user_key"].as_str(),

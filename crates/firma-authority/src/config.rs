@@ -172,9 +172,19 @@ impl AuthorityConfig {
                 field: "authority.max_ttl",
             });
         }
+        if s.bundle_ttl.subsec_nanos() != 0 {
+            return Err(AuthorityConfigError::DurationNotWholeSeconds {
+                field: "authority.bundle_ttl",
+            });
+        }
         let max_ttl_seconds = i32::try_from(s.max_ttl.as_secs()).map_err(|_| {
             AuthorityConfigError::DurationOutOfRange {
                 field: "authority.max_ttl",
+            }
+        })?;
+        let bundle_ttl_seconds = u32::try_from(s.bundle_ttl.as_secs()).map_err(|_| {
+            AuthorityConfigError::DurationOutOfRange {
+                field: "authority.bundle_ttl",
             }
         })?;
 
@@ -186,7 +196,7 @@ impl AuthorityConfig {
             revocation_file: s.revocation_file,
             max_ttl_seconds,
             key_file: s.key_file,
-            bundle_ttl_seconds: s.bundle_ttl_seconds,
+            bundle_ttl_seconds,
             tls: AuthorityTlsConfig {
                 cert: s.tls_cert_path,
                 key: s.tls_key_path,
@@ -213,7 +223,7 @@ impl AuthorityConfig {
                 u64::try_from(self.max_ttl_seconds).unwrap_or(0),
             ),
             key_file: self.key_file.clone(),
-            bundle_ttl_seconds: self.bundle_ttl_seconds,
+            bundle_ttl: std::time::Duration::from_secs(u64::from(self.bundle_ttl_seconds)),
             tls_cert_path: self.tls.cert.clone(),
             tls_key_path: self.tls.key.clone(),
             mtls_client_ca_cert_path: self.tls.mtls_client_ca_cert.clone(),
@@ -337,7 +347,7 @@ impl AuthorityConfigBuilder {
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
             && let Ok(seconds) = value.parse::<u32>()
         {
-            self.schema.bundle_ttl_seconds = seconds;
+            self.schema.bundle_ttl = std::time::Duration::from_secs(u64::from(seconds));
         }
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_TLS_CERT_PATH") {
             self.schema.tls_cert_path = Some(PathBuf::from(value));
@@ -657,9 +667,26 @@ max_ttl = "30m"
 
         schema.max_ttl = std::time::Duration::from_secs(2_147_483_648);
         assert!(matches!(
-            AuthorityConfigBuilder::new(schema).build(),
+            AuthorityConfigBuilder::new(schema.clone()).build(),
             Err(AuthorityConfigError::DurationOutOfRange {
                 field: "authority.max_ttl"
+            })
+        ));
+
+        schema.max_ttl = schema::AuthorityConfig::default().max_ttl;
+        schema.bundle_ttl = std::time::Duration::from_millis(500);
+        assert!(matches!(
+            AuthorityConfigBuilder::new(schema.clone()).build(),
+            Err(AuthorityConfigError::DurationNotWholeSeconds {
+                field: "authority.bundle_ttl"
+            })
+        ));
+
+        schema.bundle_ttl = std::time::Duration::from_secs(u64::from(u32::MAX) + 1);
+        assert!(matches!(
+            AuthorityConfigBuilder::new(schema).build(),
+            Err(AuthorityConfigError::DurationOutOfRange {
+                field: "authority.bundle_ttl"
             })
         ));
     }

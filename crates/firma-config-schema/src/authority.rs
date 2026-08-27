@@ -38,8 +38,9 @@ pub struct AuthorityConfig {
     pub max_ttl: Duration,
     /// Path to the Ed25519 signing key file.
     pub key_file: PathBuf,
-    /// Policy bundle TTL advertised to Sidecars, in seconds.
-    pub bundle_ttl_seconds: u32,
+    /// Policy bundle TTL advertised to Sidecars.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub bundle_ttl: Duration,
     /// Path to the TLS certificate file.
     pub tls_cert_path: Option<PathBuf>,
     /// Path to the TLS private key file.
@@ -62,7 +63,7 @@ impl Default for AuthorityConfig {
             revocation_file: PathBuf::from("revocations.txt"),
             max_ttl: Duration::from_hours(1),
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
-            bundle_ttl_seconds: 30,
+            bundle_ttl: Duration::from_secs(30),
             tls_cert_path: None,
             tls_key_path: None,
             mtls_client_ca_cert_path: None,

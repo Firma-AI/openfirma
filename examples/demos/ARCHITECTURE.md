@@ -126,7 +126,7 @@ policy_dir = "examples/demos/demo0/policies" # note: policies/ subdir
 revocation_file = "examples/demos/demo0/.runtime/revocations.txt"
 key_file = "examples/demos/demo0/.runtime/authority.key"
 max_ttl = "1h"
-bundle_ttl_seconds = 30
+bundle_ttl = "30s"
 # schema_path = "..."  # optional; omit to use embedded schema
 ```
 

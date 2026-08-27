@@ -226,7 +226,7 @@ If you expected a _permit_ to fire and a _forbid_ fired instead, remember: `forb
 
 ### Stage 2: `PolicyBundleStale`
 
-The Authority-advertised bundle TTL expired without a refresh. Check the Sidecar's connection to the Authority and the Authority's health. The TTL is configured by `[authority].bundle_ttl_seconds`; there is no separate Sidecar TTL setting.
+The Authority-advertised bundle TTL expired without a refresh. Check the Sidecar's connection to the Authority and the Authority's health. The TTL is configured by `[authority].bundle_ttl`; there is no separate Sidecar TTL setting.
 
 ### ABORT: `CONNECTOR_TIMEOUT`, `CONNECTOR_FAILURE`, `CONNECTOR_INVALID_REQUEST`, or `CREDENTIAL_INJECTION_FAILED`
 

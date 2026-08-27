@@ -104,7 +104,7 @@ issuance_policy_dir = "/tmp/firma-standalone/issuance"
 revocation_file = "/tmp/firma-standalone/revocations.txt"
 key_file = "/tmp/firma-standalone/firma-authority.key"
 max_ttl = "1h"
-bundle_ttl_seconds = 30
+bundle_ttl = "30s"
 ```
 
 Notable fields:
@@ -113,7 +113,7 @@ Notable fields:
 - `issuance_policy_dir` — the issuance bundle from Step 2.
 - `revocation_file` — append-only file. Each line is a `token_id` to revoke. The Authority broadcasts revocations to connected Sidecars over gRPC.
 - `max_ttl` — clamps `--ttl-seconds` requests. Even if a CLI invocation asks for a year, the Authority issues at most this much.
-- `bundle_ttl_seconds` — freshness deadline advertised in streamed policy bundles. The Authority periodically refreshes connected Sidecars; protected requests fail closed with `PolicyBundleStale` if the advertised deadline expires.
+- `bundle_ttl` — freshness deadline advertised in streamed policy bundles. The Authority periodically refreshes connected Sidecars; protected requests fail closed with `PolicyBundleStale` if the advertised deadline expires.
 
 Touch the revocations file so the Authority finds it:
 

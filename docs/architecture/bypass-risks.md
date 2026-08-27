@@ -83,7 +83,7 @@ caught before evaluation.
 
 - **Bundle freshness check:** Stage 2 checks `policy.is_fresh()` before policy
   evaluation and returns `Deny` when the bundle is stale.
-- **Configuration:** The Authority advertises its `bundle_ttl_seconds` in each
+- **Configuration:** The Authority advertises its `bundle_ttl` in each
   streamed bundle. There is no separate Sidecar TTL setting.
 
 ## Risk 5: Token Reuse After Revocation

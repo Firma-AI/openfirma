@@ -374,7 +374,7 @@ A few practices that come up only at production scale.
 
 **Capacity planning.** Each Sidecar holds active capabilities + the policy bundle in memory. With 1000 active sessions and a 100 KB bundle, you're well under 100 MB resident. The hot path stays bounded by the perf budgets (Stage 1 < 1ms, Stage 2 < 200µs) regardless of session count.
 
-**Failure modes.** If the Authority is unreachable past its configured `bundle_ttl_seconds`, Sidecars deny protected requests with `PolicyBundleStale`. They also cannot receive policy or revocation updates, and capability issuance is unavailable. Monitor the Authority streams and Sidecar readiness accordingly.
+**Failure modes.** If the Authority is unreachable past its configured `bundle_ttl`, Sidecars deny protected requests with `PolicyBundleStale`. They also cannot receive policy or revocation updates, and capability issuance is unavailable. Monitor the Authority streams and Sidecar readiness accordingly.
 
 ## Tenant onboarding flow
 

@@ -7,7 +7,7 @@ issuance_policy_dir = "issuance-policies/"
 revocation_file = ".firma/state/revocations.txt"
 key_file = "state/authority.key"
 max_ttl = "1h"
-bundle_ttl_seconds = 5
+bundle_ttl = "5s"
 
 [sidecar.interceptor]
 mode = "http_proxy"

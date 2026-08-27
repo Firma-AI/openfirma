@@ -118,7 +118,7 @@ issuance_policy_dir = "/tmp/firma-standalone/issuance"
 revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/firma-authority.key"
 max_ttl = "1h"
-bundle_ttl_seconds  = 30
+bundle_ttl = "30s"
 EOF
 
 # Permissive issuance policy for development

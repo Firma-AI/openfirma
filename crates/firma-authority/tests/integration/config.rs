@@ -70,7 +70,7 @@ fn schema_with_tls() -> schema::AuthorityConfig {
         revocation_file: "/srv/revocations.txt".into(),
         max_ttl: std::time::Duration::from_mins(20),
         key_file: "/srv/authority.key".into(),
-        bundle_ttl_seconds: 45,
+        bundle_ttl: std::time::Duration::from_secs(45),
         tls_cert_path: Some("/srv/tls.crt".into()),
         tls_key_path: Some("/srv/tls.key".into()),
         mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),

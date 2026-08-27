@@ -55,7 +55,7 @@ policy_dir = "examples/policies"
 revocation_file = "revocations.txt"
 key_file = "firma-authority.key"
 max_ttl = "1h"
-bundle_ttl_seconds = 30
+bundle_ttl = "30s"
 ```
 
 Start the Authority (discovers `firma.toml`, or pass `--config`):
