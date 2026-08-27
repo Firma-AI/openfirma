@@ -35,7 +35,7 @@ Configured in `firma.toml` as:
 [sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
-drain_timeout_secs = 5
+drain_timeout = "5s"
 ```
 
 ### gRPC interceptor
@@ -52,7 +52,7 @@ Same protocol as the HTTP proxy mode, but the listener is on a filesystem socket
 [interceptor]
 mode               = "unix_socket"
 listen_addr        = "/run/firma-sidecar.sock"
-drain_timeout_secs = 5
+drain_timeout = "5s"
 ```
 
 This is useful in three situations: (1) containerized environments where binding ports is constrained, (2) hosts with multiple tenants where port collisions are likely, and (3) any deployment where you want the Sidecar to be reachable only by processes that can also reach the filesystem path.

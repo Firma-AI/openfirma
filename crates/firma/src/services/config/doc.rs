@@ -176,6 +176,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     // sidecar.interceptor.{mode, listen_addr} + https_mitm hosts
     {
         let interceptor = ensure_table(sidecar, "interceptor")?;
+        migrate_integer_duration(interceptor, "drain_timeout_secs", "drain_timeout", "s");
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
@@ -725,6 +726,17 @@ mod tests {
             parsed["sidecar"]["interceptor"]["listen_addr"].as_str(),
             Some("127.0.0.1:8080")
         );
+    }
+
+    #[test]
+    fn merge_migrates_legacy_interceptor_drain_timeout() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.interceptor]\ndrain_timeout_secs = 30\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("drain_timeout = \"30s\""));
+        assert!(!out.contains("drain_timeout_secs"));
     }
 
     #[test]

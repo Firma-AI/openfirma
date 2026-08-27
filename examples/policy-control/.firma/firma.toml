@@ -12,7 +12,7 @@ bundle_ttl = "5s"
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:18180"
-drain_timeout_secs = 5
+drain_timeout = "5s"
 
 [sidecar.policy]
 dir = "policies"

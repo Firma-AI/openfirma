@@ -236,7 +236,7 @@ The sidecar exposes an HTTP health check server on the address specified by
 The sidecar handles `SIGTERM` and `SIGINT` for graceful shutdown:
 
 1. Stop accepting new connections.
-2. Drain in-flight requests up to `interceptor.drain_timeout_secs`.
+2. Drain in-flight requests up to `sidecar.interceptor.drain_timeout`.
 3. Exit with code `0`.
 
 ### Standalone startup log contract

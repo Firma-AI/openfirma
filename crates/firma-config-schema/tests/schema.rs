@@ -6,6 +6,8 @@
 //! JSON for convenience; the `serde` attributes under test are
 //! format-agnostic.
 
+use std::time::Duration;
+
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra::{
     CaConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
@@ -23,7 +25,7 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     // built-in default path for `unix_socket` mode.
     assert_eq!(config.socket_path, None);
     assert_eq!(InterceptorConfig::default().socket_path, None);
-    assert_eq!(config.drain_timeout_secs, 30);
+    assert_eq!(config.drain_timeout, Duration::from_secs(30));
     assert_eq!(config.max_request_body_bytes, 4 * 1024 * 1024);
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
     assert_eq!(config.total_body_budget_bytes, 64 * 1024 * 1024);
@@ -35,6 +37,19 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
         config.https_mitm.intercept_hosts,
         config.https_mitm.strict_hosts,
     );
+}
+
+#[test]
+fn interceptor_drain_timeout_accepts_subsecond_duration() {
+    let config: sidecar::SidecarConfig = toml::from_str(
+        r#"
+        [interceptor]
+        drain_timeout = "500ms"
+        "#,
+    )
+    .expect("human-readable duration deserializes");
+
+    assert_eq!(config.interceptor.drain_timeout, Duration::from_millis(500));
 }
 
 #[test]

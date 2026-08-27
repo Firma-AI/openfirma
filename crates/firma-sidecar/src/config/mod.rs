@@ -35,6 +35,7 @@ pub use crate::authority_credentials::SidecarCredentialsConfig;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra as schema_infra;
@@ -341,7 +342,7 @@ impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
 /// | `grpc` | `listen_addr` |
 /// | `unix_socket` | `socket_path` (defaults to the lifecycle runtime layout) |
 ///
-/// `drain_timeout_secs` is shared across all modes.
+/// `drain_timeout` is shared across all modes.
 #[derive(Debug, Clone)]
 pub struct InterceptorConfig {
     /// Interception mode. Default: `http_proxy`.
@@ -351,8 +352,8 @@ pub struct InterceptorConfig {
     /// Path to the Unix domain socket file, used by `unix_socket`
     /// mode.
     pub socket_path: Option<PathBuf>,
-    /// Seconds to wait for in-flight requests to drain on shutdown.
-    drain_timeout_secs: u64,
+    /// Time to wait for in-flight requests to drain on shutdown.
+    drain_timeout: Duration,
     /// Maximum request body size accepted by proxy interceptors.
     pub(crate) max_request_body_bytes: usize,
     /// Maximum size a single request or response body may expand to when
@@ -375,8 +376,8 @@ pub struct InterceptorConfig {
 /// Error validating an [`InterceptorConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InterceptorConfigError {
-    /// `drain_timeout_secs` was zero.
-    #[error("interceptor.drain_timeout_secs must be > 0")]
+    /// `drain_timeout` was zero.
+    #[error("interceptor.drain_timeout must be > 0")]
     ZeroDrainTimeout,
     /// `max_request_body_bytes` was zero.
     #[error("interceptor.max_request_body_bytes must be > 0")]
@@ -413,14 +414,14 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
             mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
-            drain_timeout_secs: s.drain_timeout_secs,
+            drain_timeout: s.drain_timeout,
             max_request_body_bytes: s.max_request_body_bytes,
             max_decompressed_body_size: s.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
             https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
             total_body_budget_bytes: s.total_body_budget_bytes,
         };
-        if config.drain_timeout_secs == 0 {
+        if config.drain_timeout.is_zero() {
             return Err(InterceptorConfigError::ZeroDrainTimeout);
         }
         if config.max_request_body_bytes == 0 {
@@ -472,7 +473,7 @@ impl Default for InterceptorConfig {
             mode: d.mode,
             listen_addr: d.listen_addr,
             socket_path: d.socket_path,
-            drain_timeout_secs: d.drain_timeout_secs,
+            drain_timeout: d.drain_timeout,
             max_request_body_bytes: d.max_request_body_bytes,
             max_decompressed_body_size: d.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::default(),
@@ -1260,7 +1261,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_drain_timeout_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.drain_timeout_secs = 0;
+        schema.interceptor.drain_timeout = Duration::ZERO;
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1495,7 +1496,7 @@ mod tests {
 [interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
-drain_timeout_secs = 15
+drain_timeout = "15s"
 max_request_body_bytes = 2097152
 
 [interceptor.connect_relay]
@@ -1555,7 +1556,7 @@ signing_key_path = "/etc/firma/audit.pem"
             config.interceptor.listen_addr,
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
-        assert_eq!(config.interceptor.drain_timeout_secs, 15);
+        assert_eq!(config.interceptor.drain_timeout, Duration::from_secs(15));
         assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
         assert_eq!(config.interceptor.connect_relay.setup_timeout_secs, 12);
         assert_eq!(config.interceptor.connect_relay.session_max_secs, 900);
@@ -1633,7 +1634,7 @@ signing_key_path = "/etc/firma/audit.pem"
 [interceptor]
 mode = "grpc"
 listen_addr = "127.0.0.1:9091"
-drain_timeout_secs = 10
+drain_timeout = "10s"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
             toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
@@ -1685,7 +1686,7 @@ drain_timeout_secs = 10
 [interceptor]
 mode = "unix_socket"
 socket_path = "/tmp/firma.sock"
-drain_timeout_secs = 10
+drain_timeout = "10s"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
             toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));

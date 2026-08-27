@@ -88,7 +88,7 @@ action_class = "communication.external.send"
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:0"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.policy]
 dir = '{policies}'

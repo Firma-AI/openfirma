@@ -6,6 +6,7 @@
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
@@ -62,9 +63,12 @@ pub struct InterceptorConfig {
     /// Path to the Unix domain socket file, used by `unix_socket` mode.
     #[serde(default)]
     pub socket_path: Option<PathBuf>,
-    /// Seconds to wait for in-flight requests to drain on shutdown.
-    #[serde(default = "default_drain_timeout")]
-    pub drain_timeout_secs: u64,
+    /// Time to wait for in-flight requests to drain on shutdown.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_drain_timeout"
+    )]
+    pub drain_timeout: Duration,
     /// Maximum request body size accepted by proxy interceptors.
     #[serde(default = "default_max_request_body_bytes")]
     pub max_request_body_bytes: usize,
@@ -94,7 +98,7 @@ impl Default for InterceptorConfig {
             // validating constructor in `firma-sidecar` resolves the default
             // path when `unix_socket` mode leaves it unset.
             socket_path: None,
-            drain_timeout_secs: default_drain_timeout(),
+            drain_timeout: default_drain_timeout(),
             max_request_body_bytes: default_max_request_body_bytes(),
             max_decompressed_body_size: default_max_decompressed_body_size(),
             connect_relay: ConnectRelayConfig::default(),
@@ -182,8 +186,8 @@ pub fn default_socket_path() -> PathBuf {
     PathBuf::from(xdg).join("firma/sidecar.sock")
 }
 
-const fn default_drain_timeout() -> u64 {
-    30
+const fn default_drain_timeout() -> Duration {
+    Duration::from_secs(30)
 }
 
 const fn default_max_request_body_bytes() -> usize {

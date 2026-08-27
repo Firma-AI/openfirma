@@ -166,7 +166,7 @@ An empty file is valid. Defaults are applied for every section:
 [interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
-drain_timeout_secs = 15
+drain_timeout = "15s"
 max_request_body_bytes = 4194304
 # socket_path = "/tmp/firma.sock"
 
@@ -256,12 +256,12 @@ Selects the interception mode and transport-specific parameters.
 | `mode`                   | string      | `http_proxy`   | `http_proxy`, `grpc`, `unix_socket`   |
 | `listen_addr`            | socket addr | `0.0.0.0:8080` | TCP address for HTTP proxy and gRPC   |
 | `socket_path`            | path        | none           | Required when mode is `unix_socket`   |
-| `drain_timeout_secs`     | u64         | `30`           | Shutdown drain timeout in seconds     |
+| `drain_timeout`          | u64         | `30`           | Shutdown drain timeout in seconds     |
 | `max_request_body_bytes` | usize       | `4194304`      | Max inbound request body size (bytes) |
 
 Validation:
 
-- `drain_timeout_secs` must be greater than `0`.
+- `drain_timeout` must be greater than `0`.
 - `max_request_body_bytes` must be greater than `0`.
 - On Unix, `socket_path` must be set and non-empty when mode is `unix_socket`.
 

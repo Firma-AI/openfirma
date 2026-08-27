@@ -148,7 +148,7 @@ The `[sidecar.*]` tables in `demoX/firma.toml` mirror the `examples/e2e/firma.to
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.policy]
 dir = "examples/demos/demo0"

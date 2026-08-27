@@ -12,7 +12,7 @@ bundle_ttl = "30s"
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "{{SIDECAR_PROXY_ADDR}}"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.interceptor.https_mitm]
 intercept_hosts = ["github.com"]

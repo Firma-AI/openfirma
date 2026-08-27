@@ -133,7 +133,7 @@ bundle_ttl = "30s"
 [sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
-drain_timeout_secs = 5
+drain_timeout = "5s"
 
 [sidecar.mapping]
 rules_path        = "/tmp/firma-standalone/config/mapping-rules.toml"

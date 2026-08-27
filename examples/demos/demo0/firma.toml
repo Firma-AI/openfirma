@@ -18,7 +18,7 @@ bundle_ttl = "30s"
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 # Override the built-in HTTPS MITM allowlist. Only the three demo
 # providers are MITM'd so the policy can see plaintext requests; the
