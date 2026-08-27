@@ -379,9 +379,12 @@ pub enum InterceptorConfigError {
     /// `drain_timeout` was zero.
     #[error("interceptor.drain_timeout must be > 0")]
     ZeroDrainTimeout,
-    /// `max_request_body_bytes` was zero.
-    #[error("interceptor.max_request_body_bytes must be > 0")]
+    /// `max_request_body_size` was zero.
+    #[error("interceptor.max_request_body_size must be > 0")]
     ZeroMaxRequestBody,
+    /// `max_request_body_size` was too large for this platform's `usize`.
+    #[error("interceptor.max_request_body_size is too large for this platform")]
+    MaxRequestBodyTooLarge,
     /// `max_decompressed_body_size` was zero.
     #[error("interceptor.max_decompressed_body_size must be > 0")]
     ZeroMaxDecompressedBody,
@@ -392,7 +395,7 @@ pub enum InterceptorConfigError {
     #[error("interceptor.total_body_budget_bytes must be > 0")]
     ZeroTotalBodyBudget,
     /// The total body budget was below the per-request maximum.
-    #[error("interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_bytes")]
+    #[error("interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_size")]
     TotalBodyBudgetBelowRequest,
     /// The CONNECT/MITM relay settings were invalid.
     #[error(transparent)]
@@ -410,12 +413,14 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
     type Error = InterceptorConfigError;
 
     fn try_from(s: schema_ic::InterceptorConfig) -> Result<Self, Self::Error> {
+        let max_request_body_size = usize::try_from(s.max_request_body_size.as_u64())
+            .map_err(|_| InterceptorConfigError::MaxRequestBodyTooLarge)?;
         let config = Self {
             mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
             drain_timeout: s.drain_timeout,
-            max_request_body_bytes: s.max_request_body_bytes,
+            max_request_body_bytes: max_request_body_size,
             max_decompressed_body_size: s.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
             https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
@@ -474,7 +479,8 @@ impl Default for InterceptorConfig {
             listen_addr: d.listen_addr,
             socket_path: d.socket_path,
             drain_timeout: d.drain_timeout,
-            max_request_body_bytes: d.max_request_body_bytes,
+            max_request_body_bytes: usize::try_from(d.max_request_body_size.as_u64())
+                .unwrap_or(4 * 1024 * 1024),
             max_decompressed_body_size: d.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
@@ -1284,7 +1290,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_max_request_body_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_bytes = 0;
+        schema.interceptor.max_request_body_size = 0;
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1320,7 +1326,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_budget_smaller_than_max_body_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_bytes = 8 * 1024 * 1024;
+        schema.interceptor.max_request_body_size = 8 * 1024 * 1024;
         schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
         assert!(matches!(
             SidecarConfig::try_from(schema),
@@ -1333,7 +1339,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_budget_equals_max_body_valid() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_bytes = 4 * 1024 * 1024;
+        schema.interceptor.max_request_body_size = 4 * 1024 * 1024;
         schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
         assert!(SidecarConfig::try_from(schema).is_ok());
     }
@@ -1520,7 +1526,7 @@ mod tests {
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 drain_timeout = "15s"
-max_request_body_bytes = 2097152
+max_request_body_size = 2097152
 
 [interceptor.connect_relay]
 setup_timeout = "12s"
@@ -1580,7 +1586,7 @@ signing_key_path = "/etc/firma/audit.pem"
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
         assert_eq!(config.interceptor.drain_timeout, Duration::from_secs(15));
-        assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
+        assert_eq!(config.interceptor.max_request_body_size, 2_097_152);
         assert_eq!(
             config.interceptor.connect_relay.setup_timeout,
             Duration::from_secs(12)

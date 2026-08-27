@@ -171,7 +171,7 @@ Important fields:
 - `[interceptor]`
   - `mode`
   - `listen_addr`
-  - `max_request_body_bytes`
+  - `max_request_body_size`
 - `[interceptor.connect_relay]`
   - `setup_timeout` (default 10)
   - `session_max` (default 600)

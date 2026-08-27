@@ -70,8 +70,8 @@ pub struct InterceptorConfig {
     )]
     pub drain_timeout: Duration,
     /// Maximum request body size accepted by proxy interceptors.
-    #[serde(default = "default_max_request_body_bytes")]
-    pub max_request_body_bytes: usize,
+    #[serde(default = "default_max_request_body_size")]
+    pub max_request_body_size: ByteSize,
     /// Maximum size a single request or response body may expand to when
     /// decompressed for secret placeholder rehydration or masking. Bounds the
     /// memory a decompression bomb can force the Sidecar to allocate.
@@ -99,7 +99,7 @@ impl Default for InterceptorConfig {
             // path when `unix_socket` mode leaves it unset.
             socket_path: None,
             drain_timeout: default_drain_timeout(),
-            max_request_body_bytes: default_max_request_body_bytes(),
+            max_request_body_size: default_max_request_body_size(),
             max_decompressed_body_size: default_max_decompressed_body_size(),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
@@ -199,8 +199,8 @@ const fn default_drain_timeout() -> Duration {
     Duration::from_secs(30)
 }
 
-const fn default_max_request_body_bytes() -> usize {
-    4 * 1024 * 1024
+const fn default_max_request_body_size() -> ByteSize {
+    ByteSize::mib(4)
 }
 
 const fn default_max_decompressed_body_size() -> ByteSize {

@@ -41,7 +41,7 @@ keys are rejected; migrate them as follows (equivalent values shown):
 | `run.profiles.<id>.capability.grace_seconds = 30`                | `run.profiles.<id>.capability.grace = "30s"`                |
 | `run.profiles.<id>.sidecar_local_exec.timeout_ms = 500`          | `run.profiles.<id>.sidecar_local_exec.timeout = "500ms"`    |
 | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait_ms = 300000` | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait = "5m"` |
-| `sidecar.interceptor.max_request_body_bytes = 4194304`           | `sidecar.interceptor.max_request_body_size = "4 MiB"`       |
+| `sidecar.interceptor.max_request_body_size = 4194304`            | `sidecar.interceptor.max_request_body_size = "4 MiB"`       |
 | `sidecar.interceptor.total_body_budget_bytes = 67108864`         | `sidecar.interceptor.total_body_budget = "64 MiB"`          |
 | `sidecar.audit.wal_max_bytes = 104857600`                        | `sidecar.audit.wal_max_size = "100 MiB"`                    |
 
@@ -201,7 +201,7 @@ An empty file is valid. Defaults are applied for every section:
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 drain_timeout = "15s"
-max_request_body_bytes = 4194304
+max_request_body_size = 4194304
 # socket_path = "/tmp/firma.sock"
 
 [interceptor.connect_relay]
@@ -297,7 +297,7 @@ Selects the interception mode and transport-specific parameters.
 Validation:
 
 - `drain_timeout` must be greater than `0`.
-- `max_request_body_bytes` must be greater than `0`.
+- `max_request_body_size` must be greater than `0`.
 - On Unix, `socket_path` must be set and non-empty when mode is `unix_socket`.
 
 ### `[interceptor.connect_relay]`
