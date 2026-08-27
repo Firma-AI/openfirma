@@ -1,5 +1,6 @@
 use std::{collections::HashSet, str::FromStr};
 
+use firma_config_schema::utils::NonZeroDuration;
 use firma_http::Authority;
 use firma_secret_provider::{
     ExposeSecret, SecretPlaceholder,
@@ -360,7 +361,8 @@ async fn resolve_batch_reports_unreachable_gateway() {
     let client = GatewayClient::new(
         unreachable_endpoint().await.expect("unreachable endpoint"),
         GatewayClientConfig {
-            connection_timeout: std::time::Duration::from_hours(1),
+            connection_timeout: NonZeroDuration::new(std::time::Duration::from_hours(1))
+                .expect("non-zero connection timeout"),
             ..Default::default()
         },
     );
@@ -477,7 +479,8 @@ async fn push_secret_reports_unreachable_gateway() {
     let client = GatewayClient::new(
         unreachable_endpoint().await.expect("unreachable endpoint"),
         GatewayClientConfig {
-            connection_timeout: std::time::Duration::from_hours(1),
+            connection_timeout: NonZeroDuration::new(std::time::Duration::from_hours(1))
+                .expect("non-zero connection timeout"),
             ..Default::default()
         },
     );

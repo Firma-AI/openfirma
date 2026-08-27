@@ -12,7 +12,7 @@ use firma_config_schema::sidecar::infra::{
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
 use firma_config_schema::utils::{NonZeroDuration, ZeroDurationError};
-use firma_config_schema::{authority, run, secret_matcher, sidecar};
+use firma_config_schema::{authority, gateway, run, secret_matcher, sidecar};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -145,6 +145,20 @@ fn byte_size_fields_require_unit_bearing_strings() {
             "raw byte size must be rejected: {config}"
         );
     }
+}
+
+#[test]
+fn secret_gateway_connection_timeout_rejects_zero() {
+    let error = toml::from_str::<gateway::GatewayClientConfig>("connection_timeout = \"0s\"")
+        .expect_err("zero connection timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
 }
 
 #[test]
