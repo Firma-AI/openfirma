@@ -179,6 +179,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         migrate_integer_duration(interceptor, "drain_timeout_secs", "drain_timeout", "s");
         if let Some(relay) = optional_table_mut(interceptor, "connect_relay")? {
             migrate_integer_duration(relay, "setup_timeout_secs", "setup_timeout", "s");
+            migrate_integer_duration(relay, "session_max_secs", "session_max", "s");
         }
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
@@ -761,6 +762,17 @@ mod tests {
 
         assert!(out.contains("setup_timeout = \"10s\""));
         assert!(!out.contains("setup_timeout_secs"));
+    }
+
+    #[test]
+    fn merge_migrates_legacy_connect_session_max() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let existing = "[sidecar.interceptor.connect_relay]\nsession_max_secs = 600\n";
+
+        let out = render_firma_toml(existing, &inputs).unwrap();
+
+        assert!(out.contains("session_max = \"600s\""));
+        assert!(!out.contains("session_max_secs"));
     }
 
     #[test]

@@ -172,7 +172,7 @@ max_request_body_bytes = 4194304
 
 [interceptor.connect_relay]
 setup_timeout = "10s"
-session_max_secs = 600
+session_max = "10m"
 
 [interceptor.https_mitm]
 enabled = true
@@ -269,15 +269,15 @@ Validation:
 
 Timeout controls for CONNECT tunnel and HTTPS MITM relay sessions.
 
-| Field              | Type | Default | Description                                              |
-| ------------------ | ---- | ------- | -------------------------------------------------------- |
-| `setup_timeout`    | u64  | `10`    | Timeout for CONNECT upgrade and upstream setup/handshake |
-| `session_max_secs` | u64  | `600`   | Hard cap for an individual CONNECT/MITM session lifetime |
+| Field           | Type | Default | Description                                              |
+| --------------- | ---- | ------- | -------------------------------------------------------- |
+| `setup_timeout` | u64  | `10`    | Timeout for CONNECT upgrade and upstream setup/handshake |
+| `session_max`   | u64  | `600`   | Hard cap for an individual CONNECT/MITM session lifetime |
 
 Validation:
 
 - `setup_timeout` must be greater than `0`.
-- `session_max_secs` must be greater than `0`.
+- `session_max` must be greater than `0`.
 
 ### `[interceptor.https_mitm]`
 

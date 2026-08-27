@@ -489,7 +489,7 @@ pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
     pub(crate) setup_timeout: Duration,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    pub(crate) session_max_secs: u64,
+    pub(crate) session_max: Duration,
 }
 
 /// Error validating a [`ConnectRelayConfig`].
@@ -498,8 +498,8 @@ pub enum ConnectRelayConfigError {
     /// `setup_timeout` was zero.
     #[error("interceptor.connect_relay.setup_timeout must be > 0")]
     ZeroSetupTimeout,
-    /// `session_max_secs` was zero.
-    #[error("interceptor.connect_relay.session_max_secs must be > 0")]
+    /// `session_max` was zero.
+    #[error("interceptor.connect_relay.session_max must be > 0")]
     ZeroSessionMax,
 }
 
@@ -510,12 +510,12 @@ impl TryFrom<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
         if s.setup_timeout.is_zero() {
             return Err(ConnectRelayConfigError::ZeroSetupTimeout);
         }
-        if s.session_max_secs == 0 {
+        if s.session_max.is_zero() {
             return Err(ConnectRelayConfigError::ZeroSessionMax);
         }
         Ok(Self {
             setup_timeout: s.setup_timeout,
-            session_max_secs: s.session_max_secs,
+            session_max: s.session_max,
         })
     }
 }
@@ -525,7 +525,7 @@ impl Default for ConnectRelayConfig {
         let d = schema_ic::ConnectRelayConfig::default();
         Self {
             setup_timeout: d.setup_timeout,
-            session_max_secs: d.session_max_secs,
+            session_max: d.session_max,
         }
     }
 }
@@ -1342,7 +1342,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_connect_session_max_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.connect_relay.session_max_secs = 0;
+        schema.interceptor.connect_relay.session_max = Duration::ZERO;
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1501,7 +1501,7 @@ max_request_body_bytes = 2097152
 
 [interceptor.connect_relay]
 setup_timeout = "12s"
-session_max_secs = 900
+session_max = "15m"
 
 [interceptor.https_mitm]
 enabled = true
@@ -1562,7 +1562,10 @@ signing_key_path = "/etc/firma/audit.pem"
             config.interceptor.connect_relay.setup_timeout,
             Duration::from_secs(12)
         );
-        assert_eq!(config.interceptor.connect_relay.session_max_secs, 900);
+        assert_eq!(
+            config.interceptor.connect_relay.session_max,
+            Duration::from_mins(15)
+        );
         assert!(config.interceptor.https_mitm.enabled);
         assert_eq!(
             config.interceptor.https_mitm.intercept_hosts,

@@ -30,7 +30,7 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
     assert_eq!(config.total_body_budget_bytes, 64 * 1024 * 1024);
     assert_eq!(config.connect_relay.setup_timeout, Duration::from_secs(10));
-    assert_eq!(config.connect_relay.session_max_secs, 600);
+    assert_eq!(config.connect_relay.session_max, Duration::from_mins(10));
     assert!(config.https_mitm.enabled);
     assert!(config.https_mitm.bypass_hosts.is_empty());
     assert_eq!(
@@ -65,6 +65,22 @@ fn connect_setup_timeout_accepts_subsecond_duration() {
     assert_eq!(
         config.interceptor.connect_relay.setup_timeout,
         Duration::from_millis(500)
+    );
+}
+
+#[test]
+fn connect_session_max_accepts_subsecond_duration() {
+    let config: sidecar::SidecarConfig = toml::from_str(
+        r#"
+        [interceptor.connect_relay]
+        session_max = "750ms"
+        "#,
+    )
+    .expect("human-readable duration deserializes");
+
+    assert_eq!(
+        config.interceptor.connect_relay.session_max,
+        Duration::from_millis(750)
     );
 }
 

@@ -174,7 +174,7 @@ Important fields:
   - `max_request_body_bytes`
 - `[interceptor.connect_relay]`
   - `setup_timeout` (default 10)
-  - `session_max_secs` (default 600)
+  - `session_max` (default 600)
 - `[interceptor.https_mitm]`
   - `enabled` (default true)
   - `intercept_hosts`

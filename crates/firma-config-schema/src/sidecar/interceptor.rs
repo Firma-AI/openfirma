@@ -119,15 +119,18 @@ pub struct ConnectRelayConfig {
     )]
     pub setup_timeout: Duration,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    #[serde(default = "default_connect_session_max_secs")]
-    pub session_max_secs: u64,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_connect_session_max"
+    )]
+    pub session_max: Duration,
 }
 
 impl Default for ConnectRelayConfig {
     fn default() -> Self {
         Self {
             setup_timeout: default_connect_setup_timeout(),
-            session_max_secs: default_connect_session_max_secs(),
+            session_max: default_connect_session_max(),
         }
     }
 }
@@ -209,8 +212,8 @@ const fn default_connect_setup_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
-const fn default_connect_session_max_secs() -> u64 {
-    600
+const fn default_connect_session_max() -> Duration {
+    Duration::from_mins(10)
 }
 
 const fn default_https_mitm_cert_ttl_secs() -> u64 {
