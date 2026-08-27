@@ -22,6 +22,33 @@ Duration settings use compact unit-bearing strings such as `"250ms"`, `"30s"`,
 `"10m"`, and `"1h"`. Byte-size settings use unit-bearing strings such as
 `"4 MiB"` and `"10MB"`. Counts, capacities, and rates remain numeric.
 
+### Non-zero duration controls
+
+The unit-bearing duration syntax is unchanged. Timeout, deadline, wait, retry,
+and session-lifetime controls must be strictly greater than zero; exact zero
+values such as `"0s"`, `"0ms"`, or `"0ns"` fail while the config is being
+deserialized. This applies to:
+
+- `[sidecar.secret_gateway]` `connection_timeout` and `operation_timeout`;
+- Run profile `sidecar_local_exec.timeout` and `hitl_max_wait`;
+- `[sidecar.authority]` `connect_timeout`, `reconnect_min_backoff`, and
+  `reconnect_max_backoff`;
+- `[sidecar.interceptor]` `drain_timeout`;
+- `[sidecar.interceptor.connect_relay]` `setup_timeout` and `session_max`;
+- `[sidecar.connector]` `default_timeout` and each host `timeout`; and
+- `[sidecar.local_exec]` `retry_after` (which must also be at least 1 ms because
+  its wire representation uses whole milliseconds).
+
+TTL, retention, grace, and clock-skew durations have field-specific semantics
+instead of inheriting this non-zero duration rule. In particular, `authority.max_ttl`,
+`authority.bundle_ttl`, Run profile `capability.grace`,
+`sidecar.authority.revocation_readiness_grace`,
+`sidecar.interceptor.https_mitm.cert_ttl`,
+`sidecar.capability_validation.clock_skew_tolerance`, and
+`sidecar.local_exec.token_ttl` retain their existing validation. For example,
+a zero clock-skew tolerance means strict expiry checking, and a zero revocation
+readiness grace means immediate readiness.
+
 Unknown keys are rejected recursively rather than ignored. The only top-level
 keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
 are strict as well. Dynamic labels such as credential names, executable-policy
