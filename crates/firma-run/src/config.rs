@@ -1303,6 +1303,7 @@ mod tests {
             config.defaults.mounts.as_ref().unwrap()[0].target,
             PathBuf::from("/sandbox/workspace")
         );
+        assert!(!config.defaults.mounts.as_ref().unwrap()[0].read_only);
         let seccomp = config.defaults.seccomp_policy.as_ref().unwrap();
         assert_eq!(
             seccomp.source_policy_path,
@@ -1433,10 +1434,10 @@ mod tests {
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         fs::write(
             &config_path,
-            r#"
+            r"
             [run.profiles.generic.capability]
             requested_actions = []
-            "#,
+            ",
         )
         .unwrap();
         let mut run_args = args("generic");
@@ -1693,6 +1694,437 @@ approval_policy = "never"
 
                 assert_eq!(merged.use_http_proxy_sidecar, higher.or(lower));
                 assert_eq!(merged.allow_non_structural, higher.or(lower));
+            }
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one aggregate contract trace keeps every layer and patch shape visible together"
+    )]
+    fn four_layer_merge_contract_is_total_and_shape_aware() {
+        struct StageExpectation {
+            name: &'static str,
+            backend: Option<firma_config_schema::run::BackendKind>,
+            allow_non_structural: Option<bool>,
+            use_http_proxy_sidecar: Option<bool>,
+            identity_mode: Option<SandboxIdentityMode>,
+            capability_file: Option<&'static str>,
+        }
+
+        fn capability_file(patch: &ProfilePatch) -> Option<&std::path::Path> {
+            match patch
+                .capability
+                .as_ref()
+                .and_then(|capability| capability.source.as_ref())
+            {
+                Some(CapabilitySourcePatch::File { path }) => Some(path),
+                Some(CapabilitySourcePatch::Disabled) | None => None,
+            }
+        }
+
+        let file: FileConfig = toml::from_str(
+            r#"
+            [defaults]
+            backend = "vz"
+            sidecar_endpoint = "unix:///defaults/sidecar.sock"
+            env_passthrough = ["DEFAULT_ONLY"]
+            mounts = [{ source = "/defaults/source", target = "/defaults/target", read_only = true }]
+            identity_mode = "host_user"
+            use_http_proxy_sidecar = true
+            allow_non_structural = true
+            mask_home_paths = [".defaults"]
+            ca_trust_mode = "append_system_roots"
+
+            [defaults.env_set]
+            DEFAULT_ONLY = "preserved"
+            SHARED = "defaults"
+
+            [defaults.network]
+            enforce_network_namespace = true
+            fail_closed = true
+
+            [defaults.seccomp_policy]
+            source_policy_path = "/defaults/seccomp.toml"
+            artifact_dir = "/defaults/artifacts"
+            runtime_mode = "compile_on_launch"
+
+            [defaults.capability]
+            public_key_path = "/defaults/authority.pub"
+            refresh_ratio = 0.7
+            grace = "45s"
+            requested_actions = ["filesystem.read"]
+
+            [defaults.capability.source]
+            kind = "file"
+            path = "/defaults/capability.toml"
+
+            [defaults.sidecar_local_exec]
+            endpoint = "unix:///defaults/local-exec.sock"
+            timeout = "2s"
+            hitl_mode = "sync_wait"
+            hitl_max_wait = "4m"
+            enforce_known_executables = true
+            allowed_executables = ["/defaults/agent"]
+
+            [defaults.executable_policies.codex]
+            enforce_wrapper_defaults = true
+            sandbox_mode = "defaults-sandbox"
+            approval_policy = "defaults-approval"
+
+            [defaults.executable_policies.codex.config_overrides]
+            defaults = "preserved"
+            shared = "defaults"
+
+            [defaults.codex_cli]
+            enforce_wrapper_defaults = true
+            sandbox_mode = "legacy-defaults"
+
+            [defaults.codex_cli.config_overrides]
+            defaults = "preserved"
+
+            [profiles.generic]
+            backend = "wsl2"
+            env_passthrough = []
+            mounts = [{ source = "/selected/source", target = "/selected/target", read_only = false }]
+            identity_mode = "sandbox_user"
+            use_http_proxy_sidecar = false
+            allow_non_structural = false
+            mask_home_paths = []
+            ca_trust_mode = "sole"
+            env_set = { SELECTED_ONLY = "present", SHARED = "selected" }
+            seccomp_policy = { runtime_mode = "precompiled_only" }
+            network = { fail_closed = false }
+            capability = { source = { kind = "disabled" }, requested_actions = [] }
+            sidecar_local_exec = { hitl_mode = "async_token", enforce_known_executables = false, allowed_executables = [] }
+            executable_policies = { codex = { enforce_wrapper_defaults = false, approval_policy = "selected-approval", config_overrides = { selected = "present", shared = "selected" } } }
+            codex_cli = { approval_policy = "legacy-selected", config_overrides = {} }
+            "#,
+        )
+        .unwrap();
+
+        let built_in = crate::profile::built_in_profile("generic").unwrap();
+        let defaults = file.defaults;
+        let selected = file.profiles["generic"].clone();
+        let mut run_args = args("generic");
+        run_args.backend = Some(BackendKind::Bwrap);
+        run_args.capability_file = Some(PathBuf::from("/cli/capability.toml"));
+        run_args.identity_mode = Some(SandboxIdentityMode::SandboxUser);
+        run_args.preserve_host_user = true;
+        run_args.allow_non_structural = true;
+        let cli = cli_profile_patch(&run_args);
+
+        let after_defaults = built_in.clone().merge(defaults);
+        let after_selected = after_defaults.clone().merge(selected);
+        let after_cli = after_selected.clone().merge(cli);
+        let stages = [
+            (
+                built_in,
+                StageExpectation {
+                    name: "built-in",
+                    backend: None,
+                    allow_non_structural: Some(false),
+                    use_http_proxy_sidecar: Some(true),
+                    identity_mode: None,
+                    capability_file: None,
+                },
+            ),
+            (
+                after_defaults,
+                StageExpectation {
+                    name: "defaults",
+                    backend: Some(firma_config_schema::run::BackendKind::Vz),
+                    allow_non_structural: Some(true),
+                    use_http_proxy_sidecar: Some(true),
+                    identity_mode: Some(SandboxIdentityMode::HostUser),
+                    capability_file: Some("/defaults/capability.toml"),
+                },
+            ),
+            (
+                after_selected,
+                StageExpectation {
+                    name: "selected profile",
+                    backend: Some(firma_config_schema::run::BackendKind::Wsl2),
+                    allow_non_structural: Some(false),
+                    use_http_proxy_sidecar: Some(false),
+                    identity_mode: Some(SandboxIdentityMode::SandboxUser),
+                    capability_file: None,
+                },
+            ),
+            (
+                after_cli.clone(),
+                StageExpectation {
+                    name: "CLI",
+                    backend: Some(firma_config_schema::run::BackendKind::Bwrap),
+                    allow_non_structural: Some(true),
+                    use_http_proxy_sidecar: Some(false),
+                    identity_mode: Some(SandboxIdentityMode::HostUser),
+                    capability_file: Some("/cli/capability.toml"),
+                },
+            ),
+        ];
+
+        for (patch, expected) in stages {
+            assert_eq!(patch.backend, expected.backend, "{} backend", expected.name);
+            assert_eq!(
+                patch.allow_non_structural, expected.allow_non_structural,
+                "{} allow_non_structural",
+                expected.name
+            );
+            assert_eq!(
+                patch.use_http_proxy_sidecar, expected.use_http_proxy_sidecar,
+                "{} use_http_proxy_sidecar",
+                expected.name
+            );
+            assert_eq!(
+                patch.identity_mode, expected.identity_mode,
+                "{} identity_mode",
+                expected.name
+            );
+            assert_eq!(
+                capability_file(&patch),
+                expected.capability_file.map(std::path::Path::new),
+                "{} capability source",
+                expected.name
+            );
+        }
+
+        assert_eq!(
+            after_cli.sidecar_endpoint.as_deref(),
+            Some("unix:///defaults/sidecar.sock")
+        );
+        assert!(
+            after_cli
+                .env_passthrough
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        );
+        let env_set = after_cli.env_set.as_ref().unwrap();
+        assert_eq!(
+            env_set.get("DEFAULT_ONLY").map(String::as_str),
+            Some("preserved")
+        );
+        assert_eq!(env_set.get("SHARED").map(String::as_str), Some("selected"));
+        assert_eq!(
+            env_set.get("SELECTED_ONLY").map(String::as_str),
+            Some("present")
+        );
+        let mounts = after_cli.mounts.as_ref().unwrap();
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].source, PathBuf::from("/selected/source"));
+        assert_eq!(mounts[0].target, PathBuf::from("/selected/target"));
+        assert!(!mounts[0].read_only);
+
+        let network = after_cli.network.as_ref().unwrap();
+        assert_eq!(network.enforce_network_namespace, Some(true));
+        assert_eq!(network.fail_closed, Some(false));
+        let seccomp = after_cli.seccomp_policy.as_ref().unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            Some(PathBuf::from("/defaults/seccomp.toml"))
+        );
+        assert_eq!(
+            seccomp.artifact_dir,
+            Some(PathBuf::from("/defaults/artifacts"))
+        );
+        assert_eq!(
+            seccomp.runtime_mode,
+            Some(SeccompRuntimeMode::PrecompiledOnly)
+        );
+
+        let capability = after_cli.capability.as_ref().unwrap();
+        assert_eq!(
+            capability.public_key_path,
+            Some(PathBuf::from("/defaults/authority.pub"))
+        );
+        assert_eq!(capability.refresh_ratio, Some(0.7));
+        assert_eq!(capability.grace, Some(Duration::from_secs(45)));
+        assert_eq!(capability.requested_actions, Some(Vec::new()));
+
+        let mediator = after_cli.sidecar_local_exec.as_ref().unwrap();
+        assert_eq!(
+            mediator.endpoint.as_deref(),
+            Some("unix:///defaults/local-exec.sock")
+        );
+        assert_eq!(
+            mediator.timeout.map(|timeout| timeout.duration()),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            mediator.hitl_mode,
+            Some(CommandMediatorHitlMode::AsyncToken)
+        );
+        assert_eq!(
+            mediator.hitl_max_wait.map(|timeout| timeout.duration()),
+            Some(Duration::from_mins(4))
+        );
+        assert_eq!(mediator.enforce_known_executables, Some(false));
+        assert!(
+            mediator
+                .allowed_executables
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        );
+
+        let codex = &after_cli.executable_policies.as_ref().unwrap()["codex"];
+        assert_eq!(codex.enforce_wrapper_defaults, Some(false));
+        assert_eq!(codex.sandbox_mode.as_deref(), Some("defaults-sandbox"));
+        assert_eq!(codex.approval_policy.as_deref(), Some("selected-approval"));
+        assert_eq!(
+            codex.config_overrides,
+            Some(BTreeMap::from([
+                ("defaults".to_string(), "preserved".to_string()),
+                ("selected".to_string(), "present".to_string()),
+                ("shared".to_string(), "selected".to_string()),
+            ]))
+        );
+        let legacy = after_cli.codex_cli.as_ref().unwrap();
+        assert_eq!(legacy.enforce_wrapper_defaults, Some(true));
+        assert_eq!(legacy.sandbox_mode.as_deref(), Some("legacy-defaults"));
+        assert_eq!(legacy.approval_policy.as_deref(), Some("legacy-selected"));
+        assert_eq!(legacy.config_overrides, Some(BTreeMap::new()));
+        assert_eq!(after_cli.mask_home_paths, Some(Vec::new()));
+        assert_eq!(after_cli.ca_trust_mode, Some(super::CaTrustMode::Sole));
+
+        assert_profile_patch_contract_inventory(after_cli);
+        assert_capability_source_variant_inventory(CapabilitySourcePatch::Disabled);
+        assert_capability_source_variant_inventory(CapabilitySourcePatch::File {
+            path: PathBuf::from("/inventory"),
+        });
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive destructuring intentionally inventories every patch field"
+    )]
+    fn assert_profile_patch_contract_inventory(patch: ProfilePatch) {
+        let ProfilePatch {
+            backend,
+            sidecar_endpoint,
+            seccomp_policy,
+            env_passthrough,
+            env_set,
+            mounts,
+            network,
+            identity_mode,
+            capability,
+            sidecar_local_exec,
+            executable_policies,
+            codex_cli,
+            use_http_proxy_sidecar,
+            allow_non_structural,
+            mask_home_paths,
+            ca_trust_mode,
+        } = patch;
+        let _ = (
+            backend,
+            sidecar_endpoint,
+            env_passthrough,
+            env_set,
+            identity_mode,
+            use_http_proxy_sidecar,
+            allow_non_structural,
+            mask_home_paths,
+            ca_trust_mode,
+        );
+
+        for MountPatch {
+            source,
+            target,
+            read_only,
+        } in mounts.unwrap_or_default()
+        {
+            let _ = (source, target, read_only);
+        }
+        if let Some(NetworkPolicyPatch {
+            enforce_network_namespace,
+            fail_closed,
+        }) = network
+        {
+            let _ = (enforce_network_namespace, fail_closed);
+        }
+        if let Some(SeccompPolicyPatch {
+            source_policy_path,
+            artifact_dir,
+            runtime_mode,
+        }) = seccomp_policy
+        {
+            let _ = (source_policy_path, artifact_dir, runtime_mode);
+        }
+        if let Some(CapabilityLeasePatch {
+            source,
+            kind,
+            path,
+            public_key_path,
+            refresh_ratio,
+            grace,
+            requested_actions,
+        }) = capability
+        {
+            let _ = (
+                source,
+                kind,
+                path,
+                public_key_path,
+                refresh_ratio,
+                grace,
+                requested_actions,
+            );
+        }
+        if let Some(CommandMediatorPatch {
+            endpoint,
+            timeout,
+            hitl_mode,
+            hitl_max_wait,
+            enforce_known_executables,
+            allowed_executables,
+        }) = sidecar_local_exec
+        {
+            let _ = (
+                endpoint,
+                timeout,
+                hitl_mode,
+                hitl_max_wait,
+                enforce_known_executables,
+                allowed_executables,
+            );
+        }
+        for ExecutableLaunchPolicyPatch {
+            enforce_wrapper_defaults,
+            sandbox_mode,
+            approval_policy,
+            config_overrides,
+        } in executable_policies.unwrap_or_default().into_values()
+        {
+            let _ = (
+                enforce_wrapper_defaults,
+                sandbox_mode,
+                approval_policy,
+                config_overrides,
+            );
+        }
+        if let Some(ExecutableLaunchPolicyPatch {
+            enforce_wrapper_defaults,
+            sandbox_mode,
+            approval_policy,
+            config_overrides,
+        }) = codex_cli
+        {
+            let _ = (
+                enforce_wrapper_defaults,
+                sandbox_mode,
+                approval_policy,
+                config_overrides,
+            );
+        }
+    }
+
+    fn assert_capability_source_variant_inventory(source: CapabilitySourcePatch) {
+        match source {
+            CapabilitySourcePatch::Disabled => {}
+            CapabilitySourcePatch::File { path } => {
+                let _ = path;
             }
         }
     }
@@ -2104,13 +2536,13 @@ approval_policy = "never"
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         fs::write(
             &config_path,
-            r#"
+            r"
             [run.profiles.generic]
             env_passthrough = []
             mounts = []
 
             [run.profiles.generic.env_set]
-            "#,
+            ",
         )
         .unwrap();
 
@@ -2129,14 +2561,14 @@ approval_policy = "never"
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         fs::write(
             &config_path,
-            r#"
+            r"
             [run.defaults]
             use_http_proxy_sidecar = false
             allow_non_structural = true
 
             [run.profiles.generic]
             allow_non_structural = false
-            "#,
+            ",
         )
         .unwrap();
 

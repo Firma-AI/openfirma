@@ -1279,12 +1279,12 @@ mod tests {
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         fs::write(
             &config_path,
-            r#"
+            r"
             [run.profiles.generic]
             env_passthrough = []
 
             [run.profiles.generic.env_set]
-            "#,
+            ",
         )
         .unwrap_or_else(|error| panic!("{error}"));
         let run_args = super::RunInput {

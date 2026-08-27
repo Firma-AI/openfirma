@@ -627,13 +627,13 @@ fn run_rejects_unknown_fields_in_defaults_and_every_profile() {
 #[test]
 fn run_profile_booleans_distinguish_absent_false_and_true() {
     let config = toml::from_str::<run::FileConfig>(
-        r#"
+        r"
         [defaults]
         use_http_proxy_sidecar = false
 
         [profiles.selected]
         allow_non_structural = true
-        "#,
+        ",
     )
     .expect("profile booleans must parse");
 
@@ -646,7 +646,7 @@ fn run_profile_booleans_distinguish_absent_false_and_true() {
 #[test]
 fn run_profile_collections_distinguish_absent_and_empty() {
     let config = toml::from_str::<run::FileConfig>(
-        r#"
+        r"
         [defaults]
         env_passthrough = []
         mounts = []
@@ -654,7 +654,7 @@ fn run_profile_collections_distinguish_absent_and_empty() {
         [defaults.env_set]
 
         [profiles.selected]
-        "#,
+        ",
     )
     .expect("empty profile collections must parse as present");
 
@@ -734,14 +734,14 @@ fn run_command_mediator_patch_distinguishes_absent_and_empty_allowlist() {
 #[test]
 fn run_executable_policy_maps_distinguish_absent_and_empty() {
     let config = toml::from_str::<run::FileConfig>(
-        r#"
+        r"
         [defaults.executable_policies]
 
         [profiles.selected.executable_policies.codex]
         enforce_wrapper_defaults = false
 
         [profiles.selected.executable_policies.codex.config_overrides]
-        "#,
+        ",
     )
     .expect("empty executable policy maps must parse as present");
 
