@@ -28,7 +28,7 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     assert_eq!(config.drain_timeout, Duration::from_secs(30));
     assert_eq!(config.max_request_body_size, 4 * 1024 * 1024);
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
-    assert_eq!(config.total_body_budget_bytes, 64 * 1024 * 1024);
+    assert_eq!(config.total_body_budget, 64 * 1024 * 1024);
     assert_eq!(config.connect_relay.setup_timeout, Duration::from_secs(10));
     assert_eq!(config.connect_relay.session_max, Duration::from_mins(10));
     assert!(config.https_mitm.enabled);

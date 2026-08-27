@@ -42,7 +42,7 @@ keys are rejected; migrate them as follows (equivalent values shown):
 | `run.profiles.<id>.sidecar_local_exec.timeout_ms = 500`          | `run.profiles.<id>.sidecar_local_exec.timeout = "500ms"`    |
 | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait_ms = 300000` | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait = "5m"` |
 | `sidecar.interceptor.max_request_body_size = 4194304`            | `sidecar.interceptor.max_request_body_size = "4 MiB"`       |
-| `sidecar.interceptor.total_body_budget_bytes = 67108864`         | `sidecar.interceptor.total_body_budget = "64 MiB"`          |
+| `sidecar.interceptor.total_body_budget = 67108864`               | `sidecar.interceptor.total_body_budget = "64 MiB"`          |
 | `sidecar.audit.wal_max_bytes = 104857600`                        | `sidecar.audit.wal_max_size = "100 MiB"`                    |
 
 Existing `max_decompressed_body_size` and secret-gateway byte-size fields also

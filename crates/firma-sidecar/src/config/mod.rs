@@ -391,11 +391,14 @@ pub enum InterceptorConfigError {
     /// `max_decompressed_body_size` was too large for this platform's `usize`.
     #[error("interceptor.max_decompressed_body_size is too large for this platform")]
     MaxDecompressedBodyTooLarge,
-    /// `total_body_budget_bytes` was zero.
-    #[error("interceptor.total_body_budget_bytes must be > 0")]
+    /// `total_body_budget` was zero.
+    #[error("interceptor.total_body_budget must be > 0")]
     ZeroTotalBodyBudget,
+    /// `total_body_budget` was too large for this platform's `usize`.
+    #[error("interceptor.total_body_budget is too large for this platform")]
+    TotalBodyBudgetTooLarge,
     /// The total body budget was below the per-request maximum.
-    #[error("interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_size")]
+    #[error("interceptor.total_body_budget must be >= interceptor.max_request_body_size")]
     TotalBodyBudgetBelowRequest,
     /// The CONNECT/MITM relay settings were invalid.
     #[error(transparent)]
@@ -415,6 +418,8 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
     fn try_from(s: schema_ic::InterceptorConfig) -> Result<Self, Self::Error> {
         let max_request_body_size = usize::try_from(s.max_request_body_size.as_u64())
             .map_err(|_| InterceptorConfigError::MaxRequestBodyTooLarge)?;
+        let total_body_budget = usize::try_from(s.total_body_budget.as_u64())
+            .map_err(|_| InterceptorConfigError::TotalBodyBudgetTooLarge)?;
         let config = Self {
             mode: s.mode,
             listen_addr: s.listen_addr,
@@ -424,7 +429,7 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
             max_decompressed_body_size: s.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
             https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
-            total_body_budget_bytes: s.total_body_budget_bytes,
+            total_body_budget_bytes: total_body_budget,
         };
         if config.drain_timeout.is_zero() {
             return Err(InterceptorConfigError::ZeroDrainTimeout);
@@ -484,7 +489,8 @@ impl Default for InterceptorConfig {
             max_decompressed_body_size: d.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
-            total_body_budget_bytes: d.total_body_budget_bytes,
+            total_body_budget_bytes: usize::try_from(d.total_body_budget.as_u64())
+                .unwrap_or(64 * 1024 * 1024),
         }
     }
 }
@@ -1290,7 +1296,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_max_request_body_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_size = 0;
+        schema.interceptor.max_request_body_size = ByteSize::b(0);
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1314,7 +1320,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_total_body_budget_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.total_body_budget_bytes = 0;
+        schema.interceptor.total_body_budget = ByteSize::b(0);
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1326,8 +1332,8 @@ mod tests {
     #[test]
     fn test_sidecar_config_budget_smaller_than_max_body_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_size = 8 * 1024 * 1024;
-        schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
+        schema.interceptor.max_request_body_size = ByteSize::mib(8);
+        schema.interceptor.total_body_budget = ByteSize::mib(4);
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1339,8 +1345,8 @@ mod tests {
     #[test]
     fn test_sidecar_config_budget_equals_max_body_valid() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_size = 4 * 1024 * 1024;
-        schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
+        schema.interceptor.max_request_body_size = ByteSize::mib(4);
+        schema.interceptor.total_body_budget = ByteSize::mib(4);
         assert!(SidecarConfig::try_from(schema).is_ok());
     }
 
@@ -1586,7 +1592,7 @@ signing_key_path = "/etc/firma/audit.pem"
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
         assert_eq!(config.interceptor.drain_timeout, Duration::from_secs(15));
-        assert_eq!(config.interceptor.max_request_body_size, 2_097_152);
+        assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
         assert_eq!(
             config.interceptor.connect_relay.setup_timeout,
             Duration::from_secs(12)

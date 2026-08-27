@@ -85,8 +85,8 @@ pub struct InterceptorConfig {
     pub https_mitm: HttpsMitmConfig,
     /// Global ceiling for the total bytes of request bodies buffered
     /// concurrently across all in-flight proxy connections.
-    #[serde(default = "default_total_body_budget_bytes")]
-    pub total_body_budget_bytes: usize,
+    #[serde(default = "default_total_body_budget")]
+    pub total_body_budget: ByteSize,
 }
 
 impl Default for InterceptorConfig {
@@ -103,7 +103,7 @@ impl Default for InterceptorConfig {
             max_decompressed_body_size: default_max_decompressed_body_size(),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
-            total_body_budget_bytes: default_total_body_budget_bytes(),
+            total_body_budget: default_total_body_budget(),
         }
     }
 }
@@ -207,8 +207,8 @@ const fn default_max_decompressed_body_size() -> ByteSize {
     ByteSize::mb(16)
 }
 
-const fn default_total_body_budget_bytes() -> usize {
-    64 * 1024 * 1024
+const fn default_total_body_budget() -> ByteSize {
+    ByteSize::mib(64)
 }
 
 const fn default_connect_setup_timeout() -> Duration {
