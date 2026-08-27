@@ -784,20 +784,15 @@ async fn relay_connect_tunnel(
 ) -> Result<TunnelRelayStats, String> {
     let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
-        .map_err(|_| {
-            format!(
-                "upgrade timed out after {} seconds",
-                limits.setup_timeout.as_secs()
-            )
-        })?
+        .map_err(|_| format!("upgrade timed out after {:?}", limits.setup_timeout))?
         .map_err(|e| format!("upgrade failed: {e}"))?;
     let mut downstream = TokioIo::new(upgraded);
     let mut upstream = tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target))
         .await
         .map_err(|_| {
             format!(
-                "upstream connect timed out after {} seconds for {target}",
-                limits.setup_timeout.as_secs()
+                "upstream connect timed out after {:?} for {target}",
+                limits.setup_timeout
             )
         })?
         .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
@@ -808,8 +803,8 @@ async fn relay_connect_tunnel(
     .await
     .map_err(|_| {
         format!(
-            "CONNECT tunnel exceeded {} seconds session cap",
-            limits.session_max.as_secs()
+            "CONNECT tunnel exceeded {:?} session cap",
+            limits.session_max
         )
     })?
     .map_err(|e| format!("tunnel relay failed: {e}"))?;
@@ -836,12 +831,7 @@ async fn relay_connect_mitm(
 ) -> Result<(), String> {
     let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
-        .map_err(|_| {
-            format!(
-                "upgrade timed out after {} seconds",
-                limits.setup_timeout.as_secs()
-            )
-        })?
+        .map_err(|_| format!("upgrade timed out after {:?}", limits.setup_timeout))?
         .map_err(|e| format!("upgrade failed: {e}"))?;
     let mut downstream = TokioIo::new(upgraded);
     let mut preface = [0_u8; CONNECT_PREFACE_MAX_BYTES];
@@ -852,9 +842,8 @@ async fn relay_connect_mitm(
     .await
     .map_err(|_| {
         format!(
-            "downstream preface read timed out after {} seconds for {}",
-            limits.setup_timeout.as_secs(),
-            target.host
+            "downstream preface read timed out after {:?} for {}",
+            limits.setup_timeout, target.host
         )
     })?
     .map_err(|e| format!("downstream preface read failed for {}: {e}", target.host))?;
@@ -889,9 +878,8 @@ async fn relay_connect_mitm(
         .await
         .map_err(|_| {
             format!(
-                "downstream TLS handshake timed out after {} seconds for {}",
-                limits.setup_timeout.as_secs(),
-                target.host
+                "downstream TLS handshake timed out after {:?} for {}",
+                limits.setup_timeout, target.host
             )
         })?
         .map_err(|e| format!("downstream TLS handshake failed for {}: {e}", target.host))?;
@@ -924,9 +912,8 @@ async fn relay_connect_mitm(
         .await
         .map_err(|_| {
             format!(
-                "HTTPS MITM relay exceeded {} seconds session cap for {}",
-                limits.session_max.as_secs(),
-                target_host
+                "HTTPS MITM relay exceeded {:?} session cap for {}",
+                limits.session_max, target_host
             )
         })?
         .map_err(|e| format!("HTTPS MITM connection failed: {e}"))?;
@@ -1076,8 +1063,8 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
             .await
             .map_err(|_| {
                 format!(
-                    "upstream connect timed out after {} seconds for {target}",
-                    limits.setup_timeout.as_secs()
+                    "upstream connect timed out after {:?} for {target}",
+                    limits.setup_timeout
                 )
             })?
             .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
@@ -1086,8 +1073,8 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
             .await
             .map_err(|_| {
                 format!(
-                    "upstream prefetch write timed out after {} seconds for {target}",
-                    limits.setup_timeout.as_secs()
+                    "upstream prefetch write timed out after {:?} for {target}",
+                    limits.setup_timeout
                 )
             })?
             .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
@@ -1099,8 +1086,8 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
     .await
     .map_err(|_| {
         format!(
-            "CONNECT tunnel exceeded {} seconds session cap",
-            limits.session_max.as_secs()
+            "CONNECT tunnel exceeded {:?} session cap",
+            limits.session_max
         )
     })?
     .map_err(|e| format!("tunnel relay failed: {e}"))?;
@@ -2906,6 +2893,26 @@ mod tests {
         assert_eq!(
             classify_connect_relay_failure("dns resolution failed"),
             "dns"
+        );
+    }
+
+    #[test]
+    fn subsecond_relay_timeout_diagnostics_do_not_truncate_to_zero() {
+        let limits = ConnectRelayLimits {
+            setup_timeout: Duration::from_millis(500),
+            session_max: Duration::from_millis(750),
+        };
+
+        assert_eq!(
+            format!("upgrade timed out after {:?}", limits.setup_timeout),
+            "upgrade timed out after 500ms"
+        );
+        assert_eq!(
+            format!(
+                "CONNECT tunnel exceeded {:?} session cap",
+                limits.session_max
+            ),
+            "CONNECT tunnel exceeded 750ms session cap"
         );
     }
 
