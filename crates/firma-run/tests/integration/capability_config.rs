@@ -7,7 +7,7 @@
     reason = "test code"
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use firma_run::config::{CapabilitySource, resolve_profile};
@@ -89,7 +89,7 @@ kind = "disabled"
     assert_eq!(resolved.capability.source, CapabilitySource::Disabled);
     assert_eq!(
         resolved.capability.public_key_path,
-        Some(PathBuf::from("keys/default.pub"))
+        Some(dir.path().join("keys/default.pub"))
     );
     assert!((resolved.capability.refresh_ratio - 0.55).abs() < f64::EPSILON);
     assert_eq!(resolved.capability.grace, Duration::from_secs(45));

@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use firma_run::config::{CapabilitySource, resolve_profile};
+use firma_run::error::RunError;
 use firma_run::runtime::RunInput;
 
-fn run_input(config: PathBuf, profile: &str) -> RunInput {
+fn run_input(config: PathBuf) -> RunInput {
     RunInput {
-        profile: profile.to_string(),
+        profile: "generic".to_string(),
         config: Some(config),
         backend: None,
         sidecar_cli: firma_run::sidecar::SidecarCli::Unset,
@@ -26,123 +27,81 @@ fn run_input(config: PathBuf, profile: &str) -> RunInput {
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one fixture must cover defaults plus selected and unselected profile resource paths"
-)]
-fn relative_config_anchors_selected_resources_without_selecting_other_profile()
+fn relative_config_path_rebases_resources_from_an_absolute_config_dir()
 -> Result<(), Box<dyn std::error::Error>> {
     let current_dir = std::env::current_dir()?;
     let tmpdir = tempfile::tempdir_in(&current_dir)?;
     let config_dir = tmpdir.path().join("config");
     fs_err::create_dir_all(&config_dir)?;
-    fs_err::create_dir_all(config_dir.join("seccomp"))?;
-    fs_err::write(config_dir.join("seccomp/selected.toml"), "version = 1\n")?;
-    fs_err::write(config_dir.join("seccomp/unselected.toml"), "version = 1\n")?;
+    let capability_path = config_dir.join("capability.toml");
+    fs_err::write(&capability_path, "token = 'test'\n")?;
     let config_path = config_dir.join(firma_config_loader::CONFIG_FILE_NAME);
     fs_err::write(
         &config_path,
         r#"
-[run.defaults.capability]
-public_key_path = "keys/default.pub"
-
-[run.profiles.generic]
-backend = "bwrap"
-
-[[run.profiles.generic.mounts]]
-source = "selected-workspace"
-target = "/sandbox/selected"
-
-[run.profiles.generic.seccomp_policy]
-source_policy_path = "seccomp/selected.toml"
-artifact_dir = "artifacts/selected"
-
-[run.profiles.generic.capability.source]
+[run.profiles.generic.capability]
 kind = "file"
-path = "capabilities/selected.toml"
-
-[run.profiles.codex]
-backend = "bwrap"
-
-[[run.profiles.codex.mounts]]
-source = "unselected-workspace"
-target = "/sandbox/unselected"
-
-[run.profiles.codex.seccomp_policy]
-source_policy_path = "seccomp/unselected.toml"
-artifact_dir = "artifacts/unselected"
-
-[run.profiles.codex.capability]
-kind = "file"
-path = "capabilities/unselected.toml"
+path = "capability.toml"
 "#,
     )?;
     let relative_config = config_path.strip_prefix(&current_dir)?.to_path_buf();
 
-    let selected = resolve_profile(&run_input(relative_config.clone(), "generic"))?;
+    let resolved = resolve_profile(&run_input(relative_config))?;
 
+    let CapabilitySource::File { path } = resolved.capability.source else {
+        return Err("expected file capability source".into());
+    };
+    assert!(path.is_absolute(), "resolved path was relative: {path:?}");
     assert_eq!(
-        selected.capability.source,
-        CapabilitySource::File {
-            path: config_dir.join("capabilities/selected.toml")
-        }
+        fs_err::canonicalize(path)?,
+        fs_err::canonicalize(capability_path)?
     );
-    assert_eq!(
-        selected.capability.public_key_path,
-        Some(config_dir.join("keys/default.pub"))
-    );
-    let selected_json = serde_json::to_value(selected)?;
-    assert_eq!(
-        selected_json["mounts"][0]["source"],
-        config_dir
-            .join("selected-workspace")
-            .to_string_lossy()
-            .as_ref()
-    );
-    assert_eq!(selected_json["mounts"][0]["target"], "/sandbox/selected");
-    assert_eq!(
-        selected_json["seccomp_policy"]["source_policy_path"],
-        config_dir
-            .join("seccomp/selected.toml")
-            .to_string_lossy()
-            .as_ref()
-    );
-    assert_eq!(
-        selected_json["seccomp_policy"]["artifact_dir"],
-        config_dir
-            .join("artifacts/selected")
-            .to_string_lossy()
-            .as_ref()
-    );
+    Ok(())
+}
 
-    let unselected = resolve_profile(&run_input(relative_config, "codex"))?;
+#[test]
+fn executable_allowlist_rejects_directories() -> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let directory = tmpdir.path().join("not-an-executable-file");
+    fs_err::create_dir(&directory)?;
+    let config_path = tmpdir.path().join(firma_config_loader::CONFIG_FILE_NAME);
+    let sidecar_endpoint = if cfg!(unix) {
+        "unix:///tmp/firma-sidecar.sock"
+    } else {
+        "tcp://127.0.0.1:18080"
+    };
+    let mediator_endpoint = if cfg!(unix) {
+        "unix:///tmp/firma-sidecar-tools.sock"
+    } else {
+        "tcp://127.0.0.1:18081"
+    };
+    fs_err::write(
+        &config_path,
+        format!(
+            r#"
+[run.profiles.generic]
+sidecar_endpoint = "{sidecar_endpoint}"
+
+[run.profiles.generic.sidecar_local_exec]
+endpoint = "{mediator_endpoint}"
+allowed_executables = ['{}']
+"#,
+            directory.display()
+        ),
+    )?;
+
+    let error = resolve_profile(&run_input(config_path))
+        .expect_err("an allowlist directory must fail validation");
+
+    let RunError::ConfigValidation(message) = error else {
+        return Err(format!("expected ConfigValidation, got {error:?}").into());
+    };
     assert_eq!(
-        unselected.capability.source,
-        CapabilitySource::File {
-            path: config_dir.join("capabilities/unselected.toml")
-        }
-    );
-    let unselected_json = serde_json::to_value(unselected)?;
-    assert_eq!(
-        unselected_json["mounts"][0]["source"],
-        config_dir
-            .join("unselected-workspace")
-            .to_string_lossy()
-            .as_ref()
-    );
-    assert_eq!(
-        unselected_json["seccomp_policy"]["source_policy_path"],
-        config_dir
-            .join("seccomp/unselected.toml")
-            .to_string_lossy()
-            .as_ref()
-    );
-    assert_eq!(
-        unselected_json["seccomp_policy"]["artifact_dir"],
-        config_dir
-            .join("artifacts/unselected")
-            .to_string_lossy()
-            .as_ref()
+        message,
+        format!(
+            "sidecar_local_exec.allowed_executables entries must point to existing regular files: {}",
+            directory.display()
+        )
     );
     Ok(())
 }

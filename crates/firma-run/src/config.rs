@@ -1133,8 +1133,8 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint, capability_from_patch,
-        resolve_profile,
+        CapabilitySourcePatch, FileConfig, SandboxIdentityMode, SeccompRuntimeMode,
+        SidecarEndpoint, capability_from_patch, rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -1157,6 +1157,153 @@ mod tests {
         let custom = vec!["communication.internal.send".to_string()];
         let resolved = capability_from_patch(lease_patch(Some(custom.clone())));
         assert_eq!(resolved.requested_actions, custom);
+    }
+
+    #[test]
+    fn file_paths_rebase_for_defaults_and_every_profile_only_where_config_relative() {
+        let mut config: FileConfig = toml::from_str(
+            r#"
+            [[defaults.mounts]]
+            source = "workspace"
+            target = "/sandbox/workspace"
+
+            [defaults.seccomp_policy]
+            source_policy_path = "seccomp/policy.toml"
+            artifact_dir = "seccomp/artifacts"
+
+            [defaults.capability]
+            public_key_path = "keys/authority.pub"
+
+            [profiles.unselected]
+            mask_home_paths = [".ssh"]
+
+            [[profiles.unselected.mounts]]
+            source = "other-workspace"
+            target = "/sandbox/other"
+
+            [profiles.unselected.capability.source]
+            kind = "file"
+            path = "capabilities/unselected.toml"
+
+            [profiles.unselected.sidecar_local_exec]
+            allowed_executables = ["/usr/bin/bash"]
+            "#,
+        )
+        .unwrap();
+
+        rebase_file_paths(&mut config, std::path::Path::new("/cfg"));
+
+        assert_eq!(
+            config.defaults.mounts[0].source,
+            PathBuf::from("/cfg/workspace")
+        );
+        assert_eq!(
+            config.defaults.mounts[0].target,
+            PathBuf::from("/sandbox/workspace")
+        );
+        let seccomp = config.defaults.seccomp_policy.as_ref().unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            PathBuf::from("/cfg/seccomp/policy.toml")
+        );
+        assert_eq!(
+            seccomp.artifact_dir,
+            PathBuf::from("/cfg/seccomp/artifacts")
+        );
+        assert_eq!(
+            config
+                .defaults
+                .capability
+                .as_ref()
+                .and_then(|capability| capability.public_key_path.as_ref()),
+            Some(&PathBuf::from("/cfg/keys/authority.pub"))
+        );
+        let unselected = &config.profiles["unselected"];
+        assert_eq!(
+            unselected.mounts[0].source,
+            PathBuf::from("/cfg/other-workspace")
+        );
+        match unselected
+            .capability
+            .as_ref()
+            .and_then(|capability| capability.source.as_ref())
+        {
+            Some(CapabilitySourcePatch::File { path }) => {
+                assert_eq!(path, &PathBuf::from("/cfg/capabilities/unselected.toml"));
+            }
+            other => panic!("expected file capability source, got {other:?}"),
+        }
+        assert_eq!(
+            unselected.mask_home_paths,
+            Some(vec![PathBuf::from(".ssh")])
+        );
+        assert_eq!(
+            unselected
+                .sidecar_local_exec
+                .as_ref()
+                .map(|mediator| &mediator.allowed_executables),
+            Some(&vec![PathBuf::from("/usr/bin/bash")])
+        );
+    }
+
+    #[test]
+    fn allowed_executable_parent_alias_is_stored_canonically() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        let nested = bin_dir.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let executable = bin_dir.join("agent");
+        fs::write(&executable, "test executable").unwrap();
+        let alias = nested.join("..").join("agent");
+
+        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
+
+        assert_eq!(
+            allowed,
+            BTreeSet::from([fs::canonicalize(executable).unwrap()])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn allowed_executable_symlink_is_stored_canonically() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("agent");
+        let alias = dir.path().join("agent-alias");
+        fs::write(&executable, "test executable").unwrap();
+        symlink(&executable, &alias).unwrap();
+
+        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
+
+        assert_eq!(
+            allowed,
+            BTreeSet::from([fs::canonicalize(executable).unwrap()])
+        );
+    }
+
+    #[test]
+    fn allowed_executable_must_be_absolute_and_resolvable() {
+        let relative = super::canonicalize_allowed_executables(&[PathBuf::from("bin/agent")])
+            .expect_err("relative path must fail");
+        assert!(relative.to_string().contains("must be absolute paths"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("agent");
+        fs::write(&executable, "test executable").unwrap();
+        let empty = super::canonicalize_allowed_executables(&[PathBuf::new(), executable])
+            .expect_err("empty path must fail even when another entry is valid");
+        assert!(empty.to_string().contains("must be absolute paths"));
+
+        let missing = dir.path().join("missing-agent");
+        let unresolved = super::canonicalize_allowed_executables(&[missing])
+            .expect_err("missing path must fail");
+        assert!(
+            unresolved
+                .to_string()
+                .contains("could not be canonicalized")
+        );
     }
 
     #[test]
@@ -1335,8 +1482,10 @@ mod tests {
     fn toml_config_overrides_profile() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let capability_path = tmpdir.path().join("capability.token");
 
-        let toml = r#"
+        let toml = format!(
+            r#"
 [run.defaults]
 sidecar_endpoint = "tcp://127.0.0.1:18080"
 
@@ -1347,9 +1496,10 @@ env_passthrough = ["HOME"]
 
 [run.profiles.codex.capability]
 kind = "file"
-path = "/tmp/capability.token"
-"#
-        .to_string();
+path = '{}'
+"#,
+            capability_path.display()
+        );
         fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("codex");
@@ -1367,7 +1517,7 @@ path = "/tmp/capability.token"
         assert_eq!(
             resolved.capability.source,
             CapabilitySource::File {
-                path: PathBuf::from("/tmp/capability.token")
+                path: capability_path
             }
         );
     }
@@ -1888,72 +2038,6 @@ allowed_executables = ['{}', '{}', '{}']
             mediator.hitl_mode,
             super::CommandMediatorHitlMode::AsyncToken
         );
-    }
-
-    #[test]
-    fn allowed_executable_paths_are_canonicalized() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin_dir = dir.path().join("bin");
-        let nested = bin_dir.join("nested");
-        fs::create_dir_all(&nested).unwrap();
-        let executable = bin_dir.join("agent");
-        fs::write(&executable, "test executable").unwrap();
-        let alias = nested.join("..").join("agent");
-
-        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
-
-        assert_eq!(
-            allowed,
-            BTreeSet::from([fs::canonicalize(executable).unwrap()])
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn allowed_executable_symlinks_are_canonicalized() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let executable = dir.path().join("agent");
-        let alias = dir.path().join("agent-alias");
-        fs::write(&executable, "test executable").unwrap();
-        symlink(&executable, &alias).unwrap();
-
-        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
-
-        assert_eq!(
-            allowed,
-            BTreeSet::from([fs::canonicalize(executable).unwrap()])
-        );
-    }
-
-    #[test]
-    fn allowed_executable_must_be_absolute_and_resolvable() {
-        let relative = super::canonicalize_allowed_executables(&[PathBuf::from("bin/agent")])
-            .expect_err("relative path must fail");
-        assert!(relative.to_string().contains("must be absolute paths"));
-
-        let dir = tempfile::tempdir().unwrap();
-        let executable = dir.path().join("agent");
-        fs::write(&executable, "test executable").unwrap();
-        let empty = super::canonicalize_allowed_executables(&[PathBuf::new(), executable])
-            .expect_err("empty path must fail even when another entry is valid");
-        assert!(empty.to_string().contains("must be absolute paths"));
-
-        let missing = dir.path().join("missing-agent");
-        let unresolved = super::canonicalize_allowed_executables(&[missing])
-            .expect_err("missing path must fail");
-        assert!(
-            unresolved
-                .to_string()
-                .contains("could not be canonicalized")
-        );
-
-        let directory = dir.path().join("not-a-file");
-        fs::create_dir(&directory).unwrap();
-        let not_file =
-            super::canonicalize_allowed_executables(&[directory]).expect_err("directory must fail");
-        assert!(not_file.to_string().contains("existing regular files"));
     }
 
     #[test]
