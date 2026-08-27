@@ -185,7 +185,11 @@ pub struct CommandMediatorPatch {
     )]
     pub timeout: Option<Duration>,
     pub hitl_mode: Option<CommandMediatorHitlMode>,
-    pub hitl_max_wait_ms: Option<u64>,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
+        default
+    )]
+    pub hitl_max_wait: Option<Duration>,
     pub enforce_known_executables: Option<bool>,
     #[serde(default)]
     pub allowed_executables: Vec<String>,

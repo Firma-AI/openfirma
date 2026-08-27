@@ -54,7 +54,7 @@ struct MediatorResponse {
 ///
 /// For `hitl_mode = "async_token"` this function blocks — sleeping between
 /// retries — until the sidecar returns `allow` or `deny`, or until
-/// `hitl_max_wait_ms` is exceeded (fail-closed). The operator approves the
+/// `hitl_max_wait` is exceeded (fail-closed). The operator approves the
 /// pending token out-of-band via `firma token approve <token-id>`.
 ///
 /// # Errors
@@ -77,7 +77,7 @@ pub fn enforce_local_command_governance(
         &identity.sandbox_id,
         agent_id.as_deref(),
     );
-    let deadline = std::time::Instant::now() + Duration::from_millis(mediator.hitl_max_wait_ms);
+    let deadline = std::time::Instant::now() + mediator.hitl_max_wait;
 
     let mut approval_token: Option<String> = None;
     loop {
@@ -204,8 +204,8 @@ fn handle_pending_hitl(
     if std::time::Instant::now() + retry_after >= deadline {
         return Err(RunError::Governance(format!(
             "governance denied execution: HITL approval wait exceeded \
-             hitl_max_wait_ms={} (fail-closed)",
-            mediator.hitl_max_wait_ms
+             hitl_max_wait={:?} (fail-closed)",
+            mediator.hitl_max_wait
         )));
     }
     tracing::info!(
@@ -389,7 +389,7 @@ mod tests {
             endpoint: CommandMediatorEndpoint::Tcp { addr },
             timeout: Duration::from_millis(500),
             hitl_mode: CommandMediatorHitlMode::SyncWait,
-            hitl_max_wait_ms: 5_000,
+            hitl_max_wait: Duration::from_secs(5),
             enforce_known_executables: false,
             allowed_executables: BTreeSet::default(),
         }
@@ -503,7 +503,7 @@ mod tests {
 
         let mut cfg = mediator_config(addr);
         cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
-        cfg.hitl_max_wait_ms = 5_000;
+        cfg.hitl_max_wait = Duration::from_secs(5);
 
         let result = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[]);
         assert!(result.is_ok(), "unexpected: {result:?}");
@@ -550,12 +550,13 @@ mod tests {
 
         let mut cfg = mediator_config(addr);
         cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
-        cfg.hitl_max_wait_ms = 60; // expires after first retry_after (50ms) would push past deadline
+        // Expires after the first 50ms retry would push past the deadline.
+        cfg.hitl_max_wait = Duration::from_millis(60);
 
         let err = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[])
             .expect_err("expected timeout fail-closed");
         assert!(
-            err.to_string().contains("hitl_max_wait_ms"),
+            err.to_string().contains("hitl_max_wait"),
             "unexpected: {err}"
         );
     }

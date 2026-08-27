@@ -165,13 +165,13 @@ Decision handling:
 3. `pending_hitl` with `sync_wait` -> blocked (explicit pending fail-closed).
 4. `pending_hitl` with `async_token` -> runtime enters internal retry loop, carrying `approval_token` on subsequent requests.
 5. Missing token for async mode -> blocked (invalid pending state).
-6. Retry deadline exceeded (`hitl_max_wait_ms`) -> blocked (fail-closed timeout).
+6. Retry deadline exceeded (`hitl_max_wait`) -> blocked (fail-closed timeout).
 7. Any other/invalid response -> blocked.
 
 ### HITL Runtime Model
 
 1. `sync_wait`: governance endpoint must return final `allow|deny` in request timeout window.
-2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; runtime sleeps `retry_after_ms` and retries internally until `allow|deny` or `hitl_max_wait_ms` expires.
+2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; runtime sleeps the wire-protocol `retry_after_ms` and retries internally until `allow|deny` or configured `hitl_max_wait` expires.
 3. No background in-place escalation of an already running sandbox process.
 
 ### Non-Cooperative Anti-Bypass Guarantees
@@ -355,7 +355,7 @@ Repeat with decision responses:
 3. `{"decision":"pending_hitl","reason":"awaiting-approval","approval_token":"tok_123","retry_after_ms":500}` with `async_token` -> runtime should retry internally and only proceed on final `allow`.
 4. governance endpoint stopped/unavailable -> must fail closed.
 5. response missing `approval_token` in async mode -> must fail closed.
-6. persistent `pending_hitl` responses beyond `hitl_max_wait_ms` -> must fail closed.
+6. persistent `pending_hitl` responses beyond `hitl_max_wait` -> must fail closed.
 7. run non-allowlisted executable (`/usr/bin/env`) -> must fail closed before launch.
 
 ### Step 5: Negative Config Validation

@@ -155,9 +155,9 @@ impl ResolvedProfile {
                     "sidecar_local_exec.timeout must be > 0".to_string(),
                 ));
             }
-            if mediator.hitl_max_wait_ms == 0 {
+            if mediator.hitl_max_wait.is_zero() {
                 return Err(RunError::ConfigValidation(
-                    "sidecar_local_exec.hitl_max_wait_ms must be > 0".to_string(),
+                    "sidecar_local_exec.hitl_max_wait must be > 0".to_string(),
                 ));
             }
             #[cfg(target_family = "unix")]
@@ -312,8 +312,9 @@ pub struct CommandMediatorConfig {
     /// Maximum total wall-clock time `firma-run` will block waiting for a
     /// human to approve a `pending_hitl` token. Applies only when
     /// `hitl_mode = "async_token"`. Fail-closed once exceeded.
-    /// Default: 300 000 ms (5 minutes).
-    pub(crate) hitl_max_wait_ms: u64,
+    /// Default: 5 minutes.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub(crate) hitl_max_wait: Duration,
     pub(crate) enforce_known_executables: bool,
     pub(crate) allowed_executables: BTreeSet<String>,
 }
@@ -767,7 +768,7 @@ fn sidecar_local_exec_from_patch(
         endpoint,
         timeout: patch.timeout.unwrap_or(Duration::from_millis(500)),
         hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
-        hitl_max_wait_ms: patch.hitl_max_wait_ms.unwrap_or(300_000),
+        hitl_max_wait: patch.hitl_max_wait.unwrap_or(Duration::from_mins(5)),
         enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
         allowed_executables,
     })
@@ -1052,6 +1053,7 @@ pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> 
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
     use pretty_assertions::assert_eq;
