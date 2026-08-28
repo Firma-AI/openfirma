@@ -291,9 +291,54 @@ construct or mutate it outside the module.
 
 ### Detailed proof obligations
 
-| ID          | Invariant | Kind                 | Owner/proof boundary                       | Stimulus and observable effects                                                                                 | Status  |
-| ----------- | --------- | -------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | ------- |
-| `PROOF-001` | `INV-001` | Strict configuration | synthesis integration tests                | Flat input through explicit, environment, and CWD sources returns path-bearing unknown-top-level-key failures.  | Planned |
-| `PROOF-002` | `INV-001` | Recursive schema     | synthesis integration tests                | Sectioned input with an unknown Sidecar field returns a path-bearing schema failure and writes no config.       | Planned |
-| `PROOF-003` | `INV-002` | Lifecycle/filesystem | `prepare_network_runtime` integration test | Invalid selected input returns before orchestration; the complete run marker/output tree does not exist.        | Planned |
-| `PROOF-004` | both      | Positive controls    | existing synthesis and preparation suites  | Sectioned explicit input, precedence, resource rebasing, overrides, and minimal synthesis retain exact outputs. | Planned |
+| ID          | Invariant | Kind                 | Owner/proof boundary                       | Stimulus and observable effects                                                                                 | Status   |
+| ----------- | --------- | -------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | -------- |
+| `PROOF-001` | `INV-001` | Strict configuration | synthesis integration tests                | Flat input through explicit, environment, and CWD sources returns path-bearing unknown-top-level-key failures.  | Verified |
+| `PROOF-002` | `INV-001` | Recursive schema     | synthesis integration tests                | Sectioned input with an unknown Sidecar field returns a path-bearing schema failure and writes no config.       | Verified |
+| `PROOF-003` | `INV-002` | Lifecycle/filesystem | `prepare_network_runtime` integration test | Invalid selected input returns before orchestration; the complete run marker/output tree does not exist.        | Verified |
+| `PROOF-004` | both      | Positive controls    | existing synthesis and preparation suites  | Sectioned explicit input, precedence, resource rebasing, overrides, and minimal synthesis retain exact outputs. | Verified |
+
+## Post-implementation independent review
+
+The exact implementation candidate reviewed was
+`7fc9cbbe38e34c1cb18581bf0fd8536eea3d3d88..fdf6985c155fe5e5eab334a909d9e03f2847699c`.
+The reviewer reconstructed the production routing and direct synthesis paths,
+inspected the full modified Rust files and tests, and found no implementation,
+Rust correctness, strict-validation, lifecycle-ordering, platform, or public-doc
+defect. It reported one lifecycle-stage concern:
+
+### `IMPL-001` — Low — Accepted plan remains in the final branch tip
+
+- **Evidence:** `docs/architecture/sectioned-sidecar-templates-plan.md:1-299`
+  is added and remains present at `fdf6985c`.
+- **Conflict:** The accepted plan's acceptance outcomes and final-verification
+  section require that no plan Markdown remain in the final branch tip or PR
+  diff.
+- **Impact:** The implementation does not fully conform to its accepted
+  cleanup/disposition contract; an implementation-planning artifact becomes
+  permanent product documentation.
+- **Correction:** Delete
+  `docs/architecture/sectioned-sidecar-templates-plan.md` from the final tip
+  while retaining immutable commit `b56e6d85` as its durable locator.
+- **Assumption:** `fdf6985c` is intended as the final review candidate rather
+  than an intermediate pre-cleanup commit.
+
+Disposition: accepted as the required closing lifecycle action, with the
+reviewer's assumption corrected. `fdf6985c` was intentionally the exact
+implementation review candidate, not the final branch tip: the repository
+workflow requires this review record to preserve the accepted artifact and
+findings before its immediate child mechanically deletes the plan. No
+behavior-changing repair or re-review is needed. The next commit removes only
+this file.
+
+### Verification evidence
+
+- Focused `firma-run` synthesis, preparation, and production-routing tests: 18
+  passed during iteration; the final complete `firma-run` suite, including the
+  added missing-section regression, passed 417 tests with 4 skipped.
+- `just check`: 2,589 tests passed with 34 skipped; clippy, doctests, build,
+  audit, dependency policy, formatting, and release-script checks passed. The
+  first run hit two unrelated TUI rewrite-completion timing failures; their
+  exact isolated rerun passed before the complete green rerun.
+- `just docs-build`: 311 pages built.
+- `git diff --check` and changed-file dprint checks passed.
