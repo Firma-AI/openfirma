@@ -233,11 +233,105 @@
 
 ## Final verification
 
-- Focused checks: formatter; `cargo nextest run -p firma-authority`; targeted
-  `firma` CLI integration tests; strict syntax search.
-- Workspace checks: `just check` and `just docs-build`.
-- Post-implementation independent review: required for Rust correctness,
-  trust-boundary behavior, regression coverage, and public-doc accuracy.
+- Focused checks: `firma-authority` passed 110 tests; the targeted
+  `issue-client-cert` CLI subprocess regression passed; strict syntax searches
+  found obsolete allow-list forms only in rejection assertions.
+- Workspace checks: `just check` passed all 2,594 tests with 34 skipped at the
+  final candidate, plus formatting, clippy, doctests, build, audit, dependency
+  policy, and release checks. One initial process-orchestrator timeout passed in
+  isolation before the clean full rerun. `just docs-build` built 311 pages at
+  the preceding production/docs-equivalent candidate.
+- Post-implementation independent review: the final exact candidate
+  `3ecb18b272a7be8dad5fdb8f68a5a67b46a06aac` received no actionable findings
+  after the three findings below were corrected and re-reviewed.
+
+## Post-implementation independent review
+
+The implementation received four independent exact-candidate reviews. The
+first reviewed `3678ddff`, the second reviewed `6b127ab0`, and the final review
+before CI reviewed `2ff04c31`. After correcting the Windows subprocess fixture,
+the final review covered the complete base-to-candidate range
+`67de08653d3d8bc96f96fdeaf4c8d6430453c9d8..3ecb18b272a7be8dad5fdb8f68a5a67b46a06aac`.
+
+### `IMPL-001` — Medium — Generated CN-only allow-list entry is not always valid TOML
+
+- **Evidence:** `crates/firma/src/services/authority.rs:338,347-348` and
+  `crates/firma/src/args/authority.rs:94-98` at candidate `3678ddff`.
+  `--cn` accepted an unrestricted string, but the selected identity was
+  interpolated directly into a quoted TOML value. For example, a CN containing
+  `"` produced a malformed snippet.
+- **Impact:** the output violated `INV-002`: a successfully issued certificate
+  could be paired with generated configuration that the Authority rejected.
+- **Correction:** encode the identity through `toml::Value::String` and add a
+  quote-bearing black-box case that parses the emitted snippet before comparing
+  the recovered identity.
+
+Disposition: corrected in `6b127ab02305b129ae81d671e41b01d41f86fc24`.
+The accepted plan was explicitly amended at `DEC-003`, `INV-002`, and the
+subprocess proof obligation. Independent re-review verified the TOML-aware
+encoding and regression.
+
+### `IMPL-002` — Low — Client certificate rotation guidance is inaccurate
+
+- **Evidence:** `docs/security/mtls-playbook.md:112-116` at candidate
+  `6b127ab0` claimed an old same-identity certificate would stop working after
+  an Authority restart with a new allow-list.
+- **Impact:** the allow-list matches identity strings rather than certificate
+  serial numbers, so both valid same-identity certificates remain authorized
+  until expiry or removal of their issuing CA.
+- **Correction:** document the same-identity limitation and the new-identity or
+  CA-rotation paths for invalidating an old certificate before expiry.
+
+Disposition: corrected in `2ff04c31dd31a81b35740d10132e5182526cde6d`.
+The final independent review verified the operational guidance and reported no
+remaining correctness, trust-boundary, test, documentation, or plan-conformance
+finding.
+
+### `IMPL-003` — Windows CI — Generated CA paths were not valid TOML
+
+- **Evidence:** the Windows `Check` job for candidate `a549671c` failed in
+  `issue_client_cert_prints_canonical_allow_list_entries` because direct path
+  interpolation left Windows backslashes unescaped in the test's generated
+  `firma.toml`.
+- **Impact:** Windows CI could not exercise the canonical generated-entry
+  contract even though production identity encoding was portable.
+- **Correction:** encode each generated CA path through `toml::Value::String`
+  before embedding it in the subprocess configuration.
+
+Disposition: corrected in `3ecb18b272a7be8dad5fdb8f68a5a67b46a06aac`.
+The targeted subprocess test passed locally. Fresh independent review confirmed
+that the path serialization is portable across supported path syntax and found
+no remaining actionable issue in the complete exact candidate. Windows CI is
+the final platform proof.
+
+#### Fresh exact-candidate review record
+
+> ## Review target
+>
+> - Workspace: `/home/user/workspace/pr611`
+> - HEAD/candidate confirmed: `3ecb18b272a7be8dad5fdb8f68a5a67b46a06aac`
+> - Base confirmed: `67de08653d3d8bc96f96fdeaf4c8d6430453c9d8`
+> - Working tree was clean.
+> - Reviewed the complete 12-file base-to-candidate diff and accepted plan.
+>
+> ## Findings
+>
+> **None.** No remaining actionable correctness, security, documentation, or test issues found.
+>
+> The Windows correction at `crates/firma/tests/integration/authority_client_cert.rs:21-32` is portable for supported paths: `toml::Value::String` emits quoted TOML with Windows backslashes and other special characters escaped. Production identity output uses the same safe mechanism at `crates/firma/src/services/authority.rs:347-348`.
+>
+> The strict parser correctly rejects alternate roots and unknown/missing entry fields, while preserving DNS-SAN-first/CN-fallback authorization. Documentation accurately describes identity-based authorization, restart requirements, and the limits of identity-based certificate revocation.
+>
+> ## Verification
+>
+> - `cargo nextest run -p firma-authority` — **110/110 passed**
+> - `dprint check <all changed Rust/Markdown/TXT files>` — **passed**
+> - Targeted CLI test command could not complete because the orb filesystem ran out of space during compilation; no test failure was observed.
+>
+> ## Assumptions / residual limits
+>
+> - Windows CI was not executable in this Linux orb; portability was established by tracing TOML serialization semantics and the subprocess test construction.
+> - Non-Unicode OS paths are outside TOML’s string representation; ordinary Windows Unicode paths, including drive separators/backslashes, are handled correctly.
 
 ## Technical evidence
 
@@ -340,8 +434,8 @@ docs-site/public/llms.txt                                # canonical retrieval s
 
 ### Detailed proof obligations
 
-| Invariant | Kind                | Owner/proof boundary             | Suite/boundary      | Stimulus                                                                                                                       | Observable effects                                                                              | Failure cases                                                                                                        | Status                  | Slice | Limits                                                                      |
-| --------- | ------------------- | -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----- | --------------------------------------------------------------------------- |
-| `INV-001` | Trust/configuration | `AuthorizedClientSet::load`      | unit                | canonical TOML; obsolete root; missing identity; unknown top-level field; `cn`, `san`, or unknown metadata under `[[clients]]` | canonical identities load                                                                       | every noncanonical case returns `ConfigError::ParseError` carrying the configured path, before verifier construction | Planned                 | 1     | Direct parser proof; startup propagation is existing control-flow evidence. |
-| `INV-001` | Trust/runtime       | `AllowListClientVerifier`        | integration         | canonical allow-list plus allowed/unlisted/no-cert/wrong-CA peers                                                              | only chain-valid, listed identity reaches policy stream                                         | all other peers fail before gRPC success                                                                             | Existing fixture update | 1     | Does not prove CLI text.                                                    |
-| `INV-002` | CLI/configuration   | `run_issue_client_cert` + parser | subprocess and unit | issue CN-only, quote-bearing CN, and DNS-SAN certificates                                                                      | emitted snippet parses as TOML and contains only `[[clients]]`/`identity` for selected identity | obsolete table/field names absent; generation errors have no success snippet                                         | Planned                 | 1     | Does not automate copying stdout into a deployment.                         |
+| Invariant | Kind                | Owner/proof boundary             | Suite/boundary      | Stimulus                                                                                                                       | Observable effects                                                                              | Failure cases                                                                                                        | Status   | Slice | Limits                                                                      |
+| --------- | ------------------- | -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------- | ----- | --------------------------------------------------------------------------- |
+| `INV-001` | Trust/configuration | `AuthorizedClientSet::load`      | unit                | canonical TOML; obsolete root; missing identity; unknown top-level field; `cn`, `san`, or unknown metadata under `[[clients]]` | canonical identities load                                                                       | every noncanonical case returns `ConfigError::ParseError` carrying the configured path, before verifier construction | Verified | 1     | Direct parser proof; startup propagation is existing control-flow evidence. |
+| `INV-001` | Trust/runtime       | `AllowListClientVerifier`        | integration         | canonical allow-list plus allowed/unlisted/no-cert/wrong-CA peers                                                              | only chain-valid, listed identity reaches policy stream                                         | all other peers fail before gRPC success                                                                             | Verified | 1     | Does not prove CLI text.                                                    |
+| `INV-002` | CLI/configuration   | `run_issue_client_cert` + parser | subprocess and unit | issue CN-only, quote-bearing CN, and DNS-SAN certificates                                                                      | emitted snippet parses as TOML and contains only `[[clients]]`/`identity` for selected identity | obsolete table/field names absent; generation errors have no success snippet                                         | Verified | 1     | Does not automate copying stdout into a deployment.                         |
