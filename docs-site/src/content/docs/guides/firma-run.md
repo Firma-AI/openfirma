@@ -28,7 +28,9 @@ flowchart LR
     Sidecar -->|"policy decision"| Audit
 ```
 
-You should already have a Sidecar running with a capability for some agent identity (see [Run the sidecar standalone](../run-the-sidecar/) and [Issue capability tokens](../issue-capability-tokens/)).
+You should already have a sectioned `firma.toml` with an Authority and registered
+agent identity. See [Issue capability tokens](../issue-capability-tokens/) for
+the automatic issuance flow.
 
 ## When `firma run` is the right tool
 
@@ -249,7 +251,7 @@ standalone log messages remain useful when either component is run directly.
 | Field                      | Meaning                                               |
 | -------------------------- | ----------------------------------------------------- |
 | `sandbox_id`               | Firma sandbox ID — unique per `firma run` invocation  |
-| `agent_id`                 | Stable Authority-registered UUID from the config      |
+| `agent_id`                 | Stable Authority-registered `agt_` TypeID from config |
 | `profile`                  | Local execution profile, such as `codex` or `generic` |
 | `pid`                      | OS process ID of the autostarted component            |
 | `listen_addr` / `endpoint` | Address the component is reachable at                 |
@@ -298,7 +300,7 @@ On structural backends, `firma run`:
 4. Sets `HTTP_PROXY=http://127.0.0.1:18080` (and the HTTPS variant).
 5. Launches `curl https://example.com` inside the sandbox under a sandbox identity.
 
-The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. With sidecar-seeded capabilities, the `curl` invocation never sees a token; it just talks to the proxy. If you use `--capability-file`, current `firma run` exports capability material into the wrapped process environment for compatibility, so do not use that mode when token non-exposure is a hard requirement.
+The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. With automatically staged capabilities, the `curl` invocation never sees a token; it just talks to the proxy. If you use `--capability-file`, `firma run` exports capability material into the wrapped process environment, so do not use that mode when token non-exposure is a hard requirement.
 
 On current macOS `vz` and Windows/WSL2 `wsl2`, `firma run` instead starts a host-side proxy bridge, injects proxy environment variables, clears `NO_PROXY`, and refuses to launch unless non-structural mode is explicitly allowed. A cooperative HTTP client is mediated and audited; a non-cooperative client can still bypass by ignoring proxy variables or opening direct sockets. The runtime logs this as a `backend compatibility proof`, not a structural proof.
 
@@ -355,11 +357,20 @@ Flow references:
 
 ## Step 5: Use the right capability
 
-For Stage 1 to allow the call, the Sidecar must have a capability matching `(session_id, action_class, resource)`. Two options:
+For Stage 1 to allow a call, the Sidecar needs a capability matching
+`(session_id, action_class, resource)`. By default, `firma run` requests and
+verifies a per-session capability automatically.
 
-**Pre-staged capability seed.** Issue a capability once with `firma authority issue --output .local/capability-<agent>.toml` and reference it in `[sidecar.capability_seed].paths` in `firma.toml`. Right for a long-lived dev workflow.
+To provide an already-issued capability explicitly, use the canonical file
+source in the selected profile:
 
-**Per-run capability.** Pass `--capability-file` to `firma run`. The wrapper writes the file to a host-side path the Sidecar reads. Right for one-off invocations.
+```toml
+[run.profiles.generic.capability.source]
+kind = "file"
+path = ".firma/capability-local-dev.toml"
+```
+
+The `--capability-file` flag selects the same file source for one invocation:
 
 ```bash
 firma authority -c .firma/firma.toml issue \
@@ -414,7 +425,9 @@ On structural backends, the agent sees:
 
 It does *not* see:
 
-- The capability token when capabilities are pre-seeded into the host-side Sidecar. Current `--capability-file` mode is an exception and exports capability material into the wrapped process environment.
+- Capabilities staged automatically for the host-side Sidecar. An explicit
+  file capability source exports capability material into the wrapped process
+  environment, so do not use it when token non-exposure is required.
 - Host environment variables (the sandbox starts with a stripped env).
 - Host filesystem outside profile-mounted paths.
 

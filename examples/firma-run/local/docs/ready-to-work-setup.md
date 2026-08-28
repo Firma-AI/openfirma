@@ -24,7 +24,7 @@ examples/firma-run/local/setup.sh
 ## 2) Pick your target agent
 
 Copy the config for your agent. `firma run` mints a capability automatically —
-no manual token issuance is needed for the primary flow.
+no manual token issuance is needed.
 
 Codex:
 
@@ -39,11 +39,6 @@ Claude:
 cp examples/firma-run/local/assets/firma.local.claude.example.toml .local/firma.toml
 cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 ```
-
-> **Legacy operator path (deprecated):** If you need a pre-provisioned seed
-> token (fixed session id, non-autostart sidecar), set
-> `FIRMA_RUN_SESSION_ID` and run `renew-capability.sh` before starting
-> the sidecar. See `codex-claude-local-setup.md` for that flow.
 
 ## 3) Start services (3 terminals)
 
@@ -86,9 +81,8 @@ cargo run -p firma -- run --profile claude-code -- claude
 ## Troubleshooting quick map
 
 - `TokenExpired`:
-  - Automatic path: start a new `firma run` session (capability is minted fresh each run).
-  - Legacy `[sidecar.capability_seed]` path: re-issue token with same `FIRMA_RUN_SESSION_ID` and
-    restart sidecar.
+  - Check the Authority connection and `firma run` refresh logs.
+  - Start a new `firma run` session after restoring Authority availability.
 
 - `TokenInvalid`:
   - Session mismatch or wrong token file.

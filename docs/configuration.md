@@ -16,39 +16,11 @@ shape and must be readable and valid TOML.
 Configuration is validated at startup. Invalid fields cause the affected
 binary to exit before accepting requests.
 
-## Breaking scalar migration
+## Scalar syntax
 
-Duration and byte-size settings are now unit-bearing strings. Old numeric
-keys are rejected; migrate them as follows (equivalent values shown):
-
-| Old                                                              | New                                                         |
-| ---------------------------------------------------------------- | ----------------------------------------------------------- |
-| `authority.max_ttl_seconds = 3600`                               | `authority.max_ttl = "1h"`                                  |
-| `authority.bundle_ttl_seconds = 30`                              | `authority.bundle_ttl = "30s"`                              |
-| `sidecar.interceptor.drain_timeout_secs = 30`                    | `sidecar.interceptor.drain_timeout = "30s"`                 |
-| `sidecar.interceptor.connect_relay.setup_timeout_secs = 10`      | `sidecar.interceptor.connect_relay.setup_timeout = "10s"`   |
-| `sidecar.interceptor.connect_relay.session_max_secs = 600`       | `sidecar.interceptor.connect_relay.session_max = "10m"`     |
-| `sidecar.interceptor.https_mitm.cert_ttl_secs = 86400`           | `sidecar.interceptor.https_mitm.cert_ttl = "1d"`            |
-| `sidecar.authority.connect_timeout_secs = 10`                    | `sidecar.authority.connect_timeout = "10s"`                 |
-| `sidecar.authority.reconnect_min_backoff_ms = 250`               | `sidecar.authority.reconnect_min_backoff = "250ms"`         |
-| `sidecar.authority.reconnect_max_backoff_secs = 30`              | `sidecar.authority.reconnect_max_backoff = "30s"`           |
-| `sidecar.authority.revocation_readiness_grace_ms = 500`          | `sidecar.authority.revocation_readiness_grace = "500ms"`    |
-| `sidecar.capability_validation.clock_skew_tolerance_seconds = 5` | `sidecar.capability_validation.clock_skew_tolerance = "5s"` |
-| `sidecar.connector.default_timeout_ms = 30000`                   | `sidecar.connector.default_timeout = "30s"`                 |
-| sidecar connector host `timeout_ms = 30000`                      | sidecar connector host `timeout = "30s"`                    |
-| `sidecar.local_exec.token_ttl_secs = 300`                        | `sidecar.local_exec.token_ttl = "5m"`                       |
-| `sidecar.local_exec.retry_after_ms = 500`                        | `sidecar.local_exec.retry_after = "500ms"`                  |
-| `run.profiles.<id>.capability.grace_seconds = 30`                | `run.profiles.<id>.capability.grace = "30s"`                |
-| `run.profiles.<id>.sidecar_local_exec.timeout_ms = 500`          | `run.profiles.<id>.sidecar_local_exec.timeout = "500ms"`    |
-| `run.profiles.<id>.sidecar_local_exec.hitl_max_wait_ms = 300000` | `run.profiles.<id>.sidecar_local_exec.hitl_max_wait = "5m"` |
-| `sidecar.interceptor.max_request_body_bytes = 4194304`           | `sidecar.interceptor.max_request_body_size = "4 MiB"`       |
-| `sidecar.interceptor.total_body_budget_bytes = 67108864`         | `sidecar.interceptor.total_body_budget = "64 MiB"`          |
-| `sidecar.audit.wal_max_bytes = 104857600`                        | `sidecar.audit.wal_max_size = "100 MiB"`                    |
-
-Existing `max_decompressed_body_size` and secret-gateway byte-size fields also
-require human-readable strings such as `"4 MiB"`. Counts, capacities, and rates
-remain numeric. Re-running `firma config` migrates the legacy integer keys in
-the table above while preserving their values and existing comments.
+Duration settings use compact unit-bearing strings such as `"250ms"`, `"30s"`,
+`"10m"`, and `"1h"`. Byte-size settings use unit-bearing strings such as
+`"4 MiB"` and `"10MB"`. Counts, capacities, and rates remain numeric.
 
 Unknown keys are rejected recursively rather than ignored. The only top-level
 keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
@@ -56,18 +28,8 @@ are strict as well. Dynamic labels such as credential names, executable-policy
 names, and Run profile names remain open, but every value under those labels
 must match its schema. Firma validates all Run defaults and profiles while
 parsing the file, including profiles that are not selected, so a typo or an
-unsupported `backend` anywhere fails startup. Remove stale tables such as
-`[project]` and `[sidecar.preflight]` instead of relying on them being ignored.
-
-The following settings were removed because they never controlled runtime
-behavior: `[authority].log_level`, `[sidecar.log]`,
-`[sidecar.constraint_enforcement].bundle_ttl_seconds`,
-`[sidecar.constraint_enforcement].enforcement_timeout_ms`, and Run profile
-`allowed_domains`. Remove them from existing files. Configure process logging
-with `--log-filter` / `FIRMA_LOG_FILTER`. Policy-bundle freshness is controlled
-by the TTL advertised by the Authority, and seccomp artifact checksums are
-always verified; `seccomp_policy.verify_checksum` is therefore no longer a
-configurable choice.
+unsupported `backend` anywhere fails startup. Configure process logging with
+`--log-filter` / `FIRMA_LOG_FILTER`.
 
 ## Scaffolded Example
 
@@ -130,13 +92,10 @@ identity.
 
 New local scaffolds generate an `agt_` TypeID backed by UUIDv7. Remote operators
 copy the agent ID returned by FirmaTeam registration and use
-`firma config --agent-id <agent-id>`. Raw UUIDs and other prefixes are rejected.
+`firma config --agent-id <agent-id>`.
 
 `firma run` never generates or edits identity in an existing config. A missing
-field, a legacy profile value such as `codex`, or another invalid agent ID fails
-closed before backend or component startup. Migrate with
-`firma config --agent-id <agent-id>` and retain the profile under
-`[run].profile`.
+or invalid agent ID fails closed before backend or component startup.
 
 ## Config-Relative Resource Resolution
 
@@ -150,7 +109,10 @@ in the state/runtime dir and are never re-based.
 
 For `[authority]`, `FIRMA_AUTHORITY_*` environment overrides are applied
 _after_ re-basing, so an env-supplied path is preserved exactly as written
-(a relative env value is **not** re-based against `config_dir`).
+(a relative env value is **not** re-based against `config_dir`). The TTL
+overrides are `FIRMA_AUTHORITY_MAX_TTL` and `FIRMA_AUTHORITY_BUNDLE_TTL`; they
+use the same compact duration syntax and validation as the corresponding TOML
+fields.
 
 Resource paths resolve relative to the containing `firma.toml`. This includes
 Sidecar mapping files and explicit MITM CA files; Authority client mTLS files
@@ -165,7 +127,6 @@ profile.
 | `sidecar.mapping.rules_paths[]`                                                              | `<config_dir>/<value>`        |
 | `sidecar.authority.public_key_path`, mTLS, and credential secret files                       | `<config_dir>/<value>`        |
 | `sidecar.interceptor.https_mitm.ca_cert_path` / `sidecar.interceptor.https_mitm.ca_key_path` | `<config_dir>/<value>`        |
-| `sidecar.capability_seed.paths[]`                                                            | `<config_dir>/<value>`        |
 | `sidecar.audit.file_path`                                                                    | `<config_dir>/<value>`        |
 | `sidecar.audit.signing_key_path`                                                             | `<config_dir>/<value>`        |
 | `authority.policy_dir`                                                                       | `<config_dir>/<value>`        |
@@ -175,10 +136,9 @@ profile.
 | Run mount sources, seccomp paths, capability files/keys                                      | `<config_dir>/<value>`        |
 
 Runtime/state paths, endpoints, sandbox mount targets, and WAL, session,
-revocation, and `sidecar.ca.dir` paths keep their prior semantics. Mask-home values
-remain home-relative, executable allowlist entries must be absolute paths to
-existing files and are canonicalized when loaded, and CLI path arguments remain
-verbatim.
+revocation, and `sidecar.ca.dir` paths are not re-based. Mask-home values are
+home-relative, executable allowlist entries must be absolute paths to existing
+files and are canonicalized when loaded, and CLI path arguments remain verbatim.
 
 | Field                       | Resolves to                               |
 | --------------------------- | ----------------------------------------- |
@@ -433,12 +393,6 @@ Audit/log visibility note:
     explicitly executed outside the governed sandbox path; the command may
     inherit proxy env pointing to `127.0.0.1:18080` even though the sandbox
     bridge is not in that execution context.
-- If you see `TokenExpired` denies, re-issue a capability for the same
-  `session_id` and restart sidecar when using `[sidecar.capability_seed]`. For local
-  workflows use:
-  - `examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID"`
-  - `pwsh ./examples/firma-run/local/renew-capability.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID`
-
 - You see `curl` timeout / agent network timeout, but no obvious deny:
   - Check audit for `action=network.connect` on the target host. This confirms
     policy allowed the destination-level CONNECT.
@@ -664,16 +618,16 @@ Tuning for the background Authority stream clients
 `sidecar.authority.url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
-| Field                                  | Type     | Default   | Description                                                                                                                         |
-| -------------------------------------- | -------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `connect_addr`                         | address  | none      | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                                    |
-| `connect_timeout`                      | duration | `"10s"`   | Connection timeout for the tonic channel                                                                                            |
-| `reconnect_min_backoff`                | duration | `"250ms"` | Minimum reconnect backoff                                                                                                           |
-| `reconnect_max_backoff`                | duration | `"30s"`   | Maximum reconnect backoff                                                                                                           |
-| `revocation_readiness_grace`           | duration | `"500ms"` | Grace period after revocation stream opens before readiness                                                                         |
-| `revocation_fail_closed_on_disconnect` | bool     | `false`   | Flip revocation readiness back to false when the stream drops                                                                       |
-| `public_key_path`                      | path     | none      | Authority Ed25519 public key. Required when `[sidecar.capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
-| `credentials`                          | section  | none      | Optional Sidecar PSK credentials sent on every Authority RPC.                                                                       |
+| Field                                  | Type     | Default   | Description                                                                      |
+| -------------------------------------- | -------- | --------- | -------------------------------------------------------------------------------- |
+| `connect_addr`                         | address  | none      | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin |
+| `connect_timeout`                      | duration | `"10s"`   | Connection timeout for the tonic channel                                         |
+| `reconnect_min_backoff`                | duration | `"250ms"` | Minimum reconnect backoff                                                        |
+| `reconnect_max_backoff`                | duration | `"30s"`   | Maximum reconnect backoff                                                        |
+| `revocation_readiness_grace`           | duration | `"500ms"` | Grace period after revocation stream opens before readiness                      |
+| `revocation_fail_closed_on_disconnect` | bool     | `false`   | Flip revocation readiness back to false when the stream drops                    |
+| `public_key_path`                      | path     | none      | Authority Ed25519 public key used to verify capabilities.                        |
+| `credentials`                          | section  | none      | Optional Sidecar PSK credentials sent on every Authority RPC.                    |
 
 Validation:
 
@@ -762,41 +716,6 @@ Validation:
 - `wal_path` must be set and non-empty when sink is `wal`.
 - `wal_max_size` must be greater than zero.
 - `signing_key_path` and `signing_key_env` are mutually exclusive.
-
-### `[sidecar.capability_seed]`
-
-Static capability provisioning. Each path entry is a TOML file
-produced by `firma authority issue` (see `docs/cli.md`). The sidecar
-loads every seed at startup, parses it, and pre-populates the
-`CapabilityMap` so Stage 1 has tokens to select against.
-
-```toml
-[sidecar.capability_seed]
-paths = ["./capability-demo-agent.toml"]
-```
-
-| Field   | Type       | Default | Description                                     |
-| ------- | ---------- | ------- | ----------------------------------------------- |
-| `paths` | `[string]` | `[]`    | Seed TOML files. Empty disables static seeding. |
-
-Validation:
-
-- Each entry in `paths` must be non-empty.
-
-Behavior notes:
-
-- Empty list means Stage 1 will deny every protected request that
-  needs a token, since the `CapabilityMap` will be empty.
-- `[sidecar.authority].public_key_path` must be set when `paths` is
-  non-empty; otherwise the verifier rejects every seeded token with
-  `signature invalid: no authority public key configured`.
-
-> **Deprecated.** `[sidecar.capability_seed]` is superseded by per-session capabilities
-> minted live by `firma run`, written to
-> `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`. Operator-configured
-> seed paths still load but emit a deprecation warning at sidecar startup.
-> Removal is scheduled for a later release once examples and install scripts
-> migrate.
 
 ### `[sidecar.local_exec]`
 

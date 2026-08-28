@@ -150,11 +150,6 @@ the Sidecar ID and token. Copy that ID into remote configuration with
 UUIDv7 when the flag is omitted. Existing valid IDs survive subsequent runs
 unless explicitly replaced.
 
-Existing configs are not silently migrated. If the field is absent, or contains
-an old execution-profile value such as `codex`, run
-`firma config --agent-id <agent-id>` and leave the profile under
-`[run].profile`.
-
 ## Implicit init on `firma run`
 
 `firma run` checks for a discoverable `firma.toml` at launch. If none is

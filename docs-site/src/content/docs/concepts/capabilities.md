@@ -94,12 +94,13 @@ uses it to verify the returned PASETO token. The same effective key is written
 to the autostarted Sidecar's `[sidecar.authority].public_key_path`, so the
 Sidecar verifies the generated capability seed against the same trust root.
 The capability-specific path takes precedence over
-`[sidecar.authority].public_key_path`; omitting it keeps the existing Sidecar
-Authority key behavior.
+`[sidecar.authority].public_key_path`; when it is omitted, the Sidecar Authority
+key is used.
 
 Key read failures, files that are not exactly 32 bytes, malformed or expired
-tokens, and signature mismatches fail closed with an error. The existing
-`--capability-file` option and capability-seed TOML format are unchanged.
+tokens, and signature mismatches fail closed with an error. An explicit
+`--capability-file` uses the same signed TOML representation as the automatic
+per-run capability file.
 
 ## Staying alive: automatic refresh
 
@@ -135,29 +136,10 @@ Tuning knobs:
 | ----------------------------------------------------- | ------------------- | ------- | ---------------------------------------------------- |
 | `run.profiles.<id>.capability.refresh_ratio`          | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing.      |
 | `run.profiles.<id>.capability.grace`                  | `firma run` profile | `"30s"` | Renew no later than this duration before expiry.     |
-| `sidecar.capability_seed.hot_reload`                  | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change.  |
 
 There is intentionally no hard session-lifetime cap: the Authority's issuance
 policy is the authority on whether a session may continue, and it is re-checked
 on every refresh. If you need a fixed ceiling, enforce it there.
-
-For the legacy operator path (pre-provisioning a fixed, long-lived session
-without `firma run`), the CLI subcommand is available:
-
-```bash
-firma authority issue \
-  --agent-id agt_01j0000000e008000000000001 \
-  --session-id demo-session \
-  --action communication.external.send \
-  --resource-scope 'wttr.in*' \
-  --ttl-seconds 3600 \
-  --output capability-demo-agent.toml
-```
-
-The output is a TOML file with both the raw PASETO and the parsed claims. It can
-be loaded into a Sidecar via `[sidecar.capability_seed]` (deprecated) or used by
-`firma run --capability-file`. See [Issue capability tokens](../../guides/issue-capability-tokens/)
-for that legacy workflow.
 
 The `raw_token` is the source of truth. The other TOML fields are a parsed mirror for selection, diagnostics, and operator readability. At Sidecar startup, every seed is verified with the configured Authority public key, and the mirrored TOML claims must exactly match the claims inside the signed token. If someone edits `action_set`, `resource_scope`, `session_id`, or any other claim in the TOML without re-issuing and re-signing the token, the Sidecar refuses to start.
 
@@ -176,20 +158,17 @@ If all five pass, Stage 1 emits a `ValidatedCapability` containing the raw token
 The whole stage is local. There is no network call, no Authority round-trip, no key fetch. This is what lets it stay under 1 ms p95.
 
 Capabilities written under `$XDG_RUNTIME_DIR/firma/capabilities/` by `firma run`
-are loaded by the sidecar at startup using the same verification path. Operator-
-configured `[sidecar.capability_seed]` paths are also loaded (deprecated; see
-[Issue capability tokens](../../guides/issue-capability-tokens/)), but emit a
-deprecation warning. In both cases the sidecar verifies each seed's `raw_token`
-and rejects the seed if the signed claims differ from the TOML mirror. This moves
-tamper detection to boot time instead of waiting for the first matching request.
+are loaded by the Sidecar at startup. The Sidecar verifies each file's
+`raw_token` and rejects it if the signed claims differ from the TOML mirror.
+This moves tamper detection to boot time instead of waiting for the first
+matching request.
 
 ## Revocation
 
 A capability lives until its `expiry`. If you need to kill one earlier — say, an agent was compromised and you want to cut it off immediately — you publish a **revocation** for its `token_id`.
 
-Capability token IDs use the canonical form `ctok_<26-character TypeID suffix>`.
-Raw UUIDs and TypeIDs with another prefix or UUID version are rejected by token,
-seed, and revocation ingestion.
+Capability token IDs use the canonical form
+`ctok_<26-character TypeID suffix>`.
 
 In the reference Authority, this is:
 
@@ -221,5 +200,5 @@ The two together form a textbook capability-based security model: the capability
 ## Where to go next
 
 - [Policies](../policies/) — the Cedar bundles that Stage 2 evaluates against.
-- [Issue capability tokens](../../guides/issue-capability-tokens/) — how an operator issues, distributes, and revokes.
+- [Wrap an agent with `firma run`](../../guides/firma-run/) — automatic capability issuance and refresh.
 - [The enforcement pipeline](../pipeline/) — see how validated claims flow into Stage 2.

@@ -2,9 +2,8 @@
 
 `firma sidecar` covers both the in-process enforcement server (used by
 `firma run` autostart) and the operator-facing daemon lifecycle —
-`start`, `stop`, `status`. The previous `firma stack` command is gone;
-`firma sidecar start` and `firma sidecar stop` now own daemon-mode boot
-and shutdown.
+`start`, `stop`, `status`. `firma sidecar start` and `firma sidecar stop`
+own daemon-mode boot and shutdown.
 
 For live activity tailing, see
 [`firma monitor`](firma_monitor_command.md). For sidecar enforcement
@@ -48,8 +47,8 @@ firma sidecar stop [--config <firma.toml>] [--state-dir <dir>] [--timeout <secs>
 ```
 
 `--timeout` defaults to 2 seconds and controls the soft-signal grace
-period before hard kill. `--config` is accepted for compatibility but
-not used to resolve `state_dir`; use `--state-dir` / `FIRMA_STATE_DIR`.
+period before hard kill. `--config` does not resolve `state_dir`; use
+`--state-dir` / `FIRMA_STATE_DIR`.
 
 Exit codes: `0` on success (graceful or hard-kill fallback); `2` on error.
 

@@ -181,10 +181,6 @@ TTY. Pass `--yes` in non-interactive contexts.
 **`firma.toml` already exists.** By design, existing files are preserved.
 Use `--force` to overwrite, or remove the file by hand for a clean slate.
 
-**An older config has no agent TypeID or uses `agent_id = "codex"`.** OpenFirma does
-not silently migrate existing identity. Run `firma config --agent-id <agent-id>`
-with the ID returned by registration. Keep `codex` under `[run].profile`.
-
 **Keys must not go in the config dir.** Keys live in `<state-dir>`, not
 `<output-dir>`. Do not commit `authority.key`. Add `.firma/*.key` to
 `.gitignore`.

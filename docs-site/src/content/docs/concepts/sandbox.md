@@ -249,14 +249,14 @@ This prints the resolved config as JSON so you can see exactly what mounts, env 
 
 ## Capability handling
 
-The preferred runtime shape keeps capability material outside the agent process:
+The automatic runtime flow keeps capability material outside the agent process:
 
-1. **Before** the sandbox starts, the operator stages capability material for the Sidecar, normally through `[sidecar.capability_seed]`.
+1. **Before** the sandbox starts, `firma run` stages capability material for the Sidecar.
 2. The host-side Sidecar reads that seed outside the sandbox.
 3. Inside the sandbox, the agent only needs `HTTP_PROXY=http://127.0.0.1:18080`.
 4. When the agent makes an outbound call, the Sidecar selects the right capability based on `(session_id, action_class, resource)` — which it knows from the request, not from the agent.
 
-That is the mode to use when token non-exposure is a security requirement. Current `firma run --capability-file` support is a compatibility path: the runtime reads the file and exports `FIRMA_CAPABILITY_TOKEN` / `FIRMA_CAPABILITY_FILE` into the wrapped process environment. Do not rely on token non-exposure in that mode. The long-term direction is to keep the agent's only superpower as "ask the Sidecar to do this thing"; the Sidecar decides whether the capability covers it.
+That is the mode to use when token non-exposure is a security requirement. With `firma run --capability-file`, the runtime reads the file and exports `FIRMA_CAPABILITY_TOKEN` / `FIRMA_CAPABILITY_FILE` into the wrapped process environment, so token non-exposure does not apply.
 
 ## What the sandbox protects against
 

@@ -21,37 +21,25 @@ In strict mode, capability validation is session-aware:
   `session_id`.
 - If session ids do not match, enforcement denies with `TokenInvalid`.
 
-### Why we set `FIRMA_RUN_SESSION_ID`
+### Optional stable session identity
 
-`firma run` can generate a new session id every run. That is fine for
-stateless scenarios, but it breaks pre-issued seed-token workflows where
-the token is tied to a fixed `session_id`.
+`firma run` generates a new session id by default. Set a stable identity when
+you need audit correlation across repeated local invocations:
 
 For stable local dev, set:
 
 - `FIRMA_RUN_SESSION_ID=<stable-value>`
 - `FIRMA_RUN_REQUIRE_SESSION_ID=true`
 
-This guarantees deterministic matching between runtime attribution and seeded
-capability claims.
+The same value is used for runtime attribution and automatic capability
+issuance.
 
 ### Token lifecycle
 
-**Automatic (primary path):** `firma run` mints a per-session capability live via
+`firma run` mints a per-session capability live via
 the Authority's `IssueCapability` gRPC call and writes it to
 `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`. The autostarted sidecar
-loads it at startup — no manual step required. When the token expires, start a
-new `firma run` session.
-
-**Legacy (operator-managed, deprecated):** If you need a fixed, long-lived
-session pre-provisioned outside the `firma run` autostart flow:
-
-1. Issue token for the exact session id:
-   - `examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" ...`
-2. Sidecar loads token via `[sidecar.capability_seed].paths` at startup (deprecated; emits warning).
-3. Requests are enforced against that token until expiry.
-4. On expiry, sidecar denies with `TokenExpired`.
-5. Re-issue token for the same session id and restart sidecar.
+loads it at startup and installs verified refreshes automatically.
 
 ### Common failure modes
 
@@ -120,28 +108,7 @@ cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local
 ## 4) Run the agent (automatic capability mint)
 
 `firma run` mints a capability automatically on each session start. No manual
-token issuance is required for the standard flow.
-
-If you are using the **legacy operator path** (pre-provisioned seed tokens with
-`[sidecar.capability_seed]`), set a stable session id and issue a seed manually:
-
-Codex (legacy):
-
-```bash
-export FIRMA_RUN_SESSION_ID=demo-session-codex
-examples/firma-run/local/renew-capability.sh \
-  --session-id "$FIRMA_RUN_SESSION_ID" \
-  --output .local/capability-codex.toml
-```
-
-Claude (legacy):
-
-```bash
-export FIRMA_RUN_SESSION_ID=demo-session-claude
-examples/firma-run/local/renew-capability.sh \
-  --session-id "$FIRMA_RUN_SESSION_ID" \
-  --output .local/capability-claude.toml
-```
+token issuance is required.
 
 ## 5) Start sidecar
 
@@ -181,12 +148,8 @@ cargo run -p firma -- run --profile claude-code -- claude
 
 Capability expired:
 
-```bash
-examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-codex.toml
-# or .local/capability-claude.toml
-```
-
-Then restart sidecar (seed files are loaded at startup).
+- Check the Authority connection and `firma run` refresh logs.
+- Start a new `firma run` session after restoring Authority availability.
 
 Unclassified endpoint:
 

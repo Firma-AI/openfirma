@@ -171,9 +171,6 @@ default_protected = true                      # production!
 [sidecar.policy]
 dir           = "/etc/firma/cache/policies"   # populated by Authority stream
 
-[sidecar.capability_seed]
-paths = []                                   # capabilities arrive via gRPC, not seed files
-
 [sidecar.authority]
 url             = "https://firma-authority.internal:50051"
 public_key_path = "/etc/firma/firma-authority.pub"
@@ -328,7 +325,7 @@ def issue_capability_for_session(tenant_id: str, user_session_id: str):
 
 When a user starts a session, the app calls `issue_capability_for_session(...)`, hands the resulting raw token to the Sidecar via the appropriate channel (a header on the proxied request, or a side channel — your design), and from then on the Sidecar can validate every call from that session against that capability.
 
-For a 15-minute TTL with 1000 active sessions, the Authority issues 1000 capabilities every 15 minutes. The Sidecar holds them in its `CapabilityMap`. The hot path is unchanged.
+For a 15-minute TTL with 1000 active sessions, the Authority issues 1000 capabilities every 15 minutes. The Sidecar holds them in its `CapabilityMap`, so issuance remains off the hot path.
 
 ## Step 8: Wire the app to the proxy
 

@@ -388,9 +388,8 @@ config-relative resource table).
 `state_dir` is **never** a config-file key. The runtime state directory is
 resolved only from `--state-dir`, then `FIRMA_STATE_DIR`, then
 `$XDG_RUNTIME_DIR/firma` (with a `/tmp/firma-$UID` fallback) — independent
-of config discovery. The `--config` flag on `sidecar stop`/`status`,
-`monitor`, and `doctor` is accepted for compatibility; only `doctor`
-actively consumes it to locate the unified file.
+of config discovery. Only `doctor` uses `--config` to locate the unified file;
+`sidecar stop`, `sidecar status`, and `monitor` resolve state independently.
 
 ## `firma control`
 
@@ -405,10 +404,9 @@ revocations. Pre-flight only, never on the hot path.
 ### `firma authority issue`
 
 Issues a signed capability token directly from the loaded Cedar
-bundle and writes it to a TOML seed file consumable by the
-sidecar `[sidecar.capability_seed]` section. Stop-gap until the sidecar
-wires the gRPC `IssueCapability` client; not intended for
-production traffic.
+bundle and writes it as signed TOML. Pass that file to
+`firma run --capability-file` when an invocation must use an explicitly
+provided capability instead of automatic issuance.
 
 ```bash
 firma authority --config firma.toml issue \
@@ -433,10 +431,9 @@ The subcommand evaluates the loaded Cedar bundle exactly like
 the gRPC `IssueCapability` handler — a Cedar deny exits non-zero
 with `issuance failed: cedar denied issuance (...): ...`.
 
-The output TOML carries the raw `v4.public....` token plus the
-matching claims; the sidecar consumes it via
-`[sidecar.capability_seed].paths` and verifies the signature with
-`[sidecar.authority].public_key_path`.
+The output TOML carries the raw `v4.public....` token plus the matching claims.
+`firma run` and the Sidecar verify it with the configured Authority public key
+before use.
 
 ## `firma run`
 
@@ -555,10 +552,9 @@ on `firma run` exit.
 typed argument-conflict error.
 
 Before resolving the backend or starting any component, `firma run` requires
-`[sidecar.authority].agent_id` to contain a UUID. Missing IDs, legacy profile
-values such as `codex`, and malformed UUIDs fail closed with migration
-guidance. The UUID is used for capability issuance and refresh; `[run].profile`
-remains the independent local execution profile.
+`[sidecar.authority].agent_id` to contain a valid `agt_` TypeID. Missing or
+malformed IDs fail closed. The ID is used for capability issuance and refresh;
+`[run].profile` remains the independent local execution profile.
 
 `AGENT_NOT_REGISTERED` and `AGENT_PROFILE_MISMATCH` Authority denial reasons
 map to dedicated run errors and retain the Authority's diagnostic message.

@@ -47,7 +47,8 @@ firma run --config .firma/firma.toml --profile copilot -- copilot
 
 - **`gh copilot` vs `copilot`.** Auto-selection keys off the first command word. The standalone `copilot` binary is detected; the `gh copilot` extension is not (the command word is `gh`). For `gh copilot`, pass `--profile copilot` explicitly.
 - **bwrap only.** The profile is validated on Linux `bwrap`. macOS `vz` and Windows/WSL2 `wsl2` are proxy-only compatibility backends and are not validated for Copilot.
-- **CA append is opt-in.** Only the copilot profile sets `AppendSystemRoots`; every other profile keeps the `Sole` firma-ca trust store unchanged.
+- **CA append is opt-in.** The copilot profile sets `AppendSystemRoots`; other
+  profiles use the `Sole` firma-ca trust store unless configured otherwise.
 
 ## What's next
 
