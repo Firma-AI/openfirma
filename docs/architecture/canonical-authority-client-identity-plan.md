@@ -7,6 +7,10 @@
 - Repository revision researched: `67de08653d3d8bc96f96fdeaf4c8d6430453c9d8`
 - Task or requirement source: <https://ampcode.com/threads/T-01a042e7-9125-736f-9bdc-ce404c78d707>
 - Supersedes: Not applicable
+- Amendment: implementation review of candidate `3678ddff` showed that direct
+  string interpolation could emit invalid TOML for a certificate identity
+  containing a quote. `DEC-003` and `INV-002` now require TOML-aware encoding
+  and a syntax-sensitive subprocess regression.
 
 ## Goal and acceptance outcomes
 
@@ -96,8 +100,9 @@
 
 ### `DEC-003`: Emit and document only current configuration
 
-- Choice: `issue-client-cert` always prints `[[clients]]` plus `identity`, and
-  current docs remove version-to-version and obsolete-form prose.
+- Choice: `issue-client-cert` always prints `[[clients]]` plus a TOML-encoded
+  `identity` value, and current docs remove version-to-version and obsolete-form
+  prose.
 - Rationale and evidence: generated snippets and user docs are public entry
   points into the same configuration contract.
 - Consequences and rejected alternatives: no migration table, alias notice, or
@@ -124,7 +129,8 @@
 
 - Semantic predicate: the allow-list snippet printed for the selected client
   certificate identity has the canonical table/field names consumed by
-  `AuthorizedClientSet::load` and contains the verifier-selected SAN or CN.
+  `AuthorizedClientSet::load`, is valid TOML for every accepted certificate
+  identity string, and contains the verifier-selected SAN or CN.
 - Primary owner: `crates/firma/src/services/authority.rs` with the parser as the
   consumption boundary.
 - Detailed proof: `TRACE-ISSUE-CLIENT` and the proof-obligation appendix.
@@ -150,7 +156,8 @@
   integration tests; `firma` client-certificate CLI integration tests; explicit
   negative parser controls for missing identity, unknown top-level fields, and
   obsolete or unknown client-entry fields; searches for obsolete allow-list
-  syntax in runtime, fixtures, and public docs.
+  syntax in runtime, fixtures, and public docs. The subprocess matrix includes a
+  quote-bearing CN and parses the emitted snippet before comparing identity.
 - Dependencies: the sectioned Sidecar template tip at researched revision
   `67de08653d3d8bc96f96fdeaf4c8d6430453c9d8`.
 - Intentionally unsupported: automatic rewrite, aliases, metadata fields, or
@@ -333,8 +340,8 @@ docs-site/public/llms.txt                                # canonical retrieval s
 
 ### Detailed proof obligations
 
-| Invariant | Kind                | Owner/proof boundary             | Suite/boundary      | Stimulus                                                                                                                       | Observable effects                                                  | Failure cases                                                                                                        | Status                  | Slice | Limits                                                                      |
-| --------- | ------------------- | -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----- | --------------------------------------------------------------------------- |
-| `INV-001` | Trust/configuration | `AuthorizedClientSet::load`      | unit                | canonical TOML; obsolete root; missing identity; unknown top-level field; `cn`, `san`, or unknown metadata under `[[clients]]` | canonical identities load                                           | every noncanonical case returns `ConfigError::ParseError` carrying the configured path, before verifier construction | Planned                 | 1     | Direct parser proof; startup propagation is existing control-flow evidence. |
-| `INV-001` | Trust/runtime       | `AllowListClientVerifier`        | integration         | canonical allow-list plus allowed/unlisted/no-cert/wrong-CA peers                                                              | only chain-valid, listed identity reaches policy stream             | all other peers fail before gRPC success                                                                             | Existing fixture update | 1     | Does not prove CLI text.                                                    |
-| `INV-002` | CLI/configuration   | `run_issue_client_cert` + parser | subprocess and unit | issue CN-only and DNS-SAN certificates                                                                                         | stdout contains only `[[clients]]`/`identity` for selected identity | obsolete table/field names absent; generation errors have no success snippet                                         | Planned                 | 1     | Does not automate copying stdout into a deployment.                         |
+| Invariant | Kind                | Owner/proof boundary             | Suite/boundary      | Stimulus                                                                                                                       | Observable effects                                                                              | Failure cases                                                                                                        | Status                  | Slice | Limits                                                                      |
+| --------- | ------------------- | -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----- | --------------------------------------------------------------------------- |
+| `INV-001` | Trust/configuration | `AuthorizedClientSet::load`      | unit                | canonical TOML; obsolete root; missing identity; unknown top-level field; `cn`, `san`, or unknown metadata under `[[clients]]` | canonical identities load                                                                       | every noncanonical case returns `ConfigError::ParseError` carrying the configured path, before verifier construction | Planned                 | 1     | Direct parser proof; startup propagation is existing control-flow evidence. |
+| `INV-001` | Trust/runtime       | `AllowListClientVerifier`        | integration         | canonical allow-list plus allowed/unlisted/no-cert/wrong-CA peers                                                              | only chain-valid, listed identity reaches policy stream                                         | all other peers fail before gRPC success                                                                             | Existing fixture update | 1     | Does not prove CLI text.                                                    |
+| `INV-002` | CLI/configuration   | `run_issue_client_cert` + parser | subprocess and unit | issue CN-only, quote-bearing CN, and DNS-SAN certificates                                                                      | emitted snippet parses as TOML and contains only `[[clients]]`/`identity` for selected identity | obsolete table/field names absent; generation errors have no success snippet                                         | Planned                 | 1     | Does not automate copying stdout into a deployment.                         |

@@ -46,6 +46,7 @@ authorized_clients_path = "authorized_clients.toml"
 
     let cases = [
         ("cn-only-sidecar", None, "cn-only-sidecar"),
+        ("side\"car", None, "side\"car"),
         (
             "sidecar-common-name",
             Some("sidecar.example.internal"),
@@ -71,10 +72,21 @@ authorized_clients_path = "authorized_clients.toml"
         assert!(key_out.is_file(), "client key was not written");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let snippet_start = stdout
+            .find("[[clients]]")
+            .unwrap_or_else(|| panic!("canonical allow-list table missing from stdout: {stdout}"));
+        let snippet = &stdout[snippet_start..];
+        let parsed: toml::Value = toml::from_str(snippet)
+            .unwrap_or_else(|error| panic!("printed allow-list entry is invalid TOML: {error}"));
         assert!(
-            stdout.contains("[[clients]]")
-                && stdout.contains(&format!("identity = \"{expected_identity}\"")),
-            "canonical allow-list entry missing from stdout: {stdout}"
+            parsed
+                .get("clients")
+                .and_then(toml::Value::as_array)
+                .and_then(|clients| clients.first())
+                .and_then(|client| client.get("identity"))
+                .and_then(toml::Value::as_str)
+                == Some(expected_identity),
+            "printed allow-list identity does not match selected certificate identity: {snippet}"
         );
         assert!(
             !stdout.contains("[[authorized]]")
