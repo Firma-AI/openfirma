@@ -351,3 +351,52 @@ docs-site/public/llms.txt
 | `PROOF-001` | `INV-001` | Runtime/configuration          | schema and Run integration suites      | Removed key in defaults and named profiles produces strict failure; canonical control resolves unchanged. | Planned                 |
 | `PROOF-002` | `INV-002` | Configuration/mutation         | compiled `firma` CLI integration suite | Removed key exits non-zero and every pre-existing scaffold file remains byte-identical.                   | Existing plus extension |
 | `PROOF-003` | `DEC-003` | Compatibility/current contract | PR #613 layering suite                 | Canonical profile merge matrix remains green and generated current configuration parses.                  | Existing plus rerun     |
+
+## Post-implementation independent review
+
+Reviewed exact range:
+`5820d57f37c7d0a136b09e544647d82de2c358b7..420c25a866651bf6fa23733e2efd5ffeebd5040f`.
+
+### `IMPL-001` — Medium — Accepted plan artifact remains in the final candidate
+
+**Evidence:** `docs/architecture/remove-legacy-run-config-plan.md:25-28`
+requires that “no plan Markdown remains at the final branch tip or in the PR
+diff.” However, candidate `420c25a866651bf6fa23733e2efd5ffeebd5040f`
+still contains the complete 353-line plan, introduced by standalone commit
+`c0bb2105`.
+
+**Causal path / impact:** Merging the candidate preserves
+implementation-process documentation that the accepted plan explicitly
+requires removing. It also leaves the commit stack incomplete relative to its
+declared lifecycle and adds an unrelated public documentation artifact to PR
+#614.
+
+**Correction:** Add the planned mechanical deletion after preserving the
+immutable `c0bb2105` locator in the PR handoff.
+
+No other actionable findings found.
+
+### Disposition
+
+Accepted. This review record is committed independently, and the immediate
+child commit mechanically deletes this plan. The accepted plan and unchanged
+review finding remain available at their immutable commit URLs, which the PR
+body records. No behavior or meaning changes follow the reviewed candidate.
+
+### Review evidence and residual uncertainty
+
+- The reviewer inspected the complete exact range and each implementation
+  commit independently.
+- No surviving production migration or alias path was found for flat
+  `capability.kind` / `capability.path`, `codex_cli`, `CapabilitySourceKind`, or
+  `LegacyProfileAgentId`.
+- Canonical tagged capability sources, keyed executable-policy merging, path
+  rebasing, and unrelated profile merge behavior remain intact.
+- `firma config` covers defaults, named unselected profiles, inline profiles,
+  mixed obsolete/current forms, malformed obsolete forms, unchanged
+  configuration and neighboring files, no state directory, and unchanged
+  directory entries.
+- Public product documentation contains only canonical forms; obsolete terms
+  survive only in rejection tests and this ephemeral plan.
+- Reviewer-focused checks passed. Full `just check` and `just docs-build` had
+  already passed in the implementation worktree before review.
