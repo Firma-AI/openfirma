@@ -157,10 +157,6 @@ pub struct SeccompPolicyPatch {
 #[serde(deny_unknown_fields)]
 pub struct CapabilityLeasePatch {
     pub source: Option<CapabilitySourcePatch>,
-    #[serde(default)]
-    pub kind: Option<CapabilitySourceKind>,
-    #[serde(default)]
-    pub path: Option<PathBuf>,
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: Option<f64>,
     #[serde(
@@ -206,13 +202,4 @@ pub struct CommandMediatorPatch {
 pub enum CapabilitySourcePatch {
     Disabled,
     File { path: PathBuf },
-}
-
-/// Legacy flat capability source selector retained for compatibility with
-/// `capability.kind` plus `capability.path`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CapabilitySourceKind {
-    Disabled,
-    File,
 }

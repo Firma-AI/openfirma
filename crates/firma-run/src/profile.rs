@@ -76,8 +76,6 @@ fn generic_profile() -> ProfilePatch {
         identity_mode: None,
         capability: Some(CapabilityLeasePatch {
             source: Some(CapabilitySourcePatch::Disabled),
-            kind: None,
-            path: None,
             public_key_path: None,
             refresh_ratio: Some(0.60),
             grace: Some(Duration::from_secs(30)),

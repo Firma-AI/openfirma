@@ -968,6 +968,36 @@ fn invalid_existing_sections_fail_without_writing() {
             "[project]\nagent = \"codex\"\n",
             "unknown top-level key `project`",
         ),
+        (
+            "flat capability source in defaults",
+            "agent-local",
+            "[run.defaults.capability]\nkind = \"file\"\npath = \"capability.toml\"\n",
+            "unknown field `kind`",
+        ),
+        (
+            "flat capability source in named profile",
+            "agent-local",
+            "[run.profiles.unselected.capability]\nkind = \"disabled\"\n",
+            "unknown field `kind`",
+        ),
+        (
+            "flat capability source in inline profile",
+            "agent-local",
+            "[run.profiles]\nunselected = { capability = { kind = \"file\", path = \"capability.toml\" } }\n",
+            "unknown field `kind`",
+        ),
+        (
+            "flat capability source beside tagged source",
+            "agent-local",
+            "[run.defaults.capability]\nkind = \"file\"\npath = \"discarded.toml\"\nsource = { kind = \"disabled\" }\n",
+            "unknown field `kind`",
+        ),
+        (
+            "malformed flat capability source",
+            "agent-local",
+            "[run.defaults.capability]\nkind = 42\n",
+            "unknown field `kind`",
+        ),
     ];
 
     for (name, mode, original, expected) in cases {

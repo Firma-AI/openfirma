@@ -410,6 +410,16 @@ Nested `network` and `seccomp_policy` tables merge field-by-field, so a higher l
 
 Capability `requested_actions` is a replaceable list. Omission keeps the inherited or all-action request default, a present list replaces it, and `[]` stays empty. Automatic Authority issuance rejects that empty request with `NO_ACTIONS` before agent launch, without creating a seed or refresher. Disabled and pre-staged capability sources do not issue a capability.
 
+Capability sources use a tagged `capability.source` table:
+
+```toml
+[run.profiles.codex.capability.source]
+kind = "file"
+path = "capability.toml"
+```
+
+Use `kind = "disabled"` without `path` to disable the source.
+
 `sidecar_local_exec` merges field-by-field. A higher layer can change one timeout, HITL mode, endpoint, or enforcement boolean while retaining lower siblings. `allowed_executables` is replaceable: omission inherits, a present list replaces, and `[]` clears. Final validation still rejects `enforce_known_executables = true` with an empty allowlist.
 
 `executable_policies` merges executable names by key; omission inherits and an empty table clears all lower entries. Matching policies merge their scalar fields, while `config_overrides` inherits when omitted, clears when empty, and otherwise merges by key. Selective inherited-key deletion is not supported.

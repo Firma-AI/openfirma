@@ -70,10 +70,12 @@ fn structured_profile_source_preserves_default_capability_fields() {
         &config_path,
         r#"
 [run.defaults.capability]
-kind = "file"
-path = "default-capability.toml"
 public_key_path = "keys/default.pub"
 refresh_ratio = 0.55
+
+[run.defaults.capability.source]
+kind = "file"
+path = "default-capability.toml"
 
 [run.profiles.codex.capability]
 grace = "45s"
@@ -96,7 +98,7 @@ kind = "disabled"
 }
 
 #[test]
-fn legacy_profile_source_preserves_default_capability_fields() {
+fn canonical_profile_source_preserves_default_capability_fields() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join(firma_config_loader::CONFIG_FILE_NAME);
     fs_err::write(
@@ -110,9 +112,11 @@ refresh_ratio = 0.55
 kind = "disabled"
 
 [run.profiles.codex.capability]
+grace = "45s"
+
+[run.profiles.codex.capability.source]
 kind = "file"
 path = "profile-capability.toml"
-grace = "45s"
 "#,
     )
     .expect("write config");
