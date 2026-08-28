@@ -109,11 +109,17 @@ scp authority-ca.crt sidecar-host:/etc/firma/authority-ca.crt
 
 ### Rotate a Sidecar client certificate
 
-1. Issue a new cert with `firma authority issue-client-cert` (same CN/SAN).
+1. Issue a new cert with `firma authority issue-client-cert`.
 2. Deploy the new cert and key to the Sidecar host.
 3. Restart the Sidecar.
 
-The old cert continues to work until the Authority is restarted with the new allow-list — or until the old cert expires.
+The allow-list authorizes identities, not certificate serial numbers. If the new
+certificate uses the same CN/SAN, the old certificate remains authorized until
+it expires or its issuing CA is removed. To invalidate the old certificate
+before expiry, issue the replacement with a new identity, authorize that
+identity, deploy and restart the Sidecar, then remove the old identity and
+restart the Authority. Rotating the client CA also invalidates every certificate
+issued by the removed CA.
 
 ### Rotate the client CA
 
