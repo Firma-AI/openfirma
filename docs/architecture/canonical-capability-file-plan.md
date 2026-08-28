@@ -22,6 +22,8 @@
   - A locally autostarted Sidecar receives the same file path in its existing
     `[sidecar.capability_seed].paths` synthesis; a pre-managed external Sidecar
     remains independently configured.
+  - Explicit canonical seed paths are a current product workflow and do not
+    emit or document the obsolete operator-seed deprecation warning.
   - Plain tokens, malformed TOML, missing fields, unknown fields, and empty
     `raw_token` values fail closed in Run with path-bearing errors that do not
     print seed contents. Shared-format failures in Sidecar startup and reload
@@ -35,8 +37,9 @@
 - In scope: the shared `CapabilitySeed` deserialization contract, Run's
   file-source read boundary, exact environment construction, local Sidecar path
   synthesis fixtures, Sidecar startup/reload parse-error sanitization,
-  external-Sidecar behavior proof, fail-before-effects regressions, and
-  current-product capability-file documentation.
+  removal of the obsolete explicit-seed deprecation warning and its dead path
+  classifier, external-Sidecar behavior proof, fail-before-effects
+  regressions, and current-product capability-file documentation.
 - Out of scope: the signed protobuf TTL request, capability issuance, token
   claim or signature verification policy, agent/session identity semantics,
   automatic capability refresh, Sidecar reloader lifecycle or map-retention
@@ -176,6 +179,22 @@
   TOML parser display in either consumer is rejected as a secret-disclosure
   risk.
 
+### `DEC-006`: Treat explicit canonical seed files as a current workflow
+
+- Choice: remove the Sidecar warning and public API prose that label configured
+  `[sidecar.capability_seed]` paths as deprecated. Remove the directory
+  classifier and internal directory parameters that existed only to produce
+  that warning, and make the canonical configuration-module documentation the
+  source for regenerated public API pages.
+- Rationale and evidence: `firma authority issue` produces this seed shape and
+  `firma run --capability-file` deliberately routes its path to a local Sidecar.
+  Warning on that exact path contradicts the supported current workflow.
+- Consequences and rejected alternatives: this PR does not weaken parsing,
+  verification, or reload behavior. Retaining a silent dead classifier or
+  placeholder directory parameter for the subsequent confinement PR is
+  rejected; that PR will introduce directory context for resolved containment,
+  not deprecation.
+
 ## Architecture and invariant ownership
 
 - Architecture shape: Authority and Run issuance produce the one shared seed
@@ -270,6 +289,10 @@
     return only the exact token with safe path-bearing errors;
   - sanitize Sidecar startup/reload structural parse errors at its existing
     file-reading boundary without changing verification or reload behavior;
+  - remove the obsolete operator-seed deprecation warning, dead classifier, and
+    directory parameters used only by that warning;
+  - replace deprecation prose in the canonical Sidecar configuration-module
+    docs and regenerate the affected public Rust API pages;
   - replace plain-token fixtures with canonical Authority-shaped seed TOML;
   - prove exact token/path environment values for local and external Sidecar
     selection, local synthesis path preservation, and no document exposure;
@@ -364,6 +387,25 @@ The first option best matches the stated trust invariant without changing Sideca
 
 > Focused follow-up Full-plan review against base `a549671c3a620b332d36e784a23d1983480d15d7` confirms that the correction fully resolves `PLAN-001`. The accepted plan now sanitizes shared `CapabilitySeed` structural parse failures at both Run and Sidecar file-reading boundaries and requires startup and reload proofs excluding bearer tokens, source excerpts, and complete seed documents while retaining safe path/category diagnostics. It preserves existing Sidecar verification, watcher lifecycle, reload logging outcome, and previous-map retention behavior. No new actionable planning finding or design incoherence was identified. Pre-implementation review does not replace exact-tip post-implementation review.
 
+### `PLAN-002` — Medium / Documentation contract / Confirmed conflict
+
+**Evidence:** `crates/firma-sidecar/src/config/capability_seed.rs:3-8` canonically describes operator-configured Authority-issued seeds as deprecated. That source generates the stale public API wording in `docs-site/src/content/docs/api/firma_sidecar/startup.md:61` and `startup/capability.md:69`. `DEC-006` requires removing public generated API deprecation wording, but the file-tree diff names only `startup/capability.rs`, `startup/pipeline.rs`, `services/sidecar.rs`, and docs-site output—not the configuration module that owns part of that wording. The current uncommitted implementation consequently leaves all three obsolete statements present.
+
+**Required correction:** Add `crates/firma-sidecar/src/config/capability_seed.rs` to the slice and file-tree diff, require its module documentation to describe explicit canonical seed paths as current, and require regeneration/verification of the affected API pages rather than treating generated files as independent prose. Extend `PROOF-010` to search canonical Rust documentation sources and generated API output for the obsolete warning language.
+
+The amendment otherwise preserves authorization, watcher, reload, and previous-map behavior; confines argument removal to runtime-directory values used solely by the warning classifier; keeps filesystem confinement deferred; and remains coherent as part of the single implementation tip. Post-implementation review remains separate.
+
+#### Disposition
+
+- Status: Corrected.
+- Rationale: the accepted plan now owns the canonical Sidecar configuration
+  module prose, generated API regeneration, and source/output searches instead
+  of editing generated documentation independently.
+- Incorporated at: `DEC-006`, Slice 1, File-tree diff, and `PROOF-010`.
+- Decided by: planner.
+
+> Focused follow-up Full-plan review against exact base `a549671c3a620b332d36e784a23d1983480d15d7` confirms that `PLAN-002` is fully resolved. The corrected plan owns `crates/firma-sidecar/src/config/capability_seed.rs` as the canonical documentation source, requires regeneration and verification of generated API pages rather than independent prose edits, and extends `PROOF-010` across both Rust documentation sources and generated output. Warning, classifier, and warning-only internal directory-parameter removal remains coherent, while filesystem confinement is explicitly deferred to its child plan. The reviewer-authored `PLAN-002` wording remains intact and only a disposition follows it. No new actionable planning finding was identified. Post-implementation review remains separate.
+
 ## Final verification
 
 - Focused checks: dprint; core seed tests; `firma-run` capability lease,
@@ -418,11 +460,19 @@ The first option best matches the stated trust invariant without changing Sideca
   deserialization and a rejection control.
 - Modify `crates/firma-run/src/capability/mod.rs` for canonical parse and safe
   extraction, and `crates/firma-sidecar/src/startup/capability.rs` for
-  secret-safe shared-format parse errors.
+  secret-safe shared-format parse errors and removal of the obsolete explicit
+  seed deprecation warning.
+- Modify `crates/firma-sidecar/src/config/capability_seed.rs` so its canonical
+  module documentation describes configured Authority-issued seed paths as a
+  current input.
+- Modify `crates/firma-sidecar/src/startup/pipeline.rs` and
+  `crates/firma/src/services/sidecar.rs` only to remove directory arguments that
+  existed solely for the deleted warning.
 - Modify `crates/firma-run/tests/integration/capability_lease.rs` and focused
   runtime/routing tests for format, environment, lifecycle, and topology proof.
 - Modify only capability-file user docs under the crate READMEs, `docs/`, docs
-  site, and `llms.txt`; do not include future confinement claims in this PR.
+  site (including generated API prose), and `llms.txt`; do not include future
+  confinement claims in this PR.
 
 ### Type and signature sketches
 
@@ -434,7 +484,11 @@ pub struct CapabilitySeed {/* existing fields */}
 pub fn read_capability_token(source: &CapabilitySource) -> Result<Option<String>, RunError>;
 ```
 
-No public signature changes and no new production type are required.
+No stable external signature changes and no new production type are required.
+The unpublished internal Sidecar map/reloader functions drop directory
+arguments whose only owner was the removed deprecation warning; the next
+confinement PR will introduce the directory context required by its own
+resolved-containment invariant.
 
 ### Semantic call traces
 
@@ -497,17 +551,18 @@ No public signature changes and no new production type are required.
 
 ### Detailed proof obligations
 
-| ID          | Invariant | Required evidence                                                                                                                       |
-| ----------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `PROOF-001` | `INV-001` | Authority-shaped seed returns exact `raw_token`; plain, malformed, incomplete, unknown-field, empty-token, and non-UTF-8 fixtures fail. |
-| `PROOF-002` | `INV-001` | Shared-type test proves unknown fields fail for all consumers; Sidecar load/reload and Authority issuance suites pass.                  |
-| `PROOF-003` | `INV-002` | Local and external profile controls assert exact `TOKEN` and original `FILE`; token value excludes the TOML document.                   |
-| `PROOF-004` | `INV-003` | Subprocess `execute_run` control asserts invalid input returns before a backend/runtime artifact can be created.                        |
-| `PROOF-005` | `INV-004` | Local synthesis test receives original path; file source still suppresses mint/Run refresher; production reloader call remains.         |
-| `PROOF-006` | `INV-004` | External control proves no local synthesis/configuration while exact environment handoff remains.                                       |
-| `PROOF-007` | all       | Focused tests, full `just check`, docs build, strict searches, and fresh independent exact-tip review pass.                             |
-| `PROOF-008` | lifecycle | Accepted plan is first PR commit; review record directly precedes mechanical plan deletion; plan is absent at tip/diff.                 |
-| `PROOF-009` | `INV-005` | Run and Sidecar startup/reload parser controls retain path/category but exclude token, source excerpt, and full document.               |
+| ID          | Invariant | Required evidence                                                                                                                         |
+| ----------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROOF-001` | `INV-001` | Authority-shaped seed returns exact `raw_token`; plain, malformed, incomplete, unknown-field, empty-token, and non-UTF-8 fixtures fail.   |
+| `PROOF-002` | `INV-001` | Shared-type test proves unknown fields fail for all consumers; Sidecar load/reload and Authority issuance suites pass.                    |
+| `PROOF-003` | `INV-002` | Local and external profile controls assert exact `TOKEN` and original `FILE`; token value excludes the TOML document.                     |
+| `PROOF-004` | `INV-003` | Subprocess `execute_run` control asserts invalid input returns before a backend/runtime artifact can be created.                          |
+| `PROOF-005` | `INV-004` | Local synthesis test receives original path; file source still suppresses mint/Run refresher; production reloader call remains.           |
+| `PROOF-006` | `INV-004` | External control proves no local synthesis/configuration while exact environment handoff remains.                                         |
+| `PROOF-007` | all       | Focused tests, full `just check`, docs build, strict searches, and fresh independent exact-tip review pass.                               |
+| `PROOF-008` | lifecycle | Accepted plan is first PR commit; review record directly precedes mechanical plan deletion; plan is absent at tip/diff.                   |
+| `PROOF-009` | `INV-005` | Run and Sidecar startup/reload parser controls retain path/category but exclude token, source excerpt, and full document.                 |
+| `PROOF-010` | current   | Rust doc sources and regenerated public API output contain no operator-seed deprecation warning; explicit canonical flow remains covered. |
 
 ## Atomic revision and review lifecycle
 
