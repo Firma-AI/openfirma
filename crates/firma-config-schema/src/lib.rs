@@ -13,8 +13,7 @@
 //! cross-field and runtime validation inside the component while representation
 //! and intrinsic value invariants live here.
 //!
-//! Modules mirror the top-level `firma.toml` sections. Sections are populated
-//! incrementally as each component migrates; see the crate rollout plan.
+//! Modules mirror the top-level and nested `firma.toml` sections.
 
 pub mod authority;
 pub mod broker;

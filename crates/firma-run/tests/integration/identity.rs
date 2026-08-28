@@ -41,7 +41,7 @@ fn identity_propagates_registered_id_and_profile_separately() {
 }
 
 #[test]
-fn configured_agent_id_rejects_missing_legacy_and_malformed_values() {
+fn configured_agent_id_rejects_missing_profile_and_malformed_values() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("firma.toml");
 
@@ -52,10 +52,11 @@ fn configured_agent_id_rejects_missing_legacy_and_malformed_values() {
         Err(RunError::MissingAgentId { .. })
     ));
 
-    fs::write(&path, "[sidecar.authority]\nagent_id = \"codex\"\n").expect("write legacy config");
+    fs::write(&path, "[sidecar.authority]\nagent_id = \"codex\"\n")
+        .expect("write profile-valued config");
     assert!(matches!(
         read_configured_agent_id(&path),
-        Err(RunError::LegacyProfileAgentId { .. })
+        Err(RunError::ProfileAgentId { .. })
     ));
 
     fs::write(&path, "[sidecar.authority]\nagent_id = \"not a TypeID\"\n")
