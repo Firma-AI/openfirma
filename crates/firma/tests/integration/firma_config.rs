@@ -935,6 +935,10 @@ fn init_handles_relative_paths() {
     assert_unified_config_parses(&firma_toml);
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the table exhaustively exercises strict section rejection and no-write effects"
+)]
 #[test]
 fn invalid_existing_sections_fail_without_writing() {
     let cases = [
@@ -997,6 +1001,36 @@ fn invalid_existing_sections_fail_without_writing() {
             "agent-local",
             "[run.defaults.capability]\nkind = 42\n",
             "unknown field `kind`",
+        ),
+        (
+            "Codex policy alias in defaults",
+            "agent-local",
+            "[run.defaults.codex_cli]\napproval_policy = \"never\"\n",
+            "unknown field `codex_cli`",
+        ),
+        (
+            "Codex policy alias in named profile",
+            "agent-local",
+            "[run.profiles.unselected.codex_cli]\napproval_policy = \"never\"\n",
+            "unknown field `codex_cli`",
+        ),
+        (
+            "Codex policy alias in inline profile",
+            "agent-local",
+            "[run.profiles]\nunselected = { codex_cli = { approval_policy = \"never\" } }\n",
+            "unknown field `codex_cli`",
+        ),
+        (
+            "Codex policy alias beside executable policy",
+            "agent-local",
+            "[run.defaults.codex_cli]\napproval_policy = \"never\"\n\n[run.defaults.executable_policies.codex]\napproval_policy = \"on-request\"\n",
+            "unknown field `codex_cli`",
+        ),
+        (
+            "malformed Codex policy alias",
+            "agent-local",
+            "[run.defaults]\ncodex_cli = 42\n",
+            "unknown field `codex_cli`",
         ),
     ];
 

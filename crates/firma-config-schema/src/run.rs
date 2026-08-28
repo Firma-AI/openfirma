@@ -101,8 +101,6 @@ pub struct ProfilePatch {
     /// Per-executable launch policies. `None` inherits the lower profile layer,
     /// a present empty map clears it, and matching entries merge field-by-field.
     pub executable_policies: Option<BTreeMap<String, ExecutableLaunchPolicyPatch>>,
-    #[serde(default)]
-    pub codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
     /// Should be `true` for profiles whose agent uses standard HTTP proxy env
     /// vars. `None` inherits the lower profile layer; explicit `false` disables
