@@ -117,9 +117,11 @@ canonical files.
 | `--state-dir` | `FIRMA_STATE_DIR`           | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` |
 | `--detach`    | —                           | _off_                                        |
 
-`start` resolves `firma.toml` via the shared
-[Config Discovery](../../../docs/cli.md) precedence and passes that exact file
-to both children. `state_dir` is never a config-file key.
+`start` uses its documented dedicated config input when supplied; otherwise it
+follows the shared
+[configuration resolution](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md#configuration-resolution)
+model. It passes one selected `firma.toml` to both children and never merges
+multiple files. `state_dir` is never a config-file key.
 
 For advanced direct-dial routing, `[sidecar.authority].connect_addr` selects a
 physical TCP destination without changing `[sidecar.authority].url`. The URL

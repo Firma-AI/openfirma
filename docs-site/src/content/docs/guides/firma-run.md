@@ -200,9 +200,10 @@ Before the Sidecar starts, `firma run` resolves which Authority to use.
 Precedence:
 
 1. `--authority local` / `--authority <url>` — CLI override.
-2. `[authority]` section present in the discovered `firma.toml`
-   (walk-up from the current directory to `<dir>/.firma/firma.toml`, or
-   `$FIRMA_CONFIG`) — autostart a local Mini Authority.
+2. `[authority]` section present in the selected `firma.toml` — autostart a
+   local Mini Authority. The shared
+   [configuration resolution model](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md#configuration-resolution)
+   selects that file.
 3. `[sidecar.authority].url` set — connect to that remote Authority.
 4. Nothing configured — `firma run` falls back to local autostart so
    zero-config works. The spawned Authority uses an ephemeral signing
@@ -396,19 +397,14 @@ firma run --profile generic --print-effective-config -- echo hi
 
 This prints the resolved profile as JSON: which backend, which env vars are injected, which mounts are visible inside the sandbox, which identity remap applies. No agent is launched. Use this to audit your wrapper config the same way you'd `terraform plan` infrastructure.
 
-### Profile precedence
+### Configuration resolution
 
-Profile values resolve from the built-in profile, then `[run.defaults]`, then the selected `[run.profiles.<name>]`, and finally supplied CLI values. Higher explicit values win.
-
-Boolean profile fields distinguish omission from `false`. Omitting `use_http_proxy_sidecar` or `allow_non_structural` inherits the lower layer; setting either to `false` disables an inherited `true`. Passing `--allow-non-structural` enables the setting at highest profile precedence, while omitting the flag leaves file configuration unchanged. `FIRMA_RUN_ALLOW_NON_STRUCTURAL` is a separate post-resolution enable-only override.
-
-Top-level collections preserve the same absent/present distinction. `env_passthrough` and `mounts` are replaceable lists: omission inherits, a present list replaces, and `[]` clears. `env_set` is a map: omission inherits, a non-empty table merges by key, and a present empty table clears every lower entry. Repeat inherited list entries you still need.
-
-An empty `env_set` table is a broad opt-out: it removes the built-in bwrap root-filesystem and home masking values plus the `NO_PROXY`/`no_proxy` proxy-bypass safeguards. Prefer non-empty key overrides for narrow changes. Selective deletion of one inherited map key is not supported.
-
-Nested `network` and `seccomp_policy` tables merge field-by-field, so a higher layer can override one network toggle or only `seccomp_policy.runtime_mode` without repeating lower siblings. A final seccomp policy still requires both `source_policy_path` and `artifact_dir`; resolution names the missing field when layered patches remain incomplete.
-
-Capability `requested_actions` is a replaceable list. Omission keeps the inherited or all-action request default, a present list replaces it, and `[]` stays empty. Automatic Authority issuance rejects that empty request with `NO_ACTIONS` before agent launch, without creating a seed or refresher. Disabled and pre-staged capability sources do not issue a capability.
+OpenFirma selects one unified `firma.toml`; it does not merge fields across
+configuration files. Run profile values then resolve from the built-in profile,
+through `[run.defaults]` and the selected profile, to supplied CLI values.
+See the canonical [configuration resolution and Run shape rules](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md#configuration-resolution)
+for file selection, Authority and Sidecar overlays, collection clearing, and
+security-relevant sharp edges.
 
 Capability sources use a tagged `capability.source` table:
 
@@ -427,41 +423,6 @@ Executable launch policies are keyed by executable name. For Codex:
 approval_policy = "on-request"
 ```
 
-`sidecar_local_exec` merges field-by-field. A higher layer can change one timeout, HITL mode, endpoint, or enforcement boolean while retaining lower siblings. `allowed_executables` is replaceable: omission inherits, a present list replaces, and `[]` clears. Final validation still rejects `enforce_known_executables = true` with an empty allowlist.
-
-`executable_policies` merges executable names by key; omission inherits and an empty table clears all lower entries. Matching policies merge their scalar fields, while `config_overrides` inherits when omitted, clears when empty, and otherwise merges by key. Selective inherited-key deletion is not supported.
-
-### Merge contract
-
-| Shape or field                               | Current rule                                                  |
-| -------------------------------------------- | ------------------------------------------------------------- |
-| Booleans                                     | Omission inherits; explicit `false` or `true` replaces        |
-| `env_passthrough`                            | Present list replaces; `[]` clears                            |
-| `env_set`                                    | Empty clears; non-empty merges by key                         |
-| `mounts`                                     | Any present list replaces; `[]` clears                        |
-| Capability `requested_actions`               | Empty fails Authority issuance with `NO_ACTIONS`              |
-| Mediator `allowed_executables`               | Parent merges by field; present list replaces or clears       |
-| Policy `config_overrides`                    | Parent merges by field; empty clears; keys otherwise merge    |
-| Nested network, seccomp, mediator, or policy | Independently overridable fields merge                        |
-| `executable_policies`                        | Empty clears; matching policy fields otherwise merge          |
-| Supplied CLI value                           | Highest precedence                                            |
-
-Repeat inherited members in a higher non-empty list when you still need them.
-Use an explicit empty list or table only to remove the entire lower collection.
-Then inspect the final profile with `--print-effective-config`. For example, an
-explicit `allow_non_structural = false`, `mounts = []`, and empty `env_set`
-table appears in the abridged output as:
-
-```json
-{
-  "profile": {
-    "env_set": {},
-    "mounts": [],
-    "allow_non_structural": false
-  }
-}
-```
-
 ## Useful flags
 
 `firma run --help` is the full reference. The flags that come up most often:
@@ -469,7 +430,7 @@ table appears in the abridged output as:
 | Flag                                        | Effect                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--profile <name>`                          | Pick a runtime profile. `generic` is the default; `codex` adds workspace mounts for coding agents.                                                                                                                                                                                                                                                                                    |
-| `--config <file>`                           | Override profile defaults from a TOML/YAML file.                                                                                                                                                                                                                                                                                                                                      |
+| `--config <file>`                           | Select one unified, sectioned `firma.toml`; it does not merge with discovered files.                                                                                                                                                                                                                                                                                                  |
 | `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                                                                                                                                                                                                                                                                                |
 | `--sidecar <local\|url>`                    | `local` autostarts a per-run Sidecar; a `tcp://host:port` / `unix:///path` value targets an external one and never autostarts. Omitted: persisted `sidecar_endpoint` else local autostart.                                                                                                                                                                                            |
 | `--no-autostart`                            | Disable autostart for any missing component and fail loudly. Incompatible with `--sidecar local` and `--authority local`. CI / production safety net.                                                                                                                                                                                                                                 |

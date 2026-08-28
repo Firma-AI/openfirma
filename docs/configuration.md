@@ -4,14 +4,34 @@ Every subcommand reads one shared, sectioned `firma.toml`. There is exactly
 **one** schema. A single file holds top-level `[authority]`, `[sidecar.*]`
 (`[sidecar.interceptor]` / `[sidecar.policy]` / `[sidecar.ca]` /
 `[sidecar.audit]` / `[sidecar.mapping]`, plus any bare `[sidecar]` scalars),
-and `[run]`. Each subcommand reads only its own section; section extraction
-is fail-closed (a missing required section is a hard error).
+and `[run]`. Commands consume the sections they need. A required section that
+is missing fails closed; diagnostic or optional consumers can inspect multiple
+sections or continue without an optional section.
 
-When `--config` is **omitted**, that `firma.toml` is discovered from
-`$FIRMA_CONFIG` or by walking up from `cwd` to `.firma/firma.toml` (see
-[Config Discovery](cli.md#config-discovery)). An explicit `--config <path>`
-only overrides the file location — the file still uses the same sectioned
-shape and must be readable and valid TOML.
+## Configuration resolution
+
+OpenFirma selects one unified configuration file in this order:
+
+1. explicit `--config <path>`;
+2. `FIRMA_CONFIG`; then
+3. the nearest `.firma/firma.toml`, found by walking up from the current
+   directory.
+
+The first selected file wins. OpenFirma does not field-merge multiple
+configuration files. A selected file must be readable and valid TOML, and
+omitted schema fields receive their documented defaults.
+
+After loading the selected `[authority]` section, Authority applies its
+documented `FIRMA_AUTHORITY_*` environment overlays. The Sidecar has no
+profile-style inheritance: only its documented explicit CLI options override
+fields from the selected `[sidecar]` section. Dedicated Sidecar launch and
+autostart template inputs select one Sidecar source; they do not add another
+field-merge layer.
+
+Run alone has profile inheritance. It resolves the built-in profile, then
+`[run.defaults]`, then the selected `[run.profiles.<name>]`, and finally
+supplied CLI profile values. Higher layers override lower layers according to
+the shape rules below.
 
 Configuration is validated at startup. Invalid fields cause the affected
 binary to exit before accepting requests.
@@ -153,94 +173,40 @@ or invalid agent ID fails closed before backend or component startup.
 
 ## Run profile layering
 
-`firma run` resolves configuration in this order: built-in profile,
-`[run.defaults]`, the selected `[run.profiles.<name>]`, then supplied CLI
-values. Higher explicit values win.
+The [configuration resolution](#configuration-resolution) order applies these
+shape rules at each Run profile layer:
 
-Profile booleans distinguish omission from `false`: an omitted
-`use_http_proxy_sidecar` or `allow_non_structural` inherits the lower layer,
-while an explicit `false` disables an inherited `true`. The enable-only
-`--allow-non-structural` flag has highest profile precedence when passed; when
-omitted it does not override the file. `FIRMA_RUN_ALLOW_NON_STRUCTURAL` is a
-separate post-resolution enable-only override.
+| Shape                 | Rule                                                      |
+| --------------------- | --------------------------------------------------------- |
+| Scalar, enum, boolean | Omitted inherits; a present value replaces                |
+| Nested patch          | Independently overridable fields merge field-by-field     |
+| List                  | Omitted inherits; a present list replaces; `[]` clears    |
+| Map                   | Omitted inherits; empty clears; non-empty merges by key   |
+| Supplied CLI value    | Replaces the resolved profile value at highest precedence |
 
-Top-level profile collections also distinguish omission from an explicit empty
-value. `env_passthrough` and `mounts` are replaceable lists: omission inherits,
-a present list replaces the lower list, and `[]` clears it. `env_set` is a map:
-omission inherits, a non-empty map merges by key, and a present empty table
-clears every lower entry. Repeat any inherited list entries that must remain.
+Repeat inherited members in a higher non-empty list when they must remain.
+Maps do not support deleting one inherited key: override that key, retain the
+map, or clear the whole map. Matching map values that are nested patches merge
+field-by-field.
 
-Clearing `env_set` deliberately removes built-in bwrap root-filesystem and home
-masking controls as well as the `NO_PROXY`/`no_proxy` proxy-bypass safeguards.
-Prefer a non-empty key override for narrow changes; use an empty table only as
-an explicit broad opt-out. Selective removal of one inherited map key is not
-supported.
+Security-relevant sharp edges:
 
-Nested `network` and `seccomp_policy` tables merge field-by-field. A higher
-layer can override one network toggle or only `seccomp_policy.runtime_mode`
-without repeating lower siblings. If a seccomp table remains after merging,
-the final result must contain both `source_policy_path` and `artifact_dir`;
-otherwise profile resolution reports the missing field.
+- Clearing `env_set` removes all built-in hardening and proxy-bypass values,
+  including `NO_PROXY` / `no_proxy`.
+- An explicit empty capability `requested_actions` list reaches automatic
+  issuance and fails closed with Authority reason `NO_ACTIONS` before launch.
+- A resolved `seccomp_policy` requires both `source_policy_path` and
+  `artifact_dir`.
+- `enforce_known_executables = true` requires a non-empty
+  `allowed_executables` list.
+- `--allow-non-structural` and `FIRMA_RUN_ALLOW_NON_STRUCTURAL` are explicit
+  enable-only safety opt-ins outside profile inheritance; when omitted, they do
+  not override the resolved profile.
 
-Capability `requested_actions` is a replaceable list. Omission inherits and
-ultimately uses the all-action request default; a present non-empty list narrows
-the request; and `[]` stays empty. With automatic Authority issuance, an empty
-request fails closed before launch with Authority reason `NO_ACTIONS`, so no
-capability seed or refresh lifecycle starts. Disabled and pre-staged capability
-sources do not issue.
-
-`sidecar_local_exec` also merges field-by-field. Higher layers can change one
-timeout, HITL mode, endpoint, or enforcement boolean without replacing lower
-siblings. `allowed_executables` is a replaceable list: omission inherits, a
-present list replaces, and `[]` clears. The final configuration cannot combine
-`enforce_known_executables = true` with an empty allowlist.
-
-`executable_policies` is a key-merged map: omission inherits, an empty table
-clears every lower executable, and a non-empty table merges executable names.
-Matching executable policies merge `enforce_wrapper_defaults`, `sandbox_mode`,
-and `approval_policy` field-by-field. Their `config_overrides` maps inherit when
-omitted, clear when empty, and otherwise merge by key. Selectively deleting one
-inherited map key is not supported.
-
-### Merge contract
-
-| Shape or field                               | Current rule                                                  |
-| -------------------------------------------- | ------------------------------------------------------------- |
-| Scalar or enum `Option<T>`                   | Omission inherits; a present value replaces                   |
-| Profile booleans                             | Omission inherits; explicit `false` or `true` replaces        |
-| `env_passthrough`                            | Omission inherits; present list replaces; `[]` clears         |
-| `env_set`                                    | Omission inherits; empty clears; non-empty merges by key      |
-| `mounts`                                     | Omission inherits; any present list replaces; `[]` clears     |
-| `mask_home_paths`                            | Omission inherits; a present list replaces                    |
-| Capability `requested_actions`               | Empty reaches issuance and fails `NO_ACTIONS` before launch   |
-| Mediator `allowed_executables`               | Parent merges by field; present list replaces or clears       |
-| Policy `config_overrides`                    | Parent merges by field; empty clears; keys otherwise merge    |
-| `network`, seccomp, mediator, policy patches | Independently overridable fields merge                        |
-| `executable_policies`                        | Empty clears; keys and matching policy fields otherwise merge |
-| Supplied CLI value                           | Highest precedence                                            |
-| Unsupplied enable-only CLI boolean           | Absent, so it inherits                                        |
-
-Repeat inherited members in every higher non-empty list that must retain them.
-Use an explicit empty list or table only when the entire lower collection
-should be removed. Partial nested tables can override one independent setting
-without repeating siblings. Inspect the result before launch:
+Inspect the result before launch:
 
 ```console
 firma run --profile generic --print-effective-config -- echo hi
-```
-
-For example, with an inherited `allow_non_structural = true`, a selected
-profile that sets `allow_non_structural = false`, `mounts = []`, and an empty
-`env_set` table produces an effective profile containing this abridged JSON:
-
-```json
-{
-  "profile": {
-    "env_set": {},
-    "mounts": [],
-    "allow_non_structural": false
-  }
-}
 ```
 
 ## Config-Relative Resource Resolution

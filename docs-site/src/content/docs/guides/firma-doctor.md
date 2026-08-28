@@ -16,15 +16,6 @@ safe to run against a live stack at any time.
 - **In CI** — gate on exit code 0 to catch configuration drift before tests run.
 - **Any time `firma sidecar status` looks wrong** — doctor tells you *why*.
 
-:::caution[v0.1.0 and earlier]
-OpenFirma **v0.1.0** shipped doctor and monitor behavior that did not match
-what `firma run` actually does: misleading sandbox backend verdicts, false
-`FAIL` on missing long-lived daemons in `firma run`-only workflows, empty
-`firma monitor` output after real decisions, and one-shot reads that skipped
-existing audit records. Upgrade to **v0.1.1** or later before trusting
-doctor/monitor for troubleshooting.
-:::
-
 ## Quickstart
 
 ```bash
