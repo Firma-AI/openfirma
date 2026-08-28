@@ -3,14 +3,10 @@
 //! Path resolution is delegated to the shared `firma-config-loader` crate so
 //! every binary discovers the same `firma.toml`.
 
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
 use crate::error::RunError;
-use firma_config_schema::sidecar::authority::SidecarCredentials;
+use firma_config_schema::sidecar::authority::AuthorityConfig as SidecarAuthorityConfig;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Client-side connect coordinates lifted from `[sidecar.authority]`.
@@ -48,40 +44,8 @@ impl Default for AuthoritySection {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-struct SidecarAuthorityOnDisk {
-    #[serde(default)]
-    url: Option<String>,
-    #[serde(default)]
-    ca_cert_path: Option<PathBuf>,
-    #[serde(default)]
-    public_key_path: Option<PathBuf>,
-    #[serde(default)]
-    credentials: Option<SidecarCredentials>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct SidecarOnDisk {
-    #[serde(default)]
-    authority: Option<SidecarAuthorityOnDisk>,
-}
-
 fn default_listen_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), 50051)
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct AuthorityOnDisk {
-    #[serde(default = "default_listen_addr")]
-    listen_addr: std::net::SocketAddr,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct UserConfig {
-    #[serde(default)]
-    authority: Option<AuthorityOnDisk>,
-    #[serde(default)]
-    sidecar: Option<SidecarOnDisk>,
 }
 
 /// Read the routing snapshot from `firma.toml`.
@@ -94,27 +58,48 @@ struct UserConfig {
 /// Returns an error on I/O failure (other than `NotFound`) or TOML
 /// parse failure.
 pub(crate) fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError> {
-    let text = match fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
+    match path.try_exists() {
+        Ok(false) => return Ok(None),
+        Ok(true) => {}
+        Err(error) => {
             return Err(RunError::Internal(format!(
-                "read user config {}: {e}",
+                "inspect user config {}: {error}",
                 path.display()
             )));
         }
-    };
-    let parsed: UserConfig = toml::from_str(&text).map_err(|e| RunError::ConfigParse {
-        path: path.to_path_buf(),
-        reason: e.to_string(),
-    })?;
-    let local = parsed.authority.is_some();
-    let listen_addr = parsed
-        .authority
-        .map_or_else(default_listen_addr, |a| a.listen_addr);
-    let connect = parsed
-        .sidecar
-        .and_then(|s| s.authority)
+    }
+    let parsed =
+        firma_config_loader::FirmaConfig::load(path).map_err(|error| RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    let authority = parsed
+        .optional_section::<firma_config_schema::authority::AuthorityConfig>("authority")
+        .map_err(|error| RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    let sidecar = parsed
+        .optional_section::<firma_config_schema::sidecar::SidecarConfig>("sidecar")
+        .map_err(|error| RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    let local = authority.is_some();
+    let listen_addr = authority.map_or_else(
+        || Ok(default_listen_addr()),
+        |config| {
+            config
+                .listen_addr
+                .parse()
+                .map_err(|error| RunError::ConfigParse {
+                    path: path.to_path_buf(),
+                    reason: format!("invalid [authority].listen_addr: {error}"),
+                })
+        },
+    )?;
+    let connect = sidecar
+        .map(|config| config.authority)
         .map(build_connect_section)
         .transpose()?
         .filter(|c| {
@@ -134,7 +119,7 @@ pub(crate) fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, Ru
 }
 
 fn build_connect_section(
-    section: SidecarAuthorityOnDisk,
+    section: SidecarAuthorityConfig,
 ) -> Result<AuthorityConnectSection, RunError> {
     let credentials = section
         .credentials
@@ -166,15 +151,57 @@ mod tests {
     fn read_authority_returns_none_when_neither_section_present() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join(CONFIG_FILE_NAME);
-        fs::write(&path, "[other]\nkeep = true\n").unwrap();
+        std::fs::write(&path, "[run]\nprofile = \"generic\"\n").unwrap();
         assert_eq!(read_authority(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn read_authority_rejects_invalid_whole_file_shapes() -> anyhow::Result<()> {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join(CONFIG_FILE_NAME);
+
+        for (body, expected_reason) in [
+            ("unexpected = true\n", "unknown top-level key `unexpected`"),
+            (
+                "[authority]\nlisten_addr = \"not-an-address\"\n",
+                "invalid [authority].listen_addr",
+            ),
+            (
+                "[authority]\nunexpected = true\n",
+                "unknown field `unexpected`",
+            ),
+            (
+                "[sidecar]\nunexpected = true\n",
+                "unknown field `unexpected`",
+            ),
+        ] {
+            std::fs::write(&path, body).unwrap();
+            let error = match read_authority(&path) {
+                Ok(value) => anyhow::bail!("invalid config {body:?} produced {value:?}"),
+                Err(error) => error,
+            };
+            let RunError::ConfigParse {
+                path: error_path,
+                reason,
+            } = error
+            else {
+                anyhow::bail!("unexpected error for {body:?}: {error}");
+            };
+            assert_eq!(error_path, path);
+            assert!(
+                reason.contains(expected_reason),
+                "unexpected error for {body:?}: {reason}"
+            );
+        }
+
+        Ok(())
     }
 
     #[test]
     fn authority_section_marks_local() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join(CONFIG_FILE_NAME);
-        fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:0\"\n").unwrap();
+        std::fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:0\"\n").unwrap();
         let section = read_authority(&path).unwrap().unwrap();
         assert!(section.local);
         assert!(section.connect.is_none());
@@ -184,7 +211,7 @@ mod tests {
     fn sidecar_authority_url_is_lifted_into_connect() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join(CONFIG_FILE_NAME);
-        fs::write(&path, "[sidecar.authority]\nurl = \"https://x\"\n").unwrap();
+        std::fs::write(&path, "[sidecar.authority]\nurl = \"https://x\"\n").unwrap();
         let section = read_authority(&path).unwrap().unwrap();
         assert!(!section.local);
         assert_eq!(
@@ -197,7 +224,7 @@ mod tests {
     fn sidecar_authority_credentials_are_lifted_into_connect() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join(CONFIG_FILE_NAME);
-        fs::write(
+        std::fs::write(
             &path,
             "[sidecar.authority.credentials]\n\
              workspace_id = \"ws\"\n\

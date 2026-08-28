@@ -5,11 +5,10 @@
 //! validated types here are built from it via `TryFrom`, so an invalid
 //! configuration can never be constructed.
 //!
-//! The top-level [`SidecarConfig`] embeds the enforcement-specific
-//! [`EnforcementConfig`] via `#[serde(flatten)]`, so enforcement
-//! sections (`[mapping]`, `[capability_validation]`,
-//! `[constraint_enforcement]`) appear as top-level TOML tables rather
-//! than nested under an `[enforcement]` prefix.
+//! The top-level [`SidecarConfig`] groups the enforcement-specific
+//! [`EnforcementConfig`] after the behavior-free schema has deserialized its
+//! three direct tables (`[mapping]`, `[capability_validation]`, and
+//! `[constraint_enforcement]`).
 //!
 //! Validation runs eagerly when the schema is converted at startup, so
 //! misconfigurations surface before the first request arrives.
@@ -297,6 +296,12 @@ impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
             .into_iter()
             .map(HttpIntegrationSpec::try_from)
             .collect::<Result<Vec<_>, _>>()?;
+        let enforcement = firma_config_schema::sidecar::EnforcementConfig {
+            mapping: s.mapping,
+            capability_validation: s.capability_validation,
+            constraint_enforcement: s.constraint_enforcement,
+        }
+        .try_into()?;
         let config = Self {
             mode: s.mode,
             interceptor: s.interceptor.try_into()?,
@@ -305,7 +310,7 @@ impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
             credentials,
             connector: s.connector.try_into()?,
             authority: s.authority.try_into()?,
-            enforcement: s.enforcement.try_into()?,
+            enforcement,
             revocation: s.revocation.try_into()?,
             capability_seed: s.capability_seed.try_into()?,
             audit: s.audit.try_into()?,

@@ -138,11 +138,14 @@ mod tests {
     fn persist_preserves_other_sections() {
         let tmp = tempdir().unwrap();
         let target = tmp.path().join(CONFIG_FILE_NAME);
-        fs::write(&target, "[other]\nkeep = true\n").unwrap();
+        fs::write(&target, "[run]\nprofile = \"generic\"\n").unwrap();
         persist_authority_section(&target).unwrap();
         let contents = fs::read_to_string(&target).unwrap();
-        assert!(contents.contains("[other]"), "got: {contents}");
-        assert!(contents.contains("keep = true"), "got: {contents}");
+        assert!(contents.contains("[run]"), "got: {contents}");
+        assert!(
+            contents.contains("profile = \"generic\""),
+            "got: {contents}"
+        );
         assert!(contents.contains("[authority]"), "got: {contents}");
         assert!(
             contents.contains(r#"listen_addr = "[::1]:0""#),

@@ -517,11 +517,10 @@ fn read_config(
     resolved: &firma_config_loader::ResolvedConfig,
     authority_connect_addr: Option<std::net::SocketAddr>,
 ) -> anyhow::Result<config::SidecarConfig> {
-    let body = resolved
+    let mut schema = resolved
         .config
-        .raw_section("sidecar")
+        .section::<firma_config_schema::sidecar::SidecarConfig>("sidecar")
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
-    let mut schema: firma_config_schema::sidecar::SidecarConfig = toml::from_str(&body)?;
     if let Some(connect_addr) = authority_connect_addr {
         schema.authority.connect_addr = Some(connect_addr);
     }

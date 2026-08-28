@@ -146,12 +146,6 @@ dir = "/tmp/firma-standalone/config/policies"
 url             = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/authority.pub"
 
-[sidecar.preflight]
-agent_id          = "agt_01j0000000e008000000000001"
-session_id        = "standalone-session"
-requested_actions = ["communication.external.send"]
-resource_scope    = "*"
-
 [sidecar.audit]
 sink             = "file"
 file_path        = "/tmp/firma-standalone/logs/audit.jsonl"
@@ -163,10 +157,10 @@ Notes:
 - **`[sidecar.authority].url` is required** for Stage 2 on mapped routes.
   Without it the Sidecar keeps a deny-all stale evaluator and every protected
   call becomes `policy bundle stale`.
-- **`[sidecar.preflight]`** asks the Authority for a dev capability at Sidecar
-  startup so Stage 1 passes without hand-minting a seed file. See
-  [Issue capability tokens](../issue-capability-tokens/) for the long-lived
-  seed workflow.
+- The Sidecar does not mint a capability at startup. Use `firma run` for
+  automatic per-session issuance, or follow
+  [Issue capability tokens](../issue-capability-tokens/) to configure a
+  long-lived `[sidecar.capability_seed]` before sending protected requests.
 - **`default_protected = false`** keeps unmapped destinations as passthrough
   while you experiment. Production stacks should use `true`.
 - No `[sidecar.ca]` section — these demo curls use plain HTTP. See

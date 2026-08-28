@@ -191,17 +191,15 @@ pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunE
 
 fn persisted_authority_config(user_config: &Path) -> Result<AuthorityConfig, RunError> {
     let config_dir = user_config.parent().unwrap_or_else(|| Path::new("."));
-    let body = firma_config_loader::load_section(user_config, "authority").map_err(|error| {
-        RunError::Internal(format!(
-            "load [authority] from {}: {error}",
-            user_config.display()
-        ))
-    })?;
+    let file = firma_config_loader::FirmaConfig::load(user_config)
+        .map_err(|error| RunError::Internal(format!("load {}: {error}", user_config.display())))?;
+    let schema = file
+        .section::<firma_config_schema::authority::AuthorityConfig>("authority")
+        .map_err(|error| RunError::Internal(format!("parse authority config: {error}")))?;
     // Build via the Authority's own builder: rebase paths, then force the
     // autostart overrides (loopback listener, no TLS) on the config, then
     // validate on build.
-    let config = AuthorityConfigBuilder::from_toml_str(&body)
-        .map_err(|error| RunError::Internal(format!("parse authority config: {error}")))?
+    let config = AuthorityConfigBuilder::new(schema)
         .rebase_defaults(config_dir)
         .without_tls()
         .listen_addr(LOOPBACK_EPHEMERAL.to_string())

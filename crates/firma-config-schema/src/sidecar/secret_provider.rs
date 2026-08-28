@@ -12,6 +12,7 @@ use crate::secret_matcher::SecretMatcher;
 /// One HTTP secret provider: which host to intercept and how to classify and
 /// extract secrets from its responses.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpSecretProviderConfig {
     /// Stable integration identity (e.g. `"aws-secrets-manager"`).
     pub provider_id: String,
@@ -29,7 +30,7 @@ pub struct HttpSecretProviderConfig {
 /// Tagged by `type` (`sensitive_command` / `safe_command` / `blocked_command`)
 /// so it nests as a flat TOML table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HttpMatcherRuleConfig {
     /// Response whose body must be scanned and redacted using `matcher`.
     SensitiveCommand {

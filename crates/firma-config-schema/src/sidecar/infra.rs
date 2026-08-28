@@ -25,6 +25,7 @@ pub enum SidecarMode {
 
 /// Policy source settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     /// Directory containing `.cedar` policy files.
     #[serde(default = "default_policy_dir")]
@@ -41,6 +42,7 @@ impl Default for PolicyConfig {
 
 /// Certificate authority directory settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaConfig {
     /// Directory containing CA key material.
     #[serde(default = "default_ca_dir")]
@@ -80,6 +82,7 @@ pub enum CredentialTransform {
 /// The `header` field is a plain string here; `firma-sidecar` parses it into
 /// an `http::HeaderName` during validation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CredentialConfig {
     /// Injection mode. Default: `basic`.
     #[serde(default)]

@@ -16,6 +16,15 @@ shape and must be readable and valid TOML.
 Configuration is validated at startup. Invalid fields cause the affected
 binary to exit before accepting requests.
 
+Unknown keys are rejected recursively rather than ignored. The only top-level
+keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
+are strict as well. Dynamic labels such as credential names, executable-policy
+names, and Run profile names remain open, but every value under those labels
+must match its schema. Firma validates all Run defaults and profiles while
+parsing the file, including profiles that are not selected, so a typo or an
+unsupported `backend` anywhere fails startup. Remove stale tables such as
+`[project]` and `[sidecar.preflight]` instead of relying on them being ignored.
+
 The following settings were removed because they never controlled runtime
 behavior: `[authority].log_level`, `[sidecar.log]`,
 `[sidecar.constraint_enforcement].bundle_ttl_seconds`,
@@ -33,7 +42,6 @@ absolutised under the resolved config and state directories. The shape is:
 
 ```toml
 [authority]
-type = "local"
 listen_addr = "127.0.0.1:50051"
 policy_dir = '/home/me/.config/firma/policies'
 issuance_policy_dir = '/home/me/.config/firma/issuance-policies'
@@ -45,9 +53,6 @@ bundle_ttl_seconds = 30
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-
-[sidecar.policy]
-authority_url = "http://127.0.0.1:50051"
 
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"

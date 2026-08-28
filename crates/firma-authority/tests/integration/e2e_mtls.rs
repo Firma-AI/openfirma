@@ -181,13 +181,10 @@ impl MtlsTestServer {
             issuance_policy_dir: issuance_dir,
             revocation_file,
             key_file,
-            tls: authority_schema::AuthorityTlsConfig {
-                tls_cert_path: Some(server_cert_path),
-                tls_key_path: Some(server_key_path),
-                mtls_client_ca_cert_path: Some(client_ca_cert_path),
-                mtls_client_ca_key_path: None,
-                authorized_clients_path: Some(authorized_clients_path),
-            },
+            tls_cert_path: Some(server_cert_path),
+            tls_key_path: Some(server_key_path),
+            mtls_client_ca_cert_path: Some(client_ca_cert_path),
+            authorized_clients_path: Some(authorized_clients_path),
             ..authority_schema::AuthorityConfig::default()
         })
         .build()

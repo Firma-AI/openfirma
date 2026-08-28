@@ -95,11 +95,6 @@ trap cleanup EXIT INT TERM
 # and is denied with RevocationCacheNotReady.
 sleep 2
 
-# 7. Read session_id from the [sidecar.preflight] table in firma.toml so the
-#    script can attach `x-firma-session-id` and Stage 1 (capability
-#    validation) can match the pre-flight token.
-session_id="$(awk -F'=' '/^session_id/ {gsub(/[" ]/,"",$2); print $2; exit}' "$demo_dir/firma.toml")"
-
 if [[ $run_script -eq 0 ]]; then
     echo "skipping demo script (--no-script). Tailing audit log; Ctrl-C to stop." >&2
     exec firma monitor --state-dir "$runtime_dir" --source audit
@@ -118,7 +113,6 @@ HTTPS_PROXY="http://127.0.0.1:8080" \
 NO_PROXY="localhost,127.0.0.1,0.0.0.0,::1,pypi.org,files.pythonhosted.org" \
 SSL_CERT_FILE="$ca_cert" \
 REQUESTS_CA_BUNDLE="$ca_cert" \
-FIRMA_SESSION_ID="$session_id" \
 uv run --offline "$demo/agent.py"
 
 echo

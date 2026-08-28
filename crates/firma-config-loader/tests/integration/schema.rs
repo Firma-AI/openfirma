@@ -50,6 +50,34 @@ fn nested_subtables_are_preserved() {
 }
 
 #[test]
+fn unknown_top_level_table_is_rejected() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(&path, "[other]\nkeep = true\n").expect("write config");
+
+    let error = FirmaConfig::load(&path).expect_err("unknown table must fail");
+    assert!(
+        error.to_string().contains("unknown top-level key `other`"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn removed_project_table_is_rejected() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(&path, "[project]\nagent = \"codex\"\n").expect("write config");
+
+    let error = FirmaConfig::load(&path).expect_err("removed table must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("unknown top-level key `project`"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn missing_section_is_an_error() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);

@@ -129,7 +129,7 @@ mod tests {
     fn no_authority_keys_defaults_to_local_autostart() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join(CONFIG_FILE_NAME);
-        std::fs::write(&path, "[other]\nkeep = true\n").unwrap();
+        std::fs::write(&path, "[run]\nprofile = \"generic\"\n").unwrap();
         let sel = resolve(&AuthorityCli::Unset, false, Some(path.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
     }
