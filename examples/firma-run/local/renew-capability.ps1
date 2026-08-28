@@ -1,16 +1,13 @@
 #!/usr/bin/env pwsh
-# LEGACY operator path: manually mints a capability seed via `firma authority issue`.
-# This flow is superseded by the automatic per-session capability minted by `firma run`
-# (written to $XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml and loaded by the
-# autostarted sidecar without operator intervention).
-# Use this script only when pre-provisioning a fixed, long-lived session outside
-# the `firma run` autostart flow (e.g. a daemon or CI agent with a known identity).
+# Issues canonical CapabilitySeed TOML for `firma run --capability-file`.
+# Run exports only the seed's raw token and path; a locally autostarted Sidecar
+# loads and watches the same file.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 param(
   [string]$AuthorityConfig = ".local/firma.toml",
-  [string]$AgentId = "example-agent",
+  [string]$AgentId = "agt_01j0000000e008000000000001",
   [string]$SessionId = "",
   [string]$Action = "communication.external.send",
   [string]$ResourceScope = "*",
@@ -19,7 +16,6 @@ param(
 )
 
 function Write-Ok([string]$Message) { Write-Host "[ok] $Message" }
-function Write-Warn([string]$Message) { Write-Host "[warn] $Message" }
 function Fail([string]$Message) { throw "[fail] $Message" }
 
 if (-not $SessionId) {
@@ -50,4 +46,4 @@ cargo run -p firma -- authority --config $AuthorityConfig issue `
   --output $Output
 
 Write-Ok "capability written: $Output"
-Write-Warn "if sidecar uses capability_seed, restart sidecar to reload the renewed token"
+Write-Ok "pass this canonical seed with firma run --capability-file"

@@ -327,9 +327,9 @@ pub struct SynthesizeRequest<'a> {
     /// Sidecar credentials to inject into `[sidecar.authority.credentials]`.
     /// `None` leaves any existing template value untouched.
     pub authority_credentials: Option<&'a SidecarCredentialsConfig>,
-    /// Path of the per-session capability seed minted by `firma run`, appended
-    /// to `[sidecar.capability_seed].paths`. `None` when no seed was minted
-    /// (e.g. `--capability-file` was passed).
+    /// Capability seed path appended to `[sidecar.capability_seed].paths`.
+    /// This is either an explicit file source or a per-session seed minted by
+    /// `firma run`; `None` means no seed is available for local Sidecar setup.
     pub capability_seed_path: Option<&'a Path>,
     /// Audit log path used as the default `file` sink when the template does
     /// not configure an audit sink. Set to the shared state/runtime dir's

@@ -39,6 +39,7 @@ use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 #[cfg(unix)]
 use firma_run::backend::{BackendKind, EnforcementProof, NetworkConfinement, SandboxHandle};
 use firma_run::capability::issue::{IssueParams, mint_and_write};
+use firma_run::capability::read_capability_token;
 use firma_run::capability::refresh::CapabilityRefresher;
 use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
 #[cfg(unix)]
@@ -323,6 +324,12 @@ async fn real_authority_token_mints_compatible_seed() {
         vec!["communication.external.send".to_string()]
     );
     assert!(!seed.raw_token.is_empty(), "seed carries the signed token");
+    let run_token = read_capability_token(&CapabilitySource::File {
+        path: seed_path.clone(),
+    })
+    .expect("Run parses Authority-issued seed")
+    .expect("file source carries a token");
+    assert_eq!(run_token, seed.raw_token);
 
     let verifier = build_token_verifier(Some(&authority.pub_key_path))
         .expect("build verifier from real Authority key");
@@ -332,7 +339,6 @@ async fn real_authority_token_mints_compatible_seed() {
             hot_reload: true,
         },
         verifier.as_ref(),
-        &dir.path().join("runtime-capabilities"),
     )
     .expect("Sidecar loads seed minted through firma-run");
     let entry = capability_map

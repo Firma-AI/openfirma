@@ -87,7 +87,7 @@ firma-authority export-workspace-public-key \
 
 The file must contain exactly the 32 raw bytes of an Ed25519 public key. PEM,
 OpenSSH, DER, hex, base64, and TOML encodings are not accepted. A relative
-`public_key_path` is resolved from the `firma run` working directory.
+`public_key_path` in `firma.toml` resolves from that file's directory.
 
 `firma run` reads and validates the key before calling `IssueCapability`, then
 uses it to verify the returned PASETO token. The same effective key is written
@@ -100,7 +100,10 @@ key is used.
 Key read failures, files that are not exactly 32 bytes, malformed or expired
 tokens, and signature mismatches fail closed with an error. An explicit
 `--capability-file` uses the same signed TOML representation as the automatic
-per-run capability file.
+per-run capability file. Run parses the complete seed before launch, exports
+only its `raw_token` and original path to the wrapped process, and passes the
+path to a locally autostarted Sidecar for verification and reload. A pre-managed
+external Sidecar owns its seed configuration independently.
 
 ## Staying alive: automatic refresh
 

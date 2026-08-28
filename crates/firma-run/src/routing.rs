@@ -284,7 +284,7 @@ pub struct AutostartFlags {
     /// Sidecar credential config injected into `[sidecar.authority.credentials]`
     /// during sidecar config synthesis.
     pub authority_credentials: Option<SidecarCredentialsConfig>,
-    /// Path of the per-session capability seed minted by `firma run`.
+    /// Explicit or Firma-minted capability seed path for local Sidecar setup.
     pub capability_seed_path: Option<PathBuf>,
     /// When `true`, the autostarted sidecar is started in HTTP proxy
     /// interceptor mode rather than Unix socket mode.

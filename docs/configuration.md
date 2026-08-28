@@ -86,7 +86,7 @@ unsupported `backend` anywhere fails startup. Configure process logging with
 ### Run capability sources
 
 Capability sources use a tagged `capability.source` table. A file source names
-the capability file:
+canonical signed capability seed TOML produced by `firma authority issue`:
 
 ```toml
 [run.profiles.codex.capability.source]
@@ -95,6 +95,11 @@ path = "capability.toml"
 ```
 
 Use `kind = "disabled"` without `path` to disable the source.
+For a file source, Run parses the complete seed before preparing the sandbox,
+exports only `raw_token` as `FIRMA_CAPABILITY_TOKEN`, and preserves the
+configured path as `FIRMA_CAPABILITY_FILE`. Local Sidecar autostart also loads
+and watches that path. A pre-managed external Sidecar owns its seed list
+independently.
 
 ### Run executable policies
 

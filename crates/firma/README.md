@@ -131,7 +131,7 @@ firma run --profile generic -- python agent.py
 | `--config <path>`          | Optional runtime config (.toml/.yaml).                 |
 | `--backend <kind>`         | Override: `bwrap`, `vz`, `wsl2`, `firecracker`.        |
 | `--sidecar <local\|url>`   | `local` autostarts; a URL targets an external sidecar. |
-| `--capability-file <path>` | Capability lease refresh source.                       |
+| `--capability-file <path>` | Canonical signed capability seed TOML.                 |
 | `--identity-mode <mode>`   | `sandbox-user` or `host-user`.                         |
 | `--preserve-host-user`     | Force host UID/GID inside sandbox.                     |
 | `--print-effective-config` | Dump resolved config as JSON before exec.              |

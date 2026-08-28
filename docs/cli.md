@@ -411,8 +411,12 @@ the gRPC `IssueCapability` handler — a Cedar deny exits non-zero
 with `issuance failed: cedar denied issuance (...): ...`.
 
 The output TOML carries the raw `v4.public....` token plus the matching claims.
-`firma run` and the Sidecar verify it with the configured Authority public key
-before use.
+`firma run` requires that complete canonical seed shape and exports only its
+`raw_token` as `FIRMA_CAPABILITY_TOKEN`, alongside the original path as
+`FIRMA_CAPABILITY_FILE`. A locally autostarted Sidecar also loads the file,
+verifies the token with the configured Authority public key, and checks the
+signed claims against the TOML claims. A pre-managed external Sidecar owns its
+seed configuration independently.
 
 ## `firma run`
 

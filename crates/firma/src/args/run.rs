@@ -26,8 +26,8 @@ pub struct RunArgs {
     #[arg(long)]
     pub backend: Option<BackendOverride>,
 
-    /// Path to a capability-token file made available to the agent for
-    /// runtime lease refresh.
+    /// Path to canonical signed capability seed TOML. Run exports its raw token
+    /// and the original path to the wrapped process.
     #[arg(long)]
     pub capability_file: Option<PathBuf>,
 

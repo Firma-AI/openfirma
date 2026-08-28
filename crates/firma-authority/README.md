@@ -75,8 +75,10 @@ cargo run -p firma-authority -- --config firma.toml issue   --agent-id agt_01j00
 ```
 
 The output file contains the signed token and matching claims. Pass it to
-`firma run --capability-file capability-demo-agent.toml`; `firma run` and the
-Sidecar verify it with the configured Authority public key before use.
+`firma run --capability-file capability-demo-agent.toml`; Run parses this
+canonical seed TOML and exports only its raw token to the wrapped process. A
+locally autostarted Sidecar also loads the file and verifies its token and
+matching claims with the configured Authority public key.
 
 ## Configuration
 
