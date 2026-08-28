@@ -275,10 +275,78 @@
 
 ## Final verification
 
-- Focused checks: Pending.
-- Workspace checks: Pending.
-- Post-implementation independent review: Pending for both the implementation
-  candidate and final post-deletion tip.
+- Implementation candidate: `ba4501c66309e3e47d7f6cf32ce246e93094a63c`.
+- Focused checks:
+  - `cargo check -p firma-sidecar -p firma-run -p firma --all-targets` passed.
+  - Sidecar capability-reload integration selection passed 7 tests, including
+    traversal and Unix symlink controls; the Windows symlink control is
+    `#[cfg(windows)]` and remains delegated to Windows CI.
+  - Run's real-Authority compatible-seed test passed.
+  - Firma's real Sidecar-seed CLI E2E selection passed 3 tests, including
+    contained acceptance and external-path rejection.
+  - `bash -n` passed for every changed shell example.
+- Workspace checks:
+  - `just check` passed at the exact implementation candidate: dprint, clippy,
+    2,605 nextest tests, doctests, all-feature/all-target build, audit, deny,
+    and release validation.
+  - `just docs-build` passed and generated all 311 pages.
+- Example smoke evidence:
+  - Policy-control issued all five canonical seeds beneath its selected runtime
+    capabilities directory before its pre-existing Authority revocation-path
+    lookup prevented the detached stack from starting.
+  - The release demo built successfully and its Authority reached `ready`; the
+    shell poll could not observe the listener because this orb has no `nc`
+    executable. Generated keys, seeds, logs, and temporary build outputs from
+    both attempts were removed.
+- Post-implementation independent review: implementation-candidate review
+  complete with no findings; final post-deletion exact-tip review remains
+  pending.
+
+### Implementation-candidate review — `ba4501c6`
+
+#### Scope / baseline inspected
+
+- **Exact revision:** `ba4501c66309e3e47d7f6cf32ce246e93094a63c`
+- **Baseline:** `02ee445cefc0008600072a4079bff5f8abd31f41`
+- Reviewed the complete `02ee445c..ba4501c6` diff and surrounding production
+  Rust, integration tests, configuration schema, runtime threading,
+  documentation, examples, Unix/Windows conditional paths, and accepted
+  plan/proof obligations.
+- No files or history modified.
+
+#### Findings
+
+**No actionable findings.**
+
+The implementation canonicalizes non-empty seed configurations before reads or
+watcher registration, uses resolved contained paths for filesystem effects,
+repeats resolution on reload, preserves the prior map on failure, and preserves
+empty-list behavior without requiring the capabilities directory. Documentation
+and examples consistently select contained runtime state, while external
+Sidecar ownership remains independent.
+
+#### Unknowns / evidence gaps
+
+- Windows symlink behavior could not be executed in this Linux orb; the
+  Windows-specific test is present behind `#[cfg(windows)]`.
+- `cargo nextest run -p firma-sidecar --test integration capability_reload`
+  passed: **7/7 tests**.
+- The reviewer's Firma CLI `sidecar_seed_e2e` verification could not complete
+  because its checkout ran out of disk while compiling `cedar-policy`; the
+  author's exact-candidate focused run and full `just check` above passed all
+  three selected CLI tests and all 2,605 nextest tests.
+- `git diff --check 02ee445c ba4501c6` passed.
+
+#### Verdict
+
+**Approved — no findings** for exact revision
+`ba4501c66309e3e47d7f6cf32ce246e93094a63c`. Residual verification risk is
+limited to unexecuted Windows runtime behavior.
+
+#### Disposition
+
+- Accepted. No implementation or documentation change was required after the
+  independent review.
 
 ## Technical evidence
 
