@@ -4,8 +4,8 @@
 //! file is built (initial) or merged (when the file already exists) via
 //! [`toml_edit::DocumentMut`], so:
 //!
-//! - hand-edited comments, key ordering, and unknown sections survive
-//!   subsequent `firma config` runs;
+//! - hand-edited comments and key ordering survive subsequent `firma config`
+//!   runs;
 //! - the `merge_*` and `build_*` paths share a single source of truth.
 //!
 //! Field policy:
@@ -35,8 +35,9 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
 use firma_identifiers::AgentId;
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Key, Table, TableLike, Value, value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
 
 use crate::args::config::Mode;
 
@@ -92,10 +93,12 @@ impl DocInputs<'_> {
 ///
 /// Returns the parse error if `text` is not valid TOML.
 pub fn render_firma_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
+    validate_firma_toml(text)?;
     let mut doc = parse_or_empty(text)?;
     merge_firma_toml(&mut doc, inputs)?;
     let mut rendered = doc.to_string();
     append_remote_credentials_hint(&mut rendered, inputs);
+    validate_firma_toml(&rendered)?;
     Ok(rendered)
 }
 
@@ -131,6 +134,16 @@ fn parse_or_empty(text: &str) -> std::result::Result<DocumentMut, toml_edit::Tom
     text.parse::<DocumentMut>()
 }
 
+fn validate_firma_toml(text: &str) -> Result<()> {
+    let config = FirmaConfig::parse(CONFIG_FILE_NAME, text)?;
+    let _: Option<firma_config_schema::authority::AuthorityConfig> =
+        config.optional_section("authority")?;
+    let _: Option<firma_config_schema::sidecar::SidecarConfig> =
+        config.optional_section("sidecar")?;
+    let _: Option<firma_config_schema::run::FileConfig> = config.optional_section("run")?;
+    Ok(())
+}
+
 // ── firma.toml ────────────────────────────────────────────────────────────────
 
 fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
@@ -154,8 +167,6 @@ fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()>
 
 fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let table = ensure_table(doc.as_table_mut(), "authority")?;
-    migrate_integer_duration(table, "max_ttl_seconds", "max_ttl", "s");
-    migrate_integer_duration(table, "bundle_ttl_seconds", "bundle_ttl", "s");
     set_str(table, "listen_addr", inputs.authority_listen);
     set_str_if_absent(table, "policy_dir", "policies/");
     set_str_if_absent(table, "issuance_policy_dir", "issuance-policies/");
@@ -170,7 +181,6 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
 
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
-    migrate_sidecar_scalars(sidecar)?;
 
     set_str_if_absent(sidecar, "mode", "enforce");
 
@@ -328,16 +338,7 @@ fn backend_for_linux(wsl: firma_run::backend::platform::WslKind) -> &'static str
 
 fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let run = ensure_table(doc.as_table_mut(), "run")?;
-    if let Some(defaults) = optional_table_mut(run, "defaults")? {
-        migrate_run_profile_scalars(defaults)?;
-    }
     let profiles = ensure_table(run, "profiles")?;
-    for (profile, item) in profiles.iter_mut() {
-        let Some(table) = item.as_table_mut() else {
-            bail!("`run.profiles.{profile}` must be a table");
-        };
-        migrate_run_profile_scalars(table)?;
-    }
     let profile_table = ensure_table(profiles, inputs.profile)?;
     set_str_if_absent(profile_table, "backend", default_run_backend());
 
@@ -357,93 +358,6 @@ fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) ->
     // run requests every action class by default and the Authority narrows the
     // grant to what its issuance policy authorizes. Users can set
     // `requested_actions` by hand as an opt-in extra-restriction knob.
-    Ok(())
-}
-
-fn migrate_run_profile_scalars(profile: &mut Table) -> Result<()> {
-    if let Some(capability) = optional_table_mut(profile, "capability")? {
-        migrate_integer_duration(capability, "grace_seconds", "grace", "s");
-    }
-    if let Some(local_exec) = optional_table_mut(profile, "sidecar_local_exec")? {
-        migrate_integer_duration(local_exec, "timeout_ms", "timeout", "ms");
-        migrate_integer_duration(local_exec, "hitl_max_wait_ms", "hitl_max_wait", "ms");
-    }
-    Ok(())
-}
-
-fn migrate_sidecar_scalars(sidecar: &mut Table) -> Result<()> {
-    if let Some(interceptor) = optional_table_mut(sidecar, "interceptor")? {
-        migrate_integer_duration(interceptor, "drain_timeout_secs", "drain_timeout", "s");
-        migrate_integer_size(
-            interceptor,
-            "max_request_body_bytes",
-            "max_request_body_size",
-        );
-        migrate_integer_size(interceptor, "total_body_budget_bytes", "total_body_budget");
-        if let Some(relay) = optional_table_mut(interceptor, "connect_relay")? {
-            migrate_integer_duration(relay, "setup_timeout_secs", "setup_timeout", "s");
-            migrate_integer_duration(relay, "session_max_secs", "session_max", "s");
-        }
-        if let Some(https) = optional_table_mut(interceptor, "https_mitm")? {
-            migrate_integer_duration(https, "cert_ttl_secs", "cert_ttl", "s");
-        }
-    }
-    if let Some(capability) = optional_table_mut(sidecar, "capability_validation")? {
-        migrate_integer_duration(
-            capability,
-            "clock_skew_tolerance_seconds",
-            "clock_skew_tolerance",
-            "s",
-        );
-    }
-    if let Some(connector) = optional_table_mut(sidecar, "connector")? {
-        migrate_integer_duration(connector, "default_timeout_ms", "default_timeout", "ms");
-        if let Some(hosts) = connector
-            .get_mut("hosts")
-            .and_then(Item::as_array_of_tables_mut)
-        {
-            for host in hosts.iter_mut() {
-                migrate_integer_duration(host, "timeout_ms", "timeout", "ms");
-            }
-        } else if let Some(hosts) = connector.get_mut("hosts").and_then(Item::as_array_mut) {
-            for host in hosts.iter_mut() {
-                let Some(host) = host.as_inline_table_mut() else {
-                    bail!("`hosts` array entries must be inline tables");
-                };
-                migrate_integer_duration(host, "timeout_ms", "timeout", "ms");
-            }
-        } else if connector.contains_key("hosts") {
-            bail!("`hosts` must be an array of tables or an inline array");
-        }
-    }
-    if let Some(audit) = optional_table_mut(sidecar, "audit")? {
-        migrate_integer_size(audit, "wal_max_bytes", "wal_max_size");
-    }
-    if let Some(authority) = optional_table_mut(sidecar, "authority")? {
-        migrate_integer_duration(authority, "connect_timeout_secs", "connect_timeout", "s");
-        migrate_integer_duration(
-            authority,
-            "reconnect_min_backoff_ms",
-            "reconnect_min_backoff",
-            "ms",
-        );
-        migrate_integer_duration(
-            authority,
-            "reconnect_max_backoff_secs",
-            "reconnect_max_backoff",
-            "s",
-        );
-        migrate_integer_duration(
-            authority,
-            "revocation_readiness_grace_ms",
-            "revocation_readiness_grace",
-            "ms",
-        );
-    }
-    if let Some(local_exec) = optional_table_mut(sidecar, "local_exec")? {
-        migrate_integer_duration(local_exec, "token_ttl_secs", "token_ttl", "s");
-        migrate_integer_duration(local_exec, "retry_after_ms", "retry_after", "ms");
-    }
     Ok(())
 }
 
@@ -602,16 +516,6 @@ fn ensure_array_of_tables<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mu
     Ok(array)
 }
 
-fn optional_table_mut<'a>(parent: &'a mut Table, key: &str) -> Result<Option<&'a mut Table>> {
-    let Some(item) = parent.get_mut(key) else {
-        return Ok(None);
-    };
-    let Some(table) = item.as_table_mut() else {
-        bail!("`{key}` must be a table");
-    };
-    Ok(Some(table))
-}
-
 fn set_str(table: &mut Table, key: &str, val: &str) {
     table.insert(key, value(val));
 }
@@ -619,96 +523,6 @@ fn set_str(table: &mut Table, key: &str, val: &str) {
 fn set_str_if_absent(table: &mut Table, key: &str, val: &str) {
     if !table.contains_key(key) {
         table.insert(key, value(val));
-    }
-}
-
-fn migrate_integer_duration(table: &mut impl TableLike, old_key: &str, new_key: &str, unit: &str) {
-    migrate_integer_scalar(table, old_key, new_key, |old_value| {
-        format!("{old_value}{unit}")
-    });
-}
-
-fn migrate_integer_size(table: &mut impl TableLike, old_key: &str, new_key: &str) {
-    migrate_integer_scalar(table, old_key, new_key, |old_value| {
-        format!("{old_value} B")
-    });
-}
-
-fn migrate_integer_scalar(
-    table: &mut impl TableLike,
-    old_key: &str,
-    new_key: &str,
-    render: impl FnOnce(i64) -> String,
-) {
-    if table.contains_key(new_key) {
-        let old_decor = table
-            .get_key_value(old_key)
-            .map(|(key, item)| (key.clone(), item.clone()));
-        table.remove(old_key);
-        if let Some((old_key, old_item)) = old_decor
-            && let Some((mut new_key, _)) = table.get_key_value_mut(new_key)
-        {
-            let mut prefix = String::new();
-            append_comment_decor(&mut prefix, old_key.leaf_decor().prefix(), false);
-            append_comment_decor(
-                &mut prefix,
-                old_item.as_value().and_then(|value| value.decor().suffix()),
-                true,
-            );
-            if let Some(existing) = new_key
-                .leaf_decor()
-                .prefix()
-                .and_then(toml_edit::RawString::as_str)
-            {
-                prefix.push_str(existing);
-            }
-            new_key.leaf_decor_mut().set_prefix(prefix);
-        }
-        return;
-    }
-    let Some(old_value) = table.get(old_key).and_then(Item::as_integer) else {
-        return;
-    };
-    let Some((old_formatted_key, old_item)) = table
-        .get_key_value(old_key)
-        .map(|(key, item)| (key.clone(), item.clone()))
-    else {
-        return;
-    };
-    table.remove(old_key);
-
-    let mut migrated_key = Key::new(new_key);
-    *migrated_key.leaf_decor_mut() = old_formatted_key.leaf_decor().clone();
-    *migrated_key.dotted_decor_mut() = old_formatted_key.dotted_decor().clone();
-
-    let mut migrated_item = value(render(old_value));
-    if let (Some(old_value), Some(migrated_value)) =
-        (old_item.as_value(), migrated_item.as_value_mut())
-    {
-        *migrated_value.decor_mut() = old_value.decor().clone();
-    }
-    table.entry_format(&migrated_key).or_insert(migrated_item);
-}
-
-fn append_comment_decor(
-    output: &mut String,
-    raw: Option<&toml_edit::RawString>,
-    trim_leading_whitespace: bool,
-) {
-    let Some(raw) = raw.and_then(toml_edit::RawString::as_str) else {
-        return;
-    };
-    if !raw.contains('#') {
-        return;
-    }
-    let raw = if trim_leading_whitespace {
-        raw.trim_start()
-    } else {
-        raw
-    };
-    output.push_str(raw);
-    if !output.ends_with('\n') {
-        output.push('\n');
     }
 }
 
@@ -912,26 +726,20 @@ public_key_path = \"/old/pub.key\"
     }
 
     #[test]
-    fn merge_preserves_unknown_sections_and_user_overrides() {
+    fn merge_preserves_current_user_overrides() {
         let inputs = dummy_inputs(&Mode::AgentLocal);
         let existing = "\
-[experimental]
-flag = true
-
 [authority]
 bundle_ttl = \"10m\"
-custom_user_key = \"keep-me\"
+schema_path = \"custom.cedarschema\"
 ";
         let out = render_firma_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
-        // Unknown section preserved verbatim.
-        assert_eq!(parsed["experimental"]["flag"].as_bool(), Some(true));
         // User override of a static-default key respected.
         assert_eq!(parsed["authority"]["bundle_ttl"].as_str(), Some("10m"));
-        // Unknown key inside authority survives.
         assert_eq!(
-            parsed["authority"]["custom_user_key"].as_str(),
-            Some("keep-me")
+            parsed["authority"]["schema_path"].as_str(),
+            Some("custom.cedarschema")
         );
         // User-driven key still updated.
         assert_eq!(
@@ -941,119 +749,30 @@ custom_user_key = \"keep-me\"
     }
 
     #[test]
-    fn merge_migrates_legacy_scalar_keys_in_every_schema_section() {
-        let inputs = dummy_inputs(&Mode::AgentLocal);
-        let existing = r#"
-[authority]
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
-
-[sidecar.interceptor]
-drain_timeout_secs = 30
-max_request_body_bytes = 4194304
-total_body_budget_bytes = 67108864
-
-[sidecar.interceptor.connect_relay]
-setup_timeout_secs = 10
-session_max_secs = 600
-
-[sidecar.interceptor.https_mitm]
-cert_ttl_secs = 86400
-
-[sidecar.connector]
-default_timeout_ms = 30000
-
-[[sidecar.connector.hosts]]
-host = "api.example.com"
-rps = 1
-burst = 1
-timeout_ms = 5000
-
-[sidecar.audit]
-wal_max_bytes = 104857600
-
-[sidecar.authority]
-connect_timeout_secs = 10
-reconnect_min_backoff_ms = 250
-reconnect_max_backoff_secs = 30
-revocation_readiness_grace_ms = 500
-
-[sidecar.capability_validation]
-clock_skew_tolerance_seconds = 5
-
-[sidecar.local_exec]
-socket_path = "/run/firma/local-exec.sock"
-token_ttl_secs = 300
-retry_after_ms = 500
-
-[run.defaults.capability]
-grace_seconds = 30
-
-[run.defaults.sidecar_local_exec]
-timeout_ms = 500
-hitl_max_wait_ms = 300000
-
-[run.profiles.unselected.capability]
-grace_seconds = 45
-
-[run.profiles.unselected.sidecar_local_exec]
-timeout_ms = 750
-hitl_max_wait_ms = 600000
-"#;
-
-        let out = render_firma_toml(existing, &inputs).unwrap();
-        let parsed: toml::Value = toml::from_str(&out).unwrap();
-        let _: firma_config_schema::authority::AuthorityConfig = parsed["authority"]
-            .clone()
-            .try_into()
-            .expect("migrated authority config must satisfy the strict schema");
-        let _: firma_config_schema::sidecar::SidecarConfig = parsed["sidecar"]
-            .clone()
-            .try_into()
-            .expect("migrated sidecar config must satisfy the strict schema");
-        let run: firma_config_schema::run::FileConfig = parsed["run"]
-            .clone()
-            .try_into()
-            .expect("migrated run config must satisfy the strict schema");
-
-        assert_eq!(
-            parsed["sidecar"]["interceptor"]["max_request_body_size"].as_str(),
-            Some("4194304 B")
-        );
-        assert_eq!(
-            parsed["sidecar"]["connector"]["hosts"][0]["timeout"].as_str(),
-            Some("5000ms")
-        );
-        assert_eq!(
-            run.profiles["unselected"]
-                .capability
-                .as_ref()
-                .and_then(|capability| capability.grace),
-            Some(std::time::Duration::from_secs(45))
-        );
-        for old_key in [
-            "max_ttl_seconds",
-            "bundle_ttl_seconds",
-            "drain_timeout_secs",
-            "max_request_body_bytes",
-            "total_body_budget_bytes",
-            "setup_timeout_secs",
-            "session_max_secs",
-            "cert_ttl_secs",
-            "default_timeout_ms",
-            "timeout_ms",
-            "wal_max_bytes",
-            "connect_timeout_secs",
-            "reconnect_min_backoff_ms",
-            "reconnect_max_backoff_secs",
-            "revocation_readiness_grace_ms",
-            "clock_skew_tolerance_seconds",
-            "token_ttl_secs",
-            "retry_after_ms",
-            "grace_seconds",
-            "hitl_max_wait_ms",
+    fn merge_rejects_invalid_sections_before_mode_changes() {
+        for (mode, existing, expected) in [
+            (
+                Mode::AgentRemote,
+                "[authority]\nmax_ttl_seconds = 3600\n",
+                "max_ttl_seconds",
+            ),
+            (
+                Mode::Authority,
+                "[sidecar.interceptor]\nmax_request_body_size = 4194304\n",
+                "max_request_body_size",
+            ),
+            (
+                Mode::AgentLocal,
+                "[run.profiles.generic.capability]\ngrace_seconds = 30\n",
+                "grace_seconds",
+            ),
         ] {
-            assert!(!out.contains(old_key), "legacy key survived: {old_key}");
+            let error = render_firma_toml(existing, &dummy_inputs(&mode))
+                .expect_err("invalid original section must fail before merge");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {expected}: {error}"
+            );
         }
     }
 

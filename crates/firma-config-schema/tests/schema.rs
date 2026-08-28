@@ -103,17 +103,52 @@ fn sidecar_scalar_fields_accept_human_readable_units() {
 }
 
 #[test]
-fn legacy_numeric_scalar_keys_are_rejected() {
-    assert!(
-        toml::from_str::<sidecar::SidecarConfig>(
-            "[interceptor]\ndrain_timeout_secs = 30\nmax_request_body_bytes = 4194304\n"
-        )
-        .is_err()
-    );
-    assert!(toml::from_str::<authority::AuthorityConfig>("max_ttl_seconds = 3600\n").is_err());
-    assert!(
-        toml::from_str::<run::FileConfig>("[defaults.capability]\ngrace_seconds = 30\n").is_err()
-    );
+fn superseded_numeric_scalar_keys_are_rejected() {
+    for config in ["max_ttl_seconds = 3600\n", "bundle_ttl_seconds = 30\n"] {
+        assert!(
+            toml::from_str::<authority::AuthorityConfig>(config).is_err(),
+            "superseded Authority scalar must be rejected: {config}"
+        );
+    }
+
+    for config in [
+        "[interceptor]\ndrain_timeout_secs = 30\n",
+        "[interceptor]\nmax_request_body_bytes = 4194304\n",
+        "[interceptor]\ntotal_body_budget_bytes = 67108864\n",
+        "[interceptor.connect_relay]\nsetup_timeout_secs = 10\n",
+        "[interceptor.connect_relay]\nsession_max_secs = 600\n",
+        "[interceptor.https_mitm]\ncert_ttl_secs = 86400\n",
+        "[capability_validation]\nclock_skew_tolerance_seconds = 5\n",
+        "[connector]\ndefault_timeout_ms = 30000\n",
+        "[[connector.hosts]]\nhost = \"api.example.com\"\nrps = 1\nburst = 1\ntimeout_ms = 5000\n",
+        "[connector]\nhosts = [{ host = \"api.example.com\", rps = 1, burst = 1, timeout_ms = 5000 }]\n",
+        "[audit]\nwal_max_bytes = 104857600\n",
+        "[authority]\nconnect_timeout_secs = 10\n",
+        "[authority]\nreconnect_min_backoff_ms = 250\n",
+        "[authority]\nreconnect_max_backoff_secs = 30\n",
+        "[authority]\nrevocation_readiness_grace_ms = 500\n",
+        "[local_exec]\ntoken_ttl_secs = 300\n",
+        "[local_exec]\nretry_after_ms = 500\n",
+    ] {
+        assert!(
+            toml::from_str::<sidecar::SidecarConfig>(config).is_err(),
+            "superseded Sidecar scalar must be rejected: {config}"
+        );
+    }
+
+    for config in [
+        "[defaults.capability]\ngrace_seconds = 30\n",
+        "[defaults.sidecar_local_exec]\ntimeout_ms = 500\n",
+        "[defaults.sidecar_local_exec]\nhitl_max_wait_ms = 300000\n",
+        "[profiles.unselected.capability]\ngrace_seconds = 45\n",
+        "[profiles.unselected.sidecar_local_exec]\ntimeout_ms = 750\n",
+        "[profiles.unselected.sidecar_local_exec]\nhitl_max_wait_ms = 600000\n",
+    ] {
+        assert!(
+            toml::from_str::<run::FileConfig>(config).is_err(),
+            "superseded Run scalar must be rejected: {config}"
+        );
+    }
 }
 
 #[test]

@@ -263,7 +263,7 @@ fn write_scaffold_files(
         // `firma.toml` and `mapping-rules.toml` are produced by the toml_edit
         // merge layer: the input was read from disk, modified in place, and
         // re-serialized. Writing the resulting bytes back is non-destructive —
-        // unknown sections, user-tuned defaults, and comments are preserved.
+        // schema-valid user-tuned defaults and comments are preserved.
         // Skipping the write here would silently swallow mode changes (e.g.
         // switching from agent-remote to agent-local would not persist the new
         // `[authority]` section).
@@ -492,7 +492,7 @@ fn has_server(inputs: &CollectedInputs) -> bool {
 /// when the operator is switching to `agent-remote`.
 ///
 /// The `toml_edit` merge layer is non-destructive: switching modes patches
-/// the relevant sections without blasting unknown content, so there is no
+/// the relevant schema-valid sections in place, so there is no
 /// "overwrite this file?" gate anymore. The only remaining decision is
 /// whether the user wants the previously-configured local Mini Authority
 /// to keep autostarting even though the sidecar is now configured to
@@ -616,16 +616,16 @@ fn collect_agent_id(
     if matches!(mode, Mode::Authority) {
         return Ok(None);
     }
+    if let Some(invalid_agent_id) = &existing.invalid_agent_id {
+        anyhow::bail!(
+            "existing [sidecar.authority].agent_id {invalid_agent_id:?} is not a valid agent TypeID"
+        );
+    }
     if let Some(agent_id) = args.agent_id {
         return Ok(Some(agent_id));
     }
     if let Some(agent_id) = existing.agent_id {
         return Ok(Some(agent_id));
-    }
-    if let Some(invalid_agent_id) = &existing.invalid_agent_id {
-        anyhow::bail!(
-            "existing [sidecar.authority].agent_id {invalid_agent_id:?} is not a valid agent TypeID; re-run firma config with --agent-id <AGENT_ID>"
-        );
     }
     if existing.exists {
         anyhow::bail!(
@@ -1930,6 +1930,44 @@ mod tests {
             mounts[0]["target"].as_str(),
             Some(workspace.to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn implicit_scaffold_rejects_invalid_input_before_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("project");
+        let config_dir = workspace.join(CONFIG_DIR_NAME);
+        let config_path = config_dir.join(CONFIG_FILE_NAME);
+        let state_dir = tmp.path().join("state");
+        let original = "[authority]\nmax_ttl_seconds = 3600\n";
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(&config_path, original).unwrap();
+        fs::write(config_dir.join("sentinel"), "unchanged").unwrap();
+
+        let error = scaffold_from_plan(&ScaffoldPlan {
+            config_dir: config_dir.clone(),
+            state_dir: state_dir.clone(),
+            workspace,
+            force: false,
+            authority_listen: "127.0.0.1:50051".into(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
+            agent: "generic".into(),
+            provider: "anthropic".into(),
+            authority: AuthorityShape::Local,
+        })
+        .expect_err("invalid original config must fail before scaffold writes");
+
+        let error = format!("{error:#}");
+        assert!(error.contains("max_ttl_seconds"), "{error}");
+        assert_eq!(fs::read_to_string(config_path).unwrap(), original);
+        assert_eq!(
+            fs::read_to_string(config_dir.join("sentinel")).unwrap(),
+            "unchanged"
+        );
+        assert!(!config_dir.join("policies").exists());
+        assert!(!config_dir.join("issuance-policies").exists());
+        assert!(!config_dir.join("mappings").exists());
+        assert!(!state_dir.exists());
     }
 
     // ── Cedar posture files ───────────────────────────────────────────────────

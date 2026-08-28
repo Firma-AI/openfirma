@@ -242,16 +242,13 @@ fn existing_config_without_agent_id_fails_without_mutation() {
 }
 
 #[test]
-fn explicit_agent_id_replaces_legacy_profile_value() {
+fn explicit_agent_id_does_not_rewrite_invalid_existing_value() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     std::fs::create_dir_all(&config_dir).expect("create config dir");
     let path = config_dir.join(CONFIG_FILE_NAME);
-    std::fs::write(
-        &path,
-        "[sidecar.authority]\nagent_id = \"codex\"\nurl = \"http://127.0.0.1:50051\"\n\n[run]\nprofile = \"codex\"\n",
-    )
-    .expect("write legacy config");
+    let original = "[sidecar.authority]\nagent_id = \"codex\"\nurl = \"http://127.0.0.1:50051\"\n\n[run]\nprofile = \"codex\"\n";
+    std::fs::write(&path, original).expect("write invalid config");
 
     let output = firma()
         .args([
@@ -267,16 +264,11 @@ fn explicit_agent_id_replaces_legacy_profile_value() {
         .output()
         .expect("spawn firma config");
 
-    assert!(
-        output.status.success(),
-        "config failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let body = std::fs::read_to_string(path).expect("read config");
-    let config: toml::Value = toml::from_str(&body).expect("parse config");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a valid agent TypeID"));
     assert_eq!(
-        config["sidecar"]["authority"]["agent_id"].as_str(),
-        Some(REGISTERED_AGENT_ID)
+        std::fs::read_to_string(path).expect("read config"),
+        original
     );
 }
 
@@ -944,111 +936,105 @@ fn init_handles_relative_paths() {
 }
 
 #[test]
-fn scalar_migration_preserves_attached_comments() {
-    let tmp = tempfile::tempdir().expect("tmpdir");
-    let config_dir = tmp.path().join("config");
-    let state_dir = tmp.path().join("state");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    let config_path = config_dir.join(CONFIG_FILE_NAME);
-    std::fs::write(
-        &config_path,
-        r#"[authority]
-# Keep the operator's duration rationale.
-max_ttl_seconds = 3600 # duration inline note
-
-[sidecar.interceptor]
-# Keep the operator's size rationale.
-max_request_body_bytes = 4194304 # size inline note
-
-[sidecar.authority]
-agent_id = "agt_01j0000000e008000000000001"
-"#,
-    )
-    .expect("write legacy config");
-
-    run_init(&config_dir, &state_dir);
-
-    let migrated = std::fs::read_to_string(config_path).expect("read migrated config");
-    assert!(!migrated.contains("max_ttl_seconds"));
-    assert!(!migrated.contains("max_request_body_bytes"));
-    assert!(
-        migrated.contains(
-            "# Keep the operator's duration rationale.\nmax_ttl = \"3600s\" # duration inline note"
+fn invalid_existing_sections_fail_without_writing() {
+    let cases = [
+        (
+            "authority scalar removed in remote mode",
+            "agent-remote",
+            "[authority]\nmax_ttl_seconds = 3600\n",
+            "max_ttl_seconds",
         ),
-        "duration comments were not preserved:\n{migrated}"
-    );
-    assert!(
-        migrated.contains(
-            "# Keep the operator's size rationale.\nmax_request_body_size = \"4194304 B\" # size inline note"
+        (
+            "sidecar scalar removed in authority mode",
+            "authority",
+            "[sidecar.interceptor]\nmax_request_body_size = 4194304\n",
+            "max_request_body_size",
         ),
-        "size comments were not preserved:\n{migrated}"
-    );
-}
-
-#[test]
-fn scalar_migration_preserves_legacy_comments_when_replacement_exists() {
-    let tmp = tempfile::tempdir().expect("tmpdir");
-    let config_dir = tmp.path().join("config");
-    let state_dir = tmp.path().join("state");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    let config_path = config_dir.join(CONFIG_FILE_NAME);
-    std::fs::write(
-        &config_path,
-        r#"[authority]
-# Keep the legacy rationale.
-max_ttl_seconds = 3600 # legacy inline note
-# Keep the replacement rationale.
-max_ttl = "2h" # replacement inline note
-
-[sidecar.authority]
-agent_id = "agt_01j0000000e008000000000001"
-"#,
-    )
-    .expect("write partially migrated config");
-
-    run_init(&config_dir, &state_dir);
-
-    let migrated = std::fs::read_to_string(config_path).expect("read migrated config");
-    assert!(!migrated.contains("max_ttl_seconds"));
-    assert!(
-        migrated.contains(
-            "# Keep the legacy rationale.\n# legacy inline note\n# Keep the replacement rationale.\nmax_ttl = \"2h\" # replacement inline note"
+        (
+            "run scalar overwritten in agent mode",
+            "agent-local",
+            "[run.profiles.generic.capability]\ngrace_seconds = 30\n",
+            "grace_seconds",
         ),
-        "migration did not merge comments deterministically:\n{migrated}"
-    );
-    assert_eq!(migrated.matches("max_ttl = \"2h\"").count(), 1);
-}
+        (
+            "invalid user-driven authority field",
+            "authority",
+            "[authority]\nlisten_addr = 42\n",
+            "listen_addr",
+        ),
+        (
+            "unknown top-level section",
+            "authority",
+            "[project]\nagent = \"codex\"\n",
+            "unknown top-level key `project`",
+        ),
+    ];
 
-#[test]
-fn scalar_migration_accepts_inline_connector_hosts() {
-    let tmp = tempfile::tempdir().expect("tmpdir");
-    let config_dir = tmp.path().join("config");
-    let state_dir = tmp.path().join("state");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    let config_path = config_dir.join(CONFIG_FILE_NAME);
-    std::fs::write(
-        &config_path,
-        r#"[sidecar.connector]
-default_timeout_ms = 30000
-hosts = [
-  { host = "api.example.com", rps = 1, burst = 1, timeout_ms = 5000 }, # Keep this host note.
-]
+    for (name, mode, original, expected) in cases {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let config_dir = tmp.path().join("config");
+        let state_dir = tmp.path().join("state");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        let config_path = config_dir.join(CONFIG_FILE_NAME);
+        let sentinel_path = config_dir.join("sentinel");
+        std::fs::write(&config_path, original).expect("write invalid config");
+        std::fs::write(&sentinel_path, "unchanged").expect("write sentinel");
 
-[sidecar.authority]
-agent_id = "agt_01j0000000e008000000000001"
-"#,
-    )
-    .expect("write legacy inline connector hosts");
+        let mut command = firma();
+        command
+            .args(["config", "--yes", "--mode", mode, "--output-dir"])
+            .arg(&config_dir)
+            .args(["--state-dir"])
+            .arg(&state_dir);
+        match mode {
+            "agent-local" => {
+                command.args(["--agent-id", REGISTERED_AGENT_ID]);
+            }
+            "agent-remote" => {
+                command
+                    .args(["--agent-id", REGISTERED_AGENT_ID])
+                    .args(["--authority-url", "https://authority.example.com:9443"])
+                    .args(["--authority-ca-cert"])
+                    .arg(tmp.path().join("authority-ca.crt"))
+                    .args(["--authority-pub-key"])
+                    .arg(tmp.path().join("authority.pub"));
+            }
+            "authority" => {}
+            other => panic!("unexpected test mode {other}"),
+        }
+        let output = command.output().expect("spawn firma config");
 
-    run_init(&config_dir, &state_dir);
-
-    let migrated = std::fs::read_to_string(&config_path).expect("read migrated config");
-    assert!(!migrated.contains("default_timeout_ms"));
-    assert!(!migrated.contains("timeout_ms"));
-    assert!(migrated.contains("default_timeout = \"30000ms\""));
-    assert!(migrated.contains("timeout = \"5000ms\""));
-    assert!(migrated.contains("# Keep this host note."));
-    assert_unified_config_parses(&config_path);
+        assert!(!output.status.success(), "{name} unexpectedly succeeded");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{name}: expected {expected:?} in stderr:\n{stderr}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read config"),
+            original,
+            "{name}: firma.toml changed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel_path).expect("read sentinel"),
+            "unchanged",
+            "{name}: surrounding config state changed"
+        );
+        assert!(!state_dir.exists(), "{name}: state directory was created");
+        let mut entries = std::fs::read_dir(&config_dir)
+            .expect("read config dir")
+            .map(|entry| entry.expect("read entry").file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(
+            entries,
+            [
+                std::ffi::OsString::from(CONFIG_FILE_NAME),
+                std::ffi::OsString::from("sentinel")
+            ],
+            "{name}: config directory contents changed"
+        );
+    }
 }
 
 #[cfg(unix)]
