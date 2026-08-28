@@ -39,7 +39,7 @@ fn relative_config_path_rebases_resources_from_an_absolute_config_dir()
     fs_err::write(
         &config_path,
         r#"
-[run.profiles.generic.capability]
+[run.profiles.generic.capability.source]
 kind = "file"
 path = "capability.toml"
 "#,

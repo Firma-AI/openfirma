@@ -13,9 +13,8 @@ use firma_config_schema::run::{
     BackendKind as SchemaBackendKind, CommandMediatorPatch, FileConfig, SeccompPolicyPatch,
 };
 pub(crate) use firma_config_schema::run::{
-    CaTrustMode, CapabilityLeasePatch, CapabilitySourceKind, CapabilitySourcePatch,
-    CommandMediatorHitlMode, ExecutableLaunchPolicyPatch, MountPatch, NetworkPolicyPatch,
-    ProfilePatch, SeccompRuntimeMode,
+    CaTrustMode, CapabilityLeasePatch, CapabilitySourcePatch, CommandMediatorHitlMode,
+    ExecutableLaunchPolicyPatch, MountPatch, NetworkPolicyPatch, ProfilePatch, SeccompRuntimeMode,
 };
 
 use crate::backend::BackendKind;
@@ -410,17 +409,8 @@ impl Merge for ExecutableLaunchPolicyPatch {
 
 impl Merge for CapabilityLeasePatch {
     fn merge(self, higher: Self) -> Self {
-        let (source, kind, path) = if higher.source.is_some() {
-            (higher.source, None, None)
-        } else if higher.kind.is_some() || higher.path.is_some() {
-            (None, higher.kind.or(self.kind), higher.path.or(self.path))
-        } else {
-            (self.source, self.kind, self.path)
-        };
         Self {
-            source,
-            kind,
-            path,
+            source: higher.source.or(self.source),
             public_key_path: higher.public_key_path.or(self.public_key_path),
             refresh_ratio: higher.refresh_ratio.or(self.refresh_ratio),
             grace: higher.grace.or(self.grace),
@@ -733,8 +723,6 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             .as_ref()
             .map(|path| CapabilityLeasePatch {
                 source: Some(CapabilitySourcePatch::File { path: path.clone() }),
-                kind: None,
-                path: None,
                 public_key_path: None,
                 refresh_ratio: None,
                 grace: None,
@@ -778,13 +766,9 @@ fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableL
 }
 
 fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
-    let source = if let Some(source) = patch.source {
-        match source {
-            CapabilitySourcePatch::Disabled => CapabilitySource::Disabled,
-            CapabilitySourcePatch::File { path } => CapabilitySource::File { path },
-        }
-    } else {
-        parse_legacy_capability_source(patch.kind, patch.path)
+    let source = match patch.source {
+        Some(CapabilitySourcePatch::File { path }) => CapabilitySource::File { path },
+        Some(CapabilitySourcePatch::Disabled) | None => CapabilitySource::Disabled,
     };
 
     CapabilityLeaseConfig {
@@ -795,18 +779,6 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         requested_actions: patch
             .requested_actions
             .unwrap_or_else(CapabilityLeaseConfig::default_requested_actions),
-    }
-}
-
-fn parse_legacy_capability_source(
-    kind: Option<CapabilitySourceKind>,
-    path: Option<PathBuf>,
-) -> CapabilitySource {
-    match kind {
-        Some(CapabilitySourceKind::File) => path.map_or(CapabilitySource::Disabled, |path| {
-            CapabilitySource::File { path }
-        }),
-        Some(CapabilitySourceKind::Disabled) | None => CapabilitySource::Disabled,
     }
 }
 
@@ -1178,9 +1150,6 @@ fn rebase_profile_paths(profile: &mut ProfilePatch, config_dir: &Path) {
         if let Some(CapabilitySourcePatch::File { path }) = &mut capability.source {
             rebase_path(path, config_dir);
         }
-        if let Some(path) = &mut capability.path {
-            rebase_path(path, config_dir);
-        }
         if let Some(path) = &mut capability.public_key_path {
             rebase_path(path, config_dir);
         }
@@ -1245,8 +1214,6 @@ mod tests {
     fn lease_patch(requested_actions: Option<Vec<String>>) -> CapabilityLeasePatch {
         CapabilityLeasePatch {
             source: Some(super::CapabilitySourcePatch::Disabled),
-            kind: None,
-            path: None,
             public_key_path: None,
             refresh_ratio: None,
             grace: None,
@@ -1617,7 +1584,7 @@ backend = "bwrap"
 identity_mode = "host_user"
 env_passthrough = ["HOME"]
 
-[run.profiles.codex.capability]
+[run.profiles.codex.capability.source]
 kind = "file"
 path = '{}'
 "#,
@@ -2054,8 +2021,6 @@ approval_policy = "never"
         }
         if let Some(CapabilityLeasePatch {
             source,
-            kind,
-            path,
             public_key_path,
             refresh_ratio,
             grace,
@@ -2064,8 +2029,6 @@ approval_policy = "never"
         {
             let _ = (
                 source,
-                kind,
-                path,
                 public_key_path,
                 refresh_ratio,
                 grace,
