@@ -23,9 +23,9 @@ pub enum RunError {
     MissingAgentId { path: PathBuf },
 
     #[error(
-        "[sidecar.authority].agent_id in {path} is the execution profile '{value}', not a registered agent TypeID; migrate it with `firma config --agent-id <AGENT_ID>` and keep '{value}' under [run].profile"
+        "[sidecar.authority].agent_id in {path} contains the execution profile '{value}', but must be a registered `agt` TypeID; keep '{value}' under [run].profile"
     )]
-    LegacyProfileAgentId { path: PathBuf, value: String },
+    ProfileAgentId { path: PathBuf, value: String },
 
     #[error(
         "invalid [sidecar.authority].agent_id '{value}' in {path}: expected an `agt` TypeID backed by UUIDv7; run `firma config --agent-id <AGENT_ID>`"
