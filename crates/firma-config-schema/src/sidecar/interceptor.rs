@@ -70,12 +70,18 @@ pub struct InterceptorConfig {
     )]
     pub drain_timeout: Duration,
     /// Maximum request body size accepted by proxy interceptors.
-    #[serde(default = "default_max_request_body_size")]
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_max_request_body_size"
+    )]
     pub max_request_body_size: ByteSize,
     /// Maximum size a single request or response body may expand to when
     /// decompressed for secret placeholder rehydration or masking. Bounds the
     /// memory a decompression bomb can force the Sidecar to allocate.
-    #[serde(default = "default_max_decompressed_body_size")]
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_max_decompressed_body_size"
+    )]
     pub max_decompressed_body_size: ByteSize,
     /// CONNECT/MITM relay timeout controls.
     #[serde(default)]
@@ -85,7 +91,10 @@ pub struct InterceptorConfig {
     pub https_mitm: HttpsMitmConfig,
     /// Global ceiling for the total bytes of request bodies buffered
     /// concurrently across all in-flight proxy connections.
-    #[serde(default = "default_total_body_budget")]
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_total_body_budget"
+    )]
     pub total_body_budget: ByteSize,
 }
 

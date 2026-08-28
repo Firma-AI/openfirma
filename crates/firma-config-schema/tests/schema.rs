@@ -61,6 +61,23 @@ fn max_decompressed_body_size_accepts_human_readable_units() {
 }
 
 #[test]
+fn byte_size_fields_require_unit_bearing_strings() {
+    for config in [
+        "[interceptor]\nmax_request_body_size = 4194304\n",
+        "[interceptor]\nmax_decompressed_body_size = 16000000\n",
+        "[interceptor]\ntotal_body_budget = 67108864\n",
+        "[audit]\nwal_max_size = 104857600\n",
+        "[secret_gateway]\nmax_buffer_size = 10000000\n",
+        "[interceptor]\nmax_request_body_size = \"4194304\"\n",
+    ] {
+        assert!(
+            toml::from_str::<sidecar::SidecarConfig>(config).is_err(),
+            "raw byte size must be rejected: {config}"
+        );
+    }
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"

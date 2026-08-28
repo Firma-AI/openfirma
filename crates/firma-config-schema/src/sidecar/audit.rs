@@ -60,7 +60,10 @@ pub struct AuditConfig {
     #[serde(default)]
     pub wal_path: Option<PathBuf>,
     /// Maximum WAL size. Default: 100 MiB.
-    #[serde(default = "default_wal_max_size")]
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_wal_max_size"
+    )]
     pub wal_max_size: ByteSize,
     /// Path to the ECDSA private key used for event signing. Mutually
     /// exclusive with `signing_key_env`.
