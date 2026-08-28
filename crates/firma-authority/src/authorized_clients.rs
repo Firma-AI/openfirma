@@ -46,19 +46,6 @@ impl AuthorizedClientSet {
             }
         }
 
-        for entry in file.authorized {
-            if let Some(cn) = entry.cn
-                && !cn.trim().is_empty()
-            {
-                identities.insert(cn);
-            }
-            if let Some(san) = entry.san
-                && !san.trim().is_empty()
-            {
-                identities.insert(san);
-            }
-        }
-
         Ok(Self { identities })
     }
 
@@ -87,30 +74,14 @@ impl AuthorizedClientSet {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AuthorizedClientsFile {
-    #[serde(default)]
-    authorized: Vec<AuthorizedEntry>,
     #[serde(default)]
     clients: Vec<ClientEntry>,
 }
 
 #[derive(Deserialize)]
-#[expect(
-    dead_code,
-    reason = "backward-compatible TOML schema accepts metadata fields that serde deserializes even when the loader ignores them"
-)]
-struct AuthorizedEntry {
-    #[serde(default)]
-    cn: Option<String>,
-    #[serde(default)]
-    san: Option<String>,
-    #[serde(default)]
-    issued_at: Option<String>,
-    #[serde(default)]
-    notes: Option<String>,
-}
-
-#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClientEntry {
     identity: String,
 }
@@ -125,6 +96,14 @@ mod tests {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(toml.as_bytes()).unwrap();
         f
+    }
+
+    fn assert_parse_error(toml: &str) {
+        let f = write_toml(toml);
+        match AuthorizedClientSet::load(f.path()) {
+            Err(ConfigError::ParseError { path, .. }) => assert_eq!(path, f.path()),
+            result => panic!("expected path-bearing parse error, got {result:?}"),
+        }
     }
 
     #[test]
@@ -146,22 +125,43 @@ identity = "sidecar-staging"
     }
 
     #[test]
-    fn load_v11_authorized_schema() {
-        let f = write_toml(
+    fn reject_superseded_authorized_schema() {
+        assert_parse_error(
             r#"
 [[authorized]]
 cn = "firma-sidecar-workstation-alice"
-issued_at = "2026-06-01"
-notes = "Alice's laptop"
-
-[[authorized]]
-san = "sidecar-prod-1.internal"
 "#,
         );
-        let set = AuthorizedClientSet::load(f.path()).unwrap();
-        assert!(set.contains("firma-sidecar-workstation-alice"));
-        assert!(set.contains("sidecar-prod-1.internal"));
-        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn reject_missing_client_identity() {
+        assert_parse_error("[[clients]]");
+    }
+
+    #[test]
+    fn reject_unknown_top_level_fields() {
+        assert_parse_error("enabled = true");
+    }
+
+    #[test]
+    fn reject_superseded_client_identity_fields() {
+        for field in ["cn", "san"] {
+            assert_parse_error(&format!(
+                "[[clients]]\nidentity = \"sidecar.example\"\n{field} = \"sidecar.example\""
+            ));
+        }
+    }
+
+    #[test]
+    fn reject_unknown_client_metadata() {
+        assert_parse_error(
+            r#"
+[[clients]]
+identity = "firma-sidecar-workstation-alice"
+notes = "unexpected metadata"
+"#,
+        );
     }
 
     #[test]

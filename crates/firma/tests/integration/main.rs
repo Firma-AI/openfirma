@@ -5,6 +5,7 @@
 
 pub use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 
+mod authority_client_cert;
 mod authority_keygen;
 mod cli_help;
 mod cli_parsing;

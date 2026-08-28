@@ -1,0 +1,111 @@
+//! Black-box contract for `firma authority issue-client-cert`.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code: panics are acceptable test failures"
+)]
+
+use std::path::Path;
+use std::process::{Command, Output};
+
+const FIRMA_BIN: &str = env!("CARGO_BIN_EXE_firma");
+
+#[test]
+fn issue_client_cert_prints_canonical_allow_list_entries() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("firma.toml");
+    let ca_cert = temp.path().join("client-ca.crt");
+    let ca_key = temp.path().join("client-ca.key");
+    std::fs::write(
+        &config,
+        format!(
+            r#"
+[authority]
+tls_cert_path = "server.crt"
+tls_key_path = "server.key"
+mtls_client_ca_cert_path = "{}"
+mtls_client_ca_key_path = "{}"
+authorized_clients_path = "authorized_clients.toml"
+"#,
+            ca_cert.display(),
+            ca_key.display(),
+        ),
+    )
+    .expect("write config");
+
+    let generate = authority_command(&config)
+        .args(["generate-client-ca", "--cert-out"])
+        .arg(&ca_cert)
+        .arg("--key-out")
+        .arg(&ca_key)
+        .output()
+        .expect("generate client CA");
+    assert_success(&generate, "generate-client-ca");
+
+    let cases = [
+        ("cn-only-sidecar", None, "cn-only-sidecar"),
+        (
+            "sidecar-common-name",
+            Some("sidecar.example.internal"),
+            "sidecar.example.internal",
+        ),
+    ];
+    for (index, (cn, san, expected_identity)) in cases.into_iter().enumerate() {
+        let cert_out = temp.path().join(format!("client-{index}.crt"));
+        let key_out = temp.path().join(format!("client-{index}.key"));
+        let mut command = authority_command(&config);
+        command
+            .args(["issue-client-cert", "--cn", cn, "--cert-out"])
+            .arg(&cert_out)
+            .arg("--key-out")
+            .arg(&key_out);
+        if let Some(san) = san {
+            command.arg("--san").arg(san);
+        }
+
+        let output = command.output().expect("issue client certificate");
+        assert_success(&output, "issue-client-cert");
+        assert!(cert_out.is_file(), "client certificate was not written");
+        assert!(key_out.is_file(), "client key was not written");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("[[clients]]")
+                && stdout.contains(&format!("identity = \"{expected_identity}\"")),
+            "canonical allow-list entry missing from stdout: {stdout}"
+        );
+        assert!(
+            !stdout.contains("[[authorized]]")
+                && !stdout.contains("\n  cn =")
+                && !stdout.contains("\n  san ="),
+            "stdout exposed a noncanonical allow-list field: {stdout}"
+        );
+    }
+}
+
+fn authority_command(config: &Path) -> Command {
+    let mut command = Command::new(FIRMA_BIN);
+    command
+        .arg("authority")
+        .arg("--config")
+        .arg(config)
+        .env_remove("FIRMA_CONFIG")
+        .env_remove("FIRMA_AUTHORITY_TLS_CERT_PATH")
+        .env_remove("FIRMA_AUTHORITY_TLS_KEY_PATH")
+        .env_remove("FIRMA_AUTHORITY_MTLS_CLIENT_CA_CERT_PATH")
+        .env_remove("FIRMA_AUTHORITY_MTLS_CLIENT_CA_KEY_PATH")
+        .env_remove("FIRMA_AUTHORITY_AUTHORIZED_CLIENTS_PATH")
+        .env("FIRMA_LOG_FILTER", "off");
+    command
+}
+
+fn assert_success(output: &Output, command: &str) {
+    assert!(
+        output.status.success(),
+        "{command} failed; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
