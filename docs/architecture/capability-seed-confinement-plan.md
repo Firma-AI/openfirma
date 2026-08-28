@@ -635,11 +635,11 @@ Author-run corrective evidence:
 - Status: Corrected in plan.
 - Rationale: the private slice-based loader makes one `ResolvedSeedPath` value
   the shared input to replacement registration and candidate reading. The
-  public startup loader resolves and immediately delegates. A deterministic
-  helper-level control will resolve `b`, register its watcher, retarget the
-  configured symlink to `c`, then prove the resolved loader still reads `b` and
-  its watcher observes a later `b` rewrite; task-level cross-directory controls
-  prove replacement integration without a production-only test hook.
+  public startup loader resolves and immediately delegates. Public reloader
+  controls retarget across contained directories and then rewrite the new target;
+  code inspection proves both operations consume one slice. Deterministic
+  suspension between two private synchronous calls would require a test-only
+  production hook, which the repository's Rust test guidance rejects.
 - Incorporated at: `DEC-002`, type sketch, `TRACE-WATCH`, and `PROOF-003`
   through `PROOF-004`.
 - Decided by: planner following independent follow-up review.
@@ -889,7 +889,7 @@ proof of path provenance.
 | ----------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PROOF-001` | `INV-001` | Contained ordinary path loads; disjoint existing and missing configured paths fail with useful context and no content; hot reload does not alter validity.                                                                                                                                                                          |
 | `PROOF-002` | `INV-001` | `..` traversal, platform file symlinks resolving outside, and external-parent symlinks targeting inside fail initial loading with configured/resolved/parent/boundary context.                                                                                                                                                      |
-| `PROOF-003` | `INV-002` | The same traversal and `#[cfg(unix)]`/`#[cfg(windows)]` symlink cases fail watcher setup before registration; a helper-level control retargets between replacement registration and candidate reading to prove both still use one resolved target.                                                                                  |
+| `PROOF-003` | `INV-002` | The same traversal and `#[cfg(unix)]`/`#[cfg(windows)]` symlink cases fail watcher setup before registration; public cross-directory retarget controls plus code inspection prove replacement registration and candidate reading use one resolved slice.                                                                            |
 | `PROOF-004` | `INV-002` | Existing valid atomic rewrite, contained-symlink retarget, a queued concurrent rewrite, and a later rewrite in the new target parent hot-swap the map; resolution/watcher failure retains old state and invalid content retains the validated new watcher. Task-only watcher ownership proves resource release at task termination. |
 | `PROOF-005` | `INV-003` | Real CLI startup accepts an Authority-issued contained seed, rejects an external seed, and current examples/docs select matching state.                                                                                                                                                                                             |
 | `PROOF-006` | all       | Focused tests, platform compile/CI, full `just check`, docs build, example checks, and exact-tip independent review pass.                                                                                                                                                                                                           |
