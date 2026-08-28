@@ -4,8 +4,8 @@
 //!
 //! The cases below exercise two distinct failure modes:
 //!
-//! - parse error (typo in `[interceptor]` field name)
-//! - validation error (`policy.dir` empty)
+//! - parse error (typo in `[sidecar.interceptor]` field name)
+//! - validation error (`sidecar.policy.dir` empty)
 
 #![allow(
     clippy::unwrap_used,
@@ -79,5 +79,47 @@ dir = ""
     assert!(
         stderr.contains("policy.dir"),
         "diagnostic should mention policy.dir: {stderr}",
+    );
+}
+
+#[test]
+fn relative_env_config_rebases_sidecar_resources_from_an_absolute_dir() {
+    let current_dir = std::env::current_dir().unwrap();
+    let tmp = tempfile::tempdir_in(&current_dir).unwrap();
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config_path = config_dir.join(CONFIG_FILE_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:0"
+
+[sidecar.audit]
+signing_key_path = "missing-signing.key"
+"#,
+    )
+    .unwrap();
+    let relative_config = config_path.strip_prefix(&current_dir).unwrap();
+
+    let output = Command::new(firma_bin())
+        .arg("sidecar")
+        .env("FIRMA_CONFIG", relative_config)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn firma sidecar");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_signing_key_path = config_dir.join("missing-signing.key");
+    assert!(
+        !output.status.success(),
+        "expected startup failure: {stderr}"
+    );
+    assert!(
+        stderr.contains(&expected_signing_key_path.display().to_string()),
+        "diagnostic must use the absolute config-relative signing-key path {}: {stderr}",
+        expected_signing_key_path.display()
     );
 }

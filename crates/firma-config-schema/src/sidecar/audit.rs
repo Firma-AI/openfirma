@@ -6,6 +6,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
 /// Audit event output sink selector.
@@ -58,9 +59,12 @@ pub struct AuditConfig {
     /// Local WAL directory for the `wal` sink.
     #[serde(default)]
     pub wal_path: Option<PathBuf>,
-    /// Maximum WAL size in bytes. Default: 100 MiB.
-    #[serde(default = "default_wal_max_bytes")]
-    pub wal_max_bytes: u64,
+    /// Maximum WAL size. Default: 100 MiB.
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_wal_max_size"
+    )]
+    pub wal_max_size: ByteSize,
     /// Path to the ECDSA private key used for event signing. Mutually
     /// exclusive with `signing_key_env`.
     #[serde(default)]
@@ -81,7 +85,7 @@ impl Default for AuditConfig {
             file_path: None,
             grpc_url: None,
             wal_path: None,
-            wal_max_bytes: default_wal_max_bytes(),
+            wal_max_size: default_wal_max_size(),
             signing_key_path: None,
             signing_key_env: None,
             redact_query_params: Vec::new(),
@@ -90,6 +94,6 @@ impl Default for AuditConfig {
 }
 
 /// 100 MiB default WAL cap.
-const fn default_wal_max_bytes() -> u64 {
-    100 * 1024 * 1024
+const fn default_wal_max_size() -> ByteSize {
+    ByteSize::mib(100)
 }

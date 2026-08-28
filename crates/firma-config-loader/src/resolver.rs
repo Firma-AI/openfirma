@@ -194,11 +194,16 @@ impl ConfigResolver {
             path: &Path,
             source: ConfigSource,
         ) -> Result<ResolvedConfig, ConfigResolveError> {
-            FirmaConfig::load(path)
+            let path = std::path::absolute(path).map_err(|reason| ConfigResolveError {
+                config_source: source,
+                path: path.to_path_buf(),
+                reason: reason.into(),
+            })?;
+            FirmaConfig::load(&path)
                 .map(|config| ResolvedConfig::new(source, config))
                 .map_err(|reason| ConfigResolveError {
                     config_source: source,
-                    path: path.to_path_buf(),
+                    path,
                     reason,
                 })
         }

@@ -101,9 +101,9 @@ impl ResolvedProfile {
             ));
         }
 
-        if self.capability.grace_seconds == 0 {
+        if self.capability.grace.is_zero() {
             return Err(RunError::ConfigValidation(
-                "capability.grace_seconds must be > 0".to_string(),
+                "capability.grace must be > 0".to_string(),
             ));
         }
 
@@ -150,9 +150,14 @@ impl ResolvedProfile {
         }
 
         if let Some(mediator) = &self.sidecar_local_exec {
-            if mediator.timeout_ms == 0 {
+            if mediator.timeout.is_zero() {
                 return Err(RunError::ConfigValidation(
-                    "sidecar_local_exec.timeout_ms must be > 0".to_string(),
+                    "sidecar_local_exec.timeout must be > 0".to_string(),
+                ));
+            }
+            if mediator.hitl_max_wait.is_zero() {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec.hitl_max_wait must be > 0".to_string(),
                 ));
             }
             #[cfg(target_family = "unix")]
@@ -184,7 +189,7 @@ impl ResolvedProfile {
             }
         } else if env_truthy(REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV) {
             return Err(RunError::ConfigValidation(format!(
-                "{REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV}=true requires [profiles.<id>.sidecar_local_exec] configuration"
+                "{REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV}=true requires [run.profiles.<id>.sidecar_local_exec] configuration"
             )));
         }
 
@@ -261,7 +266,8 @@ pub struct CapabilityLeaseConfig {
     /// Raw Ed25519 public key used to verify Authority-issued capabilities.
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: f64,
-    pub grace_seconds: u64,
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub grace: Duration,
     /// Action classes the auto-minted per-session token requests. Defaults to
     /// every action class (`DEFAULT_REQUESTED_ACTIONS`); the Authority narrows
     /// the grant to `requested ∩ Cedar-permitted`, so over-requesting is safe
@@ -273,8 +279,8 @@ pub struct CapabilityLeaseConfig {
 
 impl CapabilityLeaseConfig {
     #[must_use]
-    pub(crate) fn grace(&self) -> Duration {
-        Duration::from_secs(self.grace_seconds)
+    pub(crate) const fn grace(&self) -> Duration {
+        self.grace
     }
 
     /// Fallback action set when a profile does not set `requested_actions`.
@@ -300,15 +306,17 @@ pub struct ExecutableLaunchPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandMediatorConfig {
     pub(crate) endpoint: CommandMediatorEndpoint,
-    pub(crate) timeout_ms: u64,
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub(crate) timeout: Duration,
     pub(crate) hitl_mode: CommandMediatorHitlMode,
     /// Maximum total wall-clock time `firma-run` will block waiting for a
     /// human to approve a `pending_hitl` token. Applies only when
     /// `hitl_mode = "async_token"`. Fail-closed once exceeded.
-    /// Default: 300 000 ms (5 minutes).
-    pub(crate) hitl_max_wait_ms: u64,
+    /// Default: 5 minutes.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub(crate) hitl_max_wait: Duration,
     pub(crate) enforce_known_executables: bool,
-    pub(crate) allowed_executables: BTreeSet<String>,
+    pub(crate) allowed_executables: BTreeSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -366,7 +374,7 @@ impl Merge for CapabilityLeasePatch {
             path,
             public_key_path: higher.public_key_path.or(self.public_key_path),
             refresh_ratio: higher.refresh_ratio.or(self.refresh_ratio),
-            grace_seconds: higher.grace_seconds.or(self.grace_seconds),
+            grace: higher.grace.or(self.grace),
             requested_actions: higher.requested_actions.or(self.requested_actions),
         }
     }
@@ -485,7 +493,11 @@ pub(crate) fn resolve_profile_with_layout(
     if let Some(paths) = patch.mask_home_paths {
         env_set.insert(
             "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
-            paths.join(","),
+            paths
+                .iter()
+                .map(|path| path.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(","),
         );
     }
 
@@ -646,7 +658,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 path: None,
                 public_key_path: None,
                 refresh_ratio: None,
-                grace_seconds: None,
+                grace: None,
                 requested_actions: None,
             }),
         sidecar_local_exec: None,
@@ -700,7 +712,7 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         source,
         public_key_path: patch.public_key_path,
         refresh_ratio: patch.refresh_ratio.unwrap_or(0.60),
-        grace_seconds: patch.grace_seconds.unwrap_or(30),
+        grace: patch.grace.unwrap_or(Duration::from_secs(30)),
         requested_actions: patch
             .requested_actions
             .filter(|actions| !actions.is_empty())
@@ -725,7 +737,7 @@ fn default_capability_config() -> CapabilityLeaseConfig {
         source: CapabilitySource::Disabled,
         public_key_path: None,
         refresh_ratio: 0.60,
-        grace_seconds: 30,
+        grace: Duration::from_secs(30),
         requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
@@ -749,21 +761,42 @@ fn sidecar_local_exec_from_patch(
     } else {
         derive_sidecar_local_exec_endpoint(sidecar_endpoint)?
     };
-    let allowed_executables = patch
-        .allowed_executables
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
+    let allowed_executables = canonicalize_allowed_executables(&patch.allowed_executables)?;
     Ok(CommandMediatorConfig {
         endpoint,
-        timeout_ms: patch.timeout_ms.unwrap_or(500),
+        timeout: patch.timeout.unwrap_or(Duration::from_millis(500)),
         hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
-        hitl_max_wait_ms: patch.hitl_max_wait_ms.unwrap_or(300_000),
+        hitl_max_wait: patch.hitl_max_wait.unwrap_or(Duration::from_mins(5)),
         enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
         allowed_executables,
     })
+}
+
+fn canonicalize_allowed_executables(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, RunError> {
+    paths
+        .iter()
+        .map(|path| {
+            if !path.is_absolute() {
+                return Err(RunError::ConfigValidation(format!(
+                    "sidecar_local_exec.allowed_executables entries must be absolute paths: {}",
+                    path.display()
+                )));
+            }
+            let canonical = std::fs::canonicalize(path).map_err(|error| {
+                RunError::ConfigValidation(format!(
+                    "sidecar_local_exec.allowed_executables entry could not be canonicalized ({}): {error}",
+                    path.display()
+                ))
+            })?;
+            if !canonical.is_file() {
+                return Err(RunError::ConfigValidation(format!(
+                    "sidecar_local_exec.allowed_executables entries must point to existing regular files: {}",
+                    path.display()
+                )));
+            }
+            Ok(canonical)
+        })
+        .collect()
 }
 
 fn resolve_sidecar_local_exec_config(
@@ -981,10 +1014,14 @@ pub(crate) fn env_truthy(name: &str) -> bool {
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
-    let config = firma_config_loader::FirmaConfig::load(path).map_err(|reason| {
+    let absolute_path = std::path::absolute(path).map_err(|reason| RunError::ConfigParse {
+        path: path.to_path_buf(),
+        reason: format!("failed to resolve config path: {reason}"),
+    })?;
+    let config = firma_config_loader::FirmaConfig::load(&absolute_path).map_err(|reason| {
         // FirmaConfig prefixes the path; strip it to avoid doubling in the
         // RunError::ConfigParse display ("{path}: {reason}").
-        let prefix = format!("{}: ", path.display());
+        let prefix = format!("{}: ", absolute_path.display());
         let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
         let hint = if reason.contains("[run]") {
@@ -997,8 +1034,8 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
             reason: format!("{reason}{hint}"),
         }
     })?;
-    let parsed = config.section::<FileConfig>("run").map_err(|reason| {
-        let prefix = format!("{}: ", path.display());
+    let mut parsed = config.section::<FileConfig>("run").map_err(|reason| {
+        let prefix = format!("{}: ", absolute_path.display());
         let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
         let hint = if reason.contains("[run]") {
@@ -1011,9 +1048,50 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
             reason: format!("{reason}{hint}"),
         }
     })?;
+    let Some(config_dir) = absolute_path.parent() else {
+        return Err(RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: "resolved config path has no containing directory".to_string(),
+        });
+    };
+    rebase_file_paths(&mut parsed, config_dir);
 
     let profile_patch = parsed.profiles.get(profile).cloned().unwrap_or_default();
     Ok(parsed.defaults.merge(profile_patch))
+}
+
+fn rebase_file_paths(config: &mut FileConfig, config_dir: &Path) {
+    rebase_profile_paths(&mut config.defaults, config_dir);
+    for profile in config.profiles.values_mut() {
+        rebase_profile_paths(profile, config_dir);
+    }
+}
+
+fn rebase_profile_paths(profile: &mut ProfilePatch, config_dir: &Path) {
+    for mount in &mut profile.mounts {
+        rebase_path(&mut mount.source, config_dir);
+    }
+    if let Some(seccomp) = &mut profile.seccomp_policy {
+        rebase_path(&mut seccomp.source_policy_path, config_dir);
+        rebase_path(&mut seccomp.artifact_dir, config_dir);
+    }
+    if let Some(capability) = &mut profile.capability {
+        if let Some(CapabilitySourcePatch::File { path }) = &mut capability.source {
+            rebase_path(path, config_dir);
+        }
+        if let Some(path) = &mut capability.path {
+            rebase_path(path, config_dir);
+        }
+        if let Some(path) = &mut capability.public_key_path {
+            rebase_path(path, config_dir);
+        }
+    }
+}
+
+fn rebase_path(path: &mut PathBuf, config_dir: &Path) {
+    if path.is_relative() {
+        *path = config_dir.join(&*path);
+    }
 }
 
 /// Read `[run].profile` from `firma.toml`, if present.
@@ -1043,8 +1121,10 @@ pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
     use pretty_assertions::assert_eq;
@@ -1053,8 +1133,8 @@ mod tests {
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint, capability_from_patch,
-        resolve_profile,
+        CapabilitySourcePatch, FileConfig, SandboxIdentityMode, SeccompRuntimeMode,
+        SidecarEndpoint, capability_from_patch, rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -1067,7 +1147,7 @@ mod tests {
             path: None,
             public_key_path: None,
             refresh_ratio: None,
-            grace_seconds: None,
+            grace: None,
             requested_actions,
         }
     }
@@ -1077,6 +1157,153 @@ mod tests {
         let custom = vec!["communication.internal.send".to_string()];
         let resolved = capability_from_patch(lease_patch(Some(custom.clone())));
         assert_eq!(resolved.requested_actions, custom);
+    }
+
+    #[test]
+    fn file_paths_rebase_for_defaults_and_every_profile_only_where_config_relative() {
+        let mut config: FileConfig = toml::from_str(
+            r#"
+            [[defaults.mounts]]
+            source = "workspace"
+            target = "/sandbox/workspace"
+
+            [defaults.seccomp_policy]
+            source_policy_path = "seccomp/policy.toml"
+            artifact_dir = "seccomp/artifacts"
+
+            [defaults.capability]
+            public_key_path = "keys/authority.pub"
+
+            [profiles.unselected]
+            mask_home_paths = [".ssh"]
+
+            [[profiles.unselected.mounts]]
+            source = "other-workspace"
+            target = "/sandbox/other"
+
+            [profiles.unselected.capability.source]
+            kind = "file"
+            path = "capabilities/unselected.toml"
+
+            [profiles.unselected.sidecar_local_exec]
+            allowed_executables = ["/usr/bin/bash"]
+            "#,
+        )
+        .unwrap();
+
+        rebase_file_paths(&mut config, std::path::Path::new("/cfg"));
+
+        assert_eq!(
+            config.defaults.mounts[0].source,
+            PathBuf::from("/cfg/workspace")
+        );
+        assert_eq!(
+            config.defaults.mounts[0].target,
+            PathBuf::from("/sandbox/workspace")
+        );
+        let seccomp = config.defaults.seccomp_policy.as_ref().unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            PathBuf::from("/cfg/seccomp/policy.toml")
+        );
+        assert_eq!(
+            seccomp.artifact_dir,
+            PathBuf::from("/cfg/seccomp/artifacts")
+        );
+        assert_eq!(
+            config
+                .defaults
+                .capability
+                .as_ref()
+                .and_then(|capability| capability.public_key_path.as_ref()),
+            Some(&PathBuf::from("/cfg/keys/authority.pub"))
+        );
+        let unselected = &config.profiles["unselected"];
+        assert_eq!(
+            unselected.mounts[0].source,
+            PathBuf::from("/cfg/other-workspace")
+        );
+        match unselected
+            .capability
+            .as_ref()
+            .and_then(|capability| capability.source.as_ref())
+        {
+            Some(CapabilitySourcePatch::File { path }) => {
+                assert_eq!(path, &PathBuf::from("/cfg/capabilities/unselected.toml"));
+            }
+            other => panic!("expected file capability source, got {other:?}"),
+        }
+        assert_eq!(
+            unselected.mask_home_paths,
+            Some(vec![PathBuf::from(".ssh")])
+        );
+        assert_eq!(
+            unselected
+                .sidecar_local_exec
+                .as_ref()
+                .map(|mediator| &mediator.allowed_executables),
+            Some(&vec![PathBuf::from("/usr/bin/bash")])
+        );
+    }
+
+    #[test]
+    fn allowed_executable_parent_alias_is_stored_canonically() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        let nested = bin_dir.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let executable = bin_dir.join("agent");
+        fs::write(&executable, "test executable").unwrap();
+        let alias = nested.join("..").join("agent");
+
+        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
+
+        assert_eq!(
+            allowed,
+            BTreeSet::from([fs::canonicalize(executable).unwrap()])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn allowed_executable_symlink_is_stored_canonically() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("agent");
+        let alias = dir.path().join("agent-alias");
+        fs::write(&executable, "test executable").unwrap();
+        symlink(&executable, &alias).unwrap();
+
+        let allowed = super::canonicalize_allowed_executables(&[alias]).unwrap();
+
+        assert_eq!(
+            allowed,
+            BTreeSet::from([fs::canonicalize(executable).unwrap()])
+        );
+    }
+
+    #[test]
+    fn allowed_executable_must_be_absolute_and_resolvable() {
+        let relative = super::canonicalize_allowed_executables(&[PathBuf::from("bin/agent")])
+            .expect_err("relative path must fail");
+        assert!(relative.to_string().contains("must be absolute paths"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("agent");
+        fs::write(&executable, "test executable").unwrap();
+        let empty = super::canonicalize_allowed_executables(&[PathBuf::new(), executable])
+            .expect_err("empty path must fail even when another entry is valid");
+        assert!(empty.to_string().contains("must be absolute paths"));
+
+        let missing = dir.path().join("missing-agent");
+        let unresolved = super::canonicalize_allowed_executables(&[missing])
+            .expect_err("missing path must fail");
+        assert!(
+            unresolved
+                .to_string()
+                .contains("could not be canonicalized")
+        );
     }
 
     #[test]
@@ -1255,8 +1482,10 @@ mod tests {
     fn toml_config_overrides_profile() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let capability_path = tmpdir.path().join("capability.token");
 
-        let toml = r#"
+        let toml = format!(
+            r#"
 [run.defaults]
 sidecar_endpoint = "tcp://127.0.0.1:18080"
 
@@ -1267,9 +1496,10 @@ env_passthrough = ["HOME"]
 
 [run.profiles.codex.capability]
 kind = "file"
-path = "/tmp/capability.token"
-"#
-        .to_string();
+path = '{}'
+"#,
+            capability_path.display()
+        );
         fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("codex");
@@ -1287,7 +1517,7 @@ path = "/tmp/capability.token"
         assert_eq!(
             resolved.capability.source,
             CapabilitySource::File {
-                path: PathBuf::from("/tmp/capability.token")
+                path: capability_path
             }
         );
     }
@@ -1629,7 +1859,7 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = 'unix://{}'
-timeout_ms = 700
+timeout = "700ms"
 "#,
             policy_path.display(),
             artifact_dir.display(),
@@ -1640,7 +1870,7 @@ timeout_ms = 700
         run_args.config = Some(config_path);
         let resolved = resolve_profile(&run_args).unwrap();
         let mediator = resolved.sidecar_local_exec.unwrap();
-        assert_eq!(mediator.timeout_ms, 700);
+        assert_eq!(mediator.timeout, Duration::from_millis(700));
     }
 
     #[test]
@@ -1673,7 +1903,7 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = "unix://relative.sock"
-timeout_ms = 500
+timeout = "500ms"
 "#,
             policy_path.display(),
             artifact_dir.display()
@@ -1724,7 +1954,7 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = "{endpoint}"
-timeout_ms = 500
+timeout = "500ms"
 enforce_known_executables = true
 "#,
             policy_path.display(),
@@ -1756,6 +1986,12 @@ deny_actions = ["filesystem.delete"]
 "#,
         )
         .unwrap();
+        let allowed_codex = tmpdir.path().join("codex");
+        let allowed_claude = tmpdir.path().join("claude");
+        let allowed_bash = tmpdir.path().join("bash");
+        for path in [&allowed_codex, &allowed_claude, &allowed_bash] {
+            fs::write(path, "test executable").unwrap();
+        }
         let artifact_dir = tmpdir.path().join("artifacts");
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let endpoint = if cfg!(target_family = "unix") {
@@ -1776,13 +2012,16 @@ runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
 endpoint = "{endpoint}"
-timeout_ms = 800
+timeout = "800ms"
 hitl_mode = "async_token"
 enforce_known_executables = true
-allowed_executables = ["codex", "claude", "bash"]
+allowed_executables = ['{}', '{}', '{}']
 "#,
             policy_path.display(),
-            artifact_dir.display()
+            artifact_dir.display(),
+            allowed_codex.display(),
+            allowed_claude.display(),
+            allowed_bash.display()
         );
         fs::write(&config_path, toml).unwrap();
         let mut run_args = args("generic");
@@ -1790,7 +2029,11 @@ allowed_executables = ["codex", "claude", "bash"]
         let resolved = resolve_profile(&run_args).unwrap();
         let mediator = resolved.sidecar_local_exec.unwrap();
         assert!(mediator.enforce_known_executables);
-        assert!(mediator.allowed_executables.contains("codex"));
+        assert!(
+            mediator
+                .allowed_executables
+                .contains(&fs::canonicalize(allowed_codex).unwrap())
+        );
         assert_eq!(
             mediator.hitl_mode,
             super::CommandMediatorHitlMode::AsyncToken
@@ -1827,7 +2070,7 @@ artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
 [run.profiles.generic.sidecar_local_exec]
-timeout_ms = 700
+timeout = "700ms"
 "#,
             sidecar_sock.display(),
             policy_path.display(),

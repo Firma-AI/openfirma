@@ -5,6 +5,7 @@
 //! `firma-sidecar` validates that the socket path is absolute.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,19 +31,25 @@ pub struct LocalExecConfig {
     /// Policy applied to every fresh local-exec request.
     #[serde(default)]
     pub default_action: DefaultAction,
-    /// Approval token time-to-live in seconds (default: 300).
-    #[serde(default = "default_token_ttl_secs")]
-    pub token_ttl_secs: u64,
+    /// Approval token time-to-live (default: 5 minutes).
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_token_ttl"
+    )]
+    pub token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
-    /// responses (milliseconds, default: 500).
-    #[serde(default = "default_retry_after_ms")]
-    pub retry_after_ms: u64,
+    /// responses (default: 500 milliseconds).
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_retry_after"
+    )]
+    pub retry_after: Duration,
 }
 
-const fn default_token_ttl_secs() -> u64 {
-    300
+const fn default_token_ttl() -> Duration {
+    Duration::from_mins(5)
 }
 
-const fn default_retry_after_ms() -> u64 {
-    500
+const fn default_retry_after() -> Duration {
+    Duration::from_millis(500)
 }

@@ -36,25 +36,25 @@ Default timeout and per-host overrides live under `[sidecar.connector]` in `firm
 
 ```toml
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "wttr.in"
 rps        = 60
 burst      = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "paste.rs"
 rps        = 60
 burst      = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "127.0.0.1:9100"
 rps        = 200
 burst      = 50
-timeout_ms = 30000
+timeout = "30s"
 ```
 
 | Field        | Meaning                                                                                          |
@@ -62,29 +62,30 @@ timeout_ms = 30000
 | `host`       | The upstream the limits apply to. Exact match — wildcards aren't supported here.                 |
 | `rps`        | Steady-state allowed requests per second.                                                        |
 | `burst`      | Token-bucket burst size; absorbs short spikes above `rps`.                                       |
-| `timeout_ms` | Per-request timeout. Beyond this, the connector returns `ConnectorError::Timeout` and denies.    |
+| `timeout` | Per-request timeout. Beyond this, the connector returns `ConnectorError::Timeout` and denies. |
 
-Hosts not listed use `default_timeout_ms` and no rate limit. Set sensible defaults for any host that's part of your normal agent workload — both to protect the upstream and to bound the blast radius of a runaway agent loop.
+Hosts not listed use `default_timeout` and no rate limit. Set sensible defaults for any host that's part of your normal agent workload — both to protect the upstream and to bound the blast radius of a runaway agent loop.
 
 ## Credential injection
 
 The connector is also where credentials for upstream services are attached. This is a deliberate choice: the agent never holds the secret, the policy decides whether the call is OK, and only then does the connector add the credential.
 
-The `[credentials.*]` blocks declare what to inject for which host:
+The `[sidecar.credentials.*]` blocks declare what to inject for which host:
 
 ```toml
-[[credentials]]
-host           = "api.openai.com"
-mode           = "basic"
-header         = "Authorization"
+[sidecar.credentials.openai]
+target_host = "api.openai.com"
+mode = "basic"
+header = "Authorization"
 value_from_env = "OPENAI_API_KEY"
-prefix         = "Bearer "
+prefix = "Bearer "
 ```
 
 Two modes are supported today:
 
 - **`basic`** — pulls the value from an environment variable on the Sidecar host and prepends an optional prefix.
-- **`vault`** — pulls the value from a HashiCorp Vault path. Requires `[credentials].secret_path` and Vault auth configured.
+- **`vault`** — reads the value from a file rendered by Vault Agent. Requires
+  `secret_path` in the credential block.
 
 The injection happens after `Decision::Allow` and before dispatch. If injection fails (env var missing, Vault unreachable), the connector returns a typed error, the call is denied, and the audit event records what happened.
 
@@ -97,7 +98,7 @@ When the connector dispatches a call, four things can happen:
 | Outcome         | What it means                                                  | Audit shape                            |
 | --------------- | -------------------------------------------------------------- | -------------------------------------- |
 | Success         | Upstream returned a response (any HTTP status).                | `Decision::Allow` + upstream status    |
-| `Timeout`       | Upstream did not respond within `timeout_ms`.                  | `Decision::Allow` (policy-allowed) + connector error |
+| `Timeout`       | Upstream did not respond within `timeout`.                     | `Decision::Allow` (policy-allowed) + connector error |
 | `Network`       | Connection failed (DNS, TCP, TLS handshake).                   | `Decision::Allow` + connector error    |
 | `InvalidRequest`| Upstream rejected the request shape (e.g. malformed body).     | `Decision::Allow` + connector error    |
 
@@ -105,6 +106,6 @@ Note the subtle but important point: a connector failure does **not** retroactiv
 
 ## Where to go next
 
-- [Inject credentials](../../guides/inject-credentials/) — operator workflow for `[credentials.*]`.
+- [Inject credentials](../../guides/inject-credentials/) — operator workflow for `[sidecar.credentials.*]`.
 - [Read & verify the audit log](../../guides/audit-log/) — what connector outcomes look like in audit events.
 - [The sandbox boundary](../sandbox/) — how mandatory routing pairs with connectors.

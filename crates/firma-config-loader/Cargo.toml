@@ -22,5 +22,6 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+firma-config-schema = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

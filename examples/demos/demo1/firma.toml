@@ -9,15 +9,15 @@ policy_dir = "policies/"
 issuance_policy_dir = "issuance-policies/"
 revocation_file = "examples/demos/demo1/.runtime/revocations.txt"
 key_file = ".runtime/authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 
 # ── Sidecar ──────────────────────────────────────────────────────────────────
 
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 # Override the built-in HTTPS MITM allowlist. Only the demo's stand-in for
 # api.internal is MITM'd so the policy can see the path of inner GETs; the
@@ -40,10 +40,10 @@ rules_path = "mapping-rules.toml"
 default_protected = true
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 0
+clock_skew_tolerance = "0s"
 
 [sidecar.connector]
-default_timeout_ms = 10000
+default_timeout = "10s"
 
 [sidecar.audit]
 sink = "file"
@@ -53,8 +53,8 @@ signing_key_path = ".runtime/audit.key"
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"
 url = "http://127.0.0.1:50051"
-connect_timeout_secs = 10
-reconnect_min_backoff_ms = 250
-reconnect_max_backoff_secs = 30
-revocation_readiness_grace_ms = 500
+connect_timeout = "10s"
+reconnect_min_backoff = "250ms"
+reconnect_max_backoff = "30s"
+revocation_readiness_grace = "500ms"
 revocation_fail_closed_on_disconnect = false

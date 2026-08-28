@@ -69,18 +69,18 @@ python3 examples/firma-run/local-command-governance/scripts/mock_mediator.py \
 
 ```bash
 cat >/tmp/firma-run.mediator.toml <<'EOF'
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = "/home/dario/Work/Firma/openfirma/crates/firma-run/policies/generic-local-command-v1.toml"
 artifact_dir = "/home/dario/Work/Firma/openfirma/.artifacts/seccomp-artifacts"
 runtime_mode = "compile_on_launch"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = "unix:///tmp/firma-sidecar-tools.sock"
-timeout_ms = 500
+timeout = "500ms"
 hitl_mode = "async_token"
 enforce_known_executables = true
 allowed_executables = ["/usr/bin/echo", "/usr/bin/bash", "/usr/bin/sh"]

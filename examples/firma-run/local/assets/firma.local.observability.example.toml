@@ -1,11 +1,11 @@
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-drain_timeout_secs = 5
+drain_timeout = "5s"
 
 [sidecar.interceptor.connect_relay]
-setup_timeout_secs = 10
-session_max_secs = 1200
+setup_timeout = "10s"
+session_max = "20m"
 
 [sidecar.interceptor.https_mitm]
 enabled = true

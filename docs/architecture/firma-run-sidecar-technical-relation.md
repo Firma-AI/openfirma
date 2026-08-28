@@ -168,22 +168,22 @@ Main configuration reference:
 
 Important fields:
 
-- `[interceptor]`
+- `[sidecar.interceptor]`
   - `mode`
   - `listen_addr`
-  - `max_request_body_bytes`
-- `[interceptor.connect_relay]`
-  - `setup_timeout_secs` (default 10)
-  - `session_max_secs` (default 600)
-- `[interceptor.https_mitm]`
+  - `max_request_body_size`
+- `[sidecar.interceptor.connect_relay]`
+  - `setup_timeout` (default `"10s"`)
+  - `session_max` (default `"10m"`)
+- `[sidecar.interceptor.https_mitm]`
   - `enabled` (default true)
   - `intercept_hosts`
   - `bypass_hosts`
   - `strict_hosts`
   - `ca_cert_path` / `ca_key_path`
-  - `cert_ttl_secs`
+  - `cert_ttl`
   - `cert_cache_capacity`
-- `[ca]`
+- `[sidecar.ca]`
   - `dir`
 
 ## 7. Behavior Matrix

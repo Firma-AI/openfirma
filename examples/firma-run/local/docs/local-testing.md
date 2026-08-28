@@ -96,7 +96,7 @@ export FIRMA_PROXY_LISTEN_ADDR=127.0.0.1:18181
 cargo run -p firma -- run -- "your command"
 ```
 
-Strict capability workflow (session-bound tokens, legacy operator path):
+Stable session identity for local audit correlation:
 
 ```bash
 export FIRMA_RUN_SESSION_ID=demo-session
@@ -104,10 +104,8 @@ export FIRMA_RUN_REQUIRE_SESSION_ID=true
 cargo run -p firma -- run --profile codex -- codex
 ```
 
-This prevents late `TokenInvalid` denials caused by runtime-generated session
-ids drifting from pre-issued capability seed session ids. In the automatic
-`firma run` mint flow, `FIRMA_RUN_SESSION_ID` is still honoured and passed to
-the Authority as the session id for the live-minted capability.
+`FIRMA_RUN_SESSION_ID` is passed to the Authority as the session id for the
+automatically minted capability.
 
 When a sidecar MITM CA certificate is detected, `firma run` automatically exports trust env vars for common runtimes:
 
@@ -179,19 +177,6 @@ PowerShell helper wrapper:
 pwsh ./examples/firma-run/local/run.ps1 -- codex
 ```
 
-Capability token renewal helper — **legacy operator path** (pre-provisioned seed
-tokens; superseded by automatic `firma run` mint):
-
-```bash
-examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID"
-```
-
-PowerShell:
-
-```powershell
-pwsh ./examples/firma-run/local/renew-capability.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID
-```
-
 Identity default:
 
 - `firma run` defaults to sandbox identity masking mode (`sandbox_user`).
@@ -247,10 +232,10 @@ generated filter to `bwrap` (`--seccomp`) for additional syscall restriction.
 Example:
 
 ```toml
-[profiles.claude-code]
+[run.profiles.claude-code]
 backend = "bwrap"
 
-[profiles.claude-code.seccomp_policy]
+[run.profiles.claude-code.seccomp_policy]
 source_policy_path = "/absolute/path/to/policy.toml"
 artifact_dir = "/absolute/path/to/seccomp-artifacts"
 ```

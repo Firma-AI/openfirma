@@ -98,7 +98,7 @@ fn local_authority_publishes_effective_component_handle_and_metadata() {
         source: CapabilitySource::Disabled,
         public_key_path: None,
         refresh_ratio: 0.6,
-        grace_seconds: 30,
+        grace: Duration::from_secs(30),
         requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     };
 
@@ -312,7 +312,7 @@ fn prepare_failing_runtime(
         source: CapabilitySource::Disabled,
         public_key_path: None,
         refresh_ratio: 0.6,
-        grace_seconds: 30,
+        grace: Duration::from_secs(30),
         requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     };
     let runtime_layout =

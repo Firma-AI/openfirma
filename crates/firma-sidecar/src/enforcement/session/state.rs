@@ -4,7 +4,7 @@
 //! in-memory with LRU eviction by default; a
 //! file-backed persistent backend is available via
 //! [`crate::enforcement::session::PersistentSessionStateStore`]
-//! (selected by `constraint_enforcement.session_state_backend = "persistent"`).
+//! (selected by `sidecar.constraint_enforcement.session_state_backend = "persistent"`).
 //!
 //! The default in-memory store (`LruSessionStateStore`) evicts the
 //! least-recently-used session when capacity is exceeded, resetting an
@@ -12,7 +12,7 @@
 //! are monotone (`action_count > N` denies as count grows), eviction can
 //! only move a denying session back toward allowing — acceptable for V1
 //! scope. The capacity is configurable via
-//! `constraint_enforcement.session_state_capacity`; the persistent backend
+//! `sidecar.constraint_enforcement.session_state_capacity`; the persistent backend
 //! preserves state across eviction and restart.
 
 use std::num::NonZeroUsize;
@@ -171,7 +171,7 @@ pub(crate) fn next_provenance(
 
 /// Default capacity — 8192 active sessions per sidecar process. Tuned
 /// for V1 single-process deployments; overridable via
-/// `constraint_enforcement.session_state_capacity` in `firma.toml`.
+/// `sidecar.constraint_enforcement.session_state_capacity` in `firma.toml`.
 const DEFAULT_CAPACITY: usize = 8192;
 
 /// In-memory LRU-capped `SessionStateStore` for V1. Single-process only.

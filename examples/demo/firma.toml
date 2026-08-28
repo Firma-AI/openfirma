@@ -14,15 +14,15 @@ revocation_file = "examples/demo/revocations.txt"
 key_file = "firma-authority.key"
 tls_cert_path = "authority.crt"
 tls_key_path = "authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 
 # ── Sidecar ──────────────────────────────────────────────────────────────────
 
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:7474"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 # The hero demo's two turns hit wttr.in (ALLOW) and paste.rs (DENY)
 # over HTTPS, and the Python agents SDK reaches api.openai.com over
@@ -49,7 +49,7 @@ rules_path = "mapping-rules.toml"
 default_protected = false
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 5
+clock_skew_tolerance = "5s"
 
 [sidecar.revocation]
 capacity = 100000
@@ -57,25 +57,25 @@ fpr = 0.001
 lru_capacity = 10000
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host = "wttr.in"
 rps = 60
 burst = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host = "paste.rs"
 rps = 60
 burst = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host = "127.0.0.1:9100"
 rps = 200
 burst = 50
-timeout_ms = 30000
+timeout = "30s"
 
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"

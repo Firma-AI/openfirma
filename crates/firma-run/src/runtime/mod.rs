@@ -536,7 +536,10 @@ fn enforce_known_executable_policy(
         return Ok(());
     }
 
-    if mediator.allowed_executables.contains(canonical) {
+    if mediator
+        .allowed_executables
+        .contains(std::path::Path::new(canonical))
+    {
         return Ok(());
     }
 
@@ -817,6 +820,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
 
@@ -889,7 +893,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
@@ -957,7 +961,7 @@ mod tests {
                 },
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
@@ -1010,7 +1014,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
@@ -1078,7 +1082,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
@@ -1177,7 +1181,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
@@ -1246,7 +1250,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
@@ -1291,7 +1295,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
@@ -1363,7 +1367,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 public_key_path: None,
                 refresh_ratio: 0.60,
-                grace_seconds: 30,
+                grace: Duration::from_secs(30),
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,

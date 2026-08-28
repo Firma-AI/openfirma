@@ -484,7 +484,8 @@ fn build_startup_report<'a>(
         policy_count,
         authority_endpoint,
         connector_hosts: config.connector.hosts.len(),
-        connector_default_timeout_ms: config.connector.default_timeout_ms,
+        connector_default_timeout_ms: u64::try_from(config.connector.default_timeout.as_millis())
+            .unwrap_or(u64::MAX),
         interceptor_addr: interceptor_addr.to_string(),
     }
 }
@@ -636,7 +637,7 @@ mod tests {
         assert_eq!(report.connector_hosts, cfg.connector.hosts.len());
         assert_eq!(
             report.connector_default_timeout_ms,
-            cfg.connector.default_timeout_ms
+            u64::try_from(cfg.connector.default_timeout.as_millis()).unwrap_or(u64::MAX)
         );
         assert_eq!(report.interceptor_addr, "127.0.0.1:9000");
     }
@@ -653,7 +654,7 @@ mod tests {
         let mut cfg = config::SidecarConfig::default();
         cfg.policy.dir = dir.path().to_path_buf();
         cfg.authority.url = Some("https://auth.test:9443".to_string());
-        cfg.connector.default_timeout_ms = 5_000;
+        cfg.connector.default_timeout = std::time::Duration::from_secs(5);
 
         let config_path = Path::new("firma.toml");
         let report = build_startup_report(config_path, &cfg, 1, "127.0.0.1:9001");

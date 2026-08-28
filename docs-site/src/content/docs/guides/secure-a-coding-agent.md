@@ -259,7 +259,7 @@ The same shape works for Codex, Cursor, or any LLM coding agent. The pieces that
 Each registration gets its own UUID; product names such as `codex` and
 `claude-code` are not registered identities.
 
-The codex profile is named for the fact it was originally tuned for codex-style coding agents; despite the name, it's the right profile for any coding agent that needs project workspace mounts.
+The `codex` profile provides project workspace mounts for coding agents.
 
 ## Common gotchas
 

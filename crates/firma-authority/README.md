@@ -54,8 +54,8 @@ listen_addr = "[::1]:50051"
 policy_dir = "examples/policies"
 revocation_file = "revocations.txt"
 key_file = "firma-authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 ```
 
 Start the Authority (discovers `firma.toml`, or pass `--config`):
@@ -68,27 +68,29 @@ cargo run -p firma-authority -- --config firma.toml
 
 ## Issue a permission token
 
-For local demos, you can issue a token into a seed file that the Sidecar loads at startup:
+For local demos, you can issue a signed capability TOML file:
 
 ```bash
 cargo run -p firma-authority -- --config firma.toml issue   --agent-id agt_01j0000000e008000000000001   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
 ```
 
-The output file contains the signed token and matching claims. Configure the Sidecar with the Authority public key and list the seed file under `[capability_seed].paths`.
+The output file contains the signed token and matching claims. Pass it to
+`firma run --capability-file capability-demo-agent.toml`; `firma run` and the
+Sidecar verify it with the configured Authority public key before use.
 
 ## Configuration
 
-| Key                  | Default               | Purpose                                      |
-| -------------------- | --------------------- | -------------------------------------------- |
-| `listen_addr`        | `[::1]:50051`         | gRPC address for the Authority service.      |
-| `policy_dir`         | `policies`            | Directory containing `.cedar` policy files.  |
-| `schema_path`        | unset                 | Optional schema override.                    |
-| `revocation_file`    | `revocations.txt`     | File containing canonical `ctok` token IDs.  |
-| `key_file`           | `firma-authority.key` | Authority private signing key.               |
-| `max_ttl_seconds`    | `3600`                | Maximum token lifetime.                      |
-| `bundle_ttl_seconds` | `30`                  | TTL advertised with streamed policy bundles. |
+| Key               | Default               | Purpose                                      |
+| ----------------- | --------------------- | -------------------------------------------- |
+| `listen_addr`     | `[::1]:50051`         | gRPC address for the Authority service.      |
+| `policy_dir`      | `policies`            | Directory containing `.cedar` policy files.  |
+| `schema_path`     | unset                 | Optional schema override.                    |
+| `revocation_file` | `revocations.txt`     | File containing canonical `ctok` token IDs.  |
+| `key_file`        | `firma-authority.key` | Authority private signing key.               |
+| `max_ttl`         | `"1h"`                | Maximum token lifetime.                      |
+| `bundle_ttl`      | `"30s"`               | TTL advertised with streamed policy bundles. |
 
-Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`.
+Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`. Duration overrides use the same compact unit-bearing syntax as TOML: `FIRMA_AUTHORITY_MAX_TTL=1h` and `FIRMA_AUTHORITY_BUNDLE_TTL=30s`.
 
 ## Policy files
 

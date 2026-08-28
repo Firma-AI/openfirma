@@ -54,7 +54,7 @@ graph LR
 
 At startup, `main.rs` loads configuration, spawns long-lived tasks, and
 wires them together through in-process channels. When
-`authority.url` is configured, two additional background tasks
+`sidecar.authority.url` is configured, two additional background tasks
 keep policy and revocation state current.
 
 ```mermaid
@@ -251,7 +251,7 @@ the envelope. No LLM, no heuristic classifier on the hot path.
 Every substep on failure maps to a DENY with a distinct `DenyReason`.
 Target: < 1 ms p95.
 
-Sizing is configurable via `[revocation]` in the sidecar TOML.
+Sizing is configurable via `[sidecar.revocation]` in `firma.toml`.
 Defaults: `capacity = 1_000_000`, `fpr = 0.0001`, and
 `lru_capacity = 100_000` — about 14 MB total (bloom 2.4 MB + LRU
 12 MB), well inside the < 100 MB RSS budget. Counters exposed:
@@ -377,7 +377,7 @@ shared-reference getters; once built it is never mutated.
 
 ### 5.6 Authority stream clients
 
-When `authority.url` is set, `startup` spawns two long-lived
+When `sidecar.authority.url` is set, `startup` spawns two long-lived
 tasks from `authority_client`:
 
 - **`PolicyBundleTask`** calls `WatchPolicyBundle` and, on each
@@ -397,7 +397,7 @@ tasks from `authority_client`:
   resends it as `since` on reconnect so the Authority can replay any
   missed events. `ReadinessFlag::revocation_ready` flips on the first
   event OR after a configurable grace period
-  (`revocation_readiness_grace_ms`, default 500 ms) after the stream
+  (`revocation_readiness_grace`, default `"500ms"`) after the stream
   opens — whichever comes first. When
   `revocation_fail_closed_on_disconnect` is true, the readiness bit
   flips back to `false` on disconnect; by default it stays set and
@@ -405,14 +405,14 @@ tasks from `authority_client`:
 
 Both tasks share a single lazy `tonic::transport::Channel` but run
 independent reconnect loops with exponential backoff
-(`reconnect_min_backoff_ms` / `reconnect_max_backoff_secs`) and
+(`reconnect_min_backoff` / `reconnect_max_backoff`) and
 symmetric jitter. Shutdown is driven by the same `CancellationToken`
 that shuts the rest of the runtime down.
 
 `ReadinessFlag` is a `tokio::sync::watch` producer with a matching
 `ReadinessView` consumer. The pipeline's readiness check is a single
 atomic borrow on the watch channel — no lock, no allocation. When
-`authority_url` is unset (dev mode), the pipeline is constructed with
+`sidecar.authority.url` is unset (dev mode), the pipeline is constructed with
 a view that is pre-populated to all-ready so local runs do not wedge
 behind a stream that will never connect.
 

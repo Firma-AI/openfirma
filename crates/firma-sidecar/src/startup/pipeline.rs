@@ -44,24 +44,39 @@ fn load_mapping_rules(config: &config::SidecarConfig) -> anyhow::Result<config::
     let mut all_rules: Vec<config::MappingRuleConfig> = Vec::new();
 
     let primary_path = &config.enforcement.mapping.rules_path;
-    let primary_content = std::fs::read_to_string(primary_path)
-        .map_err(|e| anyhow::anyhow!("failed to read mapping rules from '{primary_path}': {e}"))?;
-    let primary_file: config::MappingRulesFile = toml::from_str(&primary_content)
-        .map_err(|e| anyhow::anyhow!("failed to parse mapping rules '{primary_path}': {e}"))?;
+    let primary_content = std::fs::read_to_string(primary_path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to read mapping rules from '{}': {e}",
+            primary_path.display()
+        )
+    })?;
+    let primary_file: config::MappingRulesFile = toml::from_str(&primary_content).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to parse mapping rules '{}': {e}",
+            primary_path.display()
+        )
+    })?;
     primary_file
         .validate()
-        .map_err(|e| anyhow::anyhow!("invalid mapping rules '{primary_path}': {e}"))?;
+        .map_err(|e| anyhow::anyhow!("invalid mapping rules '{}': {e}", primary_path.display()))?;
     all_rules.extend(primary_file.rules);
 
     for extra_path in &config.enforcement.mapping.rules_paths {
         let extra_content = std::fs::read_to_string(extra_path).map_err(|e| {
-            anyhow::anyhow!("failed to read mapping rules from '{extra_path}': {e}")
+            anyhow::anyhow!(
+                "failed to read mapping rules from '{}': {e}",
+                extra_path.display()
+            )
         })?;
-        let extra_file: config::MappingRulesFile = toml::from_str(&extra_content)
-            .map_err(|e| anyhow::anyhow!("failed to parse mapping rules '{extra_path}': {e}"))?;
-        extra_file
-            .validate()
-            .map_err(|e| anyhow::anyhow!("invalid mapping rules '{extra_path}': {e}"))?;
+        let extra_file: config::MappingRulesFile = toml::from_str(&extra_content).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to parse mapping rules '{}': {e}",
+                extra_path.display()
+            )
+        })?;
+        extra_file.validate().map_err(|e| {
+            anyhow::anyhow!("invalid mapping rules '{}': {e}", extra_path.display())
+        })?;
         all_rules.extend(extra_file.rules);
     }
 
@@ -95,7 +110,7 @@ fn build_session_state_store(
         }
         SessionStateBackend::Persistent => {
             let path = match &ce.path {
-                Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+                Some(p) if !p.as_os_str().is_empty() => p.clone(),
                 _ => runtime_layout.session_state(),
             };
             tracing::debug!(capacity, ?path, "session-state backend: persistent");
@@ -246,12 +261,10 @@ pub fn build_pipeline_runtime(
         capability_handle.clone(),
         Arc::clone(&token_verifier),
         Arc::clone(&revocation_store_dyn),
-        std::time::Duration::from_secs(
-            config
-                .enforcement
-                .capability_validation
-                .clock_skew_tolerance_seconds,
-        ),
+        config
+            .enforcement
+            .capability_validation
+            .clock_skew_tolerance,
         config.tenancy.mode,
     );
 

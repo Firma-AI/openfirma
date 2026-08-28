@@ -3,7 +3,7 @@
 //! Calls the Authority's `IssueCapability` RPC once per invocation, verifies
 //! the returned token locally, and writes the resulting [`CapabilitySeed`] to
 //! `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`. The sidecar then
-//! loads it via `[capability_seed]`.
+//! loads it via `[sidecar.capability_seed]`.
 
 // M-CANONICAL-DOCS: all public items carry doc comments.
 // M-ERRORS-CANONICAL-STRUCTS: errors are forwarded through RunError.

@@ -11,8 +11,7 @@ The Authority ↔ Sidecar gRPC channel carries the policy bundle stream and revo
 ## Sidecar authentication
 
 OpenFirma can present pre-shared-key credentials on Authority RPCs when the
-Sidecar config includes `[authority.credentials]` or unified
-`[sidecar.authority.credentials]`. The Sidecar sends `workspace_id`,
+Sidecar config includes `[sidecar.authority.credentials]`. The Sidecar sends `workspace_id`,
 `sidecar_id`, and the resolved PSK on `IssueCapability`, `WatchPolicyBundle`,
 and `WatchRevocations`.
 
@@ -45,38 +44,32 @@ This writes:
 - `authority-ca.crt` / `authority-ca.key`
 - `authority.crt` / `authority.key`
 
-Then wire the generated paths into Authority + Sidecar config.
-
-### Authority (`firma-authority.toml`)
+Then wire the generated paths into the Authority and Sidecar sections of one
+`firma.toml`:
 
 ```toml
+[authority]
 # Path to the server's TLS certificate (PEM).
 tls_cert_path = "/etc/firma/authority.crt"
 
 # Path to the server's TLS private key (PEM).
 tls_key_path = "/etc/firma/authority.key"
-```
 
-Both fields must be set together or neither. When set, the gRPC listener becomes TLS-only.
-
-### Sidecar (`firma-sidecar.toml`)
-
-```toml
-[policy]
-authority_url = "https://authority.internal:50051"
-
-[authority]
+[sidecar.authority]
+url = "https://authority.internal:50051"
 ca_cert_path = "/etc/firma/authority-ca.crt"
 # Optional and strongly discouraged: only for explicit non-loopback
 # plaintext authority in temporary/dev environments.
 allow_insecure_remote_authority = false
 ```
 
-`authority.ca_cert_path` is required when `authority.url` uses `https://`.
+The Authority TLS fields must be set together or neither. When set, the gRPC
+listener becomes TLS-only. `sidecar.authority.ca_cert_path` is required when
+`sidecar.authority.url` uses `https://`.
 For `http://`, sidecar permits loopback (`localhost`, `127.0.0.1`, `::1`) by
 default for local dev. Non-loopback `http://` is rejected unless
-`authority.allow_insecure_remote_authority = true`. When
-`authority.connect_addr` is set, its physical IP—not the logical URL host—is
+`sidecar.authority.allow_insecure_remote_authority = true`. When
+`sidecar.authority.connect_addr` is set, its physical IP—not the logical URL host—is
 used for this locality check. The URL still determines TLS SNI and certificate
 identity for `https://` connections.
 
@@ -118,23 +111,21 @@ openssl x509 -req \
 
 Distribute `authority-ca.crt` to every Sidecar host. Keep `authority-ca.key` offline.
 
-Authority config:
-
-```toml
-tls_cert_path = "./authority.crt"
-tls_key_path = "./authority.key"
-```
-
-Sidecar config:
+Unified `firma.toml`:
 
 ```toml
 [authority]
+tls_cert_path = "./authority.crt"
+tls_key_path = "./authority.key"
+
+[sidecar.authority]
+url = "https://authority.internal:50051"
 ca_cert_path = "./authority-ca.crt"
 ```
 
 ### Internal CA (team / staging)
 
-Request a certificate from your internal CA for the hostname the Authority listens on. The Subject Alternative Name must include the hostname (or IP) that Sidecars use in `authority_url`.
+Request a certificate from your internal CA for the hostname the Authority listens on. The Subject Alternative Name must include the hostname (or IP) that Sidecars use in `sidecar.authority.url`.
 
 Distribute the internal CA bundle (or the issuing intermediate CA cert) to Sidecars as `ca_cert_path`.
 

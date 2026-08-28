@@ -25,7 +25,15 @@ impl FirmaConfig {
         Self::parse(path, &text)
     }
 
-    pub(crate) fn parse(origin: impl Into<PathBuf>, text: &str) -> anyhow::Result<Self> {
+    /// Parse a unified configuration from an in-memory TOML document.
+    ///
+    /// This applies the same top-level contract as [`Self::load`] while letting
+    /// callers validate generated configuration before writing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a TOML parse error or an error for an unknown top-level key.
+    pub fn parse(origin: impl Into<PathBuf>, text: &str) -> anyhow::Result<Self> {
         let origin = origin.into();
         let table: toml::Table = text
             .parse()

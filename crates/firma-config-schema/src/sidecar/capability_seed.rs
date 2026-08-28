@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// `[capability_seed]` TOML section.
+/// `[sidecar.capability_seed]` TOML section.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilitySeedConfig {

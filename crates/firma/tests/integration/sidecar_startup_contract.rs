@@ -88,7 +88,7 @@ action_class = "communication.external.send"
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:0"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.policy]
 dir = '{policies}'
@@ -101,7 +101,7 @@ rules_path = '{mapping}'
 default_protected = true
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [sidecar.audit]
 sink = "stdout"

@@ -1,5 +1,5 @@
 //! On-disk seed format produced by `firma authority issue` and consumed
-//! by the sidecar's `[capability_seed]` config block.
+//! by the sidecar's `[sidecar.capability_seed]` config block.
 //!
 //! Mirrored by the sidecar-side reader at
 //! `crates/firma-sidecar/src/config/capability_seed.rs::SeedFile`. The two

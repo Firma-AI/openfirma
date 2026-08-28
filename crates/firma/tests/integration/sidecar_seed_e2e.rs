@@ -55,9 +55,9 @@ fn issue_seed() -> IssuedSeed {
 listen_addr = "127.0.0.1:0"
 policy_dir = {policy_dir}
 revocation_file = {revocation}
-max_ttl_seconds = 3600
+max_ttl = "1h"
 key_file = {key_file}
-bundle_ttl_seconds = 30
+bundle_ttl = "30s"
 "#,
             policy_dir = toml::Value::String(policies.to_string_lossy().into_owned()),
             revocation = toml::Value::String(revocation_file.to_string_lossy().into_owned()),
@@ -126,7 +126,7 @@ action_class = "communication.external.send"
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:0"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.policy]
 dir = '{policy_dir}'
@@ -139,7 +139,7 @@ rules_path = '{mapping}'
 default_protected = true
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [sidecar.authority]
 public_key_path = '{pub_key}'

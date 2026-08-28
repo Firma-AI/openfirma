@@ -6,9 +6,7 @@ description: Boot, observe, and tear down the Authority + Sidecar pair using the
 `firma sidecar start` boots the Authority and Sidecar as a single
 daemon-mode pair. `firma sidecar stop` tears them back down. `firma
 monitor` is the read-only counterpart — a live tail of audit events
-and component logs from the running daemon. Together they replace the
-old `firma stack` supervisor and the hand-rolled `firma authority &` /
-`firma sidecar &` pattern from earlier guides.
+and component logs from the running daemon.
 
 This guide covers a typical operator flow: scaffold a project, boot
 the daemon, observe what it's doing, and tear it down cleanly.
@@ -229,7 +227,7 @@ firma monitor --state-dir /var/run/firma \
 
 | Flag             | Default  | Description                                              |
 | ---------------- | -------- | -------------------------------------------------------- |
-| `--config`       | _unset_  | Accepted for compatibility; not used to resolve state.   |
+| `--config`       | _unset_  | Does not participate in state-directory resolution.      |
 | `--state-dir`    | resolved | State dir override.                                      |
 | `--source`       | `audit`  | `audit`, `authority`, `sidecar`, or `all`.               |
 | `--no-follow`    | _off_    | Read once and exit; default is to follow tail.           |

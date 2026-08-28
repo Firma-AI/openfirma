@@ -12,6 +12,7 @@ use firma_config_schema::sidecar::infra::{
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
 use firma_config_schema::{authority, run, secret_matcher, sidecar};
+use std::time::Duration;
 
 #[test]
 fn interceptor_config_fills_defaults_for_missing_fields() {
@@ -23,12 +24,12 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     // built-in default path for `unix_socket` mode.
     assert_eq!(config.socket_path, None);
     assert_eq!(InterceptorConfig::default().socket_path, None);
-    assert_eq!(config.drain_timeout_secs, 30);
-    assert_eq!(config.max_request_body_bytes, 4 * 1024 * 1024);
+    assert_eq!(config.drain_timeout, Duration::from_secs(30));
+    assert_eq!(config.max_request_body_size, ByteSize::mib(4));
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
-    assert_eq!(config.total_body_budget_bytes, 64 * 1024 * 1024);
-    assert_eq!(config.connect_relay.setup_timeout_secs, 10);
-    assert_eq!(config.connect_relay.session_max_secs, 600);
+    assert_eq!(config.total_body_budget, ByteSize::mib(64));
+    assert_eq!(config.connect_relay.setup_timeout, Duration::from_secs(10));
+    assert_eq!(config.connect_relay.session_max, Duration::from_mins(10));
     assert!(config.https_mitm.enabled);
     assert!(config.https_mitm.bypass_hosts.is_empty());
     assert_eq!(
@@ -57,6 +58,97 @@ fn max_decompressed_body_size_accepts_human_readable_units() {
         serde_json::from_str(r#"{ "max_decompressed_body_size": "8 MB" }"#)
             .expect("human-readable size deserializes");
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(8));
+}
+
+#[test]
+fn byte_size_fields_require_unit_bearing_strings() {
+    for config in [
+        "[interceptor]\nmax_request_body_size = 4194304\n",
+        "[interceptor]\nmax_decompressed_body_size = 16000000\n",
+        "[interceptor]\ntotal_body_budget = 67108864\n",
+        "[audit]\nwal_max_size = 104857600\n",
+        "[secret_gateway]\nmax_buffer_size = 10000000\n",
+        "[interceptor]\nmax_request_body_size = \"4194304\"\n",
+    ] {
+        assert!(
+            toml::from_str::<sidecar::SidecarConfig>(config).is_err(),
+            "raw byte size must be rejected: {config}"
+        );
+    }
+}
+
+#[test]
+fn sidecar_scalar_fields_accept_human_readable_units() {
+    let config: sidecar::SidecarConfig = toml::from_str(
+        r#"
+        [interceptor]
+        drain_timeout = "500ms"
+        max_request_body_size = "4 MiB"
+        total_body_budget = "64 MiB"
+
+        [connector]
+        default_timeout = "30s"
+
+        [audit]
+        wal_max_size = "100 MiB"
+        "#,
+    )
+    .expect("human-readable scalar values deserialize");
+
+    assert_eq!(config.interceptor.drain_timeout, Duration::from_millis(500));
+    assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
+    assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
+    assert_eq!(config.connector.default_timeout, Duration::from_secs(30));
+    assert_eq!(config.audit.wal_max_size, ByteSize::mib(100));
+}
+
+#[test]
+fn superseded_numeric_scalar_keys_are_rejected() {
+    for config in ["max_ttl_seconds = 3600\n", "bundle_ttl_seconds = 30\n"] {
+        assert!(
+            toml::from_str::<authority::AuthorityConfig>(config).is_err(),
+            "superseded Authority scalar must be rejected: {config}"
+        );
+    }
+
+    for config in [
+        "[interceptor]\ndrain_timeout_secs = 30\n",
+        "[interceptor]\nmax_request_body_bytes = 4194304\n",
+        "[interceptor]\ntotal_body_budget_bytes = 67108864\n",
+        "[interceptor.connect_relay]\nsetup_timeout_secs = 10\n",
+        "[interceptor.connect_relay]\nsession_max_secs = 600\n",
+        "[interceptor.https_mitm]\ncert_ttl_secs = 86400\n",
+        "[capability_validation]\nclock_skew_tolerance_seconds = 5\n",
+        "[connector]\ndefault_timeout_ms = 30000\n",
+        "[[connector.hosts]]\nhost = \"api.example.com\"\nrps = 1\nburst = 1\ntimeout_ms = 5000\n",
+        "[connector]\nhosts = [{ host = \"api.example.com\", rps = 1, burst = 1, timeout_ms = 5000 }]\n",
+        "[audit]\nwal_max_bytes = 104857600\n",
+        "[authority]\nconnect_timeout_secs = 10\n",
+        "[authority]\nreconnect_min_backoff_ms = 250\n",
+        "[authority]\nreconnect_max_backoff_secs = 30\n",
+        "[authority]\nrevocation_readiness_grace_ms = 500\n",
+        "[local_exec]\ntoken_ttl_secs = 300\n",
+        "[local_exec]\nretry_after_ms = 500\n",
+    ] {
+        assert!(
+            toml::from_str::<sidecar::SidecarConfig>(config).is_err(),
+            "superseded Sidecar scalar must be rejected: {config}"
+        );
+    }
+
+    for config in [
+        "[defaults.capability]\ngrace_seconds = 30\n",
+        "[defaults.sidecar_local_exec]\ntimeout_ms = 500\n",
+        "[defaults.sidecar_local_exec]\nhitl_max_wait_ms = 300000\n",
+        "[profiles.unselected.capability]\ngrace_seconds = 45\n",
+        "[profiles.unselected.sidecar_local_exec]\ntimeout_ms = 750\n",
+        "[profiles.unselected.sidecar_local_exec]\nhitl_max_wait_ms = 600000\n",
+    ] {
+        assert!(
+            toml::from_str::<run::FileConfig>(config).is_err(),
+            "superseded Run scalar must be rejected: {config}"
+        );
+    }
 }
 
 #[test]

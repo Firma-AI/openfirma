@@ -43,17 +43,27 @@ fn firma_config_env(root: &Path, file_name: &str) -> Vec<(std::ffi::OsString, st
 }
 
 #[test]
-fn flag_wins_over_everything() {
-    helper::run_isolated(|root| {
-        let flag = root.join("explicit.toml");
-        fs::write(&flag, "").expect("write explicit config");
+fn relative_flag_is_absolutized_and_wins_over_everything() {
+    helper::run_isolated_with_env(
+        |_| {
+            vec![(
+                std::ffi::OsString::from(CONFIG_ENV_NAME),
+                std::ffi::OsString::from("env.toml"),
+            )]
+        },
+        |root| {
+            let flag = PathBuf::from("explicit.toml");
+            fs::write(&flag, "").expect("write explicit config");
+            fs::write("env.toml", "").expect("write environment config");
+            touch_project_local(root);
 
-        let resolved = unwrap_resolved(ConfigResolver::default().resolve_config(Some(&flag)));
+            let resolved = unwrap_resolved(ConfigResolver::default().resolve_config(Some(&flag)));
 
-        assert_eq!(resolved.source, ConfigSource::Flag);
-        assert_eq!(resolved.config_file(), flag.as_path());
-        assert_eq!(resolved.config_dir(), root);
-    });
+            assert_eq!(resolved.source, ConfigSource::Flag);
+            assert_eq!(resolved.config_file(), root.join(&flag));
+            assert_eq!(resolved.config_dir(), root);
+        },
+    );
 }
 
 #[test]
@@ -87,19 +97,30 @@ fn explicit_invalid_toml_is_an_error() {
 }
 
 #[test]
-fn env_var_beats_project_local() {
+fn relative_env_var_is_absolutized_and_beats_project_local() {
     helper::run_isolated_with_env(
-        |root| firma_config_env(root, "env.toml"),
+        |_| {
+            vec![(
+                std::ffi::OsString::from(CONFIG_ENV_NAME),
+                std::ffi::OsString::from("env.toml"),
+            )]
+        },
         |root| {
-            let env_file = root.join("env.toml");
-            fs::write(&env_file, "").expect("write env config");
             let project = enter_nested_project(root);
+            let env_file = std::env::current_dir()
+                .expect("read nested project cwd")
+                .join("env.toml");
+            fs::write(&env_file, "").expect("write env config");
             touch_project_local(&project);
 
             let resolved = unwrap_resolved(ConfigResolver::default().resolve_config(None));
 
             assert_eq!(resolved.source, ConfigSource::EnvVar);
             assert_eq!(resolved.config_file(), env_file.as_path());
+            assert_eq!(
+                resolved.config_dir(),
+                env_file.parent().expect("env config parent")
+            );
         },
     );
 }

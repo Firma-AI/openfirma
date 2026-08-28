@@ -4,8 +4,8 @@
 //! file is built (initial) or merged (when the file already exists) via
 //! [`toml_edit::DocumentMut`], so:
 //!
-//! - hand-edited comments, key ordering, and unknown sections survive
-//!   subsequent `firma config` runs;
+//! - hand-edited comments and key ordering survive subsequent `firma config`
+//!   runs;
 //! - the `merge_*` and `build_*` paths share a single source of truth.
 //!
 //! Field policy:
@@ -14,7 +14,7 @@
 //!   always overwrite on merge — they are the whole point of re-running
 //!   `firma config`.
 //! - **static defaults** are only seeded when absent; an operator's manual
-//!   tweak (e.g. `max_ttl_seconds = 7200`) survives.
+//!   tweak (e.g. `max_ttl = "2h"`) survives.
 //! - **array selections** (intercept hosts, mapping paths, extra-host
 //!   rules) are fully replaced because they reflect the *current*
 //!   selection — keeping stale entries would silently widen the policy
@@ -35,6 +35,7 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig};
 use firma_identifiers::AgentId;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
 
@@ -92,10 +93,12 @@ impl DocInputs<'_> {
 ///
 /// Returns the parse error if `text` is not valid TOML.
 pub fn render_firma_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
+    validate_firma_toml(text)?;
     let mut doc = parse_or_empty(text)?;
     merge_firma_toml(&mut doc, inputs)?;
     let mut rendered = doc.to_string();
     append_remote_credentials_hint(&mut rendered, inputs);
+    validate_firma_toml(&rendered)?;
     Ok(rendered)
 }
 
@@ -131,6 +134,16 @@ fn parse_or_empty(text: &str) -> std::result::Result<DocumentMut, toml_edit::Tom
     text.parse::<DocumentMut>()
 }
 
+fn validate_firma_toml(text: &str) -> Result<()> {
+    let config = FirmaConfig::parse(CONFIG_FILE_NAME, text)?;
+    let _: Option<firma_config_schema::authority::AuthorityConfig> =
+        config.optional_section("authority")?;
+    let _: Option<firma_config_schema::sidecar::SidecarConfig> =
+        config.optional_section("sidecar")?;
+    let _: Option<firma_config_schema::run::FileConfig> = config.optional_section("run")?;
+    Ok(())
+}
+
 // ── firma.toml ────────────────────────────────────────────────────────────────
 
 fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
@@ -159,8 +172,8 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
     set_str_if_absent(table, "issuance_policy_dir", "issuance-policies/");
     set_str(table, "revocation_file", inputs.revocation_file);
     set_str(table, "key_file", inputs.key_file);
-    set_int_if_absent(table, "max_ttl_seconds", 3600);
-    set_int_if_absent(table, "bundle_ttl_seconds", 30);
+    set_str_if_absent(table, "max_ttl", "1h");
+    set_str_if_absent(table, "bundle_ttl", "30s");
     set_str(table, "tls_cert_path", inputs.tls_cert_path);
     set_str(table, "tls_key_path", inputs.tls_key_path);
     Ok(())
@@ -228,12 +241,12 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
     {
         let cap = ensure_table(sidecar, "capability_validation")?;
-        set_int_if_absent(cap, "clock_skew_tolerance_seconds", 0);
+        set_str_if_absent(cap, "clock_skew_tolerance", "0s");
     }
 
     {
         let conn = ensure_table(sidecar, "connector")?;
-        set_int_if_absent(conn, "default_timeout_ms", 120_000);
+        set_str_if_absent(conn, "default_timeout", "2m");
     }
 
     {
@@ -258,10 +271,10 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
             auth.remove("ca_cert_path");
             auth.remove("public_key_path");
         }
-        set_int_if_absent(auth, "connect_timeout_secs", 10);
-        set_int_if_absent(auth, "reconnect_min_backoff_ms", 250);
-        set_int_if_absent(auth, "reconnect_max_backoff_secs", 30);
-        set_int_if_absent(auth, "revocation_readiness_grace_ms", 500);
+        set_str_if_absent(auth, "connect_timeout", "10s");
+        set_str_if_absent(auth, "reconnect_min_backoff", "250ms");
+        set_str_if_absent(auth, "reconnect_max_backoff", "30s");
+        set_str_if_absent(auth, "revocation_readiness_grace", "500ms");
         set_bool_if_absent(auth, "revocation_fail_closed_on_disconnect", false);
     }
 
@@ -513,12 +526,6 @@ fn set_str_if_absent(table: &mut Table, key: &str, val: &str) {
     }
 }
 
-fn set_int_if_absent(table: &mut Table, key: &str, val: i64) {
-    if !table.contains_key(key) {
-        table.insert(key, value(val));
-    }
-}
-
 fn set_bool_if_absent(table: &mut Table, key: &str, val: bool) {
     if !table.contains_key(key) {
         table.insert(key, value(val));
@@ -719,35 +726,54 @@ public_key_path = \"/old/pub.key\"
     }
 
     #[test]
-    fn merge_preserves_unknown_sections_and_user_overrides() {
+    fn merge_preserves_current_user_overrides() {
         let inputs = dummy_inputs(&Mode::AgentLocal);
         let existing = "\
-[experimental]
-flag = true
-
 [authority]
-bundle_ttl_seconds = 600
-custom_user_key = \"keep-me\"
+bundle_ttl = \"10m\"
+schema_path = \"custom.cedarschema\"
 ";
         let out = render_firma_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
-        // Unknown section preserved verbatim.
-        assert_eq!(parsed["experimental"]["flag"].as_bool(), Some(true));
         // User override of a static-default key respected.
+        assert_eq!(parsed["authority"]["bundle_ttl"].as_str(), Some("10m"));
         assert_eq!(
-            parsed["authority"]["bundle_ttl_seconds"].as_integer(),
-            Some(600)
-        );
-        // Unknown key inside authority survives.
-        assert_eq!(
-            parsed["authority"]["custom_user_key"].as_str(),
-            Some("keep-me")
+            parsed["authority"]["schema_path"].as_str(),
+            Some("custom.cedarschema")
         );
         // User-driven key still updated.
         assert_eq!(
             parsed["authority"]["listen_addr"].as_str(),
             Some("127.0.0.1:50051")
         );
+    }
+
+    #[test]
+    fn merge_rejects_invalid_sections_before_mode_changes() {
+        for (mode, existing, expected) in [
+            (
+                Mode::AgentRemote,
+                "[authority]\nmax_ttl_seconds = 3600\n",
+                "max_ttl_seconds",
+            ),
+            (
+                Mode::Authority,
+                "[sidecar.interceptor]\nmax_request_body_size = 4194304\n",
+                "max_request_body_size",
+            ),
+            (
+                Mode::AgentLocal,
+                "[run.profiles.generic.capability]\ngrace_seconds = 30\n",
+                "grace_seconds",
+            ),
+        ] {
+            let error = render_firma_toml(existing, &dummy_inputs(&mode))
+                .expect_err("invalid original section must fail before merge");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {expected}: {error}"
+            );
+        }
     }
 
     #[test]

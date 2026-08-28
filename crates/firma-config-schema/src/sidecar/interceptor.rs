@@ -6,6 +6,7 @@
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
@@ -62,16 +63,25 @@ pub struct InterceptorConfig {
     /// Path to the Unix domain socket file, used by `unix_socket` mode.
     #[serde(default)]
     pub socket_path: Option<PathBuf>,
-    /// Seconds to wait for in-flight requests to drain on shutdown.
-    #[serde(default = "default_drain_timeout")]
-    pub drain_timeout_secs: u64,
+    /// Time to wait for in-flight requests to drain on shutdown.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_drain_timeout"
+    )]
+    pub drain_timeout: Duration,
     /// Maximum request body size accepted by proxy interceptors.
-    #[serde(default = "default_max_request_body_bytes")]
-    pub max_request_body_bytes: usize,
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_max_request_body_size"
+    )]
+    pub max_request_body_size: ByteSize,
     /// Maximum size a single request or response body may expand to when
     /// decompressed for secret placeholder rehydration or masking. Bounds the
     /// memory a decompression bomb can force the Sidecar to allocate.
-    #[serde(default = "default_max_decompressed_body_size")]
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_max_decompressed_body_size"
+    )]
     pub max_decompressed_body_size: ByteSize,
     /// CONNECT/MITM relay timeout controls.
     #[serde(default)]
@@ -81,8 +91,11 @@ pub struct InterceptorConfig {
     pub https_mitm: HttpsMitmConfig,
     /// Global ceiling for the total bytes of request bodies buffered
     /// concurrently across all in-flight proxy connections.
-    #[serde(default = "default_total_body_budget_bytes")]
-    pub total_body_budget_bytes: usize,
+    #[serde(
+        deserialize_with = "crate::utils::byte_size::deserialize",
+        default = "default_total_body_budget"
+    )]
+    pub total_body_budget: ByteSize,
 }
 
 impl Default for InterceptorConfig {
@@ -94,12 +107,12 @@ impl Default for InterceptorConfig {
             // validating constructor in `firma-sidecar` resolves the default
             // path when `unix_socket` mode leaves it unset.
             socket_path: None,
-            drain_timeout_secs: default_drain_timeout(),
-            max_request_body_bytes: default_max_request_body_bytes(),
+            drain_timeout: default_drain_timeout(),
+            max_request_body_size: default_max_request_body_size(),
             max_decompressed_body_size: default_max_decompressed_body_size(),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
-            total_body_budget_bytes: default_total_body_budget_bytes(),
+            total_body_budget: default_total_body_budget(),
         }
     }
 }
@@ -109,18 +122,24 @@ impl Default for InterceptorConfig {
 #[serde(deny_unknown_fields)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    #[serde(default = "default_connect_setup_timeout_secs")]
-    pub setup_timeout_secs: u64,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_connect_setup_timeout"
+    )]
+    pub setup_timeout: Duration,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    #[serde(default = "default_connect_session_max_secs")]
-    pub session_max_secs: u64,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_connect_session_max"
+    )]
+    pub session_max: Duration,
 }
 
 impl Default for ConnectRelayConfig {
     fn default() -> Self {
         Self {
-            setup_timeout_secs: default_connect_setup_timeout_secs(),
-            session_max_secs: default_connect_session_max_secs(),
+            setup_timeout: default_connect_setup_timeout(),
+            session_max: default_connect_session_max(),
         }
     }
 }
@@ -132,10 +151,10 @@ pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     #[serde(default = "default_https_mitm_enabled")]
     pub enabled: bool,
-    /// Optional explicit CA certificate path. Defaults under `ca.dir`.
+    /// Optional explicit CA certificate path. Defaults under `sidecar.ca.dir`.
     #[serde(default)]
     pub ca_cert_path: Option<PathBuf>,
-    /// Optional explicit CA private key path. Defaults under `ca.dir`.
+    /// Optional explicit CA private key path. Defaults under `sidecar.ca.dir`.
     #[serde(default)]
     pub ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
@@ -144,9 +163,12 @@ pub struct HttpsMitmConfig {
     /// Host patterns that should bypass interception and use CONNECT tunnel.
     #[serde(default)]
     pub bypass_hosts: Vec<String>,
-    /// Dynamic leaf certificate TTL in seconds.
-    #[serde(default = "default_https_mitm_cert_ttl_secs")]
-    pub cert_ttl_secs: u64,
+    /// Dynamic leaf certificate TTL.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_https_mitm_cert_ttl"
+    )]
+    pub cert_ttl: Duration,
     /// Maximum number of cached leaf certificates.
     #[serde(default = "default_https_mitm_cert_cache_capacity")]
     pub cert_cache_capacity: usize,
@@ -163,7 +185,7 @@ impl Default for HttpsMitmConfig {
             ca_key_path: None,
             intercept_hosts: default_https_mitm_intercept_hosts(),
             bypass_hosts: Vec::new(),
-            cert_ttl_secs: default_https_mitm_cert_ttl_secs(),
+            cert_ttl: default_https_mitm_cert_ttl(),
             cert_cache_capacity: default_https_mitm_cert_cache_capacity(),
             strict_hosts: default_https_mitm_strict_hosts(),
         }
@@ -182,32 +204,32 @@ pub fn default_socket_path() -> PathBuf {
     PathBuf::from(xdg).join("firma/sidecar.sock")
 }
 
-const fn default_drain_timeout() -> u64 {
-    30
+const fn default_drain_timeout() -> Duration {
+    Duration::from_secs(30)
 }
 
-const fn default_max_request_body_bytes() -> usize {
-    4 * 1024 * 1024
+const fn default_max_request_body_size() -> ByteSize {
+    ByteSize::mib(4)
 }
 
 const fn default_max_decompressed_body_size() -> ByteSize {
     ByteSize::mb(16)
 }
 
-const fn default_total_body_budget_bytes() -> usize {
-    64 * 1024 * 1024
+const fn default_total_body_budget() -> ByteSize {
+    ByteSize::mib(64)
 }
 
-const fn default_connect_setup_timeout_secs() -> u64 {
-    10
+const fn default_connect_setup_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
-const fn default_connect_session_max_secs() -> u64 {
-    600
+const fn default_connect_session_max() -> Duration {
+    Duration::from_mins(10)
 }
 
-const fn default_https_mitm_cert_ttl_secs() -> u64 {
-    86_400
+const fn default_https_mitm_cert_ttl() -> Duration {
+    Duration::from_hours(24)
 }
 
 const fn default_https_mitm_cert_cache_capacity() -> usize {

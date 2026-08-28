@@ -103,7 +103,9 @@ firma policy validate /tmp/firma-standalone/config/policies/support-agent.cedar
 
 ## Step 5: Test with a real call
 
-You need a capability for `support-agent` covering one of the permitted action classes. For now, use a quick dev capability — the full operator workflow is in [Issue capability tokens](../issue-capability-tokens/).
+You need a capability for `support-agent` covering one of the permitted action
+classes. `firma run` requests one automatically when it starts the agent; see
+[Issue capability tokens](../issue-capability-tokens/) for the complete flow.
 
 ```bash
 firma authority generate-key -o /tmp/firma-standalone/firma-authority.key
@@ -117,8 +119,8 @@ policy_dir          = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/issuance"
 revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/firma-authority.key"
-max_ttl_seconds     = 3600
-bundle_ttl_seconds  = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 EOF
 
 # Permissive issuance policy for development
@@ -126,31 +128,26 @@ mkdir -p /tmp/firma-standalone/issuance
 cat > /tmp/firma-standalone/issuance/issuance.cedar <<'EOF'
 permit (principal, action, resource);
 EOF
-
-# Mint a capability for support-agent
-firma authority -c /tmp/firma-standalone/config/firma.toml issue \
-  --agent-id agt_01j0000000e008000000000001 \
-  --session-id session-001 \
-  --action communication.external.send \
-  --resource-scope '*' \
-  --output /tmp/firma-standalone/capability-support.toml
 ```
 
-Add `[sidecar.authority]` and `[sidecar.capability_seed]` sections to `firma.toml`:
+Configure the registered identity and Authority trust root:
 
 ```toml
 [sidecar.authority]
-url             = "http://[::1]:50051"
+agent_id = "agt_01j0000000e008000000000001"
+url = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/firma-authority.pub"
-
-[sidecar.capability_seed]
-paths = ["/tmp/firma-standalone/capability-support.toml"]
 ```
 
-Restart the Sidecar. Now make a forbidden call:
+Start the Authority, then make a forbidden call through `firma run`:
 
 ```bash
-curl --proxy http://127.0.0.1:8080 -X POST http://paste.rs/ -d 'leaked'
+firma authority -c /tmp/firma-standalone/config/firma.toml
+
+# In another terminal:
+firma run --config /tmp/firma-standalone/config/firma.toml \
+  --profile generic -- \
+  curl -X POST http://paste.rs/ -d 'leaked'
 ```
 
 You should see a 403. The audit log will show:
@@ -222,7 +219,7 @@ permit (
 
 ## What's next
 
-- [Issue capability tokens](../issue-capability-tokens/) — full Authority workflow.
+- [Issue capability tokens](../issue-capability-tokens/) — configure automatic issuance and refresh.
 - [Inject credentials](../inject-credentials/) — what happens to allowed calls before they leave.
 - [Read & verify the audit log](../audit-log/) — verify the signature on every decision.
 - [Concepts: Policies](../../concepts/policies/) — for the deeper "why" behind these patterns.

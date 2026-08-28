@@ -6,13 +6,13 @@ revocation_file = "revocations.txt"
 key_file = "firma-authority.key"
 tls_cert_path = "authority.crt"
 tls_key_path = "authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "{{SIDECAR_PROXY_ADDR}}"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.interceptor.https_mitm]
 intercept_hosts = ["github.com"]
@@ -28,7 +28,7 @@ rules_path = "{{ROOT}}/crates/firma-sidecar/config/mappings/github.toml"
 default_protected = true
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 5
+clock_skew_tolerance = "5s"
 
 [sidecar.revocation]
 capacity = 100000
@@ -36,13 +36,13 @@ fpr = 0.001
 lru_capacity = 10000
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host = "github.com"
 rps = 30
 burst = 10
-timeout_ms = 30000
+timeout = "30s"
 
 [sidecar.authority]
 url = "https://{{AUTHORITY_ADDR}}"

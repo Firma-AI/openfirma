@@ -7,7 +7,6 @@
 //! disabled so the binary still runs in dev mode against local state.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
@@ -67,7 +66,7 @@ pub fn spawn_authority_client(
 
     let channel = authority_client::channel::build_channel(
         &endpoint,
-        Duration::from_secs(config.authority.connect_timeout_secs),
+        config.authority.connect_timeout,
         ca_cert_pem.as_deref(),
         client_cert_pem.as_deref(),
         client_key_pem.as_deref(),

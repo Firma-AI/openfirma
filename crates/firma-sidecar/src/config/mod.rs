@@ -7,8 +7,8 @@
 //!
 //! The top-level [`SidecarConfig`] groups the enforcement-specific
 //! [`EnforcementConfig`] after the behavior-free schema has deserialized its
-//! three direct tables (`[mapping]`, `[capability_validation]`, and
-//! `[constraint_enforcement]`).
+//! three direct tables (`[sidecar.mapping]`, `[sidecar.capability_validation]`,
+//! and `[sidecar.constraint_enforcement]`).
 //!
 //! Validation runs eagerly when the schema is converted at startup, so
 //! misconfigurations surface before the first request arrives.
@@ -35,6 +35,7 @@ pub use crate::authority_credentials::SidecarCredentialsConfig;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra as schema_infra;
@@ -125,16 +126,16 @@ pub enum SidecarConfigError {
         #[source]
         source: toml::de::Error,
     },
-    /// The `[interceptor]` section was invalid.
+    /// The `[sidecar.interceptor]` section was invalid.
     #[error("interceptor: {0}")]
     Interceptor(#[from] InterceptorConfigError),
-    /// The `[policy]` section was invalid.
+    /// The `[sidecar.policy]` section was invalid.
     #[error("{0}")]
     Policy(#[from] PolicyConfigError),
-    /// The `[ca]` section was invalid.
+    /// The `[sidecar.ca]` section was invalid.
     #[error("{0}")]
     Ca(#[from] CaConfigError),
-    /// A `[credentials.*]` entry was invalid.
+    /// A `[sidecar.credentials.*]` entry was invalid.
     #[error("credentials.{label}: {source}")]
     Credential {
         /// The credential label.
@@ -143,28 +144,28 @@ pub enum SidecarConfigError {
         #[source]
         source: CredentialConfigError,
     },
-    /// The `[connector]` section was invalid.
+    /// The `[sidecar.connector]` section was invalid.
     #[error("connector: {0}")]
     Connector(#[from] ConnectorConfigError),
-    /// The `[authority]` section was invalid.
+    /// The `[sidecar.authority]` section was invalid.
     #[error("authority: {0}")]
     Authority(#[from] AuthorityConfigError),
     /// An enforcement section was invalid.
     #[error("{0}")]
     Enforcement(#[from] EnforcementConfigError),
-    /// The `[revocation]` section was invalid.
+    /// The `[sidecar.revocation]` section was invalid.
     #[error("revocation: {0}")]
     Revocation(#[from] RevocationConfigError),
-    /// The `[capability_seed]` section was invalid.
+    /// The `[sidecar.capability_seed]` section was invalid.
     #[error("{0}")]
     CapabilitySeed(#[from] CapabilitySeedConfigError),
-    /// The `[audit]` section was invalid.
+    /// The `[sidecar.audit]` section was invalid.
     #[error("audit: {0}")]
     Audit(#[from] AuditConfigError),
-    /// The `[local_exec]` section was invalid.
+    /// The `[sidecar.local_exec]` section was invalid.
     #[error("local_exec: {0}")]
     LocalExec(#[from] LocalExecConfigError),
-    /// An `[[http_secret_providers]]` entry was invalid.
+    /// An `[[sidecar.http_secret_providers]]` entry was invalid.
     #[error("http_secret_providers: {0}")]
     HttpSecretProvider(#[from] firma_secret_provider::spec::http::HttpSecretProviderConfigError),
     /// The Authority endpoint (`url` / `connect_addr`) was invalid.
@@ -173,7 +174,7 @@ pub enum SidecarConfigError {
     /// A validated Authority endpoint unexpectedly had no host.
     #[error("authority: validated endpoint unexpectedly has no host")]
     AuthorityEndpointMissingHost,
-    /// `capability_seed.paths` was non-empty without an Authority public key.
+    /// `sidecar.capability_seed.paths` was non-empty without an Authority public key.
     #[error("authority.public_key_path must be set when capability_seed.paths is non-empty")]
     MissingPublicKeyForSeeds,
     /// An `https://` Authority URL was configured without a CA certificate.
@@ -244,7 +245,7 @@ impl SidecarConfig {
     /// check — relative always means "relative to the config file's
     /// directory" for consistency.
     ///
-    /// `ca.dir` is intentionally excluded — it is state-managed (its
+    /// `sidecar.ca.dir` is intentionally excluded — it is state-managed (its
     /// location is owned by the state dir / env override, not the
     /// config file).
     pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
@@ -261,8 +262,25 @@ impl SidecarConfig {
         if let Some(p) = self.authority.ca_cert_path.as_mut() {
             rebase(p);
         }
+        if let Some(p) = self.authority.tls_client_cert_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.authority.tls_client_key_path.as_mut() {
+            rebase(p);
+        }
         if let Some(credentials) = self.authority.credentials.as_mut() {
             credentials.rebase_defaults(config_dir);
+        }
+        for credential in self.credentials.values_mut() {
+            if let Some(p) = credential.secret_path.as_mut() {
+                rebase(p);
+            }
+        }
+        if let Some(p) = self.interceptor.https_mitm.ca_cert_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.interceptor.https_mitm.ca_key_path.as_mut() {
+            rebase(p);
         }
         if let Some(p) = self.audit.signing_key_path.as_mut() {
             rebase(p);
@@ -341,7 +359,7 @@ impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
 /// | `grpc` | `listen_addr` |
 /// | `unix_socket` | `socket_path` (defaults to the lifecycle runtime layout) |
 ///
-/// `drain_timeout_secs` is shared across all modes.
+/// `drain_timeout` is shared across all modes.
 #[derive(Debug, Clone)]
 pub struct InterceptorConfig {
     /// Interception mode. Default: `http_proxy`.
@@ -351,8 +369,8 @@ pub struct InterceptorConfig {
     /// Path to the Unix domain socket file, used by `unix_socket`
     /// mode.
     pub socket_path: Option<PathBuf>,
-    /// Seconds to wait for in-flight requests to drain on shutdown.
-    drain_timeout_secs: u64,
+    /// Time to wait for in-flight requests to drain on shutdown.
+    drain_timeout: Duration,
     /// Maximum request body size accepted by proxy interceptors.
     pub(crate) max_request_body_bytes: usize,
     /// Maximum size a single request or response body may expand to when
@@ -375,23 +393,29 @@ pub struct InterceptorConfig {
 /// Error validating an [`InterceptorConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InterceptorConfigError {
-    /// `drain_timeout_secs` was zero.
-    #[error("interceptor.drain_timeout_secs must be > 0")]
+    /// `drain_timeout` was zero.
+    #[error("interceptor.drain_timeout must be > 0")]
     ZeroDrainTimeout,
-    /// `max_request_body_bytes` was zero.
-    #[error("interceptor.max_request_body_bytes must be > 0")]
+    /// `max_request_body_size` was zero.
+    #[error("interceptor.max_request_body_size must be > 0")]
     ZeroMaxRequestBody,
+    /// `max_request_body_size` was too large for this platform's `usize`.
+    #[error("interceptor.max_request_body_size is too large for this platform")]
+    MaxRequestBodyTooLarge,
     /// `max_decompressed_body_size` was zero.
     #[error("interceptor.max_decompressed_body_size must be > 0")]
     ZeroMaxDecompressedBody,
     /// `max_decompressed_body_size` was too large for this platform's `usize`.
     #[error("interceptor.max_decompressed_body_size is too large for this platform")]
     MaxDecompressedBodyTooLarge,
-    /// `total_body_budget_bytes` was zero.
-    #[error("interceptor.total_body_budget_bytes must be > 0")]
+    /// `total_body_budget` was zero.
+    #[error("interceptor.total_body_budget must be > 0")]
     ZeroTotalBodyBudget,
+    /// `total_body_budget` was too large for this platform's `usize`.
+    #[error("interceptor.total_body_budget is too large for this platform")]
+    TotalBodyBudgetTooLarge,
     /// The total body budget was below the per-request maximum.
-    #[error("interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_bytes")]
+    #[error("interceptor.total_body_budget must be >= interceptor.max_request_body_size")]
     TotalBodyBudgetBelowRequest,
     /// The CONNECT/MITM relay settings were invalid.
     #[error(transparent)]
@@ -409,18 +433,22 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
     type Error = InterceptorConfigError;
 
     fn try_from(s: schema_ic::InterceptorConfig) -> Result<Self, Self::Error> {
+        let max_request_body_bytes = usize::try_from(s.max_request_body_size.as_u64())
+            .map_err(|_| InterceptorConfigError::MaxRequestBodyTooLarge)?;
+        let total_body_budget_bytes = usize::try_from(s.total_body_budget.as_u64())
+            .map_err(|_| InterceptorConfigError::TotalBodyBudgetTooLarge)?;
         let config = Self {
             mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
-            drain_timeout_secs: s.drain_timeout_secs,
-            max_request_body_bytes: s.max_request_body_bytes,
+            drain_timeout: s.drain_timeout,
+            max_request_body_bytes,
             max_decompressed_body_size: s.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::try_from(s.connect_relay)?,
             https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
-            total_body_budget_bytes: s.total_body_budget_bytes,
+            total_body_budget_bytes,
         };
-        if config.drain_timeout_secs == 0 {
+        if config.drain_timeout.is_zero() {
             return Err(InterceptorConfigError::ZeroDrainTimeout);
         }
         if config.max_request_body_bytes == 0 {
@@ -472,12 +500,14 @@ impl Default for InterceptorConfig {
             mode: d.mode,
             listen_addr: d.listen_addr,
             socket_path: d.socket_path,
-            drain_timeout_secs: d.drain_timeout_secs,
-            max_request_body_bytes: d.max_request_body_bytes,
+            drain_timeout: d.drain_timeout,
+            max_request_body_bytes: usize::try_from(d.max_request_body_size.as_u64())
+                .unwrap_or(4 * 1024 * 1024),
             max_decompressed_body_size: d.max_decompressed_body_size,
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
-            total_body_budget_bytes: d.total_body_budget_bytes,
+            total_body_budget_bytes: usize::try_from(d.total_body_budget.as_u64())
+                .unwrap_or(64 * 1024 * 1024),
         }
     }
 }
@@ -486,19 +516,19 @@ impl Default for InterceptorConfig {
 #[derive(Debug, Clone)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    pub(crate) setup_timeout_secs: u64,
+    pub(crate) setup_timeout: Duration,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    pub(crate) session_max_secs: u64,
+    pub(crate) session_max: Duration,
 }
 
 /// Error validating a [`ConnectRelayConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectRelayConfigError {
-    /// `setup_timeout_secs` was zero.
-    #[error("interceptor.connect_relay.setup_timeout_secs must be > 0")]
+    /// `setup_timeout` was zero.
+    #[error("interceptor.connect_relay.setup_timeout must be > 0")]
     ZeroSetupTimeout,
-    /// `session_max_secs` was zero.
-    #[error("interceptor.connect_relay.session_max_secs must be > 0")]
+    /// `session_max` was zero.
+    #[error("interceptor.connect_relay.session_max must be > 0")]
     ZeroSessionMax,
 }
 
@@ -506,15 +536,15 @@ impl TryFrom<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
     type Error = ConnectRelayConfigError;
 
     fn try_from(s: schema_ic::ConnectRelayConfig) -> Result<Self, Self::Error> {
-        if s.setup_timeout_secs == 0 {
+        if s.setup_timeout.is_zero() {
             return Err(ConnectRelayConfigError::ZeroSetupTimeout);
         }
-        if s.session_max_secs == 0 {
+        if s.session_max.is_zero() {
             return Err(ConnectRelayConfigError::ZeroSessionMax);
         }
         Ok(Self {
-            setup_timeout_secs: s.setup_timeout_secs,
-            session_max_secs: s.session_max_secs,
+            setup_timeout: s.setup_timeout,
+            session_max: s.session_max,
         })
     }
 }
@@ -523,8 +553,8 @@ impl Default for ConnectRelayConfig {
     fn default() -> Self {
         let d = schema_ic::ConnectRelayConfig::default();
         Self {
-            setup_timeout_secs: d.setup_timeout_secs,
-            session_max_secs: d.session_max_secs,
+            setup_timeout: d.setup_timeout,
+            session_max: d.session_max,
         }
     }
 }
@@ -538,16 +568,16 @@ impl Default for ConnectRelayConfig {
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     pub(crate) enabled: bool,
-    /// Optional explicit CA certificate path. Defaults under `ca.dir`.
+    /// Optional explicit CA certificate path. Defaults under `sidecar.ca.dir`.
     pub(crate) ca_cert_path: Option<PathBuf>,
-    /// Optional explicit CA private key path. Defaults under `ca.dir`.
+    /// Optional explicit CA private key path. Defaults under `sidecar.ca.dir`.
     pub(crate) ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
     pub(crate) intercept_hosts: Vec<String>,
     /// Host patterns that should bypass interception and use CONNECT tunnel.
     pub(crate) bypass_hosts: Vec<String>,
-    /// Dynamic leaf certificate TTL in seconds.
-    pub(crate) cert_ttl_secs: u64,
+    /// Dynamic leaf certificate TTL.
+    pub(crate) cert_ttl: Duration,
     /// Maximum number of cached leaf certificates.
     pub(crate) cert_cache_capacity: usize,
     /// Host patterns that must be intercepted; failures are hard deny.
@@ -560,8 +590,8 @@ pub enum HttpsMitmConfigError {
     /// A configured host pattern was invalid.
     #[error(transparent)]
     HostPattern(#[from] HostPatternError),
-    /// `cert_ttl_secs` was zero while interception was active.
-    #[error("interceptor.https_mitm.cert_ttl_secs must be > 0")]
+    /// `cert_ttl` was zero while interception was active.
+    #[error("interceptor.https_mitm.cert_ttl must be > 0")]
     ZeroCertTtl,
     /// `cert_cache_capacity` was zero while interception was active.
     #[error("interceptor.https_mitm.cert_cache_capacity must be > 0")]
@@ -578,7 +608,7 @@ impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
             ca_key_path: s.ca_key_path,
             intercept_hosts: s.intercept_hosts,
             bypass_hosts: s.bypass_hosts,
-            cert_ttl_secs: s.cert_ttl_secs,
+            cert_ttl: s.cert_ttl,
             cert_cache_capacity: s.cert_cache_capacity,
             strict_hosts: s.strict_hosts,
         };
@@ -591,7 +621,7 @@ impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
         // Empty intercept_hosts → MITM inactive (see `is_active`); skip the
         // active-only invariants below instead of rejecting the config.
         if config.is_active() {
-            if config.cert_ttl_secs == 0 {
+            if config.cert_ttl.is_zero() {
                 return Err(HttpsMitmConfigError::ZeroCertTtl);
             }
             if config.cert_cache_capacity == 0 {
@@ -655,7 +685,7 @@ impl Default for HttpsMitmConfig {
             ca_key_path: d.ca_key_path,
             intercept_hosts: d.intercept_hosts,
             bypass_hosts: d.bypass_hosts,
-            cert_ttl_secs: d.cert_ttl_secs,
+            cert_ttl: d.cert_ttl,
             cert_cache_capacity: d.cert_cache_capacity,
             strict_hosts: d.strict_hosts,
         }
@@ -672,7 +702,7 @@ pub struct PolicyConfig {
 /// Error validating a [`PolicyConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyConfigError {
-    /// `policy.dir` was empty.
+    /// `sidecar.policy.dir` was empty.
     #[error("policy.dir must not be empty")]
     EmptyDir,
 }
@@ -706,7 +736,7 @@ pub struct CaConfig {
 /// Error validating a [`CaConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CaConfigError {
-    /// `ca.dir` was empty.
+    /// `sidecar.ca.dir` was empty.
     #[error("ca.dir must not be empty")]
     EmptyDir,
 }
@@ -1017,11 +1047,11 @@ pub struct LocalExecConfig {
     pub(crate) socket_path: PathBuf,
     /// Policy applied to every fresh local-exec request.
     pub(crate) default_action: firma_config_schema::sidecar::local_exec::DefaultAction,
-    /// Approval token time-to-live in seconds (default: 300).
-    pub(crate) token_ttl_secs: u64,
+    /// Approval token time-to-live.
+    pub(crate) token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (milliseconds, default: 500).
-    pub(crate) retry_after_ms: u64,
+    pub(crate) retry_after: Duration,
 }
 
 /// Error validating a [`LocalExecConfig`].
@@ -1030,12 +1060,18 @@ pub enum LocalExecConfigError {
     /// `socket_path` was not absolute.
     #[error("local_exec.socket_path must be absolute, got: {}", .0.display())]
     SocketPathNotAbsolute(PathBuf),
-    /// `token_ttl_secs` was zero.
-    #[error("local_exec.token_ttl_secs must be > 0")]
+    /// `token_ttl` was zero.
+    #[error("local_exec.token_ttl must be > 0")]
     ZeroTokenTtl,
-    /// `retry_after_ms` was zero.
-    #[error("local_exec.retry_after_ms must be > 0")]
+    /// `retry_after` was zero.
+    #[error("local_exec.retry_after must be > 0")]
     ZeroRetryAfter,
+    /// `retry_after` was positive but shorter than the millisecond wire unit.
+    #[error("local_exec.retry_after must be at least 1ms")]
+    RetryAfterBelowOneMillisecond,
+    /// `retry_after` cannot be represented by the millisecond wire field.
+    #[error("local_exec.retry_after exceeds the supported millisecond range")]
+    RetryAfterTooLarge,
 }
 
 impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
@@ -1045,17 +1081,22 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         if !s.socket_path.is_absolute() {
             return Err(LocalExecConfigError::SocketPathNotAbsolute(s.socket_path));
         }
-        if s.token_ttl_secs == 0 {
+        if s.token_ttl.is_zero() {
             return Err(LocalExecConfigError::ZeroTokenTtl);
         }
-        if s.retry_after_ms == 0 {
+        if s.retry_after.is_zero() {
             return Err(LocalExecConfigError::ZeroRetryAfter);
+        }
+        let retry_after_ms = u64::try_from(s.retry_after.as_millis())
+            .map_err(|_| LocalExecConfigError::RetryAfterTooLarge)?;
+        if retry_after_ms == 0 {
+            return Err(LocalExecConfigError::RetryAfterBelowOneMillisecond);
         }
         Ok(Self {
             socket_path: s.socket_path,
             default_action: s.default_action,
-            token_ttl_secs: s.token_ttl_secs,
-            retry_after_ms: s.retry_after_ms,
+            token_ttl: s.token_ttl,
+            retry_after: s.retry_after,
         })
     }
 }
@@ -1114,6 +1155,74 @@ mod tests {
             c.authority.ca_cert_path,
             Some(PathBuf::from("/cfg/authority-ca.crt"))
         );
+    }
+
+    #[test]
+    fn rebase_rewrites_resource_paths_and_preserves_state_paths() {
+        let mut c = SidecarConfig::default();
+        c.authority.tls_client_cert_path = Some(PathBuf::from("tls/client.crt"));
+        c.authority.tls_client_key_path = Some(PathBuf::from("tls/client.key"));
+        c.interceptor.https_mitm.ca_cert_path = Some(PathBuf::from("tls/mitm.crt"));
+        c.interceptor.https_mitm.ca_key_path = Some(PathBuf::from("tls/mitm.key"));
+        c.credentials.insert(
+            "vault".to_string(),
+            CredentialConfig {
+                mode: CredentialMode::Vault,
+                target_host: "api.example.com".to_string(),
+                header: "authorization".parse().unwrap(),
+                prefix: None,
+                transform: None,
+                value_from_env: None,
+                secret_path: Some(PathBuf::from("secrets/token")),
+            },
+        );
+        c.enforcement.mapping.rules_path = PathBuf::from("mappings/main.toml");
+        c.enforcement.mapping.rules_paths = vec![PathBuf::from("mappings/extra.toml")];
+        c.interceptor.socket_path = Some(PathBuf::from("runtime/sidecar.sock"));
+        c.audit.wal_path = Some(PathBuf::from("state/wal"));
+        c.enforcement.constraint_enforcement.path = Some(PathBuf::from("state/sessions"));
+        c.ca.dir = PathBuf::from("state/ca");
+
+        c.rebase_defaults(std::path::Path::new("/cfg"));
+
+        assert_eq!(
+            c.authority.tls_client_cert_path,
+            Some(PathBuf::from("/cfg/tls/client.crt"))
+        );
+        assert_eq!(
+            c.authority.tls_client_key_path,
+            Some(PathBuf::from("/cfg/tls/client.key"))
+        );
+        assert_eq!(
+            c.interceptor.https_mitm.ca_cert_path,
+            Some(PathBuf::from("/cfg/tls/mitm.crt"))
+        );
+        assert_eq!(
+            c.interceptor.https_mitm.ca_key_path,
+            Some(PathBuf::from("/cfg/tls/mitm.key"))
+        );
+        assert_eq!(
+            c.credentials["vault"].secret_path,
+            Some(PathBuf::from("/cfg/secrets/token"))
+        );
+        assert_eq!(
+            c.enforcement.mapping.rules_path,
+            PathBuf::from("/cfg/mappings/main.toml")
+        );
+        assert_eq!(
+            c.enforcement.mapping.rules_paths,
+            vec![PathBuf::from("/cfg/mappings/extra.toml")]
+        );
+        assert_eq!(
+            c.interceptor.socket_path,
+            Some(PathBuf::from("runtime/sidecar.sock"))
+        );
+        assert_eq!(c.audit.wal_path, Some(PathBuf::from("state/wal")));
+        assert_eq!(
+            c.enforcement.constraint_enforcement.path,
+            Some(PathBuf::from("state/sessions"))
+        );
+        assert_eq!(c.ca.dir, PathBuf::from("state/ca"));
     }
 
     #[test]
@@ -1260,7 +1369,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_drain_timeout_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.drain_timeout_secs = 0;
+        schema.interceptor.drain_timeout = Duration::ZERO;
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1272,7 +1381,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_max_request_body_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_bytes = 0;
+        schema.interceptor.max_request_body_size = ByteSize::b(0);
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1296,7 +1405,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_total_body_budget_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.total_body_budget_bytes = 0;
+        schema.interceptor.total_body_budget = ByteSize::b(0);
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1308,8 +1417,8 @@ mod tests {
     #[test]
     fn test_sidecar_config_budget_smaller_than_max_body_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_bytes = 8 * 1024 * 1024;
-        schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
+        schema.interceptor.max_request_body_size = ByteSize::mib(8);
+        schema.interceptor.total_body_budget = ByteSize::mib(4);
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1321,15 +1430,15 @@ mod tests {
     #[test]
     fn test_sidecar_config_budget_equals_max_body_valid() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_bytes = 4 * 1024 * 1024;
-        schema.interceptor.total_body_budget_bytes = 4 * 1024 * 1024;
+        schema.interceptor.max_request_body_size = ByteSize::mib(4);
+        schema.interceptor.total_body_budget = ByteSize::mib(4);
         assert!(SidecarConfig::try_from(schema).is_ok());
     }
 
     #[test]
     fn test_sidecar_config_zero_connect_setup_timeout_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.connect_relay.setup_timeout_secs = 0;
+        schema.interceptor.connect_relay.setup_timeout = Duration::ZERO;
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1341,7 +1450,7 @@ mod tests {
     #[test]
     fn test_sidecar_config_zero_connect_session_max_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.connect_relay.session_max_secs = 0;
+        schema.interceptor.connect_relay.session_max = Duration::ZERO;
         assert!(matches!(
             SidecarConfig::try_from(schema),
             Err(SidecarConfigError::Interceptor(
@@ -1438,7 +1547,7 @@ mod tests {
         schema.interceptor.https_mitm.intercept_hosts = vec!["api.openai.com".to_string()];
         schema.interceptor.https_mitm.bypass_hosts = vec!["example.com".to_string()];
         schema.interceptor.https_mitm.strict_hosts = vec!["api.openai.com".to_string()];
-        schema.interceptor.https_mitm.cert_ttl_secs = 60;
+        schema.interceptor.https_mitm.cert_ttl = Duration::from_mins(1);
         schema.interceptor.https_mitm.cert_cache_capacity = 8;
         assert!(SidecarConfig::try_from(schema).is_ok());
     }
@@ -1495,19 +1604,19 @@ mod tests {
 [interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
-drain_timeout_secs = 15
-max_request_body_bytes = 2097152
+drain_timeout = "15s"
+max_request_body_size = "2 MiB"
 
 [interceptor.connect_relay]
-setup_timeout_secs = 12
-session_max_secs = 900
+setup_timeout = "12s"
+session_max = "15m"
 
 [interceptor.https_mitm]
 enabled = true
 intercept_hosts = ["api.openai.com"]
 bypass_hosts = ["example.com"]
 strict_hosts = ["api.openai.com"]
-cert_ttl_secs = 120
+cert_ttl = "2m"
 cert_cache_capacity = 16
 
 [policy]
@@ -1531,7 +1640,7 @@ rules_path = "/etc/firma/rules.toml"
 default_protected = false
 
 [capability_validation]
-clock_skew_tolerance_seconds = 5
+clock_skew_tolerance = "5s"
 
 [revocation]
 capacity = 500000
@@ -1542,7 +1651,7 @@ lru_capacity = 50000
 sink = "wal"
 grpc_url = "https://audit.example.com"
 wal_path = "/var/lib/firma/wal"
-wal_max_bytes = 52428800
+wal_max_size = "50 MiB"
 signing_key_path = "/etc/firma/audit.pem"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
@@ -1555,10 +1664,16 @@ signing_key_path = "/etc/firma/audit.pem"
             config.interceptor.listen_addr,
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
-        assert_eq!(config.interceptor.drain_timeout_secs, 15);
+        assert_eq!(config.interceptor.drain_timeout, Duration::from_secs(15));
         assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
-        assert_eq!(config.interceptor.connect_relay.setup_timeout_secs, 12);
-        assert_eq!(config.interceptor.connect_relay.session_max_secs, 900);
+        assert_eq!(
+            config.interceptor.connect_relay.setup_timeout,
+            Duration::from_secs(12)
+        );
+        assert_eq!(
+            config.interceptor.connect_relay.session_max,
+            Duration::from_mins(15)
+        );
         assert!(config.interceptor.https_mitm.enabled);
         assert_eq!(
             config.interceptor.https_mitm.intercept_hosts,
@@ -1572,7 +1687,10 @@ signing_key_path = "/etc/firma/audit.pem"
             config.interceptor.https_mitm.strict_hosts,
             vec!["api.openai.com".to_string()]
         );
-        assert_eq!(config.interceptor.https_mitm.cert_ttl_secs, 120);
+        assert_eq!(
+            config.interceptor.https_mitm.cert_ttl,
+            Duration::from_mins(2)
+        );
         assert_eq!(config.interceptor.https_mitm.cert_cache_capacity, 16);
         assert_eq!(config.policy.dir, PathBuf::from("/etc/firma/policies"));
         assert_eq!(
@@ -1590,15 +1708,15 @@ signing_key_path = "/etc/firma/audit.pem"
         assert_eq!(openai.prefix.as_deref(), Some("Bearer "));
         assert_eq!(
             config.enforcement.mapping.rules_path,
-            "/etc/firma/rules.toml"
+            PathBuf::from("/etc/firma/rules.toml")
         );
         assert!(!config.enforcement.mapping.default_protected);
         assert_eq!(
             config
                 .enforcement
                 .capability_validation
-                .clock_skew_tolerance_seconds,
-            5
+                .clock_skew_tolerance,
+            Duration::from_secs(5)
         );
         // New AARM R2 G4 session-state fields default when unset.
         assert_eq!(config.enforcement.constraint_enforcement.capacity, 8192);
@@ -1633,7 +1751,7 @@ signing_key_path = "/etc/firma/audit.pem"
 [interceptor]
 mode = "grpc"
 listen_addr = "127.0.0.1:9091"
-drain_timeout_secs = 10
+drain_timeout = "10s"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
             toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
@@ -1685,7 +1803,7 @@ drain_timeout_secs = 10
 [interceptor]
 mode = "unix_socket"
 socket_path = "/tmp/firma.sock"
-drain_timeout_secs = 10
+drain_timeout = "10s"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
             toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));

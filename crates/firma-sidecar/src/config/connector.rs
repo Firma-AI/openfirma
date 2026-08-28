@@ -1,4 +1,4 @@
-//! Connector configuration parsed from the `[connector]` TOML section.
+//! Connector configuration parsed from the `[sidecar.connector]` TOML section.
 //!
 //! Describes the default dispatch timeout applied to unconfigured hosts (the
 //! registry fallback) and the list of per-host overrides. Each host override
@@ -6,6 +6,7 @@
 //! the [`GenericHttpConnector`](crate::connector::provider::GenericHttpConnector).
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use firma_config_schema::sidecar::connector::{
     ConnectorConfig as SchemaConnectorConfig, HostConnectorConfig as SchemaHostConnectorConfig,
@@ -14,8 +15,8 @@ use firma_config_schema::sidecar::connector::{
 /// Validated top-level connector configuration.
 #[derive(Debug, Clone)]
 pub struct ConnectorConfig {
-    /// Timeout in milliseconds applied to the registry default.
-    pub default_timeout_ms: u64,
+    /// Timeout applied to the registry default.
+    pub default_timeout: Duration,
     /// Per-host overrides.
     pub hosts: Vec<HostConnectorConfig>,
 }
@@ -29,15 +30,15 @@ pub struct HostConnectorConfig {
     pub rps: u32,
     /// Token-bucket capacity.
     pub burst: u32,
-    /// Dispatch timeout in milliseconds applied to this host.
-    pub timeout_ms: u64,
+    /// Dispatch timeout applied to this host.
+    pub timeout: Duration,
 }
 
 /// Error validating a [`ConnectorConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectorConfigError {
     /// The registry-default timeout was zero.
-    #[error("connector.default_timeout_ms must be > 0")]
+    #[error("connector.default_timeout must be > 0")]
     ZeroDefaultTimeout,
     /// A per-host entry was invalid.
     #[error("connector.hosts[{host}]: {source}")]
@@ -62,8 +63,8 @@ pub enum HostConnectorConfigError {
     /// `host` was empty.
     #[error("host must not be empty")]
     EmptyHost,
-    /// `timeout_ms` was zero.
-    #[error("timeout_ms must be > 0")]
+    /// `timeout` was zero.
+    #[error("timeout must be > 0")]
     ZeroTimeout,
     /// `rps` was zero.
     #[error("rps must be > 0")]
@@ -76,7 +77,7 @@ pub enum HostConnectorConfigError {
 impl Default for ConnectorConfig {
     fn default() -> Self {
         Self {
-            default_timeout_ms: 30_000,
+            default_timeout: Duration::from_secs(30),
             hosts: Vec::new(),
         }
     }
@@ -89,7 +90,7 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
         if schema.host.trim().is_empty() {
             return Err(HostConnectorConfigError::EmptyHost);
         }
-        if schema.timeout_ms == 0 {
+        if schema.timeout.is_zero() {
             return Err(HostConnectorConfigError::ZeroTimeout);
         }
         if schema.rps == 0 {
@@ -102,7 +103,7 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
             host: schema.host,
             rps: schema.rps,
             burst: schema.burst,
-            timeout_ms: schema.timeout_ms,
+            timeout: schema.timeout,
         })
     }
 }
@@ -111,7 +112,7 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
     type Error = ConnectorConfigError;
 
     fn try_from(schema: SchemaConnectorConfig) -> Result<Self, Self::Error> {
-        if schema.default_timeout_ms == 0 {
+        if schema.default_timeout.is_zero() {
             return Err(ConnectorConfigError::ZeroDefaultTimeout);
         }
         let mut seen: HashSet<String> = HashSet::with_capacity(schema.hosts.len());
@@ -132,7 +133,7 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
             hosts.push(validated);
         }
         Ok(Self {
-            default_timeout_ms: schema.default_timeout_ms,
+            default_timeout: schema.default_timeout,
             hosts,
         })
     }
@@ -142,21 +143,21 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
 mod tests {
     use super::*;
 
-    fn host(host: &str, rps: u32, burst: u32, timeout_ms: u64) -> SchemaHostConnectorConfig {
+    fn host(host: &str, rps: u32, burst: u32, timeout: Duration) -> SchemaHostConnectorConfig {
         SchemaHostConnectorConfig {
             host: host.to_string(),
             rps,
             burst,
-            timeout_ms,
+            timeout,
         }
     }
 
     fn schema(
-        default_timeout_ms: u64,
+        default_timeout: Duration,
         hosts: Vec<SchemaHostConnectorConfig>,
     ) -> SchemaConnectorConfig {
         SchemaConnectorConfig {
-            default_timeout_ms,
+            default_timeout,
             hosts,
         }
     }
@@ -164,13 +165,13 @@ mod tests {
     #[test]
     fn default_config_is_valid() {
         let d = ConnectorConfig::default();
-        assert!(ConnectorConfig::try_from(schema(d.default_timeout_ms, Vec::new())).is_ok());
+        assert!(ConnectorConfig::try_from(schema(d.default_timeout, Vec::new())).is_ok());
     }
 
     #[test]
     fn zero_default_timeout_rejected() {
         assert!(matches!(
-            ConnectorConfig::try_from(schema(0, Vec::new())),
+            ConnectorConfig::try_from(schema(Duration::ZERO, Vec::new())),
             Err(ConnectorConfigError::ZeroDefaultTimeout)
         ));
     }
@@ -178,7 +179,10 @@ mod tests {
     #[test]
     fn zero_host_timeout_rejected() {
         assert!(matches!(
-            ConnectorConfig::try_from(schema(30_000, vec![host("api.example.com", 10, 5, 0)])),
+            ConnectorConfig::try_from(schema(
+                Duration::from_secs(30),
+                vec![host("api.example.com", 10, 5, Duration::ZERO)]
+            )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::ZeroTimeout,
                 ..
@@ -189,7 +193,10 @@ mod tests {
     #[test]
     fn zero_rps_rejected() {
         assert!(matches!(
-            ConnectorConfig::try_from(schema(30_000, vec![host("api.example.com", 0, 5, 10_000)])),
+            ConnectorConfig::try_from(schema(
+                Duration::from_secs(30),
+                vec![host("api.example.com", 0, 5, Duration::from_secs(10))]
+            )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::ZeroRps,
                 ..
@@ -200,7 +207,10 @@ mod tests {
     #[test]
     fn zero_burst_rejected() {
         assert!(matches!(
-            ConnectorConfig::try_from(schema(30_000, vec![host("api.example.com", 10, 0, 10_000)])),
+            ConnectorConfig::try_from(schema(
+                Duration::from_secs(30),
+                vec![host("api.example.com", 10, 0, Duration::from_secs(10))]
+            )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::ZeroBurst,
                 ..
@@ -211,7 +221,10 @@ mod tests {
     #[test]
     fn empty_host_rejected() {
         assert!(matches!(
-            ConnectorConfig::try_from(schema(30_000, vec![host("", 10, 5, 10_000)])),
+            ConnectorConfig::try_from(schema(
+                Duration::from_secs(30),
+                vec![host("", 10, 5, Duration::from_secs(10))]
+            )),
             Err(ConnectorConfigError::Host {
                 source: HostConnectorConfigError::EmptyHost,
                 ..
@@ -223,10 +236,10 @@ mod tests {
     fn duplicate_host_rejected() {
         assert!(matches!(
             ConnectorConfig::try_from(schema(
-                30_000,
+                Duration::from_secs(30),
                 vec![
-                    host("api.example.com", 10, 5, 10_000),
-                    host("api.example.com", 20, 10, 5_000),
+                    host("api.example.com", 10, 5, Duration::from_secs(10)),
+                    host("api.example.com", 20, 10, Duration::from_secs(5)),
                 ],
             )),
             Err(ConnectorConfigError::DuplicateHost { .. })
@@ -236,16 +249,16 @@ mod tests {
     #[test]
     fn valid_config_converts() {
         let config = ConnectorConfig::try_from(schema(
-            15_000,
+            Duration::from_secs(15),
             vec![
-                host("api.openai.com", 60, 10, 60_000),
-                host("api.internal", 1_000, 100, 5_000),
+                host("api.openai.com", 60, 10, Duration::from_mins(1)),
+                host("api.internal", 1_000, 100, Duration::from_secs(5)),
             ],
         ))
         .expect("valid");
-        assert_eq!(config.default_timeout_ms, 15_000);
+        assert_eq!(config.default_timeout, Duration::from_secs(15));
         assert_eq!(config.hosts.len(), 2);
         assert_eq!(config.hosts[0].host, "api.openai.com");
-        assert_eq!(config.hosts[1].timeout_ms, 5_000);
+        assert_eq!(config.hosts[1].timeout, Duration::from_secs(5));
     }
 }

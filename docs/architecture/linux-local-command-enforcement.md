@@ -136,13 +136,13 @@ Artifact layout:
 2. `unix:///absolute/path.sock`
 3. On Unix hosts, governed mode requires `unix://` endpoint for peer-credential validation.
 
-`timeout_ms` must be `> 0`.
+`timeout` must be greater than zero.
 
 Optional governance controls:
 
 1. `hitl_mode = "sync_wait" | "async_token"` (default: `sync_wait`).
 2. `enforce_known_executables = true|false` (default: `false`).
-3. `allowed_executables = ["/usr/bin/bash", "/bin/sh", "/usr/bin/python3"]` (required when enforcement is enabled; entries must be absolute canonical paths).
+3. `allowed_executables = ["/usr/bin/bash", "/bin/sh", "/usr/bin/python3"]` (required when enforcement is enabled; entries must be absolute paths to existing files and are canonicalized when loaded).
 4. If `endpoint` is omitted and sidecar endpoint is unix socket, runtime derives `*-tools.sock` next to sidecar socket.
 5. On Unix hosts, `sidecar_endpoint` must also use `unix://` when `sidecar_local_exec` is enabled.
 
@@ -165,13 +165,13 @@ Decision handling:
 3. `pending_hitl` with `sync_wait` -> blocked (explicit pending fail-closed).
 4. `pending_hitl` with `async_token` -> runtime enters internal retry loop, carrying `approval_token` on subsequent requests.
 5. Missing token for async mode -> blocked (invalid pending state).
-6. Retry deadline exceeded (`hitl_max_wait_ms`) -> blocked (fail-closed timeout).
+6. Retry deadline exceeded (`hitl_max_wait`) -> blocked (fail-closed timeout).
 7. Any other/invalid response -> blocked.
 
 ### HITL Runtime Model
 
 1. `sync_wait`: governance endpoint must return final `allow|deny` in request timeout window.
-2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; runtime sleeps `retry_after_ms` and retries internally until `allow|deny` or `hitl_max_wait_ms` expires.
+2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; runtime sleeps the wire-protocol `retry_after_ms` and retries internally until `allow|deny` or configured `hitl_max_wait` expires.
 3. No background in-place escalation of an already running sandbox process.
 
 ### Non-Cooperative Anti-Bypass Guarantees
@@ -294,25 +294,25 @@ just managed-seccomp-guardrail
 Create `/tmp/firma-run.mediator.toml`:
 
 ```toml
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = "/ABS/PATH/TO/crates/firma-run/policies/generic-local-command-v1.toml"
 artifact_dir = "/ABS/PATH/TO/.artifacts/seccomp-artifacts"
 runtime_mode = "compile_on_launch"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = "unix:///tmp/firma-sidecar-tools.sock"
-timeout_ms = 500
+timeout = "500ms"
 hitl_mode = "async_token"
 enforce_known_executables = true
 allowed_executables = ["/usr/bin/echo", "/usr/bin/bash", "/bin/sh"]
 ```
 
 Allow response server example (for isolated local testing only; production uses the
-real sidecar `[local_exec]` endpoint — see `docs/configuration.md`):
+real `[sidecar.local_exec]` endpoint — see `docs/configuration.md`):
 
 ```bash
 python3 - <<'PY'
@@ -355,13 +355,13 @@ Repeat with decision responses:
 3. `{"decision":"pending_hitl","reason":"awaiting-approval","approval_token":"tok_123","retry_after_ms":500}` with `async_token` -> runtime should retry internally and only proceed on final `allow`.
 4. governance endpoint stopped/unavailable -> must fail closed.
 5. response missing `approval_token` in async mode -> must fail closed.
-6. persistent `pending_hitl` responses beyond `hitl_max_wait_ms` -> must fail closed.
+6. persistent `pending_hitl` responses beyond `hitl_max_wait` -> must fail closed.
 7. run non-allowlisted executable (`/usr/bin/env`) -> must fail closed before launch.
 
 ### Step 5: Negative Config Validation
 
 1. `endpoint = "unix://relative.sock"` -> validation error (requires absolute path).
-2. `timeout_ms = 0` -> validation error.
+2. `timeout = "0s"` -> validation error.
 
 ### Step 6: Final Acceptance
 

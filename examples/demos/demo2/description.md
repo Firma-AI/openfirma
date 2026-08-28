@@ -13,7 +13,7 @@ Agent task: review PRs on the `acme/api` repository.
 
 The agent _appears_ to hold a full-access `GITHUB_TOKEN` (read, write,
 merge, secrets). It does not. The real token lives in the sidecar's
-`[credentials.github]` config; the agent process scrubs `GITHUB_TOKEN`
+`[sidecar.credentials.github]` config; the agent process scrubs `GITHUB_TOKEN`
 from its own environment at startup. After an ALLOW decision the sidecar
 attaches the `Authorization: Bearer …` header on the way out.
 

@@ -372,7 +372,7 @@ fn spawn_sidecar_with_credentials(
     let endpoint = AuthorityEndpoint::new(url, config.connect_addr)?;
     let channel = build_channel(
         &endpoint,
-        Duration::from_secs(config.connect_timeout_secs),
+        config.connect_timeout,
         ca_cert_pem,
         client_cert_pem,
         client_key_pem,
@@ -473,10 +473,10 @@ fn test_config() -> AuthorityConfig {
         agent_id: None,
         url: None,
         connect_addr: None,
-        connect_timeout_secs: 2,
-        reconnect_min_backoff_ms: 50,
-        reconnect_max_backoff_secs: 1,
-        revocation_readiness_grace_ms: 100,
+        connect_timeout: Duration::from_secs(2),
+        reconnect_min_backoff: Duration::from_millis(50),
+        reconnect_max_backoff: Duration::from_secs(1),
+        revocation_readiness_grace: Duration::from_millis(100),
         revocation_fail_closed_on_disconnect: false,
         public_key_path: None,
         ca_cert_path: None,
@@ -650,8 +650,8 @@ async fn revocation_disconnect_loses_readiness_when_fail_closed() -> anyhow::Res
         .set_initial_bundle(valid_bundle_update("v1", 60));
     let mut config = test_config();
     config.revocation_fail_closed_on_disconnect = true;
-    config.revocation_readiness_grace_ms = 10;
-    config.reconnect_min_backoff_ms = 500;
+    config.revocation_readiness_grace = Duration::from_millis(10);
+    config.reconnect_min_backoff = Duration::from_millis(500);
     let harness = spawn_sidecar(&server.url, config, None, None, None)?;
 
     let became_ready = wait_for(Duration::from_secs(2), || {

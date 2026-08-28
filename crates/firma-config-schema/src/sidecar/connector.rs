@@ -4,18 +4,23 @@
 //! unconfigured hosts and the per-host overrides. `firma-sidecar` validates
 //! non-zero timeouts / rate limits and rejects duplicate hosts.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 /// Default dispatch timeout (30s) applied to the registry default connector.
-const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Top-level connector configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectorConfig {
-    /// Timeout in milliseconds applied to the registry default.
-    #[serde(default = "default_timeout_ms")]
-    pub default_timeout_ms: u64,
+    /// Timeout applied to the registry default.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_timeout"
+    )]
+    pub default_timeout: Duration,
     /// Per-host overrides.
     #[serde(default)]
     pub hosts: Vec<HostConnectorConfig>,
@@ -24,7 +29,7 @@ pub struct ConnectorConfig {
 impl Default for ConnectorConfig {
     fn default() -> Self {
         Self {
-            default_timeout_ms: default_timeout_ms(),
+            default_timeout: default_timeout(),
             hosts: Vec::new(),
         }
     }
@@ -45,10 +50,11 @@ pub struct HostConnectorConfig {
     pub rps: u32,
     /// Token-bucket capacity. Bounds the instantaneous burst.
     pub burst: u32,
-    /// Dispatch timeout in milliseconds applied to this host.
-    pub timeout_ms: u64,
+    /// Dispatch timeout applied to this host.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub timeout: Duration,
 }
 
-const fn default_timeout_ms() -> u64 {
-    DEFAULT_TIMEOUT_MS
+const fn default_timeout() -> Duration {
+    DEFAULT_TIMEOUT
 }

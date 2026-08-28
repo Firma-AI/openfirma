@@ -1508,6 +1508,7 @@ dependencies = [
  "firma-protobuf",
  "fs-err",
  "hex",
+ "jiff",
  "notify",
  "pasetors",
  "prost-types",
@@ -1536,6 +1537,7 @@ version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
+ "firma-config-schema",
  "fs-err",
  "pretty_assertions",
  "serde",
@@ -1718,6 +1720,7 @@ dependencies = [
  "firma-test-helpers",
  "fs-err",
  "hex",
+ "jiff",
  "libc",
  "nix 0.31.3",
  "p256",

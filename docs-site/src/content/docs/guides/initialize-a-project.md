@@ -137,7 +137,7 @@ agent_id         = "agt_01j0000000e008000000000001"
 url             = "http://127.0.0.1:50051"
 ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
 public_key_path = "/path/to/state/authority.pub"
-# ... plus connect_timeout_secs / reconnect_* / revocation_* tuning
+# ... plus connect_timeout / reconnect_* / revocation_* tuning
 
 # Uncomment for remote Authorities that require Sidecar PSK authentication.
 # [sidecar.authority.credentials]
@@ -180,10 +180,6 @@ TTY. Pass `--yes` in non-interactive contexts.
 
 **`firma.toml` already exists.** By design, existing files are preserved.
 Use `--force` to overwrite, or remove the file by hand for a clean slate.
-
-**An older config has no agent TypeID or uses `agent_id = "codex"`.** OpenFirma does
-not silently migrate existing identity. Run `firma config --agent-id <agent-id>`
-with the ID returned by registration. Keep `codex` under `[run].profile`.
 
 **Keys must not go in the config dir.** Keys live in `<state-dir>`, not
 `<output-dir>`. Do not commit `authority.key`. Add `.firma/*.key` to

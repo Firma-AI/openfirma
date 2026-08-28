@@ -1,9 +1,12 @@
 //! Schema for the enforcement-engine sections of `[sidecar]`.
 //!
 //! Representation only. These sections are flattened at the top level of the
-//! sidecar config (`[mapping]`, `[capability_validation]`,
-//! `[constraint_enforcement]`). `firma-sidecar` validates them and re-bases the
-//! mapping paths.
+//! sidecar config (`[sidecar.mapping]`, `[sidecar.capability_validation]`,
+//! `[sidecar.constraint_enforcement]`). `firma-sidecar` validates them and
+//! re-bases the mapping paths.
+
+use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,10 +34,10 @@ pub struct EnforcementConfig {
 pub struct MappingConfig {
     /// Path to the primary mapping rules TOML file.
     #[serde(default = "default_mapping_path")]
-    pub rules_path: String,
+    pub rules_path: PathBuf,
     /// Additional mapping rule files merged on top of `rules_path`.
     #[serde(default)]
-    pub rules_paths: Vec<String>,
+    pub rules_paths: Vec<PathBuf>,
     /// Whether unlisted hosts are protected by default.
     #[serde(default = "default_true")]
     pub default_protected: bool,
@@ -54,9 +57,12 @@ impl Default for MappingConfig {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityValidationConfig {
-    /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
-    #[serde(default)]
-    pub clock_skew_tolerance_seconds: u64,
+    /// Clock skew tolerance for expiry checks. Default: zero (strict).
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default
+    )]
+    pub clock_skew_tolerance: Duration,
 }
 
 /// Constraint enforcement configuration.
@@ -73,7 +79,7 @@ pub struct ConstraintEnforcementConfig {
     /// Optional path for the persistent session-state JSONL file. Only used
     /// when `session_state_backend = "persistent"`.
     #[serde(default)]
-    pub session_state_path: Option<String>,
+    pub session_state_path: Option<PathBuf>,
 }
 
 impl Default for ConstraintEnforcementConfig {
@@ -97,11 +103,11 @@ pub enum SessionStateBackend {
     Persistent,
 }
 
-/// Sentinel: default `mapping.rules_path`.
+/// Sentinel: default `sidecar.mapping.rules_path`.
 const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
 
-fn default_mapping_path() -> String {
-    DEFAULT_MAPPING_PATH.to_string()
+fn default_mapping_path() -> PathBuf {
+    PathBuf::from(DEFAULT_MAPPING_PATH)
 }
 
 const fn default_true() -> bool {

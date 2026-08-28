@@ -201,7 +201,7 @@ cat >"$SIDECAR_CONFIG" <<EOF
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:${SIDECAR_PORT}"
-drain_timeout_secs = 5
+drain_timeout = "5s"
 
 [sidecar.mapping]
 rules_path = "${MAPPING_RULES}"

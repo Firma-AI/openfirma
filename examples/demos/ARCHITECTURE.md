@@ -125,8 +125,8 @@ listen_addr = "127.0.0.1:50051"
 policy_dir = "examples/demos/demo0/policies" # note: policies/ subdir
 revocation_file = "examples/demos/demo0/.runtime/revocations.txt"
 key_file = "examples/demos/demo0/.runtime/authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 # schema_path = "..."  # optional; omit to use embedded schema
 ```
 
@@ -148,11 +148,10 @@ The `[sidecar.*]` tables in `demoX/firma.toml` mirror the `examples/e2e/firma.to
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.policy]
 dir = "examples/demos/demo0"
-authority_url = "http://127.0.0.1:50051"
 
 [sidecar.ca]
 dir = "examples/demos/demo0/.runtime/generated-firma-ca"
@@ -162,10 +161,10 @@ rules_path = "examples/demos/demo0/mapping-rules.toml"
 default_protected = true # demos default to fail-closed
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 0
+clock_skew_tolerance = "0s"
 
 [sidecar.connector]
-default_timeout_ms = 10000
+default_timeout = "10s"
 
 [sidecar.audit]
 sink = "file"
@@ -173,10 +172,11 @@ file_path = "examples/demos/demo0/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 
 [sidecar.authority]
-connect_timeout_secs = 10
-reconnect_min_backoff_ms = 250
-reconnect_max_backoff_secs = 30
-revocation_readiness_grace_ms = 500
+url = "http://127.0.0.1:50051"
+connect_timeout = "10s"
+reconnect_min_backoff = "250ms"
+reconnect_max_backoff = "30s"
+revocation_readiness_grace = "500ms"
 revocation_fail_closed_on_disconnect = false
 ```
 
@@ -438,7 +438,7 @@ Agent task: review PRs, interact with GitHub. From its own perspective the agent
 GITHUB_TOKEN=ghp_FULL_REPO_SCOPE_xxxxxxxxxxxxxxxxxxxxxxxx   # display only
 ```
 
-Reality: the agent process scrubs `GITHUB_TOKEN` from its environment at startup. The real token lives in the sidecar's `[credentials.github]` config and is injected as `Authorization: Bearer …` only after an ALLOW decision.
+Reality: the agent process scrubs `GITHUB_TOKEN` from its environment at startup. The real token lives in the sidecar's `[sidecar.credentials.github]` config and is injected as `Authorization: Bearer …` only after an ALLOW decision.
 
 Enforced capability (outside the agent):
 

@@ -11,7 +11,7 @@
 //!
 //! # Output sinks
 //!
-//! Four output modes are supported, selectable via the `[audit]`
+//! Four output modes are supported, selectable via the `[sidecar.audit]`
 //! configuration section:
 //!
 //! | Sink     | Description                                                |
@@ -51,7 +51,7 @@ use tokio_util::sync::CancellationToken;
 ///
 /// This trait uses RPITIT (`impl Future`) and is therefore **not**
 /// object-safe. That is intentional: the concrete sink type is selected
-/// once at startup based on the `[audit]` config section, so dynamic
+/// once at startup based on the `[sidecar.audit]` config section, so dynamic
 /// dispatch is unnecessary.
 pub(crate) trait AuditSink {
     /// Drives the sink, consuming events from `rx` until `exit` is

@@ -7,6 +7,7 @@
 //!
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -109,7 +110,7 @@ pub struct ProfilePatch {
     /// Home-relative paths to mask with a tmpfs overlay inside the bwrap sandbox.
     /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
     /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.
-    pub mask_home_paths: Option<Vec<String>>,
+    pub mask_home_paths: Option<Vec<PathBuf>>,
     /// How the sandbox CA trust store is assembled. `None` resolves to the
     /// default `CaTrustMode::Sole`.
     pub ca_trust_mode: Option<CaTrustMode>,
@@ -153,7 +154,11 @@ pub struct CapabilityLeasePatch {
     pub path: Option<PathBuf>,
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: Option<f64>,
-    pub grace_seconds: Option<u64>,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
+        default
+    )]
+    pub grace: Option<Duration>,
     #[serde(default)]
     pub requested_actions: Option<Vec<String>>,
 }
@@ -174,12 +179,20 @@ pub struct ExecutableLaunchPolicyPatch {
 #[serde(deny_unknown_fields)]
 pub struct CommandMediatorPatch {
     pub endpoint: Option<String>,
-    pub timeout_ms: Option<u64>,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
+        default
+    )]
+    pub timeout: Option<Duration>,
     pub hitl_mode: Option<CommandMediatorHitlMode>,
-    pub hitl_max_wait_ms: Option<u64>,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
+        default
+    )]
+    pub hitl_max_wait: Option<Duration>,
     pub enforce_known_executables: Option<bool>,
     #[serde(default)]
-    pub allowed_executables: Vec<String>,
+    pub allowed_executables: Vec<PathBuf>,
 }
 
 /// Source for capability material patch.

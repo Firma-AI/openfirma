@@ -25,5 +25,8 @@ fn explicit_override_errors_if_missing() {
     let StackError::ConfigResolution { source } = error else {
         panic!("expected typed config resolution error, got {error:?}");
     };
-    assert_eq!(source.path, cfg_path);
+    assert_eq!(
+        source.path,
+        std::path::absolute(cfg_path).expect("absolutize missing override")
+    );
 }

@@ -929,7 +929,7 @@ fn minimal_mapping_rules_for_profile(execution_profile: AgentProfile) -> &'stati
     }
 }
 
-/// Append the per-session capability seed file to `[capability_seed].paths`
+/// Append the per-session capability seed file to `[sidecar.capability_seed].paths`
 /// so the autostarted sidecar loads it through its existing verifier path.
 /// No-op when no seed was minted.
 fn configure_capability_seed(

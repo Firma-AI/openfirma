@@ -87,7 +87,7 @@ Subcommands:
 | _(none)_              | Serve gRPC (default action).              |
 | `generate-key`        | Generate an Ed25519 signing key pair.     |
 | `init-tls`            | Generate CA + Authority TLS PEM material. |
-| `issue`               | Issue a signed capability seed file.      |
+| `issue`               | Issue a signed capability TOML file.      |
 | `revocations add`     | Append a token ID to the revocation log.  |
 | `revocations compact` | Remove expired entries from the log.      |
 
@@ -99,14 +99,14 @@ Subcommands:
 
 `issue` flags:
 
-| Flag               | Default            | Description                                              |
-| ------------------ | ------------------ | -------------------------------------------------------- |
-| `--agent-id`       | _required_         | Agent identity for the issued token.                     |
-| `--session-id`     | _required_         | Session identity (UUID).                                 |
-| `--action`         | _required, repeat_ | Action class(es) the token covers.                       |
-| `--resource-scope` | `*`                | Resource scope pattern (e.g. `wttr.in*`).                |
-| `--ttl-seconds`    | `3600`             | Requested TTL; clamped by `max_ttl_seconds` from config. |
-| `-o, --output`     | _required_         | Output seed TOML path.                                   |
+| Flag               | Default            | Description                                      |
+| ------------------ | ------------------ | ------------------------------------------------ |
+| `--agent-id`       | _required_         | Agent identity for the issued token.             |
+| `--session-id`     | _required_         | Session identity (UUID).                         |
+| `--action`         | _required, repeat_ | Action class(es) the token covers.               |
+| `--resource-scope` | `*`                | Resource scope pattern (e.g. `wttr.in*`).        |
+| `--ttl-seconds`    | `3600`             | Requested TTL; clamped by `max_ttl` from config. |
+| `-o, --output`     | _required_         | Output seed TOML path.                           |
 
 `revocations add` flags:
 
@@ -171,10 +171,11 @@ Layout written by `firma config`:
 The post-config `next:` hint is `firma run <agent>`
 (or `firma sidecar start` for the daemon path).
 
-`[sidecar.authority].agent_id` is the Authority-registered UUID. It is
+`[sidecar.authority].agent_id` is the Authority-registered `agt_` TypeID. It is
 independent from `[run].profile`, which selects local sandbox and runtime
-behaviour. New local configs generate a UUIDv7. Remote configs require the UUID
-returned by registration, supplied with `--agent-id` or entered interactively.
+behaviour. New local configs generate a TypeID backed by UUIDv7. Remote configs
+require the ID returned by registration, supplied with `--agent-id` or entered
+interactively.
 
 `firma config` flags:
 
@@ -283,20 +284,20 @@ firma monitor --source all --no-follow                 # one-shot, all sources
 
 Flags:
 
-| Flag             | Env               | Default  | Description                                            |
-| ---------------- | ----------------- | -------- | ------------------------------------------------------ |
-| `--config`       | —                 | _unset_  | Accepted for compatibility; not used to resolve state. |
-| `--state-dir`    | `FIRMA_STATE_DIR` | resolved | State dir override.                                    |
-| `--source`       | —                 | `audit`  | `audit`, `authority`, `sidecar`, or `all`.             |
-| `--decision`     | —                 | _unset_  | Audit filter: `allow`, `deny`, `passthrough`.          |
-| `--only-deny`    | —                 | _off_    | Shortcut for `--decision deny`.                        |
-| `--action-class` | —                 | _unset_  | Audit filter: exact match on `action`.                 |
-| `--agent`        | —                 | _unset_  | Audit filter: exact match on `agent_id`.               |
-| `--since`        | —                 | _unset_  | Backfill: `15m`, `2h`, RFC3339 timestamp.              |
-| `--format`       | —                 | `pretty` | `pretty` or `json` (byte-for-byte pass-through).       |
-| `--json`         | —                 | _off_    | Shortcut for `--format json`.                          |
-| `--tail`         | —                 | _off_    | Force follow even when piped.                          |
-| `--no-follow`    | —                 | _off_    | Read once and exit (overrides TTY auto-tail).          |
+| Flag             | Env               | Default  | Description                                         |
+| ---------------- | ----------------- | -------- | --------------------------------------------------- |
+| `--config`       | —                 | _unset_  | Does not participate in state-directory resolution. |
+| `--state-dir`    | `FIRMA_STATE_DIR` | resolved | State dir override.                                 |
+| `--source`       | —                 | `audit`  | `audit`, `authority`, `sidecar`, or `all`.          |
+| `--decision`     | —                 | _unset_  | Audit filter: `allow`, `deny`, `passthrough`.       |
+| `--only-deny`    | —                 | _off_    | Shortcut for `--decision deny`.                     |
+| `--action-class` | —                 | _unset_  | Audit filter: exact match on `action`.              |
+| `--agent`        | —                 | _unset_  | Audit filter: exact match on `agent_id`.            |
+| `--since`        | —                 | _unset_  | Backfill: `15m`, `2h`, RFC3339 timestamp.           |
+| `--format`       | —                 | `pretty` | `pretty` or `json` (byte-for-byte pass-through).    |
+| `--json`         | —                 | _off_    | Shortcut for `--format json`.                       |
+| `--tail`         | —                 | _off_    | Force follow even when piped.                       |
+| `--no-follow`    | —                 | _off_    | Read once and exit (overrides TTY auto-tail).       |
 
 Auto-tail: follows when stdout is a TTY; one-shot when piped, unless
 `--tail` or `--no-follow` is set. Ctrl-C exits with code 0.

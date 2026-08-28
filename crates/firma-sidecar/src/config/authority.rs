@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use firma_config_schema::sidecar::authority::AuthorityConfig as SchemaAuthorityConfig;
 use firma_identifiers::{AgentId, AgentIdParseError};
@@ -121,14 +122,14 @@ pub struct AuthorityConfig {
     pub url: Option<String>,
     /// Optional physical TCP destination for the Authority connection.
     pub connect_addr: Option<SocketAddr>,
-    /// Connection timeout in seconds.
-    pub(crate) connect_timeout_secs: u64,
-    /// Minimum reconnect backoff in milliseconds.
-    pub(crate) reconnect_min_backoff_ms: u64,
-    /// Maximum reconnect backoff in seconds.
-    pub(crate) reconnect_max_backoff_secs: u64,
+    /// Connection timeout.
+    pub(crate) connect_timeout: Duration,
+    /// Minimum reconnect backoff.
+    pub(crate) reconnect_min_backoff: Duration,
+    /// Maximum reconnect backoff.
+    pub(crate) reconnect_max_backoff: Duration,
     /// Grace period before the revocation stream is considered ready.
-    pub(crate) revocation_readiness_grace_ms: u64,
+    pub(crate) revocation_readiness_grace: Duration,
     /// Flip revocation readiness back to false on disconnect.
     pub(crate) revocation_fail_closed_on_disconnect: bool,
     /// Path to the Authority's PASETO v4 Ed25519 public key.
@@ -156,17 +157,17 @@ pub enum AuthorityConfigError {
     /// `agent_id` was not a valid `TypeID`.
     #[error("authority.agent_id: {0}")]
     AgentId(#[from] AgentIdParseError),
-    /// `connect_timeout_secs` was zero.
-    #[error("authority.connect_timeout_secs must be > 0")]
+    /// `connect_timeout` was zero.
+    #[error("authority.connect_timeout must be > 0")]
     ZeroConnectTimeout,
-    /// `reconnect_min_backoff_ms` was zero.
-    #[error("authority.reconnect_min_backoff_ms must be > 0")]
+    /// `reconnect_min_backoff` was zero.
+    #[error("authority.reconnect_min_backoff must be > 0")]
     ZeroMinBackoff,
-    /// `reconnect_max_backoff_secs` was zero.
-    #[error("authority.reconnect_max_backoff_secs must be > 0")]
+    /// `reconnect_max_backoff` was zero.
+    #[error("authority.reconnect_max_backoff must be > 0")]
     ZeroMaxBackoff,
     /// The maximum reconnect backoff was below the minimum.
-    #[error("authority.reconnect_max_backoff_secs must be >= reconnect_min_backoff_ms")]
+    #[error("authority.reconnect_max_backoff must be >= reconnect_min_backoff")]
     MaxBackoffLessThanMin,
     /// `public_key_path` was set but empty.
     #[error("authority.public_key_path must not be empty when set")]
@@ -221,16 +222,16 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
 
     fn try_from(s: SchemaAuthorityConfig) -> Result<Self, Self::Error> {
         let agent_id = s.agent_id.map(|id| id.parse::<AgentId>()).transpose()?;
-        if s.connect_timeout_secs == 0 {
+        if s.connect_timeout.is_zero() {
             return Err(AuthorityConfigError::ZeroConnectTimeout);
         }
-        if s.reconnect_min_backoff_ms == 0 {
+        if s.reconnect_min_backoff.is_zero() {
             return Err(AuthorityConfigError::ZeroMinBackoff);
         }
-        if s.reconnect_max_backoff_secs == 0 {
+        if s.reconnect_max_backoff.is_zero() {
             return Err(AuthorityConfigError::ZeroMaxBackoff);
         }
-        if s.reconnect_max_backoff_secs.saturating_mul(1000) < s.reconnect_min_backoff_ms {
+        if s.reconnect_max_backoff < s.reconnect_min_backoff {
             return Err(AuthorityConfigError::MaxBackoffLessThanMin);
         }
         let public_key_path =
@@ -256,10 +257,10 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             agent_id,
             url: s.url,
             connect_addr: s.connect_addr,
-            connect_timeout_secs: s.connect_timeout_secs,
-            reconnect_min_backoff_ms: s.reconnect_min_backoff_ms,
-            reconnect_max_backoff_secs: s.reconnect_max_backoff_secs,
-            revocation_readiness_grace_ms: s.revocation_readiness_grace_ms,
+            connect_timeout: s.connect_timeout,
+            reconnect_min_backoff: s.reconnect_min_backoff,
+            reconnect_max_backoff: s.reconnect_max_backoff,
+            revocation_readiness_grace: s.revocation_readiness_grace,
             revocation_fail_closed_on_disconnect: s.revocation_fail_closed_on_disconnect,
             public_key_path,
             ca_cert_path,
@@ -277,10 +278,10 @@ impl Default for AuthorityConfig {
             agent_id: None,
             url: None,
             connect_addr: None,
-            connect_timeout_secs: default_connect_timeout_secs(),
-            reconnect_min_backoff_ms: default_min_backoff_ms(),
-            reconnect_max_backoff_secs: default_max_backoff_secs(),
-            revocation_readiness_grace_ms: default_readiness_grace_ms(),
+            connect_timeout: Duration::from_secs(10),
+            reconnect_min_backoff: Duration::from_millis(250),
+            reconnect_max_backoff: Duration::from_secs(30),
+            revocation_readiness_grace: Duration::from_millis(500),
             revocation_fail_closed_on_disconnect: false,
             public_key_path: None,
             ca_cert_path: None,
@@ -290,20 +291,4 @@ impl Default for AuthorityConfig {
             credentials: None,
         }
     }
-}
-
-const fn default_connect_timeout_secs() -> u64 {
-    10
-}
-
-const fn default_min_backoff_ms() -> u64 {
-    250
-}
-
-const fn default_max_backoff_secs() -> u64 {
-    30
-}
-
-const fn default_readiness_grace_ms() -> u64 {
-    500
 }

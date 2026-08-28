@@ -698,7 +698,7 @@ struct HttpSecretMediation {
 /// decompressed for secret rehydration/masking, used when the handler isn't
 /// explicitly configured via [`RequestHandler::with_max_decompressed_body_bytes`].
 /// Mirrors [`crate::config::SidecarConfig`]'s own default for
-/// `interceptor.max_decompressed_body_bytes`.
+/// `sidecar.interceptor.max_decompressed_body_size`.
 const DEFAULT_MAX_DECOMPRESSED_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared handler used by every interceptor.

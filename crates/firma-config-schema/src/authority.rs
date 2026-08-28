@@ -4,6 +4,7 @@
 //! its validated runtime configuration, including the grouped TLS settings.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -32,12 +33,14 @@ pub struct AuthorityConfig {
     pub schema_path: Option<PathBuf>,
     /// Path to the revocation file.
     pub revocation_file: PathBuf,
-    /// Maximum token TTL in seconds.
-    pub max_ttl_seconds: i32,
+    /// Maximum token TTL.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub max_ttl: Duration,
     /// Path to the Ed25519 signing key file.
     pub key_file: PathBuf,
-    /// Policy bundle TTL advertised to Sidecars, in seconds.
-    pub bundle_ttl_seconds: u32,
+    /// Policy bundle TTL advertised to Sidecars.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub bundle_ttl: Duration,
     /// Path to the TLS certificate file.
     pub tls_cert_path: Option<PathBuf>,
     /// Path to the TLS private key file.
@@ -58,9 +61,9 @@ impl Default for AuthorityConfig {
             issuance_policy_dir: PathBuf::from(DEFAULT_ISSUANCE_POLICY_DIR),
             schema_path: None,
             revocation_file: PathBuf::from("revocations.txt"),
-            max_ttl_seconds: 3600,
+            max_ttl: Duration::from_hours(1),
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
-            bundle_ttl_seconds: 30,
+            bundle_ttl: Duration::from_secs(30),
             tls_cert_path: None,
             tls_key_path: None,
             mtls_client_ca_cert_path: None,

@@ -236,7 +236,7 @@ The sidecar exposes an HTTP health check server on the address specified by
 The sidecar handles `SIGTERM` and `SIGINT` for graceful shutdown:
 
 1. Stop accepting new connections.
-2. Drain in-flight requests up to `interceptor.drain_timeout_secs`.
+2. Drain in-flight requests up to `sidecar.interceptor.drain_timeout`.
 3. Exit with code `0`.
 
 ### Standalone startup log contract
@@ -257,14 +257,14 @@ ready
 ```
 
 `policy bundle loaded version` is the eight-character hex prefix of
-the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
-fires unconditionally; when `authority.url` is unset the
+the SHA-256 of the concatenated `.cedar` files in `sidecar.policy.dir`. Line 4
+fires unconditionally; when `sidecar.authority.url` is unset the
 endpoint is reported as `(disabled)`.
 
 Line 7 (`ready`) is held until the Authority streams have hydrated —
 both the policy bundle stream and the revocation stream must report
 themselves ready before the line is emitted. When
-`authority.url` is unset, both flags are pre-seeded as ready, so
+`sidecar.authority.url` is unset, both flags are pre-seeded as ready, so
 the gate is a no-op and `ready` fires immediately after line 6. This
 prevents the first wrapped-agent call from racing the readiness gate
 and hitting a DENY before policy is in place.
@@ -388,9 +388,8 @@ config-relative resource table).
 `state_dir` is **never** a config-file key. The runtime state directory is
 resolved only from `--state-dir`, then `FIRMA_STATE_DIR`, then
 `$XDG_RUNTIME_DIR/firma` (with a `/tmp/firma-$UID` fallback) — independent
-of config discovery. The `--config` flag on `sidecar stop`/`status`,
-`monitor`, and `doctor` is accepted for compatibility; only `doctor`
-actively consumes it to locate the unified file.
+of config discovery. Only `doctor` uses `--config` to locate the unified file;
+`sidecar stop`, `sidecar status`, and `monitor` resolve state independently.
 
 ## `firma control`
 
@@ -405,10 +404,9 @@ revocations. Pre-flight only, never on the hot path.
 ### `firma authority issue`
 
 Issues a signed capability token directly from the loaded Cedar
-bundle and writes it to a TOML seed file consumable by the
-sidecar `[capability_seed]` section. Stop-gap until the sidecar
-wires the gRPC `IssueCapability` client; not intended for
-production traffic.
+bundle and writes it as signed TOML. Pass that file to
+`firma run --capability-file` when an invocation must use an explicitly
+provided capability instead of automatic issuance.
 
 ```bash
 firma authority --config firma.toml issue \
@@ -420,23 +418,22 @@ firma authority --config firma.toml issue \
   --output capability-demo-agent.toml
 ```
 
-| Flag               | Required | Default | Description                                            |
-| ------------------ | -------- | ------- | ------------------------------------------------------ |
-| `--agent-id`       | yes      |         | Token agent identity.                                  |
-| `--session-id`     | yes      |         | Token session identity.                                |
-| `--action`         | yes      |         | Action class. Repeat the flag for multiple.            |
-| `--resource-scope` | no       | `*`     | Resource scope pattern.                                |
-| `--ttl-seconds`    | no       | `3600`  | Requested TTL. Clamped by `max_ttl_seconds` in config. |
-| `--output`/`-o`    | yes      |         | Path to write the seed TOML.                           |
+| Flag               | Required | Default | Description                                    |
+| ------------------ | -------- | ------- | ---------------------------------------------- |
+| `--agent-id`       | yes      |         | Token agent identity.                          |
+| `--session-id`     | yes      |         | Token session identity.                        |
+| `--action`         | yes      |         | Action class. Repeat the flag for multiple.    |
+| `--resource-scope` | no       | `*`     | Resource scope pattern.                        |
+| `--ttl-seconds`    | no       | `3600`  | Requested TTL. Clamped by `max_ttl` in config. |
+| `--output`/`-o`    | yes      |         | Path to write the seed TOML.                   |
 
 The subcommand evaluates the loaded Cedar bundle exactly like
 the gRPC `IssueCapability` handler — a Cedar deny exits non-zero
 with `issuance failed: cedar denied issuance (...): ...`.
 
-The output TOML carries the raw `v4.public....` token plus the
-matching claims; the sidecar consumes it via
-`[capability_seed].paths` and verifies the signature with
-`[authority].public_key_path`.
+The output TOML carries the raw `v4.public....` token plus the matching claims.
+`firma run` and the Sidecar verify it with the configured Authority public key
+before use.
 
 ## `firma run`
 
@@ -465,10 +462,10 @@ When autostart fires, `firma run`:
    `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux), `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback), or `%LOCALAPPDATA%\firma\runtime\run\<sandbox_id>\` (Windows; see platform caveat below).
 2. Synthesizes a sidecar TOML by inheriting the operator template
    (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → the discovered
-   `firma.toml` → minimal) and overriding the `[interceptor]` section to
+   `firma.toml` → minimal) and overriding the `[sidecar.interceptor]` section to
    bind a Unix-domain socket at `<marker_dir>/sidecar.sock`. Relative
-   resource paths in the inherited template (e.g. `audit.signing_key_path`,
-   `policy.dir`, `mapping.rules_path`, `authority.public_key_path`) are
+   resource paths in the inherited template (e.g. `sidecar.audit.signing_key_path`,
+   `sidecar.policy.dir`, `sidecar.mapping.rules_path`, `sidecar.authority.public_key_path`) are
    rebased to absolute paths anchored on the **template's** config
    directory so they keep pointing at the operator's files after the
    synthesized config is written into `<marker_dir>/`.
@@ -509,7 +506,7 @@ inputs for recovery. Set `FIRMA_RUN_KEEP_MARKERS` to retain them deliberately.
 
 ### Operator caveats
 
-- A template with `interceptor.https_mitm.enabled = true` may fail
+- A template with `sidecar.interceptor.https_mitm.enabled = true` may fail
   validation when the interceptor is forced to `unix_socket` mode.
   Either disable MITM in the template or use `--sidecar <url>` with a
   long-lived externally-managed sidecar.
@@ -555,10 +552,9 @@ on `firma run` exit.
 typed argument-conflict error.
 
 Before resolving the backend or starting any component, `firma run` requires
-`[sidecar.authority].agent_id` to contain a UUID. Missing IDs, legacy profile
-values such as `codex`, and malformed UUIDs fail closed with migration
-guidance. The UUID is used for capability issuance and refresh; `[run].profile`
-remains the independent local execution profile.
+`[sidecar.authority].agent_id` to contain a valid `agt_` TypeID. Missing or
+malformed IDs fail closed. The ID is used for capability issuance and refresh;
+`[run].profile` remains the independent local execution profile.
 
 `AGENT_NOT_REGISTERED` and `AGENT_PROFILE_MISMATCH` Authority denial reasons
 map to dedicated run errors and retain the Authority's diagnostic message.

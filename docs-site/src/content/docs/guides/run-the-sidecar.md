@@ -127,13 +127,13 @@ policy_dir          = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/config/issuance"
 revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/authority.key"
-max_ttl_seconds     = 3600
-bundle_ttl_seconds  = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 
 [sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
-drain_timeout_secs = 5
+drain_timeout = "5s"
 
 [sidecar.mapping]
 rules_path        = "/tmp/firma-standalone/config/mapping-rules.toml"
@@ -157,10 +157,9 @@ Notes:
 - **`[sidecar.authority].url` is required** for Stage 2 on mapped routes.
   Without it the Sidecar keeps a deny-all stale evaluator and every protected
   call becomes `policy bundle stale`.
-- The Sidecar does not mint a capability at startup. Use `firma run` for
-  automatic per-session issuance, or follow
-  [Issue capability tokens](../issue-capability-tokens/) to configure a
-  long-lived `[sidecar.capability_seed]` before sending protected requests.
+- The standalone Sidecar does not request capabilities. Use `firma run` for
+  automatic per-session issuance before sending protected requests; see
+  [Issue capability tokens](../issue-capability-tokens/).
 - **`default_protected = false`** keeps unmapped destinations as passthrough
   while you experiment. Production stacks should use `true`.
 - No `[sidecar.ca]` section — these demo curls use plain HTTP. See
@@ -251,6 +250,6 @@ This setup gives you a Sidecar that audits and enforces against destinations you
 - [Inspect live sidecars with `firma sidecar status`](../firma-sidecar-status/) — check per-run sidecar health with table or JSON output.
 - [Start and monitor the daemon with `firma sidecar` and `firma monitor`](../manage-the-stack/) — supervise Authority + Sidecar as one unit and live-tail decisions, instead of running each binary by hand.
 - [Write your first Cedar policy](../write-a-cedar-policy/) — go beyond the two-rule demo and learn the policy patterns.
-- [Issue capability tokens](../issue-capability-tokens/) — add an Authority and a real Stage 1 layer.
+- [Issue capability tokens](../issue-capability-tokens/) — configure automatic Stage 1 issuance.
 - [Enable HTTPS MITM](../https-mitm/) — see L7 details for HTTPS hosts.
 - [Read & verify the audit log](../audit-log/) — turn the JSONL into a tamper-evident record.

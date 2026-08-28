@@ -68,8 +68,8 @@ policy_dir          = "/etc/firma/policies"
 issuance_policy_dir = "/etc/firma/issuance"
 revocation_file     = "/var/lib/firma/revocations.txt"
 key_file            = "/etc/firma/firma-authority.key"
-max_ttl_seconds     = 3600              # capabilities live at most 1h
-bundle_ttl_seconds  = 30                # Sidecars deny if a bundle is not refreshed before this TTL
+max_ttl    = "1h"  # capabilities live at most 1h
+bundle_ttl = "30s" # Sidecars deny if a bundle is not refreshed before this TTL
 ```
 
 In production, run the Authority on a hardened host with limited access. Treat its signing key with the same care as a CA key.
@@ -153,7 +153,7 @@ Each app pod runs a Sidecar with this config:
 [sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.interceptor.https_mitm]
 enabled         = true
@@ -171,28 +171,25 @@ default_protected = true                      # production!
 [sidecar.policy]
 dir           = "/etc/firma/cache/policies"   # populated by Authority stream
 
-[sidecar.capability_seed]
-paths = []                                   # capabilities arrive via gRPC, not seed files
-
 [sidecar.authority]
 url             = "https://firma-authority.internal:50051"
 public_key_path = "/etc/firma/firma-authority.pub"
 ca_cert_path    = "/etc/firma/authority-ca.crt"
 
 [sidecar.connector]
-default_timeout_ms = 30000
+default_timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "api.openai.com"
 rps        = 100
 burst      = 20
-timeout_ms = 30000
+timeout = "30s"
 
 [[sidecar.connector.hosts]]
 host       = "api.acme-vendor.com"
 rps        = 50
 burst      = 10
-timeout_ms = 15000
+timeout = "15s"
 
 [sidecar.credentials.openai]
 target_host    = "api.openai.com"
@@ -218,7 +215,7 @@ A few things worth highlighting:
 
 - **`default_protected = true`** — anything not in mapping rules denies. Production posture.
 - **`[sidecar.authority].url` uses `https://` + `[sidecar.authority].ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
-- **`reconnect_min_backoff_ms` / `reconnect_max_backoff_secs`** — Sidecars retry Authority streams with bounded exponential backoff. The defaults are `250` ms and `30` s.
+- **`reconnect_min_backoff` / `reconnect_max_backoff`** — Sidecars retry Authority streams with bounded exponential backoff. The defaults are `"250ms"` and `"30s"`.
 - **`grpc` audit sink** — events go to a centralized collector, not to a local file. Multiple Sidecars feed one collector.
 - **Vault Agent for credentials** — no API keys in the app. Vault Agent renders short-lived files and the Sidecar reads them per call.
 - **`strict_hosts` on the vendor** — if MITM fails (e.g. cert mismatch), the call denies rather than falling back to weaker CONNECT-only policy.
@@ -235,7 +232,7 @@ The request path is blocked until both Authority-backed stores are ready:
 
 - The policy bundle stream has delivered and applied its first bundle.
 - The revocation stream has either delivered its first event or the
-  `revocation_readiness_grace_ms` window has elapsed.
+  `revocation_readiness_grace` window has elapsed.
 
 Only after both gates pass does the Sidecar emit `sidecar ready`. Before
 that point, protected traffic denies locally with readiness errors such as
@@ -250,9 +247,9 @@ needs different timing:
 url                           = "https://firma-authority.internal:50051"
 public_key_path               = "/etc/firma/firma-authority.pub"
 ca_cert_path                  = "/etc/firma/authority-ca.crt"
-reconnect_min_backoff_ms      = 250
-reconnect_max_backoff_secs    = 30
-revocation_readiness_grace_ms = 500
+reconnect_min_backoff = "250ms"
+reconnect_max_backoff = "30s"
+revocation_readiness_grace = "500ms"
 ```
 
 For Cloud Run multi-container services, make the Sidecar's health endpoint
@@ -328,7 +325,7 @@ def issue_capability_for_session(tenant_id: str, user_session_id: str):
 
 When a user starts a session, the app calls `issue_capability_for_session(...)`, hands the resulting raw token to the Sidecar via the appropriate channel (a header on the proxied request, or a side channel — your design), and from then on the Sidecar can validate every call from that session against that capability.
 
-For a 15-minute TTL with 1000 active sessions, the Authority issues 1000 capabilities every 15 minutes. The Sidecar holds them in its `CapabilityMap`. The hot path is unchanged.
+For a 15-minute TTL with 1000 active sessions, the Authority issues 1000 capabilities every 15 minutes. The Sidecar holds them in its `CapabilityMap`, so issuance remains off the hot path.
 
 ## Step 8: Wire the app to the proxy
 
@@ -374,7 +371,7 @@ A few practices that come up only at production scale.
 
 **Capacity planning.** Each Sidecar holds active capabilities + the policy bundle in memory. With 1000 active sessions and a 100 KB bundle, you're well under 100 MB resident. The hot path stays bounded by the perf budgets (Stage 1 < 1ms, Stage 2 < 200µs) regardless of session count.
 
-**Failure modes.** If the Authority is unreachable past its configured `bundle_ttl_seconds`, Sidecars deny protected requests with `PolicyBundleStale`. They also cannot receive policy or revocation updates, and capability issuance is unavailable. Monitor the Authority streams and Sidecar readiness accordingly.
+**Failure modes.** If the Authority is unreachable past its configured `bundle_ttl`, Sidecars deny protected requests with `PolicyBundleStale`. They also cannot receive policy or revocation updates, and capability issuance is unavailable. Monitor the Authority streams and Sidecar readiness accordingly.
 
 ## Tenant onboarding flow
 

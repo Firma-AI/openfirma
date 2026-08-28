@@ -9,6 +9,7 @@ mod capability_lease;
 mod capability_mint;
 mod capability_refresh;
 mod capability_routing;
+mod config_paths;
 mod helper;
 mod identity;
 mod log;

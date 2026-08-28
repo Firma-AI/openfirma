@@ -54,7 +54,7 @@ requested_ttl:      3600
 The Authority does three things in order:
 
 1. **Issuance policy evaluation and narrowing.** The Authority treats requested action classes as a mathematical set, evaluates each unique class in canonical order against a separate Cedar **issuance policy bundle**, and **grants the authorized subset** — the intersection of what was requested and what the policy permits. Unauthorized classes are dropped, not fatal; the resulting `action_set` is sorted and duplicate-free. Only if *every* requested class is denied does issuance fail closed. This is where decisions like "this agent is not allowed to ever request `payment.transfer`" live. See [Policies](../policies/) for the issuance vs runtime split.
-2. **TTL clamping.** The requested TTL is clamped to the Authority's `max_ttl_seconds` config (default 3600 in the demo). You cannot mint long-lived tokens by asking for them.
+2. **TTL clamping.** The requested TTL is clamped to the Authority's `max_ttl` config (default `"1h"` in the demo). You cannot mint long-lived tokens by asking for them.
 3. **Signing.** If at least one class is authorized, the Authority assembles a `CapabilityClaims` over the granted subset, signs it with its Ed25519 key, and returns the PASETO token + the parsed claims.
 
 Because the Authority narrows, the caller can safely over-request. `firma run` does exactly that: by default it requests **all** action classes and lets the issuance policy decide the grant, so a session is never denied merely because its config omitted a class the mapping rules later emit. The policy — not the request — is the source of truth. Setting `[run.profiles.<name>.capability] requested_actions` in `firma.toml` narrows the request further, an opt-in knob for running with *fewer* permissions than the policy would allow.
@@ -74,7 +74,7 @@ public key on the run profile:
 [run.profiles.codex.capability]
 public_key_path = "/path/to/authority.pub"
 refresh_ratio = 0.60
-grace_seconds = 30
+grace = "30s"
 ```
 
 Export that key from FirmaTeam:
@@ -94,12 +94,13 @@ uses it to verify the returned PASETO token. The same effective key is written
 to the autostarted Sidecar's `[sidecar.authority].public_key_path`, so the
 Sidecar verifies the generated capability seed against the same trust root.
 The capability-specific path takes precedence over
-`[sidecar.authority].public_key_path`; omitting it keeps the existing Sidecar
-Authority key behavior.
+`[sidecar.authority].public_key_path`; when it is omitted, the Sidecar Authority
+key is used.
 
 Key read failures, files that are not exactly 32 bytes, malformed or expired
-tokens, and signature mismatches fail closed with an error. The existing
-`--capability-file` option and capability-seed TOML format are unchanged.
+tokens, and signature mismatches fail closed with an error. An explicit
+`--capability-file` uses the same signed TOML representation as the automatic
+per-run capability file.
 
 ## Staying alive: automatic refresh
 
@@ -131,33 +132,14 @@ renewal.
 
 Tuning knobs:
 
-| Setting                      | Where               | Default | Effect                                               |
-| ---------------------------- | ------------------- | ------- | ---------------------------------------------------- |
-| `capability.refresh_ratio`   | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing.      |
-| `capability.grace_seconds`   | `firma run` profile | `30`    | Renew no later than this many seconds before expiry. |
-| `capability_seed.hot_reload` | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change.  |
+| Setting                                               | Where               | Default | Effect                                               |
+| ----------------------------------------------------- | ------------------- | ------- | ---------------------------------------------------- |
+| `run.profiles.<id>.capability.refresh_ratio`          | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing.      |
+| `run.profiles.<id>.capability.grace`                  | `firma run` profile | `"30s"` | Renew no later than this duration before expiry.     |
 
 There is intentionally no hard session-lifetime cap: the Authority's issuance
 policy is the authority on whether a session may continue, and it is re-checked
 on every refresh. If you need a fixed ceiling, enforce it there.
-
-For the legacy operator path (pre-provisioning a fixed, long-lived session
-without `firma run`), the CLI subcommand is available:
-
-```bash
-firma authority issue \
-  --agent-id agt_01j0000000e008000000000001 \
-  --session-id demo-session \
-  --action communication.external.send \
-  --resource-scope 'wttr.in*' \
-  --ttl-seconds 3600 \
-  --output capability-demo-agent.toml
-```
-
-The output is a TOML file with both the raw PASETO and the parsed claims. It can
-be loaded into a Sidecar via `[capability_seed]` (deprecated) or used by
-`firma run --capability-file`. See [Issue capability tokens](../../guides/issue-capability-tokens/)
-for that legacy workflow.
 
 The `raw_token` is the source of truth. The other TOML fields are a parsed mirror for selection, diagnostics, and operator readability. At Sidecar startup, every seed is verified with the configured Authority public key, and the mirrored TOML claims must exactly match the claims inside the signed token. If someone edits `action_set`, `resource_scope`, `session_id`, or any other claim in the TOML without re-issuing and re-signing the token, the Sidecar refuses to start.
 
@@ -167,7 +149,7 @@ When the agent makes an outbound call, Stage 1 of the pipeline runs the validati
 
 1. **Selection.** The Sidecar's `CapabilityMap` is keyed by `(session_id, action_class, resource)`. It picks the capability that matches the normalized envelope. If none does, the result is `CapabilityNotFound` (a DENY).
 2. **Signature verification.** The PASETO library verifies the Ed25519 signature against the Authority's public key, which the Sidecar holds in memory and never re-fetches on the hot path.
-3. **Expiry check.** `now()` is compared against `expiry` with a configurable `clock_skew_tolerance_seconds` (default 5). Past expiry → `CapabilityExpired`.
+3. **Expiry check.** `now()` is compared against `expiry` with a configurable `clock_skew_tolerance` (default `"5s"`). Past expiry → `CapabilityExpired`.
 4. **Revocation check.** `token_id` is looked up in the local revocation store — a bloom filter front, LRU cache for false positives. A hit → `CapabilityRevoked`.
 5. **Scope match.** The request's normalized action class must be in `action_set`, and the resource must match `resource_scope`. A miss → `CapabilityScopeMismatch`.
 
@@ -176,20 +158,17 @@ If all five pass, Stage 1 emits a `ValidatedCapability` containing the raw token
 The whole stage is local. There is no network call, no Authority round-trip, no key fetch. This is what lets it stay under 1 ms p95.
 
 Capabilities written under `$XDG_RUNTIME_DIR/firma/capabilities/` by `firma run`
-are loaded by the sidecar at startup using the same verification path. Operator-
-configured `[capability_seed]` paths are also loaded (deprecated; see
-[Issue capability tokens](../../guides/issue-capability-tokens/)), but emit a
-deprecation warning. In both cases the sidecar verifies each seed's `raw_token`
-and rejects the seed if the signed claims differ from the TOML mirror. This moves
-tamper detection to boot time instead of waiting for the first matching request.
+are loaded by the Sidecar at startup. The Sidecar verifies each file's
+`raw_token` and rejects it if the signed claims differ from the TOML mirror.
+This moves tamper detection to boot time instead of waiting for the first
+matching request.
 
 ## Revocation
 
 A capability lives until its `expiry`. If you need to kill one earlier — say, an agent was compromised and you want to cut it off immediately — you publish a **revocation** for its `token_id`.
 
-Capability token IDs use the canonical form `ctok_<26-character TypeID suffix>`.
-Raw UUIDs and TypeIDs with another prefix or UUID version are rejected by token,
-seed, and revocation ingestion.
+Capability token IDs use the canonical form
+`ctok_<26-character TypeID suffix>`.
 
 In the reference Authority, this is:
 
@@ -201,8 +180,8 @@ The Authority appends `token_id` to its revocation file and broadcasts a `Revoca
 
 The local store has two layers:
 
-- A **bloom filter** sized for the expected number of active revocations (configurable via `[revocation].capacity` and `.fpr`). Lookups are constant-time and lock-free.
-- An **LRU cache** that absorbs false-positive hits from the bloom and confirms whether a `token_id` is _actually_ revoked (configurable via `[revocation].lru_capacity`).
+- A **bloom filter** sized for the expected number of active revocations (configurable via `sidecar.revocation.capacity` and `sidecar.revocation.fpr`). Lookups are constant-time and lock-free.
+- An **LRU cache** that absorbs false-positive hits from the bloom and confirms whether a `token_id` is _actually_ revoked (configurable via `sidecar.revocation.lru_capacity`).
 
 This split is why revocation lookups stay under microseconds and why memory cost is bounded even with millions of historical revocations.
 
@@ -221,5 +200,5 @@ The two together form a textbook capability-based security model: the capability
 ## Where to go next
 
 - [Policies](../policies/) — the Cedar bundles that Stage 2 evaluates against.
-- [Issue capability tokens](../../guides/issue-capability-tokens/) — how an operator issues, distributes, and revokes.
+- [Wrap an agent with `firma run`](../../guides/firma-run/) — automatic capability issuance and refresh.
 - [The enforcement pipeline](../pipeline/) — see how validated claims flow into Stage 2.

@@ -6,8 +6,8 @@ policy_dir = "policies"
 issuance_policy_dir = "issuance-policies"
 revocation_file = "examples/firma-run/macos-vz-codex-pty/.runtime/revocations.txt"
 key_file = ".runtime/authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 
 [sidecar]
 mode = "enforce"
@@ -23,10 +23,10 @@ rules_path = "mapping-rules.toml"
 default_protected = true
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 0
+clock_skew_tolerance = "0s"
 
 [sidecar.connector]
-default_timeout_ms = 120000
+default_timeout = "2m"
 
 [sidecar.audit]
 sink = "file"

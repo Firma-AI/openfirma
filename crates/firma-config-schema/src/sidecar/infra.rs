@@ -1,5 +1,6 @@
 //! Schema for the sidecar's top-level infrastructure sections:
-//! `mode`, `[policy]`, `[ca]`, and `[credentials.*]`.
+//! `sidecar.mode`, `[sidecar.policy]`, `[sidecar.ca]`, and
+//! `[sidecar.credentials.*]`.
 //!
 //! Representation only. `firma-sidecar` validates these values and parses
 //! them into its own configuration types (for example, the credential
@@ -105,9 +106,9 @@ pub struct CredentialConfig {
     pub secret_path: Option<PathBuf>,
 }
 
-/// Sentinel: unset `policy.dir`.
+/// Sentinel: unset `sidecar.policy.dir`.
 const DEFAULT_POLICY_DIR: &str = "./policies/";
-/// Sentinel: unset `ca.dir` (state-managed; never re-based).
+/// Sentinel: unset `sidecar.ca.dir` (state-managed; never re-based).
 const DEFAULT_CA_DIR: &str = "./firma-ca/";
 
 fn default_policy_dir() -> PathBuf {

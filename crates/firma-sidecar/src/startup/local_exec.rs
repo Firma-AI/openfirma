@@ -4,8 +4,6 @@
 //! [`SidecarConfig`], builds the handler and endpoint, and spawns them as a
 //! background tokio task. Returns `None` when `local_exec` is not configured.
 
-use std::time::Duration;
-
 use tokio_util::sync::CancellationToken;
 
 use firma_identifiers::SandboxId;
@@ -16,7 +14,7 @@ use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerCon
 /// Build and spawn the local-exec governance endpoint if configured.
 ///
 /// Returns a [`JoinHandle`](tokio::task::JoinHandle) for the endpoint task,
-/// or `None` when `[local_exec]` is absent from the config.
+/// or `None` when `[sidecar.local_exec]` is absent from the config.
 ///
 /// # Errors
 ///
@@ -37,7 +35,7 @@ pub fn spawn_local_exec_endpoint(
     tracing::info!(
         socket_path = %socket_path,
         default_action = ?le_config.default_action,
-        token_ttl_secs = le_config.token_ttl_secs,
+        token_ttl_secs = le_config.token_ttl.as_secs(),
         "spawning local-exec governance endpoint"
     );
 
@@ -54,7 +52,7 @@ fn build_handler(config: &LocalExecConfig, sandbox_id: Option<SandboxId>) -> Loc
     LocalExecHandler::new(LocalExecHandlerConfig {
         default_action: config.default_action,
         expected_sandbox_id: sandbox_id,
-        token_ttl: Duration::from_secs(config.token_ttl_secs),
-        retry_after_ms: config.retry_after_ms,
+        token_ttl: config.token_ttl,
+        retry_after_ms: u64::try_from(config.retry_after.as_millis()).unwrap_or(u64::MAX),
     })
 }

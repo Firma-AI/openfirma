@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,18 +40,30 @@ pub struct AuthorityConfig {
     /// Optional physical TCP destination for the Authority connection.
     #[serde(default)]
     pub connect_addr: Option<SocketAddr>,
-    /// Connection timeout in seconds.
-    #[serde(default = "default_connect_timeout_secs")]
-    pub connect_timeout_secs: u64,
-    /// Minimum reconnect backoff in milliseconds.
-    #[serde(default = "default_min_backoff_ms")]
-    pub reconnect_min_backoff_ms: u64,
-    /// Maximum reconnect backoff in seconds.
-    #[serde(default = "default_max_backoff_secs")]
-    pub reconnect_max_backoff_secs: u64,
+    /// Connection timeout.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_connect_timeout"
+    )]
+    pub connect_timeout: Duration,
+    /// Minimum reconnect backoff.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_min_backoff"
+    )]
+    pub reconnect_min_backoff: Duration,
+    /// Maximum reconnect backoff.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_max_backoff"
+    )]
+    pub reconnect_max_backoff: Duration,
     /// Grace period before the revocation stream is considered ready.
-    #[serde(default = "default_readiness_grace_ms")]
-    pub revocation_readiness_grace_ms: u64,
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
+        default = "default_readiness_grace"
+    )]
+    pub revocation_readiness_grace: Duration,
     /// Flip revocation readiness back to false on disconnect.
     #[serde(default)]
     pub revocation_fail_closed_on_disconnect: bool,
@@ -83,10 +96,10 @@ impl Default for AuthorityConfig {
             agent_id: None,
             url: None,
             connect_addr: None,
-            connect_timeout_secs: default_connect_timeout_secs(),
-            reconnect_min_backoff_ms: default_min_backoff_ms(),
-            reconnect_max_backoff_secs: default_max_backoff_secs(),
-            revocation_readiness_grace_ms: default_readiness_grace_ms(),
+            connect_timeout: default_connect_timeout(),
+            reconnect_min_backoff: default_min_backoff(),
+            reconnect_max_backoff: default_max_backoff(),
+            revocation_readiness_grace: default_readiness_grace(),
             revocation_fail_closed_on_disconnect: false,
             public_key_path: None,
             ca_cert_path: None,
@@ -98,18 +111,18 @@ impl Default for AuthorityConfig {
     }
 }
 
-const fn default_connect_timeout_secs() -> u64 {
-    10
+const fn default_connect_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
-const fn default_min_backoff_ms() -> u64 {
-    250
+const fn default_min_backoff() -> Duration {
+    Duration::from_millis(250)
 }
 
-const fn default_max_backoff_secs() -> u64 {
-    30
+const fn default_max_backoff() -> Duration {
+    Duration::from_secs(30)
 }
 
-const fn default_readiness_grace_ms() -> u64 {
-    500
+const fn default_readiness_grace() -> Duration {
+    Duration::from_millis(500)
 }

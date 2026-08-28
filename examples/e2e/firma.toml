@@ -15,8 +15,8 @@ policy_dir = "../policies/"
 issuance_policy_dir = "issuance-policies/"
 revocation_file = "examples/e2e/revocations.txt"
 key_file = "authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+max_ttl = "1h"
+bundle_ttl = "30s"
 
 # schema_path is optional. Omit to use the schema embedded in the binary.
 # Set to override with a custom schema (e.g. to add action classes or context fields):
@@ -27,7 +27,7 @@ bundle_ttl_seconds = 30
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-drain_timeout_secs = 30
+drain_timeout = "30s"
 
 [sidecar.interceptor.https_mitm]
 enabled = true
@@ -44,7 +44,7 @@ rules_path = "mapping-rules.toml"
 default_protected = false
 
 [sidecar.capability_validation]
-clock_skew_tolerance_seconds = 0
+clock_skew_tolerance = "0s"
 
 [sidecar.constraint_enforcement]
 # Session-state cache capacity (AARM R2 G4). Raise to reduce LRU eviction
@@ -58,14 +58,14 @@ clock_skew_tolerance_seconds = 0
 # session_state_path = "/var/lib/firma/session-state.jsonl"
 
 [sidecar.connector]
-default_timeout_ms = 120000
+default_timeout = "2m"
 
 # Local agent configuration (lm-studio)
 [[sidecar.connector.hosts]]
 host = "localhost:1234"
 rps = 10
 burst = 5
-timeout_ms = 300000
+timeout = "5m"
 
 [sidecar.audit]
 sink = "stdout"
@@ -74,8 +74,8 @@ signing_key_path = "audit.key"
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"
 url = "http://127.0.0.1:50051"
-connect_timeout_secs = 10
-reconnect_min_backoff_ms = 250
-reconnect_max_backoff_secs = 30
-revocation_readiness_grace_ms = 500
+connect_timeout = "10s"
+reconnect_min_backoff = "250ms"
+reconnect_max_backoff = "30s"
+revocation_readiness_grace = "500ms"
 revocation_fail_closed_on_disconnect = false

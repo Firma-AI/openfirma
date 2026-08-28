@@ -1,6 +1,6 @@
-//! Build the connector [`ConnectorRegistry`] from `[connector]` config.
+//! Build the connector [`ConnectorRegistry`] from `[sidecar.connector]` config.
 //!
-//! The registry default is built from `default_timeout_ms` (30s uses
+//! The registry default is built from `default_timeout` (30s uses
 //! the [`GenericHttpConnector::default_for_unconfigured`] shortcut);
 //! every host connector entry becomes a
 //! [`GenericHttpConnector`] registered under its host string.
@@ -12,7 +12,7 @@ use crate::config;
 use crate::connector::ConnectorRegistry;
 use crate::connector::provider::{GenericHttpConnector, HttpConnectorConfig, RateLimitConfig};
 
-/// Builds the [`ConnectorRegistry`] from the `[connector]` config
+/// Builds the [`ConnectorRegistry`] from the `[sidecar.connector]` config
 /// section.
 ///
 /// # Errors
@@ -23,11 +23,11 @@ use crate::connector::provider::{GenericHttpConnector, HttpConnectorConfig, Rate
 pub fn build_connector_registry(
     cfg: &config::ConnectorConfig,
 ) -> anyhow::Result<Arc<ConnectorRegistry>> {
-    let default = if cfg.default_timeout_ms == 30_000 {
+    let default = if cfg.default_timeout == std::time::Duration::from_secs(30) {
         GenericHttpConnector::default_for_unconfigured()
     } else {
         GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: std::time::Duration::from_millis(cfg.default_timeout_ms),
+            timeout: cfg.default_timeout,
             rate_limit: None,
         })
     }
@@ -42,7 +42,7 @@ pub fn build_connector_registry(
             anyhow::anyhow!("connector host {}: burst must be > 0", host_cfg.host)
         })?;
         let http = GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: std::time::Duration::from_millis(host_cfg.timeout_ms),
+            timeout: host_cfg.timeout,
             rate_limit: Some(RateLimitConfig { rps, burst }),
         })
         .map_err(|e| anyhow::anyhow!("failed to build connector for {}: {e}", host_cfg.host))?;
@@ -51,7 +51,7 @@ pub fn build_connector_registry(
             host = host_cfg.host.as_str(),
             rps = host_cfg.rps,
             burst = host_cfg.burst,
-            timeout_ms = host_cfg.timeout_ms,
+            timeout_ms = u64::try_from(host_cfg.timeout.as_millis()).unwrap_or(u64::MAX),
             "connector host override registered"
         );
     }

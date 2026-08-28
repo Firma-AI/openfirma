@@ -294,7 +294,7 @@ wants "allow Slack posts to #general, deny everything else" matches on
 ## Canonical mappings (authoring guidance)
 
 Operators supply the mapping rules via the TOML file referenced by
-`mapping.rules_path` (default: `mapping-rules.toml`, see
+`sidecar.mapping.rules_path` (default: `mapping-rules.toml`, see
 `crates/firma-sidecar/src/enforcement/config.rs`). Each rule maps
 `(host, path, method)` to one registry identifier. Rules validate against
 the registry at load time; unknown identifiers fail startup.
@@ -368,7 +368,7 @@ Components that bind to the registry:
   `crates/firma-sidecar/src/normalizer/mapping.rs` — mapping rules validated
   against the registry at load time.
 - Operator-supplied `mapping-rules.toml` (path configured via
-  `mapping.rules_path` in the Sidecar config) — rule authors MUST review
+  `sidecar.mapping.rules_path` in `firma.toml`) — rule authors MUST review
   new entries against §2.3.2 naming rules and the authoring guidance in
   this document.
 - `crates/firma-core/firma.cedarschema` — canonical schema embedded in

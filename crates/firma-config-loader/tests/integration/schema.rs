@@ -1,6 +1,7 @@
 //! Section extraction behavior through the public schema API.
 
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig, load_section};
+use firma_config_schema::{authority, run, sidecar};
 use fs_err as fs;
 use serde::Deserialize;
 use std::assert_matches;
@@ -235,4 +236,70 @@ fn optional_section_rejects_present_non_table_section() {
             .contains("invalid `[authority]` section: expected table"),
         "error: {error}"
     );
+}
+
+#[test]
+fn tracked_unified_config_examples_match_the_strict_schema() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+
+    for (name, toml) in [
+        (
+            "configuration-full-example",
+            toml_fence_after(
+                include_str!("../../../../docs/configuration.md"),
+                "## Full Example",
+            ),
+        ),
+        (
+            "transport-unified-example",
+            toml_fence_after(
+                include_str!("../../../../docs/security/transport.md"),
+                "Then wire the generated paths",
+            ),
+        ),
+        (
+            "mtls-authority-example",
+            toml_fence_after(
+                include_str!("../../../../docs/security/mtls-playbook.md"),
+                "Set the paths in the Authority section",
+            ),
+        ),
+        (
+            "mtls-sidecar-example",
+            toml_fence_after(
+                include_str!("../../../../docs/security/mtls-playbook.md"),
+                "Add the Sidecar client settings",
+            ),
+        ),
+    ] {
+        let path = tmp.path().join(format!("{name}.toml"));
+        fs::write(&path, toml).expect("write documentation example");
+        assert_unified_config_parses(&path);
+    }
+
+    for path in [
+        "../../examples/firma-run/local-command-governance/configs/base-profile.toml",
+        "../../examples/firma-run/local/assets/firma_run.local.example.toml",
+    ] {
+        assert_unified_config_parses(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path));
+    }
+}
+
+fn toml_fence_after<'a>(markdown: &'a str, marker: &str) -> &'a str {
+    markdown
+        .split_once(marker)
+        .and_then(|(_, remainder)| remainder.split_once("```toml"))
+        .and_then(|(_, remainder)| remainder.split_once("```").map(|(toml, _)| toml))
+        .expect("TOML fence after marker exists")
+}
+
+fn assert_unified_config_parses(path: &std::path::Path) {
+    let config = FirmaConfig::load(path).expect("load unified config example");
+    let _: Option<authority::AuthorityConfig> = config
+        .optional_section("authority")
+        .expect("parse authority section");
+    let _: Option<sidecar::SidecarConfig> = config
+        .optional_section("sidecar")
+        .expect("parse sidecar section");
+    let _: Option<run::FileConfig> = config.optional_section("run").expect("parse run section");
 }

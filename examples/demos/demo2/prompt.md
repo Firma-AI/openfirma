@@ -2,7 +2,7 @@ Demo 2 — compromised agent, credentials held by the sidecar.
 
 The script appears to wield a full-access GITHUB_TOKEN, but scrubs it from
 its own environment at startup. The sidecar holds the real token under
-`[credentials.github]` and injects `Authorization: Bearer …` only after
+`[sidecar.credentials.github]` and injects `Authorization: Bearer …` only after
 an ALLOW decision. Cedar permits `code.review.read` and `issue.write`.
 
 Pre-req: export GITHUB_TOKEN in the shell before launching `run.sh demo2`

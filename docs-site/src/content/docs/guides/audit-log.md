@@ -15,7 +15,7 @@ The `[sidecar.audit]` block in `firma.toml` selects a sink:
 | -------- | ------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `stdout` | `sink = "stdout"`                                       | Local dev or production on Cloud Run; pipe into `jq` or ship structured JSON. |
 | `file`   | `sink = "file"`, `file_path = "..."`                    | Single-host deployments with rotation handled outside.                        |
-| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_bytes = N` | High-throughput; resilient to crashes; consume with a separate tail process.  |
+| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_size = "100 MiB"` | High-throughput; resilient to crashes; consume with a separate tail process. |
 | `grpc`   | `sink = "grpc"`, `grpc_url = "..."`                     | Centralized collector ingesting from many Sidecars.                           |
 
 For this guide, assume `sink = "file"` and `file_path = "/tmp/firma-standalone/logs/audit.jsonl"`.
@@ -208,7 +208,7 @@ The Sidecar could not find or verify a capability matching `(session_id, action,
 
 ### Stage 1: `TokenExpired`
 
-The token is past its `expiry`. Issue a fresh one. If this happens "right after" issuance, you have clock drift between Authority and Sidecar — bump `[sidecar.capability_validation].clock_skew_tolerance_seconds`.
+The token is past its `expiry`. Issue a fresh one. If this happens "right after" issuance, you have clock drift between Authority and Sidecar — bump `[sidecar.capability_validation].clock_skew_tolerance`.
 
 ### Stage 1: `TokenRevoked`
 
@@ -226,7 +226,7 @@ If you expected a _permit_ to fire and a _forbid_ fired instead, remember: `forb
 
 ### Stage 2: `PolicyBundleStale`
 
-The Authority-advertised bundle TTL expired without a refresh. Check the Sidecar's connection to the Authority and the Authority's health. The TTL is configured by `[authority].bundle_ttl_seconds`; there is no separate Sidecar TTL setting.
+The Authority-advertised bundle TTL expired without a refresh. Check the Sidecar's connection to the Authority and the Authority's health. The TTL is configured by `[authority].bundle_ttl`; there is no separate Sidecar TTL setting.
 
 ### ABORT: `CONNECTOR_TIMEOUT`, `CONNECTOR_FAILURE`, `CONNECTOR_INVALID_REQUEST`, or `CREDENTIAL_INJECTION_FAILED`
 

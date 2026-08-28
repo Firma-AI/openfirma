@@ -67,24 +67,24 @@ See [docs/security/transport.md](docs/security/transport.md) for certificate gen
 **Requirements for production:**
 
 - Use a CA-issued certificate for the Authority; keep the CA key offline
-- Distribute the CA certificate to every Sidecar host via `authority.ca_cert_path`
-- Set `allow_insecure_remote_authority = false` (default) for all non-loopback connections
+- Distribute the CA certificate to every Sidecar host via `sidecar.authority.ca_cert_path`
+- Set `sidecar.authority.allow_insecure_remote_authority = false` (default) for all non-loopback connections
 - V1 TLS is server-only; sidecar identity is **not** asserted (mTLS planned for v1.1)
 
 ### Policy Bundle Freshness
 
-Configure `[authority].bundle_ttl_seconds` to suit your risk tolerance. The
+Configure `[authority].bundle_ttl` to suit your risk tolerance. The
 Authority advertises this freshness deadline in streamed policy bundles and
 refreshes them periodically; shorter TTLs increase refresh load. Stale bundles
 result in fail-closed denials. Revocation updates use a separate stream.
 
 ### Protected-by-Default
 
-Set `mapping.default_protected = true` in production. Requests to unmapped hosts are PASSTHROUGH (no enforcement) when this is false.
+Set `sidecar.mapping.default_protected = true` in production. Requests to unmapped hosts are PASSTHROUGH (no enforcement) when this is false.
 
 ### Credential Scoping
 
-Scope each credential in `[credentials.*]` to a single host. Review these blocks as you would IAM grants.
+Scope each credential in `[sidecar.credentials.*]` to a single host. Review these blocks as you would IAM grants.
 
 ## Known Limitations
 

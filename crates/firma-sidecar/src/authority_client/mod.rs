@@ -14,7 +14,6 @@ pub mod swappable_policy;
 mod integration_tests;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use firma_core::RevocationStore;
 use tokio::task::JoinHandle;
@@ -61,8 +60,8 @@ pub struct AuthorityClientHandle {
 /// Spawn both Authority stream clients.
 #[must_use]
 pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHandle {
-    let min = Duration::from_millis(deps.config.reconnect_min_backoff_ms);
-    let max = Duration::from_secs(deps.config.reconnect_max_backoff_secs);
+    let min = deps.config.reconnect_min_backoff;
+    let max = deps.config.reconnect_max_backoff;
 
     let policy_task = PolicyBundleTask {
         channel: deps.channel.clone(),
@@ -80,7 +79,7 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
         backoff: ExponentialBackoff::new(min, max),
         cancel: deps.cancel,
         fail_closed_on_disconnect: deps.config.revocation_fail_closed_on_disconnect,
-        readiness_grace_ms: deps.config.revocation_readiness_grace_ms,
+        readiness_grace: deps.config.revocation_readiness_grace,
         last_event_time: None,
         credentials: deps.credentials,
     };

@@ -216,7 +216,7 @@ fn configure_capability(world: &TestWorld, public_key_path: Option<&Path>) {
     let authority = config["authority"]
         .as_table_mut()
         .expect("generated config has an Authority table");
-    authority["max_ttl_seconds"] = value(SHORT_TTL_SECONDS);
+    authority["max_ttl"] = value(format!("{SHORT_TTL_SECONDS}s"));
 
     let generic = config["run"]["profiles"]["generic"]
         .as_table_mut()
@@ -231,7 +231,7 @@ fn configure_capability(world: &TestWorld, public_key_path: Option<&Path>) {
         capability["public_key_path"] = value(path.display().to_string());
     }
     capability["refresh_ratio"] = value(0.5);
-    capability["grace_seconds"] = value(1);
+    capability["grace"] = value("1s");
 
     std::fs::write(config_path, config.to_string()).expect("write capability test config");
 }
