@@ -18,6 +18,7 @@ firma-core = { workspace = true }
 firma-identifiers = { workspace = true }
 firma-protobuf = { workspace = true }
 hex = { workspace = true }
+jiff = { workspace = true, features = ["serde"] }
 notify = { workspace = true }
 pasetors = { workspace = true }
 prost-types = { workspace = true }

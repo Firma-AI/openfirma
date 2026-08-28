@@ -88,7 +88,7 @@ The output file contains the signed token and matching claims. Configure the Sid
 | `max_ttl`         | `"1h"`                | Maximum token lifetime.                      |
 | `bundle_ttl`      | `"30s"`               | TTL advertised with streamed policy bundles. |
 
-Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`.
+Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`. Duration overrides use the same compact unit-bearing syntax as TOML: `FIRMA_AUTHORITY_MAX_TTL=1h` and `FIRMA_AUTHORITY_BUNDLE_TTL=30s`.
 
 ## Policy files
 

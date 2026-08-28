@@ -246,7 +246,7 @@ impl AuthorityConfig {
 /// ```ignore
 /// let config = AuthorityConfigBuilder::from_toml_str(&body)?
 ///     .rebase_defaults(config_dir)
-///     .apply_env_overrides()
+///     .apply_env_overrides()?
 ///     .build()?;
 /// ```
 pub struct AuthorityConfigBuilder {
@@ -318,9 +318,14 @@ impl AuthorityConfigBuilder {
         self
     }
 
-    /// Fold `FIRMA_AUTHORITY_`-prefixed env overrides into the config, verbatim.
-    #[must_use]
-    fn apply_env_overrides(mut self) -> Self {
+    /// Fold `FIRMA_AUTHORITY_`-prefixed environment overrides into the config.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidEnvironmentVariable`] when a configured
+    /// duration does not use the schema's compact human-readable syntax or is
+    /// zero.
+    fn apply_env_overrides(mut self) -> Result<Self, ConfigError> {
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_LISTEN_ADDR") {
             self.schema.listen_addr = value;
         }
@@ -336,18 +341,16 @@ impl AuthorityConfigBuilder {
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_REVOCATION_FILE") {
             self.schema.revocation_file = PathBuf::from(value);
         }
-        if let Ok(value) = std::env::var("FIRMA_AUTHORITY_MAX_TTL_SECONDS")
-            && let Some(seconds) = parse_nonnegative_i32(&value)
-        {
-            self.schema.max_ttl = std::time::Duration::from_secs(u64::from(seconds.unsigned_abs()));
+        if let Ok(value) = std::env::var("FIRMA_AUTHORITY_MAX_TTL") {
+            self.schema.max_ttl =
+                parse_duration_env("FIRMA_AUTHORITY_MAX_TTL", "authority.max_ttl", &value)?;
         }
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
             self.schema.key_file = PathBuf::from(value);
         }
-        if let Ok(value) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
-            && let Ok(seconds) = value.parse::<u32>()
-        {
-            self.schema.bundle_ttl = std::time::Duration::from_secs(u64::from(seconds));
+        if let Ok(value) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL") {
+            self.schema.bundle_ttl =
+                parse_duration_env("FIRMA_AUTHORITY_BUNDLE_TTL", "authority.bundle_ttl", &value)?;
         }
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_TLS_CERT_PATH") {
             self.schema.tls_cert_path = Some(PathBuf::from(value));
@@ -364,7 +367,7 @@ impl AuthorityConfigBuilder {
         if let Ok(value) = std::env::var("FIRMA_AUTHORITY_AUTHORIZED_CLIENTS_PATH") {
             self.schema.authorized_clients_path = Some(PathBuf::from(value));
         }
-        self
+        Ok(self)
     }
 
     /// Override the listen address on the in-progress config.
@@ -412,8 +415,27 @@ impl Default for AuthorityConfigBuilder {
     }
 }
 
-fn parse_nonnegative_i32(value: &str) -> Option<i32> {
-    value.parse::<i32>().ok().filter(|value| *value >= 0)
+fn parse_duration_env(
+    name: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<std::time::Duration, ConfigError> {
+    let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value);
+    let duration =
+        jiff::fmt::serde::unsigned_duration::friendly::compact::required::deserialize(deserializer)
+            .map_err(|error| ConfigError::InvalidEnvironmentVariable {
+                name,
+                field,
+                reason: error.to_string(),
+            })?;
+    if duration.is_zero() {
+        return Err(ConfigError::InvalidEnvironmentVariable {
+            name,
+            field,
+            reason: "duration must be greater than zero".to_string(),
+        });
+    }
+    Ok(duration)
 }
 
 impl AuthorityConfig {
@@ -451,7 +473,7 @@ impl AuthorityConfig {
             None => AuthorityConfigBuilder::default(),
         };
         builder
-            .apply_env_overrides()
+            .apply_env_overrides()?
             .build()
             .map_err(|e| ConfigError::ParseError {
                 path: config_path.cloned().unwrap_or_default(),
@@ -473,7 +495,7 @@ impl AuthorityConfig {
     ) -> Result<Self, ConfigError> {
         AuthorityConfigBuilder::from_toml_file(file)?
             .rebase_defaults(config_dir)
-            .apply_env_overrides()
+            .apply_env_overrides()?
             .build()
             .map_err(|e| ConfigError::ParseError {
                 path: file.to_path_buf(),
@@ -511,7 +533,7 @@ impl AuthorityConfig {
         // build. Env overrides run last so they stay verbatim.
         let config = AuthorityConfigBuilder::new(schema)
             .rebase_defaults(&resolved.config_dir())
-            .apply_env_overrides()
+            .apply_env_overrides()?
             .build()
             .map_err(|error| ConfigError::ParseError {
                 path: config_path,
@@ -528,6 +550,12 @@ pub enum ConfigError {
     IoError { path: PathBuf, reason: String },
     #[error("failed to parse config file {path}: {reason}")]
     ParseError { path: PathBuf, reason: String },
+    #[error("invalid {name} for {field}: {reason}")]
+    InvalidEnvironmentVariable {
+        name: &'static str,
+        field: &'static str,
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -689,13 +717,5 @@ max_ttl = "30m"
                 field: "authority.bundle_ttl"
             })
         ));
-    }
-
-    #[test]
-    fn authority_seconds_env_parser_rejects_negative_malformed_and_out_of_range_values() {
-        assert_eq!(parse_nonnegative_i32("60"), Some(60));
-        assert_eq!(parse_nonnegative_i32("-1"), None);
-        assert_eq!(parse_nonnegative_i32("invalid"), None);
-        assert_eq!(parse_nonnegative_i32("2147483648"), None);
     }
 }

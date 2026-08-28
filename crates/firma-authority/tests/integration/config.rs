@@ -58,7 +58,7 @@ fn missing_authority_section_returns_none() -> anyhow::Result<()> {
 }
 
 #[test]
-fn legacy_seconds_env_overrides_preserve_the_compatibility_matrix() -> anyhow::Result<()> {
+fn duration_env_overrides_use_the_schema_contract() -> anyhow::Result<()> {
     assert_eq!(
         std::env::var("NEXTEST").as_deref(),
         Ok("1"),
@@ -75,14 +75,14 @@ bundle_ttl = "12s"
     )?;
     let resolved = resolved_config(&config_path)?;
 
-    for (value, expected) in [
-        ("60", 60),
-        ("invalid", 11),
-        ("-1", 11),
-        ("0", 0),
-        ("2147483648", 11),
-    ] {
-        set_legacy_seconds_env(Some(value), None);
+    set_ttl_env(None, None, None, None);
+    let config = AuthorityConfig::from_resolved_section(&resolved)?
+        .ok_or_else(|| anyhow!("authority section should be present"))?;
+    assert_eq!(config.max_ttl_seconds(), 11);
+    assert_eq!(config.bundle_ttl_seconds(), 12);
+
+    for (value, expected) in [("1m", 60), ("2h 30m", 9_000), ("2147483647s", i32::MAX)] {
+        set_ttl_env(Some(value), None, None, None);
         let config = AuthorityConfig::from_resolved_section(&resolved)?
             .ok_or_else(|| anyhow!("authority section should be present"))?;
         assert_eq!(
@@ -93,14 +93,8 @@ bundle_ttl = "12s"
         assert_eq!(config.bundle_ttl_seconds(), 12);
     }
 
-    for (value, expected) in [
-        ("60", 60),
-        ("invalid", 12),
-        ("-1", 12),
-        ("0", 0),
-        ("4294967296", 12),
-    ] {
-        set_legacy_seconds_env(None, Some(value));
+    for (value, expected) in [("1m", 60), ("2h 30m", 9_000), ("4294967295s", u32::MAX)] {
+        set_ttl_env(None, Some(value), None, None);
         let config = AuthorityConfig::from_resolved_section(&resolved)?
             .ok_or_else(|| anyhow!("authority section should be present"))?;
         assert_eq!(config.max_ttl_seconds(), 11);
@@ -111,6 +105,147 @@ bundle_ttl = "12s"
         );
     }
 
+    set_ttl_env(Some("13s"), Some("14s"), None, None);
+    let config = AuthorityConfig::from_resolved_section(&resolved)?
+        .ok_or_else(|| anyhow!("authority section should be present"))?;
+    assert_eq!(config.max_ttl_seconds(), 13);
+    assert_eq!(config.bundle_ttl_seconds(), 14);
+
+    set_ttl_env(None, None, Some("21"), Some("22"));
+    let config = AuthorityConfig::from_resolved_section(&resolved)?
+        .ok_or_else(|| anyhow!("authority section should be present"))?;
+    assert_eq!(config.max_ttl_seconds(), 11);
+    assert_eq!(config.bundle_ttl_seconds(), 12);
+
+    Ok(())
+}
+
+#[test]
+fn invalid_duration_env_overrides_fail_closed() -> anyhow::Result<()> {
+    assert_eq!(
+        std::env::var("NEXTEST").as_deref(),
+        Ok("1"),
+        "this test mutates process environment and must run under cargo nextest"
+    );
+    let tmp = tempfile::tempdir()?;
+    let config_path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &config_path,
+        "[authority]\nmax_ttl = \"11s\"\nbundle_ttl = \"12s\"\n",
+    )?;
+    let resolved = resolved_config(&config_path)?;
+
+    for (name, max_ttl, bundle_ttl, expected) in [
+        (
+            "malformed maximum TTL",
+            Some("invalid"),
+            None,
+            "invalid FIRMA_AUTHORITY_MAX_TTL for authority.max_ttl",
+        ),
+        (
+            "negative maximum TTL",
+            Some("-1s"),
+            None,
+            "invalid FIRMA_AUTHORITY_MAX_TTL for authority.max_ttl",
+        ),
+        (
+            "zero maximum TTL",
+            Some("0s"),
+            None,
+            "duration must be greater than zero",
+        ),
+        (
+            "fractional maximum TTL",
+            Some("1500ms"),
+            None,
+            "authority.max_ttl must be a whole number of seconds",
+        ),
+        (
+            "overflowing maximum TTL",
+            Some("2147483648s"),
+            None,
+            "authority.max_ttl exceeds the supported whole-second range",
+        ),
+        (
+            "malformed bundle TTL",
+            None,
+            Some("invalid"),
+            "invalid FIRMA_AUTHORITY_BUNDLE_TTL for authority.bundle_ttl",
+        ),
+        (
+            "negative bundle TTL",
+            None,
+            Some("-1s"),
+            "invalid FIRMA_AUTHORITY_BUNDLE_TTL for authority.bundle_ttl",
+        ),
+        (
+            "zero bundle TTL",
+            None,
+            Some("0s"),
+            "duration must be greater than zero",
+        ),
+        (
+            "fractional bundle TTL",
+            None,
+            Some("1500ms"),
+            "authority.bundle_ttl must be a whole number of seconds",
+        ),
+        (
+            "overflowing bundle TTL",
+            None,
+            Some("4294967296s"),
+            "authority.bundle_ttl exceeds the supported whole-second range",
+        ),
+    ] {
+        set_ttl_env(max_ttl, bundle_ttl, None, None);
+        let error = AuthorityConfig::from_resolved_section(&resolved).expect_err(name);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for {name}: {error}"
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+#[expect(
+    unsafe_code,
+    reason = "nextest gives this environment-mutating integration test its own process"
+)]
+fn non_unicode_duration_env_overrides_follow_the_general_env_contract() -> anyhow::Result<()> {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    assert_eq!(
+        std::env::var("NEXTEST").as_deref(),
+        Ok("1"),
+        "this test mutates process environment and must run under cargo nextest"
+    );
+    let tmp = tempfile::tempdir()?;
+    let config_path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &config_path,
+        "[authority]\nmax_ttl = \"11s\"\nbundle_ttl = \"12s\"\n",
+    )?;
+    let resolved = resolved_config(&config_path)?;
+
+    // SAFETY: nextest executes this test in an isolated process.
+    unsafe {
+        std::env::set_var(
+            "FIRMA_AUTHORITY_MAX_TTL",
+            std::ffi::OsString::from_vec(vec![0xfe]),
+        );
+        std::env::set_var(
+            "FIRMA_AUTHORITY_BUNDLE_TTL",
+            std::ffi::OsString::from_vec(vec![0xff]),
+        );
+    }
+    let config = AuthorityConfig::from_resolved_section(&resolved)?
+        .ok_or_else(|| anyhow!("authority section should be present"))?;
+    assert_eq!(config.max_ttl_seconds(), 11);
+    assert_eq!(config.bundle_ttl_seconds(), 12);
+
     Ok(())
 }
 
@@ -118,20 +253,35 @@ bundle_ttl = "12s"
     unsafe_code,
     reason = "nextest gives this environment-mutating integration test its own process"
 )]
-fn set_legacy_seconds_env(max_ttl: Option<&str>, bundle_ttl: Option<&str>) {
-    const MAX_TTL: &str = "FIRMA_AUTHORITY_MAX_TTL_SECONDS";
-    const BUNDLE_TTL: &str = "FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS";
+fn set_ttl_env(
+    max_ttl: Option<&str>,
+    bundle_ttl: Option<&str>,
+    removed_max_ttl: Option<&str>,
+    removed_bundle_ttl: Option<&str>,
+) {
+    const MAX_TTL: &str = "FIRMA_AUTHORITY_MAX_TTL";
+    const BUNDLE_TTL: &str = "FIRMA_AUTHORITY_BUNDLE_TTL";
+    const REMOVED_MAX_TTL: &str = "FIRMA_AUTHORITY_MAX_TTL_SECONDS";
+    const REMOVED_BUNDLE_TTL: &str = "FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS";
 
     // SAFETY: the test verifies `NEXTEST=1` before calling this helper;
     // nextest executes each test in an isolated process.
     unsafe {
         std::env::remove_var(MAX_TTL);
         std::env::remove_var(BUNDLE_TTL);
+        std::env::remove_var(REMOVED_MAX_TTL);
+        std::env::remove_var(REMOVED_BUNDLE_TTL);
         if let Some(value) = max_ttl {
             std::env::set_var(MAX_TTL, value);
         }
         if let Some(value) = bundle_ttl {
             std::env::set_var(BUNDLE_TTL, value);
+        }
+        if let Some(value) = removed_max_ttl {
+            std::env::set_var(REMOVED_MAX_TTL, value);
+        }
+        if let Some(value) = removed_bundle_ttl {
+            std::env::set_var(REMOVED_BUNDLE_TTL, value);
         }
     }
 }
