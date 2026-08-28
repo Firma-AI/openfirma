@@ -223,18 +223,11 @@ impl AuthorityConfig {
             u64::try_from(self.max_ttl_seconds).map_err(|_| ConfigError::DurationNotPositive {
                 field: "authority.max_ttl",
             })?;
-        let max_ttl = firma_config_schema::utils::NonZeroDuration::new(
-            std::time::Duration::from_secs(max_ttl_seconds),
-        )
-        .map_err(|_| ConfigError::DurationNotPositive {
-            field: "authority.max_ttl",
-        })?;
-        let bundle_ttl = firma_config_schema::utils::NonZeroDuration::new(
-            std::time::Duration::from_secs(u64::from(self.bundle_ttl_seconds)),
-        )
-        .map_err(|_| ConfigError::DurationNotPositive {
-            field: "authority.bundle_ttl",
-        })?;
+        let max_ttl = non_zero_duration_from_seconds("authority.max_ttl", max_ttl_seconds)?;
+        let bundle_ttl = non_zero_duration_from_seconds(
+            "authority.bundle_ttl",
+            u64::from(self.bundle_ttl_seconds),
+        )?;
 
         Ok(schema::AuthorityConfig {
             listen_addr: self.listen_addr.clone(),
@@ -252,6 +245,14 @@ impl AuthorityConfig {
             authorized_clients_path: self.tls.authorized_clients.clone(),
         })
     }
+}
+
+fn non_zero_duration_from_seconds(
+    field: &'static str,
+    seconds: u64,
+) -> Result<firma_config_schema::utils::NonZeroDuration, ConfigError> {
+    firma_config_schema::utils::NonZeroDuration::new(std::time::Duration::from_secs(seconds))
+        .map_err(|_| ConfigError::DurationNotPositive { field })
 }
 
 /// Assembles a validated [`AuthorityConfig`].
