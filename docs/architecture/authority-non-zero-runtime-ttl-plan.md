@@ -497,3 +497,37 @@ reviewer:
 - `cargo clippy -p firma-authority -p firma-config-schema -p firma --all-targets -- -D warnings`;
   and
 - `git diff --check`.
+
+## Atomic revision follow-up review
+
+A later independent history review found one intermediate-only issue in the
+maximum-TTL implementation revision.
+
+### Medium — Maximum-TTL revision did not compile independently
+
+**Evidence:** The original maximum-TTL revision changed
+`max_ttl_seconds()` to return `NonZeroU32`, but one assertion in
+`crates/firma-authority/tests/integration/config.rs` acquired its required
+`.get()` only in the following bundle-TTL revision. Compiling that intermediate
+revision therefore produced `E0308` (expected `NonZero<u32>`, found integer).
+
+**Impact:** The advertised maximum-TTL atomic revision could not be built,
+tested, bisected, or cherry-picked independently. The cumulative final tree was
+correct because the following revision contained the adjustment.
+
+### Disposition and fresh re-review
+
+Accepted. The assertion adjustment now belongs to maximum-TTL revision
+`4f7064bfdbe2407ae7c8a9325aeb632b4b3c7f87`; bundle-TTL revision
+`20a2c745cc97e5ee0fd6c54ff5ea6f812cb9686f` changes only bundle-field
+assertions and consumers.
+
+Fresh independent follow-up review reported no findings. Archived checkouts of
+both implementation revisions passed `cargo check --workspace --tests
+--locked` and all 80 Authority library tests. All nine changed `crates/**`
+files at reviewed candidate `50d4fec29ee6d3df23b16575fc2f4f1e397c8dfc`
+have the same blob IDs as prior reviewed head
+`daa9fee67f75f9012e20c0ea34360e9c01eeaa3f`; the reconstructed production
+and test diff is byte-for-byte identical. The reviewer did not rerun the full
+nextest/E2E suite independently at both intermediate commits. Final stack
+verification and CI cover the complete tip separately.
