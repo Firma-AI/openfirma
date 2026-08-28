@@ -19,8 +19,8 @@ use clap::Args as ClapArgs;
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     /// Path to the unified `firma.toml`. When unset, resolved via standard
-    /// config discovery (`FIRMA_CONFIG` / XDG).
-    #[arg(long, env = "FIRMA_STACK_CONFIG")]
+    /// config discovery (`FIRMA_CONFIG` / nearest `.firma/firma.toml`).
+    #[arg(long, env = "FIRMA_CONFIG")]
     pub config: Option<PathBuf>,
     /// Override the runtime state directory inspected for pid files, sockets,
     /// and component logs.

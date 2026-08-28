@@ -8,6 +8,7 @@ pub use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 mod authority_keygen;
 mod cli_help;
 mod cli_parsing;
+mod config_selection;
 mod doctor;
 mod e2e_startup;
 mod firma_config;
