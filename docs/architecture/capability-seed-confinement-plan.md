@@ -17,8 +17,9 @@
 - Goal: ensure the Sidecar reads and watches capability seeds only through
   physical paths contained by its canonical runtime capabilities directory.
 - Observable acceptance outcomes:
-  - Startup accepts an existing canonical seed whose resolved path is under the
-    resolved runtime capabilities directory.
+  - Startup accepts an existing canonical seed whose resolved path and
+    configured path's canonical parent are under the resolved runtime
+    capabilities directory.
   - A disjoint path, `..` traversal, or file symlink that resolves outside that
     directory fails startup before any seed content is read.
   - Hot-reload setup rejects the same escape paths before registering any
@@ -90,15 +91,20 @@
 ### `DEC-001`: Establish containment from canonical existing paths
 
 - Choice: when the seed list is non-empty, canonicalize the runtime capabilities
-  directory and every configured existing seed. Accept a seed only when its
-  resolved path starts with the resolved directory by path component.
+  directory, every configured existing seed, and every configured seed's parent.
+  Accept a seed only when both its resolved path and canonical configured parent
+  start with the resolved directory by path component. Apply the same rule with
+  or without hot reload so watcher configuration cannot change seed validity.
 - Rationale and evidence: canonicalization resolves `..` and platform-supported
   symlinks before the containment check. The current startup contract already
   requires every configured seed to exist, so this adds no missing-file state.
 - Consequences and rejected alternatives: lexical `Path::starts_with` on raw
   configured values is rejected because it is bypassable. Rejecting all
-  symlinks is unnecessary: a symlink whose resolved target remains contained
-  satisfies the boundary. Descriptor-relative/open-handle confinement is not
+  symlinks is unnecessary: a symlink located under the canonical runtime
+  capabilities directory whose resolved target remains contained satisfies the
+  boundary. A symlink configured from an external parent is rejected even when
+  it targets a contained seed because watching its retarget events would require
+  an external registration. Descriptor-relative/open-handle confinement is not
   selected because the wrapped process cannot mutate the host runtime root and
   a cross-platform safe Rust implementation would defend against a trusted
   host actor outside the stated threat model.
@@ -183,9 +189,10 @@
 - Detailed proof: `TRACE-WORKFLOW` and `PROOF-005`.
 
 - Compatibility, migration, and failure semantics: this is an intentional
-  breaking location constraint. Seeds outside the physical runtime capability
-  directory fail closed without a migration or alias. `DEC-003` preserves empty
-  defaults and reload map retention.
+  breaking location constraint. Seeds whose resolved target or canonical
+  configured parent is outside the physical runtime capability directory fail
+  closed without a migration or alias. `DEC-003` preserves empty defaults and
+  reload map retention.
 - Durable documentation owner: `docs/configuration.md`, `docs/cli.md`, the
   docs-site Run/capability guides, `docs-site/public/llms.txt`, and executable
   examples.
@@ -424,6 +431,40 @@ Author-run corrective evidence:
   and `PROOF-004`.
 - Decided by: planner, following exact-tip independent review.
 
+### Watcher-amendment `PLAN-001` — High · Contract coherence · Confirmed conflict
+
+- **Evidence:** At revision `531db544`, `DEC-001` accepted any configured seed
+  whose resolved target was beneath the canonical capabilities directory, while
+  amended `DEC-002`, `INV-002`, and `TRACE-WATCH` additionally required the
+  configured path's canonical parent to be contained.
+- **Path/outcome:** An external symlink such as
+  `/outside/seed.toml -> <state>/capabilities/seed.toml` could pass initial
+  resolution, but watcher setup could neither register `/outside` without
+  violating confinement nor preserve the amendment's stated acceptance rule.
+- **Invariant owner:** `INV-001` and `INV-002`; Sidecar read and watcher
+  registration boundaries.
+- **Impact:** Hot reload would otherwise change seed validity or force an
+  undocumented choice between an external watch and the `FINAL-001` gap.
+- **Correction:** Require both the resolved seed and canonical configured parent
+  to be contained for every load, independently of hot reload. Update the
+  acceptance outcomes, `DEC-001`, failure contract, resolver sketch, traces, and
+  proof controls. Add Unix and Windows rejection controls for an externally
+  located symlink targeting a contained seed.
+- **Classification:** Confirmed conflict.
+- **Confidence:** High.
+
+#### Disposition
+
+- Status: Corrected in plan.
+- Rationale: one resolver establishes both path predicates before any load or
+  watcher registration. This gives direct startup and hot-reloaded startup one
+  validity contract, rejects every required external filesystem effect, and
+  retains contained symlink support.
+- Incorporated at: acceptance outcomes, `DEC-001`, compatibility/failure
+  semantics, type sketch, `TRACE-STARTUP`, `TRACE-WATCH`, and `PROOF-001` through
+  `PROOF-004`.
+- Decided by: planner following independent amendment review.
+
 ## Technical evidence
 
 ### Applicability assessment
@@ -488,10 +529,16 @@ Author-run corrective evidence:
 ### Type and signature sketches
 
 ```rust
+struct ResolvedSeedPath {
+    configured_path: PathBuf,
+    resolved_path: PathBuf,
+    configured_parent: PathBuf,
+}
+
 fn resolve_seed_paths(
     seed: &CapabilitySeedConfig,
     capabilities_dir: &Path,
-) -> anyhow::Result<Vec<(PathBuf, PathBuf)>>;
+) -> anyhow::Result<Vec<ResolvedSeedPath>>;
 
 pub fn load_capability_map(
     seed: &CapabilitySeedConfig,
@@ -508,17 +555,22 @@ pub fn CapabilityReloader::spawn(
 ) -> anyhow::Result<Self>;
 ```
 
-No type makes provenance unrepresentable: configured and resolved values are
-both `PathBuf` and can be swapped in compile-valid code (`CW-001`). The private
-resolver and tests own their semantic roles; callers receive no public
-constructor or reusable unchecked pair.
+No type makes provenance unrepresentable: configured, resolved, and parent
+values are all `PathBuf` and can be swapped in compile-valid code (`CW-001`). The
+private resolver and tests own their semantic roles; callers receive no public
+constructor or reusable unchecked value.
 
 `CW-001`:
 
 ```rust
 let configured = canonical_path.clone();
 let resolved = user_path.clone();
-let pair = (configured, resolved); // compiles, but violates semantic roles
+let configured_parent = external_path.clone();
+let value = ResolvedSeedPath {
+    configured_path: configured,
+    resolved_path: resolved,
+    configured_parent,
+}; // compiles, but violates semantic roles
 ```
 
 The design therefore claims runtime validation and private ownership, not type
@@ -528,17 +580,17 @@ proof of path provenance.
 
 #### `TRACE-STARTUP`
 
-| Field                      | Content                                                                                                                       |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| State                      | Proposed                                                                                                                      |
-| Entry and stimulus         | `firma sidecar` starts with non-empty `[sidecar.capability_seed].paths`.                                                      |
-| Path                       | config rebasing → `build_pipeline_runtime` → `load_capability_map` → resolve directory/seeds → containment check → read/parse |
-| Input/output types         | configured `PathBuf` + runtime `Path` → resolved pairs → verified `CapabilityMap`                                             |
-| Validation/trust crossings | Canonical containment precedes filesystem read; token/claim verification remains downstream.                                  |
-| Invariant established      | `INV-001` immediately before each read.                                                                                       |
-| Success outcome            | Contained seeds populate Stage 1.                                                                                             |
-| Failure path               | Resolution/containment/read/parse/verification error aborts startup before readiness.                                         |
-| Proof boundary             | capability unit/integration and Firma CLI E2E.                                                                                |
+| Field                      | Content                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| State                      | Proposed                                                                                                                                         |
+| Entry and stimulus         | `firma sidecar` starts with non-empty `[sidecar.capability_seed].paths`.                                                                         |
+| Path                       | config rebasing → `build_pipeline_runtime` → `load_capability_map` → resolve directory/seeds/configured parents → containment check → read/parse |
+| Input/output types         | configured `PathBuf` + runtime `Path` → resolved contained paths and parents → verified `CapabilityMap`                                          |
+| Validation/trust crossings | Canonical containment precedes filesystem read; token/claim verification remains downstream.                                                     |
+| Invariant established      | `INV-001` immediately before each read.                                                                                                          |
+| Success outcome            | Contained seeds populate Stage 1.                                                                                                                |
+| Failure path               | Resolution/containment/read/parse/verification error aborts startup before readiness.                                                            |
+| Proof boundary             | capability unit/integration and Firma CLI E2E.                                                                                                   |
 
 #### `TRACE-WATCH`
 
@@ -588,8 +640,8 @@ proof of path provenance.
 
 | ID          | Invariant | Required evidence                                                                                                                                                                                                                             |
 | ----------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PROOF-001` | `INV-001` | Contained ordinary path loads; disjoint existing and missing configured paths fail with useful context and no content.                                                                                                                        |
-| `PROOF-002` | `INV-001` | `..` traversal and platform file symlinks resolving outside fail initial loading with configured/resolved/boundary context.                                                                                                                   |
+| `PROOF-001` | `INV-001` | Contained ordinary path loads; disjoint existing and missing configured paths fail with useful context and no content; hot reload does not alter validity.                                                                                    |
+| `PROOF-002` | `INV-001` | `..` traversal, platform file symlinks resolving outside, and external-parent symlinks targeting inside fail initial loading with configured/resolved/parent/boundary context.                                                                |
 | `PROOF-003` | `INV-002` | The same traversal and `#[cfg(unix)]`/`#[cfg(windows)]` symlink cases fail watcher setup before registration; a contained symlink retarget emits through its validated configured parent.                                                     |
 | `PROOF-004` | `INV-002` | Existing valid atomic rewrite or contained-symlink retarget hot-swaps the map; missing, escaped, structurally invalid, or unverifiable reload retains the previous map.                                                                       |
 | `PROOF-005` | `INV-003` | Real CLI startup accepts an Authority-issued contained seed, rejects an external seed, and current examples/docs select matching state.                                                                                                       |
