@@ -471,10 +471,6 @@ impl Merge for ProfilePatch {
                 (lower, higher) => higher.or(lower),
             },
             executable_policies,
-            codex_cli: match (self.codex_cli, higher.codex_cli) {
-                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
-                (lower, higher) => higher.or(lower),
-            },
             use_http_proxy_sidecar: higher
                 .use_http_proxy_sidecar
                 .or(self.use_http_proxy_sidecar),
@@ -604,10 +600,12 @@ pub(crate) fn resolve_profile_with_layout(
         .identity_mode
         .unwrap_or(SandboxIdentityMode::SandboxUser);
 
-    let executable_policies = resolve_executable_policies(
-        patch.executable_policies.unwrap_or_default(),
-        patch.codex_cli,
-    );
+    let executable_policies = patch
+        .executable_policies
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(executable, policy)| (executable, resolve_executable_policy(policy)))
+        .collect();
 
     let seccomp_policy = patch
         .seccomp_policy
@@ -730,30 +728,11 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             }),
         sidecar_local_exec: None,
         executable_policies: None,
-        codex_cli: None,
         use_http_proxy_sidecar: None,
         allow_non_structural: args.allow_non_structural.then_some(true),
         mask_home_paths: None,
         ca_trust_mode: None,
     }
-}
-
-fn resolve_executable_policies(
-    patch: BTreeMap<String, ExecutableLaunchPolicyPatch>,
-    legacy_codex: Option<ExecutableLaunchPolicyPatch>,
-) -> BTreeMap<String, ExecutableLaunchPolicy> {
-    let mut resolved = patch
-        .into_iter()
-        .map(|(executable, policy)| (executable, resolve_executable_policy(policy)))
-        .collect::<BTreeMap<_, _>>();
-
-    if let Some(codex_policy) = legacy_codex {
-        resolved
-            .entry("codex".to_string())
-            .or_insert_with(|| resolve_executable_policy(codex_policy));
-    }
-
-    resolved
 }
 
 fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableLaunchPolicy {
@@ -1744,13 +1723,6 @@ approval_policy = "never"
             defaults = "preserved"
             shared = "defaults"
 
-            [defaults.codex_cli]
-            enforce_wrapper_defaults = true
-            sandbox_mode = "legacy-defaults"
-
-            [defaults.codex_cli.config_overrides]
-            defaults = "preserved"
-
             [profiles.generic]
             backend = "wsl2"
             env_passthrough = []
@@ -1766,7 +1738,6 @@ approval_policy = "never"
             capability = { source = { kind = "disabled" }, requested_actions = [] }
             sidecar_local_exec = { hitl_mode = "async_token", enforce_known_executables = false, allowed_executables = [] }
             executable_policies = { codex = { enforce_wrapper_defaults = false, approval_policy = "selected-approval", config_overrides = { selected = "present", shared = "selected" } } }
-            codex_cli = { approval_policy = "legacy-selected", config_overrides = {} }
             "#,
         )
         .unwrap();
@@ -1946,11 +1917,6 @@ approval_policy = "never"
                 ("shared".to_string(), "selected".to_string()),
             ]))
         );
-        let legacy = after_cli.codex_cli.as_ref().unwrap();
-        assert_eq!(legacy.enforce_wrapper_defaults, Some(true));
-        assert_eq!(legacy.sandbox_mode.as_deref(), Some("legacy-defaults"));
-        assert_eq!(legacy.approval_policy.as_deref(), Some("legacy-selected"));
-        assert_eq!(legacy.config_overrides, Some(BTreeMap::new()));
         assert_eq!(after_cli.mask_home_paths, Some(Vec::new()));
         assert_eq!(after_cli.ca_trust_mode, Some(super::CaTrustMode::Sole));
 
@@ -1961,10 +1927,6 @@ approval_policy = "never"
         });
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "exhaustive destructuring intentionally inventories every patch field"
-    )]
     fn assert_profile_patch_contract_inventory(patch: ProfilePatch) {
         let ProfilePatch {
             backend,
@@ -1978,7 +1940,6 @@ approval_policy = "never"
             capability,
             sidecar_local_exec,
             executable_policies,
-            codex_cli,
             use_http_proxy_sidecar,
             allow_non_structural,
             mask_home_paths,
@@ -2059,20 +2020,6 @@ approval_policy = "never"
             approval_policy,
             config_overrides,
         } in executable_policies.unwrap_or_default().into_values()
-        {
-            let _ = (
-                enforce_wrapper_defaults,
-                sandbox_mode,
-                approval_policy,
-                config_overrides,
-            );
-        }
-        if let Some(ExecutableLaunchPolicyPatch {
-            enforce_wrapper_defaults,
-            sandbox_mode,
-            approval_policy,
-            config_overrides,
-        }) = codex_cli
         {
             let _ = (
                 enforce_wrapper_defaults,
@@ -2381,12 +2328,6 @@ approval_policy = "never"
                     },
                 ),
             ])),
-            codex_cli: Some(ExecutableLaunchPolicyPatch {
-                enforce_wrapper_defaults: None,
-                sandbox_mode: Some("legacy-lower".to_string()),
-                approval_policy: None,
-                config_overrides: None,
-            }),
             ..ProfilePatch::default()
         };
         let merged = lower.clone().merge(ProfilePatch {
@@ -2402,12 +2343,6 @@ approval_policy = "never"
                     ])),
                 },
             )])),
-            codex_cli: Some(ExecutableLaunchPolicyPatch {
-                enforce_wrapper_defaults: Some(false),
-                sandbox_mode: None,
-                approval_policy: Some("legacy-higher".to_string()),
-                config_overrides: Some(BTreeMap::new()),
-            }),
             ..ProfilePatch::default()
         });
 
@@ -2425,11 +2360,6 @@ approval_policy = "never"
                 ("shared".to_string(), "higher".to_string()),
             ]))
         );
-        let legacy = merged.codex_cli.unwrap();
-        assert_eq!(legacy.enforce_wrapper_defaults, Some(false));
-        assert_eq!(legacy.sandbox_mode.as_deref(), Some("legacy-lower"));
-        assert_eq!(legacy.approval_policy.as_deref(), Some("legacy-higher"));
-        assert_eq!(legacy.config_overrides, Some(BTreeMap::new()));
 
         let cleared = lower.merge(ProfilePatch {
             executable_policies: Some(BTreeMap::new()),

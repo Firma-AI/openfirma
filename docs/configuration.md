@@ -76,6 +76,15 @@ path = "capability.toml"
 
 Use `kind = "disabled"` without `path` to disable the source.
 
+### Run executable policies
+
+Executable launch policies are keyed by executable name. For Codex:
+
+```toml
+[run.profiles.codex.executable_policies.codex]
+approval_policy = "on-request"
+```
+
 ## Scaffolded Example
 
 `firma config` writes one sectioned `firma.toml` with all paths

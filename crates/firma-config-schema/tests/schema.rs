@@ -807,10 +807,27 @@ fn legacy_capability_source_keys_are_rejected() {
 }
 
 #[test]
-fn intentional_codex_cli_compatibility_key_still_parses() {
-    let config = toml::from_str::<run::FileConfig>(
+fn legacy_codex_cli_key_is_rejected() {
+    for config in [
         "[defaults.codex_cli]\nenforce_wrapper_defaults = true\n",
+        "[profiles.unselected.codex_cli]\napproval_policy = \"never\"\n",
+    ] {
+        let error = toml::from_str::<run::FileConfig>(config)
+            .expect_err("legacy codex_cli key must be rejected");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "error: {error}"
+        );
+    }
+
+    let config = toml::from_str::<run::FileConfig>(
+        "[defaults.executable_policies.codex]\nenforce_wrapper_defaults = true\n",
     )
-    .expect("legacy codex_cli remains supported until its separate removal");
-    assert!(config.defaults.codex_cli.is_some());
+    .expect("canonical Codex executable policy must parse");
+    assert!(
+        config
+            .defaults
+            .executable_policies
+            .is_some_and(|policies| policies.contains_key("codex"))
+    );
 }
