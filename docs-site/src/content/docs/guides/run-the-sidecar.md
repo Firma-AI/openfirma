@@ -164,6 +164,11 @@ Notes:
   while you experiment. Production stacks should use `true`.
 - No `[sidecar.ca]` section — these demo curls use plain HTTP. See
   [Enable HTTPS MITM](../https-mitm/) when you need L7 visibility on TLS.
+- Duration values keep their compact unit-bearing syntax, such as `"5s"`.
+  Timeout, deadline, wait, retry, and session-lifetime controls reject zero
+  during config parsing. TTL, grace, and clock-skew values retain their
+  field-specific semantics; for example, a zero clock-skew tolerance means
+  strict expiry checking.
 
 ## Step 6: Start the Authority, then the Sidecar
 

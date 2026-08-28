@@ -1,7 +1,8 @@
 //! Schema for `[sidecar.interceptor]` and its sub-tables.
 //!
-//! Representation only. `firma-sidecar` validates these values and parses
-//! them into its own interceptor configuration types.
+//! Schema value types own intrinsic invariants. `firma-sidecar` validates
+//! cross-field constraints and parses these values into its own interceptor
+//! configuration types.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -10,6 +11,15 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
+
+use crate::utils::NonZeroDuration;
+
+const DEFAULT_DRAIN_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_secs(30));
+const DEFAULT_CONNECT_SETUP_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_secs(10));
+const DEFAULT_CONNECT_SESSION_MAX: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_mins(10));
 
 /// Interception mode selector.
 ///
@@ -64,11 +74,8 @@ pub struct InterceptorConfig {
     #[serde(default)]
     pub socket_path: Option<PathBuf>,
     /// Time to wait for in-flight requests to drain on shutdown.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_drain_timeout"
-    )]
-    pub drain_timeout: Duration,
+    #[serde(default = "default_drain_timeout")]
+    pub drain_timeout: NonZeroDuration,
     /// Maximum request body size accepted by proxy interceptors.
     #[serde(
         deserialize_with = "crate::utils::byte_size::deserialize",
@@ -122,17 +129,11 @@ impl Default for InterceptorConfig {
 #[serde(deny_unknown_fields)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_connect_setup_timeout"
-    )]
-    pub setup_timeout: Duration,
+    #[serde(default = "default_connect_setup_timeout")]
+    pub setup_timeout: NonZeroDuration,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_connect_session_max"
-    )]
-    pub session_max: Duration,
+    #[serde(default = "default_connect_session_max")]
+    pub session_max: NonZeroDuration,
 }
 
 impl Default for ConnectRelayConfig {
@@ -204,8 +205,8 @@ pub fn default_socket_path() -> PathBuf {
     PathBuf::from(xdg).join("firma/sidecar.sock")
 }
 
-const fn default_drain_timeout() -> Duration {
-    Duration::from_secs(30)
+const fn default_drain_timeout() -> NonZeroDuration {
+    DEFAULT_DRAIN_TIMEOUT
 }
 
 const fn default_max_request_body_size() -> ByteSize {
@@ -220,12 +221,12 @@ const fn default_total_body_budget() -> ByteSize {
     ByteSize::mib(64)
 }
 
-const fn default_connect_setup_timeout() -> Duration {
-    Duration::from_secs(10)
+const fn default_connect_setup_timeout() -> NonZeroDuration {
+    DEFAULT_CONNECT_SETUP_TIMEOUT
 }
 
-const fn default_connect_session_max() -> Duration {
-    Duration::from_mins(10)
+const fn default_connect_session_max() -> NonZeroDuration {
+    DEFAULT_CONNECT_SESSION_MAX
 }
 
 const fn default_https_mitm_cert_ttl() -> Duration {

@@ -37,9 +37,6 @@ pub struct HostConnectorConfig {
 /// Error validating a [`ConnectorConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectorConfigError {
-    /// The registry-default timeout was zero.
-    #[error("connector.default_timeout must be > 0")]
-    ZeroDefaultTimeout,
     /// A per-host entry was invalid.
     #[error("connector.hosts[{host}]: {source}")]
     Host {
@@ -63,9 +60,6 @@ pub enum HostConnectorConfigError {
     /// `host` was empty.
     #[error("host must not be empty")]
     EmptyHost,
-    /// `timeout` was zero.
-    #[error("timeout must be > 0")]
-    ZeroTimeout,
     /// `rps` was zero.
     #[error("rps must be > 0")]
     ZeroRps,
@@ -90,9 +84,6 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
         if schema.host.trim().is_empty() {
             return Err(HostConnectorConfigError::EmptyHost);
         }
-        if schema.timeout.is_zero() {
-            return Err(HostConnectorConfigError::ZeroTimeout);
-        }
         if schema.rps == 0 {
             return Err(HostConnectorConfigError::ZeroRps);
         }
@@ -103,7 +94,7 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
             host: schema.host,
             rps: schema.rps,
             burst: schema.burst,
-            timeout: schema.timeout,
+            timeout: schema.timeout.duration(),
         })
     }
 }
@@ -112,9 +103,6 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
     type Error = ConnectorConfigError;
 
     fn try_from(schema: SchemaConnectorConfig) -> Result<Self, Self::Error> {
-        if schema.default_timeout.is_zero() {
-            return Err(ConnectorConfigError::ZeroDefaultTimeout);
-        }
         let mut seen: HashSet<String> = HashSet::with_capacity(schema.hosts.len());
         let mut hosts = Vec::with_capacity(schema.hosts.len());
         for host in schema.hosts {
@@ -133,7 +121,7 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
             hosts.push(validated);
         }
         Ok(Self {
-            default_timeout: schema.default_timeout,
+            default_timeout: schema.default_timeout.duration(),
             hosts,
         })
     }
@@ -142,13 +130,14 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firma_config_schema::utils::NonZeroDuration;
 
     fn host(host: &str, rps: u32, burst: u32, timeout: Duration) -> SchemaHostConnectorConfig {
         SchemaHostConnectorConfig {
             host: host.to_string(),
             rps,
             burst,
-            timeout,
+            timeout: NonZeroDuration::new(timeout).expect("non-zero host timeout"),
         }
     }
 
@@ -157,7 +146,8 @@ mod tests {
         hosts: Vec<SchemaHostConnectorConfig>,
     ) -> SchemaConnectorConfig {
         SchemaConnectorConfig {
-            default_timeout,
+            default_timeout: NonZeroDuration::new(default_timeout)
+                .expect("non-zero default timeout"),
             hosts,
         }
     }
@@ -166,28 +156,6 @@ mod tests {
     fn default_config_is_valid() {
         let d = ConnectorConfig::default();
         assert!(ConnectorConfig::try_from(schema(d.default_timeout, Vec::new())).is_ok());
-    }
-
-    #[test]
-    fn zero_default_timeout_rejected() {
-        assert!(matches!(
-            ConnectorConfig::try_from(schema(Duration::ZERO, Vec::new())),
-            Err(ConnectorConfigError::ZeroDefaultTimeout)
-        ));
-    }
-
-    #[test]
-    fn zero_host_timeout_rejected() {
-        assert!(matches!(
-            ConnectorConfig::try_from(schema(
-                Duration::from_secs(30),
-                vec![host("api.example.com", 10, 5, Duration::ZERO)]
-            )),
-            Err(ConnectorConfigError::Host {
-                source: HostConnectorConfigError::ZeroTimeout,
-                ..
-            })
-        ));
     }
 
     #[test]

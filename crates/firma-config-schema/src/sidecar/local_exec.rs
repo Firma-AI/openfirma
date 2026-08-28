@@ -1,13 +1,19 @@
 //! Schema for `[sidecar.local_exec]`.
 //!
-//! Representation only. When present, the sidecar binds a UDS endpoint that
-//! `firma-run` clients contact for pre-execution governance decisions.
-//! `firma-sidecar` validates that the socket path is absolute.
+//! When present, the sidecar binds a UDS endpoint that `firma-run` clients
+//! contact for pre-execution governance decisions. Schema value types own
+//! intrinsic invariants; `firma-sidecar` validates the absolute socket path and
+//! constraints imposed by the millisecond wire representation.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use crate::utils::NonZeroDuration;
+
+const DEFAULT_RETRY_AFTER: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_millis(500));
 
 /// Policy applied to every fresh local-exec request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -39,17 +45,14 @@ pub struct LocalExecConfig {
     pub token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (default: 500 milliseconds).
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_retry_after"
-    )]
-    pub retry_after: Duration,
+    #[serde(default = "default_retry_after")]
+    pub retry_after: NonZeroDuration,
 }
 
 const fn default_token_ttl() -> Duration {
     Duration::from_mins(5)
 }
 
-const fn default_retry_after() -> Duration {
-    Duration::from_millis(500)
+const fn default_retry_after() -> NonZeroDuration {
+    DEFAULT_RETRY_AFTER
 }

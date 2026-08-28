@@ -109,7 +109,7 @@ impl GatewayClient {
         let response_line = match self.endpoint.as_inner() {
             EndpointInner::Tcp(addr) => {
                 let stream = timeout(
-                    self.config.connection_timeout,
+                    self.config.connection_timeout.duration(),
                     net::TcpStream::connect(addr),
                 )
                 .await
@@ -120,7 +120,7 @@ impl GatewayClient {
             #[cfg(unix)]
             EndpointInner::Unix(path) => {
                 let stream = timeout(
-                    self.config.connection_timeout,
+                    self.config.connection_timeout.duration(),
                     net::UnixStream::connect(path),
                 )
                 .await
@@ -207,7 +207,7 @@ impl GatewayClient {
         let response_line = match self.endpoint.as_inner() {
             EndpointInner::Tcp(addr) => {
                 let stream = timeout(
-                    self.config.connection_timeout,
+                    self.config.connection_timeout.duration(),
                     net::TcpStream::connect(addr),
                 )
                 .await
@@ -218,7 +218,7 @@ impl GatewayClient {
             #[cfg(unix)]
             EndpointInner::Unix(path) => {
                 let stream = timeout(
-                    self.config.connection_timeout,
+                    self.config.connection_timeout.duration(),
                     net::UnixStream::connect(path),
                 )
                 .await
@@ -263,7 +263,7 @@ impl GatewayClient {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        timeout(self.config.operation_timeout, async {
+        timeout(self.config.operation_timeout.duration(), async {
             let mut stream = stream;
             stream
                 .write_all(payload.as_bytes())

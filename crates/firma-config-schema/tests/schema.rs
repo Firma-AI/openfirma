@@ -11,8 +11,78 @@ use firma_config_schema::sidecar::infra::{
     CaConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
-use firma_config_schema::{authority, run, secret_matcher, sidecar};
+use firma_config_schema::utils::{NonZeroDuration, ZeroDurationError};
+use firma_config_schema::{authority, gateway, run, secret_matcher, sidecar};
+use serde::Deserialize;
 use std::time::Duration;
+
+#[test]
+fn non_zero_duration_accepts_friendly_compact_durations() {
+    for (json, expected) in [
+        (r#""1h""#, Duration::from_hours(1)),
+        (r#""30s""#, Duration::from_secs(30)),
+        (r#""500ms""#, Duration::from_millis(500)),
+    ] {
+        let non_zero_duration: NonZeroDuration =
+            serde_json::from_str(json).expect("friendly non-zero duration parses");
+        assert_eq!(non_zero_duration.duration(), expected);
+    }
+}
+
+#[test]
+fn non_zero_duration_rejects_equivalent_friendly_zero_values() {
+    for value in ["0ns", "0ms", "0s", "0m", "0h"] {
+        let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value);
+        let error =
+            NonZeroDuration::deserialize(deserializer).expect_err("zero duration must fail");
+        assert_eq!(error.to_string(), "duration must be greater than zero");
+    }
+}
+
+#[test]
+fn non_zero_duration_accepts_sub_millisecond_non_zero_duration() {
+    let non_zero_duration: NonZeroDuration =
+        serde_json::from_str(r#""1ns""#).expect("nanosecond duration parses");
+
+    assert_eq!(non_zero_duration.duration(), Duration::from_nanos(1));
+}
+
+#[test]
+fn non_zero_duration_construction_rejects_zero() {
+    assert_eq!(NonZeroDuration::new(Duration::ZERO), Err(ZeroDurationError));
+    assert_eq!(
+        NonZeroDuration::try_from(Duration::ZERO),
+        Err(ZeroDurationError)
+    );
+    assert_eq!(
+        ZeroDurationError.to_string(),
+        "duration must be greater than zero"
+    );
+
+    let duration = Duration::from_nanos(1);
+    let non_zero_duration =
+        NonZeroDuration::try_from(duration).expect("non-zero duration constructs successfully");
+    assert_eq!(Duration::from(non_zero_duration), duration);
+}
+
+#[test]
+fn non_zero_duration_serialization_round_trips_with_friendly_representation() {
+    let non_zero_duration = NonZeroDuration::new(Duration::new(65, 123_456_789))
+        .expect("non-zero duration constructs successfully");
+
+    let serialized =
+        serde_json::to_string(&non_zero_duration).expect("non-zero duration serializes");
+    let value: serde_json::Value =
+        serde_json::from_str(&serialized).expect("serialized non-zero duration is JSON");
+    assert!(
+        value.is_string(),
+        "non-zero duration must serialize as a string"
+    );
+
+    let deserialized: NonZeroDuration =
+        serde_json::from_str(&serialized).expect("serialized non-zero duration deserializes");
+    assert_eq!(deserialized, non_zero_duration);
+}
 
 #[test]
 fn interceptor_config_fills_defaults_for_missing_fields() {
@@ -24,12 +94,18 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     // built-in default path for `unix_socket` mode.
     assert_eq!(config.socket_path, None);
     assert_eq!(InterceptorConfig::default().socket_path, None);
-    assert_eq!(config.drain_timeout, Duration::from_secs(30));
+    assert_eq!(config.drain_timeout.duration(), Duration::from_secs(30));
     assert_eq!(config.max_request_body_size, ByteSize::mib(4));
     assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
     assert_eq!(config.total_body_budget, ByteSize::mib(64));
-    assert_eq!(config.connect_relay.setup_timeout, Duration::from_secs(10));
-    assert_eq!(config.connect_relay.session_max, Duration::from_mins(10));
+    assert_eq!(
+        config.connect_relay.setup_timeout.duration(),
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        config.connect_relay.session_max.duration(),
+        Duration::from_mins(10)
+    );
     assert!(config.https_mitm.enabled);
     assert!(config.https_mitm.bypass_hosts.is_empty());
     assert_eq!(
@@ -78,6 +154,213 @@ fn byte_size_fields_require_unit_bearing_strings() {
 }
 
 #[test]
+fn secret_gateway_connection_timeout_rejects_zero() {
+    let error = toml::from_str::<gateway::GatewayClientConfig>("connection_timeout = \"0s\"")
+        .expect_err("zero connection timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn secret_gateway_operation_timeout_rejects_zero() {
+    let error = toml::from_str::<gateway::GatewayClientConfig>("operation_timeout = \"0ms\"")
+        .expect_err("zero operation timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn run_mediator_timeout_rejects_zero() {
+    let error =
+        toml::from_str::<run::FileConfig>("[profiles.test.sidecar_local_exec]\ntimeout = \"0s\"\n")
+            .expect_err("zero mediator timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn run_mediator_hitl_max_wait_rejects_zero() {
+    let error = toml::from_str::<run::FileConfig>(
+        "[profiles.test.sidecar_local_exec]\nhitl_max_wait = \"0m\"\n",
+    )
+    .expect_err("zero HITL maximum wait must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_authority_connect_timeout_rejects_zero() {
+    let error =
+        toml::from_str::<sidecar::SidecarConfig>("[authority]\nconnect_timeout = \"0ns\"\n")
+            .expect_err("zero Authority connect timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_authority_reconnect_min_backoff_rejects_zero() {
+    let error =
+        toml::from_str::<sidecar::SidecarConfig>("[authority]\nreconnect_min_backoff = \"0ms\"\n")
+            .expect_err(
+                "zero Authority minimum reconnect backoff must fail during deserialization",
+            );
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_authority_reconnect_max_backoff_rejects_zero() {
+    let error =
+        toml::from_str::<sidecar::SidecarConfig>("[authority]\nreconnect_max_backoff = \"0s\"\n")
+            .expect_err(
+                "zero Authority maximum reconnect backoff must fail during deserialization",
+            );
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_interceptor_drain_timeout_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>("[interceptor]\ndrain_timeout = \"0m\"\n")
+        .expect_err("zero interceptor drain timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_connect_relay_setup_timeout_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        "[interceptor.connect_relay]\nsetup_timeout = \"0h\"\n",
+    )
+    .expect_err("zero CONNECT relay setup timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_connect_relay_session_max_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        "[interceptor.connect_relay]\nsession_max = \"0s\"\n",
+    )
+    .expect_err("zero CONNECT relay session maximum must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_connector_default_timeout_rejects_zero() {
+    let error =
+        toml::from_str::<sidecar::SidecarConfig>("[connector]\ndefault_timeout = \"0ns\"\n")
+            .expect_err("zero connector default timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_connector_host_timeout_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        r#"
+        [[connector.hosts]]
+        host = "api.example.com"
+        rps = 10
+        burst = 5
+        timeout = "0ms"
+        "#,
+    )
+    .expect_err("zero per-host connector timeout must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_local_exec_retry_after_rejects_zero() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        "[local_exec]\nsocket_path = \"/run/firma/local-exec.sock\"\nretry_after = \"0s\"\n",
+    )
+    .expect_err("zero local-exec retry interval must fail during deserialization");
+
+    assert!(error.span().is_some(), "error must identify the input span");
+    assert!(
+        error
+            .to_string()
+            .contains("duration must be greater than zero"),
+        "error: {error}"
+    );
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"
@@ -95,10 +378,16 @@ fn sidecar_scalar_fields_accept_human_readable_units() {
     )
     .expect("human-readable scalar values deserialize");
 
-    assert_eq!(config.interceptor.drain_timeout, Duration::from_millis(500));
+    assert_eq!(
+        config.interceptor.drain_timeout.duration(),
+        Duration::from_millis(500)
+    );
     assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
     assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
-    assert_eq!(config.connector.default_timeout, Duration::from_secs(30));
+    assert_eq!(
+        config.connector.default_timeout.duration(),
+        Duration::from_secs(30)
+    );
     assert_eq!(config.audit.wal_max_size, ByteSize::mib(100));
 }
 

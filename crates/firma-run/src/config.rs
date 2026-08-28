@@ -150,16 +150,6 @@ impl ResolvedProfile {
         }
 
         if let Some(mediator) = &self.sidecar_local_exec {
-            if mediator.timeout.is_zero() {
-                return Err(RunError::ConfigValidation(
-                    "sidecar_local_exec.timeout must be > 0".to_string(),
-                ));
-            }
-            if mediator.hitl_max_wait.is_zero() {
-                return Err(RunError::ConfigValidation(
-                    "sidecar_local_exec.hitl_max_wait must be > 0".to_string(),
-                ));
-            }
             #[cfg(target_family = "unix")]
             if !matches!(self.sidecar_endpoint, SidecarEndpoint::Unix { .. }) {
                 return Err(RunError::ConfigValidation(
@@ -764,9 +754,13 @@ fn sidecar_local_exec_from_patch(
     let allowed_executables = canonicalize_allowed_executables(&patch.allowed_executables)?;
     Ok(CommandMediatorConfig {
         endpoint,
-        timeout: patch.timeout.unwrap_or(Duration::from_millis(500)),
+        timeout: patch
+            .timeout
+            .map_or(Duration::from_millis(500), |timeout| timeout.duration()),
         hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
-        hitl_max_wait: patch.hitl_max_wait.unwrap_or(Duration::from_mins(5)),
+        hitl_max_wait: patch
+            .hitl_max_wait
+            .map_or(Duration::from_mins(5), |timeout| timeout.duration()),
         enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
         allowed_executables,
     })

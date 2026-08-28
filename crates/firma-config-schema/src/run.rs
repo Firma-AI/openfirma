@@ -1,15 +1,17 @@
 //! Schema for the `[run]` section of `firma.toml`.
 //!
-//! Representation only. `firma-run` layers built-in profile defaults, file
-//! config, and CLI overrides onto these patch types, merges them, then builds
-//! its validated `ResolvedProfile` from the result. The merge and validation
-//! behavior lives in `firma-run`; this module holds the deserialized shape.
+//! `firma-run` layers built-in profile defaults, file config, and CLI overrides
+//! onto these patch types, merges them, then builds its validated
+//! `ResolvedProfile` from the result. Schema value types own intrinsic
+//! invariants; merge and cross-field validation lives in `firma-run`.
 //!
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use crate::utils::NonZeroDuration;
 
 /// Sandbox backend selected for a Run profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,17 +181,11 @@ pub struct ExecutableLaunchPolicyPatch {
 #[serde(deny_unknown_fields)]
 pub struct CommandMediatorPatch {
     pub endpoint: Option<String>,
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
-        default
-    )]
-    pub timeout: Option<Duration>,
+    #[serde(default)]
+    pub timeout: Option<NonZeroDuration>,
     pub hitl_mode: Option<CommandMediatorHitlMode>,
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
-        default
-    )]
-    pub hitl_max_wait: Option<Duration>,
+    #[serde(default)]
+    pub hitl_max_wait: Option<NonZeroDuration>,
     pub enforce_known_executables: Option<bool>,
     #[serde(default)]
     pub allowed_executables: Vec<PathBuf>,
