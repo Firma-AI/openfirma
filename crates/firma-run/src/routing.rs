@@ -918,6 +918,14 @@ fn prepare_run_components(
         let cwd_template = std::env::current_dir()
             .ok()
             .map(|cwd| cwd.join("firma_sidecar.toml"));
+        let mut sidecar_template = owns_sidecar
+            .then(|| {
+                crate::sidecar::config::resolve_template_sources(
+                    flags.template_path.as_deref(),
+                    cwd_template.as_deref(),
+                )
+            })
+            .transpose()?;
         let mut authority_launch = None;
         let mut sidecar_launch = None;
         let mut capability_guard = None;
@@ -1008,6 +1016,9 @@ fn prepare_run_components(
                         "sidecar.log",
                         &orchestrator_dir.join("sidecar.log"),
                     )?;
+                    let template = sidecar_template.take().ok_or_else(|| {
+                        RunError::Internal("resolved Sidecar template missing".into())
+                    })?;
                     let mut launch = crate::sidecar::prepare::prepare(
                         crate::sidecar::prepare::PrepareRequest {
                             sandbox_id: &identity.sandbox_id,
@@ -1015,8 +1026,7 @@ fn prepare_run_components(
                             execution_profile,
                             session_id: &identity.session_id,
                             marker_dir: marker_dir.clone(),
-                            template_path: component_flags.template_path.as_deref(),
-                            cwd_template: cwd_template.clone(),
+                            template,
                             firma_exe: firma_exe.clone(),
                             authority_url: component_flags.authority_url.as_deref(),
                             authority_ca_cert: component_flags.authority_ca_cert.clone(),

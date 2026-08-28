@@ -162,6 +162,11 @@ With `--sidecar local` (also the default when no sidecar endpoint is configured)
 Sidecar alongside the agent process, waits for readiness, and tears it down
 on exit.
 
+Each selected operator template (`--sidecar-config`,
+`FIRMA_SIDECAR_CONFIG_FILE`, or the working-directory fallback) must be a
+unified, sectioned `firma.toml` containing `[sidecar]`. Invalid templates fail
+before local components start or run-marker artifacts are created.
+
 The simplest invocation:
 
 ```bash
