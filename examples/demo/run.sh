@@ -169,9 +169,8 @@ ensure_capability_seed
 # ── Sidecar ──────────────────────────────────────────────────────────────────
 
 echo "[demo] starting firma sidecar (log-filter=debug)"
-(cd "$ROOT" && exec "$TARGET_DIR/firma" --log-filter debug sidecar \
+(cd "$ROOT" && FIRMA_STATE_DIR="$DEMO" exec "$TARGET_DIR/firma" --log-filter debug sidecar \
     --config "$DEMO/firma.toml" \
-    --state-dir "$DEMO" \
     >"$LOG_DIR/sidecar.log" 2>&1) &
 SIDE_PID=$!
 poll_http "http://$LOOPBACK_HOST:9000/healthz" "sidecar /healthz"
