@@ -304,19 +304,19 @@
 
 ## Final verification
 
-- Implementation candidate: `0dc3ab7f620435971ac3b1036ab5cff6f5c2392a`.
+- Implementation candidate: `a9c58c899da4987dd2281f45a173919f43f20998`.
 - Focused checks:
-  - `cargo check -p firma-sidecar -p firma-run -p firma --all-targets` passed.
-  - Sidecar capability-reload integration selection passed 7 tests, including
-    traversal and Unix symlink controls; the Windows symlink control is
-    `#[cfg(windows)]` and remains delegated to Windows CI.
+  - Sidecar capability-reload integration selection passed 9 tests, including
+    traversal, Unix symlink controls, cross-directory retarget, invalid-content
+    map retention, replacement-watcher recovery, and escape rejection; the
+    Windows symlink controls remain delegated to Windows CI.
   - Run's real-Authority compatible-seed test passed.
   - Firma's real Sidecar-seed CLI E2E selection passed 3 tests, including
     contained acceptance and external-path rejection.
   - `bash -n` passed for every changed shell example.
 - Workspace checks:
   - `just check` passed at the exact implementation candidate: dprint, clippy,
-    2,605 nextest tests, doctests, all-feature/all-target build, audit, deny,
+    2,607 nextest tests, doctests, all-feature/all-target build, audit, deny,
     and release validation.
   - `just docs-build` passed and generated all 311 pages.
 - Example smoke evidence:
@@ -328,9 +328,14 @@
     exact checked-in demo selected its direct Sidecar runtime through the
     supported `FIRMA_STATE_DIR` contract. Generated keys, seeds, logs, and
     temporary build outputs were removed.
+  - `just git-demo-ci` reached its documented credential gate and skipped because
+    this orb has no `FIRMA_GIT_DEMO_GITHUB_TOKEN`; exact script syntax and the
+    shared supported direct-Sidecar launch pattern were reviewed, while the live
+    GitHub round trip remains CI-owned.
 - Post-implementation independent review: implementation-candidate review
-  complete with no findings; final post-deletion exact-tip review remains
-  pending.
+  complete with one corrected demo finding; fresh exact-candidate re-review at
+  `a9c58c89` reported no actionable findings. Final post-deletion exact-tip
+  review remains pending.
 
 ### Implementation-candidate review — `ba4501c6`
 
@@ -697,6 +702,51 @@ Author-run corrective evidence:
   test coordination hook would add machinery outside the confinement fix.
 - Incorporated at: type sketch, `TRACE-WATCH`, and `PROOF-004`.
 - Decided by: planner following independent follow-up review.
+
+### `FINAL-003` — Medium · Executable example · Confirmed failure
+
+- **Evidence:** `examples/firma-git-demo/run.sh` at reviewed revision
+  `6d123c1c` invoked direct `firma sidecar` with `--state-dir`, but
+  `crates/firma/src/args/sidecar.rs` exposes that option only for the nested
+  `sidecar start` and `sidecar stop` commands.
+- **Path/outcome:** The Git demo's Sidecar exited during CLI parsing, readiness
+  polling failed, and the newly relocated seed beneath `$STATE_DIR/capabilities`
+  was never loaded.
+- **Invariant owner:** `INV-003`, executable current workflow coherence.
+- **Impact:** The Authority → Sidecar → Git demonstration could not start.
+- **Correction:** Set `FIRMA_STATE_DIR="$STATE_DIR"` on the direct Sidecar process
+  and remove the unsupported argument, matching the working primary demo.
+- **Confidence:** High; Clap rejects the argument before Sidecar startup.
+
+#### Disposition
+
+- Status: Corrected in implementation revision
+  `a9c58c899da4987dd2281f45a173919f43f20998`.
+- Rationale: the canonical runtime-state environment boundary is supported by
+  direct `firma sidecar`, preserves the demo's selected state and seed path, and
+  requires no alternate CLI representation.
+- Verification: `bash -n` passed; `just check` passed 2,607 tests and all
+  workspace gates. The credentialed GitHub round trip remains CI-owned because
+  this orb has no `FIRMA_GIT_DEMO_GITHUB_TOKEN`.
+- Decided by: implementer following exact-candidate independent review.
+
+### Exact implementation-candidate review — `a9c58c89`
+
+- **Exact revision:** `a9c58c899da4987dd2281f45a173919f43f20998`.
+- **Baseline:** `7b88d17d07048b8daf7ebdb5ed721e65822ad29d`.
+- **Scope:** complete PR diff, production startup/reload and platform paths,
+  accepted plan conformance, current-product docs, secret-safe errors, async
+  watcher ownership and map handoff, tests, and executable examples.
+- **Findings:** No actionable findings after `FINAL-003` was corrected.
+- **Reviewer-run evidence:** Sidecar capability-reload integration selection
+  passed 9/9, including traversal, Unix symlink escape, cross-directory
+  retarget/rewrite recovery, invalid-content retention, and secret-safe errors;
+  changed executable examples passed `bash -n`.
+- **Residual uncertainty:** Windows symlink behavior remains CI-owned in this
+  Linux orb. Descriptor-relative protection against trusted-host filesystem
+  races remains outside the accepted threat model.
+- **Disposition:** Accepted. No further implementation or documentation change
+  was required.
 
 ## Technical evidence
 
