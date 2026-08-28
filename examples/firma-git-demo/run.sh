@@ -231,6 +231,7 @@ write_runtime_files() {
   local repo="${FIRMA_GIT_DEMO_REPO#*/}"
 
   mkdir -p \
+    "$STATE_DIR/capabilities" \
     "$STATE_DIR/policies" \
     "$STATE_DIR/issuance-policies" \
     "$STATE_DIR/firma-ca" \
@@ -275,7 +276,7 @@ issue_capability_seed() {
       --action code.destructive \
       --resource-scope 'github.com' \
       --ttl-seconds 3600 \
-      --output "$STATE_DIR/capability-git-demo.toml")
+      --output "$STATE_DIR/capabilities/capability-git-demo.toml")
 }
 
 git_via_firma() {
@@ -310,6 +311,7 @@ start_services() {
   echo "[git-demo] starting firma sidecar"
   (cd "$ROOT" && exec "$TARGET_DIR/firma" --log-filter debug sidecar \
     --config "$STATE_DIR/firma.toml" \
+    --state-dir "$STATE_DIR" \
     --health-bind-addr "$SIDECAR_HEALTH_ADDR" \
     >"$STATE_DIR/logs/sidecar.log" 2>&1) &
   SIDE_PID=$!

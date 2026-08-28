@@ -29,9 +29,6 @@ url = "http://127.0.0.1:50051"
 agent_id = "agt_01j0000000e008000000000001"
 public_key_path = "firma-authority.pub"
 
-[sidecar.capability_seed]
-paths = ["capability-claude.toml"]
-
 [sidecar.audit]
 sink = "file"
 file_path = "audit.jsonl"

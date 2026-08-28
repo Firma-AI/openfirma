@@ -382,19 +382,23 @@ revocations. Pre-flight only, never on the hot path.
 
 ### `firma authority issue`
 
-Issues a signed capability token directly from the loaded Cedar
-bundle and writes it as signed TOML. Pass that file to
-`firma run --capability-file` when an invocation must use an explicitly
-provided capability instead of automatic issuance.
+Issues a signed capability token directly from the loaded Cedar bundle and
+writes it as signed TOML. For a standalone or locally autostarted Sidecar,
+write the file beneath the selected `<state-dir>/capabilities/` directory.
+Pass that canonical file to `firma run --capability-file` when an invocation
+must use an explicitly provided capability instead of automatic issuance.
 
 ```bash
+export FIRMA_STATE_DIR="$PWD/.firma-runtime"
+mkdir -p "$FIRMA_STATE_DIR/capabilities"
+
 firma authority --config firma.toml issue \
   --agent-id agt_01j0000000e008000000000001 \
   --session-id demo-session \
   --action communication.external.send \
   --resource-scope '*' \
   --ttl-seconds 3600 \
-  --output capability-demo-agent.toml
+  --output "$FIRMA_STATE_DIR/capabilities/capability-demo-agent.toml"
 ```
 
 | Flag               | Required | Default | Description                                    |

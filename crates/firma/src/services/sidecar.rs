@@ -103,6 +103,7 @@ fn fail(msg: &str) -> ExitCode {
 /// hot-swapped into Stage 1 without a restart. Returns `None` when hot-reload is
 /// disabled. The returned guard stops the watch on drop.
 fn spawn_capability_reload(
+    runtime_layout: &firma_runtime_state::RuntimeLayout,
     config: &config::SidecarConfig,
     pipeline_runtime: &startup::PipelineRuntime,
     exit: &CancellationToken,
@@ -111,6 +112,7 @@ fn spawn_capability_reload(
         return Ok(None);
     }
     Ok(Some(CapabilityReloader::spawn(
+        runtime_layout,
         &config.capability_seed,
         Arc::clone(&pipeline_runtime.token_verifier),
         pipeline_runtime.capability_handle.clone(),
@@ -248,7 +250,8 @@ async fn serve(
     let pipeline_runtime = startup::build_pipeline_runtime(&runtime_layout, &config)?;
     let authority_handle =
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
-    let _capability_reload = spawn_capability_reload(&config, &pipeline_runtime, &exit)?;
+    let _capability_reload =
+        spawn_capability_reload(&runtime_layout, &config, &pipeline_runtime, &exit)?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
     let handler = Arc::new(build_request_handler(
         Arc::clone(&pipeline_runtime.pipeline),

@@ -97,9 +97,10 @@ path = "capability.toml"
 Use `kind = "disabled"` without `path` to disable the source.
 For a file source, Run parses the complete seed before preparing the sandbox,
 exports only `raw_token` as `FIRMA_CAPABILITY_TOKEN`, and preserves the
-configured path as `FIRMA_CAPABILITY_FILE`. Local Sidecar autostart also loads
-and watches that path. A pre-managed external Sidecar owns its seed list
-independently.
+configured path as `FIRMA_CAPABILITY_FILE`. For local Sidecar autostart, the
+file must resolve beneath the selected `<state-dir>/capabilities/` directory;
+the Sidecar loads and watches only that resolved contained path. A pre-managed
+external Sidecar owns its runtime state and seed list independently.
 
 ### Run executable policies
 
@@ -727,6 +728,23 @@ Validation:
 - Each host entry must set a non-empty `host`, and each of `rps`,
   `burst`, and `timeout` must be greater than zero.
 - Duplicate `host` entries are rejected.
+
+### `[sidecar.capability_seed]`
+
+Configures canonical `CapabilitySeed` TOML loaded into Stage 1 at Sidecar
+startup.
+
+| Field        | Type       | Default | Description                                    |
+| ------------ | ---------- | ------- | ---------------------------------------------- |
+| `paths`      | path array | `[]`    | Existing canonical seed TOML files             |
+| `hot_reload` | bool       | `true`  | Watch configured seeds and load valid rewrites |
+
+Every configured file must resolve beneath the selected Sidecar runtime
+`<state-dir>/capabilities/` directory. The Sidecar canonicalizes both that
+directory and each existing seed before reading or registering a watcher, then
+uses only the resolved contained path. Traversal and symlink paths that resolve
+outside the directory fail startup. An empty `paths` list does not require the
+directory to exist.
 
 ### `[sidecar.authority]`
 

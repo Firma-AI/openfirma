@@ -38,7 +38,7 @@ foreach ($arg in $args) {
 
 $sidecarSrc = if ($setupMode -eq "observability") { $sidecarSrcObservability } else { $sidecarSrcDefault }
 
-New-Item -ItemType Directory -Path $localDir -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $localDir "capabilities") -Force | Out-Null
 Write-Ok "ensured local runtime directory: $localDir"
 
 if (-not (Test-Path -Path $mappingDst -PathType Leaf)) {

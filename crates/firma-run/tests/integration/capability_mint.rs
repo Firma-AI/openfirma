@@ -295,7 +295,10 @@ fn lease() -> CapabilityLeaseConfig {
 async fn real_authority_token_mints_compatible_seed() {
     let authority = RealAuthority::start().await;
     let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("seed.toml");
+    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    std::fs::create_dir(&capabilities_dir).expect("create capabilities directory");
+    let seed_path = capabilities_dir.join("seed.toml");
     let params = IssueParams {
         authority_url: authority.url.clone(),
         authority_pub_key_path: authority.pub_key_path.clone(),
@@ -339,6 +342,7 @@ async fn real_authority_token_mints_compatible_seed() {
             hot_reload: true,
         },
         verifier.as_ref(),
+        &capabilities_dir,
     )
     .expect("Sidecar loads seed minted through firma-run");
     let entry = capability_map

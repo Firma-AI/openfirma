@@ -13,7 +13,7 @@
 )]
 
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -118,11 +118,21 @@ fn write_seed(dir: &Path, target: &Path, seed: &CapabilitySeed) {
     std::fs::rename(&tmp, target).expect("rename seed into place");
 }
 
+fn runtime_seed(root: &Path) -> (firma_runtime_state::RuntimeLayout, PathBuf) {
+    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(root);
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    std::fs::create_dir(&capabilities_dir).expect("create runtime capabilities directory");
+    let seed_path = capabilities_dir.join("seed.toml");
+    (runtime_layout, seed_path)
+}
+
 fn handle_from(
     seed_config: &CapabilitySeedConfig,
     verifier: &Arc<dyn TokenVerifier + Send + Sync>,
+    capabilities_dir: &Path,
 ) -> CapabilityMapHandle {
-    let map = load_capability_map(seed_config, verifier.as_ref()).expect("initial map");
+    let map =
+        load_capability_map(seed_config, verifier.as_ref(), capabilities_dir).expect("initial map");
     CapabilityMapHandle::new(map)
 }
 
@@ -156,11 +166,125 @@ async fn wait_for_log(writer: &CapturingWriter, expected: &str) -> String {
     writer.snapshot()
 }
 
+fn assert_initial_load_and_watcher_reject_escape(
+    runtime_layout: &firma_runtime_state::RuntimeLayout,
+    configured_path: &Path,
+    resolved_external_path: &Path,
+    verifier: Arc<dyn TokenVerifier + Send + Sync>,
+) {
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let resolved_capabilities_dir =
+        std::fs::canonicalize(&capabilities_dir).expect("canonical capabilities directory");
+    let config = CapabilitySeedConfig {
+        paths: vec![configured_path.to_path_buf()],
+        hot_reload: true,
+    };
+    let resolved_external_path =
+        std::fs::canonicalize(resolved_external_path).expect("canonical external seed");
+
+    let initial_error = load_capability_map(&config, verifier.as_ref(), &capabilities_dir)
+        .expect_err("initial load must reject a seed resolving outside the runtime directory");
+    let empty_map = load_capability_map(
+        &CapabilitySeedConfig::default(),
+        verifier.as_ref(),
+        &capabilities_dir,
+    )
+    .expect("empty capability map");
+    let Err(watcher_error) = CapabilityReloader::spawn(
+        runtime_layout,
+        &config,
+        verifier,
+        CapabilityMapHandle::new(empty_map),
+        CancellationToken::new(),
+    ) else {
+        panic!("watcher setup must reject a seed resolving outside the runtime directory");
+    };
+
+    for error in [initial_error, watcher_error] {
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(configured_path.to_string_lossy().as_ref()),
+            "error must identify the configured path; got: {rendered}"
+        );
+        assert!(
+            rendered.contains(resolved_external_path.to_string_lossy().as_ref()),
+            "error must identify the resolved external path; got: {rendered}"
+        );
+        assert!(
+            rendered.contains(resolved_capabilities_dir.to_string_lossy().as_ref()),
+            "error must identify the canonical capabilities directory; got: {rendered}"
+        );
+        assert!(
+            rendered.contains("must be under the runtime capabilities directory"),
+            "error must identify the containment boundary; got: {rendered}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn traversal_cannot_escape_initial_load_or_watcher_boundary() {
+    let keys = keys();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (runtime_layout, _seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let external_path = dir.path().join("external-seed.toml");
+    let configured_path = capabilities_dir.join("..").join("external-seed.toml");
+    std::fs::write(&external_path, "outside = 'runtime boundary'").expect("write external seed");
+
+    assert_initial_load_and_watcher_reject_escape(
+        &runtime_layout,
+        &configured_path,
+        &external_path,
+        verifier(&keys.public),
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_symlink_cannot_escape_initial_load_or_watcher_boundary() {
+    let keys = keys();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (runtime_layout, _seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let external_path = dir.path().join("external-seed.toml");
+    let configured_path = capabilities_dir.join("linked-seed.toml");
+    std::fs::write(&external_path, "outside = 'runtime boundary'").expect("write external seed");
+    std::os::unix::fs::symlink(&external_path, &configured_path).expect("create seed symlink");
+
+    assert_initial_load_and_watcher_reject_escape(
+        &runtime_layout,
+        &configured_path,
+        &external_path,
+        verifier(&keys.public),
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_symlink_cannot_escape_initial_load_or_watcher_boundary() {
+    let keys = keys();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (runtime_layout, _seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let external_path = dir.path().join("external-seed.toml");
+    let configured_path = capabilities_dir.join("linked-seed.toml");
+    std::fs::write(&external_path, "outside = 'runtime boundary'").expect("write external seed");
+    std::os::windows::fs::symlink_file(&external_path, &configured_path)
+        .expect("create seed symlink");
+
+    assert_initial_load_and_watcher_reject_escape(
+        &runtime_layout,
+        &configured_path,
+        &external_path,
+        verifier(&keys.public),
+    );
+}
+
 #[test]
 fn startup_parse_error_omits_seed_material() {
     let keys = keys();
     let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("seed.toml");
+    let (runtime_layout, seed_path) = runtime_seed(dir.path());
     let (seed, raw_token) = signed_seed(&keys.signer);
     let secret = "startup-secret-value";
     let body = format!(
@@ -173,9 +297,13 @@ fn startup_parse_error_omits_seed_material() {
         hot_reload: true,
     };
 
-    let error = load_capability_map(&seed_config, verifier(&keys.public).as_ref())
-        .expect_err("unknown field must fail startup parsing")
-        .to_string();
+    let error = load_capability_map(
+        &seed_config,
+        verifier(&keys.public).as_ref(),
+        &runtime_layout.capabilities_dir(),
+    )
+    .expect_err("unknown field must fail startup parsing")
+    .to_string();
 
     assert!(error.contains(&seed_path.display().to_string()));
     assert!(error.contains("is not canonical CapabilitySeed TOML"));
@@ -197,17 +325,18 @@ fn startup_parse_error_omits_seed_material() {
 async fn reload_hot_swaps_map_on_seed_rewrite() {
     let keys = keys();
     let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("seed.toml");
+    let (runtime_layout, seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
 
     let (seed_v1, raw_v1) = signed_seed(&keys.signer);
-    write_seed(dir.path(), &seed_path, &seed_v1);
+    write_seed(&capabilities_dir, &seed_path, &seed_v1);
 
     let seed_config = CapabilitySeedConfig {
         paths: vec![seed_path.clone()],
         hot_reload: true,
     };
     let verifier = verifier(&keys.public);
-    let handle = handle_from(&seed_config, &verifier);
+    let handle = handle_from(&seed_config, &verifier, &capabilities_dir);
     assert_eq!(
         selected_raw_token(&handle).as_deref(),
         Some(raw_v1.as_str())
@@ -215,6 +344,7 @@ async fn reload_hot_swaps_map_on_seed_rewrite() {
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
+        &runtime_layout,
         &seed_config,
         Arc::clone(&verifier),
         handle.clone(),
@@ -225,7 +355,7 @@ async fn reload_hot_swaps_map_on_seed_rewrite() {
     // Re-mint: a distinct token for the same selection key.
     let (seed_v2, raw_v2) = signed_seed(&keys.signer);
     assert_ne!(raw_v1, raw_v2, "re-mint must produce a distinct token");
-    write_seed(dir.path(), &seed_path, &seed_v2);
+    write_seed(&capabilities_dir, &seed_path, &seed_v2);
 
     assert!(
         wait_for_token(&handle, &raw_v2).await,
@@ -239,20 +369,22 @@ async fn reload_hot_swaps_map_on_seed_rewrite() {
 async fn reload_keeps_previous_map_when_seed_removed() {
     let keys = keys();
     let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("seed.toml");
+    let (runtime_layout, seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
 
     let (seed_v1, raw_v1) = signed_seed(&keys.signer);
-    write_seed(dir.path(), &seed_path, &seed_v1);
+    write_seed(&capabilities_dir, &seed_path, &seed_v1);
 
     let seed_config = CapabilitySeedConfig {
         paths: vec![seed_path.clone()],
         hot_reload: true,
     };
     let verifier = verifier(&keys.public);
-    let handle = handle_from(&seed_config, &verifier);
+    let handle = handle_from(&seed_config, &verifier, &capabilities_dir);
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
+        &runtime_layout,
         &seed_config,
         Arc::clone(&verifier),
         handle.clone(),
@@ -279,20 +411,22 @@ async fn reload_keeps_previous_map_when_seed_removed() {
 async fn reload_keeps_previous_map_on_invalid_seed() {
     let keys = keys();
     let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("seed.toml");
+    let (runtime_layout, seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
 
     let (seed_v1, raw_v1) = signed_seed(&keys.signer);
-    write_seed(dir.path(), &seed_path, &seed_v1);
+    write_seed(&capabilities_dir, &seed_path, &seed_v1);
 
     let seed_config = CapabilitySeedConfig {
         paths: vec![seed_path.clone()],
         hot_reload: true,
     };
     let verifier = verifier(&keys.public);
-    let handle = handle_from(&seed_config, &verifier);
+    let handle = handle_from(&seed_config, &verifier, &capabilities_dir);
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
+        &runtime_layout,
         &seed_config,
         Arc::clone(&verifier),
         handle.clone(),
@@ -304,7 +438,7 @@ async fn reload_keeps_previous_map_on_invalid_seed() {
     // not be installed; the previous valid map is retained.
     let mut tampered = seed_v1.clone();
     tampered.raw_token = "v4.public.not-a-valid-token".to_string();
-    write_seed(dir.path(), &seed_path, &tampered);
+    write_seed(&capabilities_dir, &seed_path, &tampered);
 
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
@@ -320,16 +454,17 @@ async fn reload_keeps_previous_map_on_invalid_seed() {
 async fn reload_parse_error_is_secret_safe_and_keeps_previous_map() {
     let keys = keys();
     let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("seed.toml");
+    let (runtime_layout, seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
     let (seed, raw_token) = signed_seed(&keys.signer);
-    write_seed(dir.path(), &seed_path, &seed);
+    write_seed(&capabilities_dir, &seed_path, &seed);
 
     let seed_config = CapabilitySeedConfig {
         paths: vec![seed_path.clone()],
         hot_reload: true,
     };
     let verifier = verifier(&keys.public);
-    let handle = handle_from(&seed_config, &verifier);
+    let handle = handle_from(&seed_config, &verifier, &capabilities_dir);
     let writer = CapturingWriter::default();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
@@ -344,6 +479,7 @@ async fn reload_parse_error_is_secret_safe_and_keeps_previous_map() {
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
+        &runtime_layout,
         &seed_config,
         Arc::clone(&verifier),
         handle.clone(),
@@ -356,7 +492,7 @@ async fn reload_parse_error_is_secret_safe_and_keeps_previous_map() {
         "{}unknown = \"{secret}\"\n",
         toml::to_string(&seed).expect("serialize seed")
     );
-    let temporary = dir.path().join("seed.invalid.tmp");
+    let temporary = capabilities_dir.join("seed.invalid.tmp");
     std::fs::write(&temporary, &body).expect("write invalid seed");
     std::fs::rename(&temporary, &seed_path).expect("replace seed");
 

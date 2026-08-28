@@ -1,9 +1,10 @@
 //! `[sidecar.capability_seed]` configuration section.
 //!
-//! Each path names canonical [`firma_core::CapabilitySeed`] TOML, either issued
-//! explicitly with `firma authority issue` or staged for a session by
-//! `firma run`. Every verified seed contributes one `CapabilityEntry` to the
-//! runtime `CapabilityMap`.
+//! Each path names existing canonical [`firma_core::CapabilitySeed`] TOML that
+//! resolves beneath the selected runtime state's `capabilities/` directory,
+//! either issued explicitly with `firma authority issue` or staged for a
+//! session by `firma run`. Every verified seed contributes one
+//! `CapabilityEntry` to the runtime `CapabilityMap`.
 
 use std::path::PathBuf;
 
@@ -14,7 +15,7 @@ pub use firma_core::CapabilitySeed as SeedFile;
 /// Validated `[sidecar.capability_seed]` section.
 #[derive(Debug, Clone)]
 pub struct CapabilitySeedConfig {
-    /// Paths to seed TOML files produced by `firma authority issue`.
+    /// Existing seed TOML files beneath `<state-dir>/capabilities/`.
     pub paths: Vec<PathBuf>,
     /// When `true` (default), the sidecar watches the seed file(s) and
     /// hot-swaps its `CapabilityMap` when they change.

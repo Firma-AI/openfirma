@@ -47,10 +47,10 @@ revocation_fail_closed_on_disconnect = false
 
 [sidecar.capability_seed]
 paths = [
-  "state/capability-filesystem-read.toml",
-  "state/capability-credential-read.toml",
-  "state/capability-code-write.toml",
-  "state/capability-payment-transfer.toml",
-  "state/capability-communication-external-send.toml",
+  "state/capabilities/capability-filesystem-read.toml",
+  "state/capabilities/capability-credential-read.toml",
+  "state/capabilities/capability-code-write.toml",
+  "state/capabilities/capability-payment-transfer.toml",
+  "state/capabilities/capability-communication-external-send.toml",
 ]
 hot_reload = true
