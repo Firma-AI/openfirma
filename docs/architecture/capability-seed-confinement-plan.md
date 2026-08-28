@@ -275,7 +275,7 @@
 
 ## Final verification
 
-- Implementation candidate: `ba4501c66309e3e47d7f6cf32ce246e93094a63c`.
+- Implementation candidate: `0dc3ab7f620435971ac3b1036ab5cff6f5c2392a`.
 - Focused checks:
   - `cargo check -p firma-sidecar -p firma-run -p firma --all-targets` passed.
   - Sidecar capability-reload integration selection passed 7 tests, including
@@ -294,10 +294,11 @@
   - Policy-control issued all five canonical seeds beneath its selected runtime
     capabilities directory before its pre-existing Authority revocation-path
     lookup prevented the detached stack from starting.
-  - The release demo built successfully and its Authority reached `ready`; the
-    shell poll could not observe the listener because this orb has no `nc`
-    executable. Generated keys, seeds, logs, and temporary build outputs from
-    both attempts were removed.
+  - `just demo-ci` passed the ALLOW and DENY round trips with a temporary
+    `socat`-backed `nc -z` shim because this orb has no `nc` executable. The
+    exact checked-in demo selected its direct Sidecar runtime through the
+    supported `FIRMA_STATE_DIR` contract. Generated keys, seeds, logs, and
+    temporary build outputs were removed.
 - Post-implementation independent review: implementation-candidate review
   complete with no findings; final post-deletion exact-tip review remains
   pending.
@@ -347,6 +348,44 @@ limited to unexecuted Windows runtime behavior.
 
 - Accepted. No implementation or documentation change was required after the
   independent review.
+
+### Post-CI corrective review — `0dc3ab7f`
+
+#### Trigger and correction
+
+- GitHub's demo workflow exposed that the release demo passed unsupported
+  `--state-dir` syntax to direct `firma sidecar` serving, so the process exited
+  before readiness. The demo now selects that direct Sidecar's runtime through
+  canonical `FIRMA_STATE_DIR` and retains the same runtime boundary and seed
+  placement.
+- The behavior correction is isolated in
+  `0dc3ab7f620435971ac3b1036ab5cff6f5c2392a`; no production Rust, schema,
+  configuration, or public contract changed.
+
+#### Findings and proof status
+
+**No actionable findings.** The independent reviewer inspected exact revision
+`0dc3ab7f620435971ac3b1036ab5cff6f5c2392a` against direct base
+`7b88d17d07048b8daf7ebdb5ed721e65822ad29d`, reconstructed the filesystem
+boundary and current Authority → Run → Sidecar workflow, and found `INV-001`
+through `INV-003` satisfied. `PROOF-001` through `PROOF-005` passed on Linux;
+Windows symlink execution and final plan deletion remain CI/lifecycle-owned.
+
+Reviewer-run evidence:
+
+- Sidecar capability-reload selection: **7/7 passed**.
+- Firma Sidecar-seed CLI E2E selection: **3/3 passed**.
+- Empty-seed unit behavior: passed.
+- `bash -n` on every changed shell example and `git diff --check`: passed.
+
+Author-run corrective evidence:
+
+- `just demo-ci`: passed exact ALLOW and DENY round trips after direct Sidecar
+  startup through `FIRMA_STATE_DIR`.
+
+#### Disposition
+
+- Accepted. No further implementation or documentation change was required.
 
 ## Technical evidence
 
@@ -524,7 +563,7 @@ proof of path provenance.
 
 1. Commit this accepted, independently reviewed Full plan as the first PR-owned
    revision.
-2. Add one coherent implementation revision containing the boundary, runtime
+2. Add coherent implementation revisions containing the boundary, runtime
    threading, platform regressions, real CLI proof, and current docs/examples.
 3. Run focused and full verification and obtain fresh independent review of the
    exact implementation candidate.
