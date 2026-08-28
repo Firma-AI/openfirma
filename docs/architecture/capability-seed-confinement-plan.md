@@ -107,9 +107,11 @@
 
 - Choice: one private resolution function returns configured/resolved path
   pairs. Initial reads use only the resolved path. Watcher setup resolves all
-  paths before creating registrations and watches only each resolved path's
-  parent. Event-driven reload calls the same loader and repeats resolution
-  before reading.
+  paths before creating registrations and watches each resolved path's parent
+  plus the canonical, contained parent of each configured path. Watching both
+  parents preserves notifications when a contained seed symlink is retargeted;
+  duplicate directories are registered once. Event-driven reload calls the same
+  loader and repeats resolution before reading.
 - Rationale and evidence: checking one path but reading or watching another
   would not establish confinement. Reusing one boundary prevents drift between
   initial loading and reload.
@@ -165,8 +167,9 @@
 ### `INV-002`: Watch and reload effects are physically contained
 
 - Semantic predicate: every registered seed watcher directory is the parent of
-  a resolved seed satisfying `INV-001`; each reload read re-establishes
-  `INV-001`, and a failed resolution preserves the previous map.
+  a resolved seed satisfying `INV-001` or the canonical contained parent of its
+  configured path; each reload read re-establishes `INV-001`, and a failed
+  resolution preserves the previous map.
 - Primary owner: `firma_sidecar::startup::capability::CapabilityReloader`.
 - Detailed proof: `TRACE-WATCH` and `PROOF-002` through `PROOF-004`.
 
@@ -195,10 +198,12 @@
   - add one private configured/resolved path resolver;
   - thread the runtime capabilities directory into initial loading and reloader
     setup;
-  - read and watch only resolved contained paths and repeat resolution on reload;
+  - read only resolved contained paths, watch both validated contained parents,
+    and repeat resolution on reload;
   - update all unit/integration helpers for the explicit boundary;
   - add disjoint, traversal, `#[cfg(unix)]` symlink, and `#[cfg(windows)]`
-    symlink controls for initial load and watcher setup;
+    symlink controls for initial load and watcher setup, including contained
+    symlink retarget notification and map retention;
   - prove real CLI startup accepts a contained Authority-issued seed and rejects
     an external one;
   - update current docs and executable examples to select matching runtime
@@ -387,6 +392,38 @@ Author-run corrective evidence:
 
 - Accepted. No further implementation or documentation change was required.
 
+### `FINAL-001` — Medium · Watch coverage · Confirmed gap
+
+- **Evidence:** `crates/firma-sidecar/src/startup/capability.rs:246-256` at
+  reviewed final revision `4dcf24b6`.
+- **Path/outcome:** The reloader accepts contained seed symlinks but registered
+  only the resolved target's parent. Replacing or retargeting a configured
+  symlink changes its configured parent, so no observed event was guaranteed
+  and the previous map could remain active until expiry without executing the
+  intended per-reload containment check.
+- **Invariant owner:** `INV-002`, watcher registration and reload signaling.
+- **Impact:** A valid contained symlink retarget might not hot-reload or exercise
+  fail-closed map retention promptly.
+- **Correction:** Register both the resolved target parent and the canonical,
+  contained configured parent, deduplicated. Add Unix and Windows regressions
+  that retarget a contained seed symlink and prove reload notification plus
+  previous-map retention when the new target escapes.
+- **Confidence:** Medium. Filesystem notification delivery may vary, but the
+  missing configured-parent registration is deterministic.
+
+#### Disposition
+
+- Status: Accepted for correction.
+- Rationale: contained symlinks are an accepted current representation under
+  `DEC-001`; rejecting them would contradict the settled physical-containment
+  contract. Canonicalizing and containment-checking the configured parent before
+  registration closes the notification gap without authorizing an external
+  watch. The existing event path then re-runs `INV-001` and retains the previous
+  verified map on an escaping retarget.
+- Incorporated at: `DEC-002`, `INV-002`, Slice 1, `TRACE-WATCH`, `PROOF-003`,
+  and `PROOF-004`.
+- Decided by: planner, following exact-tip independent review.
+
 ## Technical evidence
 
 ### Applicability assessment
@@ -505,17 +542,17 @@ proof of path provenance.
 
 #### `TRACE-WATCH`
 
-| Field                      | Content                                                                                                               |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| State                      | Proposed                                                                                                              |
-| Entry and stimulus         | Hot reload starts or a watched contained directory emits an event.                                                    |
-| Path                       | `CapabilityReloader::spawn` → resolve/check all seeds → watch resolved parents; event → loader → resolve/check → read |
-| Input/output types         | configured paths + runtime layout → contained directories; event → replacement map or retained prior map              |
-| Validation/trust crossings | No registration precedes resolution; every event read repeats `INV-001`.                                              |
-| Invariant established      | `INV-002` at each registration and reload read.                                                                       |
-| Success outcome            | Valid contained rewrite atomically replaces the map.                                                                  |
-| Failure path               | Escaped/missing/invalid reload logs a secret-safe error and retains the previous map.                                 |
-| Proof boundary             | real notify integration tests plus platform-specific escape controls.                                                 |
+| Field                      | Content                                                                                                                                            |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State                      | Proposed                                                                                                                                           |
+| Entry and stimulus         | Hot reload starts or a watched contained directory emits an event.                                                                                 |
+| Path                       | `CapabilityReloader::spawn` → resolve/check all seeds and configured parents → watch both contained parents; event → loader → resolve/check → read |
+| Input/output types         | configured paths + runtime layout → contained directories; event → replacement map or retained prior map                                           |
+| Validation/trust crossings | No registration precedes resolution; every event read repeats `INV-001`.                                                                           |
+| Invariant established      | `INV-002` at each registration and reload read.                                                                                                    |
+| Success outcome            | Valid contained rewrite atomically replaces the map.                                                                                               |
+| Failure path               | Escaped/missing/invalid reload logs a secret-safe error and retains the previous map.                                                              |
+| Proof boundary             | real notify integration tests plus platform-specific escape controls.                                                                              |
 
 #### `TRACE-WORKFLOW`
 
@@ -553,8 +590,8 @@ proof of path provenance.
 | ----------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PROOF-001` | `INV-001` | Contained ordinary path loads; disjoint existing and missing configured paths fail with useful context and no content.                                                                                                                        |
 | `PROOF-002` | `INV-001` | `..` traversal and platform file symlinks resolving outside fail initial loading with configured/resolved/boundary context.                                                                                                                   |
-| `PROOF-003` | `INV-002` | The same traversal and `#[cfg(unix)]`/`#[cfg(windows)]` symlink cases fail watcher setup before registration.                                                                                                                                 |
-| `PROOF-004` | `INV-002` | Existing valid atomic rewrite hot-swaps the map; missing, escaped, structurally invalid, or unverifiable reload retains the previous map.                                                                                                     |
+| `PROOF-003` | `INV-002` | The same traversal and `#[cfg(unix)]`/`#[cfg(windows)]` symlink cases fail watcher setup before registration; a contained symlink retarget emits through its validated configured parent.                                                     |
+| `PROOF-004` | `INV-002` | Existing valid atomic rewrite or contained-symlink retarget hot-swaps the map; missing, escaped, structurally invalid, or unverifiable reload retains the previous map.                                                                       |
 | `PROOF-005` | `INV-003` | Real CLI startup accepts an Authority-issued contained seed, rejects an external seed, and current examples/docs select matching state.                                                                                                       |
 | `PROOF-006` | all       | Focused tests, platform compile/CI, full `just check`, docs build, example checks, and exact-tip independent review pass.                                                                                                                     |
 | `PROOF-007` | lifecycle | Accepted reviewed plan is first PR commit; implementation review record directly precedes mechanical plan deletion; final exact-tip review includes that deletion, is recorded against the final SHA in the PR body, and proves plan absence. |
