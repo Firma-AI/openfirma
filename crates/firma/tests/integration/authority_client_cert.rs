@@ -18,6 +18,8 @@ fn issue_client_cert_prints_canonical_allow_list_entries() {
     let config = temp.path().join("firma.toml");
     let ca_cert = temp.path().join("client-ca.crt");
     let ca_key = temp.path().join("client-ca.key");
+    let ca_cert_toml = toml::Value::String(ca_cert.to_string_lossy().into_owned());
+    let ca_key_toml = toml::Value::String(ca_key.to_string_lossy().into_owned());
     std::fs::write(
         &config,
         format!(
@@ -25,12 +27,10 @@ fn issue_client_cert_prints_canonical_allow_list_entries() {
 [authority]
 tls_cert_path = "server.crt"
 tls_key_path = "server.key"
-mtls_client_ca_cert_path = "{}"
-mtls_client_ca_key_path = "{}"
+mtls_client_ca_cert_path = {ca_cert_toml}
+mtls_client_ca_key_path = {ca_key_toml}
 authorized_clients_path = "authorized_clients.toml"
 "#,
-            ca_cert.display(),
-            ca_key.display(),
         ),
     )
     .expect("write config");
