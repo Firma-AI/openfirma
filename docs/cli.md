@@ -341,49 +341,28 @@ unparseable — that marker is skipped from the listing instead of deleted.
 This guards against destroying a live sidecar's socket directory under schema
 drift or a mid-write race.
 
-### `--daemon` path note
+### `--daemon` state path
 
 `--daemon` probes the long-lived daemon sidecar by reading runtime state from the
 runtime state dir — the same path the daemon sidecar actually uses:
 `$XDG_RUNTIME_DIR/firma` (fallback `/tmp/firma-$UID`).
 
-The original FIR-104 spec text referenced `$XDG_DATA_HOME/firma/sidecar/state/`
-for the daemon path. Nothing writes that directory today, so the implementation
-uses the runtime state dir instead. This discrepancy is intentional and noted
-on FIR-104.
-
 ## Config Discovery
 
-When `--config` is **omitted**, every subcommand — `sidecar`
-(`start`/`stop`/`status`), `authority`, `run`, `config`, `monitor`, and
-`doctor` — discovers the same single shared `firma.toml`. That one file holds top-level
-`[sidecar]` / `[authority]` / `[run]` sections; each
-subcommand reads only its own section. The first selected file wins:
-
-1. `--config <path>` flag — always wins. It only relocates the file;
-   the file still uses the sectioned schema.
-2. `$FIRMA_CONFIG` env var if set — overrides walk, points directly to file.
-3. **Project-local `.firma/firma.toml`**, found by walking up from
-   `cwd`. The closest ancestor with a `.firma/firma.toml` wins; the
-   walk stops at the filesystem root. This is what `firma config` writes.
-4. None found and config is required → exit non-zero. Optional flows such as
-   zero-config `firma run` may continue without a config.
-
-A selected file must be readable and valid TOML. An explicit `--config`,
-`$FIRMA_CONFIG`, or discovered project-local file that cannot be loaded fails
-closed instead of falling through to another tier or to zero-config defaults.
+See [Configuration resolution](configuration.md#configuration-resolution) for
+the canonical file-selection, section-overlay, and Run profile-layering model.
+If that search selects no file, required commands exit non-zero; optional flows
+such as zero-config `firma run` may continue without one. A selected file that
+cannot be read or parsed fails closed instead of falling through to another
+file or to zero-config defaults.
 
 The resolved path and its source are emitted on startup as a single
 `config resolved` INFO line (with `path` and `source` fields) so operators
 can confirm which file actually loaded.
 
-There is exactly **one** schema: the sectioned `firma.toml`. A file passed
-via explicit `--config` uses the same sectioned shape — the flag only
-overrides the file location. The needed `[section]` must be present;
-section extraction is fail-closed (a missing required section is a hard
-error). Relative resource paths re-base under the resolved config
-directory (see [Configuration Reference](configuration.md) for the
-config-relative resource table).
+Relative resource paths re-base under the resolved config directory (see
+[Configuration Reference](configuration.md) for the config-relative resource
+table).
 
 `state_dir` is **never** a config-file key. The runtime state directory is
 resolved only from `--state-dir`, then `FIRMA_STATE_DIR`, then
