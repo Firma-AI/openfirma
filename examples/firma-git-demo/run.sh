@@ -309,9 +309,8 @@ start_services() {
   issue_capability_seed
 
   echo "[git-demo] starting firma sidecar"
-  (cd "$ROOT" && exec "$TARGET_DIR/firma" --log-filter debug sidecar \
+  (cd "$ROOT" && FIRMA_STATE_DIR="$STATE_DIR" exec "$TARGET_DIR/firma" --log-filter debug sidecar \
     --config "$STATE_DIR/firma.toml" \
-    --state-dir "$STATE_DIR" \
     --health-bind-addr "$SIDECAR_HEALTH_ADDR" \
     >"$STATE_DIR/logs/sidecar.log" 2>&1) &
   SIDE_PID=$!
