@@ -292,3 +292,83 @@ docs-site/src/content/docs/guides/{firma-doctor,firma-run,manage-the-stack}.md
 | ----------- | --------- | ------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `PROOF-001` | `INV-001` | CLI/configuration         | compiled `firma` integration suite                                      | Explicit, canonical env, removed env, and discovered invalid paths; exact selected path appears in the outcome.                                    | Planned |
 | `PROOF-002` | `INV-002` | Documentation/current API | docs build, public-link and surface audit, independent call-path review | Canonical section states exclusive file selection and only Run profile inheritance; docs-site links resolve publicly and `llms.txt` stays aligned. | Planned |
+
+## Post-implementation independent review
+
+The final exact implementation candidate reviewed was:
+`549016a47c887b03b3e9a96151f9597898b3d882..d7dbe425`.
+
+### `IMPL-001` — Medium — Doctor project discovery lacked command-boundary proof
+
+- **Evidence:** The first candidate's control/monitor matrix covered project
+  discovery, while Doctor covered canonical environment, explicit flag, and no
+  selected config but did not create and select `.firma/firma.toml`.
+- **Impact:** a Doctor-specific regression in the third selection tier could
+  pass despite the accepted compiled subprocess proof obligation.
+- **Correction:** add a Doctor subprocess case with only an invalid discovered
+  project file and assert its exact path in the structured failure.
+
+Disposition: accepted and repaired in the atomic CLI implementation commit.
+Doctor now proves all three tiers and proves the removed environment input was
+not selected.
+
+### `IMPL-002` — Low — Canonical docs overstated section ownership
+
+- **Evidence:** The first candidate said every command reads only its own
+  section and every missing section is a hard error. Doctor inspects Sidecar and
+  Authority sections, while Control can continue without optional Authority
+  policy configuration.
+- **Impact:** the canonical model could imply a stricter and more uniform
+  section requirement than production implements.
+- **Correction:** state that commands consume the sections they need, required
+  section extraction fails closed, and diagnostic/optional consumers can
+  inspect several sections or continue without an optional one.
+
+Disposition: accepted and repaired in the atomic docs implementation commit.
+
+### `IMPL-003` — Low — Doctor and Monitor help named XDG as config discovery
+
+- **Evidence:** the second candidate's public Clap help described fallback as
+  `FIRMA_CONFIG / XDG`, while the resolver searches ancestor
+  `.firma/firma.toml` files.
+- **Impact:** operators could look in the wrong location when neither the flag
+  nor canonical environment input is set.
+- **Correction:** name the nearest `.firma/firma.toml` fallback in both command
+  descriptions.
+
+Disposition: accepted and repaired in the atomic CLI implementation commit.
+
+### Final re-review outcome
+
+The fresh reviewer found no actionable findings in exact candidate `d7dbe425`:
+
+- no Rust correctness, robustness, lint-policy, or compatibility findings;
+- compiled subprocess coverage proves all three commands' precedence, ignored
+  `FIRMA_STACK_CONFIG`, and nearest-project discovery;
+- changed public guidance consistently describes selected-file defaults,
+  Authority overlays, Sidecar overlays, and Run-only layering; and
+- no security, resolver, Run-merge, Sidecar-template, Authority-identity,
+  capability, or protocol regressions were found.
+
+After the prior no-findings review, full clippy identified only that the Doctor
+test function exceeded the repository's line limit. The assertions were moved
+unchanged behind a shared JSON extraction helper. A final fresh reviewer
+inspected the complete new candidate and confirmed that each invocation still
+parses its own output and proves status, selected path or reason, project
+discovery, and ignored `FIRMA_STACK_CONFIG`; it reported no actionable
+findings.
+
+This review record is committed independently. Its immediate child commit
+mechanically deletes the plan. The accepted plan, plan-review finding, all
+implementation-review findings and dispositions remain available at the
+immutable review-record commit, which the PR body records.
+
+### Verification evidence
+
+- Focused compiled CLI selection tests: 3 passed.
+- `just check`: 2,585 tests passed, 34 skipped; clippy, doctests, build, audit,
+  dependency policy, formatting, and release-script checks passed. An earlier
+  run hit one unrelated endpoint-readiness timing failure; its exact isolated
+  rerun passed before the full green rerun.
+- `just docs-build`: 311 pages built.
+- `git diff --check` and changed-file dprint checks passed.
