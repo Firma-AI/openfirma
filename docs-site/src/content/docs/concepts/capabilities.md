@@ -103,9 +103,10 @@ tokens, and signature mismatches fail closed with an error. An explicit
 per-run capability file. Run parses the complete seed before launch, exports
 only its `raw_token` and original path to the wrapped process, and passes the
 path to a locally autostarted Sidecar for verification and reload. That file
-must resolve beneath the selected `<state-dir>/capabilities/` directory; the
-Sidecar reads and watches only the resolved contained path. A pre-managed
-external Sidecar owns its runtime state and seed configuration independently.
+and its resolved target must stay beneath the selected
+`<state-dir>/capabilities/` directory; the Sidecar reads only the resolved path
+and watches both contained parents. A pre-managed external Sidecar owns its
+runtime state and seed configuration independently.
 
 ## Staying alive: automatic refresh
 

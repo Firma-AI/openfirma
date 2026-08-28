@@ -196,7 +196,7 @@ FIRMA_STATE_DIR="$PWD/.firma/runtime" firma run \
   -- claude code
 ```
 
-`--profile codex` is the right shape for coding agents — it mounts your project workspace into the sandbox. `--capability-file` parses the signed seed TOML issued in Step 3 and exposes only its raw token and original path to the wrapped process. A local Sidecar accepts the seed only because it resolves beneath the selected `.firma/runtime/capabilities/` directory.
+`--profile codex` is the right shape for coding agents — it mounts your project workspace into the sandbox. `--capability-file` parses the signed seed TOML issued in Step 3 and exposes only its raw token and original path to the wrapped process. A local Sidecar accepts the seed because both its configured parent and resolved target stay beneath the selected `.firma/runtime/capabilities/` directory.
 
 When Claude Code launches, it inherits no LLM API key from your shell. Its outbound calls hit the proxy bridge, which forwards over UDS to the Sidecar, which validates Stage 1, evaluates Stage 2, and (for permitted Anthropic calls) injects the API key before dispatching upstream.
 

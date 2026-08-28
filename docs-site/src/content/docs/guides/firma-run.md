@@ -427,10 +427,11 @@ FIRMA_STATE_DIR="$PWD/.firma/runtime" firma run \
 
 Run requires the complete signed seed TOML, extracts only `raw_token` into
 `FIRMA_CAPABILITY_TOKEN`, and preserves the source path in
-`FIRMA_CAPABILITY_FILE`. With local Sidecar autostart, the file must resolve
-beneath the selected `<state-dir>/capabilities/` directory; the Sidecar loads,
-verifies, and watches only that resolved contained path. A pre-managed external
-Sidecar owns its runtime state and seed configuration independently.
+`FIRMA_CAPABILITY_FILE`. With local Sidecar autostart, the file and its resolved
+target must stay beneath the selected `<state-dir>/capabilities/` directory; the
+Sidecar reads only the resolved path and watches both contained parents. A
+pre-managed external Sidecar owns its runtime state and seed configuration
+independently.
 
 ## Step 7: Inspect the effective config
 

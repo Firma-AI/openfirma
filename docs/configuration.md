@@ -98,9 +98,10 @@ Use `kind = "disabled"` without `path` to disable the source.
 For a file source, Run parses the complete seed before preparing the sandbox,
 exports only `raw_token` as `FIRMA_CAPABILITY_TOKEN`, and preserves the
 configured path as `FIRMA_CAPABILITY_FILE`. For local Sidecar autostart, the
-file must resolve beneath the selected `<state-dir>/capabilities/` directory;
-the Sidecar loads and watches only that resolved contained path. A pre-managed
-external Sidecar owns its runtime state and seed list independently.
+file and its resolved target must stay beneath the selected
+`<state-dir>/capabilities/` directory; the Sidecar reads only the resolved path
+and watches both contained parent directories. A pre-managed external Sidecar
+owns its runtime state and seed list independently.
 
 ### Run executable policies
 
@@ -739,12 +740,13 @@ startup.
 | `paths`      | path array | `[]`    | Existing canonical seed TOML files             |
 | `hot_reload` | bool       | `true`  | Watch configured seeds and load valid rewrites |
 
-Every configured file must resolve beneath the selected Sidecar runtime
-`<state-dir>/capabilities/` directory. The Sidecar canonicalizes both that
-directory and each existing seed before reading or registering a watcher, then
-uses only the resolved contained path. Traversal and symlink paths that resolve
-outside the directory fail startup. An empty `paths` list does not require the
-directory to exist.
+Every configured file and its resolved target must stay beneath the selected
+Sidecar runtime `<state-dir>/capabilities/` directory. The Sidecar canonicalizes
+that directory, each existing seed, and each configured parent before reading or
+registering a watcher. It reads only the resolved seed and watches only the two
+contained parents. Traversal, external-parent, and symlink paths that cross the
+boundary fail startup. An empty `paths` list does not require the directory to
+exist.
 
 ### `[sidecar.authority]`
 

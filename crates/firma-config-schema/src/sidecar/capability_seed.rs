@@ -2,7 +2,8 @@
 //!
 //! Representation only. Lists pre-issued capability seed files the sidecar
 //! loads at startup. `firma-sidecar` validates that every path is non-empty and
-//! resolves beneath the selected runtime state's `capabilities/` directory.
+//! requires its configured parent and resolved target to stay beneath the
+//! selected runtime state's `capabilities/` directory.
 
 use std::path::PathBuf;
 

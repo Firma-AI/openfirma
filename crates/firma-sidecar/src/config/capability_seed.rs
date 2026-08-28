@@ -1,10 +1,11 @@
 //! `[sidecar.capability_seed]` configuration section.
 //!
-//! Each path names existing canonical [`firma_core::CapabilitySeed`] TOML that
-//! resolves beneath the selected runtime state's `capabilities/` directory,
+//! Each path names existing canonical [`firma_core::CapabilitySeed`] TOML,
 //! either issued explicitly with `firma authority issue` or staged for a
-//! session by `firma run`. Every verified seed contributes one
-//! `CapabilityEntry` to the runtime `CapabilityMap`.
+//! session by `firma run`. Its configured parent and resolved target must stay
+//! beneath the selected runtime state's `capabilities/` directory. Every
+//! verified seed contributes one `CapabilityEntry` to the runtime
+//! `CapabilityMap`.
 
 use std::path::PathBuf;
 

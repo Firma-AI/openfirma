@@ -23,10 +23,16 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+struct ResolvedSeedPath {
+    configured_path: PathBuf,
+    resolved_path: PathBuf,
+    configured_parent: PathBuf,
+}
+
 fn resolve_seed_paths(
     seed: &CapabilitySeedConfig,
     capabilities_dir: &Path,
-) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
+) -> anyhow::Result<Vec<ResolvedSeedPath>> {
     if seed.paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -56,7 +62,39 @@ fn resolve_seed_paths(
                     resolved_capabilities_dir.display()
                 );
             }
-            Ok((configured_path.clone(), resolved_path))
+
+            let configured_parent = configured_path.parent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "configured capability seed '{}' has no parent directory",
+                    configured_path.display()
+                )
+            })?;
+            let resolved_configured_parent = std::fs::canonicalize(configured_parent)
+                .with_context(|| {
+                    format!(
+                        "failed to resolve parent '{}' of configured capability seed '{}'",
+                        configured_parent.display(),
+                        configured_path.display()
+                    )
+                })?;
+            if !resolved_configured_parent.starts_with(&resolved_capabilities_dir) {
+                anyhow::bail!(
+                    "capability seed '{}' resolves to '{}', but its configured parent '{}' \
+                     resolves to '{}' and must be under the runtime capabilities directory \
+                     '{}'",
+                    configured_path.display(),
+                    resolved_path.display(),
+                    configured_parent.display(),
+                    resolved_configured_parent.display(),
+                    resolved_capabilities_dir.display()
+                );
+            }
+
+            Ok(ResolvedSeedPath {
+                configured_path: configured_path.clone(),
+                resolved_path,
+                configured_parent: resolved_configured_parent,
+            })
         })
         .collect()
 }
@@ -76,7 +114,9 @@ pub fn load_capability_map(
     capabilities_dir: &Path,
 ) -> anyhow::Result<CapabilityMap> {
     let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(seed.paths.len());
-    for (configured_path, resolved_path) in resolve_seed_paths(seed, capabilities_dir)? {
+    for resolved_seed in resolve_seed_paths(seed, capabilities_dir)? {
+        let configured_path = resolved_seed.configured_path;
+        let resolved_path = resolved_seed.resolved_path;
         let body = std::fs::read_to_string(&resolved_path).map_err(|error| {
             anyhow::anyhow!(
                 "failed to read capability seed '{}' resolved to '{}': {error}",
@@ -209,9 +249,9 @@ impl CapabilityReloader {
     ///
     /// # Errors
     ///
-    /// Returns an error when a seed does not resolve beneath the runtime
-    /// capabilities directory or the OS file watcher cannot be created or
-    /// registered.
+    /// Returns an error when a seed's configured parent or resolved target is
+    /// outside the runtime capabilities directory, or the OS file watcher
+    /// cannot be created or registered.
     pub fn spawn(
         runtime_layout: &firma_runtime_state::RuntimeLayout,
         config: &config::CapabilitySeedConfig,
@@ -247,22 +287,27 @@ impl CapabilityReloader {
         // directory, so watch the parent directories (deduplicated) non-recursively
         // rather than the files themselves — the rename target may not exist yet.
         let mut watched_dirs = HashSet::new();
-        for (configured_path, resolved_path) in &resolved_seed_paths {
-            let Some(dir) = resolved_path.parent() else {
-                continue;
-            };
-            if watched_dirs.insert(dir.to_path_buf()) {
-                watcher
-                    .watch(dir, notify::RecursiveMode::NonRecursive)
-                    .with_context(|| {
-                        format!(
-                            "failed to watch capability seed directory '{}' for configured seed \
-                             '{}' resolved to '{}'",
-                            dir.display(),
-                            configured_path.display(),
-                            resolved_path.display()
-                        )
-                    })?;
+        for resolved_seed in &resolved_seed_paths {
+            let resolved_parent = resolved_seed.resolved_path.parent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "resolved capability seed '{}' has no parent directory",
+                    resolved_seed.resolved_path.display()
+                )
+            })?;
+            for dir in [resolved_parent, resolved_seed.configured_parent.as_path()] {
+                if watched_dirs.insert(dir.to_path_buf()) {
+                    watcher
+                        .watch(dir, notify::RecursiveMode::NonRecursive)
+                        .with_context(|| {
+                            format!(
+                                "failed to watch capability seed directory '{}' for configured \
+                                 seed '{}' resolved to '{}'",
+                                dir.display(),
+                                resolved_seed.configured_path.display(),
+                                resolved_seed.resolved_path.display()
+                            )
+                        })?;
+                }
             }
         }
 

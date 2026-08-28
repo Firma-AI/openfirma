@@ -221,6 +221,148 @@ fn assert_initial_load_and_watcher_reject_escape(
     }
 }
 
+fn assert_external_parent_symlink_rejected(
+    runtime_layout: &firma_runtime_state::RuntimeLayout,
+    configured_path: &Path,
+    resolved_contained_path: &Path,
+    verifier: Arc<dyn TokenVerifier + Send + Sync>,
+) {
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let resolved_capabilities_dir =
+        std::fs::canonicalize(&capabilities_dir).expect("canonical capabilities directory");
+    let configured_parent = configured_path.parent().expect("configured parent");
+    let resolved_configured_parent =
+        std::fs::canonicalize(configured_parent).expect("canonical configured parent");
+    let resolved_contained_path =
+        std::fs::canonicalize(resolved_contained_path).expect("canonical contained seed");
+    let config = CapabilitySeedConfig {
+        paths: vec![configured_path.to_path_buf()],
+        hot_reload: true,
+    };
+
+    let initial_error = load_capability_map(&config, verifier.as_ref(), &capabilities_dir)
+        .expect_err("initial load must reject a configured parent outside the runtime directory");
+    let empty_map = load_capability_map(
+        &CapabilitySeedConfig::default(),
+        verifier.as_ref(),
+        &capabilities_dir,
+    )
+    .expect("empty capability map");
+    let Err(watcher_error) = CapabilityReloader::spawn(
+        runtime_layout,
+        &config,
+        verifier,
+        CapabilityMapHandle::new(empty_map),
+        CancellationToken::new(),
+    ) else {
+        panic!("watcher setup must reject a configured parent outside the runtime directory");
+    };
+
+    for error in [initial_error, watcher_error] {
+        let rendered = format!("{error:#}");
+        for expected in [
+            configured_path,
+            resolved_contained_path.as_path(),
+            configured_parent,
+            resolved_configured_parent.as_path(),
+            resolved_capabilities_dir.as_path(),
+        ] {
+            assert!(
+                rendered.contains(expected.to_string_lossy().as_ref()),
+                "error must identify '{}'; got: {rendered}",
+                expected.display()
+            );
+        }
+        assert!(
+            rendered.contains("configured parent"),
+            "error must identify the configured-parent boundary; got: {rendered}"
+        );
+    }
+}
+
+async fn assert_contained_symlink_retarget<F>(create_symlink: F)
+where
+    F: Fn(&Path, &Path) -> io::Result<()>,
+{
+    let keys = keys();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (runtime_layout, _seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let targets_dir = capabilities_dir.join("targets");
+    std::fs::create_dir(&targets_dir).expect("create target directory");
+
+    let (seed_v1, raw_v1) = signed_seed(&keys.signer);
+    let (seed_v2, raw_v2) = signed_seed(&keys.signer);
+    let (external_seed, _external_raw) = signed_seed(&keys.signer);
+    let target_v1 = targets_dir.join("seed-v1.toml");
+    let target_v2 = targets_dir.join("seed-v2.toml");
+    let external_path = dir.path().join("external-seed.toml");
+    write_seed(&targets_dir, &target_v1, &seed_v1);
+    write_seed(&targets_dir, &target_v2, &seed_v2);
+    std::fs::write(
+        &external_path,
+        toml::to_string(&external_seed).expect("serialize external seed"),
+    )
+    .expect("write external seed");
+
+    let configured_path = capabilities_dir.join("linked-seed.toml");
+    create_symlink(&target_v1, &configured_path).expect("create contained seed symlink");
+    let seed_config = CapabilitySeedConfig {
+        paths: vec![configured_path.clone()],
+        hot_reload: true,
+    };
+    let verifier = verifier(&keys.public);
+    let handle = handle_from(&seed_config, &verifier, &capabilities_dir);
+    assert_eq!(
+        selected_raw_token(&handle).as_deref(),
+        Some(raw_v1.as_str())
+    );
+
+    let writer = CapturingWriter::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer({
+            let writer = writer.clone();
+            move || writer.clone()
+        })
+        .with_ansi(false)
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    tracing::callsite::rebuild_interest_cache();
+
+    let cancel = CancellationToken::new();
+    let _reloader = CapabilityReloader::spawn(
+        &runtime_layout,
+        &seed_config,
+        Arc::clone(&verifier),
+        handle.clone(),
+        cancel.clone(),
+    )
+    .expect("spawn reloader");
+
+    std::fs::remove_file(&configured_path).expect("remove first seed symlink");
+    create_symlink(&target_v2, &configured_path).expect("retarget contained seed symlink");
+    assert!(
+        wait_for_token(&handle, &raw_v2).await,
+        "contained symlink retarget must hot-swap the capability map"
+    );
+
+    std::fs::remove_file(&configured_path).expect("remove contained seed symlink");
+    create_symlink(&external_path, &configured_path).expect("retarget seed symlink outside");
+    let logs = wait_for_log(&writer, external_path.to_string_lossy().as_ref()).await;
+    assert!(
+        logs.contains("capability seed reload failed; keeping previous map"),
+        "escaping retarget must fail reload; got: {logs}"
+    );
+    assert_eq!(
+        selected_raw_token(&handle).as_deref(),
+        Some(raw_v2.as_str()),
+        "escaping symlink retarget must retain the previous verified map"
+    );
+
+    cancel.cancel();
+}
+
 #[tokio::test]
 async fn traversal_cannot_escape_initial_load_or_watcher_boundary() {
     let keys = keys();
@@ -278,6 +420,66 @@ async fn windows_symlink_cannot_escape_initial_load_or_watcher_boundary() {
         &external_path,
         verifier(&keys.public),
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_external_parent_symlink_to_contained_seed_is_rejected() {
+    let keys = keys();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (runtime_layout, seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let (seed, _raw_token) = signed_seed(&keys.signer);
+    write_seed(&capabilities_dir, &seed_path, &seed);
+    let external_dir = dir.path().join("external");
+    std::fs::create_dir(&external_dir).expect("create external directory");
+    let configured_path = external_dir.join("linked-seed.toml");
+    std::os::unix::fs::symlink(&seed_path, &configured_path).expect("create seed symlink");
+
+    assert_external_parent_symlink_rejected(
+        &runtime_layout,
+        &configured_path,
+        &seed_path,
+        verifier(&keys.public),
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_external_parent_symlink_to_contained_seed_is_rejected() {
+    let keys = keys();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (runtime_layout, seed_path) = runtime_seed(dir.path());
+    let capabilities_dir = runtime_layout.capabilities_dir();
+    let (seed, _raw_token) = signed_seed(&keys.signer);
+    write_seed(&capabilities_dir, &seed_path, &seed);
+    let external_dir = dir.path().join("external");
+    std::fs::create_dir(&external_dir).expect("create external directory");
+    let configured_path = external_dir.join("linked-seed.toml");
+    std::os::windows::fs::symlink_file(&seed_path, &configured_path).expect("create seed symlink");
+
+    assert_external_parent_symlink_rejected(
+        &runtime_layout,
+        &configured_path,
+        &seed_path,
+        verifier(&keys.public),
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_contained_symlink_retarget_reloads_and_rejects_escape() {
+    assert_contained_symlink_retarget(|target, link| std::os::unix::fs::symlink(target, link))
+        .await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_contained_symlink_retarget_reloads_and_rejects_escape() {
+    assert_contained_symlink_retarget(|target, link| {
+        std::os::windows::fs::symlink_file(target, link)
+    })
+    .await;
 }
 
 #[test]
