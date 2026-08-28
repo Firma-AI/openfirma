@@ -70,7 +70,6 @@ issuance_policy_dir = "{issuance_policy_dir}"
 revocation_file = "{revocation_file}"
 max_ttl_seconds = 3600
 key_file = "{key_file}"
-log_level = "info"
 bundle_ttl_seconds = 30
 "#,
         policy_dir = policy_dir.display(),

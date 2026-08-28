@@ -167,8 +167,8 @@ Layout written by `firma config`:
   generated-firma-ca/    # populated by the sidecar
 ```
 
-`firma.toml` is one sectioned file: `[project]`, `[authority]`,
-`[sidecar.*]`, and `[run]`. The post-config `next:` hint is `firma run <agent>`
+`firma.toml` is one sectioned file: `[authority]`, `[sidecar.*]`, and `[run]`.
+The post-config `next:` hint is `firma run <agent>`
 (or `firma sidecar start` for the daemon path).
 
 `[sidecar.authority].agent_id` is the Authority-registered UUID. It is

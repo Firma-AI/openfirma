@@ -85,8 +85,8 @@ fn build_session_state_store(
 ) -> anyhow::Result<Arc<dyn crate::enforcement::SessionStateStore>> {
     use firma_config_schema::sidecar::SessionStateBackend;
     let ce = &config.enforcement.constraint_enforcement;
-    let capacity = ce.session_state_capacity;
-    match ce.session_state_backend {
+    let capacity = ce.capacity;
+    match ce.backend {
         SessionStateBackend::Lru => {
             tracing::debug!(capacity, "session-state backend: lru (in-memory)");
             Ok(Arc::new(crate::enforcement::LruSessionStateStore::new(
@@ -94,7 +94,7 @@ fn build_session_state_store(
             )))
         }
         SessionStateBackend::Persistent => {
-            let path = match &ce.session_state_path {
+            let path = match &ce.path {
                 Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
                 _ => runtime_layout.session_state(),
             };

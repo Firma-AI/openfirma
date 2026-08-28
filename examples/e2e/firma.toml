@@ -17,7 +17,6 @@ revocation_file = "examples/e2e/revocations.txt"
 key_file = "authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 
 # schema_path is optional. Omit to use the schema embedded in the binary.
 # Set to override with a custom schema (e.g. to add action classes or context fields):
@@ -40,9 +39,6 @@ dir = "../policies"
 [sidecar.ca]
 dir = "examples/e2e/firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = false
@@ -51,8 +47,6 @@ default_protected = false
 clock_skew_tolerance_seconds = 0
 
 [sidecar.constraint_enforcement]
-bundle_ttl_seconds = 30
-enforcement_timeout_ms = 50
 # Session-state cache capacity (AARM R2 G4). Raise to reduce LRU eviction
 # of long-lived sessions. Default: 8192.
 # session_state_capacity = 8192
@@ -85,11 +79,3 @@ reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
-
-[sidecar.preflight]
-agent_id = "agt_01j0000000e008000000000001"
-session_id = "demo-session-001"
-requested_actions = ["communication.external.send"]
-resource_scope = "*"
-authority_pub_key_path = "examples/e2e/authority.pub"
-ttl_seconds = 3600

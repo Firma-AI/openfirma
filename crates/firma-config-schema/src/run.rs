@@ -5,14 +5,20 @@
 //! its validated `ResolvedProfile` from the result. The merge and validation
 //! behavior lives in `firma-run`; this module holds the deserialized shape.
 //!
-//! The `backend` field is represented as a `String` here because
-//! `firma-run`'s `BackendKind` carries platform-default and display behavior;
-//! `firma-run` parses the string into that domain enum.
-
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+/// Sandbox backend selected for a Run profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendKind {
+    Bwrap,
+    Vz,
+    Wsl2,
+    Firecracker,
+}
 
 /// Identity mode used inside sandboxed execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +62,7 @@ pub enum SeccompRuntimeMode {
 
 /// Top-level `[run]` file config.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FileConfig {
     /// Profile used by `firma run` when `--profile` is not supplied.
     pub profile: Option<String>,
@@ -67,10 +74,10 @@ pub struct FileConfig {
 
 /// Partial profile configuration merged from defaults, file, and CLI layers.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ProfilePatch {
-    /// Sandbox backend name (`bwrap`, `vz`, `wsl2`, `firecracker`). Parsed into
-    /// `firma-run`'s `BackendKind`.
-    pub backend: Option<String>,
+    /// Sandbox backend (`bwrap`, `vz`, `wsl2`, or `firecracker`).
+    pub backend: Option<BackendKind>,
     pub sidecar_endpoint: Option<String>,
     pub seccomp_policy: Option<SeccompPolicyPatch>,
     #[serde(default)]
@@ -79,8 +86,6 @@ pub struct ProfilePatch {
     pub env_set: BTreeMap<String, String>,
     #[serde(default)]
     pub mounts: Vec<MountPatch>,
-    #[serde(default)]
-    pub allowed_domains: Vec<String>,
     pub network: Option<NetworkPolicyPatch>,
     pub identity_mode: Option<SandboxIdentityMode>,
     pub capability: Option<CapabilityLeasePatch>,
@@ -112,6 +117,7 @@ pub struct ProfilePatch {
 
 /// Mount entry patch.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct MountPatch {
     pub source: PathBuf,
     pub target: PathBuf,
@@ -121,6 +127,7 @@ pub struct MountPatch {
 
 /// Network policy toggles patch.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkPolicyPatch {
     pub enforce_network_namespace: Option<bool>,
     pub fail_closed: Option<bool>,
@@ -128,19 +135,20 @@ pub struct NetworkPolicyPatch {
 
 /// Seccomp policy compilation settings patch.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SeccompPolicyPatch {
     pub source_policy_path: PathBuf,
     pub artifact_dir: PathBuf,
-    pub verify_checksum: Option<bool>,
     pub runtime_mode: Option<SeccompRuntimeMode>,
 }
 
 /// Capability lease settings patch.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityLeasePatch {
     pub source: Option<CapabilitySourcePatch>,
     #[serde(default)]
-    pub kind: Option<String>,
+    pub kind: Option<CapabilitySourceKind>,
     #[serde(default)]
     pub path: Option<PathBuf>,
     pub public_key_path: Option<PathBuf>,
@@ -152,6 +160,7 @@ pub struct CapabilityLeasePatch {
 
 /// Per-executable CLI argument policy patch.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutableLaunchPolicyPatch {
     pub enforce_wrapper_defaults: Option<bool>,
     pub sandbox_mode: Option<String>,
@@ -162,6 +171,7 @@ pub struct ExecutableLaunchPolicyPatch {
 
 /// Runtime command mediation settings patch.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandMediatorPatch {
     pub endpoint: Option<String>,
     pub timeout_ms: Option<u64>,
@@ -174,8 +184,17 @@ pub struct CommandMediatorPatch {
 
 /// Source for capability material patch.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CapabilitySourcePatch {
     Disabled,
     File { path: PathBuf },
+}
+
+/// Legacy flat capability source selector retained for compatibility with
+/// `capability.kind` plus `capability.path`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilitySourceKind {
+    Disabled,
+    File,
 }

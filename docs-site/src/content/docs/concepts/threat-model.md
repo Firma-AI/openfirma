@@ -104,9 +104,9 @@ guest launch path.
 
 - Forged tokens — but PASETO v4 with Ed25519 makes this cryptographically infeasible.
 - A leaked token (extracted from a config file, exfiltrated by a compromised agent that *did* see it). Only practical if the agent is given the raw token via env var rather than going through the Sidecar's capability map.
-- Replay against a Sidecar with a stale revocation list. Mitigated by `bundle_ttl_seconds` and the gRPC revocation stream.
+- Replay against a Sidecar with a stale revocation list. Mitigated by the gRPC revocation stream.
 
-**Mitigations:** never let the agent see the raw token; always go through the Sidecar's capability map. Keep `bundle_ttl_seconds` short for runtime policy. Rotate the Authority's signing key on a schedule.
+**Mitigations:** never let the agent see the raw token; always go through the Sidecar's capability map. Monitor the Authority streams and Sidecar readiness. Rotate the Authority's signing key on a schedule.
 
 ### Layer 5: Constraint enforcement (Stage 2)
 
@@ -115,7 +115,7 @@ guest launch path.
 **Bypassed by:**
 
 - Policy bugs — overly permissive rules, missing forbid rules, wrong resource patterns. This is where most real production bypasses live.
-- Stale policy bundles. Mitigated by `bundle_ttl_seconds`: stale → DENY.
+- Stale policy bundles. Mitigated by the TTL advertised by the Authority: stale → DENY.
 - Context manipulation: if an upstream value (like `risk_score`) is computed off the hot path and the system that computes it is compromised, policies that depend on it are weakened.
 
 **Mitigations:** treat policies as security-sensitive code. Default-deny in your runtime bundle. Use forbid rules for "never under any circumstances" controls. Audit policy diffs.

@@ -16,7 +16,6 @@ tls_cert_path = "authority.crt"
 tls_key_path = "authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "debug"
 
 # ── Sidecar ──────────────────────────────────────────────────────────────────
 
@@ -45,19 +44,12 @@ dir = "policies"
 [sidecar.ca]
 dir = "examples/demo/firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = false
 
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 5
-
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds = 60
-enforcement_timeout_ms = 50
 
 [sidecar.revocation]
 capacity = 100000

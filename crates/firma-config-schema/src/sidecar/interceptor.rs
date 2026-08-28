@@ -51,6 +51,7 @@ impl fmt::Display for InterceptorMode {
 
 /// Interceptor settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct InterceptorConfig {
     /// Interception mode. Default: platform-dependent.
     #[serde(default)]
@@ -105,6 +106,7 @@ impl Default for InterceptorConfig {
 
 /// Timeout controls for CONNECT tunnel and MITM relay sessions.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
     #[serde(default = "default_connect_setup_timeout_secs")]
@@ -125,6 +127,7 @@ impl Default for ConnectRelayConfig {
 
 /// HTTPS MITM controls for the HTTP proxy interceptor.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     #[serde(default = "default_https_mitm_enabled")]

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Groups the three enforcement sub-systems: intent-mapping rules, capability
 /// validation (Stage 1), and constraint enforcement (Stage 2).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnforcementConfig {
     /// Intent normalization / mapping rules.
     #[serde(default)]
@@ -26,6 +27,7 @@ pub struct EnforcementConfig {
 
 /// Mapping rules configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MappingConfig {
     /// Path to the primary mapping rules TOML file.
     #[serde(default = "default_mapping_path")]
@@ -50,6 +52,7 @@ impl Default for MappingConfig {
 
 /// Capability validation configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityValidationConfig {
     /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
     #[serde(default)]
@@ -58,13 +61,8 @@ pub struct CapabilityValidationConfig {
 
 /// Constraint enforcement configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConstraintEnforcementConfig {
-    /// Policy bundle TTL in seconds. Default: 30.
-    #[serde(default = "default_bundle_ttl")]
-    pub bundle_ttl_seconds: u64,
-    /// Optional Stage 2 evaluation timeout in milliseconds.
-    #[serde(default = "default_stage2_timeout_ms")]
-    pub enforcement_timeout_ms: u64,
     /// Maximum number of active sessions tracked in the session-state cache.
     /// Default: 8192. Minimum: 1.
     #[serde(default = "default_session_state_capacity")]
@@ -81,8 +79,6 @@ pub struct ConstraintEnforcementConfig {
 impl Default for ConstraintEnforcementConfig {
     fn default() -> Self {
         Self {
-            bundle_ttl_seconds: default_bundle_ttl(),
-            enforcement_timeout_ms: default_stage2_timeout_ms(),
             session_state_capacity: default_session_state_capacity(),
             session_state_backend: SessionStateBackend::default(),
             session_state_path: None,
@@ -110,14 +106,6 @@ fn default_mapping_path() -> String {
 
 const fn default_true() -> bool {
     true
-}
-
-const fn default_bundle_ttl() -> u64 {
-    30
-}
-
-const fn default_stage2_timeout_ms() -> u64 {
-    50
 }
 
 const fn default_session_state_capacity() -> usize {

@@ -73,7 +73,10 @@ See [docs/security/transport.md](docs/security/transport.md) for certificate gen
 
 ### Policy Bundle Freshness
 
-Configure `bundle_ttl_seconds` to suit your risk tolerance. Shorter TTLs mean faster revocation propagation but higher Authority load. Stale bundles result in fail-closed denials.
+Configure `[authority].bundle_ttl_seconds` to suit your risk tolerance. The
+Authority advertises this freshness deadline in streamed policy bundles and
+refreshes them periodically; shorter TTLs increase refresh load. Stale bundles
+result in fail-closed denials. Revocation updates use a separate stream.
 
 ### Protected-by-Default
 

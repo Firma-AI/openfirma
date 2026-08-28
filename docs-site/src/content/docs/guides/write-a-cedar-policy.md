@@ -119,7 +119,6 @@ revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/firma-authority.key"
 max_ttl_seconds     = 3600
 bundle_ttl_seconds  = 30
-log_level           = "info"
 EOF
 
 # Permissive issuance policy for development
@@ -169,7 +168,7 @@ The `deny_reason` closes the loop: you wrote a rule, you produced a request that
 
 ## Iteration: hot-reload
 
-For development, the Authority watches the `policy_dir` and pushes updated bundles to the Sidecar. Edit your `.cedar` file, save it, and within `bundle_ttl_seconds` (default 30) the Sidecar swaps the in-memory bundle.
+For development, the Authority watches the `policy_dir` and pushes updated bundles to the Sidecar. Edit your `.cedar` file and save it; connected Sidecars atomically swap in the streamed update.
 
 The Authority re-validates the bundle against the schema on every reload, exactly as it does at startup. If your edit fails to parse or fails schema validation, the reload is rejected and logged, and the Authority keeps streaming the previously-loaded valid bundle — a broken edit never reaches the Sidecar. Watch the Authority's stderr for the rejection, fix the file, and save again. To catch the error before you save, run `firma policy validate` on the file (see [Test policies offline](../test-policies-offline/)).
 

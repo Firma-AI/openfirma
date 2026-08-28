@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// TOML-facing revocation cache config.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RevocationConfig {
     /// Expected distinct revoked tokens the bloom is sized for.
     #[serde(default = "default_capacity")]

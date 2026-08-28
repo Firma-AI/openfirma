@@ -8,7 +8,6 @@ revocation_file = "examples/firma-run/macos-vz-basic-exec/.runtime/revocations.t
 key_file = ".runtime/authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 
 [sidecar]
 mode = "enforce"
@@ -19,19 +18,12 @@ enabled = false
 [sidecar.policy]
 dir = "policies"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = true
 
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
-
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds = 3600
-enforcement_timeout_ms = 50
 
 [sidecar.connector]
 default_timeout_ms = 120000

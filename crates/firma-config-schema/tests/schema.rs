@@ -8,9 +8,10 @@
 
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra::{
-    CaConfig, CredentialMode, CredentialTransform, LogConfig, PolicyConfig, SidecarMode,
+    CaConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
+use firma_config_schema::{authority, run, secret_matcher, sidecar};
 
 #[test]
 fn interceptor_config_fills_defaults_for_missing_fields() {
@@ -92,5 +93,141 @@ fn infra_sections_default_to_documented_paths() {
         CaConfig::default().dir,
         std::path::PathBuf::from("./firma-ca/"),
     );
-    assert_eq!(LogConfig::default().level, "info");
+}
+
+#[test]
+fn authority_rejects_direct_and_flat_tls_typos() {
+    for (field, config) in [
+        ("listen_adrr", "listen_adrr = \"127.0.0.1:50051\""),
+        ("tls_cert_pat", "tls_cert_pat = \"authority.pem\""),
+    ] {
+        let error = toml::from_str::<authority::AuthorityConfig>(config)
+            .expect_err("unknown authority field must fail");
+        assert!(error.to_string().contains(field), "error: {error}");
+    }
+}
+
+#[test]
+fn sidecar_rejects_stale_and_nested_fields() {
+    for (field, config) in [
+        (
+            "preflight",
+            "[preflight]\nsession_id = \"removed-session\"\n",
+        ),
+        (
+            "drain_timeout_sec",
+            "[interceptor]\ndrain_timeout_sec = 30\n",
+        ),
+    ] {
+        let error = toml::from_str::<sidecar::SidecarConfig>(config)
+            .expect_err("unknown sidecar field must fail");
+        assert!(error.to_string().contains(field), "error: {error}");
+    }
+}
+
+#[test]
+fn sidecar_rejects_unknown_fields_in_dynamic_map_values() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        r#"
+[credentials.openai]
+target_host = "api.openai.com"
+header = "authorization"
+value_from_env = "OPENAI_API_KEY"
+target_hots = "typo.example.com"
+"#,
+    )
+    .expect_err("unknown credential field must fail");
+
+    assert!(error.to_string().contains("target_hots"), "error: {error}");
+}
+
+#[test]
+fn sidecar_rejects_unknown_fields_in_tagged_variants() {
+    let error = toml::from_str::<sidecar::SidecarConfig>(
+        r#"
+[[http_secret_providers]]
+provider_id = "vault"
+host = "vault.example.com"
+
+[[http_secret_providers.matchers]]
+type = "safe_command"
+path = "/health"
+stale_option = true
+"#,
+    )
+    .expect_err("unknown tagged-variant field must fail");
+
+    assert!(error.to_string().contains("stale_option"), "error: {error}");
+}
+
+#[test]
+fn secret_matcher_rejects_unknown_selector_fields() {
+    let error = serde_json::from_str::<secret_matcher::SecretMatcher>(
+        r#"{
+            "type": "json",
+            "record_path": "$[*]",
+            "value_path": "$.value",
+            "name": { "source": "record_key" },
+            "item_selector": {
+                "path": "$.title",
+                "scope": "record",
+                "selector_typo": true
+            }
+        }"#,
+    )
+    .expect_err("unknown nested selector field must fail");
+
+    assert!(
+        error.to_string().contains("selector_typo"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn run_rejects_unknown_fields_in_defaults_and_every_profile() {
+    for (field, config) in [
+        ("sidecar_endpont", "[defaults]\nsidecar_endpont = \"x\"\n"),
+        (
+            "allow_non_structurals",
+            "[profiles.selected]\nallow_non_structurals = true\n",
+        ),
+        (
+            "identity_modes",
+            "[profiles.unselected]\nidentity_modes = \"host_user\"\n",
+        ),
+    ] {
+        let error = toml::from_str::<run::FileConfig>(config)
+            .expect_err("unknown run profile field must fail");
+        assert!(error.to_string().contains(field), "error: {error}");
+    }
+}
+
+#[test]
+fn run_validates_backends_in_defaults_and_unselected_profiles() {
+    for config in [
+        "[defaults]\nbackend = \"bworp\"\n",
+        "[profiles.unselected]\nbackend = \"bworp\"\n",
+    ] {
+        let error = toml::from_str::<run::FileConfig>(config)
+            .expect_err("unknown backend must fail whole-file parsing");
+        assert!(error.to_string().contains("bworp"), "error: {error}");
+    }
+}
+
+#[test]
+fn intentional_run_compatibility_keys_still_parse() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+[defaults.capability]
+kind = "file"
+path = "capability.toml"
+
+[defaults.codex_cli]
+enforce_wrapper_defaults = true
+"#,
+    )
+    .expect("legacy capability and codex_cli keys remain supported");
+
+    assert!(config.defaults.capability.is_some());
+    assert!(config.defaults.codex_cli.is_some());
 }

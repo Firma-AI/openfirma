@@ -13,7 +13,6 @@ revocation_file = "examples/generic-agent/.runtime/revocations.txt"
 key_file = ".runtime/authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 
 # schema_path is optional. Omit to use the schema embedded in the binary.
 # schema_path = "examples/generic-agent/policies/schema.cedarschema"
@@ -32,8 +31,7 @@ drain_timeout_secs = 30
 [sidecar.interceptor.https_mitm]
 intercept_hosts = ["api.github.com", "gmail.googleapis.com", "pypi.org"]
 # Strict-MITM: the bare CONNECT is auto-authorized once the TLS preflight
-# succeeds; inner L7 requests (which carry x-firma-session-id) are then
-# evaluated individually.
+# succeeds; inner L7 requests are then evaluated individually.
 strict_hosts = ["api.github.com", "gmail.googleapis.com", "pypi.org"]
 
 [sidecar.policy]
@@ -41,9 +39,6 @@ dir = "."
 
 [sidecar.ca]
 dir = "examples/generic-agent/.runtime/generated-firma-ca"
-
-[sidecar.log]
-level = "info"
 
 [sidecar.mapping]
 # Supplemental rules (CONNECT tunnels, package managers, localhost).
@@ -58,10 +53,6 @@ default_protected = true
 
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
-
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds = 3600
-enforcement_timeout_ms = 50
 
 [sidecar.connector]
 default_timeout_ms = 120000 # 2 min — covers LLM first-token latency
@@ -111,27 +102,3 @@ backend = "bwrap"
 
 [run.profiles.copilot.env_set]
 FIRMA_RUN_PROFILE = "copilot"
-
-# ── Sidecar preflight ────────────────────────────────────────────────────────
-
-[sidecar.preflight]
-agent_id = "agt_01j0000000e008000000000001"
-session_id = "preflight-session"
-requested_actions = [
-  "system.install",
-  "credential.read",
-  "code.read",
-  "code.review.read",
-  "code.review.submit",
-  "code.write",
-  "code.merge",
-  "issue.read",
-  "issue.write",
-  "security.alert.read",
-  "notification.manage",
-  "communication.external.send",
-  "communication.internal.send",
-]
-resource_scope = "*"
-authority_pub_key_path = "examples/generic-agent/.runtime/authority.pub"
-ttl_seconds = 3600

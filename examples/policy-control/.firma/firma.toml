@@ -8,7 +8,6 @@ revocation_file = ".firma/state/revocations.txt"
 key_file = "state/authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 5
-log_level = "info"
 
 [sidecar.interceptor]
 mode = "http_proxy"
@@ -21,19 +20,12 @@ dir = "policies"
 [sidecar.ca]
 dir = ".firma/state/generated-firma-ca"
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = "mapping-rules.toml"
 default_protected = true
 
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
-
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds = 30
-enforcement_timeout_ms = 50
 
 [sidecar.connector]
 default_timeout_ms = 5000

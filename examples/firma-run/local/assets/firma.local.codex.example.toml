@@ -36,6 +36,3 @@ paths = ["capability-codex.toml"]
 sink = "file"
 file_path = "audit.jsonl"
 signing_key_path = "audit-key.pem"
-
-[sidecar.log]
-level = "info"

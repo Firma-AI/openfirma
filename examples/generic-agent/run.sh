@@ -138,31 +138,29 @@ else
   cat <<EOF
 
 Smoke tests — run in another terminal.
-The x-firma-session-id header binds the request to the preflight token's
-session_id (see [sidecar.preflight] in firma.toml). Without it the sidecar cannot
-select the pre-issued capability.
+This standalone Sidecar has no pre-issued capability, so protected requests
+fail closed at Stage 1. Launching an agent through firma run above performs
+automatic per-session capability issuance.
 
-  SESSION="x-firma-session-id: preflight-session"
+  # DENY — protected action without a capability
+  curl -sx $PROXY http://crates.io/api/v1/crates/serde -o /dev/null -w "crates.io  → %{http_code} (expect 403)\n"
 
-  # ALLOW — system.install (crates.io, HTTP)
-  curl -sx $PROXY -H "\$SESSION" http://crates.io/api/v1/crates/serde -o /dev/null -w "crates.io  → %{http_code} (expect 200)\n"
-
-  # ALLOW — system.install (pypi.org, HTTPS MITM — needs firma-ca)
-  curl -sx $PROXY -H "\$SESSION" --cacert "$CA_CERT" https://pypi.org/simple/requests/ -o /dev/null -w "pypi.org   → %{http_code} (expect 200)\n"
+  # DENY — protected HTTPS action without a capability
+  curl -sx $PROXY --cacert "$CA_CERT" https://pypi.org/simple/requests/ -o /dev/null -w "pypi.org   → %{http_code} (expect 403)\n"
 
   # DENY — not mapped → default_protected blocks before Cedar
-  curl -sx $PROXY -H "\$SESSION" http://evil.com/ -o /dev/null -w "evil.com   → %{http_code} (expect 403)\n"
+  curl -sx $PROXY http://evil.com/ -o /dev/null -w "evil.com   → %{http_code} (expect 403)\n"
 
   # DENY — cloud metadata endpoint (not mapped)
-  curl -sx $PROXY -H "\$SESSION" http://169.254.169.254/ -o /dev/null -w "metadata   → %{http_code} (expect 403)\n"
+  curl -sx $PROXY http://169.254.169.254/ -o /dev/null -w "metadata   → %{http_code} (expect 403)\n"
 
-  # ALLOW — code.read (GitHub MITM — GET /repos/*/*, needs firma-ca)
-  curl -sx $PROXY -H "\$SESSION" --cacert "$CA_CERT" \
+  # DENY — protected GitHub request without a capability
+  curl -sx $PROXY --cacert "$CA_CERT" \
     https://api.github.com/repos/serde-rs/serde \
-    -o /dev/null -w "github.com → %{http_code} (expect 200)\n"
+    -o /dev/null -w "github.com → %{http_code} (expect 403)\n"
 
   # DENY — code.destructive (hard-block in llm-agent.cedar, needs GITHUB_TOKEN)
-  curl -sx $PROXY -H "\$SESSION" --cacert "$CA_CERT" -X DELETE \
+  curl -sx $PROXY --cacert "$CA_CERT" -X DELETE \
     https://api.github.com/repos/owner/repo/git/refs/heads/my-branch \
     -o /dev/null -w "gh DELETE  → %{http_code} (expect 403)\n"
 

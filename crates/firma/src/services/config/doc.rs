@@ -14,7 +14,7 @@
 //!   always overwrite on merge — they are the whole point of re-running
 //!   `firma config`.
 //! - **static defaults** are only seeded when absent; an operator's manual
-//!   tweak (e.g. `bundle_ttl_seconds = 60`) survives.
+//!   tweak (e.g. `max_ttl_seconds = 7200`) survives.
 //! - **array selections** (intercept hosts, mapping paths, extra-host
 //!   rules) are fully replaced because they reflect the *current*
 //!   selection — keeping stale entries would silently widen the policy
@@ -220,11 +220,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     }
 
     {
-        let log = ensure_table(sidecar, "log")?;
-        set_str_if_absent(log, "level", "info");
-    }
-
-    {
         let mapping = ensure_table(sidecar, "mapping")?;
         set_str_if_absent(mapping, "rules_path", "mapping-rules.toml");
         set_str_array(mapping, "rules_paths", inputs.mapping_paths);
@@ -234,12 +229,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     {
         let cap = ensure_table(sidecar, "capability_validation")?;
         set_int_if_absent(cap, "clock_skew_tolerance_seconds", 0);
-    }
-
-    {
-        let ce = ensure_table(sidecar, "constraint_enforcement")?;
-        set_int_if_absent(ce, "bundle_ttl_seconds", 3600);
-        set_int_if_absent(ce, "enforcement_timeout_ms", 50);
     }
 
     {

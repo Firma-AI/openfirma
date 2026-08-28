@@ -11,7 +11,6 @@ revocation_file = "examples/demos/demo2/.runtime/revocations.txt"
 key_file = ".runtime/authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level = "info"
 
 # ── Sidecar ──────────────────────────────────────────────────────────────────
 
@@ -25,9 +24,7 @@ drain_timeout_secs = 30
 [sidecar.interceptor.https_mitm]
 intercept_hosts = ["api.github.com", "httpbin.org"]
 # Strict-MITM these hosts so the CONNECT preface is auto-authorized once the
-# TLS preflight succeeds — inner L7 requests (which carry the
-# x-firma-session-id header) are then evaluated individually. Without this,
-# the bare CONNECT (no session header, no L7 path) would fail Stage 1.
+# TLS preflight succeeds; inner L7 requests are evaluated individually.
 strict_hosts = ["api.github.com", "httpbin.org"]
 
 [sidecar.policy]
@@ -35,9 +32,6 @@ dir = "."
 
 [sidecar.ca]
 dir = "examples/demos/demo2/.runtime/generated-firma-ca"
-
-[sidecar.log]
-level = "info"
 
 # Credential injection. The real GitHub token lives only here, in the sidecar.
 # The agent process scrubs GITHUB_TOKEN from its own environment at startup
@@ -58,10 +52,6 @@ default_protected = true
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds = 3600
-enforcement_timeout_ms = 50
-
 [sidecar.connector]
 default_timeout_ms = 10000
 
@@ -78,11 +68,3 @@ reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
-
-[sidecar.preflight]
-agent_id = "agt_01j0000000e008000000000001"
-session_id = "demo2-session-001"
-requested_actions = ["code.review.read", "issue.write"]
-resource_scope = "*"
-authority_pub_key_path = "examples/demos/demo2/.runtime/authority.pub"
-ttl_seconds = 3600

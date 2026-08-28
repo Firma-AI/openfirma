@@ -116,16 +116,15 @@ Artifact layout:
 ## Runtime Hardening Invariants
 
 1. Environment-variable seccomp-path injection is not authoritative.
-2. `seccomp_policy.verify_checksum=false` is rejected.
-3. Checksum verification is mandatory in compile-on-launch and precompiled-only modes.
-4. Artifact root/leaf paths and files must be owned by current runtime uid.
-5. Symlinked managed artifact paths are rejected.
-6. Other-write permissions on managed artifact paths are rejected.
-7. Invalid-but-checksummed BPF content still fails closed at runtime load.
-8. Mediated mode is fail-closed on timeout/unavailable/error/invalid response.
-9. Runtime canonicalizes the executable path (resolving symlinks, enforcing UTF-8) before governance request construction.
-10. When `enforce_known_executables=true`, canonical executable is checked against `allowed_executables`. Any executable not in the list is fail-closed.
-11. Mediator request includes `sandbox_id` + `session_id` for identity/session binding.
+2. Checksum verification is mandatory and unconditional in compile-on-launch and precompiled-only modes.
+3. Artifact root/leaf paths and files must be owned by current runtime uid.
+4. Symlinked managed artifact paths are rejected.
+5. Other-write permissions on managed artifact paths are rejected.
+6. Invalid-but-checksummed BPF content still fails closed at runtime load.
+7. Mediated mode is fail-closed on timeout/unavailable/error/invalid response.
+8. Runtime canonicalizes the executable path (resolving symlinks, enforcing UTF-8) before governance request construction.
+9. When `enforce_known_executables=true`, canonical executable is checked against `allowed_executables`. Any executable not in the list is fail-closed.
+10. Mediator request includes `sandbox_id` + `session_id` for identity/session binding.
 
 ## Local-Exec Governance Contract
 
@@ -302,7 +301,6 @@ sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
 [profiles.generic.seccomp_policy]
 source_policy_path = "/ABS/PATH/TO/crates/firma-run/policies/generic-local-command-v1.toml"
 artifact_dir = "/ABS/PATH/TO/.artifacts/seccomp-artifacts"
-verify_checksum = true
 runtime_mode = "compile_on_launch"
 
 [profiles.generic.sidecar_local_exec]

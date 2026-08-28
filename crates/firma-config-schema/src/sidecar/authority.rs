@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Sidecar pre-shared-key credentials presented to Authority RPCs.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SidecarCredentials {
     /// Workspace the Sidecar belongs to.
     pub workspace_id: String,
@@ -25,6 +26,7 @@ pub struct SidecarCredentials {
 
 /// Tuning for background Authority stream clients.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorityConfig {
     /// Authority-registered `TypeID` for the agent represented by this Sidecar.
     /// Accepted for configuration compatibility; parsed by `firma-sidecar`.

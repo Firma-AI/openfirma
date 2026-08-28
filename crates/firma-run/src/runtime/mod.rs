@@ -880,7 +880,6 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::<MountSpec>::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -947,7 +946,6 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1003,7 +1001,6 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1072,7 +1069,6 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1172,7 +1168,6 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1242,7 +1237,6 @@ mod tests {
             ]),
             mounts: Vec::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1288,7 +1282,6 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
@@ -1361,7 +1354,6 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_policy: None,
-            allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,

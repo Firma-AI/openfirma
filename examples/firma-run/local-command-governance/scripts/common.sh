@@ -45,7 +45,6 @@ backend = "bwrap"
 [run.profiles.generic.seccomp_policy]
 source_policy_path = "${POLICY_PATH}"
 artifact_dir = "${artifact_dir}"
-verify_checksum = true
 runtime_mode = "compile_on_launch"
 
 [run.profiles.generic.sidecar_local_exec]

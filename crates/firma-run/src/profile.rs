@@ -63,7 +63,6 @@ fn generic_profile() -> ProfilePatch {
             target: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             read_only: false,
         }],
-        allowed_domains: Vec::new(),
         network: Some(NetworkPolicyPatch {
             // Structural confinement default is backend-aware and resolved later.
             enforce_network_namespace: None,

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context as _, anyhow};
+use firma_authority::config::ConfigError;
 use firma_authority::{AuthorityConfig, AuthorityConfigBuilder};
 use firma_config_loader::{CONFIG_FILE_NAME, ConfigResolver, ResolvedConfig};
 use firma_config_schema::authority as schema;
@@ -69,15 +70,12 @@ fn schema_with_tls() -> schema::AuthorityConfig {
         revocation_file: "/srv/revocations.txt".into(),
         max_ttl_seconds: 1200,
         key_file: "/srv/authority.key".into(),
-        log_level: "debug".to_string(),
         bundle_ttl_seconds: 45,
-        tls: schema::AuthorityTlsConfig {
-            tls_cert_path: Some("/srv/tls.crt".into()),
-            tls_key_path: Some("/srv/tls.key".into()),
-            mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),
-            mtls_client_ca_key_path: Some("/srv/ca.key".into()),
-            authorized_clients_path: Some("/srv/clients.toml".into()),
-        },
+        tls_cert_path: Some("/srv/tls.crt".into()),
+        tls_key_path: Some("/srv/tls.key".into()),
+        mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),
+        mtls_client_ca_key_path: Some("/srv/ca.key".into()),
+        authorized_clients_path: Some("/srv/clients.toml".into()),
     }
 }
 
@@ -144,10 +142,7 @@ fn without_tls_and_listen_addr_setters_apply() -> anyhow::Result<()> {
 #[test]
 fn build_rejects_half_configured_server_tls() {
     let schema = schema::AuthorityConfig {
-        tls: schema::AuthorityTlsConfig {
-            tls_cert_path: Some("/srv/tls.crt".into()),
-            ..schema::AuthorityTlsConfig::default()
-        },
+        tls_cert_path: Some("/srv/tls.crt".into()),
         ..schema::AuthorityConfig::default()
     };
     assert!(AuthorityConfigBuilder::new(schema).build().is_err());
@@ -156,12 +151,9 @@ fn build_rejects_half_configured_server_tls() {
 #[test]
 fn build_rejects_unpaired_mtls() {
     let schema = schema::AuthorityConfig {
-        tls: schema::AuthorityTlsConfig {
-            tls_cert_path: Some("/srv/tls.crt".into()),
-            tls_key_path: Some("/srv/tls.key".into()),
-            mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),
-            ..schema::AuthorityTlsConfig::default()
-        },
+        tls_cert_path: Some("/srv/tls.crt".into()),
+        tls_key_path: Some("/srv/tls.key".into()),
+        mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),
         ..schema::AuthorityConfig::default()
     };
     assert!(AuthorityConfigBuilder::new(schema).build().is_err());
@@ -170,12 +162,64 @@ fn build_rejects_unpaired_mtls() {
 #[test]
 fn build_rejects_mtls_without_server_tls() {
     let schema = schema::AuthorityConfig {
-        tls: schema::AuthorityTlsConfig {
-            mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),
-            authorized_clients_path: Some("/srv/clients.toml".into()),
-            ..schema::AuthorityTlsConfig::default()
-        },
+        mtls_client_ca_cert_path: Some("/srv/ca.crt".into()),
+        authorized_clients_path: Some("/srv/clients.toml".into()),
         ..schema::AuthorityConfig::default()
     };
     assert!(AuthorityConfigBuilder::new(schema).build().is_err());
+}
+
+#[test]
+#[expect(
+    unsafe_code,
+    reason = "nextest gives this environment-mutating integration test its own process"
+)]
+fn environment_tls_overrides_are_validated_after_merge() -> anyhow::Result<()> {
+    assert_eq!(
+        std::env::var("NEXTEST").as_deref(),
+        Ok("1"),
+        "this test mutates process environment and must run under cargo nextest"
+    );
+
+    let tmp = tempfile::tempdir()?;
+    let config_path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(&config_path, "[authority]\n")?;
+    let resolved = resolved_config(&config_path)?;
+    let tls_env_keys = [
+        "FIRMA_AUTHORITY_TLS_CERT_PATH",
+        "FIRMA_AUTHORITY_TLS_KEY_PATH",
+        "FIRMA_AUTHORITY_MTLS_CLIENT_CA_CERT_PATH",
+        "FIRMA_AUTHORITY_MTLS_CLIENT_CA_KEY_PATH",
+        "FIRMA_AUTHORITY_AUTHORIZED_CLIENTS_PATH",
+    ];
+
+    for (key, expected_reason) in [
+        (
+            "FIRMA_AUTHORITY_TLS_CERT_PATH",
+            "tls_cert_path and tls_key_path must both be set or both be unset",
+        ),
+        (
+            "FIRMA_AUTHORITY_MTLS_CLIENT_CA_CERT_PATH",
+            "mtls_client_ca_cert_path and authorized_clients_path must both be set or both be unset",
+        ),
+    ] {
+        // SAFETY: nextest executes each test in an isolated process.
+        unsafe {
+            for env_key in tls_env_keys {
+                std::env::remove_var(env_key);
+            }
+            std::env::set_var(key, "override.pem");
+        }
+
+        let Err(error) = AuthorityConfig::from_resolved_section(&resolved) else {
+            anyhow::bail!("an unpaired TLS environment override must fail validation");
+        };
+        let ConfigError::ParseError { path, reason } = error else {
+            anyhow::bail!("unexpected error: {error}");
+        };
+        assert_eq!(path, config_path);
+        assert_eq!(reason, expected_reason);
+    }
+
+    Ok(())
 }

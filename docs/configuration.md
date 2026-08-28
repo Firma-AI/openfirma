@@ -16,18 +16,32 @@ shape and must be readable and valid TOML.
 Configuration is validated at startup. Invalid fields cause the affected
 binary to exit before accepting requests.
 
+Unknown keys are rejected recursively rather than ignored. The only top-level
+keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
+are strict as well. Dynamic labels such as credential names, executable-policy
+names, and Run profile names remain open, but every value under those labels
+must match its schema. Firma validates all Run defaults and profiles while
+parsing the file, including profiles that are not selected, so a typo or an
+unsupported `backend` anywhere fails startup. Remove stale tables such as
+`[project]` and `[sidecar.preflight]` instead of relying on them being ignored.
+
+The following settings were removed because they never controlled runtime
+behavior: `[authority].log_level`, `[sidecar.log]`,
+`[sidecar.constraint_enforcement].bundle_ttl_seconds`,
+`[sidecar.constraint_enforcement].enforcement_timeout_ms`, and Run profile
+`allowed_domains`. Remove them from existing files. Configure process logging
+with `--log-filter` / `FIRMA_LOG_FILTER`. Policy-bundle freshness is controlled
+by the TTL advertised by the Authority, and seccomp artifact checksums are
+always verified; `seccomp_policy.verify_checksum` is therefore no longer a
+configurable choice.
+
 ## Scaffolded Example
 
 `firma config` writes one sectioned `firma.toml` with all paths
 absolutised under the resolved config and state directories. The shape is:
 
 ```toml
-[project]
-agent = "generic"
-provider = "anthropic"
-
 [authority]
-type = "local"
 listen_addr = "127.0.0.1:50051"
 policy_dir = '/home/me/.config/firma/policies'
 issuance_policy_dir = '/home/me/.config/firma/issuance-policies'
@@ -39,9 +53,6 @@ bundle_ttl_seconds = 30
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
-
-[sidecar.policy]
-authority_url = "http://127.0.0.1:50051"
 
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"
@@ -146,7 +157,6 @@ An empty file is valid. Defaults are applied for every section:
 # Interceptor: HTTP proxy on 0.0.0.0:8080
 # Policy dir: ./policies/
 # CA dir: ./firma-ca/
-# Log level: info
 # Mapping rules: mapping-rules.toml
 ```
 
@@ -179,9 +189,6 @@ authority_url = "https://authority.example.com"
 [ca]
 dir = "/etc/firma/ca"
 
-[log]
-level = "debug"
-
 [credentials.openai]
 mode = "basic"
 target_host = "api.openai.com"
@@ -204,7 +211,8 @@ default_protected = false
 clock_skew_tolerance_seconds = 5
 
 [constraint_enforcement]
-bundle_ttl_seconds = 60
+session_state_capacity = 8192
+session_state_backend = "lru"
 
 [connector]
 default_timeout_ms = 15000
@@ -495,19 +503,6 @@ Validation:
 
 - `dir` must not be empty.
 
-### `[log]`
-
-Log settings from the configuration file. CLI logging flags override these
-settings.
-
-| Field   | Type   | Default | Description                               |
-| ------- | ------ | ------- | ----------------------------------------- |
-| `level` | string | `info`  | `trace`, `debug`, `info`, `warn`, `error` |
-
-Validation:
-
-- `level` must be one of `trace`, `debug`, `info`, `warn`, or `error`.
-
 ### `[credentials.<label>]`
 
 Per-target credential injection. Each entry selects a mode (`basic` or `vault`)
@@ -591,14 +586,18 @@ Stage 1 settings.
 
 Stage 2 settings.
 
-| Field                | Type | Default | Description                           |
-| -------------------- | ---- | ------- | ------------------------------------- |
-| `bundle_ttl_seconds` | u64  | `30`    | Policy bundle maximum age before deny |
+| Field                    | Type   | Default | Description                                      |
+| ------------------------ | ------ | ------- | ------------------------------------------------ |
+| `session_state_capacity` | usize  | `8192`  | Maximum active sessions retained in the cache    |
+| `session_state_backend`  | string | `lru`   | `lru` or file-backed `persistent` storage        |
+| `session_state_path`     | path   | none    | Optional JSONL path for the `persistent` backend |
 
-The authoritative TTL at runtime comes from the `ttl_seconds` field on
-the `PolicyBundle` pushed by the Authority over `WatchPolicyBundle`.
-`bundle_ttl_seconds` here is the dev-mode fallback used only until the
-first push arrives.
+`session_state_capacity` must be at least `1`.
+
+Policy-bundle freshness is not configured in this Sidecar section. The
+Authority embeds `[authority].bundle_ttl_seconds` in each streamed bundle,
+periodically refreshes it, and Stage 2 denies with `PolicyBundleStale` if that
+advertised deadline expires. Cedar evaluation has no user-configurable timeout.
 
 ### `[connector]`
 
@@ -683,9 +682,9 @@ Behavior notes:
   bundle has been applied and `REVOCATION_CACHE_NOT_READY` until the
   revocation stream has either received its first event or the grace
   period has elapsed — whichever happens first.
-- The policy bundle TTL (carried in each `PolicyBundleUpdate`) is
-  authoritative for fail-closed on disconnect. When the deadline
-  elapses without a refresh, Stage 2 denies with `PolicyBundleStale`.
+- The policy bundle TTL carried in each `PolicyBundleUpdate` is authoritative.
+  When the deadline elapses without a refresh, Stage 2 denies with
+  `PolicyBundleStale`.
 - `revocation_fail_closed_on_disconnect = true` is the opt-in strict
   mode: a revocation stream drop flips readiness off and the sidecar
   denies all traffic with `REVOCATION_CACHE_NOT_READY` until the

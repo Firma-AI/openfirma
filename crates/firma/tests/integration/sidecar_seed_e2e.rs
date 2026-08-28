@@ -57,7 +57,6 @@ policy_dir = {policy_dir}
 revocation_file = {revocation}
 max_ttl_seconds = 3600
 key_file = {key_file}
-log_level = "warn"
 bundle_ttl_seconds = 30
 "#,
             policy_dir = toml::Value::String(policies.to_string_lossy().into_owned()),
@@ -134,9 +133,6 @@ dir = '{policy_dir}'
 
 [sidecar.ca]
 dir = '{ca_dir}'
-
-[sidecar.log]
-level = "warn"
 
 [sidecar.mapping]
 rules_path = '{mapping}'

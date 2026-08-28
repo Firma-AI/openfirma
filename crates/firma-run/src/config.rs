@@ -9,11 +9,14 @@ use firma_runtime_state::RuntimeLayout;
 use serde::Serialize;
 
 pub use firma_config_schema::run::SandboxIdentityMode;
-pub(crate) use firma_config_schema::run::{
-    CaTrustMode, CapabilityLeasePatch, CapabilitySourcePatch, CommandMediatorHitlMode,
-    ExecutableLaunchPolicyPatch, MountPatch, NetworkPolicyPatch, ProfilePatch, SeccompRuntimeMode,
+use firma_config_schema::run::{
+    BackendKind as SchemaBackendKind, CommandMediatorPatch, FileConfig, SeccompPolicyPatch,
 };
-use firma_config_schema::run::{CommandMediatorPatch, FileConfig, SeccompPolicyPatch};
+pub(crate) use firma_config_schema::run::{
+    CaTrustMode, CapabilityLeasePatch, CapabilitySourceKind, CapabilitySourcePatch,
+    CommandMediatorHitlMode, ExecutableLaunchPolicyPatch, MountPatch, NetworkPolicyPatch,
+    ProfilePatch, SeccompRuntimeMode,
+};
 
 use crate::backend::BackendKind;
 use crate::backend::platform::detect_wsl;
@@ -23,6 +26,28 @@ use crate::runtime::RunInput;
 
 fn backend_supports_structural_network(backend: BackendKind) -> bool {
     matches!(backend, BackendKind::Bwrap)
+}
+
+impl From<SchemaBackendKind> for BackendKind {
+    fn from(backend: SchemaBackendKind) -> Self {
+        match backend {
+            SchemaBackendKind::Bwrap => Self::Bwrap,
+            SchemaBackendKind::Vz => Self::Vz,
+            SchemaBackendKind::Wsl2 => Self::Wsl2,
+            SchemaBackendKind::Firecracker => Self::Firecracker,
+        }
+    }
+}
+
+impl From<BackendKind> for SchemaBackendKind {
+    fn from(backend: BackendKind) -> Self {
+        match backend {
+            BackendKind::Bwrap => Self::Bwrap,
+            BackendKind::Vz => Self::Vz,
+            BackendKind::Wsl2 => Self::Wsl2,
+            BackendKind::Firecracker => Self::Firecracker,
+        }
+    }
 }
 
 /// Resolved runtime profile after combining built-in defaults, optional file
@@ -37,7 +62,6 @@ pub struct ResolvedProfile {
     pub env_set: BTreeMap<String, String>,
     pub(crate) mounts: Vec<MountSpec>,
     pub(crate) seccomp_policy: Option<SeccompPolicyConfig>,
-    pub(crate) allowed_domains: Vec<String>,
     pub(crate) network: NetworkPolicy,
     pub(crate) identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
@@ -116,12 +140,6 @@ impl ResolvedProfile {
                     "seccomp_policy.artifact_dir must be absolute: {}",
                     managed.artifact_dir.display()
                 )));
-            }
-            if !managed.verify_checksum {
-                return Err(RunError::ConfigValidation(
-                    "seccomp_policy.verify_checksum=false is unsupported; checksum verification is mandatory"
-                        .to_string(),
-                ));
             }
             if self.backend != BackendKind::Bwrap {
                 return Err(RunError::ConfigValidation(format!(
@@ -305,7 +323,6 @@ pub enum CommandMediatorEndpoint {
 pub struct SeccompPolicyConfig {
     pub(crate) source_policy_path: PathBuf,
     pub(crate) artifact_dir: PathBuf,
-    pub(crate) verify_checksum: bool,
     pub(crate) runtime_mode: SeccompRuntimeMode,
 }
 
@@ -371,12 +388,6 @@ impl Merge for ProfilePatch {
             higher.mounts
         };
 
-        let allowed_domains = if higher.allowed_domains.is_empty() {
-            self.allowed_domains
-        } else {
-            higher.allowed_domains
-        };
-
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
@@ -384,7 +395,6 @@ impl Merge for ProfilePatch {
             env_passthrough,
             env_set,
             mounts,
-            allowed_domains,
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: match (self.capability, higher.capability) {
@@ -435,12 +445,7 @@ pub(crate) fn resolve_profile_with_layout(
     let cli_patch = cli_profile_patch(args);
     patch = patch.merge(cli_patch);
 
-    let configured_backend = patch
-        .backend
-        .as_deref()
-        .map(str::parse::<BackendKind>)
-        .transpose()
-        .map_err(RunError::ConfigValidation)?;
+    let configured_backend = patch.backend.map(BackendKind::from);
     let backend = resolve_backend(configured_backend);
 
     // The explicitly-configured endpoint (config file or env), without the
@@ -541,7 +546,6 @@ pub(crate) fn resolve_profile_with_layout(
         env_set,
         mounts,
         seccomp_policy,
-        allowed_domains: patch.allowed_domains,
         network,
         identity_mode,
         capability,
@@ -621,13 +625,12 @@ fn resolve_backend_for_linux(
 
 fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
     ProfilePatch {
-        backend: args.backend.map(|backend| backend.to_string()),
+        backend: args.backend.map(SchemaBackendKind::from),
         sidecar_endpoint: None,
         seccomp_policy: None,
         env_passthrough: Vec::new(),
         env_set: BTreeMap::new(),
         mounts: Vec::new(),
-        allowed_domains: Vec::new(),
         network: None,
         identity_mode: if args.preserve_host_user {
             Some(SandboxIdentityMode::HostUser)
@@ -690,7 +693,7 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
             CapabilitySourcePatch::File { path } => CapabilitySource::File { path },
         }
     } else {
-        parse_legacy_capability_source(patch.kind.as_deref(), patch.path)
+        parse_legacy_capability_source(patch.kind, patch.path)
     };
 
     CapabilityLeaseConfig {
@@ -705,12 +708,15 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
     }
 }
 
-fn parse_legacy_capability_source(kind: Option<&str>, path: Option<PathBuf>) -> CapabilitySource {
+fn parse_legacy_capability_source(
+    kind: Option<CapabilitySourceKind>,
+    path: Option<PathBuf>,
+) -> CapabilitySource {
     match kind {
-        Some("file") => path.map_or(CapabilitySource::Disabled, |path| CapabilitySource::File {
-            path,
+        Some(CapabilitySourceKind::File) => path.map_or(CapabilitySource::Disabled, |path| {
+            CapabilitySource::File { path }
         }),
-        Some("disabled" | _) | None => CapabilitySource::Disabled,
+        Some(CapabilitySourceKind::Disabled) | None => CapabilitySource::Disabled,
     }
 }
 
@@ -728,7 +734,6 @@ fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
     SeccompPolicyConfig {
         source_policy_path: patch.source_policy_path,
         artifact_dir: patch.artifact_dir,
-        verify_checksum: patch.verify_checksum.unwrap_or(true),
         runtime_mode: patch
             .runtime_mode
             .unwrap_or(SeccompRuntimeMode::CompileOnLaunch),
@@ -884,7 +889,6 @@ fn default_managed_seccomp_policy(
     Ok(Some(SeccompPolicyConfig {
         source_policy_path,
         artifact_dir,
-        verify_checksum: true,
         runtime_mode,
     }))
 }
@@ -977,8 +981,8 @@ pub(crate) fn env_truthy(name: &str) -> bool {
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
-    let section = firma_config_loader::load_section(path, "run").map_err(|reason| {
-        // load_section prefixes the path; strip it to avoid doubling in the
+    let config = firma_config_loader::FirmaConfig::load(path).map_err(|reason| {
+        // FirmaConfig prefixes the path; strip it to avoid doubling in the
         // RunError::ConfigParse display ("{path}: {reason}").
         let prefix = format!("{}: ", path.display());
         let reason = reason.to_string();
@@ -993,10 +997,19 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
             reason: format!("{reason}{hint}"),
         }
     })?;
-
-    let parsed = toml::from_str::<FileConfig>(&section).map_err(|error| RunError::ConfigParse {
-        path: path.to_path_buf(),
-        reason: error.to_string(),
+    let parsed = config.section::<FileConfig>("run").map_err(|reason| {
+        let prefix = format!("{}: ", path.display());
+        let reason = reason.to_string();
+        let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
+        let hint = if reason.contains("[run]") {
+            "; run `firma config` to add a [run] section"
+        } else {
+            ""
+        };
+        RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: format!("{reason}{hint}"),
+        }
     })?;
 
     let profile_patch = parsed.profiles.get(profile).cloned().unwrap_or_default();
@@ -1010,7 +1023,7 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
 /// Returns an error when the file cannot be read or the `[run]` section
 /// cannot be parsed as `FileConfig`.
 pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> {
-    let section = firma_config_loader::load_section(path, "run").map_err(|reason| {
+    let config = firma_config_loader::FirmaConfig::load(path).map_err(|reason| {
         let prefix = format!("{}: ", path.display());
         let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
@@ -1019,10 +1032,12 @@ pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> 
             reason,
         }
     })?;
-    let parsed = toml::from_str::<FileConfig>(&section).map_err(|error| RunError::ConfigParse {
-        path: path.to_path_buf(),
-        reason: error.to_string(),
-    })?;
+    let parsed = config
+        .section::<FileConfig>("run")
+        .map_err(|reason| RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: reason.to_string(),
+        })?;
     Ok(parsed.profile)
 }
 
@@ -1144,7 +1159,6 @@ mod tests {
             && !super::env_truthy(super::MANAGED_DEFAULT_DISABLE_ENV)
         {
             let managed = resolved.seccomp_policy.as_ref().unwrap();
-            assert!(managed.verify_checksum);
             assert_eq!(managed.runtime_mode, SeccompRuntimeMode::CompileOnLaunch);
             assert!(
                 managed
@@ -1466,7 +1480,6 @@ sidecar_endpoint = "unix:///tmp/sidecar.sock"
 [run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
-verify_checksum = true
 "#,
             policy_path.display(),
             artifact_dir.display()
@@ -1582,49 +1595,6 @@ runtime_mode = "precompiled_only"
                 .to_string()
                 .contains("compile_on_launch' or 'precompiled_only"),
             "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn seccomp_policy_rejects_checksum_disable() {
-        let tmpdir = tempfile::tempdir().unwrap();
-        let policy_path = tmpdir.path().join("policy.toml");
-        fs::write(
-            &policy_path,
-            r#"
-policy_id = "generic-local-command"
-policy_version = "v1"
-default_action = "allow"
-deny_actions = ["filesystem.delete"]
-"#,
-        )
-        .unwrap();
-        let artifact_dir = tmpdir.path().join("artifacts");
-
-        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
-        let toml = format!(
-            r#"
-[run.profiles.generic]
-backend = "bwrap"
-sidecar_endpoint = "unix:///tmp/sidecar.sock"
-
-[run.profiles.generic.seccomp_policy]
-source_policy_path = '{}'
-artifact_dir = '{}'
-verify_checksum = false
-"#,
-            policy_path.display(),
-            artifact_dir.display()
-        );
-        fs::write(&config_path, toml).unwrap();
-
-        let mut run_args = args("generic");
-        run_args.config = Some(config_path);
-        let err = resolve_profile(&run_args).expect_err("expected checksum validation error");
-        assert!(
-            err.to_string()
-                .contains("seccomp_policy.verify_checksum=false is unsupported"),
-            "unexpected error: {err}"
         );
     }
 

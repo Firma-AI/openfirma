@@ -253,13 +253,13 @@ backend = "bwrap"
 [profiles.claude-code.seccomp_policy]
 source_policy_path = "/absolute/path/to/policy.toml"
 artifact_dir = "/absolute/path/to/seccomp-artifacts"
-verify_checksum = true
 ```
 
 Notes:
 
 - `seccomp_policy` is supported only with backend `bwrap`.
 - policy and artifact paths must be absolute.
+- artifact checksums are always verified before loading.
 - generated artifact format must match `bwrap --seccomp` expectations (compiled cBPF).
 
 Manual backend override example:

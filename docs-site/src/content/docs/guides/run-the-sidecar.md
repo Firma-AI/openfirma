@@ -129,7 +129,6 @@ revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/authority.key"
 max_ttl_seconds     = 3600
 bundle_ttl_seconds  = 30
-log_level           = "info"
 
 [sidecar.interceptor]
 mode               = "http_proxy"
@@ -147,23 +146,10 @@ dir = "/tmp/firma-standalone/config/policies"
 url             = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/authority.pub"
 
-[sidecar.preflight]
-agent_id          = "agt_01j0000000e008000000000001"
-session_id        = "standalone-session"
-requested_actions = ["communication.external.send"]
-resource_scope    = "*"
-
-[sidecar.constraint_enforcement]
-bundle_ttl_seconds     = 3600
-enforcement_timeout_ms = 50
-
 [sidecar.audit]
 sink             = "file"
 file_path        = "/tmp/firma-standalone/logs/audit.jsonl"
 signing_key_path = "/tmp/firma-standalone/audit.key"
-
-[sidecar.log]
-level = "info"
 ```
 
 Notes:
@@ -171,10 +157,10 @@ Notes:
 - **`[sidecar.authority].url` is required** for Stage 2 on mapped routes.
   Without it the Sidecar keeps a deny-all stale evaluator and every protected
   call becomes `policy bundle stale`.
-- **`[sidecar.preflight]`** asks the Authority for a dev capability at Sidecar
-  startup so Stage 1 passes without hand-minting a seed file. See
-  [Issue capability tokens](../issue-capability-tokens/) for the long-lived
-  seed workflow.
+- The Sidecar does not mint a capability at startup. Use `firma run` for
+  automatic per-session issuance, or follow
+  [Issue capability tokens](../issue-capability-tokens/) to configure a
+  long-lived `[sidecar.capability_seed]` before sending protected requests.
 - **`default_protected = false`** keeps unmapped destinations as passthrough
   while you experiment. Production stacks should use `true`.
 - No `[sidecar.ca]` section — these demo curls use plain HTTP. See
@@ -246,9 +232,9 @@ For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
 **HTTPS calls show up as method `CONNECT`.** Without MITM, the only thing the Sidecar sees about HTTPS is the CONNECT line. The path is `/` and the action class will be whatever your rule maps `CONNECT host:443` to — probably nothing. To enforce on the inner HTTP details, set up MITM ([guide](../https-mitm/)).
 
-**`policy bundle stale` or readiness denies.** This appears when the
-Sidecar cannot use a fresh Authority-backed policy bundle or revocation
-view. You do not need to sequence the Authority before the Sidecar by hand:
+**`policy bundle stale` or readiness denies.** These appear when the Sidecar
+cannot use a fresh Authority-backed policy bundle or revocation view. You do
+not need to sequence the Authority before the Sidecar by hand:
 the Sidecar retries Authority streams with backoff, stays fail-closed, and
 emits `sidecar ready` only after the required streams hydrate. For
 deployment probe guidance, see

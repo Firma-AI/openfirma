@@ -2,10 +2,9 @@
 //! reference config: every malformed sidecar TOML must exit non-zero
 //! with a diagnostic that names the offending key.
 //!
-//! The cases below exercise three distinct failure modes:
+//! The cases below exercise two distinct failure modes:
 //!
 //! - parse error (typo in `[interceptor]` field name)
-//! - validation error (`log.level = "verbose"`)
 //! - validation error (`policy.dir` empty)
 
 #![allow(
@@ -60,26 +59,6 @@ listen_addr = "127.0.0.1:7474"
     assert!(
         lowered.contains("interceptor") || lowered.contains("mode") || lowered.contains("telnet"),
         "diagnostic should reference the offending field; got: {stderr}",
-    );
-}
-
-#[test]
-fn invalid_log_level_exits_non_zero() {
-    let (_tmp, cfg) = write_config(
-        r#"
-[sidecar.interceptor]
-mode = "http_proxy"
-listen_addr = "127.0.0.1:7474"
-
-[sidecar.log]
-level = "verbose"
-"#,
-    );
-    let (code, _, stderr) = run_sidecar(&cfg);
-    assert_ne!(code, 0, "expected non-zero exit; stderr: {stderr}");
-    assert!(
-        stderr.contains("log.level") || stderr.contains("verbose"),
-        "diagnostic should mention log.level: {stderr}",
     );
 }
 

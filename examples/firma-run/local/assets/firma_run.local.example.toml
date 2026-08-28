@@ -7,6 +7,3 @@ source_policy_path = "/abs/path/to/openfirma/crates/firma-run/policies/generic-l
 
 # Absolute output directory where versioned seccomp artifacts are generated.
 artifact_dir = "/abs/path/to/.firma/seccomp-artifacts"
-
-# Verify generated artifact hash against metadata at runtime before loading.
-verify_checksum = true

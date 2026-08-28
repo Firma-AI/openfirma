@@ -96,9 +96,6 @@ dir = '{policies}'
 [sidecar.ca]
 dir = '{ca}'
 
-[sidecar.log]
-level = "info"
-
 [sidecar.mapping]
 rules_path = '{mapping}'
 default_protected = true

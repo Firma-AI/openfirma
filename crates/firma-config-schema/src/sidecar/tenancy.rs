@@ -23,6 +23,7 @@ pub enum TenancyMode {
 
 /// Tenancy configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TenancyConfig {
     /// Tenancy mode. Default: [`TenancyMode::SingleAgent`].
     #[serde(default)]

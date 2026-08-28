@@ -149,6 +149,12 @@ public_key_path = "/path/to/state/authority.pub"
 profile = "codex"
 ```
 
+Firma rejects unknown keys at every level. The only top-level sections are
+`[authority]`, `[sidecar]`, and `[run]`; a typo in any nested table or any Run
+profile—including one that is not selected—fails parsing instead of being
+silently ignored. Dynamic profile and credential labels remain allowed, but
+their contents are strict.
+
 The two values are intentionally independent. `agent_id` is the stable UUID
 assigned during Authority registration and used in capability, audit, and
 transport attribution. `[run].profile` selects local execution behavior such
