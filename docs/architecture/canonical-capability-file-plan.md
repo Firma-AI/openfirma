@@ -408,13 +408,87 @@ The amendment otherwise preserves authorization, watcher, reload, and previous-m
 
 ## Final verification
 
-- Focused checks: dprint; core seed tests; `firma-run` capability lease,
-  routing, runtime, and config tests; Sidecar seed load/reload tests; targeted
-  black-box lifecycle proof; canonical documentation searches.
-- Workspace checks: `just check` and `just docs-build`.
-- Post-implementation independent review: required for Rust correctness,
-  trust-boundary behavior, secret-safe errors, local/external topology,
-  regression coverage, and public-doc accuracy.
+- Reviewed implementation candidate:
+  `76987c60805889550a156e7cd64ea8b83706d820`; mechanically rebased
+  implementation candidate:
+  `7821c543438b7320c1c8170528a3c3336cdab92c`.
+- Focused verification:
+  - `cargo test -p firma-core capability_seed`: 5 matching unit/integration
+    tests passed.
+  - `cargo nextest run -p firma-run -E 'test(/capability_lease/)'`: 10 passed.
+  - `cargo nextest run -p firma-sidecar -E 'test(/capability_reload/)'`: 5
+    passed.
+  - targeted all-target Clippy for `firma-core`, `firma-run`, `firma-sidecar`,
+    and `firma`: passed with warnings denied.
+  - `bash -n examples/firma-run/local/renew-capability.sh`: passed. A
+    PowerShell parser was not available in the Linux orb.
+- Workspace verification:
+  - `CARGO_TARGET_DIR=/home/user/workspace/repo/target just check`: passed;
+    Clippy, 2,602 nextest tests, doctests, all-target build, audit, deny, and
+    release-tool checks were green.
+  - `CARGO_TARGET_DIR=/home/user/workspace/repo/target just docs-build`: passed;
+    Rust API generation completed for 18 library crates and Astro built 311
+    pages.
+  - canonical Rustdoc source/generated-output and current public-doc searches
+    found no obsolete operator-seed deprecation wording.
+- Independent post-implementation review: no actionable findings; the exact
+  candidate conforms to the accepted plan and its trust-boundary obligations.
+
+## Post-implementation review record
+
+> ## Actionable findings
+>
+> None.
+>
+> ## Verdict
+>
+> No actionable correctness, robustness, security, lifecycle, topology, documentation, or test-quality findings were identified in revision `76987c60805889550a156e7cd64ea8b83706d820` against base `a549671c3a620b332d36e784a23d1983480d15d7`.
+>
+> The implementation conforms to the accepted Full plan: strict shared `CapabilitySeed` parsing, secret-safe diagnostics, pre-backend rejection, exact token/path environment roles, preserved Sidecar verification and reload ownership, file-source mint suppression, and local/external topology separation.
+>
+> ## Assumptions and uncertainties
+>
+> - Filesystem confinement was treated as intentionally deferred.
+> - External Sidecar behavior was assessed at Run’s routing/configuration boundary; no live external Sidecar was launched.
+> - Focused tests were run, not the complete `just check` or docs build.
+> - The lifecycle regression uses the unsupported WSL2 backend as an ordering sentinel rather than a filesystem artifact canary, but it still fails if backend preparation precedes capability parsing.
+>
+> ## Evidence inspected and verification
+>
+> - Confirmed candidate checkout HEAD exactly matched `76987c60805889550a156e7cd64ea8b83706d820`.
+> - Inspected the complete revision diff, modified Rust implementation and tests, affected documentation, and `docs/architecture/canonical-capability-file-plan.md`.
+> - Traced:
+>   - `execute_run` parsing before backend preparation and component resolution;
+>   - `raw_token` extraction without mutation;
+>   - original path propagation to `FIRMA_CAPABILITY_FILE` and local Sidecar synthesis;
+>   - external Sidecar non-configuration;
+>   - Sidecar parsing, verification, claim matching, watcher reload, and previous-map retention;
+>   - sanitized Run and Sidecar structural parse errors;
+>   - file-source mint/refresher suppression.
+> - Commands passed:
+>   - `git diff --check a549671c...76987c608`
+>   - `cargo test -p firma-core capability_seed --lib` — 3 passed
+>   - `cargo test -p firma-run --test integration capability_lease` — 10 passed, lifecycle fixture passed
+>   - `cargo test -p firma-sidecar --test integration capability_reload` — 5 passed
+>   - obsolete capability-seed deprecation-language search outside the disposition log — no matches.
+
+## Mechanical descendant rebase evidence
+
+- The reviewed range used base
+  `a549671c3a620b332d36e784a23d1983480d15d7`; the final range uses base
+  `c889bdd61ab38974933f63bc8a853c11caef8e98` after #621 added only a
+  portable test-fixture path serialization correction and refreshed its
+  plan/review lifecycle.
+- `git rebase --onto c889bdd6 a549671c` applied all five PR-owned revisions
+  without conflict.
+- The old and new implementation commits have identical stable patch ID
+  `d178e80da10dcb15672889a301e1c91dca3034d2`.
+- The complete old and new base-to-tip effective diffs have that same stable
+  patch ID. Every corresponding plan, amendment, review-record, and deletion
+  commit also has an identical stable patch ID.
+- The final candidate therefore uses the mechanical descendant exception: no
+  implementation, test, documentation, plan, or review meaning changed after
+  exact-candidate review.
 
 ## Technical evidence
 
