@@ -288,17 +288,20 @@ where
     let dir = tempfile::tempdir().expect("tempdir");
     let (runtime_layout, _seed_path) = runtime_seed(dir.path());
     let capabilities_dir = runtime_layout.capabilities_dir();
-    let targets_dir = capabilities_dir.join("targets");
-    std::fs::create_dir(&targets_dir).expect("create target directory");
+    let targets_a = capabilities_dir.join("targets-a");
+    let targets_b = capabilities_dir.join("targets-b");
+    std::fs::create_dir(&targets_a).expect("create first target directory");
+    std::fs::create_dir(&targets_b).expect("create second target directory");
 
     let (seed_v1, raw_v1) = signed_seed(&keys.signer);
     let (seed_v2, raw_v2) = signed_seed(&keys.signer);
+    let (seed_v3, raw_v3) = signed_seed(&keys.signer);
     let (external_seed, _external_raw) = signed_seed(&keys.signer);
-    let target_v1 = targets_dir.join("seed-v1.toml");
-    let target_v2 = targets_dir.join("seed-v2.toml");
+    let target_v1 = targets_a.join("seed.toml");
+    let target_v2 = targets_b.join("seed.toml");
     let external_path = dir.path().join("external-seed.toml");
-    write_seed(&targets_dir, &target_v1, &seed_v1);
-    write_seed(&targets_dir, &target_v2, &seed_v2);
+    write_seed(&targets_a, &target_v1, &seed_v1);
+    write_seed(&targets_b, &target_v2, &seed_v2);
     std::fs::write(
         &external_path,
         toml::to_string(&external_seed).expect("serialize external seed"),
@@ -347,6 +350,27 @@ where
         "contained symlink retarget must hot-swap the capability map"
     );
 
+    let invalid_temporary = targets_b.join("invalid.tmp");
+    std::fs::write(&invalid_temporary, "not = 'a canonical capability seed'")
+        .expect("write invalid replacement seed");
+    std::fs::rename(&invalid_temporary, &target_v2).expect("replace seed with invalid content");
+    let invalid_logs = wait_for_log(&writer, target_v2.to_string_lossy().as_ref()).await;
+    assert!(
+        invalid_logs.contains("capability seed reload failed; keeping previous map"),
+        "invalid new target must fail reload; got: {invalid_logs}"
+    );
+    assert_eq!(
+        selected_raw_token(&handle).as_deref(),
+        Some(raw_v2.as_str()),
+        "invalid content in the new target must retain the previous map"
+    );
+
+    write_seed(&targets_b, &target_v2, &seed_v3);
+    assert!(
+        wait_for_token(&handle, &raw_v3).await,
+        "replacement watcher must observe a corrected rewrite in the new target directory"
+    );
+
     std::fs::remove_file(&configured_path).expect("remove contained seed symlink");
     create_symlink(&external_path, &configured_path).expect("retarget seed symlink outside");
     let logs = wait_for_log(&writer, external_path.to_string_lossy().as_ref()).await;
@@ -356,7 +380,7 @@ where
     );
     assert_eq!(
         selected_raw_token(&handle).as_deref(),
-        Some(raw_v2.as_str()),
+        Some(raw_v3.as_str()),
         "escaping symlink retarget must retain the previous verified map"
     );
 

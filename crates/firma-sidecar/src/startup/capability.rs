@@ -113,11 +113,19 @@ pub fn load_capability_map(
     verifier: &dyn TokenVerifier,
     capabilities_dir: &Path,
 ) -> anyhow::Result<CapabilityMap> {
-    let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(seed.paths.len());
-    for resolved_seed in resolve_seed_paths(seed, capabilities_dir)? {
-        let configured_path = resolved_seed.configured_path;
-        let resolved_path = resolved_seed.resolved_path;
-        let body = std::fs::read_to_string(&resolved_path).map_err(|error| {
+    let resolved_seed_paths = resolve_seed_paths(seed, capabilities_dir)?;
+    load_capability_map_from_resolved(&resolved_seed_paths, verifier)
+}
+
+fn load_capability_map_from_resolved(
+    resolved_seed_paths: &[ResolvedSeedPath],
+    verifier: &dyn TokenVerifier,
+) -> anyhow::Result<CapabilityMap> {
+    let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(resolved_seed_paths.len());
+    for resolved_seed in resolved_seed_paths {
+        let configured_path = &resolved_seed.configured_path;
+        let resolved_path = &resolved_seed.resolved_path;
+        let body = std::fs::read_to_string(resolved_path).map_err(|error| {
             anyhow::anyhow!(
                 "failed to read capability seed '{}' resolved to '{}': {error}",
                 configured_path.display(),
@@ -231,10 +239,65 @@ impl TokenVerifier for RejectAllVerifier {
     }
 }
 
-/// Owns the file watcher and reload task. Dropping it stops the watch and the
-/// reload task.
+fn build_seed_watcher(
+    resolved_seed_paths: &[ResolvedSeedPath],
+    tx_signal: tokio::sync::mpsc::Sender<()>,
+) -> anyhow::Result<notify::RecommendedWatcher> {
+    let event_handler = move |res: notify::Result<notify::Event>| match res {
+        Ok(event)
+            if matches!(
+                event.kind,
+                notify::event::EventKind::Modify(_)
+                    | notify::event::EventKind::Create(_)
+                    | notify::event::EventKind::Remove(_)
+            ) =>
+        {
+            // Coalesced by the bounded channel; a full buffer already means a
+            // reload is pending, so dropping the extra signal is harmless.
+            let _ = tx_signal.try_send(());
+        }
+        Err(error) => tracing::error!(?error, "capability seed watch error"),
+        _ => {}
+    };
+
+    let mut watcher = notify::recommended_watcher(event_handler)
+        .context("failed to create capability seed watcher")?;
+
+    // The seed is written via a temp-file + atomic rename into its parent
+    // directory, so watch the parent directories (deduplicated) non-recursively
+    // rather than the files themselves — the rename target may not exist yet.
+    let mut watched_dirs = HashSet::new();
+    for resolved_seed in resolved_seed_paths {
+        let resolved_parent = resolved_seed.resolved_path.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "resolved capability seed '{}' has no parent directory",
+                resolved_seed.resolved_path.display()
+            )
+        })?;
+        for dir in [resolved_parent, resolved_seed.configured_parent.as_path()] {
+            if watched_dirs.insert(dir.to_path_buf()) {
+                watcher
+                    .watch(dir, notify::RecursiveMode::NonRecursive)
+                    .with_context(|| {
+                        format!(
+                            "failed to watch capability seed directory '{}' for configured \
+                             seed '{}' resolved to '{}'",
+                            dir.display(),
+                            resolved_seed.configured_path.display(),
+                            resolved_seed.resolved_path.display()
+                        )
+                    })?;
+            }
+        }
+    }
+
+    Ok(watcher)
+}
+
+/// Owns the reload task, which exclusively owns the active file watcher.
+/// Dropping the guard aborts the task; the watcher is released when task
+/// termination completes.
 pub struct CapabilityReloader {
-    _watcher: notify::RecommendedWatcher,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -263,55 +326,10 @@ impl CapabilityReloader {
         let resolved_seed_paths = resolve_seed_paths(config, &capabilities_dir)?;
         let seed_config = config.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
-        let event_handler = move |res: notify::Result<notify::Event>| match res {
-            Ok(event)
-                if matches!(
-                    event.kind,
-                    notify::event::EventKind::Modify(_)
-                        | notify::event::EventKind::Create(_)
-                        | notify::event::EventKind::Remove(_)
-                ) =>
-            {
-                // Coalesced by the bounded channel; a full buffer already means a
-                // reload is pending, so dropping the extra signal is harmless.
-                let _ = tx_signal.try_send(());
-            }
-            Err(error) => tracing::error!(?error, "capability seed watch error"),
-            _ => {}
-        };
-
-        let mut watcher = notify::recommended_watcher(event_handler)
-            .context("failed to create capability seed watcher")?;
-
-        // The seed is written via a temp-file + atomic rename into its parent
-        // directory, so watch the parent directories (deduplicated) non-recursively
-        // rather than the files themselves — the rename target may not exist yet.
-        let mut watched_dirs = HashSet::new();
-        for resolved_seed in &resolved_seed_paths {
-            let resolved_parent = resolved_seed.resolved_path.parent().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "resolved capability seed '{}' has no parent directory",
-                    resolved_seed.resolved_path.display()
-                )
-            })?;
-            for dir in [resolved_parent, resolved_seed.configured_parent.as_path()] {
-                if watched_dirs.insert(dir.to_path_buf()) {
-                    watcher
-                        .watch(dir, notify::RecursiveMode::NonRecursive)
-                        .with_context(|| {
-                            format!(
-                                "failed to watch capability seed directory '{}' for configured \
-                                 seed '{}' resolved to '{}'",
-                                dir.display(),
-                                resolved_seed.configured_path.display(),
-                                resolved_seed.resolved_path.display()
-                            )
-                        })?;
-                }
-            }
-        }
+        let watcher = build_seed_watcher(&resolved_seed_paths, tx_signal.clone())?;
 
         let task = tokio::spawn(async move {
+            let mut active_watcher = watcher;
             loop {
                 tokio::select! {
                     () = cancel.cancelled() => break,
@@ -323,22 +341,62 @@ impl CapabilityReloader {
                         // single rebuild.
                         while rx_signal.try_recv().is_ok() {}
 
-                        match load_capability_map(
+                        let resolved_seed_paths = match resolve_seed_paths(
                             &seed_config,
-                            token_verifier.as_ref(),
                             &capabilities_dir,
                         ) {
-                            Ok(map) => {
-                                capability_handle.store(Arc::new(map));
-                                tracing::info!(
-                                    "capability map hot-reloaded from updated seed file(s)"
-                                );
-                            }
+                            Ok(paths) => paths,
                             Err(error) => {
                                 // Do not probe configured paths after resolution
                                 // fails: they may no longer resolve inside the
                                 // runtime boundary. Teardown deletion and invalid
                                 // rewrites both retain the previous verified map.
+                                tracing::error!(
+                                    %error,
+                                    "capability seed reload failed; keeping previous map \
+                                     (it will fail closed on its own expiry)"
+                                );
+                                continue;
+                            }
+                        };
+                        let replacement_watcher = match build_seed_watcher(
+                            &resolved_seed_paths,
+                            tx_signal.clone(),
+                        ) {
+                            Ok(watcher) => watcher,
+                            Err(error) => {
+                                tracing::error!(
+                                    %error,
+                                    "capability seed reload failed; keeping previous map \
+                                     (it will fail closed on its own expiry)"
+                                );
+                                continue;
+                            }
+                        };
+                        let candidate_map = load_capability_map_from_resolved(
+                            &resolved_seed_paths,
+                            token_verifier.as_ref(),
+                        );
+
+                        match candidate_map {
+                            Ok(map) => {
+                                capability_handle.store(Arc::new(map));
+                                drop(std::mem::replace(
+                                    &mut active_watcher,
+                                    replacement_watcher,
+                                ));
+                                tracing::info!(
+                                    "capability map hot-reloaded from updated seed file(s)"
+                                );
+                            }
+                            Err(error) => {
+                                // The replacement watches only paths that passed
+                                // containment. Retain it so a correction in a newly
+                                // selected target directory can trigger recovery.
+                                drop(std::mem::replace(
+                                    &mut active_watcher,
+                                    replacement_watcher,
+                                ));
                                 tracing::error!(
                                     %error,
                                     "capability seed reload failed; keeping previous map \
@@ -351,14 +409,8 @@ impl CapabilityReloader {
             }
         });
 
-        tracing::debug!(
-            directories = watched_dirs.len(),
-            "capability seed hot-reload watcher started"
-        );
-        Ok(Self {
-            _watcher: watcher,
-            task,
-        })
+        tracing::debug!("capability seed hot-reload watcher started");
+        Ok(Self { task })
     }
 }
 
