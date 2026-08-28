@@ -123,7 +123,10 @@
   watcher-build failure retains both the previous verified map and watcher. A
   contained but invalid seed retains the previous map while adopting its newly
   validated watcher so a correction in a newly selected target directory can
-  trigger recovery.
+  trigger recovery. The public startup loader resolves once and delegates to a
+  private loader over `&[ResolvedSeedPath]`; reload passes that same slice to
+  watcher construction and candidate loading, so a concurrent retarget cannot
+  split their targets.
 - Rationale and evidence: checking one path but reading or watching another
   would not establish confinement. Reusing one boundary prevents drift between
   initial loading and reload.
@@ -587,12 +590,113 @@ Author-run corrective evidence:
 - Rationale: the spawned reload task is the sole owner of the active watcher and
   replacement operations use ordinary local ownership without locks. The task
   drops the active watcher when cancellation exits its loop; dropping the guard
-  aborts the task, so Tokio drops that same future-owned watcher. A regression
-  will replace the watcher, cancel/drop the guard, rewrite the new target, and
-  prove no later map effect; the single-owner type shape plus abort semantics
-  prove resource termination without a test-only watcher abstraction.
+  requests task abort, so Tokio drops that same future-owned watcher when the
+  task terminates. Neither path claims synchronous cessation of already-running
+  non-async reload work. The single-owner type shape plus task termination prove
+  resource release without a test-only watcher abstraction.
 - Incorporated at: type sketch, `TRACE-WATCH`, and `PROOF-004`.
 - Decided by: planner following independent amendment review.
+
+### Watcher-replacement follow-up `PLAN-001` — High · Handoff coherence · Confirmed conflict
+
+- **Evidence:** At revision `76befab4`, `DEC-002` requires the replacement
+  watcher and candidate load to use the _same_ resolution result
+  (`docs/architecture/capability-seed-confinement-plan.md:119-126`).
+  `TRACE-WATCH` repeats this requirement (`:739-744`). However, the type sketch
+  exposes only:
+  - `resolve_seed_paths(...) -> Vec<ResolvedSeedPath>` (`:667-670`), and
+  - `load_capability_map(seed, verifier, capabilities_dir)` (`:681-685`).
+
+  Production `load_capability_map` independently calls `resolve_seed_paths`
+  again (`crates/firma-sidecar/src/startup/capability.rs:111-120`).
+- **Reachable path/outcome:** A reload can resolve target `b`, register a
+  replacement watcher for `b`, and then call the existing loader, which
+  re-resolves a retargeted configured symlink to contained target `c`. It can
+  publish `c` while installing a watcher covering `b`. Later atomic rewrites in
+  `c` are unobserved, recreating the stale-map/stale-registration failure the
+  disposition claims to close.
+- **Invariant owner:** `INV-002`; `CapabilityReloader`.
+- **Impact:** The handoff ordering and candidate-event queue are insufficient
+  unless the candidate read is structurally tied to the exact paths used to
+  build its watcher.
+- **Correction:** Add a concrete private boundary such as:
+  `load_capability_map_from_resolved(&[ResolvedSeedPath], verifier)`.
+  Require reload to resolve once, build the watcher from that value, and load
+  exclusively from that same value. Keep the public startup loader as
+  resolve-then-delegate. Add a coordinated test that retargets between watcher
+  registration and candidate reading and proves watcher/map correspondence
+  afterward.
+- **Classification:** Confirmed conflict.
+- **Confidence:** High. The plan's signatures currently cannot directly
+  implement its stated transaction without an unspecified helper.
+
+#### Disposition
+
+- Status: Corrected in plan.
+- Rationale: the private slice-based loader makes one `ResolvedSeedPath` value
+  the shared input to replacement registration and candidate reading. The
+  public startup loader resolves and immediately delegates. A deterministic
+  helper-level control will resolve `b`, register its watcher, retarget the
+  configured symlink to `c`, then prove the resolved loader still reads `b` and
+  its watcher observes a later `b` rewrite; task-level cross-directory controls
+  prove replacement integration without a production-only test hook.
+- Incorporated at: `DEC-002`, type sketch, `TRACE-WATCH`, and `PROOF-003`
+  through `PROOF-004`.
+- Decided by: planner following independent follow-up review.
+
+### Watcher-replacement follow-up `PLAN-002` — Medium · Cancellation/lifecycle proof · Design risk
+
+- **Evidence:** The disposition assigns sole watcher ownership to the spawned
+  task and says cancellation or guard drop stops effects
+  (`docs/architecture/capability-seed-confinement-plan.md:586-594`;
+  `TRACE-WATCH` at `:739-745`). `PROOF-004` requires that “cancellation/drop
+  stops effects,” but its proposed regression only rewrites after
+  cancellation/drop and observes no later map effect.
+
+  Existing reload work is synchronous after event selection: drain signals,
+  read/verify files, and store the map without an await
+  (`crates/firma-sidecar/src/startup/capability.rs:314-350`). Existing `Drop`
+  merely calls `JoinHandle::abort()` (`:241-244`).
+- **Reachable path/outcome:** Cancellation or `Drop` can occur after the task
+  selects an event but while synchronous candidate loading is underway. Tokio
+  abort cannot interrupt that work before the next await, so the task may still
+  publish a map after the reloader guard has been dropped. Separately, “no map
+  effect after a rewrite” does not prove that the watcher itself was dropped: a
+  leaked watcher sending into an unconsumed channel has the same observation.
+- **Invariant owner:** `CapabilityReloader` lifecycle and `INV-002`.
+- **Impact:** Shutdown ordering remains under-specified, and the planned test
+  cannot establish watcher resource termination or exclude an in-flight
+  post-drop publication.
+- **Correction:** Define the intended terminal guarantee explicitly:
+  - If post-cancellation publication is forbidden, add a cancellation check
+    immediately before `capability_handle.store`, prioritize cancellation in
+    the select loop, and provide an async shutdown/join path that confirms task
+    termination.
+  - If `Drop` is only eventually aborting, document that weaker contract and
+    avoid claiming synchronous cessation.
+
+  Coordinate a test with the task paused after candidate load but before
+  publication, then cancel/drop and assert the selected terminal behavior.
+  Treat sole future ownership as the proof that watcher resources are dropped
+  once task termination is confirmed; do not use map inactivity as a proxy for
+  watcher destruction.
+- **Classification:** Design risk.
+- **Confidence:** High on the proof gap; whether post-drop publication is
+  unacceptable requires the plan to settle the lifecycle contract.
+
+#### Disposition
+
+- Status: Corrected in plan by selecting the weaker existing contract.
+- Rationale: this guard has no synchronous shutdown API today. `Drop` requests
+  task abort but does not wait, so already-running synchronous reload work may
+  complete before Tokio observes cancellation. The task remains the sole watcher
+  owner; task completion, whether by the external cancellation branch or abort,
+  destroys its active watcher. The implementation and docs will state this
+  eventual terminal contract and will not claim synchronous cessation or use
+  map inactivity as a watcher-destruction proxy. A joinable shutdown API and
+  test coordination hook would add machinery outside the confinement fix.
+- Incorporated at: type sketch, `TRACE-WATCH`, and `PROOF-004`.
+- Decided by: planner following independent follow-up review.
 
 ## Technical evidence
 
@@ -674,6 +778,11 @@ fn build_seed_watcher(
     signal: tokio::sync::mpsc::Sender<()>,
 ) -> anyhow::Result<notify::RecommendedWatcher>;
 
+fn load_capability_map_from_resolved(
+    paths: &[ResolvedSeedPath],
+    verifier: &dyn TokenVerifier,
+) -> anyhow::Result<CapabilityMap>;
+
 pub struct CapabilityReloader {
     task: tokio::task::JoinHandle<()>,
 }
@@ -732,17 +841,17 @@ proof of path provenance.
 
 #### `TRACE-WATCH`
 
-| Field                      | Content                                                                                                                                                                                                                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| State                      | Proposed                                                                                                                                                                                                                                                                                    |
-| Entry and stimulus         | Hot reload starts or a watched contained directory emits an event.                                                                                                                                                                                                                          |
-| Path                       | `CapabilityReloader::spawn` → resolve/check all seeds and configured parents → task owns active watcher; event → resolve/check → build complete replacement watcher on shared signal channel → load candidate from same resolution → publish valid map or retain old map → drop old watcher |
-| Input/output types         | configured paths + runtime layout → contained directories; event → replacement map or retained prior map                                                                                                                                                                                    |
-| Validation/trust crossings | No registration precedes resolution; every event read repeats `INV-001`.                                                                                                                                                                                                                    |
-| Invariant established      | `INV-002` at each registration and reload read.                                                                                                                                                                                                                                             |
-| Success outcome            | Valid contained rewrite replaces the watcher set and atomically publishes the map; events concurrent with the candidate read remain queued.                                                                                                                                                 |
-| Failure path               | Resolution or watcher-build failure retains the previous watcher and map. Invalid contained content retains the map and validated replacement watcher for recovery. Cancellation/task abort drops the task-owned watcher.                                                                   |
-| Proof boundary             | Real notify integration tests, replacement lifecycle controls, and platform-specific escape controls.                                                                                                                                                                                       |
+| Field                      | Content                                                                                                                                                                                                                                                                                            |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State                      | Proposed                                                                                                                                                                                                                                                                                           |
+| Entry and stimulus         | Hot reload starts or a watched contained directory emits an event.                                                                                                                                                                                                                                 |
+| Path                       | `CapabilityReloader::spawn` → resolve/check all seeds and configured parents → task owns active watcher; event → resolve once → build complete replacement watcher on shared signal channel → load candidate from the same resolved slice → publish valid map or retain old map → drop old watcher |
+| Input/output types         | configured paths + runtime layout → contained directories; event → replacement map or retained prior map                                                                                                                                                                                           |
+| Validation/trust crossings | No registration precedes resolution; every event read repeats `INV-001`.                                                                                                                                                                                                                           |
+| Invariant established      | `INV-002` at each registration and reload read.                                                                                                                                                                                                                                                    |
+| Success outcome            | Valid contained rewrite replaces the watcher set and atomically publishes the map; events concurrent with the candidate read remain queued.                                                                                                                                                        |
+| Failure path               | Resolution or watcher-build failure retains the previous watcher and map. Invalid contained content retains the map and validated replacement watcher for recovery. Cancellation or task abort drops the task-owned watcher when the task terminates; in-flight synchronous work may finish first. |
+| Proof boundary             | Real notify integration tests, replacement lifecycle controls, and platform-specific escape controls.                                                                                                                                                                                              |
 
 #### `TRACE-WORKFLOW`
 
@@ -776,15 +885,15 @@ proof of path provenance.
 
 ### Detailed proof obligations
 
-| ID          | Invariant | Required evidence                                                                                                                                                                                                                                                                                                     |
-| ----------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PROOF-001` | `INV-001` | Contained ordinary path loads; disjoint existing and missing configured paths fail with useful context and no content; hot reload does not alter validity.                                                                                                                                                            |
-| `PROOF-002` | `INV-001` | `..` traversal, platform file symlinks resolving outside, and external-parent symlinks targeting inside fail initial loading with configured/resolved/parent/boundary context.                                                                                                                                        |
-| `PROOF-003` | `INV-002` | The same traversal and `#[cfg(unix)]`/`#[cfg(windows)]` symlink cases fail watcher setup before registration; a contained cross-directory symlink retarget emits through its validated configured parent and replaces target-parent coverage.                                                                         |
-| `PROOF-004` | `INV-002` | Existing valid atomic rewrite, contained-symlink retarget, a coordinated rewrite after replacement registration, and a later rewrite in the new target parent hot-swap the map; resolution/watcher failure retains old state, invalid content retains the validated new watcher, and cancellation/drop stops effects. |
-| `PROOF-005` | `INV-003` | Real CLI startup accepts an Authority-issued contained seed, rejects an external seed, and current examples/docs select matching state.                                                                                                                                                                               |
-| `PROOF-006` | all       | Focused tests, platform compile/CI, full `just check`, docs build, example checks, and exact-tip independent review pass.                                                                                                                                                                                             |
-| `PROOF-007` | lifecycle | Accepted reviewed plan is first PR commit; implementation review record directly precedes mechanical plan deletion; final exact-tip review includes that deletion, is recorded against the final SHA in the PR body, and proves plan absence.                                                                         |
+| ID          | Invariant | Required evidence                                                                                                                                                                                                                                                                                                                   |
+| ----------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROOF-001` | `INV-001` | Contained ordinary path loads; disjoint existing and missing configured paths fail with useful context and no content; hot reload does not alter validity.                                                                                                                                                                          |
+| `PROOF-002` | `INV-001` | `..` traversal, platform file symlinks resolving outside, and external-parent symlinks targeting inside fail initial loading with configured/resolved/parent/boundary context.                                                                                                                                                      |
+| `PROOF-003` | `INV-002` | The same traversal and `#[cfg(unix)]`/`#[cfg(windows)]` symlink cases fail watcher setup before registration; a helper-level control retargets between replacement registration and candidate reading to prove both still use one resolved target.                                                                                  |
+| `PROOF-004` | `INV-002` | Existing valid atomic rewrite, contained-symlink retarget, a queued concurrent rewrite, and a later rewrite in the new target parent hot-swap the map; resolution/watcher failure retains old state and invalid content retains the validated new watcher. Task-only watcher ownership proves resource release at task termination. |
+| `PROOF-005` | `INV-003` | Real CLI startup accepts an Authority-issued contained seed, rejects an external seed, and current examples/docs select matching state.                                                                                                                                                                                             |
+| `PROOF-006` | all       | Focused tests, platform compile/CI, full `just check`, docs build, example checks, and exact-tip independent review pass.                                                                                                                                                                                                           |
+| `PROOF-007` | lifecycle | Accepted reviewed plan is first PR commit; implementation review record directly precedes mechanical plan deletion; final exact-tip review includes that deletion, is recorded against the final SHA in the PR body, and proves plan absence.                                                                                       |
 
 ## Atomic revision and review lifecycle
 
