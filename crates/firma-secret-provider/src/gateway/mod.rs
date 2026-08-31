@@ -10,8 +10,10 @@
 //! request buffer where possible to avoid copying secret material.
 //!
 //! This module defines the wire types themselves; [`client`] implements the
-//! transport that speaks the protocol over a [`client::GatewayClientConfig`]-tuned
-//! connection to a [`crate::endpoint::client::ClientEndpoint`].
+//! transport that speaks the protocol over a [`firma_config_schema::gateway::GatewayConfig`]-tuned
+//! connection to a [`crate::endpoint::client::ClientEndpoint`], and [`server`]
+//! implements the broker-side listener that serves the same protocol from the
+//! shared [`crate::store::SecretStore`].
 
 use std::collections::HashSet;
 
@@ -22,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::SecretPlaceholder;
 
 pub mod client;
+pub mod server;
 
 /// A gateway call, tagged by `action` in its wire representation (e.g.
 /// `{"action": "secret.push", ...}`) so the broker can dispatch without a
@@ -32,7 +35,7 @@ pub enum GatewayRequest<'a> {
     /// Look up previously pushed placeholders and return their plaintext
     /// values.
     #[serde(rename = "secret.resolve")]
-    Resolve(#[serde(borrow)] ResolveRequest<'a>),
+    Resolve(ResolveRequest),
     /// Register a newly minted placeholder and the secret value it stands
     /// for.
     #[serde(rename = "secret.push")]
@@ -42,11 +45,10 @@ pub enum GatewayRequest<'a> {
 /// Request to resolve a batch of placeholders back to plaintext, scoped to
 /// the request's target host.
 #[derive(Deserialize, Serialize)]
-pub struct ResolveRequest<'a> {
+pub struct ResolveRequest {
     /// Placeholder tokens to resolve, in the order the response's
     /// [`PlaceholderResult`]s are returned.
-    #[serde(borrow)]
-    pub placeholders: Vec<Str<'a>>,
+    pub placeholders: Vec<SecretPlaceholder>,
     /// Target host of the outbound request. Used to filter domain-scoped
     /// secrets: a secret stored for `api.github.com` will not resolve for
     /// requests to `api.stripe.com`.
@@ -57,8 +59,7 @@ pub struct ResolveRequest<'a> {
 pub struct PushRequest<'a> {
     /// Already-minted placeholder token (the Sidecar mints locally so it can
     /// substitute synchronously into the response body it forwards).
-    #[serde(borrow)]
-    pub placeholder: Str<'a>,
+    pub placeholder: SecretPlaceholder,
     /// Base64-encoded plaintext secret value.
     #[serde(borrow)]
     pub value_b64: Str<'a>,

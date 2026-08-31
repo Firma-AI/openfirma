@@ -1,6 +1,5 @@
 ---
 source: crates/firma-secret-provider/tests/integration/json.rs
-assertion_line: 290
 expression: output
 ---
 {"data":{"a/b~c":"[placeholder]","plain":"[placeholder]"}}

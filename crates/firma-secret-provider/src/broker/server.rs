@@ -18,16 +18,17 @@
 //! time out while a slow tool holds the broker. Callers that want tools to
 //! run concurrently should spawn a task per `accept_one` (each call takes
 //! `&self`, so concurrent accepts are safe). Note that
-//! [`config::BrokerListenerConfig::operation_timeout`] cancels the handler
-//! mid-run when it fires: a handler that spawns a child process must ensure
-//! the child is killed on cancellation, or the tool keeps running out of the
-//! sandbox after the shim has already failed closed.
+//! [`firma_config_schema::broker::BrokerConfig::operation_timeout`]
+//! cancels the handler mid-run when it fires: a handler that spawns a child
+//! process must ensure the child is killed on cancellation, or the tool keeps
+//! running out of the sandbox after the shim has already failed closed.
 
 use std::io;
 
 #[cfg(unix)]
 use std::path::PathBuf;
 
+use firma_config_schema::broker::BrokerConfig;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio::{net::TcpListener, time::timeout};
@@ -39,8 +40,6 @@ use crate::{
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
-
-pub mod config;
 
 enum BrokerListenerInner {
     Tcp(TcpListener),
@@ -62,7 +61,7 @@ struct SocketIdentity {
 /// Broker-side listener: accepts shim connections and dispatches requests.
 pub struct BrokerListener {
     inner: BrokerListenerInner,
-    config: config::BrokerListenerConfig,
+    config: BrokerConfig,
 }
 
 impl BrokerListener {
@@ -82,10 +81,7 @@ impl BrokerListener {
     /// Returns [`io::ErrorKind::InvalidInput`] when the endpoint fails the
     /// address-level invariants, or the underlying I/O error if binding or
     /// setting socket permissions fails.
-    pub async fn bind(
-        endpoint: &ServerEndpoint,
-        config: config::BrokerListenerConfig,
-    ) -> io::Result<Self> {
+    pub async fn bind(endpoint: &ServerEndpoint, config: BrokerConfig) -> io::Result<Self> {
         match endpoint.as_inner() {
             EndpointInner::Tcp(addr) => {
                 let listener = TcpListener::bind(addr).await?;
@@ -132,9 +128,9 @@ impl BrokerListener {
     /// response back.
     ///
     /// The whole read-then-run-then-write exchange is bounded by
-    /// [`config::BrokerListenerConfig::operation_timeout`], and on Unix the connecting
-    /// shim's credentials are validated before the request is read. A rejected
-    /// connection receives an error response.
+    /// [`firma_config_schema::broker::BrokerConfig::operation_timeout`],
+    /// and on Unix the connecting shim's credentials are validated before the
+    /// request is read. A rejected connection receives an error response.
     ///
     /// # Errors
     ///
@@ -147,7 +143,7 @@ impl BrokerListener {
     where
         F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
     {
-        let mut stream: BrokerStream = match &self.inner {
+        let mut stream = match &self.inner {
             BrokerListenerInner::Tcp(listener) => BrokerStream::Tcp {
                 stream: listener.accept().await?.0,
             },
@@ -160,7 +156,7 @@ impl BrokerListener {
                     ));
                     let mut stream = BrokerStream::Unix { stream };
                     let _ = timeout(
-                        self.config.operation_timeout,
+                        self.config.operation_timeout.duration(),
                         write_response(&mut stream, &response, self.config.max_response_size()),
                     )
                     .await;
@@ -173,13 +169,8 @@ impl BrokerListener {
         // `operation_timeout`, so a shim that stalls mid-exchange cannot hold
         // the connection indefinitely.
         timeout(
-            self.config.operation_timeout,
-            handle_connection(
-                &mut stream,
-                self.config.max_request_size(),
-                self.config.max_response_size(),
-                handler,
-            ),
+            self.config.operation_timeout.duration(),
+            handle_connection(&mut stream, self.config, handler),
         )
         .await
         .map_err(|_| {
@@ -206,8 +197,8 @@ impl Drop for BrokerListener {
 /// returns an error. TCP loopback carries no peer credentials to check.
 #[cfg(unix)]
 fn reject_mismatched_peer(stream: &tokio::net::UnixStream) -> io::Result<()> {
-    let actual_uid = super::peer_uid(stream)?;
-    let expected_uid = super::current_uid();
+    let actual_uid = crate::unix::peer_uid(stream)?;
+    let expected_uid = crate::unix::current_uid();
     if actual_uid != expected_uid {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -219,8 +210,7 @@ fn reject_mismatched_peer(stream: &tokio::net::UnixStream) -> io::Result<()> {
 
 async fn handle_connection<F>(
     stream: &mut BrokerStream,
-    max_request_size: usize,
-    max_response_size: usize,
+    config: BrokerConfig,
     handler: F,
 ) -> io::Result<()>
 where
@@ -233,12 +223,12 @@ where
     // content. The size check runs on the raw bytes before UTF-8 decoding so
     // an over-limit line that truncates mid-character still receives the
     // "request too large" response instead of a silent close.
-    let line = read_bounded_line(stream, max_request_size as u64).await?;
-    if line.bytes.len() > max_request_size {
+    let line = read_bounded_line(stream, config.max_request_size.as_u64()).await?;
+    if line.bytes.len() > config.max_request_size() {
         write_response(
             stream,
             &BrokerResponse::rejected("request too large"),
-            max_response_size,
+            config.max_response_size(),
         )
         .await?;
         // The request line was capped, so the rest of an over-limit request is
@@ -260,7 +250,7 @@ where
         return write_response(
             stream,
             &BrokerResponse::rejected("empty broker request"),
-            max_response_size,
+            config.max_response_size(),
         )
         .await;
     }
@@ -268,7 +258,7 @@ where
         Ok(request) => handler(request).await,
         Err(e) => BrokerResponse::rejected(format!("malformed broker request: {e}")),
     };
-    write_response(stream, &response, max_response_size).await
+    write_response(stream, &response, config.max_response_size()).await
 }
 
 /// Serialize `response` into a newline-terminated wire line, or return `None`

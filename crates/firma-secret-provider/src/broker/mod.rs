@@ -34,8 +34,6 @@ pub mod stream;
 use std::{fmt::Display, io, ops::Deref};
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-#[cfg(unix)]
-use tokio::net::UnixStream;
 
 use base64::Engine as _;
 use firma_http::Str;
@@ -167,7 +165,7 @@ impl BrokerResponse<'_> {
     /// cross-stream write order. Chunks are base64-encoded into memory here, so
     /// handlers must cap process output capture: an unbounded payload would
     /// exhaust broker memory before the listener's response-size check (see
-    /// [`server::config::BrokerListenerConfig::max_response_size`]) can
+    /// [`firma_config_schema::broker::BrokerConfig::max_response_size`]) can
     /// reject it.
     #[must_use]
     pub fn executed(
@@ -383,19 +381,4 @@ pub(crate) async fn drain_remaining<S: AsyncRead + Unpin>(stream: &mut S) -> io:
             Err(e) => return Err(e),
         }
     }
-}
-
-/// The effective uid of the process on the other side of `stream`.
-///
-/// Tokio selects the platform credential API: `SO_PEERCRED`, `getpeereid`, or
-/// `getpeerucred`, depending on the Unix target.
-#[cfg(unix)]
-fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
-    stream.peer_cred().map(|credentials| credentials.uid())
-}
-
-/// The uid of the current process.
-#[cfg(unix)]
-fn current_uid() -> u32 {
-    nix::unistd::Uid::current().as_raw()
 }

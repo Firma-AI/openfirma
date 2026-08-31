@@ -8,7 +8,7 @@
 //! authorization), which reports a refused or failed launch back as an error.
 //! [`BrokerClient`] opens a fresh connection per call rather than
 //! pooling, since broker calls are infrequent relative to tool launches, and
-//! applies the timeouts and buffer limits from [`BrokerClientConfig`] to every
+//! applies the timeouts and buffer limits from [`BrokerConfig`] to every
 //! operation.
 //!
 //! All operations are fail-closed: any connect, timeout, protocol, or
@@ -16,6 +16,7 @@
 //! caller must treat the invocation as failed rather than substituting a
 //! partial or synthetic result.
 
+use firma_config_schema::broker::BrokerConfig;
 use firma_http::Str;
 
 use crate::{
@@ -26,10 +27,8 @@ use crate::{
     endpoint::{EndpointInner, client::ClientEndpoint},
 };
 
-pub mod config;
 pub mod error;
 
-use config::BrokerClientConfig;
 #[cfg(unix)]
 use error::PeerAuthenticationError;
 use error::{BrokerClientError, OutcomeUnknownError, ProtocolViolation, UnavailableError};
@@ -42,13 +41,13 @@ use error::{BrokerClientError, OutcomeUnknownError, ProtocolViolation, Unavailab
 #[derive(Debug)]
 pub struct BrokerClient {
     endpoint: ClientEndpoint,
-    config: BrokerClientConfig,
+    config: BrokerConfig,
 }
 
 impl BrokerClient {
     /// Build a client for `endpoint`
     #[must_use]
-    pub fn new(endpoint: ClientEndpoint, config: BrokerClientConfig) -> Self {
+    pub fn new(endpoint: ClientEndpoint, config: BrokerConfig) -> Self {
         Self { endpoint, config }
     }
 
@@ -94,7 +93,7 @@ impl BrokerClient {
         exec: impl Fn(BrokerResponse<'_>) -> Result<T, BrokerClientError>,
     ) -> Result<T, BrokerClientError> {
         let payload = serde_json::to_string(request).map_err(BrokerClientError::Bug)?;
-        let max_request_size = self.max_request_size();
+        let max_request_size = self.config.max_request_size();
         if payload.len() > max_request_size {
             return Err(BrokerClientError::RequestTooLarge {
                 size: payload.len(),
@@ -106,8 +105,8 @@ impl BrokerClient {
     }
 
     async fn connect(&self) -> Result<BrokerStream, BrokerClientError> {
-        let timeout = self.config.connection_timeout;
-        let stream: BrokerStream = match self.endpoint.as_inner() {
+        let timeout = self.config.connection_timeout.duration();
+        let stream = match self.endpoint.as_inner() {
             EndpointInner::Tcp(addr) => {
                 let stream = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr))
                     .await
@@ -137,7 +136,7 @@ impl BrokerClient {
         // The whole write-then-read exchange runs under one deadline, so a
         // peer that stalls mid-exchange cannot hold the connection past
         // `operation_timeout`.
-        let line = tokio::time::timeout(self.config.operation_timeout, async {
+        let line = tokio::time::timeout(self.config.operation_timeout.duration(), async {
             write_all(&mut stream, payload.as_bytes())
                 .await
                 .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Write(error)))?;
@@ -150,7 +149,7 @@ impl BrokerClient {
             // line exceeds the limit. Padding an over-limit response with boundary
             // whitespace must not let it pass, so the check measures the raw line,
             // not the trimmed content.
-            read_bounded_line(&mut stream, self.max_response_size() as u64)
+            read_bounded_line(&mut stream, self.config.max_response_size.as_u64())
                 .await
                 .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Read(error)))
         })
@@ -160,7 +159,7 @@ impl BrokerClient {
         // Size-check the raw line before UTF-8 decoding so an over-limit
         // response that truncates mid-character is reported as an oversized
         // payload rather than a decode failure.
-        if line.bytes.len() > self.max_response_size() {
+        if line.bytes.len() > self.config.max_response_size() {
             return Err(BrokerClientError::ProtocolViolation(
                 ProtocolViolation::ResponseTooLarge,
             ));
@@ -198,18 +197,6 @@ impl BrokerClient {
             source,
         }
     }
-
-    #[inline]
-    fn max_request_size(&self) -> usize {
-        // The only way this conversion can fail is on a 32-bit system with a
-        // configured max_request_size larger than usize::MAX.
-        usize::try_from(self.config.max_request_size.as_u64()).unwrap_or(usize::MAX)
-    }
-
-    #[inline]
-    fn max_response_size(&self) -> usize {
-        usize::try_from(self.config.max_response_size.as_u64()).unwrap_or(usize::MAX)
-    }
 }
 
 /// Confirm the broker socket's peer belongs to the current user.
@@ -223,11 +210,11 @@ fn validate_broker_peer_credentials(
     endpoint: &ClientEndpoint,
 ) -> Result<(), BrokerClientError> {
     let actual_uid =
-        super::peer_uid(stream).map_err(|error| BrokerClientError::PeerAuthentication {
+        crate::unix::peer_uid(stream).map_err(|error| BrokerClientError::PeerAuthentication {
             endpoint: endpoint.clone(),
             source: PeerAuthenticationError::Credential(error),
         })?;
-    let expected_uid = super::current_uid();
+    let expected_uid = crate::unix::current_uid();
     if actual_uid != expected_uid {
         return Err(BrokerClientError::PeerAuthentication {
             endpoint: endpoint.clone(),

@@ -99,11 +99,11 @@ fn traversal_id_is_rejected_before_marker_access() {
 
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    insta::assert_snapshot!(stderr, @r#"
+    insta::assert_snapshot!(stderr, @"
     error: invalid value '../outside' for '--sandbox-id <SANDBOX_ID>': sandbox id must start with `sbx` as prefix: `../outside` does not
 
     For more information, try '--help'.
-    "#);
+    ");
     assert!(
         !stderr.contains("failed to parse sidecar marker"),
         "lookup touched the escaped marker: {stderr}"
@@ -166,7 +166,5 @@ fn malformed_daemon_pidfile_exits_two() {
         stderr.contains(&*pidfile.to_string_lossy()),
         "diagnostic omitted pidfile path: {stderr}"
     );
-    insta::assert_snapshot!(stderr.replace(&*pidfile.to_string_lossy(), "[PIDFILE]"), @"
-    [ERR]  sidecar status: invalid pidfile '[PIDFILE]': expected one canonical non-zero decimal process ID followed by a newline, got \"not-a-pid\\n\"
-    ");
+    insta::assert_snapshot!(stderr.replace(&*pidfile.to_string_lossy(), "[PIDFILE]"), @r#"[ERR]  sidecar status: invalid pidfile '[PIDFILE]': expected one canonical non-zero decimal process ID followed by a newline, got "not-a-pid\n""#);
 }

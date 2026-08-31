@@ -119,7 +119,7 @@ fn malformed_pidfile_is_rejected() {
     };
     assert_eq!(error_path, &path);
     assert_eq!(value, "not-a-pid");
-    insta::assert_snapshot!(error.to_string().replace(&*path.to_string_lossy(), "[PIDFILE]"), @"invalid pidfile '[PIDFILE]': expected one canonical non-zero decimal process ID followed by a newline, got \"not-a-pid\"");
+    insta::assert_snapshot!(error.to_string().replace(&*path.to_string_lossy(), "[PIDFILE]"), @r#"invalid pidfile '[PIDFILE]': expected one canonical non-zero decimal process ID followed by a newline, got "not-a-pid""#);
 }
 
 #[test]

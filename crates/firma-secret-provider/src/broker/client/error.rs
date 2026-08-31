@@ -142,7 +142,7 @@ pub enum ProtocolViolation {
     #[error("broker response is not valid UTF-8: {0}")]
     InvalidUtf8(#[source] std::string::FromUtf8Error),
     /// The response line exceeded
-    /// [`super::config::BrokerClientConfig::max_response_size`].
+    /// [`firma_config_schema::broker::BrokerConfig::max_response_size`].
     #[error("broker response exceeds the configured size limit")]
     ResponseTooLarge,
 }
