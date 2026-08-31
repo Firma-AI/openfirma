@@ -160,12 +160,18 @@ impl BrokerClient {
         // Size-check the raw line before UTF-8 decoding so an over-limit
         // response that truncates mid-character is reported as an oversized
         // payload rather than a decode failure.
-        if line.len() > self.max_response_size() {
+        if line.bytes.len() > self.max_response_size() {
             return Err(BrokerClientError::ProtocolViolation(
                 ProtocolViolation::ResponseTooLarge,
             ));
         }
-        let line = String::from_utf8(line).map_err(|error| {
+        if !line.terminated {
+            if line.bytes.is_empty() {
+                return Err(self.outcome_unknown(OutcomeUnknownError::Empty));
+            }
+            return Err(self.outcome_unknown(OutcomeUnknownError::UnterminatedResponse));
+        }
+        let line = String::from_utf8(line.bytes).map_err(|error| {
             BrokerClientError::ProtocolViolation(ProtocolViolation::InvalidUtf8(error))
         })?;
         let trimmed = line.trim();

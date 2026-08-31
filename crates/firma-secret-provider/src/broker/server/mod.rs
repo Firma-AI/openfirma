@@ -218,7 +218,7 @@ where
     // an over-limit line that truncates mid-character still receives the
     // "request too large" response instead of a silent close.
     let line = read_bounded_line(stream, max_request_size as u64).await?;
-    if line.len() > max_request_size {
+    if line.bytes.len() > max_request_size {
         write_response(
             stream,
             &BrokerResponse::rejected("request too large"),
@@ -231,7 +231,13 @@ where
         // not read yet (see [`drain_remaining`]).
         return drain_remaining(stream).await;
     }
-    let line = String::from_utf8(line)
+    if !line.terminated {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "broker request is not newline-terminated",
+        ));
+    }
+    let line = String::from_utf8(line.bytes)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "broker request is not UTF-8"))?;
     let trimmed = line.trim();
     if trimmed.is_empty() {

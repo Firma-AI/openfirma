@@ -201,7 +201,10 @@ async fn request_accepts_response_exactly_at_buffer_limit() {
 /// line that no serializer would produce (e.g. whitespace-padded).
 #[cfg(unix)]
 #[expect(clippy::expect_used, reason = "this is a test")]
-fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, tempfile::TempDir) {
+fn bind_raw_responder(
+    padded: Vec<u8>,
+    keep_connection_open: bool,
+) -> (ClientEndpoint, tempfile::TempDir) {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -218,6 +221,9 @@ fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, tempfile::TempDir) {
         let _ = reader.read_until(b'\n', &mut request).await;
         drop(reader);
         conn.write_all(&padded).await.expect("write");
+        if keep_connection_open {
+            std::future::pending::<()>().await;
+        }
     });
     (
         ClientEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint"),
@@ -228,7 +234,7 @@ fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, tempfile::TempDir) {
 /// Windows twin of [`bind_raw_responder`], using the TCP transport.
 #[cfg(not(unix))]
 #[expect(clippy::expect_used, reason = "this is a test")]
-fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, ()) {
+fn bind_raw_responder(padded: Vec<u8>, keep_connection_open: bool) -> (ClientEndpoint, ()) {
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let listener = tokio::net::TcpListener::from_std(std_listener).expect("tcp listener");
     let addr = listener.local_addr().expect("local_addr");
@@ -239,6 +245,9 @@ fn bind_raw_responder(padded: Vec<u8>) -> (ClientEndpoint, ()) {
         let _ = reader.read_until(b'\n', &mut request).await;
         drop(reader);
         conn.write_all(&padded).await.expect("write");
+        if keep_connection_open {
+            std::future::pending::<()>().await;
+        }
     });
     (
         ClientEndpoint::from_str(&format!("tcp://{addr}")).expect("valid endpoint"),
@@ -257,7 +266,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
     let mut padded = response_payload.clone();
     padded.push(b' ');
     padded.push(b'\n');
-    let (endpoint, _guard) = bind_raw_responder(padded);
+    let (endpoint, _guard) = bind_raw_responder(padded, false);
     let config = BrokerClientConfig {
         max_response_size: bytesize::ByteSize::b(response_payload.len() as u64),
         ..BrokerClientConfig::default()
@@ -287,7 +296,7 @@ async fn request_rejects_over_limit_line_padded_with_whitespace() {
 /// by a bare responder, returning the client error.
 #[expect(clippy::expect_used, reason = "this is a test")]
 async fn raw_response_error(raw_response: &[u8]) -> BrokerClientError {
-    let (endpoint, _guard) = bind_raw_responder(raw_response.to_vec());
+    let (endpoint, _guard) = bind_raw_responder(raw_response.to_vec(), false);
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
     client
         .request(
@@ -308,7 +317,11 @@ async fn request_rejects_invalid_base64_stdout() {
     // `request` deserialization.
     let (endpoint, _guard) = bind_raw_responder(
         br#"{"type":"executed","output":[{"stream":"stdout","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
-            .to_vec(),
+            .iter()
+            .copied()
+            .chain(*b"\n")
+            .collect(),
+        false,
     );
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
     let error = client
@@ -327,7 +340,11 @@ async fn request_rejects_invalid_base64_stdout() {
 async fn request_rejects_invalid_base64_stderr() {
     let (endpoint, _guard) = bind_raw_responder(
         br#"{"type":"executed","output":[{"stream":"stderr","data":"not-base64!!"}],"status":{"type":"exited","code":0}}"#
-            .to_vec(),
+            .iter()
+            .copied()
+            .chain(*b"\n")
+            .collect(),
+        false,
     );
     let client = BrokerClient::new(endpoint, BrokerClientConfig::default());
     let error = client
@@ -369,6 +386,47 @@ async fn request_rejects_malformed_response_json() {
     std::assert_matches!(
         error,
         BrokerClientError::ProtocolViolation(ProtocolViolation::Deserialize(_))
+    );
+}
+
+#[tokio::test]
+async fn request_rejects_unterminated_response() {
+    let response = serde_json::to_vec(&executed_response(b"secret-value")).expect("serialize");
+    let error = raw_response_error(&response).await;
+    std::assert_matches!(
+        error,
+        BrokerClientError::OutcomeUnknown {
+            source: OutcomeUnknownError::UnterminatedResponse,
+            ..
+        }
+    );
+}
+
+#[tokio::test]
+async fn request_rejects_over_limit_response_without_waiting_for_delimiter() {
+    let (endpoint, _guard) = bind_raw_responder(vec![b'x'; 65], true);
+    let config = BrokerClientConfig {
+        max_response_size: bytesize::ByteSize::b(64),
+        ..BrokerClientConfig::default()
+    };
+    let client = BrokerClient::new(endpoint, config);
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        client.request(
+            &BrokerRequest {
+                bin: BinaryName::new("bws").expect("valid binary name"),
+                args: vec![Str::from("secret"), Str::from("get"), Str::from("abc")],
+            },
+            |_| Ok(()),
+        ),
+    )
+    .await
+    .expect("oversized response must be rejected without waiting for the connection to close");
+    std::assert_matches!(
+        error,
+        Err(BrokerClientError::ProtocolViolation(
+            ProtocolViolation::ResponseTooLarge
+        ))
     );
 }
 

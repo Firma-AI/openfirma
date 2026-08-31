@@ -108,6 +108,9 @@ pub enum OutcomeUnknownError {
     /// The broker closed the connection without a response after dispatch.
     #[error("broker closed the connection without a response")]
     Empty,
+    /// The broker closed the response without its newline frame delimiter.
+    #[error("broker response is not newline-terminated")]
+    UnterminatedResponse,
 }
 
 /// Unix peer-authentication failures.

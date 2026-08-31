@@ -318,28 +318,40 @@ pub enum BrokerResponseDecodeError {
     },
 }
 
-/// Read one newline-terminated line from `stream` with `max_bytes` as the
-/// line-size limit.
+/// A bounded line read, including whether its framing delimiter arrived.
+pub(crate) struct BoundedLine {
+    /// The retained prefix of bytes before the delimiter or EOF.
+    pub(crate) bytes: Vec<u8>,
+    /// Whether the required newline delimiter arrived within the size limit.
+    pub(crate) terminated: bool,
+}
+
+/// Read one line from `stream` with `max_bytes` as the line-size limit.
 ///
-/// The underlying read is capped at `max_bytes + 1` so a line without a
-/// trailing newline cannot grow without bound; the `+ 1` lets an over-limit
-/// line still trip the caller's size check instead of being silently truncated
-/// to exactly the limit. The caller bounds the whole exchange with
+/// Retained bytes are capped at `max_bytes + 1` so a line cannot consume
+/// unbounded memory; the `+ 1` lets an over-limit line still trip the caller's
+/// size check instead of being silently truncated to exactly the limit. Once
+/// the line exceeds the limit, the delimiter is irrelevant and the read
+/// returns immediately. The caller bounds the whole exchange with
 /// [`tokio::time::timeout`], so a peer that trickles bytes cannot hold the
 /// connection indefinitely.
 pub(crate) async fn read_bounded_line<S: AsyncRead + Unpin>(
     stream: &mut S,
     max_bytes: u64,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<BoundedLine> {
     // `saturating_add` keeps a caller passing `max_bytes` at the type's
     // ceiling from overflowing the `+ 1` boundary byte.
     let mut buf = tokio::io::BufReader::new(stream.take(max_bytes.saturating_add(1)));
     let mut line = Vec::new();
     buf.read_until(b'\n', &mut line).await?;
-    if line.last() == Some(&b'\n') {
+    let terminated = line.last() == Some(&b'\n');
+    if terminated {
         line.pop();
     }
-    Ok(line)
+    Ok(BoundedLine {
+        bytes: line,
+        terminated,
+    })
 }
 
 /// Write all of `payload` to `stream` and flush.
