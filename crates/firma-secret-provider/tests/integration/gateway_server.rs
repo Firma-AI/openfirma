@@ -1,11 +1,12 @@
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
+use firma_config_schema::{gateway::GatewayConfig, utils::NonZeroDuration};
 use firma_http::Authority;
 use firma_secret_provider::{
     ExposeSecret, SecretPlaceholder,
     broker::stream::BrokerStream,
     endpoint::{EndpointInner, client::ClientEndpoint, server::ServerEndpoint},
-    gateway::{client::GatewayClient, config::GatewayConfig, server::GatewayListener},
+    gateway::{client::GatewayClient, server::GatewayListener},
     store::SecretStore,
 };
 use secrecy::SecretString;
@@ -193,7 +194,8 @@ async fn stalled_connection_is_closed_after_operation_timeout() -> anyhow::Resul
         endpoint,
         _dir,
     } = bind_gateway(GatewayConfig {
-        operation_timeout: std::time::Duration::from_millis(50),
+        operation_timeout: NonZeroDuration::new(std::time::Duration::from_millis(50))
+            .expect("valid duration"),
         ..Default::default()
     })
     .await?;

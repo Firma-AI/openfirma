@@ -18,24 +18,25 @@
 //! time out while a slow tool holds the broker. Callers that want tools to
 //! run concurrently should spawn a task per `accept_one` (each call takes
 //! `&self`, so concurrent accepts are safe). Note that
-//! [`crate::broker::config::BrokerConfig::operation_timeout`] cancels the handler
-//! mid-run when it fires: a handler that spawns a child process must ensure
-//! the child is killed on cancellation, or the tool keeps running out of the
-//! sandbox after the shim has already failed closed.
+//! [`firma_config_schema::broker::BrokerConfig::operation_timeout`]
+//! cancels the handler mid-run when it fires: a handler that spawns a child
+//! process must ensure the child is killed on cancellation, or the tool keeps
+//! running out of the sandbox after the shim has already failed closed.
 
 use std::io;
 
 #[cfg(unix)]
 use std::path::PathBuf;
 
+use firma_config_schema::broker::BrokerConfig;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio::{net::TcpListener, time::timeout};
 
 use crate::{
     broker::{
-        BrokerRequest, BrokerResponse, config::BrokerConfig, drain_remaining, read_bounded_line,
-        stream::BrokerStream, write_all,
+        BrokerRequest, BrokerResponse, drain_remaining, read_bounded_line, stream::BrokerStream,
+        write_all,
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
@@ -127,9 +128,9 @@ impl BrokerListener {
     /// response back.
     ///
     /// The whole read-then-run-then-write exchange is bounded by
-    /// [`crate::broker::config::BrokerConfig::operation_timeout`], and on Unix the connecting
-    /// shim's credentials are validated before the request is read. A rejected
-    /// connection receives an error response.
+    /// [`firma_config_schema::broker::BrokerConfig::operation_timeout`],
+    /// and on Unix the connecting shim's credentials are validated before the
+    /// request is read. A rejected connection receives an error response.
     ///
     /// # Errors
     ///
@@ -155,7 +156,7 @@ impl BrokerListener {
                     ));
                     let mut stream = BrokerStream::Unix { stream };
                     let _ = timeout(
-                        self.config.operation_timeout,
+                        self.config.operation_timeout.duration(),
                         write_response(&mut stream, &response, self.config.max_response_size()),
                     )
                     .await;
@@ -168,7 +169,7 @@ impl BrokerListener {
         // `operation_timeout`, so a shim that stalls mid-exchange cannot hold
         // the connection indefinitely.
         timeout(
-            self.config.operation_timeout,
+            self.config.operation_timeout.duration(),
             handle_connection(&mut stream, self.config, handler),
         )
         .await

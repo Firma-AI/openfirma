@@ -155,7 +155,7 @@ fn byte_size_fields_require_unit_bearing_strings() {
 
 #[test]
 fn secret_gateway_connection_timeout_rejects_zero() {
-    let error = toml::from_str::<gateway::GatewayClientConfig>("connection_timeout = \"0s\"")
+    let error = toml::from_str::<gateway::GatewayConfig>("connection_timeout = \"0s\"")
         .expect_err("zero connection timeout must fail during deserialization");
 
     assert!(error.span().is_some(), "error must identify the input span");
@@ -169,7 +169,7 @@ fn secret_gateway_connection_timeout_rejects_zero() {
 
 #[test]
 fn secret_gateway_operation_timeout_rejects_zero() {
-    let error = toml::from_str::<gateway::GatewayClientConfig>("operation_timeout = \"0ms\"")
+    let error = toml::from_str::<gateway::GatewayConfig>("operation_timeout = \"0ms\"")
         .expect_err("zero operation timeout must fail during deserialization");
 
     assert!(error.span().is_some(), "error must identify the input span");

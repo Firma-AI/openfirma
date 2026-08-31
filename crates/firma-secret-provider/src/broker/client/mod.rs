@@ -16,12 +16,13 @@
 //! caller must treat the invocation as failed rather than substituting a
 //! partial or synthetic result.
 
+use firma_config_schema::broker::BrokerConfig;
 use firma_http::Str;
 
 use crate::{
     broker::{
         BinaryName, BrokerOutput, BrokerRequest, BrokerResponse, DecodedBrokerResponse,
-        config::BrokerConfig, read_bounded_line, stream::BrokerStream, write_all,
+        read_bounded_line, stream::BrokerStream, write_all,
     },
     endpoint::{EndpointInner, client::ClientEndpoint},
 };
@@ -104,7 +105,7 @@ impl BrokerClient {
     }
 
     async fn connect(&self) -> Result<BrokerStream, BrokerClientError> {
-        let timeout = self.config.connection_timeout;
+        let timeout = self.config.connection_timeout.duration();
         let stream = match self.endpoint.as_inner() {
             EndpointInner::Tcp(addr) => {
                 let stream = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr))
@@ -135,7 +136,7 @@ impl BrokerClient {
         // The whole write-then-read exchange runs under one deadline, so a
         // peer that stalls mid-exchange cannot hold the connection past
         // `operation_timeout`.
-        let line = tokio::time::timeout(self.config.operation_timeout, async {
+        let line = tokio::time::timeout(self.config.operation_timeout.duration(), async {
             write_all(&mut stream, payload.as_bytes())
                 .await
                 .map_err(|error| self.outcome_unknown(OutcomeUnknownError::Write(error)))?;

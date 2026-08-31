@@ -19,6 +19,7 @@
 
 use std::collections::HashSet;
 
+use firma_config_schema::gateway::GatewayConfig;
 use firma_http::{Authority, Str};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -30,10 +31,7 @@ use crate::{
     ExposeSecret, GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder, SecretString,
     endpoint::{EndpointInner, client::ClientEndpoint},
-    gateway::{
-        client::error::{GatewayClientError, ProtocolViolation, TransportError},
-        config::GatewayConfig,
-    },
+    gateway::client::error::{GatewayClientError, ProtocolViolation, TransportError},
 };
 
 pub mod error;

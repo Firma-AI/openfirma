@@ -1,16 +1,13 @@
 use std::{collections::HashSet, str::FromStr};
 
-use firma_config_schema::utils::NonZeroDuration;
+use firma_config_schema::{gateway::GatewayConfig, utils::NonZeroDuration};
 use firma_http::Authority;
 use firma_secret_provider::{
     ExposeSecret, SecretPlaceholder,
     endpoint::{client::ClientEndpoint, error::EndpointParseError},
-    gateway::{
-        client::{
-            GatewayClient, ResolveError,
-            error::{GatewayClientError, ProtocolViolation, TransportError},
-        },
-        config::GatewayConfig,
+    gateway::client::{
+        GatewayClient, ResolveError,
+        error::{GatewayClientError, ProtocolViolation, TransportError},
     },
 };
 use secrecy::SecretString;

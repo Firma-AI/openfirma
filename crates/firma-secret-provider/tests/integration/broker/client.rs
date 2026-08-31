@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use firma_config_schema::{broker::BrokerConfig, utils::NonZeroDuration};
 use firma_http::Str;
 #[cfg(not(unix))]
 use firma_secret_provider::endpoint::EndpointInner;
@@ -11,7 +12,6 @@ use firma_secret_provider::{
             BrokerClient,
             error::{BrokerClientError, OutcomeUnknownError, ProtocolViolation},
         },
-        config::BrokerConfig,
         server::BrokerListener,
     },
     endpoint::{client::ClientEndpoint, server::ServerEndpoint},
@@ -403,9 +403,9 @@ async fn request_rejects_unterminated_response() {
 #[tokio::test]
 async fn request_rejects_over_limit_response_without_waiting_for_delimiter() {
     let (endpoint, _guard) = bind_raw_responder(vec![b'x'; 65], true);
-    let config = BrokerClientConfig {
+    let config = BrokerConfig {
         max_response_size: bytesize::ByteSize::b(64),
-        ..BrokerClientConfig::default()
+        ..BrokerConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);
     let error = tokio::time::timeout(
@@ -463,7 +463,8 @@ async fn request_fails_closed_when_operation_times_out() {
         _dir,
     } = bind_broker().await.expect("bind");
     let config = BrokerConfig {
-        operation_timeout: std::time::Duration::from_millis(100),
+        operation_timeout: NonZeroDuration::new(std::time::Duration::from_millis(100))
+            .expect("valid duration"),
         ..BrokerConfig::default()
     };
     let client = BrokerClient::new(endpoint, config);

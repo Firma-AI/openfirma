@@ -38,14 +38,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bytesize::ByteSize;
+use firma_config_schema::gateway::GatewayConfig;
 use firma_config_schema::sidecar::infra as schema_infra;
 use firma_config_schema::sidecar::interceptor as schema_ic;
 use firma_config_schema::sidecar::local_exec as schema_le;
 use firma_core::SecretMatcher;
 use firma_http::HeaderName;
-use firma_secret_provider::{
-    gateway::client::GatewayClientConfig, spec::http::HttpIntegrationSpec,
-};
+use firma_secret_provider::spec::http::HttpIntegrationSpec;
 // One-to-one config enums live in `firma_config_schema` and are imported for
 // in-crate use only; they are never re-exported, so `firma_config_schema`
 // stays the single owner and every consumer imports them from there directly.

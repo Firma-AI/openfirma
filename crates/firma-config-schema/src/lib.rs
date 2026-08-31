@@ -17,6 +17,7 @@
 //! incrementally as each component migrates; see the crate rollout plan.
 
 pub mod authority;
+pub mod broker;
 pub mod gateway;
 pub mod run;
 pub mod secret_matcher;

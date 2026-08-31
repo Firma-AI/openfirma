@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
+use firma_config_schema::broker::BrokerConfig;
 use firma_http::Str;
 use firma_secret_provider::{
     broker::{
         BinaryName, BrokerExitStatus, BrokerOutput, BrokerOutputChunk, BrokerRequest,
-        BrokerResponse, DecodedBrokerResponse, config::BrokerConfig, server::BrokerListener,
-        stream::BrokerStream,
+        BrokerResponse, DecodedBrokerResponse, server::BrokerListener, stream::BrokerStream,
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
@@ -340,7 +340,7 @@ async fn unterminated_request_is_rejected_without_reaching_handler() {
         listener,
         endpoint,
         _dir,
-    } = bind_with_config(BrokerListenerConfig::default())
+    } = bind_with_config(BrokerConfig::default())
         .await
         .expect("bind");
     let server = tokio::spawn(async move {
@@ -453,10 +453,10 @@ async fn binding_over_active_unix_socket_is_rejected_without_unlinking_it() {
     let path = dir.path().join("broker.sock");
     let endpoint =
         ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
-    let first = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+    let first = BrokerListener::bind(&endpoint, BrokerConfig::default())
         .await
         .expect("first bind");
-    let error = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+    let error = BrokerListener::bind(&endpoint, BrokerConfig::default())
         .await
         .err()
         .expect("second bind must fail");
@@ -476,7 +476,7 @@ async fn stale_unix_socket_is_reclaimed() {
         ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
     let stale = std::os::unix::net::UnixListener::bind(&path).expect("create stale socket");
     drop(stale);
-    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+    let listener = BrokerListener::bind(&endpoint, BrokerConfig::default())
         .await
         .expect("reclaim stale socket");
     let _connection = tokio::net::UnixStream::connect(&path)
@@ -492,7 +492,7 @@ async fn dropping_listener_does_not_remove_replacement_socket() {
     let path = dir.path().join("broker.sock");
     let endpoint =
         ServerEndpoint::from_str(&format!("unix://{}", path.display())).expect("valid endpoint");
-    let listener = BrokerListener::bind(&endpoint, BrokerListenerConfig::default())
+    let listener = BrokerListener::bind(&endpoint, BrokerConfig::default())
         .await
         .expect("bind");
     std::fs::remove_file(&path).expect("unlink original socket path");

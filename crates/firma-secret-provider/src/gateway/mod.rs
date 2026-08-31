@@ -10,7 +10,7 @@
 //! request buffer where possible to avoid copying secret material.
 //!
 //! This module defines the wire types themselves; [`client`] implements the
-//! transport that speaks the protocol over a [`config::GatewayConfig`]-tuned
+//! transport that speaks the protocol over a [`firma_config_schema::gateway::GatewayConfig`]-tuned
 //! connection to a [`crate::endpoint::client::ClientEndpoint`], and [`server`]
 //! implements the broker-side listener that serves the same protocol from the
 //! shared [`crate::store::SecretStore`].
@@ -24,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use crate::SecretPlaceholder;
 
 pub mod client;
-pub mod config;
 pub mod server;
 
 /// A gateway call, tagged by `action` in its wire representation (e.g.

@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::{io, sync::Arc, time::Duration};
 
 use base64::Engine;
+use firma_config_schema::gateway::GatewayConfig;
 use firma_http::Str;
 use secrecy::{ExposeSecret, SecretString};
 #[cfg(unix)]
@@ -39,7 +40,6 @@ use tokio::{
 use crate::{
     broker::{drain_remaining, read_bounded_line},
     endpoint::{EndpointInner, server::ServerEndpoint},
-    gateway::config::GatewayConfig,
     store::SecretStore,
 };
 
@@ -155,7 +155,7 @@ async fn serve_tcp(listener: &TcpListener, config: GatewayConfig, store: Arc<RwL
                 tokio::spawn(async move {
                     let (reader, writer) = stream.split();
                     match timeout(
-                        config.operation_timeout,
+                        config.operation_timeout.duration(),
                         handle_protocol(reader, writer, config, store),
                     )
                     .await
@@ -202,7 +202,7 @@ async fn serve_unix(
                     if let Err(error) = reject_mismatched_peer(&stream) {
                         let (_, mut writer) = stream.split();
                         let _ = timeout(
-                            config.operation_timeout,
+                            config.operation_timeout.duration(),
                             write_error_line(
                                 &mut writer,
                                 &format!("peer credential validation failed: {error}"),
@@ -217,7 +217,7 @@ async fn serve_unix(
                     }
                     let (reader, writer) = stream.split();
                     match timeout(
-                        config.operation_timeout,
+                        config.operation_timeout.duration(),
                         handle_protocol(reader, writer, config, store),
                     )
                     .await

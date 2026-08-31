@@ -2117,7 +2117,6 @@ pub(crate) mod tests {
     use firma_secret_provider::{
         MatcherError,
         endpoint::client::ClientEndpoint,
-        gateway::config::GatewayConfig,
         non_empty::NonEmptyString,
         spec::http::{HttpMatcherRule, PathAndMatcher, PathOnly},
     };
@@ -2136,7 +2135,7 @@ pub(crate) mod tests {
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
         MappingTable, PipelineArgs,
     };
-    use firma_config_schema::sidecar::TenancyMode;
+    use firma_config_schema::{gateway::GatewayConfig, sidecar::TenancyMode};
 
     #[expect(
         clippy::redundant_pub_crate,

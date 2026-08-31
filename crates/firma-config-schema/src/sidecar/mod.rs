@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::GatewayClientConfig;
+use crate::gateway::GatewayConfig;
 
 pub mod audit;
 pub mod authority;
@@ -103,5 +103,5 @@ pub struct SidecarConfig {
     pub http_secret_providers: Vec<HttpSecretProviderConfig>,
     /// Secret-gateway client tuning.
     #[serde(default)]
-    pub secret_gateway: GatewayClientConfig,
+    pub secret_gateway: GatewayConfig,
 }
