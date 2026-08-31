@@ -385,28 +385,13 @@ pub(crate) async fn drain_remaining<S: AsyncRead + Unpin>(stream: &mut S) -> io:
     }
 }
 
-/// The real uid of the process that owns the Unix socket on the other side of
-/// `stream`.
+/// The effective uid of the process on the other side of `stream`.
 ///
-/// Linux exposes it via the `SO_PEERCRED` sockopt; BSD-family platforms (where
-/// the sockopt is unavailable) use `getpeereid`.
-#[cfg(target_os = "linux")]
+/// Tokio selects the platform credential API: `SO_PEERCRED`, `getpeereid`, or
+/// `getpeerucred`, depending on the Unix target.
+#[cfg(unix)]
 fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
-    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-
-    getsockopt(stream, PeerCredentials)
-        .map(|creds| creds.uid())
-        .map_err(io::Error::from)
-}
-
-/// [`peer_uid`] on BSD-family platforms, where the Linux `SO_PEERCRED` sockopt
-/// is unavailable.
-#[cfg(all(unix, not(target_os = "linux")))]
-fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
-    match nix::unistd::getpeereid(stream) {
-        Ok((user_id, _group_id)) => Ok(user_id.as_raw()),
-        Err(err_no) => Err(io::Error::from(err_no)),
-    }
+    stream.peer_cred().map(|credentials| credentials.uid())
 }
 
 /// The uid of the current process.
