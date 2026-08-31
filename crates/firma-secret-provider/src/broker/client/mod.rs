@@ -157,12 +157,6 @@ impl BrokerClient {
         .await
         .map_err(|_| self.outcome_unknown(OutcomeUnknownError::OperationTimeout))??;
 
-        if !line.terminated {
-            if line.bytes.is_empty() {
-                return Err(self.outcome_unknown(OutcomeUnknownError::Empty));
-            }
-            return Err(self.outcome_unknown(OutcomeUnknownError::UnterminatedResponse));
-        }
         // Size-check the raw line before UTF-8 decoding so an over-limit
         // response that truncates mid-character is reported as an oversized
         // payload rather than a decode failure.
@@ -170,6 +164,12 @@ impl BrokerClient {
             return Err(BrokerClientError::ProtocolViolation(
                 ProtocolViolation::ResponseTooLarge,
             ));
+        }
+        if !line.terminated {
+            if line.bytes.is_empty() {
+                return Err(self.outcome_unknown(OutcomeUnknownError::Empty));
+            }
+            return Err(self.outcome_unknown(OutcomeUnknownError::UnterminatedResponse));
         }
         let line = String::from_utf8(line.bytes).map_err(|error| {
             BrokerClientError::ProtocolViolation(ProtocolViolation::InvalidUtf8(error))

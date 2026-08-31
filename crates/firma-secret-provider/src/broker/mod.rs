@@ -322,8 +322,7 @@ pub enum BrokerResponseDecodeError {
 pub(crate) struct BoundedLine {
     /// The retained prefix of bytes before the delimiter or EOF.
     pub(crate) bytes: Vec<u8>,
-    /// Whether the required newline delimiter arrived, including after the
-    /// retained prefix exceeded the size limit.
+    /// Whether the required newline delimiter arrived within the size limit.
     pub(crate) terminated: bool,
 }
 
@@ -331,10 +330,9 @@ pub(crate) struct BoundedLine {
 ///
 /// Retained bytes are capped at `max_bytes + 1` so a line cannot consume
 /// unbounded memory; the `+ 1` lets an over-limit line still trip the caller's
-/// size check instead of being silently truncated to exactly the limit. If the
-/// retained prefix has no delimiter, the rest of the frame is discarded while
-/// scanning for a newline so the caller can distinguish an oversized frame
-/// from an unterminated response. The caller bounds the whole exchange with
+/// size check instead of being silently truncated to exactly the limit. Once
+/// the line exceeds the limit, the delimiter is irrelevant and the read
+/// returns immediately. The caller bounds the whole exchange with
 /// [`tokio::time::timeout`], so a peer that trickles bytes cannot hold the
 /// connection indefinitely.
 pub(crate) async fn read_bounded_line<S: AsyncRead + Unpin>(
@@ -346,24 +344,9 @@ pub(crate) async fn read_bounded_line<S: AsyncRead + Unpin>(
     let mut buf = tokio::io::BufReader::new(stream.take(max_bytes.saturating_add(1)));
     let mut line = Vec::new();
     buf.read_until(b'\n', &mut line).await?;
-    let mut terminated = line.last() == Some(&b'\n');
+    let terminated = line.last() == Some(&b'\n');
     if terminated {
         line.pop();
-    }
-    drop(buf);
-
-    if !terminated {
-        let mut discarded = [0; 1024];
-        loop {
-            let read = stream.read(&mut discarded).await?;
-            if read == 0 {
-                break;
-            }
-            if discarded[..read].contains(&b'\n') {
-                terminated = true;
-                break;
-            }
-        }
     }
     Ok(BoundedLine {
         bytes: line,
