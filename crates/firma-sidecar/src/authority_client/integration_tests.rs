@@ -16,8 +16,8 @@ use firma_identifiers::{AgentId, TokenId};
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
     GetApprovalOutcomeRequest, GetApprovalOutcomeResponse, IssueCapabilityRequest,
-    IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate, RevocationEvent,
-    SidecarCredentials, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate, RevocationEvent, SidecarCredentials,
+    WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};

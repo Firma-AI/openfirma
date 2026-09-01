@@ -290,10 +290,22 @@ fn capability_seed_from_response(
         .token
         .ok_or_else(|| RunError::Capability("ALLOW response contained no token".to_string()))?;
 
-    // `signature` carries the raw PASETO token string as UTF-8 bytes.
-    let raw_token = String::from_utf8(token.signature)
+    let raw_token = super::paseto_from_wire_token(token)
         .map_err(|e| RunError::Capability(format!("token is not valid UTF-8: {e}")))?;
 
+    verified_seed_from_raw_token(raw_token, verifier)
+}
+
+/// Verifies a raw PASETO bearer token and builds the capability seed.
+///
+/// The single conversion from a released token to a [`CapabilitySeed`],
+/// shared by the immediate-grant path above and the HITL retrieval path
+/// (`GetApprovalOutcome`): every token, however it was obtained, goes
+/// through the same local verification before anything touches disk.
+fn verified_seed_from_raw_token(
+    raw_token: String,
+    verifier: &PasetoV4Verifier,
+) -> Result<CapabilitySeed, RunError> {
     let claims = verifier.verify(&raw_token).map_err(|e| {
         RunError::Capability(format!("issued token failed local verification: {e}"))
     })?;

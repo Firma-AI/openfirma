@@ -1,3 +1,4 @@
+mod approval_wait;
 mod authority_autostart_eaddrinuse;
 mod authority_autostart_marker;
 mod authority_autostart_reuse;

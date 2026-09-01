@@ -172,7 +172,9 @@ impl AuthorityService for AuthorityServiceImpl {
         // poll the Mini Authority for an approval it never opens; worth a
         // loud signal, since IssueCapability's own responses never point a
         // well-behaved client here.
-        tracing::warn!("get_approval_outcome called on the Mini Authority; it never gates issuance on human approval");
+        tracing::warn!(
+            "get_approval_outcome called on the Mini Authority; it never gates issuance on human approval"
+        );
         Err(Status::unimplemented(
             "the Mini Authority does not gate issuance on human approval",
         ))

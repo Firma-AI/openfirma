@@ -1,3 +1,4 @@
+pub mod approval_wait;
 pub mod guard;
 pub mod issue;
 pub mod refresh;
@@ -6,6 +7,19 @@ use std::path::Path;
 
 use crate::config::CapabilitySource;
 use crate::error::RunError;
+
+/// Decodes the wire `CapabilityToken.signature` field into the raw PASETO
+/// token string.
+///
+/// The `signature` bytes carry the PASETO token as UTF-8 — the one wire
+/// convention shared by `IssueCapability` and `GetApprovalOutcome`. Both
+/// decoders call this so the convention is interpreted in exactly one
+/// place.
+fn paseto_from_wire_token(
+    token: firma_protobuf::v1::CapabilityToken,
+) -> Result<String, std::string::FromUtf8Error> {
+    String::from_utf8(token.signature)
+}
 
 /// Read the operator-supplied capability token for a `firma run` session.
 ///
