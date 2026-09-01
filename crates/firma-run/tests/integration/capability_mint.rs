@@ -49,7 +49,7 @@ use super::helper::RealAuthority;
 
 /// One scripted `GetApprovalOutcome` answer, consumed in order.
 #[derive(Clone, Copy)]
-enum ApprovalOutcomeStep {
+pub enum ApprovalOutcomeStep {
     /// Still pending; advises polling again after this many seconds.
     Pending { retry_after_secs: i64 },
     /// Granted: the mock signs a real token for the enrolled test agent.
@@ -67,7 +67,7 @@ struct MockAuthority {
     signer: PasetoV4Signer,
     token_kind: MockTokenKind,
     denial: Option<(&'static str, &'static str)>,
-    seen_agent_ids: Arc<Mutex<Vec<String>>>,
+    pub seen_agent_ids: Arc<Mutex<Vec<String>>>,
     /// Scripted answers for `GetApprovalOutcome`; an exhausted script
     /// answers `UNIMPLEMENTED`, the same as an Authority without HITL.
     approval_script: Arc<Mutex<VecDeque<ApprovalOutcomeStep>>>,
@@ -78,7 +78,7 @@ struct MockAuthority {
 }
 
 #[derive(Clone, Copy)]
-enum MockTokenKind {
+pub enum MockTokenKind {
     Valid,
     Malformed,
     NonUtf8,
@@ -264,13 +264,13 @@ impl AuthorityService for MockAuthority {
 }
 
 /// Handle to a running mock Authority. Dropping it shuts the server down.
-struct MockServer {
-    url: String,
-    pub_key_path: PathBuf,
+pub struct MockServer {
+    pub url: String,
+    pub pub_key_path: PathBuf,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     handle: Option<std::thread::JoinHandle<()>>,
-    seen_agent_ids: Arc<Mutex<Vec<String>>>,
-    outcome_calls: Arc<Mutex<u32>>,
+    pub seen_agent_ids: Arc<Mutex<Vec<String>>>,
+    pub outcome_calls: Arc<Mutex<u32>>,
     _dir: tempfile::TempDir,
 }
 
@@ -306,7 +306,7 @@ fn start_authority(
 }
 
 /// Starts the mock with a scripted `GetApprovalOutcome` answer sequence.
-fn start_authority_scripted(
+pub fn start_authority_scripted(
     token_kind: MockTokenKind,
     denial: Option<(&'static str, &'static str)>,
     script: VecDeque<ApprovalOutcomeStep>,

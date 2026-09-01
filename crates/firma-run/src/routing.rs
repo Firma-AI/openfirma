@@ -920,6 +920,37 @@ fn prepare_run_components(
         let capability_seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
         let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
 
+        // Remote (non-owned) Authority: mint before the stack. This is the
+        // only path where PENDING_APPROVAL can occur, and a human approval
+        // can take minutes — waiting inside the component factory would
+        // burn `component_readiness` and abort the stack, and the approval
+        // notice must reach stderr before the run redirects its logs. The
+        // guard is created first, exactly as in the factory below, so a
+        // failed mint never leaves a partial seed behind. An owned
+        // Authority keeps the in-factory mint: its URL only exists once
+        // the component is ready, and the Mini Authority never gates
+        // issuance on human approval.
+        if !owns_authority && !is_source_file && authority.pub_key_path.is_some() {
+            capability_guard = Some(crate::capability::guard::CapabilityFileGuard::new(
+                capability_seed_path.clone(),
+            ));
+            match mint_capability_seed(
+                identity,
+                &capability_seed_path,
+                &authority,
+                capability_lease,
+            ) {
+                Ok(refresher) => capability_refresher = Some(refresher),
+                Err(error) => {
+                    // Mirrors the certain-teardown factory failure path: the
+                    // guard drops here (removing any partial seed) and the
+                    // run markers are cleaned up.
+                    drop(capability_guard);
+                    return Err(cleanup_run_markers_after(error, &marker_dir));
+                }
+            }
+        }
+
         let stack_result = spawn_stack_from_plan(
             &topology,
             |context| match context.name() {
@@ -987,16 +1018,21 @@ fn prepare_run_components(
                         .clone_from(&authority.credentials_config);
                     if !is_source_file && authority.pub_key_path.is_some() {
                         component_flags.capability_seed_path = Some(capability_seed_path.clone());
-                        capability_guard =
-                            Some(crate::capability::guard::CapabilityFileGuard::new(
-                                capability_seed_path.clone(),
-                            ));
-                        capability_refresher = Some(mint_capability_seed(
-                            identity,
-                            &capability_seed_path,
-                            &authority,
-                            capability_lease,
-                        )?);
+                        // The pre-stack path above already minted for a
+                        // remote Authority; only the owned Authority mints
+                        // here, after its component became ready.
+                        if capability_refresher.is_none() {
+                            capability_guard =
+                                Some(crate::capability::guard::CapabilityFileGuard::new(
+                                    capability_seed_path.clone(),
+                                ));
+                            capability_refresher = Some(mint_capability_seed(
+                                identity,
+                                &capability_seed_path,
+                                &authority,
+                                capability_lease,
+                            )?);
+                        }
                     }
                     create_log_alias(
                         &marker_dir,
