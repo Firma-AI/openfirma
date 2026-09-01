@@ -31,6 +31,7 @@ fn params(authority_url: &str, pub_key_path: PathBuf) -> IssueParams {
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
+        issuance_attempt_id: uuid::Uuid::new_v4(),
     }
 }
 

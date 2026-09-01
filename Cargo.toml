@@ -91,7 +91,7 @@ firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", v
 firma-http = { path = "crates/firma-http", version = "0.1.5" }
 firma-identifiers = { path = "crates/firma-identifiers", version = "0.1.5" }
 firma-process-orchestrator = { path = "crates/firma-process-orchestrator", version = "0.1.5" }
-firma-protobuf = "0.2"
+firma-protobuf = "0.3"
 firma-run = { path = "crates/firma-run", version = "0.1.5" }
 firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.5" }
 firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.1.5" }

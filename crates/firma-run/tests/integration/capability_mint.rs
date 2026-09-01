@@ -30,8 +30,9 @@ use firma_core::{CapabilityClaims, CapabilitySeed, TokenSigner, TokenVerifier};
 use firma_identifiers::TokenId;
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
-    CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision,
-    PolicyBundleUpdate, RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    CapabilityToken, GetApprovalOutcomeRequest, GetApprovalOutcomeResponse,
+    IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision, PolicyBundleUpdate,
+    RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
@@ -61,6 +62,18 @@ enum MockTokenKind {
 
 #[tonic::async_trait]
 impl AuthorityService for MockAuthority {
+    // Wired up with programmable outcomes in Fase 3 of the FIR-504 plan,
+    // alongside the pending/granted/denied/expired polling matrix. Fase 1
+    // only needs the mock to compile against the bumped protobuf trait.
+    async fn get_approval_outcome(
+        &self,
+        _request: Request<GetApprovalOutcomeRequest>,
+    ) -> Result<Response<GetApprovalOutcomeResponse>, Status> {
+        Err(Status::unimplemented(
+            "MockAuthority does not serve GetApprovalOutcome yet",
+        ))
+    }
+
     async fn issue_capability(
         &self,
         request: Request<IssueCapabilityRequest>,
@@ -269,6 +282,7 @@ fn params(server: &MockServer) -> IssueParams {
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
+        issuance_attempt_id: uuid::Uuid::new_v4(),
     }
 }
 
@@ -297,6 +311,7 @@ async fn real_authority_token_mints_compatible_seed() {
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
+        issuance_attempt_id: uuid::Uuid::new_v4(),
     };
     let mint_path = seed_path.clone();
 

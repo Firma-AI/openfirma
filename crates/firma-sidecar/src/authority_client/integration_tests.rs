@@ -15,8 +15,9 @@ use firma_core::RevocationStore;
 use firma_identifiers::{AgentId, TokenId};
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
-    IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate,
-    RevocationEvent, SidecarCredentials, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    GetApprovalOutcomeRequest, GetApprovalOutcomeResponse, IssueCapabilityRequest,
+    IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate, RevocationEvent,
+    SidecarCredentials, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
@@ -106,6 +107,15 @@ impl AuthorityService for MockAuthority {
     ) -> Result<Response<IssueCapabilityResponse>, Status> {
         Err(Status::unimplemented(
             "mock authority: issue_capability not exercised in task 007 tests",
+        ))
+    }
+
+    async fn get_approval_outcome(
+        &self,
+        _request: Request<GetApprovalOutcomeRequest>,
+    ) -> Result<Response<GetApprovalOutcomeResponse>, Status> {
+        Err(Status::unimplemented(
+            "mock authority: get_approval_outcome not exercised in task 007 tests",
         ))
     }
 

@@ -12,6 +12,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use uuid::Uuid;
+
 use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::{ActionClass, CapabilitySeed, TokenVerifier};
 use firma_identifiers::AgentId;
@@ -44,6 +46,14 @@ pub struct IssueParams {
     pub resource_scope: String,
     /// Requested TTL in seconds.
     pub ttl_seconds: i32,
+    /// Client-chosen idempotency key for this issuance cycle.
+    ///
+    /// One id per logical issuance cycle (an initial mint, or one refresh
+    /// cycle), reused across every retry of that same cycle so the
+    /// Authority replays the approval it already opened instead of opening
+    /// a second one under HITL. The caller decides the cycle boundary and
+    /// generates the id; this type never generates one on its own.
+    pub issuance_attempt_id: Uuid,
 }
 
 /// Default action set requested when none is configured: every action class.
@@ -181,6 +191,7 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
                 .credentials
                 .as_ref()
                 .map(ResolvedSidecarCredentials::to_proto),
+            issuance_attempt_id: Some(params.issuance_attempt_id.to_string()),
         });
         tokio::time::timeout(REQUEST_TIMEOUT, rpc)
             .await
