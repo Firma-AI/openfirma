@@ -75,13 +75,17 @@ pub struct ResolvedProfile {
     /// firma-run broker); an HTTP entry is mirrored into the autostarted
     /// Sidecar's own config so it can intercept MITM'd responses from that
     /// vault. The map value is the fully resolved
-    /// [`IntegrationConfig`](firma_secret_provider::IntegrationConfig) — a
+    /// [`IntegrationSpec`](firma_secret_provider::IntegrationSpec) — a
     /// built-in looked up by name (CLI only), or a custom spec defined
     /// inline. An entry being present here is itself the authorization to
     /// intercept — no separate policy check gates it; see the secrets design
     /// doc. Merged across `[run.defaults]` and the active profile; entries
     /// defined later win on name collision (profile overrides defaults,
     /// custom overrides built-in).
+    ///
+    /// This is the canonical definition of secret-provider authorization and
+    /// merge semantics; other `secret_providers` / `http_secret_providers`
+    /// fields reference it via intra-doc links rather than duplicating it.
     pub(crate) secret_providers: BTreeMap<String, IntegrationSpec<SecretMatcher>>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.

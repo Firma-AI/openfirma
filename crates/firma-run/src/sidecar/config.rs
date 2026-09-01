@@ -346,14 +346,15 @@ pub struct SynthesizeRequest<'a> {
     /// operator template. Enables `firma run --monitor` for a single-run
     /// observe-only mode without editing firma.toml.
     pub monitor_mode: bool,
-    /// HTTP-shaped entries from `ResolvedProfile::secret_providers`, written
-    /// into `[sidecar].http_secret_providers` so the Sidecar's MITM path can
-    /// intercept matching vault responses. A provider entry being present
-    /// here is itself the authorization to intercept — no separate policy
-    /// check gates it. Deliberately a distinct field name from firma-run's own
-    /// `secret_providers` config so the two are never confused — this is a
-    /// read-only mirror the Sidecar consumes, not a config surface an
-    /// operator edits directly. Empty when no HTTP providers are configured.
+    /// HTTP-shaped entries mirrored into `[sidecar].http_secret_providers` so the
+    /// Sidecar's MITM path can intercept matching vault responses.
+    ///
+    /// This is a read-only mirror of the HTTP subset of
+    /// [`crate::config::ResolvedProfile::secret_providers`]; that field is the
+    /// canonical definition of authorization (presence implies intercept) and
+    /// merge semantics. The distinct name avoids confusion with `firma-run`'s
+    /// own `secret_providers` config surface. Empty when no HTTP providers are
+    /// configured.
     pub http_secret_providers: &'a [HttpIntegrationSpec<SecretMatcher>],
 }
 
@@ -666,7 +667,9 @@ fn override_authority_credentials(
 /// Mirror the resolved HTTP-shaped `secret_providers` entries into
 /// `[sidecar].http_secret_providers`. A no-op when `providers` is empty —
 /// most profiles configure no HTTP vaults, and the field's `#[serde(default)]`
-/// on the Sidecar side already treats an absent key as empty.
+/// on the Sidecar side already treats an absent key as empty. See
+/// [`crate::config::ResolvedProfile::secret_providers`] for the canonical
+/// authorization invariant.
 fn override_http_secret_providers(
     value: &mut toml::Value,
     providers: &[HttpIntegrationSpec<SecretMatcher>],

@@ -295,10 +295,12 @@ pub struct AutostartFlags {
     /// Secret gateway address advertised to the autostarted Sidecar via
     /// `FIRMA_SECRET_GATEWAY_ADDR`. `None` when no secret providers are configured.
     pub secret_gateway_addr: Option<String>,
-    /// HTTP-shaped entries from `ResolvedProfile::secret_providers`, mirrored
-    /// into the synthesized sidecar config's `http_secret_providers` so the
-    /// Sidecar's MITM path can intercept matching vault responses. Empty when
-    /// no HTTP providers are configured.
+    /// HTTP-shaped entries mirrored into the synthesized sidecar config's
+    /// `http_secret_providers` so the Sidecar's MITM path can intercept matching
+    /// vault responses. Empty when no HTTP providers are configured.
+    ///
+    /// Canonical authorization and merge semantics are documented on
+    /// [`crate::config::ResolvedProfile::secret_providers`].
     pub http_secret_providers: Vec<HttpIntegrationSpec<SecretMatcher>>,
 }
 

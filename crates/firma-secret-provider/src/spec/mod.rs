@@ -103,14 +103,25 @@ pub enum MatchingResolution<'a, Matcher> {
 }
 
 /// One candidate rule for [`cli::CliIntegrationSpec`] and [`http::HttpIntegrationSpec`].
+///
+/// Classification is fail-closed: [`MatchingResolution::Blocked`] is returned
+/// for unrecognized shapes, malformed options, or any [`Self::BlockedCommand`]
+/// match, never forwarding unredacted material.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MatcherRule<A, B> {
-    /// Command we want to redact secret from
+    /// Response whose body must be scanned and redacted using `A`'s matcher.
+    ///
+    /// For CLI providers `A` is [`cli::CommandAndMatcher`]; for HTTP it is
+    /// an [`http::HttpIntegrationSpec`] rule. Produces
+    /// [`MatchingResolution::Matcher`] on match.
     SensitiveCommand(A),
-    /// Command we let through without redaction
+    /// Known-safe invocation whose response never carries secrets; forwarded
+    /// unredacted without extraction. Produces
+    /// [`MatchingResolution::PassThrough`] on match.
     SafeCommand(B),
-    /// Command we know should be forbidden no matter what
+    /// Invocation that must always be denied. Produces
+    /// [`MatchingResolution::Blocked`] on match and fails closed.
     BlockedCommand(B),
 }
 

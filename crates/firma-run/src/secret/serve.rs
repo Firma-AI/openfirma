@@ -3,8 +3,8 @@
 //! Turns one shim request into a vault CLI execution plus an extraction
 //! transform that extracts secrets and substitutes placeholders before the
 //! output reaches the agent. Fail-closed: any classification or extraction
-//! error returns a [`BrokerResponse::Rejected`] instead of forwarding
-//! plaintext.
+//! error returns a [`firma_secret_provider::broker::BrokerResponse::Rejected`]
+//! instead of forwarding plaintext.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -58,7 +58,7 @@ pub async fn serve_request(
                     .args
                     .iter()
                     .map(|s| s.as_ref())
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<&str>>()
                     .join(" ")
             )),
             MatchingResolution::PassThrough => {
@@ -151,6 +151,13 @@ fn chunks_from_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<BrokerOutputChunk
     chunks
 }
 
+/// Spawn the real vault binary with a minimal environment.
+///
+/// Only `credential_env_vars` (if present in the broker's environment) and
+/// `PATH` are forwarded — `env_clear` is used so no other parent env leaks
+/// into the vault invocation. When `real_bin_dir` is `Some`, the binary is
+/// resolved as `real_bin_dir/<bin>` (Linux bwrap layout); otherwise `bin` is
+/// resolved via `PATH`.
 async fn run_subprocess(
     bin: &str,
     args: &[String],

@@ -21,9 +21,9 @@ pub enum SecretProviderPatch {
 /// A custom secret-provider integration spec
 ///
 /// One full-table entry in `secret_providers`, explicitly tagged by `type`
-/// so a CLI-only field (e.g. `name`) and an HTTP-only field (e.g. `host`)
-/// can never be mixed on the same entry — an untagged CLI-vs-HTTP guess
-/// would also give worse parse errors for a malformed table than an
+/// so a CLI-only field (e.g. `binary_name`) and an HTTP-only field (e.g.
+/// `host`) can never be mixed on the same entry — an untagged CLI-vs-HTTP
+/// guess would also give worse parse errors for a malformed table than an
 /// explicit tag does.
 ///
 /// Minimal CLI example (JSON output with `{ key, value }` pairs):
@@ -31,7 +31,7 @@ pub enum SecretProviderPatch {
 /// ```toml
 /// [run.defaults]
 /// secret_providers = [
-///     { type = "cli", name = "mock-vault", placeholder_template = "firma-secret://demo/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+///     { type = "cli", binary_name = "mock-vault", provider_id = "mock-vault", credential_env_vars = [], matchers = [{ type = "sensitive_command", argv = ["secret", "list"], matcher = { type = "json", record_path = "$[*]", value_path = "$.value", name = { source = "path", path = "$.key" } } }] },
 /// ]
 /// ```
 ///
@@ -40,7 +40,7 @@ pub enum SecretProviderPatch {
 /// ```toml
 /// [run.defaults]
 /// secret_providers = [
-///     { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+///     { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matchers = [{ type = "sensitive_command", path = "/GetSecretValue", matcher = { type = "json", record_path = "$", value_path = "$.SecretString", name = { source = "path", path = "$.Name" } } }] },
 /// ]
 /// ```
 #[derive(Debug, Clone, Deserialize)]

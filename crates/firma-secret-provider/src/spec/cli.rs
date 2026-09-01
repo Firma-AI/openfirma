@@ -9,13 +9,42 @@ use super::{MatcherRule, MatchingResolution, NonEmptyVec};
 pub type CliMatcherRule<Matcher> = MatcherRule<CommandAndMatcher<Matcher>, CommandPattern>;
 
 /// A CLI integration configuration that has passed cross-field validation.
+///
+/// Cross-field checks (empty names, `allow_attached_value` without
+/// `takes_value`, conflicting [`FlagSpec`] definitions across
+/// `stripped_options` / `forbidden_options` / per-command
+/// `stripped_options`) are enforced by the
+/// `TryFrom<CliSecretProviderConfig>` impl before this type is constructed.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CliIntegrationSpec<Matcher> {
+    /// Executable basename used to select this integration (e.g. `"bws"`).
+    ///
+    /// Matches [`SecretProviderPatch::Named`](firma_config_schema::secret_provider::SecretProviderPatch::Named)
+    /// keys and the `binary_name` field of a custom CLI spec; see
+    /// [`CliSecretProviderConfig::binary_name`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::binary_name).
     pub binary_name: String,
+    /// Stable identifier recorded for secrets from this integration.
+    ///
+    /// Mirrors [`CliSecretProviderConfig::provider_id`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::provider_id).
     pub provider_id: String,
+    /// Environment variables forwarded to authenticate the provider CLI.
+    ///
+    /// Only these names are forwarded from the broker's environment to the
+    /// subprocess; see [`CliSecretProviderConfig::credential_env_vars`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::credential_env_vars).
     pub credential_env_vars: Vec<String>,
+    /// Options ignored while identifying command words. Their value arity is
+    /// honored, and the options remain unchanged in the executed command.
+    ///
+    /// Mirrors [`CliSecretProviderConfig::stripped_options`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::stripped_options).
     pub stripped_options: Vec<FlagSpec>,
+    /// Options that make an otherwise permitted invocation unsafe. An
+    /// invocation containing one is blocked rather than silently changed.
+    ///
+    /// Mirrors [`CliSecretProviderConfig::forbidden_options`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::forbidden_options).
     pub forbidden_options: Vec<FlagSpec>,
+    /// Rules that classify invocations and configure secret extraction.
+    ///
+    /// See [`CliMatcherRule`] and [`CliSecretProviderConfig::matchers`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::matchers).
     pub matchers: Vec<CliMatcherRule<Matcher>>,
 }
 

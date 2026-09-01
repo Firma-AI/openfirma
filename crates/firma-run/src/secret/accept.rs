@@ -1,7 +1,9 @@
+#![allow(dead_code, reason = "Code will be used in later iteration")]
+
 //! Broker accept loop.
 //!
-//! Accepts shim connections from [`BrokerListener`] and serves each
-//! one via [`serve::serve_request`]. Each connection is handled
+//! Accepts shim connections from [`firma_secret_provider::broker::server::BrokerListener`]
+//! and serves each one via [`serve::serve_request`]. Each connection is handled
 //! synchronously in the accept loop; callers that need parallelism should
 //! spawn this future per listener or wrap the loop with `tokio::spawn`.
 //! A binary only ever reaches this loop because it matched a configured
@@ -22,10 +24,14 @@ use super::serve::serve_request;
 
 /// Accept and serve shim connections until the listener is closed.
 ///
-/// `spec_for(bin)` looks up the integration spec for the binary and is shared
-/// across tasks. Per-connection handler errors are mapped to
-/// `BrokerResponse::Rejected`; only transport-level `accept_one` errors stop
-/// the loop (typically when the listener is dropped).
+/// `spec_for(bin)` looks up the [`CliIntegrationSpec`] for the binary and is
+/// shared across tasks. `store` is the run-scoped [`SecretStore`] dictionary
+/// (shared with the secret gateway). `real_bin_dir`, when `Some`, overrides
+/// `PATH` lookup for the real binary (Linux bwrap layout). Per-connection
+/// handler errors are mapped to [`firma_secret_provider::broker::BrokerResponse::Rejected`];
+/// only transport-level [`BrokerListener::accept_one`] errors stop the loop
+/// (typically when the listener is dropped). This future never returns a
+/// `Result` — it loops until the listener is closed and then returns `()`.
 pub async fn serve_forever<S>(
     listener: BrokerListener,
     store: Arc<RwLock<SecretStore>>,
@@ -76,8 +82,10 @@ mod tests {
         let config = BrokerConfig::default();
         let listener = BrokerListener::bind(&endpoint, config).await.expect("bind");
         let bound = listener.bound_endpoint().expect("bound");
-        let firma_secret_provider::endpoint::EndpointInner::Tcp(addr) = bound else {
-            panic!("expected tcp")
+        let addr = match bound {
+            firma_secret_provider::endpoint::EndpointInner::Tcp(addr) => addr,
+            #[cfg(unix)]
+            firma_secret_provider::endpoint::EndpointInner::Unix(_) => panic!("expected tcp"),
         };
         (listener, addr)
     }

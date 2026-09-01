@@ -3,15 +3,11 @@ title: Rehydrate & mask secrets with the secret gateway
 description: Configure placeholder-based secret handling — outbound rehydration, inbound masking, and HTTP vault interception — for the Sidecar.
 ---
 
-:::caution[Manual configuration only, for now]
-This feature currently requires hand-writing `[sidecar.http_secret_providers]` /
-`[sidecar.secret_gateway]` into the Sidecar's `firma.toml` and setting
-`FIRMA_SECRET_GATEWAY_ADDR` in the Sidecar's process environment yourself.
-`firma-run`'s autostart path does not yet synthesize these from its own
-`secret_providers` config or spawn the gateway automatically — that wiring
-has not landed. Treat everything below as the currently supported,
-manually-configured path.
-:::
+`firma run` can manage the gateway for its per-run Sidecar automatically via
+`secret_providers` in `firma.toml` (recommended). For a standalone Sidecar
+(`firma sidecar start` / systemd) configure `[sidecar.http_secret_providers]`
+/ `[sidecar.secret_gateway]` and `FIRMA_SECRET_GATEWAY_ADDR` manually — see
+[Manual Sidecar configuration](#manual-sidecar-configuration) below.
 
 The secret gateway lets the Sidecar exchange **placeholder tokens** for real
 secret values without the agent ever holding the plaintext. It's a different
@@ -59,10 +55,72 @@ enforcement — no partial or best-effort forwarding:
   instead of handing the agent a placeholder the gateway never learned —
   a token that could never resolve.
 
-## Step 1: Start the gateway and point the Sidecar at it
+## Step 1: Configure `secret_providers` via `firma run` (recommended)
 
-Run `firma-run`'s broker so it's listening on a `unix://` or `tcp://` endpoint,
-then set that address in the Sidecar's environment before it starts:
+Add `secret_providers` under `[run.defaults]` or a single
+`[run.profiles.<id>]`. Each entry is either a bare string naming a built-in
+CLI integration (e.g. `"bws"` for Bitwarden Secrets, `"op"` for 1Password) or a
+full table defining a custom CLI or HTTP provider. Entries from defaults and
+the active profile are merged; a later entry wins on name collision (profile
+overrides defaults, custom overrides built-in). Bare-string HTTP providers are
+not supported — define them as a full `{ type = "http", ... }` table.
+
+- **CLI entry** — activates an in-sandbox shim for that binary. The shim
+  forwards the real vault CLI through the `firma-run` broker, which classifies
+  the invocation (`sensitive_command` / `safe_command` / `blocked_command`),
+  rewrites output options, extracts secrets via its `matcher`, and stores them
+  under opaque `fsp_…` placeholders the gateway resolves later. An entry being
+  present is itself the authorization to intercept — no separate policy check
+  gates it.
+- **HTTP entry** — mirrored into the autostarted Sidecar's
+  `[sidecar].http_secret_providers` so the Sidecar's MITM path can intercept
+  matching vault responses. Fail-closed: an unknown vault path is `blocked`, a
+  failed gateway push aborts the response.
+
+```toml
+[run.defaults]
+secret_providers = [
+  "bws",  # built-in Bitwarden Secrets CLI
+
+  # custom CLI vault — full spec
+  { type = "cli", binary_name = "mock-vault", provider_id = "mock-vault", credential_env_vars = [], matchers = [
+    { type = "sensitive_command", argv = ["secret", "list"], matcher = { type = "json", record_path = "$[*]", value_path = "$.value", name = { source = "path", path = "$.key" } } },
+    { type = "safe_command", argv = ["secret", "status"] },
+    { type = "blocked_command", argv = ["secret", "delete"] },
+  ] },
+
+  # custom HTTP vault — mirrored to the Sidecar
+  { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matchers = [
+    { type = "sensitive_command", path = "/GetSecretValue", matcher = { type = "json", record_path = "$", value_path = "$.SecretString", name = { source = "path", path = "$.Name" } } },
+    { type = "safe_command", path = "/health" },
+  ] },
+]
+```
+
+Run normally — `firma run` spawns the gateway, wires
+`FIRMA_SECRET_GATEWAY_ADDR` for the Sidecar, and writes the mirrored
+`http_secret_providers` into the per-run Sidecar config:
+
+```bash
+firma run --profile generic -- your-agent
+```
+
+Validate the resolved set without launching:
+
+```bash
+firma run --profile generic --print-effective-config -- echo hi | jq .secret_providers
+```
+
+## Step 2: Configure HTTP vault interception (optional, standalone Sidecar)
+
+When not using `firma run`'s autostart, configure HTTP vault interception
+directly on the Sidecar.
+
+### Manual Sidecar configuration
+
+Start the gateway and point the Sidecar at it. Run `firma-run`'s broker so
+it's listening on a `unix://` or `tcp://` endpoint, then set that address in
+the Sidecar's environment before it starts:
 
 ```bash
 FIRMA_SECRET_GATEWAY_ADDR=unix:///run/firma/secret-shims/gateway.sock \
@@ -83,7 +141,7 @@ operation_timeout  = "1s"
 max_buffer_size    = "10MB"
 ```
 
-## Step 2: Configure HTTP vault interception (optional)
+### HTTP provider entries
 
 If you want the Sidecar to extract secrets directly from a vault's HTTP
 responses — rather than only rehydrating placeholders another component
