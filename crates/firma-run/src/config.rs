@@ -5,8 +5,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
+use firma_config_schema::secret_provider::SecretProviderPatch;
+use firma_core::SecretMatcher;
 use firma_runtime_state::RuntimeLayout;
-use serde::{Deserialize, Serialize};
+use firma_secret_provider::IntegrationSpec;
+use serde::Serialize;
 
 pub use firma_config_schema::run::SandboxIdentityMode;
 use firma_config_schema::run::{
@@ -79,7 +82,7 @@ pub struct ResolvedProfile {
     /// doc. Merged across `[run.defaults]` and the active profile; entries
     /// defined later win on name collision (profile overrides defaults,
     /// custom overrides built-in).
-    pub(crate) secret_providers: BTreeMap<String, firma_secret_provider::IntegrationConfig>,
+    pub(crate) secret_providers: BTreeMap<String, IntegrationSpec<SecretMatcher>>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
@@ -364,31 +367,6 @@ pub enum CapabilitySource {
 /// it lives in `firma-run` rather than `firma-config-schema`.
 trait Merge {
     fn merge(self, higher: Self) -> Self;
-}
-
-/// Matcher configuration for a custom secret-provider spec (an inline table
-/// entry in `secret_providers`).
-///
-/// Mirrors [`firma_core::SecretMatcher`] with a `type` discriminator tag so
-/// TOML config reads naturally (e.g. `type = "json"`).
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum SecretMatcherConfig {
-    Json {
-        value_path: String,
-        name_path: String,
-        #[serde(default)]
-        item_path: Option<String>,
-        #[serde(default)]
-        domain_path: Option<String>,
-        #[serde(default)]
-        domain_is_url: bool,
-    },
-    Regex {
-        pattern: String,
-        #[serde(default)]
-        domain_is_url: bool,
-    },
 }
 
 impl Merge for NetworkPolicyPatch {
@@ -793,8 +771,11 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
 /// Returns [`RunError::ConfigValidation`] if a bare-string entry does not name
 /// a known built-in integration.
 fn resolve_secret_providers(
-    patch: Vec<SecretProviderPatch>,
-) -> Result<BTreeMap<String, firma_secret_provider::IntegrationSpec>, RunError> {
+    patch: Option<Vec<SecretProviderPatch>>,
+) -> Result<BTreeMap<String, IntegrationSpec<SecretMatcher>>, RunError> {
+    let Some(patch) = patch else {
+        return Ok(BTreeMap::new());
+    };
     let builtins = firma_secret_provider::IntegrationRegistry::with_builtins();
     let mut resolved = BTreeMap::new();
     for entry in patch {
@@ -804,50 +785,23 @@ fn resolve_secret_providers(
                 if name.is_empty() {
                     continue;
                 }
-                let spec = builtins.get(&name).cloned().ok_or_else(|| {
+                let spec = builtins.for_binary(&name).cloned().ok_or_else(|| {
                     RunError::ConfigValidation(format!(
                         "unknown secret provider '{name}'; no built-in integration by that name \
                          — provide a full spec to define a custom one"
                     ))
                 })?;
-                resolved.insert(name, firma_secret_provider::IntegrationSpec::Cli(spec));
+                resolved.insert(name, IntegrationSpec::Cli(spec));
             }
-            SecretProviderPatch::Custom(spec) => match *spec {
-                SecretProviderSpec::Cli(cli) => {
-                    let provider_id = cli
-                        .provider_id
-                        .filter(|id| !id.trim().is_empty())
-                        .unwrap_or_else(|| cli.name.clone());
-                    resolved.insert(
-                        cli.name.clone(),
-                        firma_secret_provider::IntegrationSpec::Cli(
-                            firma_secret_provider::CliIntegrationSpec {
-                                binary_name: cli.name,
-                                provider_id,
-                                credential_env_vars: cli.credential_env_vars,
-                                matcher: cli.matcher.into(),
-                                placeholder_template: cli.placeholder_template,
-                                strip_arg_flags: cli.strip_arg_flags,
-                                forced_args: cli.forced_args,
-                            },
-                        ),
-                    );
-                }
-                SecretProviderSpec::Http(http) => {
-                    resolved.insert(
-                        http.provider_id.clone(),
-                        firma_secret_provider::IntegrationSpec::Http(
-                            firma_secret_provider::HttpIntegrationSpec {
-                                provider_id: http.provider_id,
-                                host: http.host,
-                                path: http.path,
-                                matcher: http.matcher.into(),
-                                placeholder_template: http.placeholder_template,
-                            },
-                        ),
-                    );
-                }
-            },
+            SecretProviderPatch::Custom(spec) => {
+                let spec = IntegrationSpec::try_from(*spec)?;
+                // Cli specs are indexed by binary name, Http specs are indexed by provider id
+                let name = match &spec {
+                    IntegrationSpec::Cli(cli) => cli.binary_name.clone(),
+                    IntegrationSpec::Http(http) => http.provider_id.clone(),
+                };
+                resolved.insert(name, spec);
+            }
         }
     }
     Ok(resolved)
@@ -1311,6 +1265,8 @@ mod tests {
 
     use firma_config_loader::CONFIG_FILE_NAME;
     use firma_config_schema::utils::NonZeroDuration;
+    use firma_core::SecretMatcher;
+    use firma_secret_provider::{MatcherRule, spec::cli::CommandAndMatcher};
     use pretty_assertions::assert_eq;
 
     use crate::runtime::RunInput;
@@ -1319,7 +1275,7 @@ mod tests {
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
         CapabilitySourcePatch, CommandMediatorHitlMode, CommandMediatorPatch,
         ExecutableLaunchPolicyPatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch,
-        ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode, SidecarEndpoint,
+        ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode,
         capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
     };
 
@@ -1781,7 +1737,24 @@ secret_providers = ["not-a-real-integration"]
 [run.defaults]
 secret_providers = [
     "bws",
-    { type = "cli", name = "bws", placeholder_template = "firma-secret://custom/{name}", matcher = { type = "json", value_path = "$[*].value", name_path = "$[*].key" } },
+    {
+        type = "cli",
+        binary_name = "bws",
+        provider_id = "bitwarden",
+        credential_env_vars = [],
+        stripped_options = [],
+        matchers = [
+            {
+                type = "sensitive_command",
+                argv = ["secret", "list"],
+                match = "prefix",
+                matcher = {
+                    type = "regex",
+                    pattern = "(?P<name>.+)=(?P<value>.+)"
+                }
+            }
+        ]
+    },
 ]
 "#;
         fs::write(&config_path, toml).unwrap();
@@ -1791,11 +1764,14 @@ secret_providers = [
 
         let resolved = resolve_profile(&run_args).unwrap();
         let spec = resolved.secret_providers.get("bws").unwrap();
-        assert!(
+        std::assert_matches!(
             spec.as_cli()
                 .expect("bws entry must resolve to a CLI spec")
-                .placeholder_template
-                .contains("custom")
+                .matchers[0],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                matcher: SecretMatcher::Regex { .. },
+                ..
+            })
         );
     }
 
@@ -1806,7 +1782,23 @@ secret_providers = [
         let toml = r#"
 [run.defaults]
 secret_providers = [
-    { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+    {
+        type = "http",
+        provider_id = "aws-secrets-manager",
+        host = "secretsmanager.*.amazonaws.com",
+        matchers = [
+            {
+                type = "sensitive_command",
+                path = "/get",
+                matcher = {
+                    type = "json",
+                    record_path = "$",
+                    value_path = "$.SecretString",
+                    name = { source = "path", path = "$.Name" }
+                }
+            }
+        ]
+    },
 ]
 "#;
         fs::write(&config_path, toml).unwrap();
@@ -1832,7 +1824,7 @@ secret_providers = [
         let toml = r#"
 [run.defaults]
 secret_providers = [
-    { provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", placeholder_template = "firma-secret://aws/{name}", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+    { provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
 ]
 "#;
         fs::write(&config_path, toml).unwrap();
@@ -2182,14 +2174,14 @@ approval_policy = "never"
 
     fn assert_profile_patch_contract_inventory(patch: ProfilePatch) {
         let ProfilePatch {
-            backend,
-            sidecar_endpoint,
+            backend: _,
+            sidecar_endpoint: _,
             seccomp_policy,
-            env_passthrough,
-            env_set,
+            env_passthrough: _,
+            env_set: _,
             mounts,
             network,
-            identity_mode,
+            identity_mode: _,
             capability,
             sidecar_local_exec,
             executable_policies,
@@ -2199,17 +2191,6 @@ approval_policy = "never"
             ca_trust_mode,
             secret_providers,
         } = patch;
-        let _ = (
-            backend,
-            sidecar_endpoint,
-            env_passthrough,
-            env_set,
-            identity_mode,
-            use_http_proxy_sidecar,
-            allow_non_structural,
-            mask_home_paths,
-            ca_trust_mode,
-        );
 
         for MountPatch {
             source,

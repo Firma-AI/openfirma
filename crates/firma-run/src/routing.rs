@@ -6,6 +6,7 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use firma_config_loader::AgentProfile;
+use firma_core::SecretMatcher;
 use firma_process_orchestrator::RunningStack;
 #[cfg(unix)]
 use firma_process_orchestrator::{
@@ -13,6 +14,7 @@ use firma_process_orchestrator::{
     spawn_stack_from_plan,
 };
 use firma_runtime_state::RuntimeLayout;
+use firma_secret_provider::spec::http::HttpIntegrationSpec;
 
 #[cfg(unix)]
 use std::io;
@@ -297,7 +299,7 @@ pub struct AutostartFlags {
     /// into the synthesized sidecar config's `http_secret_providers` so the
     /// Sidecar's MITM path can intercept matching vault responses. Empty when
     /// no HTTP providers are configured.
-    pub http_secret_providers: Vec<firma_secret_provider::HttpIntegrationSpec>,
+    pub http_secret_providers: Vec<HttpIntegrationSpec<SecretMatcher>>,
 }
 
 impl Default for AutostartFlags {
@@ -1027,6 +1029,7 @@ fn prepare_run_components(
                             use_http_proxy_interceptor: component_flags.use_http_proxy_sidecar,
                             audit_fallback_path: Some(runtime_layout.audit_log()),
                             monitor_mode: component_flags.monitor_mode,
+                            http_secret_providers: &component_flags.http_secret_providers,
                         },
                     )?;
                     let publication =

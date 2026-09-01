@@ -1,6 +1,4 @@
-use firma_config_schema::sidecar::secret_provider::{
-    HttpMatcherRuleConfig, HttpSecretProviderConfig,
-};
+use firma_config_schema::secret_provider::http::{HttpMatcherRuleConfig, HttpSecretProviderConfig};
 use firma_core::SecretMatcher;
 
 use crate::{CompiledMatcher, MatcherCompiler, MatcherError, glob::glob_match};

@@ -546,14 +546,37 @@ fn override_interceptor(
             toml::Value::String(addr.to_string()),
         );
     } else {
-        table.insert(
-            "mode".to_string(),
-            toml::Value::String("unix_socket".to_string()),
-        );
-        table.insert(
-            "socket_path".to_string(),
-            toml::Value::String(socket_path.display().to_string()),
-        );
+        #[cfg(unix)]
+        {
+            table.insert(
+                "mode".to_string(),
+                toml::Value::String("unix_socket".to_string()),
+            );
+            table.insert(
+                "socket_path".to_string(),
+                toml::Value::String(socket_path.display().to_string()),
+            );
+        }
+        #[cfg(windows)]
+        {
+            let _ = socket_path;
+            table.insert(
+                "mode".to_string(),
+                toml::Value::String("http_proxy".to_string()),
+            );
+            // Windows has no `unix_socket` interceptor mode (see
+            // `firma-config-schema::sidecar::interceptor::InterceptorMode`).
+            // Synthesize a loopback `http_proxy` instead; preserve an
+            // existing `listen_addr` from the template if present, otherwise
+            // use an ephemeral port so the config remains valid and loadable
+            // via `SidecarConfig` on Windows.
+            if !table.contains_key("listen_addr") {
+                table.insert(
+                    "listen_addr".to_string(),
+                    toml::Value::String("127.0.0.1:0".to_string()),
+                );
+            }
+        }
     }
     Ok(())
 }

@@ -1,11 +1,10 @@
+use firma_config_schema::secret_provider::cli::{
+    CliMatcherRuleConfig, CliSecretProviderConfig, CommandMatch, FlagSpec,
+};
 use firma_core::{SecretMatcher, SecretNameSource};
 use firma_secret_provider::{
-    CompiledMatcher, IntegrationRegistry, MatcherRule, MatchingResolution, SecretPlaceholder,
-    non_empty::{NonEmptyVec, vec::EmptyError},
-    spec::cli::{
-        CliIntegrationConfig, CliIntegrationConfigError, CliIntegrationSpec, CommandAndMatcher,
-        CommandMatch, CommandPattern, FlagSpec,
-    },
+    CompiledMatcher, IntegrationRegistry, MatchingResolution, SecretPlaceholder,
+    spec::cli::{CliIntegrationConfigError, CliIntegrationSpec},
 };
 
 use crate::support::{Entry, rewrite_mint_placeholders};
@@ -14,15 +13,8 @@ fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| String::from(*word)).collect()
 }
 
-fn command(words: &[&str], match_kind: CommandMatch) -> Result<CommandPattern, EmptyError> {
-    Ok(CommandPattern {
-        argv: NonEmptyVec::new(args(words))?,
-        match_kind,
-    })
-}
-
 fn validated_config(
-    config: CliIntegrationConfig,
+    config: CliSecretProviderConfig,
 ) -> Result<CliIntegrationSpec<SecretMatcher>, CliIntegrationConfigError> {
     CliIntegrationSpec::try_from(config)
 }
@@ -57,7 +49,7 @@ source = "path"
 path = "$.key"
 "#;
 
-    let config: CliIntegrationConfig =
+    let config: CliSecretProviderConfig =
         toml::from_str(input).unwrap_or_else(|error| panic!("valid CLI schema TOML: {error}"));
     assert_eq!(
         config.stripped_options,
@@ -74,7 +66,7 @@ path = "$.key"
 
     let serialized =
         toml::to_string(&config).unwrap_or_else(|error| panic!("serialize CLI schema: {error}"));
-    let round_trip: CliIntegrationConfig = toml::from_str(&serialized)
+    let round_trip: CliSecretProviderConfig = toml::from_str(&serialized)
         .unwrap_or_else(|error| panic!("round-trip CLI schema TOML: {error}"));
     assert_eq!(round_trip, config);
     let spec = validated_config(round_trip)
@@ -112,7 +104,7 @@ argv = ["secret", "get"]
 type = "regex"
 pattern = "(?P<name>.+)=(?P<value>.+)"
 "#;
-    let base: CliIntegrationConfig =
+    let base: CliSecretProviderConfig =
         toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
     let invalid_options = [
         FlagSpec {
@@ -135,10 +127,13 @@ pattern = "(?P<name>.+)=(?P<value>.+)"
                 0 => config.stripped_options.push(invalid_option.clone()),
                 1 => config.forbidden_options.push(invalid_option.clone()),
                 _ => {
-                    let MatcherRule::SensitiveCommand(rule) = &mut config.matchers[0] else {
+                    let CliMatcherRuleConfig::SensitiveCommand {
+                        stripped_options, ..
+                    } = &mut config.matchers[0]
+                    else {
                         panic!("fixture must contain a sensitive command");
                     };
-                    rule.stripped_options.push(invalid_option.clone());
+                    stripped_options.push(invalid_option.clone());
                 }
             }
 
@@ -197,7 +192,7 @@ pattern = "(?P<name>.+)=(?P<value>.+)"
 "#
         );
 
-        let config: CliIntegrationConfig = toml::from_str(&input)
+        let config: CliSecretProviderConfig = toml::from_str(&input)
             .unwrap_or_else(|error| panic!("plain config must deserialize: {error}"));
         let Err(error) = CliIntegrationSpec::try_from(config) else {
             panic!("conflicting option definitions must fail validation");
@@ -246,7 +241,7 @@ pattern = "(?P<name>.+)=(?P<value>.+)"
     ];
 
     for input in inputs {
-        let config: CliIntegrationConfig =
+        let config: CliSecretProviderConfig =
             toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
         let Err(error) = CliIntegrationSpec::try_from(config) else {
             panic!("conflicting definitions in one scope must fail validation");
@@ -279,7 +274,7 @@ type = "regex"
 pattern = "(?P<name>.+)=(?P<value>.+)"
 "#;
 
-    let config: CliIntegrationConfig =
+    let config: CliSecretProviderConfig =
         toml::from_str(input).unwrap_or_else(|error| panic!("plain config: {error}"));
     let spec = validated_config(config)
         .unwrap_or_else(|error| panic!("valid CLI integration config: {error}"));
@@ -482,17 +477,18 @@ fn unrecognized_invocation_falls_back_to_blocked() {
 }
 
 #[test]
-fn command_matching_skips_declared_options_and_their_values() -> Result<(), EmptyError> {
+fn command_matching_skips_declared_options_and_their_values() {
     let mut registry = IntegrationRegistry::with_builtins();
     registry.push(
-        validated_config(CliIntegrationConfig {
+        validated_config(CliSecretProviderConfig {
             binary_name: String::from("synthetic"),
             provider_id: String::from("test"),
             credential_env_vars: vec![],
             stripped_options: vec![FlagSpec::valueless("--verbose"), FlagSpec::value("-f")],
             forbidden_options: vec![],
-            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
-                command: command(&["get", "secret"], CommandMatch::Exact)?,
+            matchers: vec![CliMatcherRuleConfig::SensitiveCommand {
+                argv: args(&["get", "secret"]),
+                match_kind: CommandMatch::Exact,
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$"),
                     value_path: String::from("$.value"),
@@ -504,7 +500,7 @@ fn command_matching_skips_declared_options_and_their_values() -> Result<(), Empt
                 },
                 stripped_options: vec![],
                 append_options: vec![],
-            })],
+            }],
         })
         .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
     );
@@ -542,7 +538,6 @@ fn command_matching_skips_declared_options_and_their_values() -> Result<(), Empt
             "expected {case:?} not to match",
         );
     }
-    Ok(())
 }
 
 #[test]
@@ -585,17 +580,18 @@ fn bws_spec_has_expected_credential_env_and_provider_id() {
 }
 
 #[test]
-fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
+fn push_custom_spec_takes_precedence_over_builtin() {
     let mut registry = IntegrationRegistry::with_builtins();
     registry.push(
-        validated_config(CliIntegrationConfig {
+        validated_config(CliSecretProviderConfig {
             binary_name: String::from("bws"),
             provider_id: String::from("custom"),
             credential_env_vars: vec![],
             stripped_options: vec![],
             forbidden_options: vec![],
-            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
-                command: command(&["secret"], CommandMatch::Prefix)?,
+            matchers: vec![CliMatcherRuleConfig::SensitiveCommand {
+                argv: args(&["secret"]),
+                match_kind: CommandMatch::Prefix,
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$[*]"),
                     value_path: String::from("$.value"),
@@ -607,7 +603,7 @@ fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
                 },
                 stripped_options: vec![],
                 append_options: vec![],
-            })],
+            }],
         })
         .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
     );
@@ -618,7 +614,6 @@ fn push_custom_spec_takes_precedence_over_builtin() -> Result<(), EmptyError> {
         spec.resolve_args(&args(&["secret", "get"])),
         MatchingResolution::Matcher(_)
     ));
-    Ok(())
 }
 
 #[test]
@@ -1129,18 +1124,18 @@ fn builtins_reject_backend_override_flags_on_safe_commands() {
 }
 
 #[test]
-fn rewrite_args_leaves_args_untouched_when_no_stripped_options_configured() -> Result<(), EmptyError>
-{
+fn rewrite_args_leaves_args_untouched_when_no_stripped_options_configured() {
     let mut registry = IntegrationRegistry::with_builtins();
     registry.push(
-        validated_config(CliIntegrationConfig {
+        validated_config(CliSecretProviderConfig {
             binary_name: String::from("foo"),
             provider_id: String::from("test"),
             credential_env_vars: vec![],
             stripped_options: vec![],
             forbidden_options: vec![],
-            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
-                command: command(&["secret", "get"], CommandMatch::Prefix)?,
+            matchers: vec![CliMatcherRuleConfig::SensitiveCommand {
+                argv: args(&["secret", "get"]),
+                match_kind: CommandMatch::Prefix,
                 matcher: SecretMatcher::Json {
                     record_path: String::from("$[*]"),
                     value_path: String::from("$.value"),
@@ -1152,7 +1147,7 @@ fn rewrite_args_leaves_args_untouched_when_no_stripped_options_configured() -> R
                 },
                 stripped_options: vec![],
                 append_options: vec![],
-            })],
+            }],
         })
         .unwrap_or_else(|error| panic!("valid CLI integration config: {error}")),
     );
@@ -1160,7 +1155,6 @@ fn rewrite_args_leaves_args_untouched_when_no_stripped_options_configured() -> R
 
     let rewritten = spec.rewrite_args(&args(&["secret", "get", "some-id"]));
     assert_eq!(rewritten, args(&["secret", "get", "some-id"]));
-    Ok(())
 }
 
 /// Builds a registry with one custom sensitive command, for pinning
@@ -1172,14 +1166,15 @@ fn registry_with_stripped_options(
     append_options: Vec<String>,
 ) -> Result<IntegrationRegistry, Box<dyn std::error::Error>> {
     let mut registry = IntegrationRegistry::with_builtins();
-    registry.push(validated_config(CliIntegrationConfig {
+    registry.push(validated_config(CliSecretProviderConfig {
         binary_name: String::from("foo"),
         provider_id: String::from("test"),
         credential_env_vars: vec![],
         stripped_options: vec![],
         forbidden_options: vec![],
-        matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
-            command: command(command_words, CommandMatch::Prefix)?,
+        matchers: vec![CliMatcherRuleConfig::SensitiveCommand {
+            argv: args(command_words),
+            match_kind: CommandMatch::Prefix,
             matcher: SecretMatcher::Json {
                 record_path: String::from("$[*]"),
                 value_path: String::from("$.value"),
@@ -1191,7 +1186,7 @@ fn registry_with_stripped_options(
             },
             stripped_options,
             append_options,
-        })],
+        }],
     })?);
     Ok(registry)
 }

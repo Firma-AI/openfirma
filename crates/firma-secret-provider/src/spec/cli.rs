@@ -1,3 +1,6 @@
+use firma_config_schema::secret_provider::cli::{
+    CliMatcherRuleConfig, CliSecretProviderConfig, CommandMatch, FlagSpec,
+};
 use firma_core::SecretMatcher;
 
 use super::{MatcherRule, MatchingResolution, NonEmptyVec};
@@ -5,113 +8,26 @@ use super::{MatcherRule, MatchingResolution, NonEmptyVec};
 /// A command-classification rule for a CLI secret provider.
 pub type CliMatcherRule<Matcher> = MatcherRule<CommandAndMatcher<Matcher>, CommandPattern>;
 
-/// A command-line option that a CLI integration needs to recognize.
-///
-/// ```toml
-/// { name = "--format", takes_value = true }
-/// { name = "--offline", takes_value = false }
-/// { name = "-u", takes_value = true, allow_attached_value = true }
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FlagSpec {
-    /// The option's spelling, such as `--server-url` or `-u`.
-    pub name: String,
-    /// Whether the option consumes the following argument as its value.
-    pub takes_value: bool,
-    /// Whether the spelling accepts an attached value without `=`, such as
-    /// `-uhttps://example.com`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_attached_value: bool,
-}
-
-impl FlagSpec {
-    /// Creates a specification for an option whose value is a separate
-    /// argument or follows `=`.
-    #[must_use]
-    pub fn value(name: &str) -> Self {
-        Self {
-            name: String::from(name),
-            takes_value: true,
-            allow_attached_value: false,
-        }
-    }
-
-    /// Creates a specification for an option that takes no value.
-    #[must_use]
-    pub fn valueless(name: &str) -> Self {
-        Self {
-            name: String::from(name),
-            takes_value: false,
-            allow_attached_value: false,
-        }
-    }
-
-    /// Creates a specification for an option that also accepts a value
-    /// attached directly to its name.
-    #[must_use]
-    pub fn attached_value(name: &str) -> Self {
-        Self {
-            name: String::from(name),
-            takes_value: true,
-            allow_attached_value: true,
-        }
-    }
-}
-
-/// Whether a command pattern permits trailing positional arguments.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandMatch {
-    /// Only the listed command words may occur. Options may be interspersed.
-    Exact,
-    /// Additional positional arguments may follow the listed command words.
-    #[default]
-    Prefix,
-}
-
-/// Deserializable configuration for a CLI secret-provider integration.
-///
-/// Convert this plain representation into [`CliIntegrationSpec`] to validate
-/// relationships between its option policies before use.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CliIntegrationConfig {
-    /// Executable basename used to select this integration.
-    pub binary_name: String,
-    /// Stable identifier recorded for secrets from this integration.
-    pub provider_id: String,
-    /// Environment variables forwarded to authenticate the provider CLI.
-    pub credential_env_vars: Vec<String>,
-    /// Options ignored while identifying command words. Their value arity is
-    /// honored, and the options remain unchanged in the executed command.
-    #[serde(default)]
-    pub stripped_options: Vec<FlagSpec>,
-    /// Options that make an otherwise permitted invocation unsafe. An
-    /// invocation containing one is blocked rather than silently changed.
-    #[serde(default)]
-    pub forbidden_options: Vec<FlagSpec>,
-    /// Rules that classify invocations and configure secret extraction.
-    pub matchers: Vec<CliMatcherRule<SecretMatcher>>,
-}
-
 /// A CLI integration configuration that has passed cross-field validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CliIntegrationSpec<Matcher> {
-    pub(crate) binary_name: String,
-    pub(crate) provider_id: String,
-    pub(crate) credential_env_vars: Vec<String>,
-    pub(crate) stripped_options: Vec<FlagSpec>,
-    pub(crate) forbidden_options: Vec<FlagSpec>,
-    pub(crate) matchers: Vec<CliMatcherRule<Matcher>>,
+    pub binary_name: String,
+    pub provider_id: String,
+    pub credential_env_vars: Vec<String>,
+    pub stripped_options: Vec<FlagSpec>,
+    pub forbidden_options: Vec<FlagSpec>,
+    pub matchers: Vec<CliMatcherRule<Matcher>>,
 }
 
-/// Error returned when validating a [`CliIntegrationConfig`].
+/// Error returned when validating a [`CliSecretProviderConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CliIntegrationConfigError {
     /// An option has no spelling.
     #[error("option name must not be empty")]
     EmptyOptionName,
+    /// A command has no args.
+    #[error("argv name must not be empty")]
+    EmptyArgv,
     /// An option permits an attached value but does not take a value.
     #[error("option `{name}` sets allow_attached_value but does not take a value")]
     AttachedValueWithoutValue {
@@ -126,20 +42,19 @@ pub enum CliIntegrationConfigError {
     },
 }
 
-impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec<SecretMatcher> {
+impl TryFrom<CliSecretProviderConfig> for CliIntegrationSpec<SecretMatcher> {
     type Error = CliIntegrationConfigError;
 
-    fn try_from(config: CliIntegrationConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: CliSecretProviderConfig) -> Result<Self, Self::Error> {
         validate_consistent_options(&config.stripped_options)?;
         validate_consistent_options(&config.forbidden_options)?;
-        let command_options = config
-            .matchers
-            .iter()
-            .filter_map(|matcher| match matcher {
-                MatcherRule::SensitiveCommand(rule) => Some(rule),
-                MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
-            })
-            .flat_map(|rule| &rule.stripped_options);
+        let command_options = config.matchers.iter().flat_map(|matcher| match matcher {
+            CliMatcherRuleConfig::SensitiveCommand {
+                stripped_options, ..
+            } => stripped_options.as_slice(),
+            CliMatcherRuleConfig::SafeCommand { .. }
+            | CliMatcherRuleConfig::BlockedCommand { .. } => &[],
+        });
         for option in config
             .stripped_options
             .iter()
@@ -156,14 +71,16 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec<SecretMatcher> {
             }
         }
 
-        for rule in config.matchers.iter().filter_map(|matcher| match matcher {
-            MatcherRule::SensitiveCommand(rule) => Some(rule),
-            MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
+        for stripped_options in config.matchers.iter().filter_map(|matcher| match matcher {
+            CliMatcherRuleConfig::SensitiveCommand {
+                stripped_options, ..
+            } => Some(stripped_options),
+            CliMatcherRuleConfig::SafeCommand { .. }
+            | CliMatcherRuleConfig::BlockedCommand { .. } => None,
         }) {
-            validate_consistent_options(&rule.stripped_options)?;
+            validate_consistent_options(stripped_options)?;
             for integration_option in &config.stripped_options {
-                if rule
-                    .stripped_options
+                if stripped_options
                     .iter()
                     .filter(|option| option.name == integration_option.name)
                     .any(|command_option| command_option != integration_option)
@@ -181,9 +98,53 @@ impl TryFrom<CliIntegrationConfig> for CliIntegrationSpec<SecretMatcher> {
             credential_env_vars: config.credential_env_vars,
             stripped_options: config.stripped_options,
             forbidden_options: config.forbidden_options,
-            matchers: config.matchers,
+            matchers: config
+                .matchers
+                .into_iter()
+                .map(MatcherRule::try_from)
+                .collect::<Result<_, _>>()?,
         })
     }
+}
+
+impl TryFrom<CliMatcherRuleConfig> for CliMatcherRule<SecretMatcher> {
+    type Error = CliIntegrationConfigError;
+
+    fn try_from(value: CliMatcherRuleConfig) -> Result<Self, Self::Error> {
+        match value {
+            CliMatcherRuleConfig::SensitiveCommand {
+                argv,
+                match_kind,
+                matcher,
+                stripped_options,
+                append_options,
+            } => Ok(Self::SensitiveCommand(CommandAndMatcher {
+                command: CommandPattern {
+                    argv: non_empty_vec(argv)?,
+                    match_kind,
+                },
+                matcher,
+                stripped_options,
+                append_options,
+            })),
+            CliMatcherRuleConfig::SafeCommand { argv, match_kind } => {
+                Ok(Self::SafeCommand(CommandPattern {
+                    argv: non_empty_vec(argv)?,
+                    match_kind,
+                }))
+            }
+            CliMatcherRuleConfig::BlockedCommand { argv, match_kind } => {
+                Ok(Self::BlockedCommand(CommandPattern {
+                    argv: non_empty_vec(argv)?,
+                    match_kind,
+                }))
+            }
+        }
+    }
+}
+
+fn non_empty_vec(vec: Vec<String>) -> Result<NonEmptyVec<String>, CliIntegrationConfigError> {
+    NonEmptyVec::new(vec).map_err(|_| CliIntegrationConfigError::EmptyArgv)
 }
 
 fn validate_consistent_options(options: &[FlagSpec]) -> Result<(), CliIntegrationConfigError> {

@@ -20,5 +20,6 @@ pub mod broker;
 pub mod gateway;
 pub mod run;
 pub mod secret_matcher;
+pub mod secret_provider;
 pub mod sidecar;
 pub mod utils;

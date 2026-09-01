@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use crate::{secret_provider::SecretProviderPatch, utils::NonZeroDuration};
 
 /// Sandbox backend selected for a Run profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

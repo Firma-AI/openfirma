@@ -15,8 +15,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use firma_config_loader::{AgentProfile, CONFIG_FILE_NAME};
+use firma_core::SecretNameSource;
 use firma_http::{Authority, Method};
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
+use firma_secret_provider::MatcherRule;
+use firma_secret_provider::spec::http::{HttpIntegrationSpec, PathAndMatcher};
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
 use firma_sidecar::normalizer::{MappingTable, MatchResult};
 use tempfile::TempDir;
@@ -148,14 +151,31 @@ fn missing_template_writes_minimal_config() {
         .get("interceptor")
         .and_then(|v| v.as_table())
         .expect("interceptor table");
-    assert_eq!(
-        interceptor.get("mode").and_then(|v| v.as_str()),
-        Some("unix_socket")
-    );
-    assert_eq!(
-        interceptor.get("socket_path").and_then(|v| v.as_str()),
-        Some(sock.display().to_string()).as_deref()
-    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("unix_socket")
+        );
+        assert_eq!(
+            interceptor.get("socket_path").and_then(|v| v.as_str()),
+            Some(sock.display().to_string()).as_deref()
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("http_proxy")
+        );
+        assert!(
+            interceptor
+                .get("listen_addr")
+                .and_then(|v| v.as_str())
+                .is_some(),
+            "windows minimal config must have a listen_addr for http_proxy"
+        );
+    }
     let mapping = sidecar
         .get("mapping")
         .and_then(|v| v.as_table())
@@ -243,14 +263,24 @@ paths = ["/etc/firma/cap.toml"]
         .get("interceptor")
         .and_then(|v| v.as_table())
         .expect("interceptor");
-    assert_eq!(
-        interceptor.get("mode").and_then(|v| v.as_str()),
-        Some("unix_socket")
-    );
-    assert_eq!(
-        interceptor.get("socket_path").and_then(|v| v.as_str()),
-        Some(sock.display().to_string()).as_deref()
-    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("unix_socket")
+        );
+        assert_eq!(
+            interceptor.get("socket_path").and_then(|v| v.as_str()),
+            Some(sock.display().to_string()).as_deref()
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("http_proxy")
+        );
+    }
     // listen_addr from template preserved verbatim — sidecar validator
     // tolerates extra keys, and this proves we did not wipe the table.
     assert_eq!(
@@ -591,18 +621,21 @@ fn http_secret_providers_are_mirrored_into_sidecar_config_and_load_back() {
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
 
-    let provider = firma_secret_provider::HttpIntegrationSpec {
+    let provider = HttpIntegrationSpec {
         provider_id: "aws-secrets-manager".to_string(),
         host: "secretsmanager.*.amazonaws.com".to_string(),
-        path: None,
-        matcher: firma_core::SecretMatcher::Json {
-            value_path: "$.SecretString".to_string(),
-            name_path: "$.Name".to_string(),
-            item_path: None,
-            domain_path: None,
-            domain_is_url: false,
-        },
-        placeholder_template: "firma-secret://aws/{name}".to_string(),
+        matchers: vec![MatcherRule::SensitiveCommand(PathAndMatcher {
+            path: None,
+            matcher: firma_core::SecretMatcher::Json {
+                record_path: "$".to_string(),
+                value_path: "$.SecretString".to_string(),
+                name: SecretNameSource::Path {
+                    path: "$.Name".to_string(),
+                },
+                item_selector: None,
+                domain_selector: None,
+            },
+        })],
     };
 
     synthesize(SynthesizeRequest {
@@ -619,14 +652,13 @@ fn http_secret_providers_are_mirrored_into_sidecar_config_and_load_back() {
     // top level *is* the sidecar config, not one wrapped in `[sidecar]`.
     let value = read(&out);
     let sidecar_section = value.get("sidecar").expect("sidecar section").clone();
-    let loaded: firma_sidecar::config::SidecarConfig = sidecar_section
+    let loaded: firma_config_schema::sidecar::SidecarConfig = sidecar_section
         .try_into()
         .expect("synthesized sidecar section must load");
     assert_eq!(loaded.http_secret_providers.len(), 1);
     let spec = &loaded.http_secret_providers[0];
     assert_eq!(spec.provider_id, "aws-secrets-manager");
     assert_eq!(spec.host, "secretsmanager.*.amazonaws.com");
-    assert_eq!(spec.placeholder_template, "firma-secret://aws/{name}");
 }
 
 #[test]
