@@ -72,9 +72,7 @@ fn capability(source: CapabilitySource, public_key_path: Option<PathBuf>) -> Cap
     CapabilityLeaseConfig {
         source,
         public_key_path,
-        refresh_ratio: 0.60,
-        grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+        ..super::helper::default_lease()
     }
 }
 

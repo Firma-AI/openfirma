@@ -12,7 +12,8 @@ use firma_protobuf::v1::{
 };
 use firma_run::capability::approval_wait::{
     ApprovalWaitPolicy, BackoffSample, FailureClass, FailureKind, MAX_POLL_DELAY, MIN_POLL_DELAY,
-    OutcomeDecodeError, OutcomeMessage, RawToken, RpcFailure,
+    OutcomeDecodeError, OutcomeMessage, PollError, RawToken, RpcFailure, SleepOutcome, WaitError,
+    drive_wait,
 };
 use pretty_assertions::assert_eq;
 
@@ -314,4 +315,193 @@ fn malformed_responses_fail_closed_with_a_typed_error() {
         }),
     }))));
     assert_eq!(garbled.unwrap_err(), OutcomeDecodeError::TokenNotUtf8);
+}
+
+/// Test harness for [`drive_wait`]: scripted polls, recorded sleeps, a
+/// manually advanced clock, zero jitter.
+struct Loop {
+    responses: std::collections::VecDeque<Result<OutcomeMessage, PollError>>,
+    slept: Vec<Duration>,
+    clock: DateTime<Utc>,
+    stop_after_sleeps: Option<usize>,
+}
+
+impl Loop {
+    fn new(responses: Vec<Result<OutcomeMessage, PollError>>) -> Self {
+        Self {
+            responses: responses.into(),
+            slept: Vec::new(),
+            clock: t(0),
+            stop_after_sleeps: None,
+        }
+    }
+
+    fn run(
+        &mut self,
+        policy: &ApprovalWaitPolicy,
+        deadline: DateTime<Utc>,
+    ) -> Result<RawToken, WaitError> {
+        use std::cell::{Cell, RefCell};
+
+        let mut responses = std::mem::take(&mut self.responses);
+        let slept: RefCell<Vec<Duration>> = RefCell::new(Vec::new());
+        let clock = Cell::new(self.clock);
+        let stop_after = self.stop_after_sleeps;
+        let result = {
+            let mut poll = || {
+                responses.pop_front().unwrap_or_else(|| {
+                    Err(PollError::Rpc(RpcFailure::transport("script exhausted")))
+                })
+            };
+            let mut sleep = |delay: Duration| {
+                slept.borrow_mut().push(delay);
+                // The fake clock advances by exactly the slept delay.
+                clock.set(clock.get() + chrono::Duration::from_std(delay).unwrap_or_default());
+                if stop_after.is_some_and(|n| slept.borrow().len() >= n) {
+                    SleepOutcome::Stopped
+                } else {
+                    SleepOutcome::Slept
+                }
+            };
+            let mut now = || clock.get();
+            let mut jitter = || 0.0;
+            drive_wait(
+                policy,
+                deadline,
+                &mut poll,
+                &mut sleep,
+                &mut now,
+                &mut jitter,
+            )
+        };
+        self.slept = slept.into_inner();
+        self.clock = clock.get();
+        result
+    }
+}
+
+fn pending(retry_secs: u64) -> OutcomeMessage {
+    OutcomeMessage::Pending {
+        expires_at: None,
+        retry_after: Some(Duration::from_secs(retry_secs)),
+    }
+}
+
+fn granted(token: &str) -> OutcomeMessage {
+    OutcomeMessage::Granted {
+        raw_token: RawToken::new(token.to_string()),
+    }
+}
+
+fn failure(kind_status: tonic::Status) -> Result<OutcomeMessage, PollError> {
+    Err(PollError::Rpc(RpcFailure::from(kind_status)))
+}
+
+#[test]
+fn loop_waits_through_pending_and_returns_the_grant() {
+    let mut harness = Loop::new(vec![
+        Ok(pending(2)),
+        Ok(pending(2)),
+        Ok(granted("v4.public.tok")),
+    ]);
+    let token = harness.run(&policy(5), t(600)).expect("granted");
+    assert_eq!(token, RawToken::new("v4.public.tok".to_string()));
+    assert_eq!(harness.slept, vec![Duration::from_secs(2); 2]);
+}
+
+#[test]
+fn loop_tightens_deadline_from_a_pending_expiry() {
+    // The server answers pending with an expiry 3s away; the local deadline
+    // was 600s. The 5s advisory would sleep past the tightened deadline, so
+    // the wait ends immediately, without even sleeping.
+    let mut harness = Loop::new(vec![Ok(OutcomeMessage::Pending {
+        expires_at: Some(t(3)),
+        retry_after: Some(Duration::from_secs(5)),
+    })]);
+    let error = harness.run(&policy(5), t(600)).unwrap_err();
+    assert!(matches!(error, WaitError::DeadlineReached));
+    assert!(harness.slept.is_empty());
+}
+
+#[test]
+fn loop_retries_transient_failures_with_growing_backoff() {
+    let mut harness = Loop::new(vec![
+        failure(tonic::Status::unavailable("down")),
+        failure(tonic::Status::unavailable("down")),
+        Ok(granted("v4.public.tok")),
+    ]);
+    harness
+        .run(&policy(2), t(600))
+        .expect("granted after retries");
+    // Backoff doubles per consecutive failure: 2s*2, then 2s*4.
+    assert_eq!(
+        harness.slept,
+        vec![Duration::from_secs(4), Duration::from_secs(8)]
+    );
+}
+
+#[test]
+fn loop_doubles_the_delay_when_throttled() {
+    let mut harness = Loop::new(vec![
+        failure(tonic::Status::resource_exhausted("slow down")),
+        Ok(granted("v4.public.tok")),
+    ]);
+    harness.run(&policy(5), t(600)).expect("granted");
+    assert_eq!(harness.slept, vec![Duration::from_secs(10)]);
+}
+
+#[test]
+fn loop_stops_at_once_on_a_permanent_failure() {
+    let mut harness = Loop::new(vec![failure(tonic::Status::not_found("nope"))]);
+    let err = harness
+        .run(&policy(5), t(600))
+        .expect_err("permanent stops");
+    assert!(matches!(
+        err,
+        WaitError::Failure(RpcFailure {
+            kind: FailureKind::NotFound,
+            ..
+        })
+    ));
+    assert!(
+        harness.slept.is_empty(),
+        "no sleep after a permanent failure"
+    );
+}
+
+#[test]
+fn loop_enforces_the_local_deadline_even_if_the_server_keeps_pending() {
+    // Defense in depth: the server answers pending forever; the local clock
+    // must end the wait on its own.
+    let mut harness = Loop::new((0..100).map(|_| Ok(pending(30))).collect());
+    let err = harness
+        .run(&policy(5), t(70))
+        .expect_err("deadline must win");
+    assert_eq!(err, WaitError::DeadlineReached);
+    assert!(
+        harness.slept.len() < 5,
+        "the wait must stop within the deadline budget, slept {:?}",
+        harness.slept
+    );
+}
+
+#[test]
+fn loop_reports_cancellation_from_the_sleeper() {
+    let mut harness = Loop::new(vec![
+        Ok(pending(2)),
+        Ok(pending(2)),
+        Ok(granted("v4.public.tok")),
+    ]);
+    harness.stop_after_sleeps = Some(1);
+    let err = harness.run(&policy(5), t(600)).expect_err("stopped");
+    assert_eq!(err, WaitError::Stopped);
+}
+
+#[test]
+fn loop_treats_undecodable_responses_as_terminal() {
+    let mut harness = Loop::new(vec![Err(PollError::Decode(
+        OutcomeDecodeError::MissingOutcome,
+    ))]);
+    let err = harness.run(&policy(5), t(600)).expect_err("decode stops");
+    assert_eq!(err, WaitError::Decode(OutcomeDecodeError::MissingOutcome));
 }

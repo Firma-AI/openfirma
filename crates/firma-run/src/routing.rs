@@ -737,6 +737,7 @@ fn mint_capability_seed(
         // generates its own fresh id per renewal cycle instead of reusing
         // this one (see `capability::refresh`).
         issuance_attempt_id: uuid::Uuid::new_v4(),
+        approval_wait: capability_lease.approval_wait_policy(),
     };
     let seed = crate::capability::issue::mint_and_write_seed(&params, capability_seed_path)?;
 
@@ -1876,6 +1877,8 @@ mod non_structural_env_tests {
             refresh_ratio: 0.60,
             grace: Duration::from_secs(30),
             requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+            approval_poll_interval: Duration::from_secs(5),
+            approval_max_wait: None,
         }
     }
 

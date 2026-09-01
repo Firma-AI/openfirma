@@ -118,6 +118,17 @@ pub enum RunError {
         approval_url: String,
     },
 
+    #[error("an operator denied capability approval '{approval_id}'")]
+    CapabilityApprovalDenied { approval_id: String },
+
+    #[error(
+        "capability approval '{approval_id}' expired before an operator decided; run again to open a new request"
+    )]
+    CapabilityApprovalExpired { approval_id: String },
+
+    #[error("capability approval '{approval_id}' can no longer be granted: {reason}")]
+    CapabilityApprovalRefused { approval_id: String, reason: String },
+
     #[error("authority rejected unregistered agent '{agent_id}': {message}")]
     AgentNotRegistered { agent_id: String, message: String },
 

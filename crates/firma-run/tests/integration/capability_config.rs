@@ -184,3 +184,42 @@ fn omitted_verification_key_preserves_existing_behavior() {
 
     assert_eq!(resolved.capability.public_key_path, None);
 }
+
+#[test]
+fn approval_wait_knobs_parse_merge_and_resolve() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join(firma_config_loader::CONFIG_FILE_NAME);
+    fs_err::write(
+        &config_path,
+        r#"
+[run.defaults.capability]
+approval_poll_interval = "10s"
+
+[run.profiles.codex.capability]
+approval_max_wait = "2m"
+"#,
+    )
+    .expect("write config");
+
+    let resolved = resolve_profile(&run_input(&config_path)).expect("resolve profile");
+    let policy = resolved.capability.approval_wait_policy();
+
+    assert_eq!(policy.poll_interval, Duration::from_secs(10));
+    assert_eq!(policy.max_wait, Some(Duration::from_mins(2)));
+}
+
+#[test]
+fn approval_wait_knobs_default_when_absent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join(firma_config_loader::CONFIG_FILE_NAME);
+    fs_err::write(&config_path, "[run]\n").expect("write config");
+
+    let resolved = resolve_profile(&run_input(&config_path)).expect("resolve profile");
+    let policy = resolved.capability.approval_wait_policy();
+
+    assert_eq!(policy.poll_interval, Duration::from_secs(5));
+    assert_eq!(
+        policy.max_wait, None,
+        "absent means wait until the server expiry"
+    );
+}

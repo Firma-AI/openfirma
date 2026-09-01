@@ -21,6 +21,19 @@ fn paseto_from_wire_token(
     String::from_utf8(token.signature)
 }
 
+/// Decodes a wire timestamp into a UTC instant, rejecting malformed values.
+///
+/// Negative nanos (or an unrepresentable instant) yield `None` instead of
+/// being reinterpreted as a different point in time — the one invariant
+/// shared by every timestamp this module reads off the wire.
+fn datetime_from_wire_timestamp(
+    timestamp: prost_types::Timestamp,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    u32::try_from(timestamp.nanos)
+        .ok()
+        .and_then(|nanos| chrono::DateTime::from_timestamp(timestamp.seconds, nanos))
+}
+
 /// Read the operator-supplied capability token for a `firma run` session.
 ///
 /// Only [`CapabilitySource::File`] carries a bring-your-own token; the token is

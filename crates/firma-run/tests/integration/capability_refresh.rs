@@ -19,18 +19,13 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 
+use firma_run::capability::approval_wait::ApprovalWaitPolicy;
 use firma_run::capability::issue::IssueParams;
 use firma_run::capability::refresh::CapabilityRefresher;
-use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
+use firma_run::config::CapabilityLeaseConfig;
 
 fn lease() -> CapabilityLeaseConfig {
-    CapabilityLeaseConfig {
-        source: CapabilitySource::Disabled,
-        public_key_path: None,
-        refresh_ratio: 0.60,
-        grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-    }
+    super::helper::default_lease()
 }
 
 /// `IssueParams` pointing at a dead Authority with a missing public-key file.
@@ -48,6 +43,7 @@ fn dead_params() -> IssueParams {
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
         issuance_attempt_id: uuid::Uuid::new_v4(),
+        approval_wait: ApprovalWaitPolicy::default(),
     }
 }
 

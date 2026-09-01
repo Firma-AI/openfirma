@@ -163,6 +163,15 @@ pub struct CapabilityLeasePatch {
     pub grace: Option<Duration>,
     #[serde(default)]
     pub requested_actions: Option<Vec<String>>,
+    /// Delay between approval-outcome polls when the Authority sends no
+    /// advisory `retry_after`. Defaults to the server's own default advisory
+    /// (5 seconds).
+    #[serde(default)]
+    pub approval_poll_interval: Option<NonZeroDuration>,
+    /// Local cap on how long a run waits for a human approval. Absent means
+    /// waiting until the server-side approval deadline.
+    #[serde(default)]
+    pub approval_max_wait: Option<NonZeroDuration>,
 }
 
 /// Per-executable CLI argument policy patch.

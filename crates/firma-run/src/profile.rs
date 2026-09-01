@@ -78,6 +78,8 @@ fn generic_profile() -> ProfilePatch {
             refresh_ratio: Some(0.60),
             grace: Some(Duration::from_secs(30)),
             requested_actions: None,
+            approval_poll_interval: None,
+            approval_max_wait: None,
         }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),

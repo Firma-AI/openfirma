@@ -820,7 +820,11 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
-    use std::time::Duration;
+
+    /// Disabled-source lease with production defaults.
+    fn disabled_lease() -> CapabilityLeaseConfig {
+        CapabilityLeaseConfig::disabled()
+    }
 
     use firma_config_loader::CONFIG_FILE_NAME;
 
@@ -889,13 +893,7 @@ mod tests {
                 fail_closed: true,
             },
             identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::Disabled,
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
+            capability: disabled_lease(),
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
@@ -959,10 +957,7 @@ mod tests {
                 source: CapabilitySource::File {
                     path: token_path.clone(),
                 },
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+                ..disabled_lease()
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -1010,13 +1005,7 @@ mod tests {
                 fail_closed: true,
             },
             identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::Disabled,
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
+            capability: disabled_lease(),
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
@@ -1078,13 +1067,7 @@ mod tests {
                 fail_closed: true,
             },
             identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::Disabled,
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
+            capability: disabled_lease(),
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
@@ -1177,13 +1160,7 @@ mod tests {
                 fail_closed: true,
             },
             identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::Disabled,
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
+            capability: disabled_lease(),
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
@@ -1246,13 +1223,7 @@ mod tests {
                 fail_closed: true,
             },
             identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::Disabled,
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
+            capability: disabled_lease(),
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: true,
@@ -1291,13 +1262,7 @@ mod tests {
                 fail_closed: true,
             },
             identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::Disabled,
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
+            capability: disabled_lease(),
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
@@ -1363,13 +1328,7 @@ mod tests {
                 fail_closed: true,
             },
             identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::Disabled,
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
+            capability: disabled_lease(),
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
