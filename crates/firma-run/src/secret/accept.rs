@@ -1,48 +1,51 @@
 //! Broker accept loop.
 //!
-//! Accepts shim connections from [`broker::BrokerListener`] and serves each
-//! one via [`serve::serve_request`]. Each connection is handled synchronously
-//! (one thread per connection is spawned by the caller if parallelism is
-//! needed). A binary only ever reaches this loop because it matched a
-//! configured secret-provider entry (that's why the shim was installed over
-//! it), so there is no separate decision to make here — every launch is
-//! mediated.
+//! Accepts shim connections from [`BrokerListener`] and serves each
+//! one via [`serve::serve_request`]. Each connection is handled
+//! synchronously in the accept loop; callers that need parallelism should
+//! spawn this future per listener or wrap the loop with `tokio::spawn`.
+//! A binary only ever reaches this loop because it matched a configured
+//! secret-provider entry (that's why the shim was installed over it), so
+//! there is no separate decision to make here — every launch is mediated
+//! through the integration's `resolve_args` classification.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
+use firma_core::SecretMatcher;
+use firma_secret_provider::{
+    broker::server::BrokerListener, spec::cli::CliIntegrationSpec, store::SecretStore,
+};
+use tokio::sync::RwLock;
 
-use firma_secret_provider::CliIntegrationSpec;
-
-use super::SecretStore;
-use super::broker::{BrokerListener, BrokerRequest};
 use super::serve::serve_request;
 
 /// Accept and serve shim connections until the listener is closed.
 ///
 /// `spec_for(bin)` looks up the integration spec for the binary and is shared
-/// across threads. Per-connection errors are logged and do not stop the
-/// loop; the loop ends when `accept_one` fails (typically when the listener
-/// is dropped).
-pub fn serve_forever<S>(
+/// across tasks. Per-connection handler errors are mapped to
+/// `BrokerResponse::Rejected`; only transport-level `accept_one` errors stop
+/// the loop (typically when the listener is dropped).
+pub async fn serve_forever<S>(
     listener: BrokerListener,
-    store: Arc<ArcSwap<SecretStore>>,
+    store: Arc<RwLock<SecretStore>>,
     spec_for: Arc<S>,
     real_bin_dir: Option<Arc<Path>>,
 ) where
-    S: Fn(&str) -> Option<CliIntegrationSpec> + Send + Sync + 'static,
+    S: Fn(&str) -> Option<CliIntegrationSpec<SecretMatcher>> + Send + Sync + 'static,
 {
     loop {
         let store = Arc::clone(&store);
         let spec_for = Arc::clone(&spec_for);
         let real_bin_dir = real_bin_dir.clone();
 
-        let result = listener.accept_one(|request: BrokerRequest| {
-            let spec = spec_for(&request.bin);
-            let dir = real_bin_dir.as_deref();
-            serve_request(&request, spec.as_ref(), &store, dir)
-        });
+        let result = listener
+            .accept_one(async |request| {
+                let spec = spec_for(&request.bin);
+                let dir = real_bin_dir.as_deref();
+                serve_request(&request, spec.as_ref(), &store, dir).await
+            })
+            .await;
 
         match result {
             Ok(()) => {}
@@ -57,57 +60,117 @@ pub fn serve_forever<S>(
 
 #[cfg(test)]
 mod tests {
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::{SocketAddr, TcpStream};
-    use std::thread;
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use super::*;
-    use crate::config::CommandMediatorEndpoint;
-    use crate::secret::broker::BrokerResponse;
+    use firma_config_schema::broker::BrokerConfig;
+    use firma_secret_provider::{endpoint::server::ServerEndpoint, store::SecretStore};
+    use tokio::sync::RwLock;
 
-    fn bind_tcp() -> (BrokerListener, SocketAddr) {
-        let endpoint = CommandMediatorEndpoint::Tcp {
-            addr: "127.0.0.1:0".parse().expect("valid addr"),
-        };
-        let listener = BrokerListener::bind(&endpoint).expect("bind");
-        let CommandMediatorEndpoint::Tcp { addr } =
-            listener.bound_endpoint().expect("bound_endpoint")
-        else {
-            panic!("TCP listener must return TCP endpoint");
+    use super::serve_forever;
+    use firma_secret_provider::broker::server::BrokerListener;
+
+    async fn bind_tcp() -> (BrokerListener, std::net::SocketAddr) {
+        let endpoint = ServerEndpoint::from_str("tcp://127.0.0.1:0").expect("valid endpoint");
+        let config = BrokerConfig::default();
+        let listener = BrokerListener::bind(&endpoint, config).await.expect("bind");
+        let bound = listener.bound_endpoint().expect("bound");
+        let firma_secret_provider::endpoint::EndpointInner::Tcp(addr) = bound else {
+            panic!("expected tcp")
         };
         (listener, addr)
     }
 
-    fn call(addr: SocketAddr, bin: &str, args: &str) -> BrokerResponse {
-        let mut stream = TcpStream::connect(addr).expect("connect");
-        let payload = serde_json::to_string(&crate::secret::broker::BrokerRequest {
-            bin: bin.to_string(),
-            args: args.to_string(),
-        })
-        .expect("serialize");
-        stream
-            .write_all(format!("{payload}\n").as_bytes())
-            .expect("write");
-        stream.flush().expect("flush");
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read");
-        serde_json::from_str(line.trim()).expect("deserialize")
+    #[tokio::test]
+    async fn echo_end_to_end() {
+        let (listener, addr) = bind_tcp().await;
+        let store = Arc::new(RwLock::new(SecretStore::new()));
+
+        let server = tokio::spawn(serve_forever(
+            listener,
+            Arc::clone(&store),
+            Arc::new(|_bin: &str| None),
+            None,
+        ));
+
+        // Give the listener a moment to start
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let client_endpoint = firma_secret_provider::endpoint::client::ClientEndpoint::from_str(
+            &format!("tcp://{addr}"),
+        )
+        .expect("valid client endpoint");
+        let client = firma_secret_provider::broker::client::BrokerClient::new(
+            client_endpoint,
+            BrokerConfig::default(),
+        );
+        let output = client
+            .run("echo", &["hello", "from", "broker"])
+            .await
+            .expect("run");
+        let stdout: Vec<u8> = output
+            .output
+            .into_iter()
+            .filter_map(|c| match c {
+                firma_secret_provider::broker::BrokerOutputChunk::Stdout(b) => Some(b),
+                firma_secret_provider::broker::BrokerOutputChunk::Stderr(_) => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(stdout, b"hello from broker\n");
+
+        // Dropping the server task stops the listener
+        server.abort();
     }
 
-    #[test]
-    fn echo_end_to_end() {
-        let (listener, addr) = bind_tcp();
-        let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
+    #[tokio::test]
+    async fn blocked_command_is_rejected() {
+        use firma_config_schema::secret_provider::cli::FlagSpec;
+        use firma_secret_provider::spec::cli::CliIntegrationSpec;
 
-        let server = thread::spawn(move || {
-            serve_forever(listener, store, Arc::new(|_bin: &str| None), None);
-        });
-
-        let response = call(addr, "echo", "hello from broker");
-        let stdout = response.into_stdout().expect("ok response");
-        assert_eq!(stdout.trim_ascii_end(), b"hello from broker");
-
-        drop(server);
+        let spec = CliIntegrationSpec {
+            binary_name: "bws".to_string(),
+            provider_id: "bitwarden".to_string(),
+            credential_env_vars: vec!["BWS_ACCESS_TOKEN".to_string()],
+            stripped_options: vec![],
+            forbidden_options: vec![FlagSpec::value("--server-url")],
+            matchers: vec![],
+        };
+        let (listener, addr) = bind_tcp().await;
+        let store = Arc::new(RwLock::new(SecretStore::new()));
+        let spec_clone = spec.clone();
+        let server = tokio::spawn(serve_forever(
+            listener,
+            Arc::clone(&store),
+            Arc::new(move |bin: &str| {
+                if bin == "bws" {
+                    Some(spec_clone.clone())
+                } else {
+                    None
+                }
+            }),
+            None,
+        ));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let client_endpoint = firma_secret_provider::endpoint::client::ClientEndpoint::from_str(
+            &format!("tcp://{addr}"),
+        )
+        .expect("valid");
+        let client = firma_secret_provider::broker::client::BrokerClient::new(
+            client_endpoint,
+            BrokerConfig::default(),
+        );
+        let result = client
+            .run(
+                "bws",
+                &["secret", "get", "x", "--server-url", "https://evil"],
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(firma_secret_provider::broker::client::error::BrokerClientError::Rejected(_))
+        ));
+        server.abort();
     }
 }
