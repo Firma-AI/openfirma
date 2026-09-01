@@ -42,7 +42,7 @@ fn dead_params() -> IssueParams {
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
-        issuance_attempt_id: uuid::Uuid::new_v4(),
+        issuance_attempt_id: firma_run::capability::issue::IssuanceAttemptId::generate(),
         approval_wait: ApprovalWaitPolicy::default(),
     }
 }

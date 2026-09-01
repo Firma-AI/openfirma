@@ -21,6 +21,19 @@ fn paseto_from_wire_token(
     String::from_utf8(token.signature)
 }
 
+/// Sleeps up to `wait` on a stop channel; `true` means stop was requested.
+///
+/// The one reading of the refresher's stop protocol: a received signal or a
+/// disconnected sender both mean "stop now", only a timeout means the full
+/// wait elapsed.
+fn stop_requested(stop_rx: &std::sync::mpsc::Receiver<()>, wait: std::time::Duration) -> bool {
+    use std::sync::mpsc::RecvTimeoutError;
+    match stop_rx.recv_timeout(wait) {
+        Ok(()) | Err(RecvTimeoutError::Disconnected) => true,
+        Err(RecvTimeoutError::Timeout) => false,
+    }
+}
+
 /// Decodes a wire timestamp into a UTC instant, rejecting malformed values.
 ///
 /// Negative nanos (or an unrepresentable instant) yield `None` instead of

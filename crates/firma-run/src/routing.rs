@@ -736,7 +736,7 @@ fn mint_capability_seed(
         // One id for this issuance cycle (the initial mint). The refresher
         // generates its own fresh id per renewal cycle instead of reusing
         // this one (see `capability::refresh`).
-        issuance_attempt_id: uuid::Uuid::new_v4(),
+        issuance_attempt_id: crate::capability::issue::IssuanceAttemptId::generate(),
         approval_wait: capability_lease.approval_wait_policy(),
     };
     let seed = crate::capability::issue::mint_and_write_seed(&params, capability_seed_path)?;

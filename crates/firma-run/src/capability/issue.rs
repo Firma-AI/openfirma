@@ -10,6 +10,7 @@
 // M-PANIC-IS-STOP: no unwrap/expect/panic outside tests.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -34,6 +35,29 @@ use super::approval_wait::{
     drive_wait,
 };
 use crate::error::RunError;
+
+/// Client-chosen idempotency key for one logical issuance cycle.
+///
+/// A newtype rather than a bare `Uuid`: the key carries rotation rules of
+/// its own (one per cycle, reused across that cycle's retries, rotated on
+/// success or on a decided approval) and must not be confusable with any
+/// other identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IssuanceAttemptId(Uuid);
+
+impl IssuanceAttemptId {
+    /// Generates a fresh attempt id for a new issuance cycle.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl std::fmt::Display for IssuanceAttemptId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
 
 /// Inputs for a single capability mint.
 #[derive(Debug, Clone)]
@@ -63,7 +87,7 @@ pub struct IssueParams {
     /// Authority replays the approval it already opened instead of opening
     /// a second one under HITL. The caller decides the cycle boundary and
     /// generates the id; this type never generates one on its own.
-    pub issuance_attempt_id: Uuid,
+    pub issuance_attempt_id: IssuanceAttemptId,
     /// Resolved HITL waiting policy: how the mint polls for the outcome
     /// when issuance is gated on a human approval. Resolved once from
     /// configuration; this module never reads config itself.
@@ -124,7 +148,7 @@ fn rpc_timeout_reason(rpc_name: &str) -> String {
 /// - [`RunError::CapabilityPendingApproval`] when issuance requires human approval.
 /// - [`RunError::Capability`] on verification, encoding, or file-write failure.
 pub fn mint_and_write(params: &IssueParams, out_path: &Path) -> Result<PathBuf, RunError> {
-    let seed = mint(params)?;
+    let seed = mint(params, WaitMode::Startup)?;
     write_seed(&seed, out_path)?;
     Ok(out_path.to_path_buf())
 }
@@ -135,16 +159,66 @@ pub fn mint_and_write(params: &IssueParams, out_path: &Path) -> Result<PathBuf, 
 /// # Errors
 ///
 /// Same failure modes as [`mint_and_write`].
+#[cfg(unix)]
 pub(crate) fn mint_and_write_seed(
     params: &IssueParams,
     out_path: &Path,
 ) -> Result<CapabilitySeed, RunError> {
-    let seed = mint(params)?;
+    let seed = mint(params, WaitMode::Startup)?;
     write_seed(&seed, out_path)?;
     Ok(seed)
 }
 
-fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
+/// Mint a capability seed from the background refresher, write it
+/// atomically, and return it.
+///
+/// Same flow as [`mint_and_write_seed`], but a pending approval waits with
+/// the refresher's semantics: the sleep listens on the refresher's stop
+/// channel (so dropping the refresher cancels the wait promptly instead of
+/// stalling teardown until the approval deadline), and the wait never
+/// outlives the current lease — past `lease_deadline` the cycle gives up
+/// and the caller retries on its own schedule.
+///
+/// # Errors
+///
+/// Same failure modes as [`mint_and_write`], plus
+/// [`RunError::CapabilityApprovalInterrupted`] when the stop channel fires
+/// mid-wait.
+pub(crate) fn mint_and_write_seed_for_refresh(
+    params: &IssueParams,
+    out_path: &Path,
+    stop_rx: &Receiver<()>,
+    lease_deadline: DateTime<Utc>,
+) -> Result<CapabilitySeed, RunError> {
+    let seed = mint(
+        params,
+        WaitMode::Refresh {
+            stop_rx,
+            lease_deadline,
+        },
+    )?;
+    write_seed(&seed, out_path)?;
+    Ok(seed)
+}
+
+/// How a pending approval is waited on, per call site.
+#[derive(Debug, Clone, Copy)]
+enum WaitMode<'a> {
+    /// Pre-stack startup wait: plain `thread::sleep`, no cancellation
+    /// channel (Ctrl-C kills the process, fail closed, no seed written).
+    Startup,
+    /// Background refresher wait: the sleep listens on the refresher's stop
+    /// channel and the wait is capped by the current lease.
+    Refresh {
+        /// Fires (or disconnects) when the refresher is dropped.
+        stop_rx: &'a Receiver<()>,
+        /// End of the current lease: waiting past it is pointless, the
+        /// sidecar is already denying on the expired token.
+        lease_deadline: DateTime<Utc>,
+    },
+}
+
+fn mint(params: &IssueParams, wait_mode: WaitMode<'_>) -> Result<CapabilitySeed, RunError> {
     let pub_key = std::fs::read(&params.authority_pub_key_path).map_err(|e| {
         RunError::Capability(format!(
             "read authority public key '{}': {e}",
@@ -231,9 +305,14 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
 
     match capability_seed_from_response(response, params, &verifier)? {
         Minted::Seed(seed) => Ok(seed),
-        Minted::Pending(pending) => {
-            wait_for_outcome(&runtime, &mut client, params, &verifier, &pending)
-        }
+        Minted::Pending(pending) => wait_for_outcome(
+            &runtime,
+            &mut client,
+            params,
+            &verifier,
+            &pending,
+            wait_mode,
+        ),
     }
 }
 
@@ -363,9 +442,13 @@ fn wait_for_outcome(
     params: &IssueParams,
     verifier: &PasetoV4Verifier,
     pending: &PendingIssuance,
+    wait_mode: WaitMode<'_>,
 ) -> Result<CapabilitySeed, RunError> {
     let policy = params.approval_wait;
-    let deadline = policy.deadline(Utc::now(), pending.expiry);
+    let mut deadline = policy.deadline(Utc::now(), pending.expiry);
+    if let WaitMode::Refresh { lease_deadline, .. } = wait_mode {
+        deadline = deadline.min(lease_deadline);
+    }
     announce_pending_wait(pending, deadline);
     tracing::info!(
         approval_id = %pending.id,
@@ -397,11 +480,22 @@ fn wait_for_outcome(
             }
         }
     };
-    // Pre-stack there is no cancellation channel: Ctrl-C kills the process
-    // (fail closed, no seed written), so the sleeper always reports Slept.
-    let sleep = |delay: std::time::Duration| {
-        std::thread::sleep(delay);
-        SleepOutcome::Slept
+    // Startup has no cancellation channel: Ctrl-C kills the process (fail
+    // closed, no seed written) and the sleeper always reports Slept. The
+    // refresher instead sleeps on its stop channel, so dropping it cancels
+    // the wait promptly.
+    let sleep: Box<dyn FnMut(std::time::Duration) -> SleepOutcome> = match wait_mode {
+        WaitMode::Startup => Box::new(|delay| {
+            std::thread::sleep(delay);
+            SleepOutcome::Slept
+        }),
+        WaitMode::Refresh { stop_rx, .. } => Box::new(move |delay| {
+            if super::stop_requested(stop_rx, delay) {
+                SleepOutcome::Stopped
+            } else {
+                SleepOutcome::Slept
+            }
+        }),
     };
     let now = Utc::now;
     // Seeded from the wall clock: the jitter only de-synchronizes pollers,
@@ -472,9 +566,7 @@ fn wait_error_to_run_error(
         WaitError::Decode(decode) => {
             RunError::Capability(format!("approval outcome response is malformed: {decode}"))
         }
-        WaitError::Stopped => {
-            RunError::Capability("approval wait was cancelled before an outcome".to_string())
-        }
+        WaitError::Stopped => RunError::CapabilityApprovalInterrupted,
         WaitError::Failure(failure) => {
             use super::approval_wait::FailureKind as Fk;
             match failure.kind {

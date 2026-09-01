@@ -73,6 +73,9 @@ struct MockAuthority {
     approval_script: Arc<Mutex<VecDeque<ApprovalOutcomeStep>>>,
     /// How many `GetApprovalOutcome` calls arrived, for ordering asserts.
     outcome_calls: Arc<Mutex<u32>>,
+    /// Every `issuance_attempt_id` seen on `IssueCapability`, in order.
+    /// `None` records a request where the optional wire field was absent.
+    seen_attempt_ids: Arc<Mutex<Vec<Option<String>>>>,
     /// Answer `IssueCapability` pending with an already-past expiry.
     pending_expiry_past: bool,
 }
@@ -160,6 +163,10 @@ impl AuthorityService for MockAuthority {
             .lock()
             .expect("capture lock")
             .push(req.agent_id.clone());
+        self.seen_attempt_ids
+            .lock()
+            .expect("capture lock")
+            .push(req.issuance_attempt_id.clone());
         if let Some((reason, message)) = self.denial {
             return Ok(Response::new(IssueCapabilityResponse {
                 granted: false,
@@ -271,6 +278,7 @@ pub struct MockServer {
     handle: Option<std::thread::JoinHandle<()>>,
     pub seen_agent_ids: Arc<Mutex<Vec<String>>>,
     pub outcome_calls: Arc<Mutex<u32>>,
+    pub seen_attempt_ids: Arc<Mutex<Vec<Option<String>>>>,
     _dir: tempfile::TempDir,
 }
 
@@ -323,6 +331,8 @@ pub fn start_authority_scripted(
     let server_script = Arc::clone(&approval_script);
     let outcome_calls = Arc::new(Mutex::new(0_u32));
     let server_outcome_calls = Arc::clone(&outcome_calls);
+    let seen_attempt_ids = Arc::new(Mutex::new(Vec::new()));
+    let server_seen_attempt_ids = Arc::clone(&seen_attempt_ids);
 
     // Reserve a loopback port, then hand its address to the server.
     let addr: SocketAddr = std::net::TcpListener::bind("127.0.0.1:0")
@@ -345,6 +355,7 @@ pub fn start_authority_scripted(
                 seen_agent_ids: server_seen_agent_ids,
                 approval_script: server_script,
                 outcome_calls: server_outcome_calls,
+                seen_attempt_ids: server_seen_attempt_ids,
                 pending_expiry_past,
             });
             tonic::transport::Server::builder()
@@ -371,6 +382,7 @@ pub fn start_authority_scripted(
         handle: Some(handle),
         seen_agent_ids,
         outcome_calls,
+        seen_attempt_ids,
         _dir: dir,
     }
 }
@@ -386,7 +398,7 @@ fn params(server: &MockServer) -> IssueParams {
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
-        issuance_attempt_id: uuid::Uuid::new_v4(),
+        issuance_attempt_id: firma_run::capability::issue::IssuanceAttemptId::generate(),
         approval_wait: ApprovalWaitPolicy::default(),
     }
 }
@@ -410,7 +422,7 @@ async fn real_authority_token_mints_compatible_seed() {
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
-        issuance_attempt_id: uuid::Uuid::new_v4(),
+        issuance_attempt_id: firma_run::capability::issue::IssuanceAttemptId::generate(),
         approval_wait: ApprovalWaitPolicy::default(),
     };
     let mint_path = seed_path.clone();
@@ -855,6 +867,167 @@ fn unknown_denial_reason_retains_generic_fallback() {
         firma_run::error::RunError::CapabilityDenied { reason, message, .. }
             if reason == "SOMETHING_NEW" && message == "future denial"
     ));
+}
+
+#[test]
+fn refresher_waits_for_a_pending_approval_and_rewrites_the_seed() {
+    // The renewal answers PENDING_APPROVAL; the refresher must wait for the
+    // grant inside the same cycle (one IssueCapability call), then rewrite
+    // the seed with the retrieved token.
+    let server = start_authority_scripted(
+        MockTokenKind::PendingApproval,
+        None,
+        VecDeque::from([
+            ApprovalOutcomeStep::Pending {
+                retry_after_secs: 1,
+            },
+            ApprovalOutcomeStep::Granted,
+        ]),
+        false,
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+    std::fs::write(&seed_path, "placeholder\n").expect("write placeholder");
+
+    // Lease far enough away that the HITL wait fits inside it.
+    let initial_expiry = Utc::now() + chrono::Duration::seconds(90);
+    let mut lease = super::helper::default_lease();
+    lease.grace = Duration::from_secs(89);
+    let refresher = CapabilityRefresher::spawn(params(&server), &seed_path, initial_expiry, &lease)
+        .expect("spawn refresher");
+
+    let token_id = wait_for_reminted_token(&seed_path);
+    assert!(token_id.to_string().starts_with("ctok_"));
+    assert_eq!(
+        server.seen_agent_ids.lock().expect("capture").len(),
+        1,
+        "the pending wait must not reopen the issuance"
+    );
+    assert_eq!(
+        *server.outcome_calls.lock().expect("calls"),
+        2,
+        "one pending poll plus the granted one"
+    );
+    drop(refresher);
+}
+
+#[test]
+fn refresher_reuses_the_attempt_id_across_cycle_retries() {
+    // First attempt of the cycle: pending, then a permanent but undecided
+    // failure (server error) ends the wait. The approval is still open, so
+    // the backoff retry of the same cycle must present the same
+    // issuance_attempt_id and let the Authority replay it — a decided
+    // outcome would rotate instead (covered by the rotation test below).
+    let server = start_authority_scripted(
+        MockTokenKind::PendingApproval,
+        None,
+        VecDeque::from([
+            ApprovalOutcomeStep::Fail(tonic::Code::Internal),
+            ApprovalOutcomeStep::Granted,
+        ]),
+        false,
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+    std::fs::write(&seed_path, "placeholder\n").expect("write placeholder");
+
+    let initial_expiry = Utc::now() + chrono::Duration::seconds(90);
+    let mut lease = super::helper::default_lease();
+    lease.grace = Duration::from_secs(89);
+    let refresher = CapabilityRefresher::spawn(params(&server), &seed_path, initial_expiry, &lease)
+        .expect("spawn refresher");
+
+    let _token = wait_for_reminted_token(&seed_path);
+    let attempts = server.seen_attempt_ids.lock().expect("capture").clone();
+    assert_eq!(
+        attempts.len(),
+        2,
+        "the failed wait must be retried with a second IssueCapability"
+    );
+    assert_eq!(
+        attempts[0], attempts[1],
+        "both attempts of the same cycle must carry the same attempt id"
+    );
+    assert!(attempts[0].is_some(), "the attempt id must be on the wire");
+    drop(refresher);
+}
+
+#[test]
+fn refresher_rotates_the_attempt_id_after_a_decided_approval() {
+    // First cycle: the operator denies. Replaying that cycle's id could
+    // only re-fetch the same refusal, so the retry must open a NEW
+    // approval with a fresh attempt id — even though the lease is alive.
+    let server = start_authority_scripted(
+        MockTokenKind::PendingApproval,
+        None,
+        VecDeque::from([ApprovalOutcomeStep::Denied, ApprovalOutcomeStep::Granted]),
+        false,
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+    std::fs::write(&seed_path, "placeholder\n").expect("write placeholder");
+
+    let initial_expiry = Utc::now() + chrono::Duration::seconds(90);
+    let mut lease = super::helper::default_lease();
+    lease.grace = Duration::from_secs(89);
+    let refresher = CapabilityRefresher::spawn(params(&server), &seed_path, initial_expiry, &lease)
+        .expect("spawn refresher");
+
+    let _token = wait_for_reminted_token(&seed_path);
+    let attempts = server.seen_attempt_ids.lock().expect("capture").clone();
+    assert_eq!(attempts.len(), 2, "the denied cycle must be retried");
+    assert_ne!(
+        attempts[0], attempts[1],
+        "a decided approval must rotate the attempt id"
+    );
+    drop(refresher);
+}
+
+#[test]
+fn dropping_the_refresher_cancels_a_pending_wait() {
+    // The approval never resolves; dropping the refresher mid-wait must
+    // cancel promptly (the sleeper listens on the stop channel) instead of
+    // stalling until the approval deadline, and must leave no seed behind.
+    let server = start_authority_scripted(
+        MockTokenKind::PendingApproval,
+        None,
+        VecDeque::from(vec![
+            ApprovalOutcomeStep::Pending {
+                retry_after_secs: 1,
+            };
+            60
+        ]),
+        false,
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+    std::fs::write(&seed_path, "placeholder\n").expect("write placeholder");
+
+    let initial_expiry = Utc::now() + chrono::Duration::seconds(90);
+    let mut lease = super::helper::default_lease();
+    lease.grace = Duration::from_secs(89);
+    let refresher = CapabilityRefresher::spawn(params(&server), &seed_path, initial_expiry, &lease)
+        .expect("spawn refresher");
+
+    // Let the refresher enter the wait (at least one outcome poll).
+    let poll_deadline = Instant::now() + Duration::from_secs(6);
+    while *server.outcome_calls.lock().expect("calls") == 0 {
+        assert!(
+            Instant::now() < poll_deadline,
+            "the refresher never started polling the outcome"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let drop_started = Instant::now();
+    drop(refresher);
+    assert!(
+        drop_started.elapsed() < Duration::from_secs(5),
+        "dropping the refresher must cancel the wait promptly, took {:?}",
+        drop_started.elapsed()
+    );
+    let body = std::fs::read_to_string(&seed_path).expect("read seed");
+    assert_eq!(body, "placeholder\n", "no seed may be written mid-wait");
 }
 
 /// Poll `seed_path` until it holds a parseable, re-minted seed; return its

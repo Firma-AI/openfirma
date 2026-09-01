@@ -140,6 +140,9 @@ pub enum RunError {
     #[error("the Authority does not support approval retrieval yet; upgrade it or retry later")]
     CapabilityApprovalUnsupported,
 
+    #[error("the approval wait was interrupted before an outcome")]
+    CapabilityApprovalInterrupted,
+
     #[error("authority rejected unregistered agent '{agent_id}': {message}")]
     AgentNotRegistered { agent_id: String, message: String },
 
