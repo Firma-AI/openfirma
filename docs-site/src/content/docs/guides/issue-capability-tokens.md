@@ -177,6 +177,40 @@ Compact expired revocations periodically:
 firma authority --config .firma/firma.toml revocations compact
 ```
 
+## Human-in-the-loop approvals
+
+An Authority can gate issuance on a human decision (Firma Team's HITL flow).
+When it does, `IssueCapability` answers `PENDING_APPROVAL` and `firma run`
+does not exit: it prints the approval id, its URL, and the waiting deadline
+on stderr, then polls the Authority until an operator decides.
+
+```text
+[INFO] approval required: request <approval id>
+       approve at: <approval url>
+       waiting until <deadline> (Ctrl-C to abort)
+```
+
+On a grant, the released token goes through the same local verification as
+an immediate grant before the seed touches disk and the session starts. A
+denied or expired request stops the run with a dedicated error and no token
+— fail closed, as everywhere else.
+
+Two profile settings tune the wait:
+
+```toml
+[run.profiles.<name>.capability]
+# Delay between polls when the Authority sends no advisory. Default: 5s.
+approval_poll_interval = "5s"
+# Local cap on the total wait. Absent: wait until the server-side deadline.
+approval_max_wait = "10m"
+```
+
+The background refresher follows the same flow when a renewal needs an
+approval, bounded by the current token's lifetime: an approval that is not
+granted before the token expires simply leaves the Sidecar denying (fail
+closed) until a later renewal succeeds. Pressing Ctrl-C during the startup
+wait aborts the run; no token is written.
+
 ## Common errors
 
 **`TokenInvalid`.** Check that the requested action and resource are covered,
