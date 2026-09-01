@@ -227,16 +227,16 @@ firma monitor --state-dir /var/run/firma \
 
 `monitor` flags:
 
-| Flag             | Default  | Description                                              |
-| ---------------- | -------- | -------------------------------------------------------- |
-| `--config`       | _unset_  | Does not participate in state-directory resolution.      |
-| `--state-dir`    | resolved | State dir override.                                      |
-| `--source`       | `audit`  | `audit`, `authority`, `sidecar`, or `all`.               |
-| `--no-follow`    | _off_    | Read once and exit; default is to follow tail.           |
-| `--decision`     | _unset_  | Audit-only: `allow`, `deny`, `passthrough`.              |
-| `--action-class` | _unset_  | Audit-only: exact match on `intent.action_class`.        |
-| `--since`        | _unset_  | Backfill window: `15m`, `2h`, `1d` or RFC3339 timestamp. |
-| `--format`       | `pretty` | `pretty` (human) or `json` (one object per line).        |
+| Flag             | Env             | Default    | Description                                                                                          |
+| ---------------- | --------------- | ---------- | --------------------------------------------------------------------------------------------------- |
+| `--config`       | `FIRMA_CONFIG`  | discovered | Unified `firma.toml` used to discover the audit log. When set, the file must load or `monitor` fails closed; it is not consulted once `--state-dir` is given. |
+| `--state-dir`    | `FIRMA_STATE_DIR` | resolved | State dir override.                                                                                 |
+| `--source`       | —               | `audit`     | `audit`, `authority`, `sidecar`, or `all`.               |
+| `--no-follow`    | —               | _off_       | Read once and exit; default is to follow tail.           |
+| `--decision`     | —               | _unset_     | Audit-only: `allow`, `deny`, `passthrough`.              |
+| `--action-class` | —               | _unset_     | Audit-only: exact match on `intent.action_class`.        |
+| `--since`        | —               | _unset_     | Backfill window: `15m`, `2h`, `1d` or RFC3339 timestamp. |
+| `--format`       | —               | `pretty`    | `pretty` (human) or `json` (one object per line).        |
 
 `--decision` and `--action-class` apply to audit events only — they
 are silently ignored for `authority` and `sidecar` log lines. The
@@ -249,6 +249,11 @@ tailer detects log rotation by inode and reopens automatically.
 ```bash
 firma control --config .firma/firma.toml
 ```
+
+`--config` is bound to `FIRMA_CONFIG`; when omitted it follows the shared
+[configuration resolution](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md#configuration-resolution)
+model (`FIRMA_CONFIG`, then the nearest `.firma/firma.toml`). A selected file
+that cannot load fails closed.
 
 The policy pane reads Cedar files from the Authority policy directory in
 `firma.toml`. Any policy with an `@id(...)` annotation is shown as a row:
