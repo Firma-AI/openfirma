@@ -7,11 +7,6 @@ use firma_identifiers::TokenId;
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    /// Path to the Authority TOML config (issuer identity, key paths, bundle dir,
-    /// listen address). When unset, falls back to platform discovery.
-    #[arg(short, long)]
-    pub config: Option<PathBuf>,
-
     /// Internal path for writing the one-shot startup report.
     #[arg(long, hide = true)]
     pub startup_report: Option<PathBuf>,

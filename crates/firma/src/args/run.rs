@@ -22,11 +22,6 @@ pub struct RunArgs {
     #[arg(long)]
     pub profile: Option<String>,
 
-    /// Path to a runtime config file (`.toml`, `.yaml`, `.yml`) layered on top
-    /// of the selected profile.
-    #[arg(long)]
-    pub config: Option<PathBuf>,
-
     /// Force a specific sandbox backend instead of the profile's default.
     #[arg(long)]
     pub backend: Option<BackendOverride>,
@@ -66,8 +61,7 @@ pub struct RunArgs {
     pub no_autostart: bool,
 
     /// Optional sidecar config template path for the autostarted sidecar.
-    /// Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then `./firma_sidecar.toml`,
-    /// then a synthesized minimal config.
+    /// Falls back to `./firma_sidecar.toml`, then a synthesized minimal config.
     #[arg(long)]
     pub sidecar_config: Option<PathBuf>,
 

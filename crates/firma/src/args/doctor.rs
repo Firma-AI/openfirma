@@ -6,8 +6,7 @@ use clap::Args as ClapArgs;
 
 /// Parsed `firma doctor` arguments.
 ///
-/// `--config` is the unified `firma.toml`. It's optional; when unset,
-/// `doctor` resolves it via the standard config discovery precedence.
+/// The unified `firma.toml` is selected by the global `--config` / `FIRMA_CONFIG`.
 ///
 /// `--state-dir` overrides the resolved state directory.
 ///
@@ -18,10 +17,6 @@ use clap::Args as ClapArgs;
 /// already report unreachable as a structured `FAIL`, not a hang.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    /// Path to the unified `firma.toml`. When unset, resolved via standard
-    /// config discovery (`FIRMA_CONFIG` / nearest `.firma/firma.toml`).
-    #[arg(long, env = "FIRMA_CONFIG")]
-    pub config: Option<PathBuf>,
     /// Override the runtime state directory inspected for pid files, sockets,
     /// and component logs.
     #[arg(long, env = "FIRMA_STATE_DIR")]
@@ -55,7 +50,6 @@ mod tests {
     #[test]
     fn defaults_parse() {
         let args = try_parse(&["firma-doctor"]).expect("parse default");
-        assert!(args.config.is_none());
         assert!(args.state_dir.is_none());
         assert!(!args.json);
         assert_eq!(args.timeout_ms, 500);

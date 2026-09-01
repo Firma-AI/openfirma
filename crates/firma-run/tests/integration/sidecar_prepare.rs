@@ -21,7 +21,6 @@ fn request(
         session_id: "prepared-session",
         marker_dir,
         template_path: None,
-        env_template: None,
         cwd_template: None,
         firma_exe: "/bin/false".into(),
         authority_url: Some("http://127.0.0.1:50051"),

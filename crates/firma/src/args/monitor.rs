@@ -13,10 +13,6 @@ use clap::{Args as ClapArgs, ValueEnum};
 )]
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    /// Unified `firma.toml` used to discover the audit log. When unset,
-    /// resolved via `FIRMA_CONFIG` or the nearest `.firma/firma.toml`.
-    #[arg(long, env = "FIRMA_CONFIG")]
-    pub config: Option<PathBuf>,
     /// Override the runtime state directory containing the audit log and
     /// component log files.
     #[arg(long, env = "FIRMA_STATE_DIR")]

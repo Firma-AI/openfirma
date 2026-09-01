@@ -35,23 +35,23 @@ use crate::{
 ///
 /// Propagates config/startup/runtime errors from the server path, or
 /// rendering/probe errors from the status path.
-pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
+pub async fn run(args: Args, config: Option<&Path>) -> anyhow::Result<ExitCode> {
     match args.command {
         Some(SidecarCommand::Status(ref status)) => crate::services::sidecar_status::run(status),
-        Some(SidecarCommand::Start(start)) => Ok(run_start(start)),
+        Some(SidecarCommand::Start(start)) => Ok(run_start(start, config)),
         Some(SidecarCommand::Stop(stop)) => Ok(run_stop(stop)),
-        None => serve(args.serve).await,
+        None => serve(args.serve, config).await,
     }
 }
 
-fn run_start(args: StartArgs) -> ExitCode {
+fn run_start(args: StartArgs, config: Option<&Path>) -> ExitCode {
     info!(
         detach = args.detach,
-        config = ?args.config,
+        config = ?config,
         state_dir = ?args.state_dir,
         "firma sidecar start invoked"
     );
-    let cfg = match firma_stack::resolve_stack_config(args.config.as_deref()) {
+    let cfg = match firma_stack::resolve_stack_config(config) {
         Ok(cfg) => cfg,
         Err(error) => return fail(&format!("config: {error}")),
     };
@@ -194,13 +194,16 @@ fn build_request_handler(
     clippy::too_many_lines,
     reason = "startup sequencing stays linear so readiness ordering remains auditable"
 )]
-async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
+async fn serve(
+    args: crate::args::sidecar::ServeArgs,
+    config: Option<&Path>,
+) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
     let sandbox_id = propagated_sandbox_id()?;
     let runtime_layout = RuntimeLayout::resolve(None)?;
 
     let resolved = firma_config_loader::ConfigResolver::default()
-        .resolve_config(args.config.as_deref())?
+        .resolve_config(config)?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `sidecar`"))?;
     info!(
         path = %resolved.config_file().display(),
