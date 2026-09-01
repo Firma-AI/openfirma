@@ -1,3 +1,4 @@
+pub mod approval_wait;
 pub mod guard;
 pub mod issue;
 pub mod refresh;
@@ -6,6 +7,45 @@ use std::path::Path;
 
 use crate::config::CapabilitySource;
 use crate::error::RunError;
+
+/// Decodes the wire `CapabilityToken.signature` field into the raw PASETO
+/// token string.
+///
+/// The `signature` bytes carry the PASETO token as UTF-8 — the one wire
+/// convention shared by `IssueCapability` and `GetApprovalOutcome`. Both
+/// decoders call this so the convention is interpreted in exactly one
+/// place.
+fn paseto_from_wire_token(
+    token: firma_protobuf::v1::CapabilityToken,
+) -> Result<String, std::string::FromUtf8Error> {
+    String::from_utf8(token.signature)
+}
+
+/// Sleeps up to `wait` on a stop channel; `true` means stop was requested.
+///
+/// The one reading of the refresher's stop protocol: a received signal or a
+/// disconnected sender both mean "stop now", only a timeout means the full
+/// wait elapsed.
+fn stop_requested(stop_rx: &std::sync::mpsc::Receiver<()>, wait: std::time::Duration) -> bool {
+    use std::sync::mpsc::RecvTimeoutError;
+    match stop_rx.recv_timeout(wait) {
+        Ok(()) | Err(RecvTimeoutError::Disconnected) => true,
+        Err(RecvTimeoutError::Timeout) => false,
+    }
+}
+
+/// Decodes a wire timestamp into a UTC instant, rejecting malformed values.
+///
+/// Negative nanos (or an unrepresentable instant) yield `None` instead of
+/// being reinterpreted as a different point in time — the one invariant
+/// shared by every timestamp this module reads off the wire.
+fn datetime_from_wire_timestamp(
+    timestamp: prost_types::Timestamp,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    u32::try_from(timestamp.nanos)
+        .ok()
+        .and_then(|nanos| chrono::DateTime::from_timestamp(timestamp.seconds, nanos))
+}
 
 /// Read the operator-supplied capability token for a `firma run` session.
 ///

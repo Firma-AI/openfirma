@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
+use firma_run::capability::approval_wait::ApprovalWaitPolicy;
 use firma_run::capability::issue::{IssueParams, mint_and_write};
 
 fn params(authority_url: &str, pub_key_path: PathBuf) -> IssueParams {
@@ -31,6 +32,8 @@ fn params(authority_url: &str, pub_key_path: PathBuf) -> IssueParams {
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
+        issuance_attempt_id: firma_run::capability::issue::IssuanceAttemptId::generate(),
+        approval_wait: ApprovalWaitPolicy::default(),
     }
 }
 

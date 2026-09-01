@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::capability::approval_wait::ApprovalId;
+
 /// Error type used by `firma-run` runtime orchestration.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -114,9 +116,32 @@ pub enum RunError {
     )]
     CapabilityPendingApproval {
         agent_id: String,
-        approval_id: String,
+        approval_id: ApprovalId,
         approval_url: String,
     },
+
+    #[error("an operator denied capability approval '{approval_id}'")]
+    CapabilityApprovalDenied { approval_id: ApprovalId },
+
+    #[error(
+        "capability approval '{approval_id}' expired before an operator decided; run again to open a new request"
+    )]
+    CapabilityApprovalExpired { approval_id: ApprovalId },
+
+    #[error("capability approval '{approval_id}' can no longer be granted: {reason}")]
+    CapabilityApprovalRefused {
+        approval_id: ApprovalId,
+        reason: String,
+    },
+
+    #[error("approval '{approval_id}' was not found for this identity")]
+    CapabilityApprovalNotFound { approval_id: ApprovalId },
+
+    #[error("the Authority does not support approval retrieval yet; upgrade it or retry later")]
+    CapabilityApprovalUnsupported,
+
+    #[error("the approval wait was interrupted before an outcome")]
+    CapabilityApprovalInterrupted,
 
     #[error("authority rejected unregistered agent '{agent_id}': {message}")]
     AgentNotRegistered { agent_id: String, message: String },

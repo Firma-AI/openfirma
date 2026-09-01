@@ -6,5 +6,6 @@ mod config_masking;
 mod connector_failure;
 mod control_plane_runtime_isolation;
 mod deny_http_dispatch;
+mod hitl_approval_wait;
 mod policy_and_revocation_propagation;
 mod unclassified_intent;

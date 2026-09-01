@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use firma_run::backend::{BackendKind, EnforcementProof, NetworkConfinement, SandboxHandle};
-use firma_run::config::{CapabilityLeaseConfig, CapabilitySource, NetworkPolicy, SidecarEndpoint};
+use firma_run::config::{NetworkPolicy, SidecarEndpoint};
 use firma_run::error::RunError;
 use firma_run::routing::{
     AutostartFlags, NetworkRuntime, OwnedAuthorityPlan, ResolvedAuthority, prepare_network_runtime,
@@ -94,13 +94,7 @@ fn local_authority_publishes_effective_component_handle_and_metadata() {
         startup_timeout: Duration::from_secs(5),
         ..AutostartFlags::default()
     };
-    let capability = CapabilityLeaseConfig {
-        source: CapabilitySource::Disabled,
-        public_key_path: None,
-        refresh_ratio: 0.6,
-        grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-    };
+    let capability = super::helper::default_lease();
 
     let runtime_layout =
         firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout");
@@ -308,13 +302,7 @@ fn prepare_failing_runtime(
         startup_timeout: Duration::from_secs(5),
         ..AutostartFlags::default()
     };
-    let capability = CapabilityLeaseConfig {
-        source: CapabilitySource::Disabled,
-        public_key_path: None,
-        refresh_ratio: 0.6,
-        grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-    };
+    let capability = super::helper::default_lease();
     let runtime_layout =
         firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout");
     let marker = runtime_layout

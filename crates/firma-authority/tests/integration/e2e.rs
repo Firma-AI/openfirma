@@ -138,6 +138,7 @@ async fn issue_capability_e2e() {
         session_id: "test_session".to_string(),
         requested_ttl_seconds: 300,
         credentials: None,
+        issuance_attempt_id: None,
     };
 
     let response = client.issue_capability(request).await.expect("RPC failed");
@@ -163,6 +164,7 @@ async fn issue_capability_e2e() {
             session_id: "test_session".to_string(),
             requested_ttl_seconds: 300,
             credentials: None,
+            issuance_attempt_id: None,
         })
         .await
         .expect("RPC failed")
@@ -191,6 +193,7 @@ async fn custom_schema_action_is_issued() {
             session_id: "custom_schema_session".to_string(),
             requested_ttl_seconds: 300,
             credentials: None,
+            issuance_attempt_id: None,
         })
         .await
         .expect("RPC failed")
@@ -220,6 +223,7 @@ async fn action_absent_from_active_schema_aborts_partial_grant() {
             session_id: "unknown_action_session".to_string(),
             requested_ttl_seconds: 300,
             credentials: None,
+            issuance_attempt_id: None,
         })
         .await
         .expect("RPC failed")

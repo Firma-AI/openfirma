@@ -72,9 +72,7 @@ fn capability(source: CapabilitySource, public_key_path: Option<PathBuf>) -> Cap
     CapabilityLeaseConfig {
         source,
         public_key_path,
-        refresh_ratio: 0.60,
-        grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+        ..super::helper::default_lease()
     }
 }
 
@@ -282,6 +280,124 @@ fn autostart_with_effective_key_attempts_managed_capability_mint() {
     assert!(
         !marker_dir(&identity).join("sidecar.toml").exists(),
         "mint must happen before Sidecar synthesis"
+    );
+    remove_marker(&identity);
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_authority_completes_the_hitl_wait_before_the_stack() {
+    use std::collections::VecDeque;
+
+    use super::capability_mint::{ApprovalOutcomeStep, MockTokenKind, start_authority_scripted};
+
+    // Scripted remote Authority: pending once, then granted. The whole
+    // mint-and-wait must finish before the orchestrator ever runs — the
+    // failure this test then observes is the stack spawn (this test binary
+    // cannot become the Sidecar), never a capability error.
+    let server = start_authority_scripted(
+        MockTokenKind::PendingApproval,
+        None,
+        VecDeque::from([
+            ApprovalOutcomeStep::Pending {
+                retry_after_secs: 1,
+            },
+            ApprovalOutcomeStep::Granted,
+        ]),
+        false,
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
+    let handle = sandbox_handle(&identity, dir.path());
+    let mut remote = authority(Some(server.pub_key_path.clone()));
+    remote.url.clone_from(&server.url);
+    let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None).expect("layout");
+    let seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
+
+    let error = prepare_network_runtime(
+        &runtime_layout,
+        &handle,
+        &enforcement_proof(),
+        &SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:1".parse().expect("sidecar address"),
+        },
+        &identity,
+        &autostart_flags(None),
+        remote,
+        &capability(
+            CapabilitySource::Disabled,
+            Some(server.pub_key_path.clone()),
+        ),
+    )
+    .err()
+    .expect("test binary cannot autostart as the Sidecar");
+
+    assert!(
+        matches!(error, RunError::RunComponentOrchestration(_)),
+        "the wait must succeed pre-stack; the only failure left is the spawn, got: {error}"
+    );
+    assert_eq!(
+        *server.outcome_calls.lock().expect("calls"),
+        2,
+        "the pending poll and the granted poll both happen before the spawn"
+    );
+    assert!(
+        !seed_path.exists(),
+        "certain teardown after a pre-stack mint must clean the seed through the guard"
+    );
+    remove_marker(&identity);
+}
+
+#[cfg(unix)]
+#[test]
+fn spawn_failure_after_pre_stack_mint_cleans_the_seed() {
+    use super::capability_mint::{MockTokenKind, start_authority_scripted};
+
+    // Immediate ALLOW from the remote Authority: the seed is written
+    // pre-stack, the spawn fails, and the guard must remove the seed.
+    let server = start_authority_scripted(
+        MockTokenKind::Valid,
+        None,
+        std::collections::VecDeque::new(),
+        false,
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
+    let handle = sandbox_handle(&identity, dir.path());
+    let mut remote = authority(Some(server.pub_key_path.clone()));
+    remote.url.clone_from(&server.url);
+    let runtime_layout = firma_runtime_state::RuntimeLayout::resolve(None).expect("layout");
+    let seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
+
+    let error = prepare_network_runtime(
+        &runtime_layout,
+        &handle,
+        &enforcement_proof(),
+        &SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:1".parse().expect("sidecar address"),
+        },
+        &identity,
+        &autostart_flags(None),
+        remote,
+        &capability(
+            CapabilitySource::Disabled,
+            Some(server.pub_key_path.clone()),
+        ),
+    )
+    .err()
+    .expect("test binary cannot autostart as the Sidecar");
+
+    assert!(
+        matches!(error, RunError::RunComponentOrchestration(_)),
+        "the mint must succeed pre-stack, got: {error}"
+    );
+    assert!(
+        !server.seen_agent_ids.lock().expect("seen").is_empty(),
+        "IssueCapability must have been called before the spawn"
+    );
+    assert!(
+        !seed_path.exists(),
+        "the guard must remove the pre-stack seed on a certain teardown"
     );
     remove_marker(&identity);
 }

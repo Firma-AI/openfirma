@@ -5,6 +5,8 @@
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use firma_run::config::CapabilityLeaseConfig;
+
 use firma_authority::{AuthorityConfigBuilder, Server};
 use firma_config_schema::authority as authority_schema;
 use firma_identifiers::AgentId;
@@ -85,4 +87,10 @@ impl RealAuthority {
             .expect("join real Authority")
             .expect("run real Authority");
     }
+}
+
+/// A disabled-source lease with the production defaults, for tests that
+/// need a `CapabilityLeaseConfig` but do not exercise the lease itself.
+pub fn default_lease() -> CapabilityLeaseConfig {
+    CapabilityLeaseConfig::disabled()
 }

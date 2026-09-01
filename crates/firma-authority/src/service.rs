@@ -158,6 +158,28 @@ impl AuthorityService for AuthorityServiceImpl {
         }
     }
 
+    /// The Mini Authority never gates issuance on human approval: every
+    /// decision above is `Allow` or `Deny`, never `PENDING_APPROVAL`, so
+    /// there is never an approval outcome to retrieve. `UNIMPLEMENTED` is
+    /// the honest answer, not a placeholder — it tells a polling client
+    /// exactly what the design expects for a server that predates or never
+    /// carries HITL support.
+    async fn get_approval_outcome(
+        &self,
+        _request: TonicRequest<firma_protobuf::v1::GetApprovalOutcomeRequest>,
+    ) -> Result<Response<firma_protobuf::v1::GetApprovalOutcomeResponse>, Status> {
+        // A real client would only reach this if it were misconfigured to
+        // poll the Mini Authority for an approval it never opens; worth a
+        // loud signal, since IssueCapability's own responses never point a
+        // well-behaved client here.
+        tracing::warn!(
+            "get_approval_outcome called on the Mini Authority; it never gates issuance on human approval"
+        );
+        Err(Status::unimplemented(
+            "the Mini Authority does not gate issuance on human approval",
+        ))
+    }
+
     type WatchPolicyBundleStream =
         Pin<Box<dyn Stream<Item = Result<PolicyBundleUpdate, Status>> + Send>>;
 

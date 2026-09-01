@@ -70,6 +70,7 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+firma-protobuf = { workspace = true }
 firma-stack = { workspace = true }
 firma-test-helpers = { workspace = true }
 fs-err = { workspace = true }
@@ -79,6 +80,7 @@ hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
+prost-types = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
@@ -86,6 +88,8 @@ rustls = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true }
 wait-timeout = { workspace = true }
 wiremock = { workspace = true }
 

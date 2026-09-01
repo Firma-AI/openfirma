@@ -17,17 +17,27 @@
 //! capped backoff but never serves a stale token itself. While a refresh is
 //! outstanding the old token simply expires and the sidecar denies, exactly as
 //! it would without a refresher.
+//!
+//! Under HITL, a renewal may answer `PENDING_APPROVAL`. The refresher then
+//! waits for the outcome inside the same mint call, with two bounds of its
+//! own: the wait sleeps on the refresher's stop channel (dropping the
+//! refresher cancels it promptly, teardown never stalls until the approval
+//! deadline) and never outlives the current lease — past it, the token has
+//! expired anyway and the sidecar is already denying; a cycle can also end
+//! earlier on a permanent failure and retry within the same lease. One `issuance_attempt_id` per renewal
+//! cycle, reused across that cycle's backoff retries, keeps the Authority
+//! replaying the same approval instead of opening one per retry.
 
 // M-PANIC-IS-STOP: no unwrap/expect/panic outside tests.
 
 use std::path::Path;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use super::issue::{self, IssueParams};
+use super::issue::{self, IssuanceAttemptId, IssueParams};
 use crate::config::CapabilityLeaseConfig;
 use crate::error::RunError;
 
@@ -73,7 +83,7 @@ impl CapabilityRefresher {
             .name("firma-run-capability-refresh".to_string())
             .spawn(move || {
                 run_refresh_loop(
-                    &params,
+                    params,
                     &out_path,
                     initial_expiry,
                     refresh_ratio,
@@ -104,7 +114,7 @@ impl Drop for CapabilityRefresher {
 /// Refresh loop body. Returns when a stop signal is received (or the sender is
 /// dropped). Runs on the background thread.
 fn run_refresh_loop(
-    params: &IssueParams,
+    mut params: IssueParams,
     out_path: &Path,
     mut expiry: DateTime<Utc>,
     refresh_ratio: f64,
@@ -112,37 +122,74 @@ fn run_refresh_loop(
     stop_rx: &mpsc::Receiver<()>,
 ) {
     let mut backoff = BACKOFF_INITIAL;
+    // One attempt id per renewal cycle, minted lazily when the cycle's
+    // first attempt runs and cleared on success: every backoff retry of
+    // the same cycle reuses it, so the Authority replays the approval the
+    // cycle already opened instead of opening one per retry.
+    let mut cycle_attempt_id: Option<IssuanceAttemptId> = None;
     loop {
         // Floor the scheduled wait so a successful re-mint can never spin the
         // loop with zero delay (see `MIN_REFRESH_INTERVAL`).
         let wait = compute_wait(expiry, Utc::now(), refresh_ratio, grace).max(MIN_REFRESH_INTERVAL);
-        match stop_rx.recv_timeout(wait) {
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
-            Err(RecvTimeoutError::Timeout) => {}
+        if super::stop_requested(stop_rx, wait) {
+            return;
         }
 
-        match issue::mint_and_write_seed(params, out_path) {
+        // A lease that died while this loop slept (scheduled wait or
+        // backoff) invalidates the cycle: whatever approval the stale id
+        // pointed at is moot, so the new cycle opens fresh.
+        if Utc::now() >= expiry {
+            cycle_attempt_id = None;
+        }
+        params.issuance_attempt_id =
+            *cycle_attempt_id.get_or_insert_with(IssuanceAttemptId::generate);
+        // Under HITL the mint may wait for an operator; the wait sleeps on
+        // this refresher's stop channel and is capped by the current lease
+        // (`expiry`): a lease that runs out mid-wait ends the cycle, the
+        // sidecar keeps failing closed on the expired token, and the next
+        // cycle reopens with a fresh attempt id.
+        match issue::mint_and_write_seed_for_refresh(&params, out_path, stop_rx, expiry) {
             Ok(seed) => {
                 expiry = seed.expiry;
                 backoff = BACKOFF_INITIAL;
+                cycle_attempt_id = None;
                 tracing::info!(
                     token_id = %seed.token_id,
                     expiry = %seed.expiry,
                     "capability token refreshed before expiry"
                 );
             }
+            Err(RunError::CapabilityApprovalInterrupted) => return,
             Err(error) => {
+                let lease_ran_out = Utc::now() >= expiry;
+                // A decided approval (denied, expired, refused, not found)
+                // is terminal: replaying its id could only re-fetch the
+                // same refusal, so the next attempt opens a new approval.
+                // Transient failures keep the id — the whole point of the
+                // idempotency key is that a retry of the same cycle finds
+                // the approval the cycle already opened.
+                let approval_decided = matches!(
+                    error,
+                    RunError::CapabilityApprovalDenied { .. }
+                        | RunError::CapabilityApprovalExpired { .. }
+                        | RunError::CapabilityApprovalRefused { .. }
+                        | RunError::CapabilityApprovalNotFound { .. }
+                );
+                if lease_ran_out || approval_decided {
+                    cycle_attempt_id = None;
+                }
                 tracing::warn!(
                     %error,
+                    lease_ran_out,
+                    approval_decided,
                     "capability token refresh failed; retrying (token fails closed if it expires \
                      before a refresh succeeds)"
                 );
                 // Back off exponentially between retries: once past the refresh
                 // point `compute_wait` returns ~0 (floored to `MIN_REFRESH_INTERVAL`),
                 // so without this the retry cadence would stay at the 1s floor.
-                match stop_rx.recv_timeout(backoff) {
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
-                    Err(RecvTimeoutError::Timeout) => {}
+                if super::stop_requested(stop_rx, backoff) {
+                    return;
                 }
                 backoff = (backoff * 2).min(BACKOFF_MAX);
             }

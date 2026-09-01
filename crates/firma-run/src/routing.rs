@@ -701,6 +701,48 @@ fn start_loopback_guard(
     }
 }
 
+/// Whether this run manages its own capability seed: a bring-your-own
+/// capability file suppresses the mint, and without a verification key no
+/// minted token could be checked. The one gate shared by the pre-stack and
+/// in-factory mint sites.
+#[cfg(unix)]
+fn managed_mint_enabled(is_source_file: bool, authority: &ResolvedAuthority) -> bool {
+    !is_source_file && authority.pub_key_path.is_some()
+}
+
+/// Creates the seed-file guard, then mints (waiting for a HITL approval
+/// when required) and spawns the refresher.
+///
+/// The guard exists before the mint on purpose: a failed or interrupted
+/// mint drops it and no partial seed survives on disk. One helper for both
+/// call sites — pre-stack (remote Authority) and in-factory (owned
+/// Authority) — so the guard-before-mint invariant lives in exactly one
+/// place.
+///
+/// # Errors
+///
+/// Propagates every [`mint_capability_seed`] failure; the guard created
+/// here is dropped on the way out, removing any partial seed.
+#[cfg(unix)]
+fn mint_with_guard(
+    identity: &RunIdentity,
+    capability_seed_path: &Path,
+    authority: &ResolvedAuthority,
+    capability_lease: &CapabilityLeaseConfig,
+) -> Result<
+    (
+        crate::capability::guard::CapabilityFileGuard,
+        CapabilityRefresher,
+    ),
+    RunError,
+> {
+    let guard =
+        crate::capability::guard::CapabilityFileGuard::new(capability_seed_path.to_path_buf());
+    let refresher =
+        mint_capability_seed(identity, capability_seed_path, authority, capability_lease)?;
+    Ok((guard, refresher))
+}
+
 /// Mint the per-session capability seed at `capability_seed_path` and spawn the
 /// background refresher that re-mints it before expiry.
 ///
@@ -733,6 +775,11 @@ fn mint_capability_seed(
         requested_actions: capability_lease.requested_actions.clone(),
         resource_scope: crate::capability::issue::DEFAULT_RESOURCE_SCOPE.to_string(),
         ttl_seconds: crate::capability::issue::DEFAULT_TTL_SECONDS,
+        // One id for this issuance cycle (the initial mint). The refresher
+        // generates its own fresh id per renewal cycle instead of reusing
+        // this one (see `capability::refresh`).
+        issuance_attempt_id: crate::capability::issue::IssuanceAttemptId::generate(),
+        approval_wait: capability_lease.approval_wait_policy(),
     };
     let seed = crate::capability::issue::mint_and_write_seed(&params, capability_seed_path)?;
 
@@ -915,6 +962,36 @@ fn prepare_run_components(
         let capability_seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
         let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
 
+        // Remote (non-owned) Authority: mint before the stack. This is the
+        // only path where PENDING_APPROVAL can occur, and a human approval
+        // can take minutes — waiting inside the component factory would
+        // burn `component_readiness` and abort the stack, and the approval
+        // notice must reach stderr before the run redirects its logs. The
+        // guard is created first, exactly as in the factory below, so a
+        // failed mint never leaves a partial seed behind. An owned
+        // Authority keeps the in-factory mint: its URL only exists once
+        // the component is ready, and the Mini Authority never gates
+        // issuance on human approval.
+        if !owns_authority && managed_mint_enabled(is_source_file, &authority) {
+            match mint_with_guard(
+                identity,
+                &capability_seed_path,
+                &authority,
+                capability_lease,
+            ) {
+                Ok((guard, refresher)) => {
+                    capability_guard = Some(guard);
+                    capability_refresher = Some(refresher);
+                }
+                Err(error) => {
+                    // Mirrors the certain-teardown factory failure path: the
+                    // guard already dropped inside the helper (removing any
+                    // partial seed); the run markers are cleaned up here.
+                    return Err(cleanup_run_markers_after(error, &marker_dir));
+                }
+            }
+        }
+
         let stack_result = spawn_stack_from_plan(
             &topology,
             |context| match context.name() {
@@ -980,18 +1057,21 @@ fn prepare_run_components(
                     component_flags
                         .authority_credentials
                         .clone_from(&authority.credentials_config);
-                    if !is_source_file && authority.pub_key_path.is_some() {
+                    if managed_mint_enabled(is_source_file, &authority) {
                         component_flags.capability_seed_path = Some(capability_seed_path.clone());
-                        capability_guard =
-                            Some(crate::capability::guard::CapabilityFileGuard::new(
-                                capability_seed_path.clone(),
-                            ));
-                        capability_refresher = Some(mint_capability_seed(
-                            identity,
-                            &capability_seed_path,
-                            &authority,
-                            capability_lease,
-                        )?);
+                        // The pre-stack path above already minted for a
+                        // remote Authority; only the owned Authority mints
+                        // here, after its component became ready.
+                        if capability_refresher.is_none() {
+                            let (guard, refresher) = mint_with_guard(
+                                identity,
+                                &capability_seed_path,
+                                &authority,
+                                capability_lease,
+                            )?;
+                            capability_guard = Some(guard);
+                            capability_refresher = Some(refresher);
+                        }
                     }
                     create_log_alias(
                         &marker_dir,
@@ -1854,9 +1934,9 @@ mod non_structural_env_tests {
     use std::time::Duration;
 
     use crate::backend::{BackendKind, SandboxHandle};
+    use crate::config::CapabilityLeaseConfig;
     use crate::config::NetworkPolicy;
     use crate::config::SidecarEndpoint;
-    use crate::config::{CapabilityLeaseConfig, CapabilitySource};
     use crate::identity::RunIdentity;
 
     use super::{
@@ -1866,13 +1946,7 @@ mod non_structural_env_tests {
 
     /// Default capability-lease config for `prepare_network_runtime` tests.
     fn capability_lease_conf() -> CapabilityLeaseConfig {
-        CapabilityLeaseConfig {
-            source: CapabilitySource::Disabled,
-            public_key_path: None,
-            refresh_ratio: 0.60,
-            grace: Duration::from_secs(30),
-            requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-        }
+        CapabilityLeaseConfig::disabled()
     }
 
     /// Verifies that `setup_host_bridge` inserts all proxy env vars pointing

@@ -265,6 +265,17 @@ pub struct CapabilityLeaseConfig {
     /// Setting this narrows the request further — an opt-in extra-restriction
     /// knob for running with fewer permissions than the policy would allow.
     pub requested_actions: Vec<String>,
+    /// Delay between approval-outcome polls when the Authority sends no
+    /// advisory `retry_after`.
+    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    pub approval_poll_interval: Duration,
+    /// Local cap on how long a run waits for a human approval. `None` waits
+    /// until the server-side approval deadline.
+    #[serde(
+        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub approval_max_wait: Option<Duration>,
 }
 
 impl CapabilityLeaseConfig {
@@ -273,9 +284,35 @@ impl CapabilityLeaseConfig {
         self.grace
     }
 
+    /// A disabled-source lease carrying every production default.
+    ///
+    /// The one authoritative fixture for "no lease configured": adding a
+    /// field to this struct means one edit here instead of one per literal.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            source: CapabilitySource::Disabled,
+            public_key_path: None,
+            refresh_ratio: 0.60,
+            grace: Duration::from_secs(30),
+            requested_actions: Self::default_requested_actions(),
+            approval_poll_interval: crate::capability::approval_wait::DEFAULT_POLL_INTERVAL,
+            approval_max_wait: None,
+        }
+    }
+
+    /// The resolved HITL waiting policy this profile configures.
+    #[must_use]
+    pub fn approval_wait_policy(&self) -> crate::capability::approval_wait::ApprovalWaitPolicy {
+        crate::capability::approval_wait::ApprovalWaitPolicy {
+            poll_interval: self.approval_poll_interval,
+            max_wait: self.approval_max_wait,
+        }
+    }
+
     /// Fallback action set when a profile does not set `requested_actions`.
     #[must_use]
-    pub fn default_requested_actions() -> Vec<String> {
+    fn default_requested_actions() -> Vec<String> {
         crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
             .iter()
             .map(|class| class.as_str().to_string())
@@ -366,6 +403,10 @@ impl Merge for CapabilityLeasePatch {
             refresh_ratio: higher.refresh_ratio.or(self.refresh_ratio),
             grace: higher.grace.or(self.grace),
             requested_actions: higher.requested_actions.or(self.requested_actions),
+            approval_poll_interval: higher
+                .approval_poll_interval
+                .or(self.approval_poll_interval),
+            approval_max_wait: higher.approval_max_wait.or(self.approval_max_wait),
         }
     }
 }
@@ -650,6 +691,8 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 refresh_ratio: None,
                 grace: None,
                 requested_actions: None,
+                approval_poll_interval: None,
+                approval_max_wait: None,
             }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
@@ -707,6 +750,11 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
             .requested_actions
             .filter(|actions| !actions.is_empty())
             .unwrap_or_else(CapabilityLeaseConfig::default_requested_actions),
+        approval_poll_interval: patch.approval_poll_interval.map_or(
+            crate::capability::approval_wait::DEFAULT_POLL_INTERVAL,
+            |interval| interval.duration(),
+        ),
+        approval_max_wait: patch.approval_max_wait.map(|wait| wait.duration()),
     }
 }
 
@@ -729,6 +777,8 @@ fn default_capability_config() -> CapabilityLeaseConfig {
         refresh_ratio: 0.60,
         grace: Duration::from_secs(30),
         requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+        approval_poll_interval: crate::capability::approval_wait::DEFAULT_POLL_INTERVAL,
+        approval_max_wait: None,
     }
 }
 
@@ -1143,6 +1193,8 @@ mod tests {
             refresh_ratio: None,
             grace: None,
             requested_actions,
+            approval_poll_interval: None,
+            approval_max_wait: None,
         }
     }
 
