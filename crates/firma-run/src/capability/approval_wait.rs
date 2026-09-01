@@ -154,6 +154,33 @@ impl ApprovalWaitPolicy {
     }
 }
 
+/// The opaque identifier of an approval the Authority opened.
+///
+/// A newtype so the id cannot be confused with the other strings traveling
+/// beside it (URL, session, agent) across error variants and requests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalId(String);
+
+impl ApprovalId {
+    /// Wraps a wire approval id.
+    #[must_use]
+    pub(crate) fn new(id: String) -> Self {
+        Self(id)
+    }
+
+    /// The id as sent by the Authority.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ApprovalId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// A bearer token exactly as the Authority released it, not yet verified.
 ///
 /// A newtype so the secret cannot leak through `Debug`: logging a decoded
@@ -247,125 +274,6 @@ impl TryFrom<GetApprovalOutcomeResponse> for OutcomeMessage {
             }
             Outcome::Denied(_) => Ok(Self::Denied),
             Outcome::Expired(_) => Ok(Self::Expired),
-        }
-    }
-}
-
-/// Outcome of one injected sleep between polls.
-///
-/// The pre-stack wait sleeps unconditionally (`Slept`); the refresher's
-/// sleeper listens on its stop channel and reports `Stopped` on
-/// cancellation. One signature for both, so the loop has a single
-/// cancellation semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SleepOutcome {
-    /// The full delay elapsed.
-    Slept,
-    /// The wait was cancelled; the loop must stop without a token.
-    Stopped,
-}
-
-/// A failed poll attempt, as reported by the injected poll closure.
-#[derive(Debug, PartialEq, Eq)]
-pub enum PollError {
-    /// The call failed at the RPC layer.
-    Rpc(RpcFailure),
-    /// The call succeeded but the response could not be decoded.
-    Decode(OutcomeDecodeError),
-}
-
-/// Why a wait ended without a granted token.
-///
-/// Every variant is fail-closed: no seed is written for any of them. The
-/// caller maps these onto its own error surface, adding the identifiers it
-/// knows (approval id, URL).
-#[derive(Debug, PartialEq, Eq)]
-pub enum WaitError {
-    /// An operator denied the request.
-    Denied,
-    /// The server reported the approval expired.
-    Expired,
-    /// The local deadline was reached while the approval was still pending.
-    DeadlineReached,
-    /// A response could not be decoded; polling on would not help.
-    Decode(OutcomeDecodeError),
-    /// A permanent failure ended the wait.
-    Failure(RpcFailure),
-    /// The injected sleeper reported cancellation.
-    Stopped,
-}
-
-/// Drives the polling loop to completion over injected effects.
-///
-/// Pure orchestration: the RPC, the sleep, the clock, and the jitter all
-/// arrive as closures, so the whole loop is testable without a network or
-/// real time. Behavior:
-///
-/// - `Granted` returns the raw token (still to be verified by the caller);
-/// - `Denied`/`Expired` from the server end the wait with the matching
-///   error;
-/// - transient failures retry with exponential backoff; a throttled answer
-///   (`RESOURCE_EXHAUSTED`) also doubles the delay; a successful poll
-///   resets the backoff;
-/// - permanent failures and undecodable responses end the wait at once;
-/// - the deadline is enforced locally on every iteration, even if the
-///   server keeps answering `pending` past its own expiry (defense in
-///   depth: the client stops on its own clock too); a pending answer that
-///   carries an earlier `expires_at` tightens the local deadline — the
-///   server can shorten the wait, never extend it.
-///
-/// # Errors
-///
-/// Returns a [`WaitError`] describing why no token was granted; see the
-/// variant docs.
-pub fn drive_wait(
-    policy: &ApprovalWaitPolicy,
-    deadline: DateTime<Utc>,
-    poll: &mut dyn FnMut() -> Result<OutcomeMessage, PollError>,
-    sleep: &mut dyn FnMut(Duration) -> SleepOutcome,
-    now: &mut dyn FnMut() -> DateTime<Utc>,
-    jitter: &mut dyn FnMut() -> f64,
-) -> Result<RawToken, WaitError> {
-    let mut deadline = deadline;
-    let mut backoff_exponent: u32 = 0;
-    loop {
-        if now() >= deadline {
-            return Err(WaitError::DeadlineReached);
-        }
-        let (retry_after, failure_kind) = match poll() {
-            Ok(OutcomeMessage::Granted { raw_token }) => return Ok(raw_token),
-            Ok(OutcomeMessage::Denied) => return Err(WaitError::Denied),
-            Ok(OutcomeMessage::Expired) => return Err(WaitError::Expired),
-            Ok(OutcomeMessage::Pending {
-                retry_after,
-                expires_at,
-            }) => {
-                if let Some(server_expiry) = expires_at {
-                    deadline = deadline.min(server_expiry);
-                }
-                backoff_exponent = 0;
-                (retry_after, None)
-            }
-            Err(PollError::Decode(error)) => return Err(WaitError::Decode(error)),
-            Err(PollError::Rpc(failure)) => match failure.kind.class() {
-                FailureClass::Permanent => return Err(WaitError::Failure(failure)),
-                FailureClass::Transient | FailureClass::Throttled => {
-                    backoff_exponent = backoff_exponent.saturating_add(1);
-                    (None, Some(failure.kind))
-                }
-            },
-        };
-        tracing::debug!(
-            ?failure_kind,
-            backoff_exponent,
-            "approval still pending; scheduling next poll"
-        );
-        let sample = BackoffSample::new(backoff_exponent, jitter());
-        let Some(delay) = policy.next_delay(retry_after, sample, now(), deadline) else {
-            return Err(WaitError::DeadlineReached);
-        };
-        if sleep(delay) == SleepOutcome::Stopped {
-            return Err(WaitError::Stopped);
         }
     }
 }
@@ -486,6 +394,125 @@ impl FailureKind {
             | Self::Internal
             | Self::Unimplemented
             | Self::Other => FailureClass::Permanent,
+        }
+    }
+}
+
+/// Outcome of one injected sleep between polls.
+///
+/// The pre-stack wait sleeps unconditionally (`Slept`); the refresher's
+/// sleeper listens on its stop channel and reports `Stopped` on
+/// cancellation. One signature for both, so the loop has a single
+/// cancellation semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SleepOutcome {
+    /// The full delay elapsed.
+    Slept,
+    /// The wait was cancelled; the loop must stop without a token.
+    Stopped,
+}
+
+/// A failed poll attempt, as reported by the injected poll closure.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PollError {
+    /// The call failed at the RPC layer.
+    Rpc(RpcFailure),
+    /// The call succeeded but the response could not be decoded.
+    Decode(OutcomeDecodeError),
+}
+
+/// Why a wait ended without a granted token.
+///
+/// Every variant is fail-closed: no seed is written for any of them. The
+/// caller maps these onto its own error surface, adding the identifiers it
+/// knows (approval id, URL).
+#[derive(Debug, PartialEq, Eq)]
+pub enum WaitError {
+    /// An operator denied the request.
+    Denied,
+    /// The server reported the approval expired.
+    Expired,
+    /// The local deadline was reached while the approval was still pending.
+    DeadlineReached,
+    /// A response could not be decoded; polling on would not help.
+    Decode(OutcomeDecodeError),
+    /// A permanent failure ended the wait.
+    Failure(RpcFailure),
+    /// The injected sleeper reported cancellation.
+    Stopped,
+}
+
+/// Drives the polling loop to completion over injected effects.
+///
+/// Pure orchestration: the RPC, the sleep, the clock, and the jitter all
+/// arrive as closures, so the whole loop is testable without a network or
+/// real time. Behavior:
+///
+/// - `Granted` returns the raw token (still to be verified by the caller);
+/// - `Denied`/`Expired` from the server end the wait with the matching
+///   error;
+/// - transient failures retry with exponential backoff; a throttled answer
+///   (`RESOURCE_EXHAUSTED`) also doubles the delay; a successful poll
+///   resets the backoff;
+/// - permanent failures and undecodable responses end the wait at once;
+/// - the deadline is enforced locally on every iteration, even if the
+///   server keeps answering `pending` past its own expiry (defense in
+///   depth: the client stops on its own clock too); a pending answer that
+///   carries an earlier `expires_at` tightens the local deadline — the
+///   server can shorten the wait, never extend it.
+///
+/// # Errors
+///
+/// Returns a [`WaitError`] describing why no token was granted; see the
+/// variant docs.
+pub fn drive_wait(
+    policy: &ApprovalWaitPolicy,
+    deadline: DateTime<Utc>,
+    mut poll: impl FnMut() -> Result<OutcomeMessage, PollError>,
+    mut sleep: impl FnMut(Duration) -> SleepOutcome,
+    mut now: impl FnMut() -> DateTime<Utc>,
+    mut jitter: impl FnMut() -> f64,
+) -> Result<RawToken, WaitError> {
+    let mut deadline = deadline;
+    let mut backoff_exponent: u32 = 0;
+    loop {
+        if now() >= deadline {
+            return Err(WaitError::DeadlineReached);
+        }
+        let (retry_after, failure_kind) = match poll() {
+            Ok(OutcomeMessage::Granted { raw_token }) => return Ok(raw_token),
+            Ok(OutcomeMessage::Denied) => return Err(WaitError::Denied),
+            Ok(OutcomeMessage::Expired) => return Err(WaitError::Expired),
+            Ok(OutcomeMessage::Pending {
+                retry_after,
+                expires_at,
+            }) => {
+                if let Some(server_expiry) = expires_at {
+                    deadline = deadline.min(server_expiry);
+                }
+                backoff_exponent = 0;
+                (retry_after, None)
+            }
+            Err(PollError::Decode(error)) => return Err(WaitError::Decode(error)),
+            Err(PollError::Rpc(failure)) => match failure.kind.class() {
+                FailureClass::Permanent => return Err(WaitError::Failure(failure)),
+                FailureClass::Transient | FailureClass::Throttled => {
+                    backoff_exponent = backoff_exponent.saturating_add(1);
+                    (None, Some(failure.kind))
+                }
+            },
+        };
+        tracing::debug!(
+            ?failure_kind,
+            backoff_exponent,
+            "approval still pending; scheduling next poll"
+        );
+        let sample = BackoffSample::new(backoff_exponent, jitter());
+        let Some(delay) = policy.next_delay(retry_after, sample, now(), deadline) else {
+            return Err(WaitError::DeadlineReached);
+        };
+        if sleep(delay) == SleepOutcome::Stopped {
+            return Err(WaitError::Stopped);
         }
     }
 }

@@ -67,7 +67,7 @@ struct MockAuthority {
     signer: PasetoV4Signer,
     token_kind: MockTokenKind,
     denial: Option<(&'static str, &'static str)>,
-    pub seen_agent_ids: Arc<Mutex<Vec<String>>>,
+    seen_agent_ids: Arc<Mutex<Vec<String>>>,
     /// Scripted answers for `GetApprovalOutcome`; an exhausted script
     /// answers `UNIMPLEMENTED`, the same as an Authority without HITL.
     approval_script: Arc<Mutex<VecDeque<ApprovalOutcomeStep>>>,
@@ -580,7 +580,7 @@ fn denied_approval_fails_closed_without_a_seed() {
         matches!(
             &err,
             firma_run::error::RunError::CapabilityApprovalDenied { approval_id }
-                if approval_id == "approval-123"
+                if approval_id.as_str() == "approval-123"
         ),
         "got: {err}"
     );
@@ -602,7 +602,7 @@ fn past_approval_expiry_fails_closed_before_any_poll() {
         matches!(
             &err,
             firma_run::error::RunError::CapabilityApprovalExpired { approval_id }
-                if approval_id == "approval-123"
+                if approval_id.as_str() == "approval-123"
         ),
         "got: {err}"
     );
@@ -638,7 +638,7 @@ fn local_max_wait_reports_pending_not_expired() {
         matches!(
             &err,
             firma_run::error::RunError::CapabilityPendingApproval { approval_id, approval_url, .. }
-                if approval_id == "approval-123"
+                if approval_id.as_str() == "approval-123"
                     && approval_url == "https://authority.example/approvals/123"
         ),
         "a locally capped wait must stay 'pending' with the URL, got: {err}"
@@ -666,7 +666,7 @@ fn server_reported_expiry_fails_closed() {
         matches!(
             &err,
             firma_run::error::RunError::CapabilityApprovalExpired { approval_id }
-                if approval_id == "approval-123"
+                if approval_id.as_str() == "approval-123"
         ),
         "got: {err}"
     );
@@ -687,7 +687,11 @@ fn foreign_approval_not_found_fails_closed() {
     let err = mint_and_write(&params(&server), &seed_path).expect_err("not found must fail closed");
 
     assert!(
-        err.to_string().contains("was not found for this identity"),
+        matches!(
+            &err,
+            firma_run::error::RunError::CapabilityApprovalNotFound { approval_id }
+                if approval_id.as_str() == "approval-123"
+        ),
         "got: {err}"
     );
     assert!(!seed_path.exists(), "no seed on a foreign approval");
@@ -705,8 +709,10 @@ fn authority_without_retrieval_reports_the_upgrade_path() {
     let err = mint_and_write(&params(&server), &seed_path).expect_err("unimplemented must stop");
 
     assert!(
-        err.to_string()
-            .contains("does not support approval retrieval yet"),
+        matches!(
+            &err,
+            firma_run::error::RunError::CapabilityApprovalUnsupported
+        ),
         "got: {err}"
     );
     assert!(!seed_path.exists());

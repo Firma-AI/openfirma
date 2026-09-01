@@ -30,7 +30,8 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 
 use super::approval_wait::{
-    ApprovalWaitPolicy, OutcomeMessage, PollError, RpcFailure, SleepOutcome, WaitError, drive_wait,
+    ApprovalId, ApprovalWaitPolicy, OutcomeMessage, PollError, RpcFailure, SleepOutcome, WaitError,
+    drive_wait,
 };
 use crate::error::RunError;
 
@@ -248,7 +249,9 @@ enum Minted {
 /// The identifiers of an approval the Authority opened for this request.
 #[derive(Debug)]
 struct PendingIssuance {
-    id: String,
+    id: ApprovalId,
+    /// Display-only: shown to the operator, never parsed or dereferenced
+    /// by this client, so a plain string is deliberate.
     url: String,
     expiry: DateTime<Utc>,
 }
@@ -323,7 +326,7 @@ fn capability_seed_from_response(
                     )
                 })?;
             return Ok(Minted::Pending(PendingIssuance {
-                id: approval_id,
+                id: ApprovalId::new(approval_id),
                 url: approval_url,
                 expiry: approval_expiry,
             }));
@@ -375,10 +378,10 @@ fn wait_for_outcome(
         .credentials
         .as_ref()
         .map(ResolvedSidecarCredentials::to_proto);
-    let mut poll = || -> Result<OutcomeMessage, PollError> {
+    let poll = || -> Result<OutcomeMessage, PollError> {
         let request = GetApprovalOutcomeRequest {
             credentials: credentials.clone(),
-            approval_id: pending.id.clone(),
+            approval_id: pending.id.to_string(),
             session_id: params.session_id.clone(),
         };
         let rpc = runtime.block_on(async {
@@ -396,26 +399,19 @@ fn wait_for_outcome(
     };
     // Pre-stack there is no cancellation channel: Ctrl-C kills the process
     // (fail closed, no seed written), so the sleeper always reports Slept.
-    let mut sleep = |delay: std::time::Duration| {
+    let sleep = |delay: std::time::Duration| {
         std::thread::sleep(delay);
         SleepOutcome::Slept
     };
-    let mut now = Utc::now;
+    let now = Utc::now;
     // Seeded from the wall clock: the jitter only de-synchronizes pollers,
     // it carries no security weight.
     let mut rng = SmallRng::seed_from_u64(
         u64::try_from(Utc::now().timestamp_nanos_opt().unwrap_or_default()).unwrap_or_default(),
     );
-    let mut jitter = || rng.random_range(-1.0..=1.0);
+    let jitter = || rng.random_range(-1.0..=1.0);
 
-    match drive_wait(
-        &policy,
-        deadline,
-        &mut poll,
-        &mut sleep,
-        &mut now,
-        &mut jitter,
-    ) {
+    match drive_wait(&policy, deadline, poll, sleep, now, jitter) {
         Ok(raw_token) => {
             tracing::info!(
                 approval_id = %pending.id,
@@ -479,26 +475,23 @@ fn wait_error_to_run_error(
         WaitError::Stopped => {
             RunError::Capability("approval wait was cancelled before an outcome".to_string())
         }
-        WaitError::Failure(failure) => match failure.kind {
-            super::approval_wait::FailureKind::Unimplemented => RunError::Capability(
-                "the Authority does not support approval retrieval yet; upgrade it or retry later"
-                    .to_string(),
-            ),
-            super::approval_wait::FailureKind::FailedPrecondition => {
-                RunError::CapabilityApprovalRefused {
+        WaitError::Failure(failure) => {
+            use super::approval_wait::FailureKind as Fk;
+            match failure.kind {
+                Fk::Unimplemented => RunError::CapabilityApprovalUnsupported,
+                Fk::FailedPrecondition => RunError::CapabilityApprovalRefused {
                     approval_id: pending.id.clone(),
                     reason: failure.message,
-                }
+                },
+                Fk::NotFound => RunError::CapabilityApprovalNotFound {
+                    approval_id: pending.id.clone(),
+                },
+                kind => RunError::Capability(format!(
+                    "approval outcome retrieval failed ({kind:?}): {}",
+                    failure.message
+                )),
             }
-            super::approval_wait::FailureKind::NotFound => RunError::Capability(format!(
-                "approval '{}' was not found for this identity",
-                pending.id
-            )),
-            kind => RunError::Capability(format!(
-                "approval outcome retrieval failed ({kind:?}): {}",
-                failure.message
-            )),
-        },
+        }
     }
 }
 
