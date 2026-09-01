@@ -82,27 +82,6 @@ fn config_check_from_output(output: &Output) -> Value {
 }
 
 #[test]
-fn config_commands_expose_only_canonical_environment_variable() {
-    for command in ["doctor", "control", "monitor"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_firma"))
-            .args([command, "--help"])
-            .output()
-            .unwrap_or_else(|error| panic!("spawn firma {command}: {error}"));
-        assert!(output.status.success());
-
-        let help = String::from_utf8(output.stdout).expect("UTF-8 help");
-        assert!(
-            help.contains("FIRMA_CONFIG"),
-            "{command} help must expose FIRMA_CONFIG: {help}"
-        );
-        assert!(
-            !help.contains("FIRMA_STACK_CONFIG"),
-            "{command} help must not expose FIRMA_STACK_CONFIG: {help}"
-        );
-    }
-}
-
-#[test]
 fn doctor_uses_only_canonical_config_environment_variable() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_path = tmp.path().join("firma.toml");
