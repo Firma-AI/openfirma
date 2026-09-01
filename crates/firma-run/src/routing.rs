@@ -734,8 +734,8 @@ fn mint_capability_seed(
         resource_scope: crate::capability::issue::DEFAULT_RESOURCE_SCOPE.to_string(),
         ttl_seconds: crate::capability::issue::DEFAULT_TTL_SECONDS,
         // One id for this issuance cycle (the initial mint). The refresher
-        // reuses `params` across every renewal cycle today; each cycle
-        // getting its own fresh id is fixed there, not here.
+        // generates its own fresh id per renewal cycle instead of reusing
+        // this one (see `capability::refresh`).
         issuance_attempt_id: uuid::Uuid::new_v4(),
     };
     let seed = crate::capability::issue::mint_and_write_seed(&params, capability_seed_path)?;

@@ -26,6 +26,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use super::issue::{self, IssueParams};
 use crate::config::CapabilityLeaseConfig;
@@ -121,7 +122,15 @@ fn run_refresh_loop(
             Err(RecvTimeoutError::Timeout) => {}
         }
 
-        match issue::mint_and_write_seed(params, out_path) {
+        // Each refresh is its own issuance cycle: a fresh attempt id, not
+        // the one the initial mint (or a prior refresh) used. Reusing a
+        // single id across every cycle would make every renewal look like a
+        // retry of the same request to the Authority.
+        let cycle_params = IssueParams {
+            issuance_attempt_id: Uuid::new_v4(),
+            ..params.clone()
+        };
+        match issue::mint_and_write_seed(&cycle_params, out_path) {
             Ok(seed) => {
                 expiry = seed.expiry;
                 backoff = BACKOFF_INITIAL;

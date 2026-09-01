@@ -12,8 +12,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use uuid::Uuid;
-
 use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::{ActionClass, CapabilitySeed, TokenVerifier};
 use firma_identifiers::AgentId;
@@ -22,6 +20,7 @@ use firma_protobuf::v1::{IssueCapabilityRequest, IssueCapabilityResponse, IssueD
 use firma_sidecar::authority_client::channel::build_channel;
 use firma_sidecar::authority_credentials::ResolvedSidecarCredentials;
 use firma_sidecar::config::AuthorityEndpoint;
+use uuid::Uuid;
 
 use crate::error::RunError;
 
