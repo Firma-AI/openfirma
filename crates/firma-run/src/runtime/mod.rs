@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use firma_runtime_state::RuntimeLayout;
+use firma_secret_provider::IntegrationSpec;
 use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
@@ -209,6 +210,12 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             }),
             use_http_proxy_sidecar: profile.use_http_proxy_sidecar,
             monitor_mode: args.monitor_mode,
+            http_secret_providers: profile
+                .secret_providers
+                .values()
+                .filter_map(IntegrationSpec::as_http)
+                .cloned()
+                .collect(),
             ..Default::default()
         };
         // When the user supplies --capability-file, thread the path into the
