@@ -2,6 +2,7 @@
 
 mod file;
 mod grpc;
+mod metadata;
 mod stdout;
 mod wal;
 

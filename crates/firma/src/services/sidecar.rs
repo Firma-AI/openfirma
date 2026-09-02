@@ -233,12 +233,8 @@ async fn serve(
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
     let audit_event_builder =
         startup::load_audit_event_builder(&config.audit)?.with_sandbox_id(sandbox_id);
-    let audit_sink = startup::spawn_audit_sink(
-        &config.audit,
-        audit_payload_rx,
-        audit_event_builder,
-        exit.clone(),
-    )?;
+    let audit_sink =
+        startup::spawn_audit_sink(&config, audit_payload_rx, audit_event_builder, exit.clone())?;
 
     // Out-of-band ingest for the `firma run` audit channel (e.g. loopback
     // connections the egress guard blocks at the sandbox boundary). Bound only

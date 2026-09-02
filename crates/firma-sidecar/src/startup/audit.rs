@@ -35,21 +35,22 @@ use crate::config;
 /// Returns an error when the sink fails to initialize (invalid
 /// config, inability to connect to an external sink).
 pub fn spawn_audit_sink(
-    config: &config::AuditConfig,
+    config: &config::SidecarConfig,
     payload_rx: mpsc::Receiver<audit::AuditPayload>,
     event_builder: audit::builder::EventBuilder,
     exit: CancellationToken,
 ) -> anyhow::Result<tokio::task::JoinHandle<Result<(), audit::AuditSinkError>>> {
     let (event_tx, event_rx) = mpsc::channel::<audit::ExecutionEvent>(100);
+    let audit_config = &config.audit;
 
     let adapter_exit = exit.clone();
     tokio::spawn(async move {
         run_signing_adapter(payload_rx, event_tx, event_builder, adapter_exit).await;
     });
 
-    match config.sink {
+    match audit_config.sink {
         AuditSink::File => {
-            let path = config.file_path.clone().ok_or_else(|| {
+            let path = audit_config.file_path.clone().ok_or_else(|| {
                 anyhow::anyhow!("file sink requires file_path in audit configuration")
             })?;
             Ok(tokio::spawn(async move {
@@ -59,11 +60,12 @@ pub fn spawn_audit_sink(
             }))
         }
         AuditSink::Grpc => {
-            let endpoint = config.grpc_url.clone().ok_or_else(|| {
+            let endpoint = audit_config.grpc_url.clone().ok_or_else(|| {
                 anyhow::anyhow!("gRPC sink requires grpc_url in audit configuration")
             })?;
+            let credentials = resolve_audit_credentials(config)?;
             Ok(tokio::spawn(async move {
-                audit_sink::GrpcAuditSink::new(endpoint)
+                audit_sink::GrpcAuditSink::new(endpoint, credentials)
                     .run(event_rx, exit)
                     .await
             }))
@@ -72,20 +74,33 @@ pub fn spawn_audit_sink(
             audit_sink::StdoutAuditSink::new().run(event_rx, exit).await
         })),
         AuditSink::Wal => {
-            let path = config.wal_path.clone().ok_or_else(|| {
+            let path = audit_config.wal_path.clone().ok_or_else(|| {
                 anyhow::anyhow!("WAL sink requires wal_path in audit configuration")
             })?;
-            let grpc_url = config.grpc_url.clone().ok_or_else(|| {
+            let grpc_url = audit_config.grpc_url.clone().ok_or_else(|| {
                 anyhow::anyhow!("WAL sink requires grpc_url in audit configuration")
             })?;
-            let wal_max_bytes = config.wal_max_bytes;
+            let wal_max_bytes = audit_config.wal_max_bytes;
+            let credentials = resolve_audit_credentials(config)?;
             Ok(tokio::spawn(async move {
-                audit_sink::WalAuditSink::new(grpc_url, path, wal_max_bytes)
+                audit_sink::WalAuditSink::new(grpc_url, path, wal_max_bytes, credentials)
                     .run(event_rx, exit)
                     .await
             }))
         }
     }
+}
+
+fn resolve_audit_credentials(
+    config: &config::SidecarConfig,
+) -> anyhow::Result<Option<crate::authority_credentials::ResolvedSidecarCredentials>> {
+    config
+        .authority
+        .credentials
+        .as_ref()
+        .map(crate::authority_credentials::SidecarCredentialsConfig::resolve)
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("failed to resolve authority credentials: {error}"))
 }
 
 /// Loads the ECDSA signing key PEM from the audit configuration and

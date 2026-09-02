@@ -511,6 +511,7 @@ impl ConstraintEnforcer {
             "risk_score".to_string(),
             serde_json::json!(signals.risk_score_long()),
         );
+        context.insert("budget_remaining".to_string(), serde_json::json!(i64::MAX));
         context.insert(
             "session_duration_s".to_string(),
             serde_json::json!(session_duration_s),
@@ -929,6 +930,7 @@ mod tests {
         assert!(context["timestamp_ms"].is_i64());
         assert!(context["params"].is_string());
         assert_eq!(context["risk_score"], 3);
+        assert_eq!(context["budget_remaining"], i64::MAX);
         assert_eq!(context["session_duration_s"], 42);
         assert_eq!(context["action_count"], 7);
         // Prior-action context (AARM R2 G3) — fresh session defaults.
