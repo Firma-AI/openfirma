@@ -45,13 +45,7 @@ pub async fn serve_request(
     let args: Vec<String> = request.args.iter().map(ToString::to_string).collect();
 
     match spec {
-        None => match run_subprocess(&request.bin, &args, &[], real_bin_dir, capture_limit).await {
-            Ok((stdout, stderr, status)) => {
-                let output = chunks_from_output(stdout, stderr);
-                BrokerResponse::executed(output, status)
-            }
-            Err(error) => BrokerResponse::rejected(error),
-        },
+        None => BrokerResponse::rejected(format!("unconfigured binary {}", request.bin)),
         Some(spec) => match spec.resolve_args(&args) {
             MatchingResolution::Blocked => BrokerResponse::rejected(format!(
                 "blocked command: {} {}",

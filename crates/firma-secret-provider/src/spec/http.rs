@@ -1,5 +1,6 @@
 use firma_config_schema::secret_provider::http::{HttpMatcherRuleConfig, HttpSecretProviderConfig};
 use firma_core::SecretMatcher;
+use serde::Serialize;
 
 use crate::{CompiledMatcher, MatcherCompiler, MatcherError, glob::glob_match};
 
@@ -60,7 +61,7 @@ fn non_empty_path(path: String) -> Result<NonEmptyString, HttpSecretProviderConf
 /// Per-HTTP-vault behavior spec: which traffic to intercept and how to extract
 /// secrets from the response body. Callers own placeholder minting and
 /// persistence for extracted values.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HttpIntegrationSpec<Matcher> {
     /// Stable integration identity (e.g. `"aws-secrets-manager"`).
     pub provider_id: String,

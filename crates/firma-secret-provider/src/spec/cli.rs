@@ -2,6 +2,7 @@ use firma_config_schema::secret_provider::cli::{
     CliMatcherRuleConfig, CliSecretProviderConfig, CommandMatch, FlagSpec,
 };
 use firma_core::SecretMatcher;
+use serde::Serialize;
 
 use super::{MatcherRule, MatchingResolution, NonEmptyVec};
 
@@ -16,7 +17,7 @@ pub type CliMatcherRule<Matcher> = MatcherRule<CommandAndMatcher<Matcher>, Comma
 /// `stripped_options`) are enforced by [`Self::new`] and the
 /// `TryFrom<CliSecretProviderConfig>` impl before this type is constructed.
 /// Direct field construction outside this crate is not permitted.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CliIntegrationSpec<Matcher> {
     /// Executable basename used to select this integration (e.g. `"bws"`).
     ///
