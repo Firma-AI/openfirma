@@ -260,7 +260,7 @@ async fn run_subprocess(
 
 #[cfg(test)]
 mod tests {
-    use firma_core::{SecretMatcher, SecretNameSource};
+    use firma_core::SecretMatcher;
     use firma_secret_provider::{
         broker::{BinaryName, BrokerRequest},
         store::SecretStore,
@@ -270,18 +270,6 @@ mod tests {
     use super::serve_request;
 
     const CAPTURE_LIMIT: usize = 1024 * 1024;
-
-    fn matcher_for_json() -> SecretMatcher {
-        SecretMatcher::Json {
-            record_path: "$[*]".to_string(),
-            value_path: "$.value".to_string(),
-            name: SecretNameSource::Path {
-                path: "$.key".to_string(),
-            },
-            item_selector: None,
-            domain_selector: None,
-        }
-    }
 
     fn store() -> RwLock<SecretStore> {
         RwLock::new(SecretStore::new())
@@ -402,10 +390,15 @@ mod tests {
                 cli::{CliIntegrationSpec, CommandAndMatcher, CommandPattern},
             },
         };
-        use serde_json::json;
 
-        let matcher = matcher_for_json();
-        let payload = json!([{"key": "token", "value": "s3cr3t"}]).to_string();
+        // `echo` must round-trip the payload argv on every platform. Windows
+        // resolves `echo` to Git's MSYS2 binary, which does not round-trip
+        // MSVC quoting for quote-heavy arguments, so the payload stays a
+        // quote-free `name=value` line and extraction uses the regex matcher.
+        let matcher = SecretMatcher::Regex {
+            pattern: r"(?m)^(?P<name>[^=]+)=(?P<value>s3cr3t)$".to_string(),
+        };
+        let payload = "token=s3cr3t".to_string();
         let spec = CliIntegrationSpec::new(
             "echo".to_string(),
             "test".to_string(),
@@ -425,7 +418,7 @@ mod tests {
         let store = RwLock::new(SecretStore::new());
         let request = BrokerRequest {
             bin: BinaryName::new("echo").expect("valid"),
-            args: vec![payload.clone().into()],
+            args: vec![payload.into()],
         };
         let response = serve_request(&request, Some(&spec), &store, None, CAPTURE_LIMIT).await;
         let decoded = response.decode().expect("decode");
@@ -450,11 +443,11 @@ mod tests {
             text.contains("fsp_"),
             "rewritten stdout must contain a placeholder: {text}"
         );
-        let parsed: serde_json::Value =
-            serde_json::from_str(text.trim()).expect("rewritten stdout is valid json");
-        let placeholder = parsed[0]["value"]
-            .as_str()
-            .expect("value is a string placeholder");
+        let (name, placeholder) = text
+            .trim()
+            .split_once('=')
+            .expect("rewritten stdout is a name=placeholder line");
+        assert_eq!(name, "token");
         assert!(
             placeholder.starts_with("fsp_"),
             "placeholder prefix: {placeholder}"
