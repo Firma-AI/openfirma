@@ -28,7 +28,7 @@ use crate::signal::shutdown_future;
 ///
 /// Propagates any error from configuration loading or subcommand
 /// execution.
-pub async fn run(args: Args) -> Result<ExitCode> {
+pub async fn run(args: Args, config: Option<&Path>) -> Result<ExitCode> {
     // `generate-key` writes a keypair to an explicit `-o` path and never
     // reads config. Short-circuit before resolution so it works in a
     // bare environment with no discoverable firma.toml.
@@ -42,7 +42,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     }
 
     let resolved = firma_config_loader::ConfigResolver::default()
-        .resolve_config(args.config.as_deref())?
+        .resolve_config(config)?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `authority`"))?;
     tracing::info!(
         path = %resolved.config_file().display(),

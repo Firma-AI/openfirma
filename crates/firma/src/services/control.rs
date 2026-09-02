@@ -27,10 +27,10 @@ use crate::monitor::tailer::{self, Source as TailSource};
 ///
 /// Returns an error when audit-source setup, config resolution, or terminal UI
 /// execution fails.
-pub fn run(args: &Args) -> anyhow::Result<ExitCode> {
-    let (audit_rows, _audit_guard) = spawn_audit_source(args)?;
+pub fn run(args: &Args, config: Option<&Path>) -> anyhow::Result<ExitCode> {
+    let (audit_rows, _audit_guard) = spawn_audit_source(args, config)?;
     let mut options = firma_tui::control::ControlOptions::with_audit_rows(audit_rows);
-    if let Some(policy_dir) = resolve_policy_dir(args.config.as_deref())? {
+    if let Some(policy_dir) = resolve_policy_dir(config)? {
         options = options.with_policy_dir(policy_dir);
     }
 
@@ -77,14 +77,16 @@ fn load_authority_policy_dir(
         .map(|config| config.policy_dir().to_path_buf()))
 }
 
-fn spawn_audit_source(args: &Args) -> anyhow::Result<(Receiver<AuditRow>, AuditSourceGuard)> {
-    let audit_path = crate::services::config::resolve_audit_log_path(
-        args.state_dir.as_ref(),
-        args.config.as_deref(),
-    )
-    .map_err(|error| AuditSourceError::ResolvePath {
-        source: ErrorMessage::capture(error),
-    })?;
+fn spawn_audit_source(
+    args: &Args,
+    config: Option<&Path>,
+) -> anyhow::Result<(Receiver<AuditRow>, AuditSourceGuard)> {
+    let audit_path =
+        crate::services::config::resolve_audit_log_path(args.state_dir.as_ref(), config).map_err(
+            |error| AuditSourceError::ResolvePath {
+                source: ErrorMessage::capture(error),
+            },
+        )?;
 
     let (line_tx, line_rx) = channel::<tailer::Line>();
     let (row_tx, row_rx) = channel::<AuditRow>();

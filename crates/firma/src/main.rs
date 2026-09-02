@@ -24,19 +24,20 @@ fn main() -> ExitCode {
         }
     };
 
+    let config = cli.config;
     let result = match cli.command {
-        Command::Authority(a) => block_on_async(services::authority::run(a)),
+        Command::Authority(a) => block_on_async(services::authority::run(a, config.as_deref())),
         Command::DnsStub(a) => services::dns_stub::run(a),
         #[cfg(target_os = "linux")]
         Command::EgressGuardedRun(a) => services::egress_guarded_run::run(a),
-        Command::Doctor(a) => Ok(services::doctor::run(a)),
+        Command::Doctor(a) => Ok(services::doctor::run(a, config.as_deref())),
         Command::Config(a) => services::config::run(&a),
-        Command::Control(a) => services::control::run(&a),
+        Command::Control(a) => services::control::run(&a, config.as_deref()),
         Command::Policy(a) => services::policy::run(a),
-        Command::Monitor(a) => Ok(services::monitor::run(&a)),
+        Command::Monitor(a) => Ok(services::monitor::run(&a, config.as_deref())),
         Command::ProxyBridge(a) => services::proxy_bridge::run(a),
-        Command::Run(a) => services::run::run(a, &foreground),
-        Command::Sidecar(a) => block_on_async(services::sidecar::run(a)),
+        Command::Run(a) => services::run::run(a, &foreground, config),
+        Command::Sidecar(a) => block_on_async(services::sidecar::run(a, config.as_deref())),
         Command::Supervise(a) => Ok(services::supervise::run(a)),
         Command::Token(a) => services::token::run(a),
     };

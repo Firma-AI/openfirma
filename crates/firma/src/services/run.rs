@@ -1,6 +1,6 @@
 //! Runner for `firma run`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use firma_config_loader::CONFIG_DIR_NAME;
@@ -23,7 +23,11 @@ use crate::services::config::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
 ///
 /// Returns an error if `firma_run` fails to launch or supervise the
 /// wrapped command.
-pub fn run(args: RunArgs, foreground: &ForegroundLog) -> anyhow::Result<ExitCode> {
+pub fn run(
+    args: RunArgs,
+    foreground: &ForegroundLog,
+    config: Option<PathBuf>,
+) -> anyhow::Result<ExitCode> {
     firma_run::identity::reject_reserved_sandbox_id_environment()?;
     if args.no_autostart && args.authority.as_deref() == Some("local") {
         anyhow::bail!(
@@ -46,7 +50,7 @@ pub fn run(args: RunArgs, foreground: &ForegroundLog) -> anyhow::Result<ExitCode
     // Implicit init: if no firma.toml is discoverable for this project,
     // scaffold one before handing off to firma-run. The returned path is
     // reused below so discovery is performed once.
-    let run_config = maybe_implicit_init(&args)?;
+    let run_config = maybe_implicit_init(config.as_deref(), &args)?;
 
     let profile = resolve_profile_name(
         args.profile.as_deref(),
@@ -78,7 +82,7 @@ pub fn run(args: RunArgs, foreground: &ForegroundLog) -> anyhow::Result<ExitCode
         command: args.command,
         authority_cli,
         authority_profile: args.authority_profile,
-        user_config_path: args.config.clone(),
+        user_config_path: config,
         allow_non_structural: args.allow_non_structural,
         monitor_mode: args.monitor,
     };
@@ -97,11 +101,11 @@ pub fn run(args: RunArgs, foreground: &ForegroundLog) -> anyhow::Result<ExitCode
     }
 }
 
-fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
-    if let Some(config) = &args.config {
+fn maybe_implicit_init(config: Option<&Path>, args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
+    if let Some(config) = config {
         // Trust the user-supplied config path. If it does not exist we
         // let firma-run report the parse/IO error normally.
-        return Ok(Some(config.clone()));
+        return Ok(Some(config.to_path_buf()));
     }
     // Spec §4 step 1 + §5: walk-up `./.firma/firma.toml` is the project-local
     // tier, picked up by `firma_config_loader::ConfigResolver`. If anything in the

@@ -51,7 +51,6 @@ fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
         execution_profile: AgentProfile::Generic,
         session_id: "sess",
         explicit_template: None,
-        env_template: None,
         cwd_template: None,
         socket_path: sock,
         listen_addr: None,
@@ -269,13 +268,12 @@ paths = ["/etc/firma/cap.toml"]
 }
 
 #[test]
-fn priority_order_explicit_over_env_over_cwd() {
+fn priority_order_explicit_over_cwd() {
     let tmp = TempDir::new().expect("tmp");
 
     let explicit = tmp.path().join("explicit.toml");
-    let env = tmp.path().join("env.toml");
     let cwd = tmp.path().join("cwd.toml");
-    for path in [&explicit, &env, &cwd] {
+    for path in [&explicit, &cwd] {
         fs::write(path, "[interceptor]\nmode = \"http_proxy\"\n").expect("write");
     }
 
@@ -284,20 +282,11 @@ fn priority_order_explicit_over_env_over_cwd() {
 
     let source = synthesize(SynthesizeRequest {
         explicit_template: Some(&explicit),
-        env_template: Some(env.clone()),
         cwd_template: Some(cwd.clone()),
         ..req(&sock, &out)
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Explicit(explicit));
-
-    let source = synthesize(SynthesizeRequest {
-        env_template: Some(env.clone()),
-        cwd_template: Some(cwd.clone()),
-        ..req(&sock, &out)
-    })
-    .expect("synthesize");
-    assert_eq!(source, TemplateSource::Env(env));
 
     let source = synthesize(SynthesizeRequest {
         cwd_template: Some(cwd.clone()),
@@ -477,7 +466,6 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
     let explicit = PathBuf::from("/does/not/exist/explicit.toml");
     let source = synthesize(SynthesizeRequest {
         explicit_template: Some(&explicit),
-        env_template: Some(PathBuf::from("/does/not/exist/env.toml")),
         cwd_template: Some(PathBuf::from("/does/not/exist/cwd.toml")),
         ..req(&sock, &out)
     })

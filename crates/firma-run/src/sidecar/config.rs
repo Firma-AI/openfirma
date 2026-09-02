@@ -303,8 +303,6 @@ pub struct SynthesizeRequest<'a> {
     pub session_id: &'a str,
     /// Highest-priority template path (typically `--sidecar-config`).
     pub explicit_template: Option<&'a Path>,
-    /// Fallback template path from `FIRMA_SIDECAR_CONFIG_FILE`.
-    pub env_template: Option<PathBuf>,
     /// Fallback template path from the current working directory.
     pub cwd_template: Option<PathBuf>,
     /// UDS path the spawned sidecar must bind.
@@ -352,7 +350,6 @@ pub struct SynthesizeRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateSource {
     Explicit(PathBuf),
-    Env(PathBuf),
     Cwd(PathBuf),
     Minimal,
 }
@@ -372,7 +369,7 @@ pub enum TemplateSource {
 pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError> {
     let source = select_template(&req);
     let (mut value, template_dir) = match &source {
-        TemplateSource::Explicit(path) | TemplateSource::Env(path) | TemplateSource::Cwd(path) => {
+        TemplateSource::Explicit(path) | TemplateSource::Cwd(path) => {
             let abs = std::path::absolute(path).unwrap_or_else(|_| path.clone());
             (parse_template(path)?, abs.parent().map(Path::to_path_buf))
         }
@@ -488,11 +485,6 @@ fn select_template(req: &SynthesizeRequest<'_>) -> TemplateSource {
         && path.is_file()
     {
         return TemplateSource::Explicit(path.to_path_buf());
-    }
-    if let Some(path) = req.env_template.as_deref()
-        && path.is_file()
-    {
-        return TemplateSource::Env(path.to_path_buf());
     }
     if let Some(path) = req.cwd_template.as_deref()
         && path.is_file()
@@ -1058,7 +1050,6 @@ mod tests {
             execution_profile: firma_config_loader::AgentProfile::Vscode,
             session_id: "sess_001",
             explicit_template: None,
-            env_template: None,
             cwd_template: None,
             socket_path: &tmp.path().join("sidecar.sock"),
             listen_addr: Some(

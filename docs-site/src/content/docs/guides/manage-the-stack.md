@@ -113,12 +113,12 @@ canonical files.
 
 | Flag          | Env                         | Default                                      |
 | ------------- | --------------------------- | -------------------------------------------- |
-| `--config`    | `FIRMA_SIDECAR_CONFIG_FILE` | discovered `firma.toml`                      |
+| `--config`    | `FIRMA_CONFIG`              | discovered `firma.toml`                      |
 | `--state-dir` | `FIRMA_STATE_DIR`           | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` |
 | `--detach`    | —                           | _off_                                        |
 
-`start` uses its documented dedicated config input when supplied; otherwise it
-follows the shared
+`start` selects the unified `firma.toml` via the global `--config` /
+`FIRMA_CONFIG`; when unset it follows the shared
 [configuration resolution](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md#configuration-resolution)
 model. It passes one selected `firma.toml` to both children and never merges
 multiple files. `state_dir` is never a config-file key.

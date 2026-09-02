@@ -901,10 +901,6 @@ fn prepare_run_components(
             })?;
         let firma_exe = std::env::current_exe()
             .map_err(|error| RunError::Internal(format!("resolve current executable: {error}")))?;
-        let env_template = std::env::var("FIRMA_SIDECAR_CONFIG_FILE")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from);
         let cwd_template = std::env::current_dir()
             .ok()
             .map(|cwd| cwd.join("firma_sidecar.toml"));
@@ -1006,7 +1002,6 @@ fn prepare_run_components(
                             session_id: &identity.session_id,
                             marker_dir: marker_dir.clone(),
                             template_path: component_flags.template_path.as_deref(),
-                            env_template: env_template.clone(),
                             cwd_template: cwd_template.clone(),
                             firma_exe: firma_exe.clone(),
                             authority_url: component_flags.authority_url.as_deref(),

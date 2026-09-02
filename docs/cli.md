@@ -180,18 +180,18 @@ firma sidecar [OPTIONS]
 
 ### Options
 
-| Flag                       | Short | Env var                          | Default                                                | Description                                                  |
-| -------------------------- | ----- | -------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------ |
-| `--config`                 | `-c`  | `FIRMA_SIDECAR_CONFIG_FILE`      | discovered (see [Config Discovery](#config-discovery)) | TOML configuration file                                      |
-| `--authority-connect-addr` |       | —                                | URL/DNS routing                                        | Physical Authority address; preserves the logical URL origin |
-| `--health-bind-addr`       |       | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000`                                       | Health check bind address                                    |
+| Flag                       | Short | Env var                          | Default          | Description                                                  |
+| -------------------------- | ----- | -------------------------------- | ---------------- | ------------------------------------------------------------ |
+| `--authority-connect-addr` |       | —                                | URL/DNS routing  | Physical Authority address; preserves the logical URL origin |
+| `--health-bind-addr`       |       | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000` | Health check bind address                                    |
 
-Log-level flags are global (placed **before** the subcommand):
+Global flags are accepted **before or after** any subcommand:
 
-| Flag           | Env                | Default | Description                                |
-| -------------- | ------------------ | ------- | ------------------------------------------ |
-| `--log-filter` | `FIRMA_LOG_FILTER` | `info`  | `EnvFilter` directive (e.g. `firma=debug`) |
-| `--log-file`   | `FIRMA_LOG_FILE`   | none    | File path for log output                   |
+| Flag           | Short | Env                | Default    | Description                                                      |
+| -------------- | ----- | ------------------ | ---------- | ---------------------------------------------------------------- |
+| `--config`     | `-c`  | `FIRMA_CONFIG`     | discovered | Unified `firma.toml` (see [Config Discovery](#config-discovery)) |
+| `--log-filter` |       | `FIRMA_LOG_FILTER` | `info`     | `EnvFilter` directive (e.g. `firma=debug`)                       |
+| `--log-file`   |       | `FIRMA_LOG_FILE`   | none       | File path for log output                                         |
 
 All options can be set through environment variables. CLI flags take precedence
 over environment variables.
@@ -221,7 +221,7 @@ firma --log-file /var/log/firma.log --log-filter "firma_sidecar=debug,tower=warn
 Use environment variables:
 
 ```bash
-export FIRMA_SIDECAR_CONFIG_FILE=/etc/firma/firma.toml
+export FIRMA_CONFIG=/etc/firma/firma.toml
 export FIRMA_LOG_FILTER=debug
 firma sidecar
 ```
@@ -440,8 +440,8 @@ When autostart fires, `firma run`:
 1. Resolves the per-sandbox marker directory under
    `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux), `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback), or `%LOCALAPPDATA%\firma\runtime\run\<sandbox_id>\` (Windows; see platform caveat below).
 2. Synthesizes a sidecar TOML by inheriting the operator template
-   (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → the discovered
-   `firma.toml` → minimal) and overriding the `[sidecar.interceptor]` section to
+   (`--sidecar-config` → `./firma_sidecar.toml` → minimal) and overriding the
+   `[sidecar.interceptor]` section to
    bind a Unix-domain socket at `<marker_dir>/sidecar.sock`. Relative
    resource paths in the inherited template (e.g. `sidecar.audit.signing_key_path`,
    `sidecar.policy.dir`, `sidecar.mapping.rules_path`, `sidecar.authority.public_key_path`) are
@@ -469,7 +469,7 @@ inputs for recovery. Set `FIRMA_RUN_KEEP_MARKERS` to retain them deliberately.
 | -------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--sidecar <local\|url>`               | —       | `local` autostarts a per-run sidecar. A `tcp://host:port` / `unix:///path` value targets an external sidecar and never autostarts. Omitted: persisted `sidecar_endpoint` (external) else local autostart. |
 | `--no-autostart`                       | off     | Fail with a typed error instead of autostarting any missing component. CI safety net. Incompatible with `--sidecar local` and `--authority local`.                                                        |
-| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback.                                                                                                          |
+| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Falls back to `./firma_sidecar.toml`, then a synthesized minimal config.                                                                                             |
 | `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for startup publication. `0` reverts to the built-in default.                                                                                                                                |
 
 ### Typed errors

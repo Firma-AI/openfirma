@@ -71,6 +71,11 @@ fn configure_help(command: &mut ClapCommand) {
                   firma doctor        — diagnose setup issues"
 )]
 pub struct Cli {
+    /// Unified `firma.toml` selecting stack configuration. When unset, resolved
+    /// via `FIRMA_CONFIG`, then the nearest `.firma/firma.toml`. Ignored by
+    /// subcommands that do not consume the unified config.
+    #[arg(long, short = 'c', global = true, env = "FIRMA_CONFIG")]
+    pub config: Option<PathBuf>,
     /// Write logs to this file instead of stderr.
     #[arg(long, global = true, env = "FIRMA_LOG_FILE")]
     pub log_file: Option<PathBuf>,
