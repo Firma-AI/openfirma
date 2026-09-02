@@ -7,15 +7,69 @@ pub mod http;
 ///
 /// Either a bare string naming an existing built-in integration (e.g. `"bws"`),
 /// or a full table defining a new custom integration (CLI or HTTP).
-/// TOML is self-describing, so this deserializes untagged based on whether
-/// the entry is a string or a table; the CLI-vs-HTTP distinction *within*
-/// the table form is resolved by [`SecretProviderConfig`]'s own `type` tag,
-/// not by this outer untagged split.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+/// The outer dispatch is string-vs-table; the CLI-vs-HTTP distinction *within*
+/// the table form is resolved by [`SecretProviderConfig`]'s own `type` tag.
+#[derive(Debug, Clone)]
 pub enum SecretProviderPatch {
     Named(String),
     Custom(Box<SecretProviderConfig>),
+}
+
+impl<'de> Deserialize<'de> for SecretProviderPatch {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PatchVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for PatchVisitor {
+            type Value = SecretProviderPatch;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(
+                    "a built-in integration name (bare string) or a custom integration table tagged by `type`",
+                )
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(SecretProviderPatch::Named(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(SecretProviderPatch::Named(value))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(SecretProviderPatch::Named(value.to_owned()))
+            }
+
+            fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let config = SecretProviderConfig::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )
+                .map_err(|error| {
+                    serde::de::Error::custom(format!(
+                        "invalid secret_providers entry (expected a table with `type = \"cli\"` or `type = \"http\"`): {error}"
+                    ))
+                })?;
+                Ok(SecretProviderPatch::Custom(Box::new(config)))
+            }
+        }
+
+        deserializer.deserialize_any(PatchVisitor)
+    }
 }
 
 /// A custom secret-provider integration spec

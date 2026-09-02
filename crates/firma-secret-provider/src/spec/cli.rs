@@ -13,8 +13,9 @@ pub type CliMatcherRule<Matcher> = MatcherRule<CommandAndMatcher<Matcher>, Comma
 /// Cross-field checks (empty names, `allow_attached_value` without
 /// `takes_value`, conflicting [`FlagSpec`] definitions across
 /// `stripped_options` / `forbidden_options` / per-command
-/// `stripped_options`) are enforced by the
+/// `stripped_options`) are enforced by [`Self::new`] and the
 /// `TryFrom<CliSecretProviderConfig>` impl before this type is constructed.
+/// Direct field construction outside this crate is not permitted.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CliIntegrationSpec<Matcher> {
     /// Executable basename used to select this integration (e.g. `"bws"`).
@@ -22,30 +23,30 @@ pub struct CliIntegrationSpec<Matcher> {
     /// Matches [`SecretProviderPatch::Named`](firma_config_schema::secret_provider::SecretProviderPatch::Named)
     /// keys and the `binary_name` field of a custom CLI spec; see
     /// [`CliSecretProviderConfig::binary_name`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::binary_name).
-    pub binary_name: String,
+    pub(crate) binary_name: String,
     /// Stable identifier recorded for secrets from this integration.
     ///
     /// Mirrors [`CliSecretProviderConfig::provider_id`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::provider_id).
-    pub provider_id: String,
+    pub(crate) provider_id: String,
     /// Environment variables forwarded to authenticate the provider CLI.
     ///
     /// Only these names are forwarded from the broker's environment to the
     /// subprocess; see [`CliSecretProviderConfig::credential_env_vars`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::credential_env_vars).
-    pub credential_env_vars: Vec<String>,
+    pub(crate) credential_env_vars: Vec<String>,
     /// Options ignored while identifying command words. Their value arity is
     /// honored, and the options remain unchanged in the executed command.
     ///
     /// Mirrors [`CliSecretProviderConfig::stripped_options`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::stripped_options).
-    pub stripped_options: Vec<FlagSpec>,
+    pub(crate) stripped_options: Vec<FlagSpec>,
     /// Options that make an otherwise permitted invocation unsafe. An
     /// invocation containing one is blocked rather than silently changed.
     ///
     /// Mirrors [`CliSecretProviderConfig::forbidden_options`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::forbidden_options).
-    pub forbidden_options: Vec<FlagSpec>,
+    pub(crate) forbidden_options: Vec<FlagSpec>,
     /// Rules that classify invocations and configure secret extraction.
     ///
     /// See [`CliMatcherRule`] and [`CliSecretProviderConfig::matchers`](firma_config_schema::secret_provider::cli::CliSecretProviderConfig::matchers).
-    pub matchers: Vec<CliMatcherRule<Matcher>>,
+    pub(crate) matchers: Vec<CliMatcherRule<Matcher>>,
 }
 
 /// Error returned when validating a [`CliSecretProviderConfig`].
@@ -75,64 +76,19 @@ impl TryFrom<CliSecretProviderConfig> for CliIntegrationSpec<SecretMatcher> {
     type Error = CliIntegrationConfigError;
 
     fn try_from(config: CliSecretProviderConfig) -> Result<Self, Self::Error> {
-        validate_consistent_options(&config.stripped_options)?;
-        validate_consistent_options(&config.forbidden_options)?;
-        let command_options = config.matchers.iter().flat_map(|matcher| match matcher {
-            CliMatcherRuleConfig::SensitiveCommand {
-                stripped_options, ..
-            } => stripped_options.as_slice(),
-            CliMatcherRuleConfig::SafeCommand { .. }
-            | CliMatcherRuleConfig::BlockedCommand { .. } => &[],
-        });
-        for option in config
-            .stripped_options
-            .iter()
-            .chain(&config.forbidden_options)
-            .chain(command_options)
-        {
-            if option.name.is_empty() {
-                return Err(CliIntegrationConfigError::EmptyOptionName);
-            }
-            if !option.takes_value && option.allow_attached_value {
-                return Err(CliIntegrationConfigError::AttachedValueWithoutValue {
-                    name: option.name.clone(),
-                });
-            }
-        }
-
-        for stripped_options in config.matchers.iter().filter_map(|matcher| match matcher {
-            CliMatcherRuleConfig::SensitiveCommand {
-                stripped_options, ..
-            } => Some(stripped_options),
-            CliMatcherRuleConfig::SafeCommand { .. }
-            | CliMatcherRuleConfig::BlockedCommand { .. } => None,
-        }) {
-            validate_consistent_options(stripped_options)?;
-            for integration_option in &config.stripped_options {
-                if stripped_options
-                    .iter()
-                    .filter(|option| option.name == integration_option.name)
-                    .any(|command_option| command_option != integration_option)
-                {
-                    return Err(CliIntegrationConfigError::ConflictingOptionDefinition {
-                        name: integration_option.name.clone(),
-                    });
-                }
-            }
-        }
-
-        Ok(Self {
-            binary_name: config.binary_name,
-            provider_id: config.provider_id,
-            credential_env_vars: config.credential_env_vars,
-            stripped_options: config.stripped_options,
-            forbidden_options: config.forbidden_options,
-            matchers: config
-                .matchers
-                .into_iter()
-                .map(MatcherRule::try_from)
-                .collect::<Result<_, _>>()?,
-        })
+        let matchers = config
+            .matchers
+            .into_iter()
+            .map(MatcherRule::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::new(
+            config.binary_name,
+            config.provider_id,
+            config.credential_env_vars,
+            config.stripped_options,
+            config.forbidden_options,
+            matchers,
+        )
     }
 }
 
@@ -191,6 +147,70 @@ fn validate_consistent_options(options: &[FlagSpec]) -> Result<(), CliIntegratio
 }
 
 impl<Matcher> CliIntegrationSpec<Matcher> {
+    /// Validated constructor.
+    ///
+    /// Enforces the same cross-field checks as `TryFrom<CliSecretProviderConfig>`:
+    /// empty option names, `allow_attached_value` without `takes_value`, and
+    /// conflicting [`FlagSpec`] definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CliIntegrationConfigError`] when cross-field validation fails.
+    pub fn new(
+        binary_name: String,
+        provider_id: String,
+        credential_env_vars: Vec<String>,
+        stripped_options: Vec<FlagSpec>,
+        forbidden_options: Vec<FlagSpec>,
+        matchers: Vec<CliMatcherRule<Matcher>>,
+    ) -> Result<Self, CliIntegrationConfigError> {
+        validate_consistent_options(&stripped_options)?;
+        validate_consistent_options(&forbidden_options)?;
+        let command_options = matchers
+            .iter()
+            .filter_map(MatcherRule::as_sensitive_command)
+            .flat_map(|rule| &rule.stripped_options);
+        for option in stripped_options
+            .iter()
+            .chain(&forbidden_options)
+            .chain(command_options)
+        {
+            if option.name.is_empty() {
+                return Err(CliIntegrationConfigError::EmptyOptionName);
+            }
+            if !option.takes_value && option.allow_attached_value {
+                return Err(CliIntegrationConfigError::AttachedValueWithoutValue {
+                    name: option.name.clone(),
+                });
+            }
+        }
+        for stripped in matchers.iter().filter_map(|m| match m {
+            MatcherRule::SensitiveCommand(rule) => Some(&rule.stripped_options),
+            MatcherRule::SafeCommand(_) | MatcherRule::BlockedCommand(_) => None,
+        }) {
+            validate_consistent_options(stripped)?;
+            for integration_option in &stripped_options {
+                if stripped
+                    .iter()
+                    .filter(|o| o.name == integration_option.name)
+                    .any(|o| o != integration_option)
+                {
+                    return Err(CliIntegrationConfigError::ConflictingOptionDefinition {
+                        name: integration_option.name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(Self {
+            binary_name,
+            provider_id,
+            credential_env_vars,
+            stripped_options,
+            forbidden_options,
+            matchers,
+        })
+    }
+
     /// Returns the executable basename used to select this integration.
     #[must_use]
     pub fn binary_name(&self) -> &str {
@@ -207,6 +227,12 @@ impl<Matcher> CliIntegrationSpec<Matcher> {
     #[must_use]
     pub fn credential_env_vars(&self) -> &[String] {
         &self.credential_env_vars
+    }
+
+    /// Returns the matcher rules.
+    #[must_use]
+    pub fn matchers(&self) -> &[CliMatcherRule<Matcher>] {
+        &self.matchers
     }
 
     /// Classifies an invocation as sensitive, safe to pass through, or

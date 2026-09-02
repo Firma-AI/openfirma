@@ -667,9 +667,12 @@ fn override_authority_credentials(
 /// Mirror the resolved HTTP-shaped `secret_providers` entries into
 /// `[sidecar].http_secret_providers`. A no-op when `providers` is empty —
 /// most profiles configure no HTTP vaults, and the field's `#[serde(default)]`
-/// on the Sidecar side already treats an absent key as empty. See
-/// [`crate::config::ResolvedProfile::secret_providers`] for the canonical
-/// authorization invariant.
+/// on the Sidecar side already treats an absent key as empty. When the
+/// template already contains `http_secret_providers`, entries are unioned:
+/// template entries whose `provider_id` collides with a profile entry are
+/// replaced by the profile entry (profile wins). A warning is emitted for
+/// each replacement. See [`crate::config::ResolvedProfile::secret_providers`]
+/// for the canonical authorization invariant.
 fn override_http_secret_providers(
     value: &mut toml::Value,
     providers: &[HttpIntegrationSpec<SecretMatcher>],
@@ -678,12 +681,58 @@ fn override_http_secret_providers(
         return Ok(());
     }
     let sidecar = sidecar_table_mut(value)?;
-    let serialized = toml::Value::try_from(providers).map_err(|error| {
+    let profile_ids: std::collections::HashSet<&str> = providers
+        .iter()
+        .map(|provider| provider.provider_id.as_str())
+        .collect();
+    let serialized_profile = toml::Value::try_from(providers).map_err(|error| {
         RunError::Internal(format!(
             "failed to serialize http_secret_providers into sidecar config: {error}"
         ))
     })?;
-    sidecar.insert("http_secret_providers".to_string(), serialized);
+    let toml::Value::Array(profile_entries) = serialized_profile else {
+        return Err(RunError::Internal(
+            "serialized http_secret_providers must be an array".to_string(),
+        ));
+    };
+    let mut merged: Vec<toml::Value> = match sidecar.get("http_secret_providers") {
+        Some(toml::Value::Array(existing)) => {
+            let before = existing.len();
+            let filtered: Vec<toml::Value> = existing
+                .iter()
+                .filter(|entry| {
+                    let Some(provider_id) = entry
+                        .as_table()
+                        .and_then(|table| table.get("provider_id"))
+                        .and_then(toml::Value::as_str)
+                    else {
+                        return true;
+                    };
+                    !profile_ids.contains(provider_id)
+                })
+                .cloned()
+                .collect();
+            let replaced = before.saturating_sub(filtered.len());
+            if replaced > 0 {
+                tracing::warn!(
+                    replaced,
+                    "template http_secret_providers entries overridden by profile secret_providers"
+                );
+            }
+            filtered
+        }
+        Some(other) => {
+            return Err(RunError::Internal(format!(
+                "http_secret_providers in sidecar template must be an array, got: {other:?}"
+            )));
+        }
+        None => Vec::new(),
+    };
+    merged.extend(profile_entries);
+    sidecar.insert(
+        "http_secret_providers".to_string(),
+        toml::Value::Array(merged),
+    );
     Ok(())
 }
 

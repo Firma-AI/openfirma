@@ -347,9 +347,6 @@ pub struct SeccompPolicyConfig {
 
 /// Fallback sidecar endpoint used only to keep `ResolvedProfile.sidecar_endpoint`
 /// populated on local autostart, where the supervisor substitutes its own UDS.
-#[cfg(target_family = "unix")]
-const DEFAULT_SIDECAR_ENDPOINT: &str = "unix:///tmp/sidecar.sock";
-#[cfg(not(target_family = "unix"))]
 const DEFAULT_SIDECAR_ENDPOINT: &str = "tcp://127.0.0.1:8080";
 const DEFAULT_MANAGED_POLICY_FILE: &str = "generic-local-command-v1.toml";
 const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
@@ -801,7 +798,7 @@ fn resolve_secret_providers(
                 let spec = IntegrationSpec::try_from(*spec)?;
                 // Cli specs are indexed by binary name, Http specs are indexed by provider id
                 let name = match &spec {
-                    IntegrationSpec::Cli(cli) => cli.binary_name.clone(),
+                    IntegrationSpec::Cli(cli) => cli.binary_name().to_owned(),
                     IntegrationSpec::Http(http) => http.provider_id.clone(),
                 };
                 resolved.insert(name, spec);
@@ -1771,7 +1768,7 @@ secret_providers = [
         std::assert_matches!(
             spec.as_cli()
                 .expect("bws entry must resolve to a CLI spec")
-                .matchers[0],
+                .matchers()[0],
             MatcherRule::SensitiveCommand(CommandAndMatcher {
                 matcher: SecretMatcher::Regex { .. },
                 ..

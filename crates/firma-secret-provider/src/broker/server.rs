@@ -41,6 +41,34 @@ use crate::{
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
 
+/// Error from [`BrokerListener::accept_one`], split by whether the listener
+/// can keep serving.
+///
+/// `Listener` errors mean the listener itself failed (e.g. the socket can no
+/// longer accept); a loop should stop. `Connection` errors affect only the
+/// current peer (timeout, malformed framing, I/O failure, rejected peer
+/// credentials); the listener stays usable and a robust loop must keep
+/// accepting.
+#[derive(Debug, thiserror::Error)]
+pub enum AcceptError {
+    /// The listener socket failed and can no longer accept connections.
+    #[error("broker listener failed: {0}")]
+    Listener(#[source] std::io::Error),
+    /// One accepted connection failed before completing the exchange.
+    #[error("broker connection failed: {0}")]
+    Connection(#[source] std::io::Error),
+}
+
+impl AcceptError {
+    /// The underlying [`std::io::ErrorKind`] of the wrapped I/O error.
+    #[must_use]
+    pub fn kind(&self) -> std::io::ErrorKind {
+        match self {
+            Self::Listener(error) | Self::Connection(error) => error.kind(),
+        }
+    }
+}
+
 enum BrokerListenerInner {
     Tcp(TcpListener),
     #[cfg(unix)]
@@ -111,6 +139,12 @@ impl BrokerListener {
         }
     }
 
+    /// The broker configuration this listener applies to each connection.
+    #[must_use]
+    pub fn config(&self) -> BrokerConfig {
+        self.config
+    }
+
     /// Return the address this listener is actually bound to.
     ///
     /// # Errors
@@ -134,22 +168,23 @@ impl BrokerListener {
     ///
     /// # Errors
     ///
-    /// Returns an I/O error if accepting, reading, or writing fails, or if the
-    /// peer fails credential validation. Handler rejections are serialized as
-    /// `{"type":"rejected","error":"..."}` responses rather than returned
-    /// here. A returned error only affects the current connection; a robust
-    /// accept loop must keep accepting.
-    pub async fn accept_one<F>(&self, handler: F) -> io::Result<()>
+    /// Returns [`AcceptError::Listener`] when the listener socket itself can no
+    /// longer accept. Returns [`AcceptError::Connection`] for per-connection
+    /// failures (timeout, malformed framing, I/O failure, rejected peer
+    /// credentials). `Connection` errors affect only the current peer; a robust
+    /// accept loop must keep accepting. Handler rejections are serialized as
+    /// `{"type":"rejected","error":"..."}` responses rather than returned here.
+    pub async fn accept_one<F>(&self, handler: F) -> Result<(), AcceptError>
     where
         F: for<'a> AsyncFnOnce(BrokerRequest<'a>) -> BrokerResponse<'a>,
     {
         let mut stream = match &self.inner {
             BrokerListenerInner::Tcp(listener) => BrokerStream::Tcp {
-                stream: listener.accept().await?.0,
+                stream: listener.accept().await.map_err(AcceptError::Listener)?.0,
             },
             #[cfg(unix)]
             BrokerListenerInner::Unix { listener, .. } => {
-                let (stream, _) = listener.accept().await?;
+                let (stream, _) = listener.accept().await.map_err(AcceptError::Listener)?;
                 if let Err(error) = reject_mismatched_peer(&stream) {
                     let response = BrokerResponse::rejected(format!(
                         "peer credential validation failed: {error}"
@@ -160,7 +195,7 @@ impl BrokerListener {
                         write_response(&mut stream, &response, self.config.max_response_size()),
                     )
                     .await;
-                    return Err(error);
+                    return Err(AcceptError::Connection(error));
                 }
                 BrokerStream::Unix { stream }
             }
@@ -174,11 +209,12 @@ impl BrokerListener {
         )
         .await
         .map_err(|_| {
-            io::Error::new(
+            AcceptError::Connection(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "broker connection exceeded operation timeout",
-            )
+            ))
         })?
+        .map_err(AcceptError::Connection)
     }
 }
 

@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use firma_core::SecretMatcher;
 use firma_secret_provider::{
-    broker::server::BrokerListener, spec::cli::CliIntegrationSpec, store::SecretStore,
+    broker::server::{AcceptError, BrokerListener},
+    spec::cli::CliIntegrationSpec,
+    store::SecretStore,
 };
 use tokio::sync::RwLock;
 
@@ -29,9 +31,11 @@ use super::serve::serve_request;
 /// (shared with the secret gateway). `real_bin_dir`, when `Some`, overrides
 /// `PATH` lookup for the real binary (Linux bwrap layout). Per-connection
 /// handler errors are mapped to [`firma_secret_provider::broker::BrokerResponse::Rejected`];
-/// only transport-level [`BrokerListener::accept_one`] errors stop the loop
-/// (typically when the listener is dropped). This future never returns a
-/// `Result` — it loops until the listener is closed and then returns `()`.
+/// only listener-level [`AcceptError::Listener`] errors stop the loop. Per-
+/// connection [`AcceptError::Connection`] errors (timeout, malformed framing,
+/// I/O failure, rejected peer credentials) are logged and the loop continues.
+/// This future never returns a `Result` — it loops until the listener can no
+/// longer accept and then returns `()`.
 pub async fn serve_forever<S>(
     listener: BrokerListener,
     store: Arc<RwLock<SecretStore>>,
@@ -40,6 +44,7 @@ pub async fn serve_forever<S>(
 ) where
     S: Fn(&str) -> Option<CliIntegrationSpec<SecretMatcher>> + Send + Sync + 'static,
 {
+    let capture_limit = listener.config().max_response_size() / 4;
     loop {
         let store = Arc::clone(&store);
         let spec_for = Arc::clone(&spec_for);
@@ -49,26 +54,27 @@ pub async fn serve_forever<S>(
             .accept_one(async |request| {
                 let spec = spec_for(&request.bin);
                 let dir = real_bin_dir.as_deref();
-                serve_request(&request, spec.as_ref(), &store, dir).await
+                serve_request(&request, spec.as_ref(), &store, dir, capture_limit).await
             })
             .await;
 
         match result {
             Ok(()) => {}
-            Err(error) => {
-                tracing::debug!(%error, "secret broker accept loop stopping");
+            Err(AcceptError::Connection(error)) => {
+                tracing::warn!(%error, "secret broker connection failed; continuing to accept");
+            }
+            Err(AcceptError::Listener(error)) => {
+                tracing::error!(%error, "secret broker listener failed; accept loop stopping");
                 break;
             }
         }
     }
-    drop((listener, store, spec_for, real_bin_dir));
 }
 
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
 
     use firma_config_schema::broker::BrokerConfig;
     use firma_secret_provider::{endpoint::server::ServerEndpoint, store::SecretStore};
@@ -102,9 +108,6 @@ mod tests {
             None,
         ));
 
-        // Give the listener a moment to start
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
         let client_endpoint = firma_secret_provider::endpoint::client::ClientEndpoint::from_str(
             &format!("tcp://{addr}"),
         )
@@ -137,14 +140,15 @@ mod tests {
         use firma_config_schema::secret_provider::cli::FlagSpec;
         use firma_secret_provider::spec::cli::CliIntegrationSpec;
 
-        let spec = CliIntegrationSpec {
-            binary_name: "bws".to_string(),
-            provider_id: "bitwarden".to_string(),
-            credential_env_vars: vec!["BWS_ACCESS_TOKEN".to_string()],
-            stripped_options: vec![],
-            forbidden_options: vec![FlagSpec::value("--server-url")],
-            matchers: vec![],
-        };
+        let spec = CliIntegrationSpec::new(
+            "bws".to_string(),
+            "bitwarden".to_string(),
+            vec!["BWS_ACCESS_TOKEN".to_string()],
+            vec![],
+            vec![FlagSpec::value("--server-url")],
+            vec![],
+        )
+        .unwrap_or_else(|error| panic!("valid spec: {error}"));
         let (listener, addr) = bind_tcp().await;
         let store = Arc::new(RwLock::new(SecretStore::new()));
         let spec_clone = spec.clone();
@@ -160,7 +164,6 @@ mod tests {
             }),
             None,
         ));
-        tokio::time::sleep(Duration::from_millis(50)).await;
         let client_endpoint = firma_secret_provider::endpoint::client::ClientEndpoint::from_str(
             &format!("tcp://{addr}"),
         )
