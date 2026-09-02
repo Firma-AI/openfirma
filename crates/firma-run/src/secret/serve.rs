@@ -287,14 +287,42 @@ mod tests {
         RwLock::new(SecretStore::new())
     }
 
+    fn echo_spec() -> firma_secret_provider::spec::cli::CliIntegrationSpec<SecretMatcher> {
+        use firma_secret_provider::{
+            non_empty::NonEmptyVec,
+            spec::{MatcherRule, cli::CommandPattern},
+        };
+
+        // An exact `SafeCommand` match on the whole argv: passthrough with no
+        // extraction, the only execution path still reachable for `echo` now
+        // that unconfigured binaries are rejected.
+        firma_secret_provider::spec::cli::CliIntegrationSpec::new(
+            "echo".to_string(),
+            "echo".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![MatcherRule::SafeCommand(CommandPattern::exact(
+                NonEmptyVec::new(vec![
+                    String::from("hello"),
+                    String::from("from"),
+                    String::from("broker"),
+                ])
+                .expect("non-empty argv"),
+            ))],
+        )
+        .unwrap_or_else(|error| panic!("valid spec: {error}"))
+    }
+
     #[tokio::test]
-    async fn passthrough_without_spec_returns_raw_stdout() {
+    async fn passthrough_safe_command_returns_raw_stdout() {
         let store = store();
         let request = BrokerRequest {
             bin: BinaryName::new("echo").expect("valid bin"),
             args: vec!["hello".into(), "from".into(), "broker".into()],
         };
-        let response = serve_request(&request, None, &store, None, CAPTURE_LIMIT).await;
+        let spec = echo_spec();
+        let response = serve_request(&request, Some(&spec), &store, None, CAPTURE_LIMIT).await;
         let decoded = response.decode().expect("decode");
         match decoded {
             firma_secret_provider::broker::DecodedBrokerResponse::Executed(output) => {
@@ -313,6 +341,24 @@ mod tests {
                 panic!("expected executed, got rejected: {e}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn unconfigured_binary_is_rejected() {
+        let store = store();
+        let request = BrokerRequest {
+            bin: BinaryName::new("echo").expect("valid bin"),
+            args: vec!["hello".into()],
+        };
+        let response = serve_request(&request, None, &store, None, CAPTURE_LIMIT).await;
+        assert!(
+            matches!(
+                response.decode().expect("decode"),
+                firma_secret_provider::broker::DecodedBrokerResponse::Rejected(reason)
+                    if reason.contains("unconfigured binary echo")
+            ),
+            "a binary with no resolved spec must be rejected, not executed"
+        );
     }
 
     #[tokio::test]
@@ -423,8 +469,9 @@ mod tests {
             bin: BinaryName::new("echo").expect("valid bin"),
             args: vec!["hello".into(), "from".into(), "broker".into()],
         };
+        let spec = echo_spec();
         let tiny_limit = 4usize;
-        let response = serve_request(&request, None, &store, None, tiny_limit).await;
+        let response = serve_request(&request, Some(&spec), &store, None, tiny_limit).await;
         assert!(
             matches!(
                 response.decode().expect("decode"),

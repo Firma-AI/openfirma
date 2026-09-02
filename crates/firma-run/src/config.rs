@@ -498,7 +498,16 @@ impl Merge for ProfilePatch {
             allow_non_structural: higher.allow_non_structural.or(self.allow_non_structural),
             mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
             ca_trust_mode: higher.ca_trust_mode.or(self.ca_trust_mode),
-            secret_providers: higher.secret_providers.or(self.secret_providers),
+            secret_providers: match (self.secret_providers, higher.secret_providers) {
+                // Additive across layers (like `env_passthrough`); the later
+                // (higher) entries come last so they win on name collision in
+                // `resolve_secret_providers`.
+                (Some(mut lower), Some(higher)) => {
+                    lower.extend(higher);
+                    Some(lower)
+                }
+                (lower, higher) => higher.or(lower),
+            },
         }
     }
 }

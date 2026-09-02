@@ -96,15 +96,43 @@ mod tests {
         (listener, addr)
     }
 
+    fn echo_spec() -> firma_secret_provider::spec::cli::CliIntegrationSpec<firma_core::SecretMatcher>
+    {
+        use firma_secret_provider::{
+            non_empty::NonEmptyVec,
+            spec::{MatcherRule, cli::CommandPattern},
+        };
+
+        // Exact `SafeCommand` on the whole argv so `echo` is classified as a
+        // known-safe passthrough (unconfigured binaries are rejected now).
+        firma_secret_provider::spec::cli::CliIntegrationSpec::new(
+            "echo".to_string(),
+            "echo".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![MatcherRule::SafeCommand(CommandPattern::exact(
+                NonEmptyVec::new(vec![
+                    String::from("hello"),
+                    String::from("from"),
+                    String::from("broker"),
+                ])
+                .expect("non-empty argv"),
+            ))],
+        )
+        .unwrap_or_else(|error| panic!("valid spec: {error}"))
+    }
+
     #[tokio::test]
     async fn echo_end_to_end() {
         let (listener, addr) = bind_tcp().await;
         let store = Arc::new(RwLock::new(SecretStore::new()));
 
+        let spec = echo_spec();
         let server = tokio::spawn(serve_forever(
             listener,
             Arc::clone(&store),
-            Arc::new(|_bin: &str| None),
+            Arc::new(move |_bin: &str| Some(spec.clone())),
             None,
         ));
 
