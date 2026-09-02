@@ -91,7 +91,7 @@ async fn run_server(config: AuthorityConfig, startup_report: Option<&Path>) -> R
 }
 
 async fn run_revoke(config: &AuthorityConfig, token_id: TokenId, reason: &str) -> Result<()> {
-    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds()));
+    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds().get()));
     let store =
         RevocationStore::try_new(config.revocation_file(), token_ttl).with_context(|| {
             format!(
@@ -110,7 +110,7 @@ async fn run_revoke(config: &AuthorityConfig, token_id: TokenId, reason: &str) -
 }
 
 async fn run_compact(config: &AuthorityConfig) -> Result<()> {
-    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds()));
+    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds().get()));
     let store =
         RevocationStore::try_new(config.revocation_file(), token_ttl).with_context(|| {
             format!(
@@ -251,7 +251,7 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
         CedarPolicyStore::load(
             config.policy_dir(),
             config.schema_path().map(std::path::Path::to_path_buf),
-            config.bundle_ttl_seconds(),
+            config.bundle_ttl_seconds().get(),
         )
         .context("failed to load Cedar policies")?,
     );

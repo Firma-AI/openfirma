@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -37,7 +38,7 @@ pub struct AuthorityServiceImpl {
     /// and read in-memory revocation state via `Deref<Target = RevocationStore>`.
     revocation_watcher: RevocationStoreWatcher,
     signer: Arc<PasetoV4Signer>,
-    max_ttl_seconds: i32,
+    max_ttl_seconds: NonZeroU32,
 }
 
 impl AuthorityServiceImpl {
@@ -49,7 +50,7 @@ impl AuthorityServiceImpl {
         policy_store: CedarPolicyStore,
         revocation_store: RevocationStore,
         signer: Arc<PasetoV4Signer>,
-        max_ttl_seconds: i32,
+        max_ttl_seconds: NonZeroU32,
     ) -> anyhow::Result<Self> {
         let issuance_policy_watcher = issuance_policy_store.watch()?;
         let policy_watcher = policy_store.watch()?;
@@ -597,18 +598,21 @@ pub(crate) fn compute_context_hash(
     hex::encode(hasher.finalize())
 }
 
-/// FR-4: Clamp requested TTL to the configured maximum.
-pub(crate) fn clamp_ttl(requested: i32, max: i32) -> i32 {
-    if requested <= 0 {
-        max
-    } else {
-        requested.min(max)
-    }
+/// FR-4: Normalize a signed protocol request and clamp it to the configured maximum.
+pub(crate) fn clamp_ttl(requested: i32, max: NonZeroU32) -> NonZeroU32 {
+    u32::try_from(requested)
+        .ok()
+        .and_then(NonZeroU32::new)
+        .map_or(max, |requested| requested.min(max))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn max_ttl() -> NonZeroU32 {
+        NonZeroU32::new(3600).unwrap_or(NonZeroU32::MIN)
+    }
 
     fn agent(id: &str) -> AgentId {
         id.parse().unwrap()
@@ -624,22 +628,22 @@ mod tests {
 
     #[test]
     fn clamp_ttl_within_max() {
-        assert_eq!(clamp_ttl(600, 3600), 600);
+        assert_eq!(clamp_ttl(600, max_ttl()).get(), 600);
     }
 
     #[test]
     fn clamp_ttl_exceeds_max() {
-        assert_eq!(clamp_ttl(7200, 3600), 3600);
+        assert_eq!(clamp_ttl(7200, max_ttl()).get(), 3600);
     }
 
     #[test]
     fn clamp_ttl_zero_uses_max() {
-        assert_eq!(clamp_ttl(0, 3600), 3600);
+        assert_eq!(clamp_ttl(0, max_ttl()).get(), 3600);
     }
 
     #[test]
     fn clamp_ttl_negative_uses_max() {
-        assert_eq!(clamp_ttl(-1, 3600), 3600);
+        assert_eq!(clamp_ttl(-1, max_ttl()).get(), 3600);
     }
 
     fn permit_all() -> PolicySet {

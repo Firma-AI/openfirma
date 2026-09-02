@@ -1,4 +1,5 @@
 use firma_config_schema::authority as schema;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 
 /// Authority configuration loaded from TOML file and/or environment variables.
@@ -36,12 +37,12 @@ pub struct AuthorityConfig {
     pub(crate) schema_path: Option<PathBuf>,
     /// Path to the revocation file (one token ID per line).
     pub(crate) revocation_file: PathBuf,
-    /// Maximum token TTL in seconds (default: 3600).
-    pub(crate) max_ttl_seconds: i32,
+    /// Strictly positive maximum token TTL in whole seconds.
+    max_ttl_seconds: NonZeroU32,
     /// Path to the Ed25519 signing key file (64-byte raw or PEM).
     pub(crate) key_file: PathBuf,
-    /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
-    pub(crate) bundle_ttl_seconds: u32,
+    /// Strictly positive policy bundle TTL advertised to sidecars in whole seconds.
+    bundle_ttl_seconds: NonZeroU32,
     /// Authority TLS configuration.
     pub(crate) tls: AuthorityTlsConfig,
 }
@@ -74,9 +75,9 @@ impl AuthorityConfig {
         &self.revocation_file
     }
 
-    /// Maximum token TTL in seconds.
+    /// Strictly positive maximum token TTL in whole seconds.
     #[must_use]
-    pub fn max_ttl_seconds(&self) -> i32 {
+    pub const fn max_ttl_seconds(&self) -> NonZeroU32 {
         self.max_ttl_seconds
     }
 
@@ -86,9 +87,9 @@ impl AuthorityConfig {
         &self.key_file
     }
 
-    /// Policy bundle TTL advertised to sidecars in seconds.
+    /// Strictly positive policy bundle TTL advertised to sidecars in whole seconds.
     #[must_use]
-    pub fn bundle_ttl_seconds(&self) -> u32 {
+    pub const fn bundle_ttl_seconds(&self) -> NonZeroU32 {
         self.bundle_ttl_seconds
     }
 
@@ -179,12 +180,26 @@ impl AuthorityConfig {
                 field: "authority.bundle_ttl",
             });
         }
-        let max_ttl_seconds = i32::try_from(max_ttl.as_secs()).map_err(|_| {
+        let max_ttl_seconds =
+            NonZeroU64::new(max_ttl.as_secs()).ok_or(AuthorityConfigError::DurationOutOfRange {
+                field: "authority.max_ttl",
+            })?;
+        if max_ttl_seconds.get() > u64::from(i32::MAX.unsigned_abs()) {
+            return Err(AuthorityConfigError::DurationOutOfRange {
+                field: "authority.max_ttl",
+            });
+        }
+        let max_ttl_seconds = NonZeroU32::try_from(max_ttl_seconds).map_err(|_| {
             AuthorityConfigError::DurationOutOfRange {
                 field: "authority.max_ttl",
             }
         })?;
-        let bundle_ttl_seconds = u32::try_from(bundle_ttl.as_secs()).map_err(|_| {
+        let bundle_ttl_seconds = NonZeroU64::new(bundle_ttl.as_secs()).ok_or(
+            AuthorityConfigError::DurationOutOfRange {
+                field: "authority.bundle_ttl",
+            },
+        )?;
+        let bundle_ttl_seconds = NonZeroU32::try_from(bundle_ttl_seconds).map_err(|_| {
             AuthorityConfigError::DurationOutOfRange {
                 field: "authority.bundle_ttl",
             }
@@ -216,18 +231,15 @@ impl AuthorityConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::DurationNotPositive`] if either runtime TTL
-    /// cannot be represented as a non-zero schema duration.
+    /// This conversion is infallible for builder-produced runtime state. The
+    /// result remains fallible for API compatibility with existing callers.
     pub fn to_schema(&self) -> Result<schema::AuthorityConfig, ConfigError> {
-        let max_ttl_seconds =
-            u64::try_from(self.max_ttl_seconds).map_err(|_| ConfigError::DurationNotPositive {
-                field: "authority.max_ttl",
-            })?;
-        let max_ttl = non_zero_duration_from_seconds("authority.max_ttl", max_ttl_seconds)?;
-        let bundle_ttl = non_zero_duration_from_seconds(
-            "authority.bundle_ttl",
-            u64::from(self.bundle_ttl_seconds),
-        )?;
+        let max_ttl = firma_config_schema::utils::NonZeroDuration::from(NonZeroU64::from(
+            self.max_ttl_seconds,
+        ));
+        let bundle_ttl = firma_config_schema::utils::NonZeroDuration::from(NonZeroU64::from(
+            self.bundle_ttl_seconds,
+        ));
 
         Ok(schema::AuthorityConfig {
             listen_addr: self.listen_addr.clone(),
@@ -245,14 +257,6 @@ impl AuthorityConfig {
             authorized_clients_path: self.tls.authorized_clients.clone(),
         })
     }
-}
-
-fn non_zero_duration_from_seconds(
-    field: &'static str,
-    seconds: u64,
-) -> Result<firma_config_schema::utils::NonZeroDuration, ConfigError> {
-    firma_config_schema::utils::NonZeroDuration::new(std::time::Duration::from_secs(seconds))
-        .map_err(|_| ConfigError::DurationNotPositive { field })
 }
 
 /// Assembles a validated [`AuthorityConfig`].
@@ -589,8 +593,8 @@ mod tests {
     fn default_config_has_sensible_values() -> anyhow::Result<()> {
         let config = AuthorityConfigBuilder::default().build()?;
         assert_eq!(config.listen_addr, "[::1]:50051");
-        assert_eq!(config.max_ttl_seconds, 3600);
-        assert_eq!(config.bundle_ttl_seconds, 30);
+        assert_eq!(config.max_ttl_seconds.get(), 3600);
+        assert_eq!(config.bundle_ttl_seconds.get(), 30);
 
         Ok(())
     }
@@ -678,7 +682,7 @@ mod tests {
         )
         .unwrap();
         let c = AuthorityConfig::load_resolved(&p, tmp.path()).unwrap();
-        assert_eq!(c.max_ttl_seconds, 1800);
+        assert_eq!(c.max_ttl_seconds.get(), 1800);
         assert_eq!(c.policy_dir, tmp.path().join("policies"));
         assert_eq!(c.tls.cert, Some(tmp.path().join("authority.crt")));
         assert_eq!(c.tls.key, Some(tmp.path().join("authority.key")));
@@ -696,9 +700,9 @@ max_ttl = "30m"
             .build()
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(config.listen_addr, "0.0.0.0:9090");
-        assert_eq!(config.max_ttl_seconds, 1800);
+        assert_eq!(config.max_ttl_seconds.get(), 1800);
         // Defaults for unspecified fields
-        assert_eq!(config.bundle_ttl_seconds, 30);
+        assert_eq!(config.bundle_ttl_seconds.get(), 30);
     }
 
     #[test]

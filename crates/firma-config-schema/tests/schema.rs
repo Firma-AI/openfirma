@@ -15,6 +15,7 @@ use firma_config_schema::utils::{NonZeroDuration, ZeroDurationError};
 use firma_config_schema::{authority, gateway, run, secret_matcher, sidecar};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 #[test]
@@ -83,6 +84,12 @@ fn non_zero_duration_serialization_round_trips_with_friendly_representation() {
     let deserialized: NonZeroDuration =
         serde_json::from_str(&serialized).expect("serialized non-zero duration deserializes");
     assert_eq!(deserialized, non_zero_duration);
+
+    let whole_seconds = NonZeroU64::new(90).expect("test fixture is non-zero");
+    assert_eq!(
+        NonZeroDuration::from(whole_seconds).duration(),
+        Duration::from_secs(90)
+    );
 }
 
 #[test]

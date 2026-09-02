@@ -78,28 +78,32 @@ bundle_ttl = "12s"
     set_ttl_env(None, None, None, None);
     let config = AuthorityConfig::from_resolved_section(&resolved)?
         .ok_or_else(|| anyhow!("authority section should be present"))?;
-    assert_eq!(config.max_ttl_seconds(), 11);
-    assert_eq!(config.bundle_ttl_seconds(), 12);
+    assert_eq!(config.max_ttl_seconds().get(), 11);
+    assert_eq!(config.bundle_ttl_seconds().get(), 12);
 
-    for (value, expected) in [("1m", 60), ("2h 30m", 9_000), ("2147483647s", i32::MAX)] {
+    for (value, expected) in [
+        ("1m", 60),
+        ("2h 30m", 9_000),
+        ("2147483647s", i32::MAX.unsigned_abs()),
+    ] {
         set_ttl_env(Some(value), None, None, None);
         let config = AuthorityConfig::from_resolved_section(&resolved)?
             .ok_or_else(|| anyhow!("authority section should be present"))?;
         assert_eq!(
-            config.max_ttl_seconds(),
+            config.max_ttl_seconds().get(),
             expected,
             "unexpected max TTL override result for {value:?}"
         );
-        assert_eq!(config.bundle_ttl_seconds(), 12);
+        assert_eq!(config.bundle_ttl_seconds().get(), 12);
     }
 
     for (value, expected) in [("1m", 60), ("2h 30m", 9_000), ("4294967295s", u32::MAX)] {
         set_ttl_env(None, Some(value), None, None);
         let config = AuthorityConfig::from_resolved_section(&resolved)?
             .ok_or_else(|| anyhow!("authority section should be present"))?;
-        assert_eq!(config.max_ttl_seconds(), 11);
+        assert_eq!(config.max_ttl_seconds().get(), 11);
         assert_eq!(
-            config.bundle_ttl_seconds(),
+            config.bundle_ttl_seconds().get(),
             expected,
             "unexpected bundle TTL override result for {value:?}"
         );
@@ -108,14 +112,14 @@ bundle_ttl = "12s"
     set_ttl_env(Some("13s"), Some("14s"), None, None);
     let config = AuthorityConfig::from_resolved_section(&resolved)?
         .ok_or_else(|| anyhow!("authority section should be present"))?;
-    assert_eq!(config.max_ttl_seconds(), 13);
-    assert_eq!(config.bundle_ttl_seconds(), 14);
+    assert_eq!(config.max_ttl_seconds().get(), 13);
+    assert_eq!(config.bundle_ttl_seconds().get(), 14);
 
     set_ttl_env(None, None, Some("21"), Some("22"));
     let config = AuthorityConfig::from_resolved_section(&resolved)?
         .ok_or_else(|| anyhow!("authority section should be present"))?;
-    assert_eq!(config.max_ttl_seconds(), 11);
-    assert_eq!(config.bundle_ttl_seconds(), 12);
+    assert_eq!(config.max_ttl_seconds().get(), 11);
+    assert_eq!(config.bundle_ttl_seconds().get(), 12);
 
     Ok(())
 }
@@ -243,8 +247,8 @@ fn non_unicode_duration_env_overrides_follow_the_general_env_contract() -> anyho
     }
     let config = AuthorityConfig::from_resolved_section(&resolved)?
         .ok_or_else(|| anyhow!("authority section should be present"))?;
-    assert_eq!(config.max_ttl_seconds(), 11);
-    assert_eq!(config.bundle_ttl_seconds(), 12);
+    assert_eq!(config.max_ttl_seconds().get(), 11);
+    assert_eq!(config.bundle_ttl_seconds().get(), 12);
 
     Ok(())
 }
@@ -327,9 +331,9 @@ fn accessors_expose_built_values() -> anyhow::Result<()> {
         Some(Path::new("/srv/schema.cedarschema"))
     );
     assert_eq!(config.revocation_file(), Path::new("/srv/revocations.txt"));
-    assert_eq!(config.max_ttl_seconds(), 1200);
+    assert_eq!(config.max_ttl_seconds().get(), 1200);
     assert_eq!(config.key_file(), Path::new("/srv/authority.key"));
-    assert_eq!(config.bundle_ttl_seconds(), 45);
+    assert_eq!(config.bundle_ttl_seconds().get(), 45);
     assert_eq!(
         config.tls().mtls_client_ca_cert_path(),
         Some(Path::new("/srv/ca.crt"))
