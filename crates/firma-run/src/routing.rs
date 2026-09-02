@@ -1031,6 +1031,7 @@ fn prepare_run_components(
                             use_http_proxy_interceptor: component_flags.use_http_proxy_sidecar,
                             audit_fallback_path: Some(runtime_layout.audit_log()),
                             monitor_mode: component_flags.monitor_mode,
+                            secret_gateway_addr: component_flags.secret_gateway_addr.as_deref(),
                             http_secret_providers: &component_flags.http_secret_providers,
                         },
                     )?;

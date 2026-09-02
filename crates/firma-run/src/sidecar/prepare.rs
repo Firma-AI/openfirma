@@ -74,10 +74,15 @@ pub struct PrepareRequest<'a> {
     pub use_http_proxy_interceptor: bool,
     pub audit_fallback_path: Option<PathBuf>,
     pub monitor_mode: bool,
+    pub secret_gateway_addr: Option<&'a str>,
     pub http_secret_providers: &'a [HttpIntegrationSpec<SecretMatcher>],
 }
 
 /// Materialize a Sidecar command and all of its launch inputs.
+#[expect(
+    clippy::too_many_lines,
+    reason = "prepare operations must stay in the same place"
+)]
 pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunError> {
     let marker_dir = std::path::absolute(&req.marker_dir).map_err(|error| {
         RunError::Internal(format!(
@@ -167,6 +172,9 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         .stderr(Stdio::piped());
     if req.monitor_mode {
         command.env("FIRMA_ALLOW_MONITOR_MODE", "1");
+    }
+    if let Some(ref addr) = req.secret_gateway_addr {
+        command.env("FIRMA_SECRET_GATEWAY_ADDR", addr);
     }
 
     Ok(PreparedSidecarLaunch {
