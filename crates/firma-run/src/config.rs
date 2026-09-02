@@ -72,9 +72,10 @@ pub struct ResolvedProfile {
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
     pub(crate) use_http_proxy_sidecar: bool,
     /// When `true`, allow non-structural (proxy-only) backends to run without
-    /// failing closed. Comes from config `[defaults] allow_non_structural = true`
-    /// and is OR'd with the CLI `--allow-non-structural` flag and env var
-    /// `FIRMA_RUN_ALLOW_NON_STRUCTURAL`.
+    /// failing closed. Profile layers replace lower explicit values, the CLI
+    /// `--allow-non-structural` flag enables it at highest profile precedence,
+    /// and `FIRMA_RUN_ALLOW_NON_STRUCTURAL` remains a post-resolution
+    /// enable-only override.
     pub(crate) allow_non_structural: bool,
     /// How the sandbox CA trust store is assembled (sole firma-ca vs. appended
     /// to system roots).
@@ -349,6 +350,64 @@ trait Merge {
     fn merge(self, higher: Self) -> Self;
 }
 
+impl Merge for NetworkPolicyPatch {
+    fn merge(self, higher: Self) -> Self {
+        Self {
+            enforce_network_namespace: higher
+                .enforce_network_namespace
+                .or(self.enforce_network_namespace),
+            fail_closed: higher.fail_closed.or(self.fail_closed),
+        }
+    }
+}
+
+impl Merge for SeccompPolicyPatch {
+    fn merge(self, higher: Self) -> Self {
+        Self {
+            source_policy_path: higher.source_policy_path.or(self.source_policy_path),
+            artifact_dir: higher.artifact_dir.or(self.artifact_dir),
+            runtime_mode: higher.runtime_mode.or(self.runtime_mode),
+        }
+    }
+}
+
+impl Merge for CommandMediatorPatch {
+    fn merge(self, higher: Self) -> Self {
+        Self {
+            endpoint: higher.endpoint.or(self.endpoint),
+            timeout: higher.timeout.or(self.timeout),
+            hitl_mode: higher.hitl_mode.or(self.hitl_mode),
+            hitl_max_wait: higher.hitl_max_wait.or(self.hitl_max_wait),
+            enforce_known_executables: higher
+                .enforce_known_executables
+                .or(self.enforce_known_executables),
+            allowed_executables: higher.allowed_executables.or(self.allowed_executables),
+        }
+    }
+}
+
+impl Merge for ExecutableLaunchPolicyPatch {
+    fn merge(self, higher: Self) -> Self {
+        let config_overrides = match higher.config_overrides {
+            Some(higher) if higher.is_empty() => Some(higher),
+            Some(higher) => {
+                let mut merged = self.config_overrides.unwrap_or_default();
+                merged.extend(higher);
+                Some(merged)
+            }
+            None => self.config_overrides,
+        };
+        Self {
+            enforce_wrapper_defaults: higher
+                .enforce_wrapper_defaults
+                .or(self.enforce_wrapper_defaults),
+            sandbox_mode: higher.sandbox_mode.or(self.sandbox_mode),
+            approval_policy: higher.approval_policy.or(self.approval_policy),
+            config_overrides,
+        }
+    }
+}
+
 impl Merge for CapabilityLeasePatch {
     fn merge(self, higher: Self) -> Self {
         let (source, kind, path) = if higher.source.is_some() {
@@ -372,38 +431,64 @@ impl Merge for CapabilityLeasePatch {
 
 impl Merge for ProfilePatch {
     fn merge(self, higher: Self) -> Self {
-        let mut env_set = self.env_set;
-        env_set.extend(higher.env_set);
-
-        let mut env_passthrough = self.env_passthrough;
-        env_passthrough.extend(higher.env_passthrough);
-        let mut executable_policies = self.executable_policies;
-        executable_policies.extend(higher.executable_policies);
-
-        let mounts = if higher.mounts.is_empty() {
-            self.mounts
-        } else {
-            higher.mounts
+        let env_set = match higher.env_set {
+            Some(higher) if higher.is_empty() => Some(higher),
+            Some(higher) => {
+                let mut merged = self.env_set.unwrap_or_default();
+                merged.extend(higher);
+                Some(merged)
+            }
+            None => self.env_set,
+        };
+        let executable_policies = match higher.executable_policies {
+            Some(higher) if higher.is_empty() => Some(higher),
+            Some(higher) => {
+                let mut merged = self.executable_policies.unwrap_or_default();
+                for (executable, higher_policy) in higher {
+                    let policy = if let Some(lower) = merged.remove(&executable) {
+                        lower.merge(higher_policy)
+                    } else {
+                        higher_policy
+                    };
+                    merged.insert(executable, policy);
+                }
+                Some(merged)
+            }
+            None => self.executable_policies,
         };
 
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
-            seccomp_policy: higher.seccomp_policy.or(self.seccomp_policy),
-            env_passthrough,
+            seccomp_policy: match (self.seccomp_policy, higher.seccomp_policy) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
+            env_passthrough: higher.env_passthrough.or(self.env_passthrough),
             env_set,
-            mounts,
-            network: higher.network.or(self.network),
+            mounts: higher.mounts.or(self.mounts),
+            network: match (self.network, higher.network) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: match (self.capability, higher.capability) {
                 (Some(lower), Some(higher)) => Some(lower.merge(higher)),
                 (lower, higher) => higher.or(lower),
             },
-            sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
+            sidecar_local_exec: match (self.sidecar_local_exec, higher.sidecar_local_exec) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
             executable_policies,
-            codex_cli: higher.codex_cli.or(self.codex_cli),
-            use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
-            allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
+            codex_cli: match (self.codex_cli, higher.codex_cli) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
+            use_http_proxy_sidecar: higher
+                .use_http_proxy_sidecar
+                .or(self.use_http_proxy_sidecar),
+            allow_non_structural: higher.allow_non_structural.or(self.allow_non_structural),
             mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
             ca_trust_mode: higher.ca_trust_mode.or(self.ca_trust_mode),
         }
@@ -475,11 +560,12 @@ pub(crate) fn resolve_profile_with_layout(
 
     let env_passthrough = patch
         .env_passthrough
+        .unwrap_or_default()
         .into_iter()
         .filter(|item: &String| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
 
-    let mut env_set = patch.env_set;
+    let mut env_set = patch.env_set.unwrap_or_default();
     if let Some(paths) = patch.mask_home_paths {
         env_set.insert(
             "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
@@ -493,6 +579,7 @@ pub(crate) fn resolve_profile_with_layout(
 
     let mounts = patch
         .mounts
+        .unwrap_or_default()
         .into_iter()
         .map(|mount| MountSpec {
             source: mount.source,
@@ -527,18 +614,20 @@ pub(crate) fn resolve_profile_with_layout(
         .identity_mode
         .unwrap_or(SandboxIdentityMode::SandboxUser);
 
-    let executable_policies =
-        resolve_executable_policies(patch.executable_policies, patch.codex_cli);
+    let executable_policies = resolve_executable_policies(
+        patch.executable_policies.unwrap_or_default(),
+        patch.codex_cli,
+    );
 
-    let seccomp_policy =
-        patch
-            .seccomp_policy
-            .map(seccomp_policy_from_patch)
-            .or(default_managed_seccomp_policy(
-                runtime_layout,
-                &profile_id,
-                backend,
-            )?);
+    let seccomp_policy = patch
+        .seccomp_policy
+        .map(seccomp_policy_from_patch)
+        .transpose()?
+        .or(default_managed_seccomp_policy(
+            runtime_layout,
+            &profile_id,
+            backend,
+        )?);
     let resolved = ResolvedProfile {
         id: profile_id,
         backend,
@@ -553,8 +642,8 @@ pub(crate) fn resolve_profile_with_layout(
         capability,
         sidecar_local_exec,
         executable_policies,
-        use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
-        allow_non_structural: patch.allow_non_structural,
+        use_http_proxy_sidecar: patch.use_http_proxy_sidecar.unwrap_or(false),
+        allow_non_structural: patch.allow_non_structural.unwrap_or(false),
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
     };
 
@@ -630,9 +719,9 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         backend: args.backend.map(SchemaBackendKind::from),
         sidecar_endpoint: None,
         seccomp_policy: None,
-        env_passthrough: Vec::new(),
-        env_set: BTreeMap::new(),
-        mounts: Vec::new(),
+        env_passthrough: None,
+        env_set: None,
+        mounts: None,
         network: None,
         identity_mode: if args.preserve_host_user {
             Some(SandboxIdentityMode::HostUser)
@@ -652,10 +741,10 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 requested_actions: None,
             }),
         sidecar_local_exec: None,
-        executable_policies: BTreeMap::new(),
+        executable_policies: None,
         codex_cli: None,
-        use_http_proxy_sidecar: false,
-        allow_non_structural: args.allow_non_structural,
+        use_http_proxy_sidecar: None,
+        allow_non_structural: args.allow_non_structural.then_some(true),
         mask_home_paths: None,
         ca_trust_mode: None,
     }
@@ -684,7 +773,7 @@ fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableL
         enforce_wrapper_defaults: policy.enforce_wrapper_defaults.unwrap_or(true),
         sandbox_mode: policy.sandbox_mode,
         approval_policy: policy.approval_policy,
-        config_overrides: policy.config_overrides,
+        config_overrides: policy.config_overrides.unwrap_or_default(),
     }
 }
 
@@ -705,7 +794,6 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         grace: patch.grace.unwrap_or(Duration::from_secs(30)),
         requested_actions: patch
             .requested_actions
-            .filter(|actions| !actions.is_empty())
             .unwrap_or_else(CapabilityLeaseConfig::default_requested_actions),
     }
 }
@@ -732,14 +820,24 @@ fn default_capability_config() -> CapabilityLeaseConfig {
     }
 }
 
-fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
-    SeccompPolicyConfig {
-        source_policy_path: patch.source_policy_path,
-        artifact_dir: patch.artifact_dir,
+fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> Result<SeccompPolicyConfig, RunError> {
+    let source_policy_path = patch.source_policy_path.ok_or_else(|| {
+        RunError::ConfigValidation(
+            "seccomp_policy.source_policy_path is required after profile merging".to_string(),
+        )
+    })?;
+    let artifact_dir = patch.artifact_dir.ok_or_else(|| {
+        RunError::ConfigValidation(
+            "seccomp_policy.artifact_dir is required after profile merging".to_string(),
+        )
+    })?;
+    Ok(SeccompPolicyConfig {
+        source_policy_path,
+        artifact_dir,
         runtime_mode: patch
             .runtime_mode
             .unwrap_or(SeccompRuntimeMode::CompileOnLaunch),
-    }
+    })
 }
 
 fn sidecar_local_exec_from_patch(
@@ -751,7 +849,8 @@ fn sidecar_local_exec_from_patch(
     } else {
         derive_sidecar_local_exec_endpoint(sidecar_endpoint)?
     };
-    let allowed_executables = canonicalize_allowed_executables(&patch.allowed_executables)?;
+    let allowed_executables =
+        canonicalize_allowed_executables(patch.allowed_executables.as_deref().unwrap_or_default())?;
     Ok(CommandMediatorConfig {
         endpoint,
         timeout: patch
@@ -1062,12 +1161,18 @@ fn rebase_file_paths(config: &mut FileConfig, config_dir: &Path) {
 }
 
 fn rebase_profile_paths(profile: &mut ProfilePatch, config_dir: &Path) {
-    for mount in &mut profile.mounts {
-        rebase_path(&mut mount.source, config_dir);
+    if let Some(mounts) = &mut profile.mounts {
+        for mount in mounts {
+            rebase_path(&mut mount.source, config_dir);
+        }
     }
     if let Some(seccomp) = &mut profile.seccomp_policy {
-        rebase_path(&mut seccomp.source_policy_path, config_dir);
-        rebase_path(&mut seccomp.artifact_dir, config_dir);
+        if let Some(path) = &mut seccomp.source_policy_path {
+            rebase_path(path, config_dir);
+        }
+        if let Some(path) = &mut seccomp.artifact_dir {
+            rebase_path(path, config_dir);
+        }
     }
     if let Some(capability) = &mut profile.capability {
         if let Some(CapabilitySourcePatch::File { path }) = &mut capability.source {
@@ -1115,20 +1220,23 @@ pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
+    use firma_config_schema::utils::NonZeroDuration;
     use pretty_assertions::assert_eq;
 
     use crate::runtime::RunInput;
 
     use super::{
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        CapabilitySourcePatch, FileConfig, SandboxIdentityMode, SeccompRuntimeMode,
-        SidecarEndpoint, capability_from_patch, rebase_file_paths, resolve_profile,
+        CapabilitySourcePatch, CommandMediatorHitlMode, CommandMediatorPatch,
+        ExecutableLaunchPolicyPatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch,
+        ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode, SidecarEndpoint,
+        capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -1188,21 +1296,22 @@ mod tests {
         rebase_file_paths(&mut config, std::path::Path::new("/cfg"));
 
         assert_eq!(
-            config.defaults.mounts[0].source,
+            config.defaults.mounts.as_ref().unwrap()[0].source,
             PathBuf::from("/cfg/workspace")
         );
         assert_eq!(
-            config.defaults.mounts[0].target,
+            config.defaults.mounts.as_ref().unwrap()[0].target,
             PathBuf::from("/sandbox/workspace")
         );
+        assert!(!config.defaults.mounts.as_ref().unwrap()[0].read_only);
         let seccomp = config.defaults.seccomp_policy.as_ref().unwrap();
         assert_eq!(
             seccomp.source_policy_path,
-            PathBuf::from("/cfg/seccomp/policy.toml")
+            Some(PathBuf::from("/cfg/seccomp/policy.toml"))
         );
         assert_eq!(
             seccomp.artifact_dir,
-            PathBuf::from("/cfg/seccomp/artifacts")
+            Some(PathBuf::from("/cfg/seccomp/artifacts"))
         );
         assert_eq!(
             config
@@ -1214,7 +1323,7 @@ mod tests {
         );
         let unselected = &config.profiles["unselected"];
         assert_eq!(
-            unselected.mounts[0].source,
+            unselected.mounts.as_ref().unwrap()[0].source,
             PathBuf::from("/cfg/other-workspace")
         );
         match unselected
@@ -1235,7 +1344,7 @@ mod tests {
             unselected
                 .sidecar_local_exec
                 .as_ref()
-                .map(|mediator| &mediator.allowed_executables),
+                .and_then(|mediator| mediator.allowed_executables.as_ref()),
             Some(&vec![PathBuf::from("/usr/bin/bash")])
         );
     }
@@ -1310,12 +1419,32 @@ mod tests {
     }
 
     #[test]
-    fn capability_patch_empty_actions_fall_back_to_default() {
+    fn capability_patch_empty_actions_remain_explicitly_empty() {
         let resolved = capability_from_patch(lease_patch(Some(Vec::new())));
-        assert_eq!(
-            resolved.requested_actions,
-            CapabilityLeaseConfig::default_requested_actions()
-        );
+        assert!(resolved.requested_actions.is_empty());
+    }
+
+    #[test]
+    fn capability_empty_actions_replace_lower_actions_and_survive_file_resolution() {
+        let merged = lease_patch(Some(vec!["filesystem.read".to_string()]))
+            .merge(lease_patch(Some(Vec::new())));
+        assert_eq!(merged.requested_actions, Some(Vec::new()));
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r"
+            [run.profiles.generic.capability]
+            requested_actions = []
+            ",
+        )
+        .unwrap();
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        assert!(resolved.capability.requested_actions.is_empty());
     }
 
     fn args(profile: &str) -> RunInput {
@@ -1546,6 +1675,930 @@ approval_policy = "never"
 
         let resolved = resolve_profile(&run_args).unwrap();
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
+    }
+
+    #[test]
+    fn profile_boolean_merge_distinguishes_absent_false_and_true() {
+        for lower in [None, Some(false), Some(true)] {
+            for higher in [None, Some(false), Some(true)] {
+                let merged = ProfilePatch {
+                    use_http_proxy_sidecar: lower,
+                    allow_non_structural: lower,
+                    ..ProfilePatch::default()
+                }
+                .merge(ProfilePatch {
+                    use_http_proxy_sidecar: higher,
+                    allow_non_structural: higher,
+                    ..ProfilePatch::default()
+                });
+
+                assert_eq!(merged.use_http_proxy_sidecar, higher.or(lower));
+                assert_eq!(merged.allow_non_structural, higher.or(lower));
+            }
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one aggregate contract trace keeps every layer and patch shape visible together"
+    )]
+    fn four_layer_merge_contract_is_total_and_shape_aware() {
+        struct StageExpectation {
+            name: &'static str,
+            backend: Option<firma_config_schema::run::BackendKind>,
+            allow_non_structural: Option<bool>,
+            use_http_proxy_sidecar: Option<bool>,
+            identity_mode: Option<SandboxIdentityMode>,
+            capability_file: Option<&'static str>,
+        }
+
+        fn capability_file(patch: &ProfilePatch) -> Option<&std::path::Path> {
+            match patch
+                .capability
+                .as_ref()
+                .and_then(|capability| capability.source.as_ref())
+            {
+                Some(CapabilitySourcePatch::File { path }) => Some(path),
+                Some(CapabilitySourcePatch::Disabled) | None => None,
+            }
+        }
+
+        let file: FileConfig = toml::from_str(
+            r#"
+            [defaults]
+            backend = "vz"
+            sidecar_endpoint = "unix:///defaults/sidecar.sock"
+            env_passthrough = ["DEFAULT_ONLY"]
+            mounts = [{ source = "/defaults/source", target = "/defaults/target", read_only = true }]
+            identity_mode = "host_user"
+            use_http_proxy_sidecar = true
+            allow_non_structural = true
+            mask_home_paths = [".defaults"]
+            ca_trust_mode = "append_system_roots"
+
+            [defaults.env_set]
+            DEFAULT_ONLY = "preserved"
+            SHARED = "defaults"
+
+            [defaults.network]
+            enforce_network_namespace = true
+            fail_closed = true
+
+            [defaults.seccomp_policy]
+            source_policy_path = "/defaults/seccomp.toml"
+            artifact_dir = "/defaults/artifacts"
+            runtime_mode = "compile_on_launch"
+
+            [defaults.capability]
+            public_key_path = "/defaults/authority.pub"
+            refresh_ratio = 0.7
+            grace = "45s"
+            requested_actions = ["filesystem.read"]
+
+            [defaults.capability.source]
+            kind = "file"
+            path = "/defaults/capability.toml"
+
+            [defaults.sidecar_local_exec]
+            endpoint = "unix:///defaults/local-exec.sock"
+            timeout = "2s"
+            hitl_mode = "sync_wait"
+            hitl_max_wait = "4m"
+            enforce_known_executables = true
+            allowed_executables = ["/defaults/agent"]
+
+            [defaults.executable_policies.codex]
+            enforce_wrapper_defaults = true
+            sandbox_mode = "defaults-sandbox"
+            approval_policy = "defaults-approval"
+
+            [defaults.executable_policies.codex.config_overrides]
+            defaults = "preserved"
+            shared = "defaults"
+
+            [defaults.codex_cli]
+            enforce_wrapper_defaults = true
+            sandbox_mode = "legacy-defaults"
+
+            [defaults.codex_cli.config_overrides]
+            defaults = "preserved"
+
+            [profiles.generic]
+            backend = "wsl2"
+            env_passthrough = []
+            mounts = [{ source = "/selected/source", target = "/selected/target", read_only = false }]
+            identity_mode = "sandbox_user"
+            use_http_proxy_sidecar = false
+            allow_non_structural = false
+            mask_home_paths = []
+            ca_trust_mode = "sole"
+            env_set = { SELECTED_ONLY = "present", SHARED = "selected" }
+            seccomp_policy = { runtime_mode = "precompiled_only" }
+            network = { fail_closed = false }
+            capability = { source = { kind = "disabled" }, requested_actions = [] }
+            sidecar_local_exec = { hitl_mode = "async_token", enforce_known_executables = false, allowed_executables = [] }
+            executable_policies = { codex = { enforce_wrapper_defaults = false, approval_policy = "selected-approval", config_overrides = { selected = "present", shared = "selected" } } }
+            codex_cli = { approval_policy = "legacy-selected", config_overrides = {} }
+            "#,
+        )
+        .unwrap();
+
+        let built_in = crate::profile::built_in_profile("generic").unwrap();
+        let defaults = file.defaults;
+        let selected = file.profiles["generic"].clone();
+        let mut run_args = args("generic");
+        run_args.backend = Some(BackendKind::Bwrap);
+        run_args.capability_file = Some(PathBuf::from("/cli/capability.toml"));
+        run_args.identity_mode = Some(SandboxIdentityMode::SandboxUser);
+        run_args.preserve_host_user = true;
+        run_args.allow_non_structural = true;
+        let cli = cli_profile_patch(&run_args);
+
+        let after_defaults = built_in.clone().merge(defaults);
+        let after_selected = after_defaults.clone().merge(selected);
+        let after_cli = after_selected.clone().merge(cli);
+        let stages = [
+            (
+                built_in,
+                StageExpectation {
+                    name: "built-in",
+                    backend: None,
+                    allow_non_structural: Some(false),
+                    use_http_proxy_sidecar: Some(true),
+                    identity_mode: None,
+                    capability_file: None,
+                },
+            ),
+            (
+                after_defaults,
+                StageExpectation {
+                    name: "defaults",
+                    backend: Some(firma_config_schema::run::BackendKind::Vz),
+                    allow_non_structural: Some(true),
+                    use_http_proxy_sidecar: Some(true),
+                    identity_mode: Some(SandboxIdentityMode::HostUser),
+                    capability_file: Some("/defaults/capability.toml"),
+                },
+            ),
+            (
+                after_selected,
+                StageExpectation {
+                    name: "selected profile",
+                    backend: Some(firma_config_schema::run::BackendKind::Wsl2),
+                    allow_non_structural: Some(false),
+                    use_http_proxy_sidecar: Some(false),
+                    identity_mode: Some(SandboxIdentityMode::SandboxUser),
+                    capability_file: None,
+                },
+            ),
+            (
+                after_cli.clone(),
+                StageExpectation {
+                    name: "CLI",
+                    backend: Some(firma_config_schema::run::BackendKind::Bwrap),
+                    allow_non_structural: Some(true),
+                    use_http_proxy_sidecar: Some(false),
+                    identity_mode: Some(SandboxIdentityMode::HostUser),
+                    capability_file: Some("/cli/capability.toml"),
+                },
+            ),
+        ];
+
+        for (patch, expected) in stages {
+            assert_eq!(patch.backend, expected.backend, "{} backend", expected.name);
+            assert_eq!(
+                patch.allow_non_structural, expected.allow_non_structural,
+                "{} allow_non_structural",
+                expected.name
+            );
+            assert_eq!(
+                patch.use_http_proxy_sidecar, expected.use_http_proxy_sidecar,
+                "{} use_http_proxy_sidecar",
+                expected.name
+            );
+            assert_eq!(
+                patch.identity_mode, expected.identity_mode,
+                "{} identity_mode",
+                expected.name
+            );
+            assert_eq!(
+                capability_file(&patch),
+                expected.capability_file.map(std::path::Path::new),
+                "{} capability source",
+                expected.name
+            );
+        }
+
+        assert_eq!(
+            after_cli.sidecar_endpoint.as_deref(),
+            Some("unix:///defaults/sidecar.sock")
+        );
+        assert!(
+            after_cli
+                .env_passthrough
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        );
+        let env_set = after_cli.env_set.as_ref().unwrap();
+        assert_eq!(
+            env_set.get("DEFAULT_ONLY").map(String::as_str),
+            Some("preserved")
+        );
+        assert_eq!(env_set.get("SHARED").map(String::as_str), Some("selected"));
+        assert_eq!(
+            env_set.get("SELECTED_ONLY").map(String::as_str),
+            Some("present")
+        );
+        let mounts = after_cli.mounts.as_ref().unwrap();
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].source, PathBuf::from("/selected/source"));
+        assert_eq!(mounts[0].target, PathBuf::from("/selected/target"));
+        assert!(!mounts[0].read_only);
+
+        let network = after_cli.network.as_ref().unwrap();
+        assert_eq!(network.enforce_network_namespace, Some(true));
+        assert_eq!(network.fail_closed, Some(false));
+        let seccomp = after_cli.seccomp_policy.as_ref().unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            Some(PathBuf::from("/defaults/seccomp.toml"))
+        );
+        assert_eq!(
+            seccomp.artifact_dir,
+            Some(PathBuf::from("/defaults/artifacts"))
+        );
+        assert_eq!(
+            seccomp.runtime_mode,
+            Some(SeccompRuntimeMode::PrecompiledOnly)
+        );
+
+        let capability = after_cli.capability.as_ref().unwrap();
+        assert_eq!(
+            capability.public_key_path,
+            Some(PathBuf::from("/defaults/authority.pub"))
+        );
+        assert_eq!(capability.refresh_ratio, Some(0.7));
+        assert_eq!(capability.grace, Some(Duration::from_secs(45)));
+        assert_eq!(capability.requested_actions, Some(Vec::new()));
+
+        let mediator = after_cli.sidecar_local_exec.as_ref().unwrap();
+        assert_eq!(
+            mediator.endpoint.as_deref(),
+            Some("unix:///defaults/local-exec.sock")
+        );
+        assert_eq!(
+            mediator.timeout.map(|timeout| timeout.duration()),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            mediator.hitl_mode,
+            Some(CommandMediatorHitlMode::AsyncToken)
+        );
+        assert_eq!(
+            mediator.hitl_max_wait.map(|timeout| timeout.duration()),
+            Some(Duration::from_mins(4))
+        );
+        assert_eq!(mediator.enforce_known_executables, Some(false));
+        assert!(
+            mediator
+                .allowed_executables
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        );
+
+        let codex = &after_cli.executable_policies.as_ref().unwrap()["codex"];
+        assert_eq!(codex.enforce_wrapper_defaults, Some(false));
+        assert_eq!(codex.sandbox_mode.as_deref(), Some("defaults-sandbox"));
+        assert_eq!(codex.approval_policy.as_deref(), Some("selected-approval"));
+        assert_eq!(
+            codex.config_overrides,
+            Some(BTreeMap::from([
+                ("defaults".to_string(), "preserved".to_string()),
+                ("selected".to_string(), "present".to_string()),
+                ("shared".to_string(), "selected".to_string()),
+            ]))
+        );
+        let legacy = after_cli.codex_cli.as_ref().unwrap();
+        assert_eq!(legacy.enforce_wrapper_defaults, Some(true));
+        assert_eq!(legacy.sandbox_mode.as_deref(), Some("legacy-defaults"));
+        assert_eq!(legacy.approval_policy.as_deref(), Some("legacy-selected"));
+        assert_eq!(legacy.config_overrides, Some(BTreeMap::new()));
+        assert_eq!(after_cli.mask_home_paths, Some(Vec::new()));
+        assert_eq!(after_cli.ca_trust_mode, Some(super::CaTrustMode::Sole));
+
+        assert_profile_patch_contract_inventory(after_cli);
+        assert_capability_source_variant_inventory(CapabilitySourcePatch::Disabled);
+        assert_capability_source_variant_inventory(CapabilitySourcePatch::File {
+            path: PathBuf::from("/inventory"),
+        });
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive destructuring intentionally inventories every patch field"
+    )]
+    fn assert_profile_patch_contract_inventory(patch: ProfilePatch) {
+        let ProfilePatch {
+            backend,
+            sidecar_endpoint,
+            seccomp_policy,
+            env_passthrough,
+            env_set,
+            mounts,
+            network,
+            identity_mode,
+            capability,
+            sidecar_local_exec,
+            executable_policies,
+            codex_cli,
+            use_http_proxy_sidecar,
+            allow_non_structural,
+            mask_home_paths,
+            ca_trust_mode,
+        } = patch;
+        let _ = (
+            backend,
+            sidecar_endpoint,
+            env_passthrough,
+            env_set,
+            identity_mode,
+            use_http_proxy_sidecar,
+            allow_non_structural,
+            mask_home_paths,
+            ca_trust_mode,
+        );
+
+        for MountPatch {
+            source,
+            target,
+            read_only,
+        } in mounts.unwrap_or_default()
+        {
+            let _ = (source, target, read_only);
+        }
+        if let Some(NetworkPolicyPatch {
+            enforce_network_namespace,
+            fail_closed,
+        }) = network
+        {
+            let _ = (enforce_network_namespace, fail_closed);
+        }
+        if let Some(SeccompPolicyPatch {
+            source_policy_path,
+            artifact_dir,
+            runtime_mode,
+        }) = seccomp_policy
+        {
+            let _ = (source_policy_path, artifact_dir, runtime_mode);
+        }
+        if let Some(CapabilityLeasePatch {
+            source,
+            kind,
+            path,
+            public_key_path,
+            refresh_ratio,
+            grace,
+            requested_actions,
+        }) = capability
+        {
+            let _ = (
+                source,
+                kind,
+                path,
+                public_key_path,
+                refresh_ratio,
+                grace,
+                requested_actions,
+            );
+        }
+        if let Some(CommandMediatorPatch {
+            endpoint,
+            timeout,
+            hitl_mode,
+            hitl_max_wait,
+            enforce_known_executables,
+            allowed_executables,
+        }) = sidecar_local_exec
+        {
+            let _ = (
+                endpoint,
+                timeout,
+                hitl_mode,
+                hitl_max_wait,
+                enforce_known_executables,
+                allowed_executables,
+            );
+        }
+        for ExecutableLaunchPolicyPatch {
+            enforce_wrapper_defaults,
+            sandbox_mode,
+            approval_policy,
+            config_overrides,
+        } in executable_policies.unwrap_or_default().into_values()
+        {
+            let _ = (
+                enforce_wrapper_defaults,
+                sandbox_mode,
+                approval_policy,
+                config_overrides,
+            );
+        }
+        if let Some(ExecutableLaunchPolicyPatch {
+            enforce_wrapper_defaults,
+            sandbox_mode,
+            approval_policy,
+            config_overrides,
+        }) = codex_cli
+        {
+            let _ = (
+                enforce_wrapper_defaults,
+                sandbox_mode,
+                approval_policy,
+                config_overrides,
+            );
+        }
+    }
+
+    fn assert_capability_source_variant_inventory(source: CapabilitySourcePatch) {
+        match source {
+            CapabilitySourcePatch::Disabled => {}
+            CapabilitySourcePatch::File { path } => {
+                let _ = path;
+            }
+        }
+    }
+
+    #[test]
+    fn top_level_collection_merge_obeys_each_shape_contract() {
+        let lower = ProfilePatch {
+            env_passthrough: Some(vec!["LOWER".to_string()]),
+            env_set: Some(BTreeMap::from([
+                ("LOWER".to_string(), "preserved".to_string()),
+                ("SHARED".to_string(), "lower".to_string()),
+            ])),
+            mounts: Some(vec![MountPatch {
+                source: PathBuf::from("/lower"),
+                target: PathBuf::from("/workspace"),
+                read_only: true,
+            }]),
+            ..ProfilePatch::default()
+        };
+
+        let inherited = lower.clone().merge(ProfilePatch::default());
+        assert_eq!(inherited.env_passthrough, lower.env_passthrough);
+        assert_eq!(inherited.env_set, lower.env_set);
+        assert_eq!(
+            inherited.mounts.as_ref().map(|mounts| &mounts[0].source),
+            Some(&PathBuf::from("/lower"))
+        );
+
+        let replaced = lower.clone().merge(ProfilePatch {
+            env_passthrough: Some(vec!["HIGHER".to_string()]),
+            env_set: Some(BTreeMap::from([
+                ("HIGHER".to_string(), "added".to_string()),
+                ("SHARED".to_string(), "higher".to_string()),
+            ])),
+            mounts: Some(vec![MountPatch {
+                source: PathBuf::from("/higher"),
+                target: PathBuf::from("/workspace"),
+                read_only: false,
+            }]),
+            ..ProfilePatch::default()
+        });
+        assert_eq!(replaced.env_passthrough, Some(vec!["HIGHER".to_string()]));
+        assert_eq!(
+            replaced.env_set,
+            Some(BTreeMap::from([
+                ("HIGHER".to_string(), "added".to_string()),
+                ("LOWER".to_string(), "preserved".to_string()),
+                ("SHARED".to_string(), "higher".to_string()),
+            ]))
+        );
+        assert_eq!(
+            replaced.mounts.as_ref().map(|mounts| &mounts[0].source),
+            Some(&PathBuf::from("/higher"))
+        );
+
+        let cleared = lower.merge(ProfilePatch {
+            env_passthrough: Some(Vec::new()),
+            env_set: Some(BTreeMap::new()),
+            mounts: Some(Vec::new()),
+            ..ProfilePatch::default()
+        });
+        assert_eq!(cleared.env_passthrough, Some(Vec::new()));
+        assert_eq!(cleared.env_set, Some(BTreeMap::new()));
+        assert!(cleared.mounts.as_ref().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn network_and_seccomp_patches_merge_field_by_field() {
+        let merged = ProfilePatch {
+            network: Some(NetworkPolicyPatch {
+                enforce_network_namespace: Some(true),
+                fail_closed: Some(true),
+            }),
+            seccomp_policy: Some(SeccompPolicyPatch {
+                source_policy_path: Some(PathBuf::from("/policy/lower.toml")),
+                artifact_dir: Some(PathBuf::from("/artifacts/lower")),
+                runtime_mode: Some(SeccompRuntimeMode::CompileOnLaunch),
+            }),
+            ..ProfilePatch::default()
+        }
+        .merge(ProfilePatch {
+            network: Some(NetworkPolicyPatch {
+                enforce_network_namespace: Some(false),
+                fail_closed: None,
+            }),
+            seccomp_policy: Some(SeccompPolicyPatch {
+                source_policy_path: None,
+                artifact_dir: Some(PathBuf::from("/artifacts/higher")),
+                runtime_mode: Some(SeccompRuntimeMode::PrecompiledOnly),
+            }),
+            ..ProfilePatch::default()
+        });
+
+        let network = merged.network.unwrap();
+        assert_eq!(network.enforce_network_namespace, Some(false));
+        assert_eq!(network.fail_closed, Some(true));
+        let seccomp = merged.seccomp_policy.unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            Some(PathBuf::from("/policy/lower.toml"))
+        );
+        assert_eq!(
+            seccomp.artifact_dir,
+            Some(PathBuf::from("/artifacts/higher"))
+        );
+        assert_eq!(
+            seccomp.runtime_mode,
+            Some(SeccompRuntimeMode::PrecompiledOnly)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
+    fn file_network_and_seccomp_layers_preserve_lower_siblings() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tmpdir.path().join("policy.toml"),
+            "default_action = \"allow\"\n",
+        )
+        .unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.defaults.network]
+            enforce_network_namespace = false
+            fail_closed = false
+
+            [run.defaults.seccomp_policy]
+            source_policy_path = "policy.toml"
+            artifact_dir = "artifacts"
+
+            [run.profiles.generic.network]
+            fail_closed = true
+
+            [run.profiles.generic.seccomp_policy]
+            runtime_mode = "precompiled_only"
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+
+        assert!(!resolved.network.enforce_network_namespace);
+        assert!(resolved.network.fail_closed);
+        let seccomp = resolved.seccomp_policy.unwrap();
+        assert_eq!(
+            seccomp.source_policy_path,
+            tmpdir.path().join("policy.toml")
+        );
+        assert_eq!(seccomp.artifact_dir, tmpdir.path().join("artifacts"));
+        assert_eq!(seccomp.runtime_mode, SeccompRuntimeMode::PrecompiledOnly);
+    }
+
+    #[test]
+    fn incomplete_final_seccomp_patch_reports_missing_field() {
+        for (body, missing) in [
+            (
+                r#"
+                [run.profiles.generic.seccomp_policy]
+                runtime_mode = "precompiled_only"
+                "#,
+                "seccomp_policy.source_policy_path",
+            ),
+            (
+                r#"
+                [run.profiles.generic.seccomp_policy]
+                source_policy_path = "policy.toml"
+                "#,
+                "seccomp_policy.artifact_dir",
+            ),
+        ] {
+            let tmpdir = tempfile::tempdir().unwrap();
+            let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+            fs::write(&config_path, body).unwrap();
+            let mut run_args = args("generic");
+            run_args.config = Some(config_path);
+
+            let error = resolve_profile(&run_args).expect_err("incomplete seccomp must fail");
+            assert!(
+                error.to_string().contains(missing),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_mediator_patch_merges_siblings_and_replaces_allowlist() {
+        let merged = CommandMediatorPatch {
+            endpoint: Some("unix:///run/firma/tools.sock".to_string()),
+            timeout: Some(NonZeroDuration::try_from(Duration::from_secs(1)).unwrap()),
+            hitl_mode: Some(CommandMediatorHitlMode::SyncWait),
+            hitl_max_wait: Some(NonZeroDuration::try_from(Duration::from_mins(5)).unwrap()),
+            enforce_known_executables: Some(true),
+            allowed_executables: Some(vec![PathBuf::from("/usr/bin/lower")]),
+        }
+        .merge(CommandMediatorPatch {
+            endpoint: None,
+            timeout: None,
+            hitl_mode: Some(CommandMediatorHitlMode::AsyncToken),
+            hitl_max_wait: Some(NonZeroDuration::try_from(Duration::from_mins(2)).unwrap()),
+            enforce_known_executables: Some(false),
+            allowed_executables: Some(Vec::new()),
+        });
+
+        assert_eq!(
+            merged.endpoint.as_deref(),
+            Some("unix:///run/firma/tools.sock")
+        );
+        assert_eq!(
+            merged.timeout.map(|timeout| timeout.duration()),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(merged.hitl_mode, Some(CommandMediatorHitlMode::AsyncToken));
+        assert_eq!(
+            merged.hitl_max_wait.map(|timeout| timeout.duration()),
+            Some(Duration::from_mins(2))
+        );
+        assert_eq!(merged.enforce_known_executables, Some(false));
+        assert!(
+            merged
+                .allowed_executables
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_mediator_file_layers_merge_and_empty_allowlist_clears() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.defaults]
+            sidecar_endpoint = "unix:///run/firma/sidecar.sock"
+
+            [run.defaults.sidecar_local_exec]
+            timeout = "1s"
+            hitl_mode = "sync_wait"
+            hitl_max_wait = "5m"
+            enforce_known_executables = true
+            allowed_executables = ["/lower/will-be-cleared"]
+
+            [run.profiles.generic.sidecar_local_exec]
+            hitl_mode = "async_token"
+            enforce_known_executables = false
+            allowed_executables = []
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+        let mediator = resolved.sidecar_local_exec.unwrap();
+
+        assert_eq!(mediator.timeout, Duration::from_secs(1));
+        assert_eq!(mediator.hitl_mode, CommandMediatorHitlMode::AsyncToken);
+        assert_eq!(mediator.hitl_max_wait, Duration::from_mins(5));
+        assert!(!mediator.enforce_known_executables);
+        assert!(mediator.allowed_executables.is_empty());
+    }
+
+    #[test]
+    fn executable_policy_maps_merge_entries_fields_and_config_keys() {
+        let lower = ProfilePatch {
+            executable_policies: Some(BTreeMap::from([
+                (
+                    "codex".to_string(),
+                    ExecutableLaunchPolicyPatch {
+                        enforce_wrapper_defaults: Some(true),
+                        sandbox_mode: Some("workspace-write".to_string()),
+                        approval_policy: Some("on-request".to_string()),
+                        config_overrides: Some(BTreeMap::from([
+                            ("lower".to_string(), "preserved".to_string()),
+                            ("shared".to_string(), "lower".to_string()),
+                        ])),
+                    },
+                ),
+                (
+                    "other".to_string(),
+                    ExecutableLaunchPolicyPatch {
+                        enforce_wrapper_defaults: Some(true),
+                        sandbox_mode: None,
+                        approval_policy: None,
+                        config_overrides: None,
+                    },
+                ),
+            ])),
+            codex_cli: Some(ExecutableLaunchPolicyPatch {
+                enforce_wrapper_defaults: None,
+                sandbox_mode: Some("legacy-lower".to_string()),
+                approval_policy: None,
+                config_overrides: None,
+            }),
+            ..ProfilePatch::default()
+        };
+        let merged = lower.clone().merge(ProfilePatch {
+            executable_policies: Some(BTreeMap::from([(
+                "codex".to_string(),
+                ExecutableLaunchPolicyPatch {
+                    enforce_wrapper_defaults: Some(false),
+                    sandbox_mode: None,
+                    approval_policy: Some("never".to_string()),
+                    config_overrides: Some(BTreeMap::from([
+                        ("higher".to_string(), "added".to_string()),
+                        ("shared".to_string(), "higher".to_string()),
+                    ])),
+                },
+            )])),
+            codex_cli: Some(ExecutableLaunchPolicyPatch {
+                enforce_wrapper_defaults: Some(false),
+                sandbox_mode: None,
+                approval_policy: Some("legacy-higher".to_string()),
+                config_overrides: Some(BTreeMap::new()),
+            }),
+            ..ProfilePatch::default()
+        });
+
+        let policies = merged.executable_policies.as_ref().unwrap();
+        assert!(policies.contains_key("other"));
+        let codex = &policies["codex"];
+        assert_eq!(codex.enforce_wrapper_defaults, Some(false));
+        assert_eq!(codex.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(codex.approval_policy.as_deref(), Some("never"));
+        assert_eq!(
+            codex.config_overrides,
+            Some(BTreeMap::from([
+                ("higher".to_string(), "added".to_string()),
+                ("lower".to_string(), "preserved".to_string()),
+                ("shared".to_string(), "higher".to_string()),
+            ]))
+        );
+        let legacy = merged.codex_cli.unwrap();
+        assert_eq!(legacy.enforce_wrapper_defaults, Some(false));
+        assert_eq!(legacy.sandbox_mode.as_deref(), Some("legacy-lower"));
+        assert_eq!(legacy.approval_policy.as_deref(), Some("legacy-higher"));
+        assert_eq!(legacy.config_overrides, Some(BTreeMap::new()));
+
+        let cleared = lower.merge(ProfilePatch {
+            executable_policies: Some(BTreeMap::new()),
+            ..ProfilePatch::default()
+        });
+        assert!(
+            cleared
+                .executable_policies
+                .as_ref()
+                .is_some_and(BTreeMap::is_empty)
+        );
+    }
+
+    #[test]
+    fn executable_policy_file_layer_partially_overrides_built_in_entry() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+            [run.profiles.codex.executable_policies.codex]
+            enforce_wrapper_defaults = false
+
+            [run.profiles.codex.executable_policies.codex.config_overrides]
+            custom = "higher"
+            "#,
+        )
+        .unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+        let policy = &resolved.executable_policies["codex"];
+
+        assert!(!policy.enforce_wrapper_defaults);
+        assert!(policy.sandbox_mode.is_some());
+        assert_eq!(policy.approval_policy.as_deref(), Some("never"));
+        assert_eq!(
+            policy.config_overrides.get("custom").map(String::as_str),
+            Some("higher")
+        );
+        assert_eq!(
+            policy
+                .config_overrides
+                .get("shell_environment_policy.inherit")
+                .map(String::as_str),
+            Some("all")
+        );
+    }
+
+    #[test]
+    fn explicit_empty_executable_policy_map_clears_built_in_entries() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "[run.profiles.codex.executable_policies]\n").unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+
+        assert!(resolved.executable_policies.is_empty());
+    }
+
+    #[test]
+    fn explicit_empty_top_level_collections_clear_built_in_values() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r"
+            [run.profiles.generic]
+            env_passthrough = []
+            mounts = []
+
+            [run.profiles.generic.env_set]
+            ",
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap();
+
+        assert!(resolved.env_passthrough.is_empty());
+        assert!(resolved.env_set.is_empty());
+        assert!(resolved.mounts.is_empty());
+    }
+
+    #[test]
+    fn profile_booleans_follow_file_layers_and_cli_precedence() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r"
+            [run.defaults]
+            use_http_proxy_sidecar = false
+            allow_non_structural = true
+
+            [run.profiles.generic]
+            allow_non_structural = false
+            ",
+        )
+        .unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        run_args.allow_non_structural = false;
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        assert!(!resolved.use_http_proxy_sidecar);
+        assert!(!resolved.allow_non_structural);
+
+        run_args.allow_non_structural = true;
+        let cli_resolved = resolve_profile(&run_args).unwrap();
+        assert!(cli_resolved.allow_non_structural);
+        assert!(!cli_resolved.use_http_proxy_sidecar);
+    }
+
+    #[test]
+    fn unsupplied_enable_only_cli_boolean_is_absent() {
+        let mut run_args = args("generic");
+        run_args.allow_non_structural = false;
+        let absent = cli_profile_patch(&run_args);
+        assert_eq!(absent.allow_non_structural, None);
+        assert_eq!(absent.use_http_proxy_sidecar, None);
+
+        run_args.allow_non_structural = true;
+        assert_eq!(
+            cli_profile_patch(&run_args).allow_non_structural,
+            Some(true)
+        );
     }
 
     #[test]

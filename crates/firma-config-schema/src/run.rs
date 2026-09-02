@@ -83,32 +83,37 @@ pub struct ProfilePatch {
     pub backend: Option<BackendKind>,
     pub sidecar_endpoint: Option<String>,
     pub seccomp_policy: Option<SeccompPolicyPatch>,
-    #[serde(default)]
-    pub env_passthrough: Vec<String>,
-    #[serde(default)]
-    pub env_set: BTreeMap<String, String>,
-    #[serde(default)]
-    pub mounts: Vec<MountPatch>,
+    /// Environment variable names inherited from the host. `None` inherits the
+    /// lower profile layer; a present list replaces it, including an empty list.
+    pub env_passthrough: Option<Vec<String>>,
+    /// Fixed environment values. `None` inherits the lower profile layer, a
+    /// present empty map clears it, and a non-empty map merges by key.
+    pub env_set: Option<BTreeMap<String, String>>,
+    /// Sandbox mounts. `None` inherits the lower profile layer; a present list
+    /// replaces it, including an empty list.
+    pub mounts: Option<Vec<MountPatch>>,
     pub network: Option<NetworkPolicyPatch>,
     pub identity_mode: Option<SandboxIdentityMode>,
     pub capability: Option<CapabilityLeasePatch>,
     /// Preferred governance config path. This routes local tool execution
     /// decisions through a Sidecar-owned endpoint.
     pub sidecar_local_exec: Option<CommandMediatorPatch>,
-    #[serde(default)]
-    pub executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    /// Per-executable launch policies. `None` inherits the lower profile layer,
+    /// a present empty map clears it, and matching entries merge field-by-field.
+    pub executable_policies: Option<BTreeMap<String, ExecutableLaunchPolicyPatch>>,
     #[serde(default)]
     pub codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
-    /// Should be `true` for profiles whose agent uses standard HTTP proxy env vars.
-    #[serde(default)]
-    pub use_http_proxy_sidecar: bool,
+    /// Should be `true` for profiles whose agent uses standard HTTP proxy env
+    /// vars. `None` inherits the lower profile layer; explicit `false` disables
+    /// an inherited `true` value.
+    pub use_http_proxy_sidecar: Option<bool>,
     /// Allow non-structural (proxy-only) backends to run without failing closed.
     /// Intentional opt-in: proxy-only enforcement can be bypassed by clients
     /// that ignore `HTTP_PROXY`, open raw sockets, or spawn children with
-    /// a clean environment.
-    #[serde(default)]
-    pub allow_non_structural: bool,
+    /// a clean environment. `None` inherits the lower profile layer; explicit
+    /// `false` revokes a lower layer's opt-in.
+    pub allow_non_structural: Option<bool>,
     /// Home-relative paths to mask with a tmpfs overlay inside the bwrap sandbox.
     /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
     /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.
@@ -140,8 +145,10 @@ pub struct NetworkPolicyPatch {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeccompPolicyPatch {
-    pub source_policy_path: PathBuf,
-    pub artifact_dir: PathBuf,
+    /// Policy source path. Required after all profile layers merge.
+    pub source_policy_path: Option<PathBuf>,
+    /// Managed artifact directory. Required after all profile layers merge.
+    pub artifact_dir: Option<PathBuf>,
     pub runtime_mode: Option<SeccompRuntimeMode>,
 }
 
@@ -172,8 +179,9 @@ pub struct ExecutableLaunchPolicyPatch {
     pub enforce_wrapper_defaults: Option<bool>,
     pub sandbox_mode: Option<String>,
     pub approval_policy: Option<String>,
-    #[serde(default)]
-    pub config_overrides: BTreeMap<String, String>,
+    /// Wrapper configuration values. `None` inherits the lower policy, a
+    /// present empty map clears it, and a non-empty map merges by key.
+    pub config_overrides: Option<BTreeMap<String, String>>,
 }
 
 /// Runtime command mediation settings patch.
@@ -187,8 +195,9 @@ pub struct CommandMediatorPatch {
     #[serde(default)]
     pub hitl_max_wait: Option<NonZeroDuration>,
     pub enforce_known_executables: Option<bool>,
-    #[serde(default)]
-    pub allowed_executables: Vec<PathBuf>,
+    /// Executables allowed when enforcement is enabled. `None` inherits the
+    /// lower profile layer; a present list replaces it, including an empty list.
+    pub allowed_executables: Option<Vec<PathBuf>>,
 }
 
 /// Source for capability material patch.

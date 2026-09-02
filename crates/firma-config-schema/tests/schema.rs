@@ -14,6 +14,7 @@ use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMo
 use firma_config_schema::utils::{NonZeroDuration, ZeroDurationError};
 use firma_config_schema::{authority, gateway, run, secret_matcher, sidecar};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 #[test]
@@ -621,6 +622,148 @@ fn run_rejects_unknown_fields_in_defaults_and_every_profile() {
             .expect_err("unknown run profile field must fail");
         assert!(error.to_string().contains(field), "error: {error}");
     }
+}
+
+#[test]
+fn run_profile_booleans_distinguish_absent_false_and_true() {
+    let config = toml::from_str::<run::FileConfig>(
+        r"
+        [defaults]
+        use_http_proxy_sidecar = false
+
+        [profiles.selected]
+        allow_non_structural = true
+        ",
+    )
+    .expect("profile booleans must parse");
+
+    assert_eq!(config.defaults.use_http_proxy_sidecar, Some(false));
+    assert_eq!(config.defaults.allow_non_structural, None);
+    assert_eq!(config.profiles["selected"].use_http_proxy_sidecar, None);
+    assert_eq!(config.profiles["selected"].allow_non_structural, Some(true));
+}
+
+#[test]
+fn run_profile_collections_distinguish_absent_and_empty() {
+    let config = toml::from_str::<run::FileConfig>(
+        r"
+        [defaults]
+        env_passthrough = []
+        mounts = []
+
+        [defaults.env_set]
+
+        [profiles.selected]
+        ",
+    )
+    .expect("empty profile collections must parse as present");
+
+    assert_eq!(config.defaults.env_passthrough, Some(Vec::new()));
+    assert_eq!(config.defaults.env_set, Some(BTreeMap::new()));
+    assert!(config.defaults.mounts.as_ref().is_some_and(Vec::is_empty));
+    assert_eq!(config.profiles["selected"].env_passthrough, None);
+    assert_eq!(config.profiles["selected"].env_set, None);
+    assert!(config.profiles["selected"].mounts.is_none());
+}
+
+#[test]
+fn run_nested_policy_patches_allow_partial_overrides() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+        [defaults.network]
+        fail_closed = true
+
+        [profiles.selected.network]
+        enforce_network_namespace = false
+
+        [profiles.selected.seccomp_policy]
+        runtime_mode = "precompiled_only"
+        "#,
+    )
+    .expect("partial nested policy patches must parse");
+
+    let defaults_network = config.defaults.network.as_ref().unwrap();
+    assert_eq!(defaults_network.fail_closed, Some(true));
+    assert_eq!(defaults_network.enforce_network_namespace, None);
+    let profile = &config.profiles["selected"];
+    let profile_network = profile.network.as_ref().unwrap();
+    assert_eq!(profile_network.fail_closed, None);
+    assert_eq!(profile_network.enforce_network_namespace, Some(false));
+    let seccomp = profile.seccomp_policy.as_ref().unwrap();
+    assert_eq!(seccomp.source_policy_path, None);
+    assert_eq!(seccomp.artifact_dir, None);
+    assert_eq!(
+        seccomp.runtime_mode,
+        Some(run::SeccompRuntimeMode::PrecompiledOnly)
+    );
+}
+
+#[test]
+fn run_command_mediator_patch_distinguishes_absent_and_empty_allowlist() {
+    let config = toml::from_str::<run::FileConfig>(
+        r#"
+        [defaults.sidecar_local_exec]
+        timeout = "1s"
+
+        [profiles.selected.sidecar_local_exec]
+        enforce_known_executables = false
+        allowed_executables = []
+        "#,
+    )
+    .expect("partial command mediator patches must parse");
+
+    let defaults = config.defaults.sidecar_local_exec.as_ref().unwrap();
+    assert_eq!(
+        defaults.timeout.map(|timeout| timeout.duration()),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(defaults.allowed_executables, None);
+    let selected = config.profiles["selected"]
+        .sidecar_local_exec
+        .as_ref()
+        .unwrap();
+    assert_eq!(selected.enforce_known_executables, Some(false));
+    assert!(
+        selected
+            .allowed_executables
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+    );
+}
+
+#[test]
+fn run_executable_policy_maps_distinguish_absent_and_empty() {
+    let config = toml::from_str::<run::FileConfig>(
+        r"
+        [defaults.executable_policies]
+
+        [profiles.selected.executable_policies.codex]
+        enforce_wrapper_defaults = false
+
+        [profiles.selected.executable_policies.codex.config_overrides]
+        ",
+    )
+    .expect("empty executable policy maps must parse as present");
+
+    assert!(
+        config
+            .defaults
+            .executable_policies
+            .as_ref()
+            .is_some_and(BTreeMap::is_empty)
+    );
+    let selected = config.profiles["selected"]
+        .executable_policies
+        .as_ref()
+        .unwrap();
+    let codex = &selected["codex"];
+    assert_eq!(codex.enforce_wrapper_defaults, Some(false));
+    assert!(
+        codex
+            .config_overrides
+            .as_ref()
+            .is_some_and(BTreeMap::is_empty)
+    );
 }
 
 #[test]
