@@ -691,6 +691,22 @@ pub(crate) fn resolve_profile_with_layout(
         );
     }
 
+    // CLI secret providers are mediated by bind-mounting the
+    // `firma-secret-shim` binary over the real tool and routing it to a
+    // host-side broker socket. Only the Linux bwrap backend implements both
+    // the mount and the host-socket reachability; on any other backend the
+    // real tool would run unmediated, so fail closed instead.
+    let has_cli_providers = resolved
+        .secret_providers
+        .values()
+        .any(|spec| spec.as_cli().is_some());
+    if has_cli_providers && resolved.backend != BackendKind::Bwrap {
+        return Err(RunError::ConfigValidation(format!(
+            "secret_providers with a CLI entry is unsupported for backend '{}'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider",
+            resolved.backend
+        )));
+    }
+
     resolved.validate()?;
     Ok(resolved)
 }
@@ -1685,6 +1701,18 @@ path = '{}'
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        should_panic(
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'vz'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+        )
+    )]
+    #[cfg_attr(
+        target_os = "windows",
+        should_panic(
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'wsl2'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+        )
+    )]
     fn secret_providers_merge_across_defaults_and_profile() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
@@ -1732,6 +1760,18 @@ secret_providers = ["not-a-real-integration"]
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        should_panic(
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'vz'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+        )
+    )]
+    #[cfg_attr(
+        target_os = "windows",
+        should_panic(
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'wsl2'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+        )
+    )]
     fn secret_providers_custom_spec_overrides_builtin_of_same_name() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
@@ -2858,6 +2898,65 @@ fail_closed = true
                 .to_string()
                 .contains("enforce_network_namespace=true is unsupported"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn cli_secret_providers_on_non_bwrap_backend_are_rejected() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let backend = non_bwrap_backend_for_current_host();
+        let toml = format!(
+            r#"
+[run.profiles.generic]
+backend = "{backend}"
+
+[run.defaults]
+secret_providers = ["bws"]
+"#
+        );
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+
+        let error = resolve_profile(&run_args).expect_err("expected validation error");
+        assert!(
+            error
+                .to_string()
+                .contains("CLI secret mediation requires backend 'bwrap'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn http_secret_providers_are_allowed_on_non_bwrap_backends() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let backend = non_bwrap_backend_for_current_host();
+        let toml = format!(
+            r#"
+[run.profiles.generic]
+backend = "{backend}"
+
+[run.defaults]
+secret_providers = [
+  {{ type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matchers = [
+    {{ type = "sensitive_command", path = "/GetSecretValue", matcher = {{ type = "json", record_path = "$", value_path = "$.SecretString", name = {{ source = "path", path = "$.Name" }} }} }},
+  ] }},
+]
+"#
+        );
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).expect("HTTP provider must not be backend-gated");
+        assert!(
+            resolved
+                .secret_providers
+                .contains_key("aws-secrets-manager")
         );
     }
 

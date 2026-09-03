@@ -36,6 +36,7 @@ jobs:
           ./install.sh --install-dir "${INSTALL_DIR}"
           "${INSTALL_DIR}/firma" --version
           "${INSTALL_DIR}/firma" help config
+          test -x "${INSTALL_DIR}/firma-secret-shim"
       - name: Re-run (already installed exit path)
         env:
           FIRMA_NO_BREW: '1'
@@ -81,6 +82,7 @@ jobs:
           .\install.ps1 -InstallDir $dir
           & (Join-Path $dir 'firma.exe') --version
           & (Join-Path $dir 'firma.exe') help config
+          if (-not (Test-Path (Join-Path $dir 'firma-secret-shim.exe'))) { exit 1 }
       - name: Re-run (already installed exit path)
         shell: pwsh
         env:
