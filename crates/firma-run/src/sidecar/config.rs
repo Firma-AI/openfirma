@@ -499,9 +499,7 @@ fn select_template(
     explicit_template: Option<&Path>,
     cwd_template: Option<&Path>,
 ) -> TemplateSource {
-    if let Some(path) = explicit_template
-        && path.is_file()
-    {
+    if let Some(path) = explicit_template {
         return TemplateSource::Explicit(path.to_path_buf());
     }
     if let Some(path) = cwd_template
@@ -513,8 +511,9 @@ fn select_template(
 }
 
 fn parse_template(path: &Path) -> Result<toml::Value, RunError> {
-    let text = std::fs::read_to_string(path).map_err(|error| {
-        RunError::Internal(format!("read sidecar template {}: {error}", path.display()))
+    let text = std::fs::read_to_string(path).map_err(|error| RunError::ConfigParse {
+        path: path.to_path_buf(),
+        reason: format!("failed to read Sidecar template: {error}"),
     })?;
     let config = firma_config_loader::FirmaConfig::parse(path, &text).map_err(|error| {
         RunError::ConfigParse {

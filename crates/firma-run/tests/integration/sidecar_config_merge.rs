@@ -582,17 +582,37 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
 }
 
 #[test]
-fn nonexistent_template_paths_fall_through_to_minimal() {
+fn nonexistent_explicit_template_fails_without_falling_back() {
+    let tmp = TempDir::new().expect("tmp");
+    let explicit = tmp.path().join("missing.toml");
+    let cwd = tmp.path().join("cwd.toml");
+    fs::write(&cwd, "[sidecar]\n").expect("write fallback template");
+
+    let error = resolve_template_sources(Some(&explicit), Some(&cwd))
+        .expect_err("missing explicit template must fail");
+    match error {
+        firma_run::error::RunError::ConfigParse { path, reason } => {
+            assert_eq!(path, explicit);
+            assert!(reason.starts_with("failed to read Sidecar template:"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn nonexistent_working_directory_template_falls_through_to_minimal() {
     let tmp = TempDir::new().expect("tmp");
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
-    let explicit = PathBuf::from("/does/not/exist/explicit.toml");
     let cwd = PathBuf::from("/does/not/exist/cwd.toml");
+
+    let template = resolve_template_sources(None, Some(&cwd))
+        .expect("missing working-directory template should fall through");
     let source = synthesize(SynthesizeRequest {
-        template: resolved_template(Some(&explicit), Some(&cwd)),
+        template,
         ..req(&sock, &out)
     })
-    .expect("synthesize");
+    .expect("synthesize minimal template");
     assert_eq!(source, TemplateSource::Minimal);
 }
 
