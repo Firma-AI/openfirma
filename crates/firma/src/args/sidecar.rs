@@ -34,11 +34,6 @@ pub enum SidecarCommand {
 
 #[derive(Debug, clap::Args)]
 pub struct ServeArgs {
-    /// Path to the Sidecar's `firma.toml` config (listen addresses, Authority
-    /// endpoint, mapping rules, …). When unset, discovered from platform config
-    /// dirs (see docs/cli.md).
-    #[clap(long, short = 'c', env = "FIRMA_SIDECAR_CONFIG_FILE")]
-    pub config: Option<PathBuf>,
     /// Physically connect to this Authority address while retaining the
     /// configured Authority URL as the logical HTTP and TLS origin.
     #[arg(long)]
@@ -57,10 +52,6 @@ pub struct ServeArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct StartArgs {
-    /// Path to the `firma.toml` config used to launch the stack. When unset,
-    /// the platform-default config is used.
-    #[arg(long, env = "FIRMA_SIDECAR_CONFIG_FILE")]
-    pub config: Option<PathBuf>,
     /// Detach into the background once readiness has been confirmed. Without
     /// this flag the command stays attached to the foreground.
     #[arg(long)]
@@ -73,10 +64,6 @@ pub struct StartArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct StopArgs {
-    /// Accepted for symmetry with `start`; the running daemon is located via
-    /// `--state-dir` / `FIRMA_STATE_DIR` / XDG, not via this file.
-    #[arg(long, env = "FIRMA_SIDECAR_CONFIG_FILE")]
-    pub config: Option<PathBuf>,
     /// Override the runtime state directory used to locate the running daemon.
     #[arg(long, env = "FIRMA_STATE_DIR")]
     pub state_dir: Option<PathBuf>,

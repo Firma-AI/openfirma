@@ -8,7 +8,7 @@
 )]
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output};
 
 #[cfg(unix)]
 use std::fs;
@@ -63,6 +63,108 @@ fn doctor_json_emits_valid_envelope() {
             "missing category {required}; got {categories:?}"
         );
     }
+}
+
+fn config_check_from_output(output: &Output) -> Value {
+    let parsed: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "doctor stdout was not JSON: {error}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    parsed["checks"]
+        .as_array()
+        .expect("checks array")
+        .iter()
+        .find(|check| check["category"] == "config parsed")
+        .expect("config parsed check")
+        .clone()
+}
+
+#[test]
+fn doctor_uses_only_canonical_config_environment_variable() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("firma.toml");
+    std::fs::write(&config_path, "[sidecar]\n").expect("write config");
+    let removed_path = tmp.path().join("removed.toml");
+    std::fs::write(&removed_path, "not valid TOML").expect("write removed config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["doctor", "--json", "--state-dir"])
+        .arg(tmp.path())
+        .env("FIRMA_CONFIG", &config_path)
+        .env("FIRMA_STACK_CONFIG", &removed_path)
+        .current_dir(tmp.path())
+        .output()
+        .expect("spawn firma doctor");
+    let config_check = config_check_from_output(&output);
+
+    assert_eq!(config_check["status"], "ok");
+    assert_eq!(
+        config_check["detail"]["path"],
+        config_path.to_string_lossy().as_ref()
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["doctor", "--json", "--config"])
+        .arg(&config_path)
+        .arg("--state-dir")
+        .arg(tmp.path())
+        .env("FIRMA_CONFIG", &removed_path)
+        .env("FIRMA_STACK_CONFIG", &removed_path)
+        .current_dir(tmp.path())
+        .output()
+        .expect("spawn firma doctor");
+    let config_check = config_check_from_output(&output);
+
+    assert_eq!(config_check["status"], "ok");
+    assert_eq!(
+        config_check["detail"]["path"],
+        config_path.to_string_lossy().as_ref()
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["doctor", "--json", "--state-dir"])
+        .arg(tmp.path())
+        .env_remove("FIRMA_CONFIG")
+        .env("FIRMA_STACK_CONFIG", &removed_path)
+        .current_dir(tmp.path())
+        .output()
+        .expect("spawn firma doctor");
+    let config_check = config_check_from_output(&output);
+
+    assert_eq!(config_check["status"], "fail");
+    assert_eq!(
+        config_check["reason"],
+        "could not resolve firma.toml: no config found"
+    );
+
+    let discovered_dir = tmp.path().join(".firma");
+    std::fs::create_dir(&discovered_dir).expect("create project config directory");
+    let discovered_path = discovered_dir.join("firma.toml");
+    std::fs::write(&discovered_path, "not valid TOML").expect("write discovered config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["doctor", "--json", "--state-dir"])
+        .arg(tmp.path())
+        .env_remove("FIRMA_CONFIG")
+        .env("FIRMA_STACK_CONFIG", &removed_path)
+        .current_dir(tmp.path())
+        .output()
+        .expect("spawn firma doctor");
+    let config_check = config_check_from_output(&output);
+    let reason = config_check["reason"].as_str().expect("failure reason");
+
+    assert_eq!(config_check["status"], "fail");
+    assert!(
+        reason.contains(discovered_path.to_string_lossy().as_ref()),
+        "failure must identify discovered config '{}'; got: {reason}",
+        discovered_path.display()
+    );
+    assert!(
+        !reason.contains(removed_path.to_string_lossy().as_ref()),
+        "removed environment input must not be selected: {reason}"
+    );
 }
 
 #[cfg(unix)]

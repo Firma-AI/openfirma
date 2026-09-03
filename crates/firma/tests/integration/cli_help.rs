@@ -40,7 +40,7 @@ fn top_level_help_lists_subcommands() {
 
 #[test]
 fn sidecar_help_ok() {
-    assert_help(&["sidecar", "--help"], &["--config", "FIRMA_SIDECAR"]);
+    assert_help(&["sidecar", "--help"], &["--config", "FIRMA_CONFIG"]);
 }
 
 #[test]
@@ -72,4 +72,37 @@ fn proxy_bridge_help_ok() {
         &["__proxy-bridge", "--help"],
         &["--listen", "--upstream-uds"],
     );
+}
+
+/// Every config-consuming command selects the unified `firma.toml` through the
+/// global `--config` bound to the canonical `FIRMA_CONFIG`; none may still
+/// advertise the retired `FIRMA_STACK_CONFIG` or `FIRMA_SIDECAR_CONFIG_FILE`
+/// aliases.
+#[test]
+fn config_commands_expose_only_canonical_environment_variable() {
+    for command in ["doctor", "control", "monitor", "sidecar", "authority"] {
+        let output = Command::new(firma_bin())
+            .args([command, "--help"])
+            .output()
+            .unwrap_or_else(|error| panic!("spawn firma {command}: {error}"));
+        assert!(
+            output.status.success(),
+            "firma {command} --help failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let help = String::from_utf8(output.stdout).expect("UTF-8 help");
+        assert!(
+            help.contains("FIRMA_CONFIG"),
+            "{command} help must expose FIRMA_CONFIG: {help}"
+        );
+        assert!(
+            !help.contains("FIRMA_STACK_CONFIG"),
+            "{command} help must not expose FIRMA_STACK_CONFIG: {help}"
+        );
+        assert!(
+            !help.contains("FIRMA_SIDECAR_CONFIG_FILE"),
+            "{command} help must not expose FIRMA_SIDECAR_CONFIG_FILE: {help}"
+        );
+    }
 }

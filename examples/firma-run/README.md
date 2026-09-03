@@ -18,8 +18,8 @@ Skip the dedicated Sidecar terminal by relying on autostart — `firma run` spaw
 
 ```bash
 examples/firma-run/local/setup.sh
-FIRMA_SIDECAR_CONFIG_FILE=.local/firma.toml \
-  cargo run -p firma -- run --profile generic -- curl https://example.com
+cargo run -p firma -- run --sidecar-config .local/firma.toml \
+  --profile generic -- curl https://example.com
 ```
 
 Opt out for CI or production: `--no-autostart` fails loudly if the configured endpoint is unreachable; `--sidecar=external` skips the spawn and only uses an existing Sidecar. See [`docs/cli.md`](../../docs/cli.md) `## firma run` for the full flag list, marker layout, and typed errors.

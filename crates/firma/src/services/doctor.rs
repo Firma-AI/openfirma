@@ -1,7 +1,7 @@
 //! Wire `firma doctor` CLI args to the doctor module.
 
 use std::io::{self, IsTerminal as _, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -24,9 +24,9 @@ use crate::doctor::{
 /// - `0` — all checks are `OK` or `WARN`.
 /// - `1` — at least one check is `FAIL`.
 /// - `2` — internal error (runtime init, render failure).
-pub fn run(args: Args) -> ExitCode {
+pub fn run(args: Args, config: Option<&Path>) -> ExitCode {
     info!(
-        config = ?args.config,
+        config = ?config,
         state_dir = ?args.state_dir,
         json = args.json,
         timeout_ms = args.timeout_ms,
@@ -44,7 +44,7 @@ pub fn run(args: Args) -> ExitCode {
         }
     };
 
-    let RenderedReport(report, json) = runtime.block_on(build_report(args));
+    let RenderedReport(report, json) = runtime.block_on(build_report(args, config));
 
     let stdout_is_terminal = io::stdout().is_terminal();
     let mut stdout = io::stdout().lock();
@@ -103,7 +103,7 @@ fn authority_endpoint_from_body(body: &str) -> Option<Endpoint> {
     reachability::endpoint_from_authority(&config)
 }
 
-async fn build_report(args: Args) -> RenderedReport {
+async fn build_report(args: Args, config: Option<&Path>) -> RenderedReport {
     let mut report = Report::default();
     let timeout = Duration::from_millis(args.timeout_ms);
 
@@ -117,8 +117,7 @@ async fn build_report(args: Args) -> RenderedReport {
     // 3. config parse — resolves the unified `firma.toml` everyone else
     //    uses, then validates both sections. Runs early so the
     //    reachability probes can reuse the resolved path.
-    let resolved_config =
-        firma_config_loader::ConfigResolver::default().resolve_config(args.config.as_deref());
+    let resolved_config = firma_config_loader::ConfigResolver::default().resolve_config(config);
     let parsed_config = match &resolved_config {
         Ok(Some(resolved)) => {
             report.push(config_parse::check_loaded(&resolved.config));

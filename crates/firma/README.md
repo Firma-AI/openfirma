@@ -51,7 +51,7 @@ firma sidecar --config /etc/firma/firma.toml
 
 | Flag                 | Env                              | Default          |
 | -------------------- | -------------------------------- | ---------------- |
-| `-c, --config`       | `FIRMA_SIDECAR_CONFIG_FILE`      | discovered       |
+| `-c, --config`       | `FIRMA_CONFIG`                   | discovered       |
 | `--health-bind-addr` | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000` |
 
 When `--config` is omitted, a shared `firma.toml` is discovered from
@@ -222,12 +222,12 @@ Subcommands:
 
 `start` / `stop` flags:
 
-| Flag          | Env                         | Default                                      |
-| ------------- | --------------------------- | -------------------------------------------- |
-| `--config`    | `FIRMA_SIDECAR_CONFIG_FILE` | discovered `firma.toml` (`start` only)       |
-| `--state-dir` | `FIRMA_STATE_DIR`           | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` |
-| `--detach`    | —                           | _off_ (`start` only)                         |
-| `--timeout`   | —                           | `2` seconds (`stop` only)                    |
+| Flag          | Env               | Default                                        |
+| ------------- | ----------------- | ---------------------------------------------- |
+| `--config`    | `FIRMA_CONFIG`    | discovered `firma.toml` (`start` only, global) |
+| `--state-dir` | `FIRMA_STATE_DIR` | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID`   |
+| `--detach`    | —                 | _off_ (`start` only)                           |
+| `--timeout`   | —                 | `2` seconds (`stop` only)                      |
 
 State-dir resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env →
 `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` on Unix;
