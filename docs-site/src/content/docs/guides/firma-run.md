@@ -289,7 +289,37 @@ The marker directory is removed on teardown, so treat `run.log` as a live,
 per-session record rather than a durable archive; use `--log-file` for a log
 that outlives the run.
 
-## Step 4: What `firma run` does
+## Step 4: Configure secret providers (optional)
+
+Keep real secret values out of the agent by declaring which vaults the agent
+may use. Add `secret_providers` under `[run.defaults]` or a single
+`[run.profiles.<id>]` — see [Rehydrate & mask secrets with the secret
+gateway](../secret-gateway/) for the full spec:
+
+```toml
+[run.defaults]
+secret_providers = [
+  "bws", # built-in Bitwarden Secrets CLI — shim + broker
+  { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matchers = [
+    { type = "sensitive_command", path = "/GetSecretValue", matcher = { type = "json", record_path = "$", value_path = "$.SecretString", name = { source = "path", path = "$.Name" } } },
+  ] },
+]
+```
+
+- `secret_providers = ["bws", "op"]` — bare strings activate built-ins (CLI only).
+- `{ type = "cli", binary_name = "...", provider_id = "...", credential_env_vars = [...], matchers = [...] }` — custom CLI vault with per-command `sensitive_command` / `safe_command` / `blocked_command` classification and `SecretMatcher` extraction.
+- `{ type = "http", provider_id = "...", host = "...", matchers = [...] }` — custom HTTP vault mirrored into the per-run Sidecar's `http_secret_providers` for MITM interception.
+
+Merged across defaults + active profile; later entries win on key collision
+(`binary_name` for CLI, `provider_id` for HTTP). An unknown bare name fails
+closed. Presence is authorization — no separate policy check gates interception.
+
+The Sidecar never sees plaintext the agent learned elsewhere: CLI secrets are
+extracted in the broker, stored under `fsp_…` placeholders in a per-run
+`SecretStore`, and resolved via `FIRMA_SECRET_GATEWAY_ADDR`; HTTP vault
+responses are placeholder-ized in the MITM path.
+
+## Step 5: What `firma run` does
 
 Everything after `--` is the command and its arguments.
 
@@ -356,7 +386,7 @@ Flow references:
 - Local-exec mediator client: `crates/firma-run/src/mediator.rs`
 - Sidecar local-exec endpoint: `crates/firma-sidecar/src/local_exec/endpoint.rs`
 
-## Step 5: Use the right capability
+## Step 6: Use the right capability
 
 For Stage 1 to allow a call, the Sidecar needs a capability matching
 `(session_id, action_class, resource)`. By default, `firma run` requests and
@@ -387,7 +417,7 @@ firma run \
   -- curl https://example.com
 ```
 
-## Step 6: Inspect the effective config
+## Step 7: Inspect the effective config
 
 Before you trust a `firma run` invocation in production, see what it's actually going to do:
 

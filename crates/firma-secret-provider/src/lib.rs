@@ -27,6 +27,4 @@ pub use matcher::{CompiledMatcher, MatcherCompiler, MatcherError};
 pub use placeholder::{PLACEHOLDER_PREFIX, PLACEHOLDER_SUFFIX_LEN, SecretPlaceholder};
 pub use registry::IntegrationRegistry;
 pub use secrecy::{ExposeSecret, SecretString};
-pub use spec::{
-    IntegrationConfig, IntegrationConfigError, IntegrationSpec, MatcherRule, MatchingResolution,
-};
+pub use spec::{IntegrationConfigError, IntegrationSpec, MatcherRule, MatchingResolution};

@@ -1,33 +1,32 @@
+use firma_config_schema::secret_provider::SecretProviderConfig;
 use firma_core::{SecretMatcher, SecretNameSource};
-use firma_secret_provider::{
-    IntegrationConfig, IntegrationConfigError, IntegrationSpec, MatchingResolution,
-};
+use firma_secret_provider::{IntegrationConfigError, IntegrationSpec, MatchingResolution};
 
 #[test]
 fn cli_config_deserializes_and_validates() {
     let input = r#"
-[Cli]
+type = "cli"
 binary_name = "bws"
 provider_id = "bitwarden"
 credential_env_vars = ["BWS_ACCESS_TOKEN"]
 stripped_options = [{ name = "--output", takes_value = true }]
 
-[[Cli.matchers]]
+[[matchers]]
 type = "sensitive_command"
 argv = ["secret", "get"]
 match = "prefix"
 
-[Cli.matchers.matcher]
+[matchers.matcher]
 type = "json"
 record_path = "$"
 value_path = "$.value"
 
-[Cli.matchers.matcher.name]
+[matchers.matcher.name]
 source = "path"
 path = "$.key"
 "#;
 
-    let config: IntegrationConfig =
+    let config: SecretProviderConfig =
         toml::from_str(input).unwrap_or_else(|error| panic!("valid CLI config TOML: {error}"));
     let spec = IntegrationSpec::try_from(config)
         .unwrap_or_else(|error| panic!("valid CLI integration: {error}"));
@@ -52,20 +51,20 @@ path = "$.key"
 #[test]
 fn http_config_deserializes_without_validation_boundary() {
     let input = r#"
-[Http]
+type = "http"
 provider_id = "aws-secrets-manager"
 host = "secretsmanager.*.amazonaws.com"
 
-[[Http.matchers]]
+[[matchers]]
 type = "sensitive_command"
 path = "/get"
 
-[Http.matchers.matcher]
+[matchers.matcher]
 type = "regex"
 pattern = "(?P<name>.+)=(?P<value>.+)"
 "#;
 
-    let config: IntegrationConfig =
+    let config: SecretProviderConfig =
         toml::from_str(input).unwrap_or_else(|error| panic!("valid HTTP config TOML: {error}"));
     let spec = IntegrationSpec::try_from(config)
         .unwrap_or_else(|error| panic!("valid HTTP integration: {error}"));
@@ -77,9 +76,9 @@ pattern = "(?P<name>.+)=(?P<value>.+)"
 
 #[test]
 fn try_from_propagates_cli_validation_errors() {
-    let config: IntegrationConfig = toml::from_str(
+    let config: SecretProviderConfig = toml::from_str(
         r#"
-[Cli]
+type = "cli"
 binary_name = "example"
 provider_id = "example"
 credential_env_vars = []

@@ -1,8 +1,12 @@
-//! Schema for `[[sidecar.http_secret_providers]]`.
+//! Schema for an HTTP secret provider (`type = "http"`).
 //!
 //! Concrete, non-generic representation of exactly what an operator writes in
-//! `firma.toml` for an HTTP secret provider. `firma-secret-provider` converts
-//! these into its runtime `HttpIntegrationSpec<SecretMatcher>` type (generic
+//! `firma.toml` for an HTTP secret provider — either as a `secret_providers`
+//! entry under `[run.defaults]` / `[run.profiles.<id>]` (`{ type = "http",
+//! provider_id = "...", host = "...", matchers = [...] }`) which `firma-run`
+//! mirrors into `[sidecar].http_secret_providers`, or directly as
+//! `[[sidecar.http_secret_providers]]` in a sidecar config. `firma-secret-provider`
+//! converts these into its runtime `HttpIntegrationSpec<SecretMatcher>` type (generic
 //! over the matcher, and carrying the extraction behavior).
 
 use serde::{Deserialize, Serialize};

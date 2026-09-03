@@ -6,6 +6,7 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use firma_config_loader::AgentProfile;
+use firma_core::SecretMatcher;
 use firma_process_orchestrator::RunningStack;
 #[cfg(unix)]
 use firma_process_orchestrator::{
@@ -13,6 +14,7 @@ use firma_process_orchestrator::{
     spawn_stack_from_plan,
 };
 use firma_runtime_state::RuntimeLayout;
+use firma_secret_provider::spec::http::HttpIntegrationSpec;
 
 #[cfg(unix)]
 use std::io;
@@ -290,6 +292,16 @@ pub struct AutostartFlags {
     /// When `true`, inject `mode = "monitor"` into the synthesized sidecar
     /// config. Passed through from `RunInput.monitor_mode`.
     pub monitor_mode: bool,
+    /// Secret gateway address advertised to the autostarted Sidecar via
+    /// `FIRMA_SECRET_GATEWAY_ADDR`. `None` when no secret providers are configured.
+    pub secret_gateway_addr: Option<String>,
+    /// HTTP-shaped entries mirrored into the synthesized sidecar config's
+    /// `http_secret_providers` so the Sidecar's MITM path can intercept matching
+    /// vault responses. Empty when no HTTP providers are configured.
+    ///
+    /// Canonical authorization and merge semantics are documented on
+    /// [`crate::config::ResolvedProfile::secret_providers`].
+    pub http_secret_providers: Vec<HttpIntegrationSpec<SecretMatcher>>,
 }
 
 impl Default for AutostartFlags {
@@ -306,6 +318,8 @@ impl Default for AutostartFlags {
             capability_seed_path: None,
             use_http_proxy_sidecar: false,
             monitor_mode: false,
+            secret_gateway_addr: None,
+            http_secret_providers: Vec::new(),
         }
     }
 }
@@ -1012,6 +1026,8 @@ fn prepare_run_components(
                             use_http_proxy_interceptor: component_flags.use_http_proxy_sidecar,
                             audit_fallback_path: Some(runtime_layout.audit_log()),
                             monitor_mode: component_flags.monitor_mode,
+                            secret_gateway_addr: component_flags.secret_gateway_addr.as_deref(),
+                            http_secret_providers: &component_flags.http_secret_providers,
                         },
                     )?;
                     let publication =
@@ -1178,6 +1194,7 @@ fn create_log_alias(marker_dir: &Path, alias_name: &str, target: &Path) -> Resul
             target.display()
         ))
     })?;
+
     let alias = marker_dir.join(alias_name);
     match std::fs::symlink_metadata(&alias) {
         Ok(metadata) if metadata.file_type().is_symlink() => {

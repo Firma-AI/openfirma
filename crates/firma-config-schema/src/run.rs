@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use crate::{secret_provider::SecretProviderPatch, utils::NonZeroDuration};
 
 /// Sandbox backend selected for a Run profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +119,13 @@ pub struct ProfilePatch {
     /// How the sandbox CA trust store is assembled. `None` resolves to the
     /// default `CaTrustMode::Sole`.
     pub ca_trust_mode: Option<CaTrustMode>,
+    pub secret_gateway_addr: Option<String>,
+    /// Secret providers to activate: bare strings reference a built-in
+    /// integration, tables define a custom one. Additive across
+    /// `[run.defaults]` and the active profile (like `env_passthrough`);
+    /// entries appearing later win on name collision.
+    #[serde(default)]
+    pub secret_providers: Option<Vec<SecretProviderPatch>>,
 }
 
 /// Mount entry patch.

@@ -83,6 +83,8 @@ fn generic_profile() -> ProfilePatch {
         }),
         sidecar_local_exec: None,
         executable_policies: Some(BTreeMap::new()),
+        secret_gateway_addr: None,
+        secret_providers: None,
         use_http_proxy_sidecar: Some(true),
         allow_non_structural: Some(false),
         mask_home_paths: None,

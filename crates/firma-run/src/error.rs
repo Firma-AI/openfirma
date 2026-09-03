@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use firma_secret_provider::IntegrationConfigError;
+
 /// Error type used by `firma-run` runtime orchestration.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -16,6 +18,9 @@ pub enum RunError {
 
     #[error("config validation failed: {0}")]
     ConfigValidation(String),
+
+    #[error(transparent)]
+    IntegrationValidation(#[from] IntegrationConfigError),
 
     #[error(
         "missing [sidecar.authority].agent_id in {path}; run `firma config --agent-id <AGENT_ID>` or add the registered agent TypeID to the configuration"

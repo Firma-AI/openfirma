@@ -9,7 +9,9 @@
 //! mixing CLI-only and HTTP-only attributes (e.g. an HTTP entry carrying a
 //! `binary_name`) cannot be represented.
 
+use firma_config_schema::secret_provider::SecretProviderConfig;
 use firma_core::SecretMatcher;
+use serde::Serialize;
 
 use crate::{
     MatcherCompiler,
@@ -19,19 +21,9 @@ use crate::{
 pub mod cli;
 pub mod http;
 
-/// Deserializable configuration for either a CLI or HTTP secret provider.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum IntegrationConfig {
-    /// Plain CLI integration configuration requiring validation before use.
-    Cli(cli::CliIntegrationConfig),
-    /// HTTP integration configuration, which has no additional validation
-    /// boundary.
-    Http(http::HttpIntegrationSpec<SecretMatcher>),
-}
-
 /// A validated secret-provider integration: either a CLI vault tool or an
 /// HTTP vault.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum IntegrationSpec<Matcher> {
     /// Validated CLI integration.
     Cli(cli::CliIntegrationSpec<Matcher>),
@@ -39,21 +31,28 @@ pub enum IntegrationSpec<Matcher> {
     Http(http::HttpIntegrationSpec<Matcher>),
 }
 
-/// Error returned when validating an [`IntegrationConfig`].
+/// Error returned when validating an [`SecretProviderConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IntegrationConfigError {
     /// CLI integration validation failed.
     #[error(transparent)]
     Cli(#[from] cli::CliIntegrationConfigError),
+    /// HTTP integration validation failed.
+    #[error(transparent)]
+    Http(#[from] http::HttpSecretProviderConfigError),
 }
 
-impl TryFrom<IntegrationConfig> for IntegrationSpec<SecretMatcher> {
+impl TryFrom<SecretProviderConfig> for IntegrationSpec<SecretMatcher> {
     type Error = IntegrationConfigError;
 
-    fn try_from(config: IntegrationConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: SecretProviderConfig) -> Result<Self, Self::Error> {
         match config {
-            IntegrationConfig::Cli(config) => Ok(Self::Cli(config.try_into()?)),
-            IntegrationConfig::Http(config) => Ok(Self::Http(config)),
+            SecretProviderConfig::Cli(config) => {
+                Ok(Self::Cli(cli::CliIntegrationSpec::try_from(config)?))
+            }
+            SecretProviderConfig::Http(config) => {
+                Ok(Self::Http(http::HttpIntegrationSpec::try_from(config)?))
+            }
         }
     }
 }
@@ -104,14 +103,25 @@ pub enum MatchingResolution<'a, Matcher> {
 }
 
 /// One candidate rule for [`cli::CliIntegrationSpec`] and [`http::HttpIntegrationSpec`].
+///
+/// Classification is fail-closed: [`MatchingResolution::Blocked`] is returned
+/// for unrecognized shapes, malformed options, or any [`Self::BlockedCommand`]
+/// match, never forwarding unredacted material.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MatcherRule<A, B> {
-    /// Command we want to redact secret from
+    /// Response whose body must be scanned and redacted using `A`'s matcher.
+    ///
+    /// For CLI providers `A` is [`cli::CommandAndMatcher`]; for HTTP it is
+    /// an [`http::HttpIntegrationSpec`] rule. Produces
+    /// [`MatchingResolution::Matcher`] on match.
     SensitiveCommand(A),
-    /// Command we let through without redaction
+    /// Known-safe invocation whose response never carries secrets; forwarded
+    /// unredacted without extraction. Produces
+    /// [`MatchingResolution::PassThrough`] on match.
     SafeCommand(B),
-    /// Command we know should be forbidden no matter what
+    /// Invocation that must always be denied. Produces
+    /// [`MatchingResolution::Blocked`] on match and fails closed.
     BlockedCommand(B),
 }
 

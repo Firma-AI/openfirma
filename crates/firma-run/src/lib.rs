@@ -19,5 +19,6 @@ pub mod proxy_bridge;
 pub mod routing;
 pub mod runtime;
 pub mod seccomp;
+pub(crate) mod secret;
 pub mod sidecar;
 pub(crate) mod supervisor;

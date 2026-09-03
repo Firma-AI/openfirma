@@ -31,6 +31,8 @@ fn request(
         use_http_proxy_interceptor: tcp,
         audit_fallback_path: None,
         monitor_mode: true,
+        secret_gateway_addr: None,
+        http_secret_providers: &[],
     }
 }
 

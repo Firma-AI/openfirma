@@ -15,8 +15,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use firma_config_loader::{AgentProfile, CONFIG_FILE_NAME};
+use firma_core::SecretNameSource;
 use firma_http::{Authority, Method};
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
+use firma_secret_provider::MatcherRule;
+use firma_secret_provider::spec::http::{HttpIntegrationSpec, PathAndMatcher};
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
 use firma_sidecar::normalizer::{MappingTable, MatchResult};
 use tempfile::TempDir;
@@ -62,6 +65,7 @@ fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
         capability_seed_path: None,
         audit_fallback_path: None,
         monitor_mode: false,
+        http_secret_providers: &[],
     }
 }
 
@@ -146,14 +150,31 @@ fn missing_template_writes_minimal_config() {
         .get("interceptor")
         .and_then(|v| v.as_table())
         .expect("interceptor table");
-    assert_eq!(
-        interceptor.get("mode").and_then(|v| v.as_str()),
-        Some("unix_socket")
-    );
-    assert_eq!(
-        interceptor.get("socket_path").and_then(|v| v.as_str()),
-        Some(sock.display().to_string()).as_deref()
-    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("unix_socket")
+        );
+        assert_eq!(
+            interceptor.get("socket_path").and_then(|v| v.as_str()),
+            Some(sock.display().to_string()).as_deref()
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("http_proxy")
+        );
+        assert!(
+            interceptor
+                .get("listen_addr")
+                .and_then(|v| v.as_str())
+                .is_some(),
+            "windows minimal config must have a listen_addr for http_proxy"
+        );
+    }
     let mapping = sidecar
         .get("mapping")
         .and_then(|v| v.as_table())
@@ -241,14 +262,24 @@ paths = ["/etc/firma/cap.toml"]
         .get("interceptor")
         .and_then(|v| v.as_table())
         .expect("interceptor");
-    assert_eq!(
-        interceptor.get("mode").and_then(|v| v.as_str()),
-        Some("unix_socket")
-    );
-    assert_eq!(
-        interceptor.get("socket_path").and_then(|v| v.as_str()),
-        Some(sock.display().to_string()).as_deref()
-    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("unix_socket")
+        );
+        assert_eq!(
+            interceptor.get("socket_path").and_then(|v| v.as_str()),
+            Some(sock.display().to_string()).as_deref()
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            interceptor.get("mode").and_then(|v| v.as_str()),
+            Some("http_proxy")
+        );
+    }
     // listen_addr from template preserved verbatim — sidecar validator
     // tolerates extra keys, and this proves we did not wipe the table.
     assert_eq!(
@@ -569,5 +600,70 @@ fn no_monitor_mode_does_not_inject_mode_field() {
     assert!(
         sidecar.get("mode").is_none(),
         "monitor_mode=false must not inject a mode field"
+    );
+}
+
+#[test]
+fn http_secret_providers_are_mirrored_into_sidecar_config_and_load_back() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+
+    let provider = HttpIntegrationSpec {
+        provider_id: "aws-secrets-manager".to_string(),
+        host: "secretsmanager.*.amazonaws.com".to_string(),
+        matchers: vec![MatcherRule::SensitiveCommand(PathAndMatcher {
+            path: None,
+            matcher: firma_core::SecretMatcher::Json {
+                record_path: "$".to_string(),
+                value_path: "$.SecretString".to_string(),
+                name: SecretNameSource::Path {
+                    path: "$.Name".to_string(),
+                },
+                item_selector: None,
+                domain_selector: None,
+            },
+        })],
+    };
+
+    synthesize(SynthesizeRequest {
+        http_secret_providers: &[provider],
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    // The synthesized file must be loadable by the Sidecar's own config type,
+    // with the entry intact end to end (not just structurally present as raw
+    // TOML). Mirrors the real load path (`firma sidecar --config <path>`):
+    // extract the `[sidecar]` section, then deserialize just that as
+    // `SidecarConfig` — `SidecarConfig::load_from_path` parses a file whose
+    // top level *is* the sidecar config, not one wrapped in `[sidecar]`.
+    let value = read(&out);
+    let sidecar_section = value.get("sidecar").expect("sidecar section").clone();
+    let loaded: firma_config_schema::sidecar::SidecarConfig = sidecar_section
+        .try_into()
+        .expect("synthesized sidecar section must load");
+    assert_eq!(loaded.http_secret_providers.len(), 1);
+    let spec = &loaded.http_secret_providers[0];
+    assert_eq!(spec.provider_id, "aws-secrets-manager");
+    assert_eq!(spec.host, "secretsmanager.*.amazonaws.com");
+}
+
+#[test]
+fn empty_http_secret_providers_omits_the_field() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    synthesize(req(&sock, &out)).expect("synthesize");
+
+    let value = read(&out);
+    let sidecar = value
+        .as_table()
+        .and_then(|t| t.get("sidecar"))
+        .and_then(|v| v.as_table())
+        .expect("sidecar table");
+    assert!(
+        sidecar.get("http_secret_providers").is_none(),
+        "no HTTP providers configured must not inject an empty array field"
     );
 }

@@ -38,13 +38,14 @@
 
 use std::collections::BTreeMap;
 
+use firma_config_schema::secret_provider::cli::FlagSpec;
 use firma_core::{SecretJsonSelector, SecretJsonSelectorScope, SecretMatcher, SecretNameSource};
 
 use crate::{
     non_empty::vec::non_empty_vec,
     spec::{
         MatcherRule,
-        cli::{CliIntegrationSpec, CommandAndMatcher, CommandPattern, FlagSpec},
+        cli::{CliIntegrationSpec, CommandAndMatcher, CommandPattern},
     },
 };
 

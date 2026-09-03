@@ -5,7 +5,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
+use firma_config_schema::secret_provider::SecretProviderPatch;
+use firma_core::SecretMatcher;
 use firma_runtime_state::RuntimeLayout;
+use firma_secret_provider::IntegrationSpec;
+use firma_secret_provider::gateway::client::GATEWAY_ADDR_ENV;
 use serde::Serialize;
 
 pub use firma_config_schema::run::SandboxIdentityMode;
@@ -66,6 +70,25 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub(crate) sidecar_local_exec: Option<CommandMediatorConfig>,
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
+    pub(crate) secret_gateway_addr: Option<String>,
+    /// Resolved secret-provider integrations: CLI vault tools keyed by binary
+    /// basename, HTTP vaults keyed by `provider_id`. A CLI entry activates a
+    /// secret-mediation shim for that binary (stdio routed through the
+    /// firma-run broker); an HTTP entry is mirrored into the autostarted
+    /// Sidecar's own config so it can intercept MITM'd responses from that
+    /// vault. The map value is the fully resolved
+    /// [`IntegrationSpec`](firma_secret_provider::IntegrationSpec) — a
+    /// built-in looked up by name (CLI only), or a custom spec defined
+    /// inline. An entry being present here is itself the authorization to
+    /// intercept — no separate policy check gates it; see the secrets design
+    /// doc. Merged across `[run.defaults]` and the active profile; entries
+    /// defined later win on name collision (profile overrides defaults,
+    /// custom overrides built-in).
+    ///
+    /// This is the canonical definition of secret-provider authorization and
+    /// merge semantics; other `secret_providers` / `http_secret_providers`
+    /// fields reference it via intra-doc links rather than duplicating it.
+    pub(crate) secret_providers: BTreeMap<String, IntegrationSpec<SecretMatcher>>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
@@ -477,6 +500,17 @@ impl Merge for ProfilePatch {
             allow_non_structural: higher.allow_non_structural.or(self.allow_non_structural),
             mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
             ca_trust_mode: higher.ca_trust_mode.or(self.ca_trust_mode),
+            secret_gateway_addr: higher.secret_gateway_addr.or(self.secret_gateway_addr),
+            secret_providers: match (self.secret_providers, higher.secret_providers) {
+                // Additive across layers (like `env_passthrough`); the later
+                // (higher) entries come last so they win on name collision in
+                // `resolve_secret_providers`.
+                (Some(mut lower), Some(higher)) => {
+                    lower.extend(higher);
+                    Some(lower)
+                }
+                (lower, higher) => higher.or(lower),
+            },
         }
     }
 }
@@ -548,8 +582,10 @@ pub(crate) fn resolve_profile_with_layout(
         .env_passthrough
         .unwrap_or_default()
         .into_iter()
-        .filter(|item: &String| !item.trim().is_empty())
+        .filter(|item| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
+
+    let secret_providers = resolve_secret_providers(patch.secret_providers)?;
 
     let mut env_set = patch.env_set.unwrap_or_default();
     if let Some(paths) = patch.mask_home_paths {
@@ -607,6 +643,12 @@ pub(crate) fn resolve_profile_with_layout(
         .map(|(executable, policy)| (executable, resolve_executable_policy(policy)))
         .collect();
 
+    let secret_gateway_addr = patch.secret_gateway_addr.clone().or_else(|| {
+        std::env::var(GATEWAY_ADDR_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    });
+
     let seccomp_policy = patch
         .seccomp_policy
         .map(seccomp_policy_from_patch)
@@ -630,6 +672,8 @@ pub(crate) fn resolve_profile_with_layout(
         capability,
         sidecar_local_exec,
         executable_policies,
+        secret_providers,
+        secret_gateway_addr,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar.unwrap_or(false),
         allow_non_structural: patch.allow_non_structural.unwrap_or(false),
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
@@ -728,11 +772,60 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             }),
         sidecar_local_exec: None,
         executable_policies: None,
+        secret_gateway_addr: None,
+        secret_providers: None,
         use_http_proxy_sidecar: None,
         allow_non_structural: args.allow_non_structural.then_some(true),
         mask_home_paths: None,
         ca_trust_mode: None,
     }
+}
+
+/// Resolve the merged `secret_providers` patch entries into the final
+/// map (CLI entries keyed by binary basename, HTTP entries keyed by
+/// `provider_id`). Entries are processed in order, so a later entry (a
+/// higher-priority profile, or a custom spec appearing after a bare-name
+/// reference) wins on name collision.
+///
+/// # Errors
+///
+/// Returns [`RunError::ConfigValidation`] if a bare-string entry does not name
+/// a known built-in integration.
+fn resolve_secret_providers(
+    patch: Option<Vec<SecretProviderPatch>>,
+) -> Result<BTreeMap<String, IntegrationSpec<SecretMatcher>>, RunError> {
+    let Some(patch) = patch else {
+        return Ok(BTreeMap::new());
+    };
+    let builtins = firma_secret_provider::IntegrationRegistry::with_builtins();
+    let mut resolved = BTreeMap::new();
+    for entry in patch {
+        match entry {
+            SecretProviderPatch::Named(name) => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let spec = builtins.for_binary(&name).cloned().ok_or_else(|| {
+                    RunError::ConfigValidation(format!(
+                        "unknown secret provider '{name}'; no built-in integration by that name \
+                         — provide a full spec to define a custom one"
+                    ))
+                })?;
+                resolved.insert(name, IntegrationSpec::Cli(spec));
+            }
+            SecretProviderPatch::Custom(spec) => {
+                let spec = IntegrationSpec::try_from(*spec)?;
+                // Cli specs are indexed by binary name, Http specs are indexed by provider id
+                let name = match &spec {
+                    IntegrationSpec::Cli(cli) => cli.binary_name().to_owned(),
+                    IntegrationSpec::Http(http) => http.provider_id.clone(),
+                };
+                resolved.insert(name, spec);
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableLaunchPolicy {
@@ -1175,6 +1268,8 @@ mod tests {
 
     use firma_config_loader::CONFIG_FILE_NAME;
     use firma_config_schema::utils::NonZeroDuration;
+    use firma_core::SecretMatcher;
+    use firma_secret_provider::{MatcherRule, spec::cli::CommandAndMatcher};
     use pretty_assertions::assert_eq;
 
     use crate::runtime::RunInput;
@@ -1183,12 +1278,13 @@ mod tests {
         BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
         CapabilitySourcePatch, CommandMediatorHitlMode, CommandMediatorPatch,
         ExecutableLaunchPolicyPatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch,
-        ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode, SidecarEndpoint,
+        ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode,
         capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
     };
 
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
+    use crate::error::RunError;
 
     fn lease_patch(requested_actions: Option<Vec<String>>) -> CapabilityLeasePatch {
         CapabilityLeasePatch {
@@ -1445,9 +1541,7 @@ mod tests {
         assert_eq!(resolved.backend, BackendKind::default_for_current_host());
         assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp {
-                addr: "127.0.0.1:8080".parse().unwrap()
-            }
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
         );
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::SandboxUser);
         if cfg!(target_os = "linux")
@@ -1589,6 +1683,160 @@ path = '{}'
                 path: capability_path
             }
         );
+    }
+
+    #[test]
+    fn secret_providers_merge_across_defaults_and_profile() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+
+        let toml = r#"
+[run.defaults]
+secret_providers = ["bws", "  "]
+
+[run.profiles.codex]
+secret_providers = ["op"]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        // Defaults and profile are additive; blank entries are dropped.
+        assert!(resolved.secret_providers.contains_key("bws"));
+        assert!(resolved.secret_providers.contains_key("op"));
+        assert!(!resolved.secret_providers.contains_key(""));
+    }
+
+    #[test]
+    fn secret_providers_default_to_empty() {
+        let resolved = resolve_profile(&args("codex")).unwrap();
+        assert!(resolved.secret_providers.is_empty());
+    }
+
+    #[test]
+    fn secret_providers_named_entry_unknown_builtin_errors() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = ["not-a-real-integration"]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let err = resolve_profile(&run_args).unwrap_err();
+        assert!(matches!(err, RunError::ConfigValidation(_)));
+    }
+
+    #[test]
+    fn secret_providers_custom_spec_overrides_builtin_of_same_name() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    "bws",
+    {
+        type = "cli",
+        binary_name = "bws",
+        provider_id = "bitwarden",
+        credential_env_vars = [],
+        stripped_options = [],
+        matchers = [
+            {
+                type = "sensitive_command",
+                argv = ["secret", "list"],
+                match = "prefix",
+                matcher = {
+                    type = "regex",
+                    pattern = "(?P<name>.+)=(?P<value>.+)"
+                }
+            }
+        ]
+    },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        let spec = resolved.secret_providers.get("bws").unwrap();
+        std::assert_matches!(
+            spec.as_cli()
+                .expect("bws entry must resolve to a CLI spec")
+                .matchers()[0],
+            MatcherRule::SensitiveCommand(CommandAndMatcher {
+                matcher: SecretMatcher::Regex { .. },
+                ..
+            })
+        );
+    }
+
+    #[test]
+    fn secret_providers_http_entry_resolves_by_provider_id() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    {
+        type = "http",
+        provider_id = "aws-secrets-manager",
+        host = "secretsmanager.*.amazonaws.com",
+        matchers = [
+            {
+                type = "sensitive_command",
+                path = "/get",
+                matcher = {
+                    type = "json",
+                    record_path = "$",
+                    value_path = "$.SecretString",
+                    name = { source = "path", path = "$.Name" }
+                }
+            }
+        ]
+    },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        let spec = resolved
+            .secret_providers
+            .get("aws-secrets-manager")
+            .expect("http provider keyed by provider_id")
+            .as_http()
+            .expect("must resolve to an HTTP spec");
+        assert_eq!(spec.host, "secretsmanager.*.amazonaws.com");
+        assert_eq!(spec.provider_id, "aws-secrets-manager");
+    }
+
+    #[test]
+    fn secret_providers_http_entry_missing_type_tag_fails_closed() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let toml = r#"
+[run.defaults]
+secret_providers = [
+    { provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matcher = { type = "json", value_path = "$.SecretString", name_path = "$.Name" } },
+]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let err = resolve_profile(&run_args).unwrap_err();
+        assert!(matches!(err, RunError::ConfigParse { .. }));
     }
 
     #[test]
@@ -1929,33 +2177,24 @@ approval_policy = "never"
 
     fn assert_profile_patch_contract_inventory(patch: ProfilePatch) {
         let ProfilePatch {
-            backend,
-            sidecar_endpoint,
+            backend: _,
+            sidecar_endpoint: _,
             seccomp_policy,
-            env_passthrough,
-            env_set,
+            env_passthrough: _,
+            env_set: _,
             mounts,
             network,
-            identity_mode,
+            identity_mode: _,
             capability,
             sidecar_local_exec,
             executable_policies,
-            use_http_proxy_sidecar,
-            allow_non_structural,
-            mask_home_paths,
-            ca_trust_mode,
+            use_http_proxy_sidecar: _,
+            allow_non_structural: _,
+            mask_home_paths: _,
+            ca_trust_mode: _,
+            secret_gateway_addr: _,
+            secret_providers: _,
         } = patch;
-        let _ = (
-            backend,
-            sidecar_endpoint,
-            env_passthrough,
-            env_set,
-            identity_mode,
-            use_http_proxy_sidecar,
-            allow_non_structural,
-            mask_home_paths,
-            ca_trust_mode,
-        );
 
         for MountPatch {
             source,
@@ -2499,10 +2738,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&args("claude-code")).unwrap();
         assert_eq!(resolved.id, "claude-code");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
         assert!(resolved.env_passthrough.contains("ANTHROPIC_API_KEY"));
     }
 
@@ -2543,10 +2782,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&args("codex")).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.id, "codex");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
     }
 
     #[test]
@@ -2556,10 +2795,10 @@ approval_policy = "never"
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.id, "generic");
         assert!(resolved.use_http_proxy_sidecar);
-        assert!(matches!(
+        assert_eq!(
             resolved.sidecar_endpoint,
-            SidecarEndpoint::Tcp { .. }
-        ));
+            super::DEFAULT_SIDECAR_ENDPOINT.parse().unwrap()
+        );
     }
 
     #[test]

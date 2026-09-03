@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::GatewayConfig;
+use crate::{gateway::GatewayConfig, secret_provider::http::HttpSecretProviderConfig};
 
 pub mod audit;
 pub mod authority;
@@ -20,7 +20,6 @@ pub mod infra;
 pub mod interceptor;
 pub mod local_exec;
 pub mod revocation;
-pub mod secret_provider;
 pub mod tenancy;
 
 pub use audit::{AuditConfig, AuditSink};
@@ -37,7 +36,6 @@ pub use infra::{
 pub use interceptor::{ConnectRelayConfig, HttpsMitmConfig, InterceptorConfig, InterceptorMode};
 pub use local_exec::{DefaultAction, LocalExecConfig};
 pub use revocation::RevocationConfig;
-pub use secret_provider::{HttpMatcherRuleConfig, HttpSecretProviderConfig};
 pub use tenancy::{TenancyConfig, TenancyMode};
 
 /// Top-level sidecar configuration, deserialized from the `[sidecar]` section

@@ -12,6 +12,8 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use firma_core::SecretMatcher;
+use firma_secret_provider::spec::http::HttpIntegrationSpec;
 use p256::ecdsa::SigningKey;
 use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use sha2::{Digest, Sha256};
@@ -342,6 +344,16 @@ pub struct SynthesizeRequest<'a> {
     /// operator template. Enables `firma run --monitor` for a single-run
     /// observe-only mode without editing firma.toml.
     pub monitor_mode: bool,
+    /// HTTP-shaped entries mirrored into `[sidecar].http_secret_providers` so the
+    /// Sidecar's MITM path can intercept matching vault responses.
+    ///
+    /// This is a read-only mirror of the HTTP subset of
+    /// [`crate::config::ResolvedProfile::secret_providers`]; that field is the
+    /// canonical definition of authorization (presence implies intercept) and
+    /// merge semantics. The distinct name avoids confusion with `firma-run`'s
+    /// own `secret_providers` config surface. Empty when no HTTP providers are
+    /// configured.
+    pub http_secret_providers: &'a [HttpIntegrationSpec<SecretMatcher>],
 }
 
 /// Result of template resolution. Returned for tests; production callers
@@ -419,6 +431,7 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     // VS Code profile classifies its GitHub account traffic at CONNECT level.
     ensure_vscode_github_mitm_bypass(&mut value, req.execution_profile)?;
     ensure_mapping_rules(&mut value, req.out_path, req.execution_profile)?;
+    override_http_secret_providers(&mut value, req.http_secret_providers)?;
     write_atomic(req.out_path, &value)?;
     Ok(source)
 }
@@ -526,14 +539,37 @@ fn override_interceptor(
             toml::Value::String(addr.to_string()),
         );
     } else {
-        table.insert(
-            "mode".to_string(),
-            toml::Value::String("unix_socket".to_string()),
-        );
-        table.insert(
-            "socket_path".to_string(),
-            toml::Value::String(socket_path.display().to_string()),
-        );
+        #[cfg(unix)]
+        {
+            table.insert(
+                "mode".to_string(),
+                toml::Value::String("unix_socket".to_string()),
+            );
+            table.insert(
+                "socket_path".to_string(),
+                toml::Value::String(socket_path.display().to_string()),
+            );
+        }
+        #[cfg(windows)]
+        {
+            let _ = socket_path;
+            table.insert(
+                "mode".to_string(),
+                toml::Value::String("http_proxy".to_string()),
+            );
+            // Windows has no `unix_socket` interceptor mode (see
+            // `firma-config-schema::sidecar::interceptor::InterceptorMode`).
+            // Synthesize a loopback `http_proxy` instead; preserve an
+            // existing `listen_addr` from the template if present, otherwise
+            // use an ephemeral port so the config remains valid and loadable
+            // via `SidecarConfig` on Windows.
+            if !table.contains_key("listen_addr") {
+                table.insert(
+                    "listen_addr".to_string(),
+                    toml::Value::String("127.0.0.1:0".to_string()),
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -617,6 +653,78 @@ fn override_authority_credentials(
         );
         table.remove("pre_shared_key_env");
     }
+    Ok(())
+}
+
+/// Mirror the resolved HTTP-shaped `secret_providers` entries into
+/// `[sidecar].http_secret_providers`. A no-op when `providers` is empty —
+/// most profiles configure no HTTP vaults, and the field's `#[serde(default)]`
+/// on the Sidecar side already treats an absent key as empty. When the
+/// template already contains `http_secret_providers`, entries are unioned:
+/// template entries whose `provider_id` collides with a profile entry are
+/// replaced by the profile entry (profile wins). A warning is emitted for
+/// each replacement. See [`crate::config::ResolvedProfile::secret_providers`]
+/// for the canonical authorization invariant.
+fn override_http_secret_providers(
+    value: &mut toml::Value,
+    providers: &[HttpIntegrationSpec<SecretMatcher>],
+) -> Result<(), RunError> {
+    if providers.is_empty() {
+        return Ok(());
+    }
+    let sidecar = sidecar_table_mut(value)?;
+    let profile_ids: std::collections::HashSet<&str> = providers
+        .iter()
+        .map(|provider| provider.provider_id.as_str())
+        .collect();
+    let serialized_profile = toml::Value::try_from(providers).map_err(|error| {
+        RunError::Internal(format!(
+            "failed to serialize http_secret_providers into sidecar config: {error}"
+        ))
+    })?;
+    let toml::Value::Array(profile_entries) = serialized_profile else {
+        return Err(RunError::Internal(
+            "serialized http_secret_providers must be an array".to_string(),
+        ));
+    };
+    let mut merged: Vec<toml::Value> = match sidecar.get("http_secret_providers") {
+        Some(toml::Value::Array(existing)) => {
+            let before = existing.len();
+            let filtered: Vec<toml::Value> = existing
+                .iter()
+                .filter(|entry| {
+                    let Some(provider_id) = entry
+                        .as_table()
+                        .and_then(|table| table.get("provider_id"))
+                        .and_then(toml::Value::as_str)
+                    else {
+                        return true;
+                    };
+                    !profile_ids.contains(provider_id)
+                })
+                .cloned()
+                .collect();
+            let replaced = before.saturating_sub(filtered.len());
+            if replaced > 0 {
+                tracing::warn!(
+                    replaced,
+                    "template http_secret_providers entries overridden by profile secret_providers"
+                );
+            }
+            filtered
+        }
+        Some(other) => {
+            return Err(RunError::Internal(format!(
+                "http_secret_providers in sidecar template must be an array, got: {other:?}"
+            )));
+        }
+        None => Vec::new(),
+    };
+    merged.extend(profile_entries);
+    sidecar.insert(
+        "http_secret_providers".to_string(),
+        toml::Value::Array(merged),
+    );
     Ok(())
 }
 
@@ -1065,6 +1173,7 @@ mod tests {
             capability_seed_path: None,
             audit_fallback_path: None,
             monitor_mode: false,
+            http_secret_providers: &[],
         })
         .unwrap_or_else(|error| panic!("{error}"));
 

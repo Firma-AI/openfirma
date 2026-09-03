@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use firma_runtime_state::RuntimeLayout;
+use firma_secret_provider::IntegrationSpec;
 use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
@@ -209,6 +210,13 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             }),
             use_http_proxy_sidecar: profile.use_http_proxy_sidecar,
             monitor_mode: args.monitor_mode,
+            secret_gateway_addr: profile.secret_gateway_addr.clone(),
+            http_secret_providers: profile
+                .secret_providers
+                .values()
+                .filter_map(IntegrationSpec::as_http)
+                .cloned()
+                .collect(),
             ..Default::default()
         };
         // When the user supplies --capability-file, thread the path into the
@@ -897,6 +905,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
@@ -965,6 +975,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
@@ -1018,6 +1030,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
@@ -1086,6 +1100,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
@@ -1185,6 +1201,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1254,6 +1272,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
@@ -1354,6 +1374,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
@@ -1426,6 +1448,8 @@ mod tests {
                 requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
