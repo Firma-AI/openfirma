@@ -1500,7 +1500,6 @@ mod tests {
             preserve_host_user: false,
             print_effective_config: false,
             no_autostart: false,
-            sidecar_template_path: None,
             sidecar_startup_timeout_secs: 10,
             command: vec!["echo".to_string(), "ok".to_string()],
             authority_cli: crate::authority::AuthorityCli::Unset,

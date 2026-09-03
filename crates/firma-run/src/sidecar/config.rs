@@ -359,8 +359,11 @@ pub struct SynthesizeRequest<'a> {
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateSource {
+    /// The resolved unified `firma.toml` (`--config` / `FIRMA_CONFIG` /
+    /// discovery) was selected as the template.
     Explicit(PathBuf),
-    Cwd(PathBuf),
+    /// No template file was available; a minimal `[sidecar]` document is
+    /// synthesized.
     Minimal,
 }
 
@@ -495,21 +498,6 @@ fn override_authority_agent_id(
     Ok(())
 }
 
-fn select_template(
-    explicit_template: Option<&Path>,
-    cwd_template: Option<&Path>,
-) -> TemplateSource {
-    if let Some(path) = explicit_template {
-        return TemplateSource::Explicit(path.to_path_buf());
-    }
-    if let Some(path) = cwd_template
-        && path.is_file()
-    {
-        return TemplateSource::Cwd(path.to_path_buf());
-    }
-    TemplateSource::Minimal
-}
-
 fn parse_template(path: &Path) -> Result<toml::Value, RunError> {
     let text = std::fs::read_to_string(path).map_err(|error| RunError::ConfigParse {
         path: path.to_path_buf(),
@@ -536,18 +524,22 @@ fn parse_template(path: &Path) -> Result<toml::Value, RunError> {
 
 /// Select and validate one template snapshot without writing runtime artifacts.
 ///
+/// `template_path` is the resolved unified `firma.toml` when one exists on
+/// disk; otherwise a minimal `[sidecar]` document is synthesized.
+///
 /// # Errors
 ///
 /// Returns a path-bearing configuration error when the selected template is
 /// unreadable or does not match the unified Sidecar schema.
 #[doc(hidden)]
 pub fn resolve_template_sources(
-    explicit_template: Option<&Path>,
-    cwd_template: Option<&Path>,
+    template_path: Option<&Path>,
 ) -> Result<ResolvedTemplate, RunError> {
-    let source = select_template(explicit_template, cwd_template);
+    let source = template_path.map_or(TemplateSource::Minimal, |path| {
+        TemplateSource::Explicit(path.to_path_buf())
+    });
     let (value, template_dir) = match &source {
-        TemplateSource::Explicit(path) | TemplateSource::Cwd(path) => {
+        TemplateSource::Explicit(path) => {
             let abs = std::path::absolute(path).unwrap_or_else(|_| path.clone());
             (parse_template(path)?, abs.parent().map(Path::to_path_buf))
         }
@@ -1196,8 +1188,7 @@ mod tests {
             agent_id: &crate::identity::test_agent_id(),
             execution_profile: firma_config_loader::AgentProfile::Vscode,
             session_id: "sess_001",
-            template: resolve_template_sources(None, None)
-                .unwrap_or_else(|error| panic!("{error}")),
+            template: resolve_template_sources(None).unwrap(),
             socket_path: &tmp.path().join("sidecar.sock"),
             listen_addr: Some(
                 "127.0.0.1:18080"

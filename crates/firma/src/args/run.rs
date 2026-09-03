@@ -60,11 +60,6 @@ pub struct RunArgs {
     #[arg(long, default_value_t = false)]
     pub no_autostart: bool,
 
-    /// Optional sidecar config template path for the autostarted sidecar.
-    /// Falls back to `./firma_sidecar.toml`, then a synthesized minimal config.
-    #[arg(long)]
-    pub sidecar_config: Option<PathBuf>,
-
     /// Seconds to wait for the autostarted sidecar's `ready` line.
     /// `0` reverts to the built-in default (10s).
     #[arg(long, default_value_t = 10)]

@@ -20,7 +20,7 @@ fn request(
         execution_profile: firma_config_loader::AgentProfile::Generic,
         session_id: "prepared-session",
         marker_dir,
-        template: firma_run::sidecar::config::resolve_template_sources(None, None)
+        template: firma_run::sidecar::config::resolve_template_sources(None)
             .expect("resolve minimal Sidecar template"),
         firma_exe: "/bin/false".into(),
         authority_url: Some("http://127.0.0.1:50051"),

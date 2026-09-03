@@ -93,24 +93,6 @@ fn sidecar_local_with_no_autostart_fails_at_runtime() {
 }
 
 #[test]
-fn parse_sidecar_config_template_path() {
-    let out = Command::new(firma_bin())
-        .args([
-            "run",
-            "--sidecar-config",
-            "/etc/firma/sidecar.toml",
-            "--help",
-        ])
-        .output()
-        .expect("spawn");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
 fn sidecar_invalid_endpoint_fails_at_runtime() {
     // `--sidecar` is `Option<String>` at the clap layer, so an invalid
     // endpoint is only rejected at runtime during selection resolution.

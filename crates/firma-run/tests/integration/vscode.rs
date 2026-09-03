@@ -29,7 +29,6 @@ fn vscode_run_input() -> RunInput {
         preserve_host_user: false,
         print_effective_config: false,
         no_autostart: false,
-        sidecar_template_path: None,
         sidecar_startup_timeout_secs: 10,
         command: vec!["code".to_string(), ".".to_string()],
         authority_cli: firma_run::authority::AuthorityCli::Unset,
