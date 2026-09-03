@@ -76,8 +76,6 @@ fn generic_profile() -> ProfilePatch {
         identity_mode: None,
         capability: Some(CapabilityLeasePatch {
             source: Some(CapabilitySourcePatch::Disabled),
-            kind: None,
-            path: None,
             public_key_path: None,
             refresh_ratio: Some(0.60),
             grace: Some(Duration::from_secs(30)),
@@ -85,7 +83,6 @@ fn generic_profile() -> ProfilePatch {
         }),
         sidecar_local_exec: None,
         executable_policies: Some(BTreeMap::new()),
-        codex_cli: None,
         use_http_proxy_sidecar: Some(true),
         allow_non_structural: Some(false),
         mask_home_paths: None,

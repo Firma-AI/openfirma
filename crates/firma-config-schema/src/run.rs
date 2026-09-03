@@ -101,8 +101,6 @@ pub struct ProfilePatch {
     /// Per-executable launch policies. `None` inherits the lower profile layer,
     /// a present empty map clears it, and matching entries merge field-by-field.
     pub executable_policies: Option<BTreeMap<String, ExecutableLaunchPolicyPatch>>,
-    #[serde(default)]
-    pub codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
     /// Should be `true` for profiles whose agent uses standard HTTP proxy env
     /// vars. `None` inherits the lower profile layer; explicit `false` disables
@@ -157,10 +155,6 @@ pub struct SeccompPolicyPatch {
 #[serde(deny_unknown_fields)]
 pub struct CapabilityLeasePatch {
     pub source: Option<CapabilitySourcePatch>,
-    #[serde(default)]
-    pub kind: Option<CapabilitySourceKind>,
-    #[serde(default)]
-    pub path: Option<PathBuf>,
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: Option<f64>,
     #[serde(
@@ -206,13 +200,4 @@ pub struct CommandMediatorPatch {
 pub enum CapabilitySourcePatch {
     Disabled,
     File { path: PathBuf },
-}
-
-/// Legacy flat capability source selector retained for compatibility with
-/// `capability.kind` plus `capability.path`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CapabilitySourceKind {
-    Disabled,
-    File,
 }

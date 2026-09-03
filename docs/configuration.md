@@ -63,6 +63,28 @@ parsing the file, including profiles that are not selected, so a typo or an
 unsupported `backend` anywhere fails startup. Configure process logging with
 `--log-filter` / `FIRMA_LOG_FILTER`.
 
+### Run capability sources
+
+Capability sources use a tagged `capability.source` table. A file source names
+the capability file:
+
+```toml
+[run.profiles.codex.capability.source]
+kind = "file"
+path = "capability.toml"
+```
+
+Use `kind = "disabled"` without `path` to disable the source.
+
+### Run executable policies
+
+Executable launch policies are keyed by executable name. For Codex:
+
+```toml
+[run.profiles.codex.executable_policies.codex]
+approval_policy = "on-request"
+```
+
 ## Scaffolded Example
 
 `firma config` writes one sectioned `firma.toml` with all paths

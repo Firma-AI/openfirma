@@ -786,19 +786,48 @@ fn run_validates_backends_in_defaults_and_unselected_profiles() {
 }
 
 #[test]
-fn intentional_run_compatibility_keys_still_parse() {
+fn legacy_capability_source_keys_are_rejected() {
+    for config in [
+        "[defaults.capability]\nkind = \"file\"\n",
+        "[profiles.unselected.capability]\npath = \"capability.toml\"\n",
+    ] {
+        let error = toml::from_str::<run::FileConfig>(config)
+            .expect_err("flat capability source keys must be rejected");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "error: {error}"
+        );
+    }
+
     let config = toml::from_str::<run::FileConfig>(
-        r#"
-[defaults.capability]
-kind = "file"
-path = "capability.toml"
-
-[defaults.codex_cli]
-enforce_wrapper_defaults = true
-"#,
+        "[defaults.capability.source]\nkind = \"file\"\npath = \"capability.toml\"\n",
     )
-    .expect("legacy capability and codex_cli keys remain supported");
-
+    .expect("canonical tagged capability source must parse");
     assert!(config.defaults.capability.is_some());
-    assert!(config.defaults.codex_cli.is_some());
+}
+
+#[test]
+fn legacy_codex_cli_key_is_rejected() {
+    for config in [
+        "[defaults.codex_cli]\nenforce_wrapper_defaults = true\n",
+        "[profiles.unselected.codex_cli]\napproval_policy = \"never\"\n",
+    ] {
+        let error = toml::from_str::<run::FileConfig>(config)
+            .expect_err("legacy codex_cli key must be rejected");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "error: {error}"
+        );
+    }
+
+    let config = toml::from_str::<run::FileConfig>(
+        "[defaults.executable_policies.codex]\nenforce_wrapper_defaults = true\n",
+    )
+    .expect("canonical Codex executable policy must parse");
+    assert!(
+        config
+            .defaults
+            .executable_policies
+            .is_some_and(|policies| policies.contains_key("codex"))
+    );
 }

@@ -102,7 +102,7 @@ pub fn reject_reserved_sandbox_id_environment() -> Result<(), crate::error::RunE
 ///
 /// # Errors
 ///
-/// Returns a typed missing, legacy-profile, malformed `TypeID`, or config parse
+/// Returns a typed missing, profile-valued, malformed `TypeID`, or config parse
 /// error. The returned [`AgentId`] always contains the canonical `agt` `TypeID`.
 pub fn read_configured_agent_id(path: &std::path::Path) -> Result<AgentId, crate::error::RunError> {
     let text =
@@ -124,7 +124,7 @@ pub fn read_configured_agent_id(path: &std::path::Path) -> Result<AgentId, crate
             path: path.to_path_buf(),
         })?;
     if firma_config_loader::AgentProfile::from_name(raw).is_some() {
-        return Err(crate::error::RunError::LegacyProfileAgentId {
+        return Err(crate::error::RunError::ProfileAgentId {
             path: path.to_path_buf(),
             value: raw.to_string(),
         });
