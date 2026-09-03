@@ -20,6 +20,8 @@ use std::io::{BufRead, BufReader};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use firma_secret_provider::gateway::client::GATEWAY_ADDR_ENV;
+
 use super::CONFIG_FILE_NAME;
 
 const CONTRACT_PREFIXES: &[&str] = &[
@@ -196,7 +198,7 @@ pattern = "no_named_groups_here"
         .args(["sidecar", "--config"])
         .arg(&fixture.config_path)
         .args(["--health-bind-addr", "127.0.0.1:0"])
-        .env("FIRMA_SECRET_GATEWAY_ADDR", "tcp://127.0.0.1:1")
+        .env(GATEWAY_ADDR_ENV, "tcp://127.0.0.1:1")
         .output()
         .expect("spawn firma sidecar");
     let stderr = String::from_utf8_lossy(&output.stderr);

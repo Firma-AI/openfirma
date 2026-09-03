@@ -8,6 +8,7 @@ use firma_config_loader::AgentProfile;
 use firma_core::SecretMatcher;
 use firma_identifiers::{AgentId, SandboxId};
 use firma_runtime_state::RunEntryLayout;
+use firma_secret_provider::gateway::client::GATEWAY_ADDR_ENV;
 use firma_secret_provider::spec::http::HttpIntegrationSpec;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
@@ -174,7 +175,9 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         command.env("FIRMA_ALLOW_MONITOR_MODE", "1");
     }
     if let Some(ref addr) = req.secret_gateway_addr {
-        command.env("FIRMA_SECRET_GATEWAY_ADDR", addr);
+        command.env(GATEWAY_ADDR_ENV, addr);
+    } else {
+        command.env_remove(GATEWAY_ADDR_ENV);
     }
 
     Ok(PreparedSidecarLaunch {

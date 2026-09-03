@@ -9,6 +9,7 @@ use firma_config_schema::secret_provider::SecretProviderPatch;
 use firma_core::SecretMatcher;
 use firma_runtime_state::RuntimeLayout;
 use firma_secret_provider::IntegrationSpec;
+use firma_secret_provider::gateway::client::GATEWAY_ADDR_ENV;
 use serde::Serialize;
 
 pub use firma_config_schema::run::SandboxIdentityMode;
@@ -69,6 +70,7 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub(crate) sidecar_local_exec: Option<CommandMediatorConfig>,
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
+    pub(crate) secret_gateway_addr: Option<String>,
     /// Resolved secret-provider integrations: CLI vault tools keyed by binary
     /// basename, HTTP vaults keyed by `provider_id`. A CLI entry activates a
     /// secret-mediation shim for that binary (stdio routed through the
@@ -498,6 +500,7 @@ impl Merge for ProfilePatch {
             allow_non_structural: higher.allow_non_structural.or(self.allow_non_structural),
             mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
             ca_trust_mode: higher.ca_trust_mode.or(self.ca_trust_mode),
+            secret_gateway_addr: higher.secret_gateway_addr.or(self.secret_gateway_addr),
             secret_providers: match (self.secret_providers, higher.secret_providers) {
                 // Additive across layers (like `env_passthrough`); the later
                 // (higher) entries come last so they win on name collision in
@@ -640,6 +643,12 @@ pub(crate) fn resolve_profile_with_layout(
         .map(|(executable, policy)| (executable, resolve_executable_policy(policy)))
         .collect();
 
+    let secret_gateway_addr = patch.secret_gateway_addr.clone().or_else(|| {
+        std::env::var(GATEWAY_ADDR_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    });
+
     let seccomp_policy = patch
         .seccomp_policy
         .map(seccomp_policy_from_patch)
@@ -664,6 +673,7 @@ pub(crate) fn resolve_profile_with_layout(
         sidecar_local_exec,
         executable_policies,
         secret_providers,
+        secret_gateway_addr,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar.unwrap_or(false),
         allow_non_structural: patch.allow_non_structural.unwrap_or(false),
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
@@ -762,7 +772,8 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             }),
         sidecar_local_exec: None,
         executable_policies: None,
-        secret_providers: Vec::new(),
+        secret_gateway_addr: None,
+        secret_providers: None,
         use_http_proxy_sidecar: None,
         allow_non_structural: args.allow_non_structural.then_some(true),
         mask_home_paths: None,
@@ -815,24 +826,6 @@ fn resolve_secret_providers(
         }
     }
     Ok(resolved)
-}
-
-fn resolve_executable_policies(
-    patch: BTreeMap<String, ExecutableLaunchPolicyPatch>,
-    legacy_codex: Option<ExecutableLaunchPolicyPatch>,
-) -> BTreeMap<String, ExecutableLaunchPolicy> {
-    let mut resolved = patch
-        .into_iter()
-        .map(|(executable, policy)| (executable, resolve_executable_policy(policy)))
-        .collect::<BTreeMap<_, _>>();
-
-    if let Some(codex_policy) = legacy_codex {
-        resolved
-            .entry("codex".to_string())
-            .or_insert_with(|| resolve_executable_policy(codex_policy));
-    }
-
-    resolved
 }
 
 fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableLaunchPolicy {
@@ -2195,11 +2188,12 @@ approval_policy = "never"
             capability,
             sidecar_local_exec,
             executable_policies,
-            use_http_proxy_sidecar,
-            allow_non_structural,
-            mask_home_paths,
-            ca_trust_mode,
-            secret_providers,
+            use_http_proxy_sidecar: _,
+            allow_non_structural: _,
+            mask_home_paths: _,
+            ca_trust_mode: _,
+            secret_gateway_addr: _,
+            secret_providers: _,
         } = patch;
 
         for MountPatch {

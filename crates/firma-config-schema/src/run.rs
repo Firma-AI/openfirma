@@ -119,6 +119,7 @@ pub struct ProfilePatch {
     /// How the sandbox CA trust store is assembled. `None` resolves to the
     /// default `CaTrustMode::Sole`.
     pub ca_trust_mode: Option<CaTrustMode>,
+    pub secret_gateway_addr: Option<String>,
     /// Secret providers to activate: bare strings reference a built-in
     /// integration, tables define a custom one. Additive across
     /// `[run.defaults]` and the active profile (like `env_passthrough`);
