@@ -30,7 +30,7 @@ pub mod vscode;
 
 /// Secret-mediation shim injection (Unix/bwrap). Wires the broker + shim mounts
 /// into a launch when the profile lists `secret_providers`.
-mod secret_shims;
+pub mod secret_shims;
 
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
@@ -157,6 +157,11 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         profile: profile.clone(),
         working_dir: working_dir.clone(),
     })?);
+    // Secret services (gateway + broker) for this run. Assigned once the
+    // profile's providers are known inside the run closure below; dropped
+    // only after sandbox teardown so the agent can resolve placeholders for
+    // its whole lifetime while the plaintext store still cannot outlive the run.
+    let mut secret_services = None;
 
     let run_result = (|| {
         let handle_ref = handle
@@ -235,10 +240,21 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         let firma_exe = env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
         // Start the secret services before the Sidecar so its gateway address
-        // is available while the Sidecar config is synthesized.
-        let gateway_binding = secret_shims::pre_bind_gateway(handle_ref, &profile)?;
-        if let Some(binding) = &gateway_binding {
-            flags.secret_gateway_addr = Some(binding.addr.clone());
+        // is available while the Sidecar config is synthesized. The guard is
+        // held for the whole run: dropping it stops the gateway and broker
+        // and removes their sockets.
+        secret_services = if profile.secret_providers.is_empty() {
+            None
+        } else {
+            Some(secret_shims::SecretServices::start(
+                &runtime_layout,
+                handle_ref,
+                &identity,
+                &profile,
+            )?)
+        };
+        if let Some(services) = &secret_services {
+            flags.secret_gateway_addr = Some(services.gateway_addr.clone());
         }
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
@@ -338,7 +354,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 &mut env,
                 &firma_exe,
                 env::var_os("PATH").as_deref(),
-                gateway_binding.as_ref(),
+                secret_services.as_ref(),
             )?;
             let launch = LaunchSpec {
                 executable,
@@ -379,6 +395,11 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     let teardown_result = handle
         .take()
         .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
+
+    // Stop the secret services after sandbox teardown so the agent can still
+    // resolve placeholders while it exits, but before the run returns: the
+    // gateway socket is removed and the plaintext per-run store is dropped.
+    drop(secret_services);
 
     combine_run_and_teardown_results(run_result, teardown_result)
 }

@@ -307,13 +307,17 @@ install_binary() {
     run "mkdir -p '$extract_dir'"
     run "tar -xzf '$ARCHIVE_PATH' -C '$extract_dir'"
 
-    # Locate the extracted binary. The release tarball ships a single `firma`
-    # at the root; guard against future layout changes.
+    # Locate the extracted binaries. The release tarball ships `firma` plus the
+    # `firma-secret-shim` sibling it launches for CLI secret mediation; guard
+    # against future layout changes.
     if [ "$DRY_RUN" != "1" ]; then
         binary_path=$(find "$extract_dir" -maxdepth 2 -type f -name firma -print | head -n1)
         [ -n "$binary_path" ] || die "could not find 'firma' inside ${ARCHIVE_NAME}"
+        shim_path=$(find "$extract_dir" -maxdepth 2 -type f -name firma-secret-shim -print | head -n1)
+        [ -n "$shim_path" ] || die "could not find 'firma-secret-shim' inside ${ARCHIVE_NAME}; CLI secret mediation requires it next to firma"
     else
         binary_path="${extract_dir}/firma"
+        shim_path="${extract_dir}/firma-secret-shim"
     fi
 
     run "mkdir -p '$INSTALL_DIR'"
@@ -321,8 +325,10 @@ install_binary() {
         die "install dir not writable: $INSTALL_DIR (re-run with FIRMA_INSTALL_DIR=<path>, or run the install command yourself with sudo)"
     fi
     run "mv '$binary_path' '${INSTALL_DIR}/firma'"
-    run "chmod 0755 '${INSTALL_DIR}/firma'"
+    run "mv '$shim_path' '${INSTALL_DIR}/firma-secret-shim'"
+    run "chmod 0755 '${INSTALL_DIR}/firma' '${INSTALL_DIR}/firma-secret-shim'"
     info "installed: ${INSTALL_DIR}/firma"
+    info "installed: ${INSTALL_DIR}/firma-secret-shim"
 }
 
 # Returns 0 if $1 is already a colon-segment in $PATH.
