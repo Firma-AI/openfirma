@@ -150,7 +150,7 @@ impl MtlsTestServer {
         // Write authorized clients TOML.
         let mut f = std::fs::File::create(&authorized_clients_path).unwrap();
         for id in allowed_identities {
-            writeln!(f, "[[authorized]]\ncn = \"{id}\"").unwrap();
+            writeln!(f, "[[clients]]\nidentity = \"{id}\"").unwrap();
         }
 
         // Set up policy dirs.

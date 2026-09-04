@@ -304,7 +304,7 @@ where
         .with_context(|| format!("failed to read TLS key {}", key_path.display()))?;
     let identity = Identity::from_pem(cert_pem, key_pem);
     let tls_config = ServerTlsConfig::new().identity(identity);
-    tracing::info!("TLS enabled on gRPC server (server-only, V1)");
+    tracing::info!("TLS enabled on gRPC server (server-only)");
 
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
     let mut builder = TonicServer::builder()

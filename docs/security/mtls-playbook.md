@@ -1,10 +1,13 @@
-# mTLS Playbook: Authority ↔ Sidecar (V1.1)
+# mTLS Playbook: Authority ↔ Sidecar
 
-V1.1 upgrades the Authority ↔ Sidecar transport from **server-only TLS** (V1) to **mutual TLS (mTLS)**. Each Sidecar presents a client certificate during the TLS handshake; the Authority verifies the certificate chain **and** checks the client identity against a configurable allow-list. Connections from unknown Sidecars are dropped at the TLS handshake — no gRPC frame is ever processed.
+Each Sidecar presents a client certificate during the mutual TLS (mTLS)
+handshake. The Authority verifies the certificate chain and checks the client
+identity against a configurable allow-list. Connections from unknown Sidecars
+are dropped at the TLS handshake, before any gRPC frame is processed.
 
 Scope note: this playbook applies to configured `https://` Authority deployments. The `firma run --authority local` autostart path is a developer convenience mode on loopback `http://` and does not enable mTLS.
 
-## What V1.1 achieves (on top of V1)
+## Security properties
 
 - **Sidecar authentication.** The Authority cryptographically identifies each connecting Sidecar by its client certificate CN or DNS SAN. Spoofed or unknown clients are rejected before any policy data is exchanged.
 - **Allow-list enforcement.** Even a cert signed by the trusted CA is rejected if its identity is not present in `authorized_clients_path`. Revoking a Sidecar requires only removing it from the allow-list and reloading the Authority.
@@ -38,11 +41,11 @@ Set the paths in the Authority section of `firma.toml`:
 
 ```toml
 [authority]
-# Server TLS (V1, required for mTLS)
+# Server TLS (required for mTLS)
 tls_cert_path = "/etc/firma/authority.crt"
 tls_key_path = "/etc/firma/authority.key"
 
-# mTLS (V1.1)
+# Client authentication
 mtls_client_ca_cert_path = "/etc/firma/firma-client-ca.crt"
 mtls_client_ca_key_path = "/etc/firma/firma-client-ca.key" # for issue-client-cert only
 authorized_clients_path = "/etc/firma/authorized_clients.toml"
@@ -55,16 +58,15 @@ authorized_clients_path = "/etc/firma/authorized_clients.toml"
 # One entry per Sidecar. The identity must match the CN or DNS SAN
 # of the Sidecar's client certificate.
 
-[[authorized]]
-san = "sidecar-production-1.internal"
-issued_at = "2026-06-01"
-notes = "production sidecar node 1"
+[[clients]]
+identity = "sidecar-production-1.internal"
 
-[[authorized]]
-san = "sidecar-staging.internal"
-issued_at = "2026-06-01"
-notes = "staging sidecar"
+[[clients]]
+identity = "sidecar-staging.internal"
 ```
+
+The file accepts only `[[clients]]` tables with an `identity` field. Unknown
+tables or fields fail Authority startup.
 
 Restart the Authority after modifying this file (it is read once at startup).
 
@@ -88,9 +90,9 @@ Add the Sidecar client settings to the same `firma.toml`:
 ```toml
 [sidecar.authority]
 url = "https://authority.internal:50051"
-ca_cert_path = "/etc/firma/authority-ca.crt" # server CA (V1)
-tls_client_cert_path = "/etc/firma/sidecar.crt" # client cert (V1.1)
-tls_client_key_path = "/etc/firma/sidecar.key" # client key (V1.1)
+ca_cert_path = "/etc/firma/authority-ca.crt" # server CA
+tls_client_cert_path = "/etc/firma/sidecar.crt" # client cert
+tls_client_key_path = "/etc/firma/sidecar.key" # client key
 ```
 
 Both `tls_client_cert_path` and `tls_client_key_path` must be set together or both omitted.
@@ -107,11 +109,17 @@ scp authority-ca.crt sidecar-host:/etc/firma/authority-ca.crt
 
 ### Rotate a Sidecar client certificate
 
-1. Issue a new cert with `firma authority issue-client-cert` (same CN/SAN).
+1. Issue a new cert with `firma authority issue-client-cert`.
 2. Deploy the new cert and key to the Sidecar host.
 3. Restart the Sidecar.
 
-The old cert continues to work until the Authority is restarted with the new allow-list — or until the old cert expires.
+The allow-list authorizes identities, not certificate serial numbers. If the new
+certificate uses the same CN/SAN, the old certificate remains authorized until
+it expires or its issuing CA is removed. To invalidate the old certificate
+before expiry, issue the replacement with a new identity, authorize that
+identity, deploy and restart the Sidecar, then remove the old identity and
+restart the Authority. Rotating the client CA also invalidates every certificate
+issued by the removed CA.
 
 ### Rotate the client CA
 
@@ -137,7 +145,9 @@ The revoked Sidecar's next reconnect attempt will be rejected at the TLS handsha
 
 For immediate disconnection, restart the Authority; this terminates all active connections.
 
-Revocation model note (V1.1): Authority-side mTLS currently enforces revocation operationally via allow-list updates (`authorized_clients.toml`) and certificate rotation/expiry. It does not perform CRL fetching or OCSP checks in the TLS verifier in this release.
+Authority-side mTLS enforces revocation operationally through allow-list updates
+(`authorized_clients.toml`) and certificate rotation or expiry. The TLS verifier
+does not fetch CRLs or perform OCSP checks.
 
 ## Failure modes
 
@@ -149,8 +159,8 @@ Revocation model note (V1.1): Authority-side mTLS currently enforces revocation 
 | `authorized_clients_path` missing at startup                                                    | Authority exits at startup with an error                                                                  |
 | `authorized_clients_path` is empty (no entries)                                                 | Authority starts, but all clients are rejected                                                            |
 | Server cert missing/invalid at startup                                                          | Authority exits at startup                                                                                |
-| Wrong server CA on Sidecar                                                                      | Server TLS verification fails; same as V1 cert-mismatch behavior                                          |
-| Client cert is PKI-revoked by CRL/OCSP only (still signed by trusted CA and still allow-listed) | No automatic rejection in V1.1; remove identity from allow-list to revoke access                          |
+| Wrong server CA on Sidecar                                                                      | Server TLS verification fails                                                                             |
+| Client cert is PKI-revoked by CRL/OCSP only (still signed by trusted CA and still allow-listed) | No automatic rejection; remove the identity from the allow-list to revoke access                          |
 | Both `tls_client_cert_path`/`tls_client_key_path` set without the other                         | Sidecar config validation rejects startup                                                                 |
 | `mtls_client_ca_cert_path` set without TLS server cert                                          | Authority exits at startup with a validation error                                                        |
 
@@ -159,20 +169,14 @@ Revocation model note (V1.1): Authority-side mTLS currently enforces revocation 
 ```toml
 # /etc/firma/authorized_clients.toml
 
-[[authorized]]
-san = "sidecar-production-1.internal" # Must match DNS SAN (preferred) or CN
-issued_at = "2026-06-01"
-notes = "prod node 1"
+[[clients]]
+identity = "sidecar-production-1.internal" # Must match DNS SAN (preferred) or CN
 
-[[authorized]]
-san = "sidecar-production-2.internal"
-issued_at = "2026-06-01"
-notes = "prod node 2"
+[[clients]]
+identity = "sidecar-production-2.internal"
 
-[[authorized]]
-cn = "sidecar-staging"
-issued_at = "2026-06-01"
-notes = "legacy CN-only cert"
+[[clients]]
+identity = "sidecar-staging"
 ```
 
 **Identity resolution order** (consistent between Authority verifier and `issue-client-cert`):

@@ -344,12 +344,8 @@ fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -
     println!(
         "Add the following entry to your authorized_clients_path TOML file to authorize this Sidecar:"
     );
-    println!("  [[authorized]]");
-    if args.san.is_some() {
-        println!("  san = \"{identity}\"");
-    } else {
-        println!("  cn = \"{identity}\"");
-    }
+    println!("  [[clients]]");
+    println!("  identity = {}", toml::Value::String(identity.to_string()));
     Ok(())
 }
 

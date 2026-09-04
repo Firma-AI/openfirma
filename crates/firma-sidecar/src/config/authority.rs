@@ -116,7 +116,10 @@ pub enum AuthorityEndpointError {
 #[derive(Debug, Clone)]
 pub struct AuthorityConfig {
     /// Authority-registered `TypeID` for the agent represented by this Sidecar.
-    #[expect(dead_code, reason = "accepted for configuration compatibility")]
+    #[expect(
+        dead_code,
+        reason = "validated here and consumed by firma-run before sidecar startup"
+    )]
     pub(crate) agent_id: Option<AgentId>,
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
     pub url: Option<String>,
