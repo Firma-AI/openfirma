@@ -1,23 +1,18 @@
 #!/usr/bin/env bash
-# LEGACY operator path: manually mints a capability seed via `firma authority issue`.
-# This flow is superseded by the automatic per-session capability minted by `firma run`
-# (written to $XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml and loaded by the
-# autostarted sidecar without operator intervention).
-# Use this script only when pre-provisioning a fixed, long-lived session outside
-# the `firma run` autostart flow (e.g. a daemon or CI agent with a known identity).
+# Issues canonical CapabilitySeed TOML for `firma run --capability-file`.
+# Run exports only the seed's raw token and path; a locally autostarted Sidecar
+# loads and watches the same file.
 set -euo pipefail
 
 ok() { printf '[ok] %s\n' "$1"; }
-warn() { printf '[warn] %s\n' "$1"; }
 fail() { printf '[fail] %s\n' "$1"; exit 1; }
 
 AUTHORITY_CONFIG="${AUTHORITY_CONFIG:-.local/firma.toml}"
-AGENT_ID="${AGENT_ID:-example-agent}"
+AGENT_ID="${AGENT_ID:-agt_01j0000000e008000000000001}"
 SESSION_ID="${SESSION_ID:-${FIRMA_RUN_SESSION_ID:-demo-session}}"
 ACTION="${ACTION:-communication.external.send}"
 RESOURCE_SCOPE="${RESOURCE_SCOPE:-*}"
 TTL_SECONDS="${TTL_SECONDS:-3600}"
-OUTPUT_PATH="${OUTPUT_PATH:-.local/capability-chatgpt.toml}"
 OUTPUT_PATH="${OUTPUT_PATH:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -35,7 +30,7 @@ Usage: examples/firma-run/local/renew-capability.sh [options]
 
 Options:
   --authority-config <path>  Unified firma.toml with an [authority] table (default: .local/firma.toml)
-  --agent-id <id>            Agent id (default: example-agent)
+  --agent-id <id>            Agent id (default: agt_01j0000000e008000000000001)
   --session-id <id>          Session id (default: FIRMA_RUN_SESSION_ID or demo-session)
   --action <action>          Requested action (default: communication.external.send)
   --resource-scope <scope>   Resource scope (default: *)
@@ -67,4 +62,4 @@ cargo run -p firma -- authority --config "$AUTHORITY_CONFIG" issue \
   --output "$OUTPUT_PATH"
 
 ok "capability written: $OUTPUT_PATH"
-warn "if sidecar uses capability_seed, restart sidecar to reload the renewed token"
+ok "pass this canonical seed with firma run --capability-file"

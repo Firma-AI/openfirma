@@ -194,7 +194,7 @@ firma run \
   -- claude code
 ```
 
-`--profile codex` is the right shape for coding agents — it mounts your project workspace into the sandbox. `--capability-file` wires in the capability we issued in Step 3.
+`--profile codex` is the right shape for coding agents — it mounts your project workspace into the sandbox. `--capability-file` parses the signed seed TOML issued in Step 3 and exposes only its raw token and original path to the wrapped process; the locally autostarted Sidecar loads the same seed.
 
 When Claude Code launches, it inherits no LLM API key from your shell. Its outbound calls hit the proxy bridge, which forwards over UDS to the Sidecar, which validates Stage 1, evaluates Stage 2, and (for permitted Anthropic calls) injects the API key before dispatching upstream.
 

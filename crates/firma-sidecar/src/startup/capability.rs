@@ -2,9 +2,9 @@
 //! sidecar's `[sidecar.capability_seed]` and
 //! `[sidecar.authority].public_key_path` config.
 //!
-//! Seeds are minted per session by `firma run` (via `IssueCapability`) and
-//! written under the runtime capabilities directory; operator-configured
-//! `[sidecar.capability_seed]` paths are deprecated and warn at load time.
+//! Each configured path contains canonical [`firma_core::CapabilitySeed`] TOML.
+//! The Sidecar verifies every raw token and checks its signed claims against the
+//! file before adding it to the runtime map.
 
 use std::path::Path;
 
@@ -21,18 +21,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// True when `path` is an operator-configured seed (NOT under the runtime
-/// capabilities dir written by `firma run`), and therefore should emit the
-/// `[sidecar.capability_seed]` deprecation warning.
-fn is_operator_seed(path: &Path, capabilities_dir: &Path) -> bool {
-    !path.starts_with(capabilities_dir)
-}
-
 /// Read every seed file referenced by `seed.paths` and assemble a
 /// fully-indexed [`CapabilityMap`].
-///
-/// Emits a deprecation warning for each seed path that is not under the
-/// runtime capabilities directory written by `firma run`.
 ///
 /// # Errors
 ///
@@ -42,22 +32,17 @@ fn is_operator_seed(path: &Path, capabilities_dir: &Path) -> bool {
 pub fn load_capability_map(
     seed: &CapabilitySeedConfig,
     verifier: &dyn TokenVerifier,
-    capabilities_dir: &Path,
 ) -> anyhow::Result<CapabilityMap> {
     let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(seed.paths.len());
     for path in &seed.paths {
-        if is_operator_seed(path, capabilities_dir) {
-            tracing::warn!(
-                path = %path.display(),
-                "[sidecar.capability_seed] is deprecated; prefer per-session capabilities \
-                 minted by `firma run` under the runtime capabilities directory"
-            );
-        }
         let body = std::fs::read_to_string(path).map_err(|e| {
             anyhow::anyhow!("failed to read capability seed '{}': {e}", path.display())
         })?;
-        let file: SeedFile = toml::from_str(&body).map_err(|e| {
-            anyhow::anyhow!("failed to parse capability seed '{}': {e}", path.display())
+        let file: SeedFile = toml::from_str(&body).map_err(|_| {
+            anyhow::anyhow!(
+                "capability seed '{}' is not canonical CapabilitySeed TOML",
+                path.display()
+            )
         })?;
         entries.push(
             seed_into_entry(&file, verifier).map_err(|e| {
@@ -177,13 +162,11 @@ impl CapabilityReloader {
     ///
     /// Returns an error when the OS file watcher cannot be created or registered.
     pub fn spawn(
-        runtime_layout: &firma_runtime_state::RuntimeLayout,
         config: &config::CapabilitySeedConfig,
         token_verifier: Arc<dyn TokenVerifier + Send + Sync>,
         capability_handle: CapabilityMapHandle,
         cancel: CancellationToken,
     ) -> anyhow::Result<Self> {
-        let capabilities_dir = runtime_layout.capabilities_dir();
         let seed_config = config.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
         let event_handler = move |res: notify::Result<notify::Event>| match res {
@@ -238,7 +221,7 @@ impl CapabilityReloader {
                         // single rebuild.
                         while rx_signal.try_recv().is_ok() {}
 
-                        match load_capability_map(&seed_config, token_verifier.as_ref(), &capabilities_dir) {
+                        match load_capability_map(&seed_config, token_verifier.as_ref()) {
                             Ok(map) => {
                                 capability_handle.store(Arc::new(map));
                                 tracing::info!(
@@ -295,12 +278,7 @@ mod tests {
     fn empty_seed_yields_empty_map() {
         let seed = CapabilitySeedConfig::default();
         let verifier = build_token_verifier(None).unwrap();
-        let map = load_capability_map(
-            &seed,
-            verifier.as_ref(),
-            Path::new("/run/firma/capabilities"),
-        )
-        .unwrap();
+        let map = load_capability_map(&seed, verifier.as_ref()).unwrap();
         // `CapabilityMap::select` returns `Err(EnforcementDecision)`
         // when no entry matches; the empty map must always deny.
         let result = map.select("sess", "communication.external.send", "wttr.in");
@@ -314,24 +292,10 @@ mod tests {
             hot_reload: true,
         };
         let verifier = build_token_verifier(None).unwrap();
-        let err = load_capability_map(
-            &seed,
-            verifier.as_ref(),
-            Path::new("/run/firma/capabilities"),
-        )
-        .unwrap_err()
-        .to_string();
+        let err = load_capability_map(&seed, verifier.as_ref())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("/definitely/not/here.toml"));
-    }
-
-    #[test]
-    fn runtime_dir_seed_is_not_flagged_operator() {
-        let cap_dir = Path::new("/run/firma/capabilities");
-        assert!(!is_operator_seed(
-            Path::new("/run/firma/capabilities/abc.toml"),
-            cap_dir
-        ));
-        assert!(is_operator_seed(Path::new("/etc/firma/seed.toml"), cap_dir));
     }
 
     #[test]

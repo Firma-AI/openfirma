@@ -1,11 +1,9 @@
 //! `[sidecar.capability_seed]` configuration section.
 //!
-//! Deprecated operator-seed input. Per-session capabilities are now minted
-//! live by `firma run` (via `IssueCapability`) and written under the runtime
-//! capabilities directory, which the sidecar loads through this same path.
-//! Operator-configured seeds — tokens pre-issued via `firma-authority issue`
-//! and listed here — still load but emit a deprecation warning at startup.
-//! Each seed contributes one `CapabilityEntry` to the runtime `CapabilityMap`.
+//! Each path names canonical [`firma_core::CapabilitySeed`] TOML, either issued
+//! explicitly with `firma authority issue` or staged for a session by
+//! `firma run`. Every verified seed contributes one `CapabilityEntry` to the
+//! runtime `CapabilityMap`.
 
 use std::path::PathBuf;
 
@@ -16,7 +14,7 @@ pub use firma_core::CapabilitySeed as SeedFile;
 /// Validated `[sidecar.capability_seed]` section.
 #[derive(Debug, Clone)]
 pub struct CapabilitySeedConfig {
-    /// Paths to seed TOML files produced by `firma-authority issue`.
+    /// Paths to seed TOML files produced by `firma authority issue`.
     pub paths: Vec<PathBuf>,
     /// When `true` (default), the sidecar watches the seed file(s) and
     /// hot-swaps its `CapabilityMap` when they change.

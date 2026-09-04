@@ -337,7 +337,7 @@ On structural backends, `firma run`:
 4. Sets `HTTP_PROXY=http://127.0.0.1:18080` (and the HTTPS variant).
 5. Launches `curl https://example.com` inside the sandbox under a sandbox identity.
 
-The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. With automatically staged capabilities, the `curl` invocation never sees a token; it just talks to the proxy. If you use `--capability-file`, `firma run` exports capability material into the wrapped process environment, so do not use that mode when token non-exposure is a hard requirement.
+The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. With automatically staged capabilities, the `curl` invocation never sees a token; it just talks to the proxy. If you use `--capability-file`, `firma run` parses the canonical seed and exports its raw token into the wrapped process environment, so do not use that mode when token non-exposure is a hard requirement.
 
 On current macOS `vz` and Windows/WSL2 `wsl2`, `firma run` instead starts a host-side proxy bridge, injects proxy environment variables, clears `NO_PROXY`, and refuses to launch unless non-structural mode is explicitly allowed. A cooperative HTTP client is mediated and audited; a non-cooperative client can still bypass by ignoring proxy variables or opening direct sockets. The runtime logs this as a `backend compatibility proof`, not a structural proof.
 
@@ -423,6 +423,12 @@ firma run \
   -- curl https://example.com
 ```
 
+Run requires the complete signed seed TOML, extracts only `raw_token` into
+`FIRMA_CAPABILITY_TOKEN`, and preserves the source path in
+`FIRMA_CAPABILITY_FILE`. With local Sidecar autostart, the Sidecar also loads,
+verifies, and watches that file. A pre-managed external Sidecar owns its seed
+configuration independently.
+
 ## Step 7: Inspect the effective config
 
 Before you trust a `firma run` invocation in production, see what it's actually going to do:
@@ -471,7 +477,7 @@ approval_policy = "on-request"
 | `--sidecar <local\|url>`                    | `local` autostarts a per-run Sidecar; a `tcp://host:port` / `unix:///path` value targets an external one and never autostarts. Omitted: persisted `sidecar_endpoint` else local autostart.                                                                                                                                                                                            |
 | `--no-autostart`                            | Disable autostart for any missing component and fail loudly. Incompatible with `--sidecar local` and `--authority local`. CI / production safety net.                                                                                                                                                                                                                                 |
 | `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                                                                                                                                                                                                                                                                               |
-| `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                                                                                                                                                                                                                                                                                              |
+| `--capability-file <path>`                  | Canonical signed capability seed TOML for this run.                                                                                                                                                                                                                                                                                                                                  |
 | `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                                                                                                                                                                                                                                                                                |
 | `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                                                                                                                                                                                                                                                                                    |
 | `--monitor`                                 | Run in observe-only mode for this invocation. Every call is allowed through; `firma monitor` shows the original deny reason prefixed with `monitor_mode:`. This flag is the explicit opt-in: it sets `FIRMA_ALLOW_MONITOR_MODE=1` on the autostarted sidecar. A config that sets `mode = "monitor"` without that env var downgrades to `enforce` at startup. Never use in production. |
@@ -488,8 +494,8 @@ On structural backends, the agent sees:
 It does *not* see:
 
 - Capabilities staged automatically for the host-side Sidecar. An explicit
-  file capability source exports capability material into the wrapped process
-  environment, so do not use it when token non-exposure is required.
+  file capability source exports the seed's raw token and path into the wrapped
+  process environment, so do not use it when token non-exposure is required.
 - Host environment variables (the sandbox starts with a stripped env).
 - Host filesystem outside profile-mounted paths.
 

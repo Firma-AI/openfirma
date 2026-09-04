@@ -40,8 +40,8 @@ pub struct RunInput {
     pub backend: Option<crate::backend::BackendKind>,
     /// CLI value of `--sidecar` (`local` | `<tcp://...|unix:///...>` | unset).
     pub sidecar_cli: crate::sidecar::SidecarCli,
-    /// Optional operator-supplied capability token file, injected into the
-    /// agent environment at launch (bring-your-own token).
+    /// Optional canonical signed capability seed TOML. Run exports only its raw
+    /// token and the original file path to the agent environment at launch.
     pub capability_file: Option<PathBuf>,
     /// Override sandbox identity mode.
     pub identity_mode: Option<crate::config::SandboxIdentityMode>,
@@ -837,6 +837,21 @@ mod tests {
     use super::{RunIdentity, build_execution_env};
     use crate::backend::SandboxHandle;
 
+    fn canonical_seed_toml(raw_token: &str) -> String {
+        format!(
+            r#"raw_token = "{raw_token}"
+token_id = "ctok_01j0000000e008000000000001"
+agent_id = "agt_01j0000000e008000000000001"
+session_id = "sess_runtime"
+action_set = ["communication.external.send"]
+resource_scope = "*"
+issued_at = "2026-04-29T15:00:00Z"
+expiry = "2026-04-29T16:00:00Z"
+context_hash = "runtime-seed-canary"
+"#
+        )
+    }
+
     /// Quotes a path the way the platform's VS Code shim does.
     fn quote_shim_path(path: &std::path::Path) -> String {
         let value = path.display().to_string();
@@ -941,64 +956,81 @@ mod tests {
     }
 
     #[test]
-    fn capability_file_is_exported_when_file_source_is_used() {
+    fn capability_file_exports_exact_token_and_path_for_local_and_external_sidecars() {
         let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let token_path = tempdir.path().join("cap.token");
-        fs::write(&token_path, "token").unwrap_or_else(|e| panic!("{e}"));
-
-        let profile = ResolvedProfile {
-            id: "generic".to_string(),
-            backend: crate::backend::BackendKind::Bwrap,
-            sidecar_endpoint: SidecarEndpoint::Tcp {
-                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
-            },
-            sidecar_selection: crate::sidecar::SidecarSelection::Local,
-            env_passthrough: BTreeSet::default(),
-            env_set: BTreeMap::default(),
-            mounts: Vec::new(),
-            seccomp_policy: None,
-            network: NetworkPolicy {
-                enforce_network_namespace: false,
-                fail_closed: true,
-            },
-            identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::File {
-                    path: token_path.clone(),
-                },
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
-            sidecar_local_exec: None,
-            secret_gateway_addr: None,
-            secret_providers: BTreeMap::new(),
-            executable_policies: BTreeMap::new(),
-            use_http_proxy_sidecar: false,
-            allow_non_structural: false,
-            ca_trust_mode: crate::config::CaTrustMode::Sole,
+        let seed_path = tempdir.path().join("capability.toml");
+        let raw_token = "v4.public.exact-runtime-token";
+        let seed_document = canonical_seed_toml(raw_token);
+        fs::write(&seed_path, &seed_document).unwrap_or_else(|e| panic!("{e}"));
+        let endpoint = SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
         };
 
-        let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
-        let capability_token = crate::capability::read_capability_token(&profile.capability.source)
-            .unwrap_or_else(|e| panic!("{e}"));
+        for sidecar_selection in [
+            crate::sidecar::SidecarSelection::Local,
+            crate::sidecar::SidecarSelection::Remote(endpoint.clone()),
+        ] {
+            let profile = ResolvedProfile {
+                id: "generic".to_string(),
+                backend: crate::backend::BackendKind::Bwrap,
+                sidecar_endpoint: endpoint.clone(),
+                sidecar_selection,
+                env_passthrough: BTreeSet::default(),
+                env_set: BTreeMap::default(),
+                mounts: Vec::new(),
+                seccomp_policy: None,
+                network: NetworkPolicy {
+                    enforce_network_namespace: false,
+                    fail_closed: true,
+                },
+                identity_mode: SandboxIdentityMode::SandboxUser,
+                capability: CapabilityLeaseConfig {
+                    source: CapabilitySource::File {
+                        path: seed_path.clone(),
+                    },
+                    public_key_path: None,
+                    refresh_ratio: 0.60,
+                    grace: Duration::from_secs(30),
+                    requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+                },
+                sidecar_local_exec: None,
+                secret_gateway_addr: None,
+                secret_providers: BTreeMap::new(),
+                executable_policies: BTreeMap::new(),
+                use_http_proxy_sidecar: false,
+                allow_non_structural: false,
+                ca_trust_mode: crate::config::CaTrustMode::Sole,
+            };
 
-        let env = build_execution_env(
-            &profile,
-            &identity,
-            capability_token.as_deref(),
-            &profile.sidecar_endpoint,
-            &BTreeMap::default(),
-        );
-        assert_eq!(
-            env.get("FIRMA_CAPABILITY_FILE"),
-            Some(&token_path.display().to_string())
-        );
-        assert_eq!(
-            env.get("FIRMA_CAPABILITY_TOKEN"),
-            Some(&"token".to_string())
-        );
+            let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
+            let capability_token =
+                crate::capability::read_capability_token(&profile.capability.source)
+                    .unwrap_or_else(|e| panic!("{e}"));
+
+            let env = build_execution_env(
+                &profile,
+                &identity,
+                capability_token.as_deref(),
+                &profile.sidecar_endpoint,
+                &BTreeMap::default(),
+            );
+            assert_eq!(
+                env.get("FIRMA_CAPABILITY_FILE"),
+                Some(&seed_path.display().to_string())
+            );
+            assert_eq!(
+                env.get("FIRMA_CAPABILITY_TOKEN").map(String::as_str),
+                Some(raw_token)
+            );
+            assert_ne!(
+                env.get("FIRMA_CAPABILITY_TOKEN").map(String::as_str),
+                Some(seed_document.as_str())
+            );
+            assert!(
+                !env.get("FIRMA_CAPABILITY_TOKEN")
+                    .is_some_and(|value| value.contains("runtime-seed-canary"))
+            );
+        }
     }
 
     #[test]

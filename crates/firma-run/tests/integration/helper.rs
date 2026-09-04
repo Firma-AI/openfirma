@@ -7,7 +7,8 @@ use std::sync::LazyLock;
 
 use firma_authority::{AuthorityConfigBuilder, Server};
 use firma_config_schema::authority as authority_schema;
-use firma_identifiers::AgentId;
+use firma_core::{CapabilityClaims, CapabilitySeed};
+use firma_identifiers::{AgentId, TokenId};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
@@ -18,6 +19,22 @@ pub fn agent_id() -> &'static AgentId {
             .expect("valid test agent ID")
     });
     &AGENT_ID
+}
+
+pub fn canonical_seed_toml(raw_token: &str) -> String {
+    let issued_at = chrono::Utc::now();
+    let claims = CapabilityClaims {
+        token_id: TokenId::generate(),
+        agent_id: *agent_id(),
+        session_id: "sess_test".parse().expect("valid test session ID"),
+        action_set: vec!["communication.external.send".to_string()],
+        resource_scope: "*".to_string(),
+        issued_at,
+        expiry: issued_at + chrono::Duration::minutes(15),
+        context_hash: "deadbeef".to_string(),
+    };
+    toml::to_string(&CapabilitySeed::from_claims(&claims, raw_token.to_string()))
+        .expect("serialize canonical capability seed")
 }
 
 /// Handle to a real Authority running with temporary keys and permit-all policies.

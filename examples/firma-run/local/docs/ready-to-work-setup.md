@@ -85,7 +85,7 @@ cargo run -p firma -- run --profile claude-code -- claude
   - Start a new `firma run` session after restoring Authority availability.
 
 - `TokenInvalid`:
-  - Session mismatch or wrong token file.
+  - Session mismatch or wrong capability seed.
   - Ensure token was issued with the same session id as runtime.
 
 - `UnclassifiedIntent`:

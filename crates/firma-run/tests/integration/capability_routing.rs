@@ -388,7 +388,11 @@ process_fixture! {
         let identity = RunIdentity::new(*crate::helper::agent_id(), "generic");
         let missing_key = dir.path().join("missing-firmateam.pub");
         let seed_path = dir.path().join("existing-capability.toml");
-        std::fs::write(&seed_path, "existing seed\n").expect("write seed placeholder");
+        std::fs::write(
+            &seed_path,
+            crate::helper::canonical_seed_toml("v4.public.existing-token"),
+        )
+        .expect("write canonical seed");
         let handle = sandbox_handle(&identity, dir.path());
 
         let error = prepare_network_runtime(

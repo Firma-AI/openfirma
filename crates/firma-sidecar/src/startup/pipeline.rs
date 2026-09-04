@@ -248,12 +248,7 @@ pub fn build_pipeline_runtime(
     tracing::debug!("Stage 1 using configured capability seed and authority public key");
     let token_verifier: Arc<dyn TokenVerifier + Send + Sync> =
         build_token_verifier(config.authority.public_key_path.as_deref())?.into();
-    let capabilities_dir = runtime_layout.capabilities_dir();
-    let capability_map = load_capability_map(
-        &config.capability_seed,
-        token_verifier.as_ref(),
-        &capabilities_dir,
-    )?;
+    let capability_map = load_capability_map(&config.capability_seed, token_verifier.as_ref())?;
 
     // Shared handle: the reload task swaps in a fresh map on seed-file changes.
     let capability_handle = CapabilityMapHandle::new(capability_map);

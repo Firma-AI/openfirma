@@ -256,7 +256,7 @@ The automatic runtime flow keeps capability material outside the agent process:
 3. Inside the sandbox, the agent only needs `HTTP_PROXY=http://127.0.0.1:18080`.
 4. When the agent makes an outbound call, the Sidecar selects the right capability based on `(session_id, action_class, resource)` — which it knows from the request, not from the agent.
 
-That is the mode to use when token non-exposure is a security requirement. With `firma run --capability-file`, the runtime reads the file and exports `FIRMA_CAPABILITY_TOKEN` / `FIRMA_CAPABILITY_FILE` into the wrapped process environment, so token non-exposure does not apply.
+That is the mode to use when token non-exposure is a security requirement. With `firma run --capability-file`, the runtime parses canonical signed seed TOML and exports its `raw_token` as `FIRMA_CAPABILITY_TOKEN` plus the original path as `FIRMA_CAPABILITY_FILE`, so token non-exposure does not apply.
 
 ## What the sandbox protects against
 
