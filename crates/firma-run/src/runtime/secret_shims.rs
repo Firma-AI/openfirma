@@ -555,7 +555,9 @@ fn validate_shim_artifact(path: &Path, target: &ShimTarget) -> Result<(), RunErr
     const ET_EXEC: u16 = 2;
     const ET_DYN: u16 = 3;
 
+    #[cfg(unix)]
     validate_executable(path)?;
+
     let mut bytes = [0_u8; ELF64_HEADER_SIZE];
     let mut file = std::fs::File::open(path).map_err(|error| {
         RunError::Internal(format!("read secret shim {}: {error}", path.display()))
@@ -604,20 +606,19 @@ fn validate_shim_artifact(path: &Path, target: &ShimTarget) -> Result<(), RunErr
     Ok(())
 }
 
+#[cfg(unix)]
 fn validate_executable(path: &Path) -> Result<(), RunError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let metadata = std::fs::metadata(path).map_err(|error| {
-            RunError::Internal(format!("stat secret shim {}: {error}", path.display()))
-        })?;
-        if metadata.permissions().mode() & 0o111 == 0 {
-            return Err(RunError::Internal(format!(
-                "secret shim is not executable: {}",
-                path.display()
-            )));
-        }
+    use std::os::unix::fs::PermissionsExt as _;
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        RunError::Internal(format!("stat secret shim {}: {error}", path.display()))
+    })?;
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(RunError::Internal(format!(
+            "secret shim is not executable: {}",
+            path.display()
+        )));
     }
+
     Ok(())
 }
 
@@ -685,7 +686,6 @@ mod tests {
             preserve_host_user: false,
             print_effective_config: false,
             no_autostart: false,
-            sidecar_template_path: None,
             sidecar_startup_timeout_secs: 10,
             command: vec!["true".to_string()],
             authority_cli: crate::authority::AuthorityCli::Unset,
