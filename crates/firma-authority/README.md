@@ -71,14 +71,17 @@ cargo run -p firma-authority -- --config firma.toml
 For local demos, you can issue a signed capability TOML file:
 
 ```bash
-cargo run -p firma-authority -- --config firma.toml issue   --agent-id agt_01j0000000e008000000000001   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
+export FIRMA_STATE_DIR="$PWD/.firma-runtime"
+mkdir -p "$FIRMA_STATE_DIR/capabilities"
+cargo run -p firma-authority -- --config firma.toml issue   --agent-id agt_01j0000000e008000000000001   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output "$FIRMA_STATE_DIR/capabilities/capability-demo-agent.toml"
 ```
 
 The output file contains the signed token and matching claims. Pass it to
-`firma run --capability-file capability-demo-agent.toml`; Run parses this
-canonical seed TOML and exports only its raw token to the wrapped process. A
-locally autostarted Sidecar also loads the file and verifies its token and
-matching claims with the configured Authority public key.
+`firma run --capability-file`; Run parses this canonical seed TOML and exports
+only its raw token to the wrapped process. A standalone or locally autostarted
+Sidecar accepts the file only when its configured parent and resolved target
+stay beneath the selected `<state-dir>/capabilities/` directory, then verifies
+its token and matching claims with the configured Authority public key.
 
 ## Configuration
 

@@ -102,8 +102,11 @@ tokens, and signature mismatches fail closed with an error. An explicit
 `--capability-file` uses the same signed TOML representation as the automatic
 per-run capability file. Run parses the complete seed before launch, exports
 only its `raw_token` and original path to the wrapped process, and passes the
-path to a locally autostarted Sidecar for verification and reload. A pre-managed
-external Sidecar owns its seed configuration independently.
+path to a locally autostarted Sidecar for verification and reload. That file
+and its resolved target must stay beneath the selected
+`<state-dir>/capabilities/` directory; the Sidecar reads only the resolved path
+and watches both contained parents. A pre-managed external Sidecar owns its
+runtime state and seed configuration independently.
 
 ## Staying alive: automatic refresh
 

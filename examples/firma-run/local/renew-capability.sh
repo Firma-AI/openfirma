@@ -50,7 +50,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 [[ -n "$SESSION_ID" ]] || fail "session id must not be empty"
-[[ -n "$OUTPUT_PATH" ]] || fail "--output is required (example: --output .local/capability-codex.toml)"
+[[ -n "$OUTPUT_PATH" ]] || fail "--output is required (example: --output .local/capabilities/capability-codex.toml)"
 
 ok "issuing capability token (agent=$AGENT_ID session=$SESSION_ID ttl=${TTL_SECONDS}s)"
 cargo run -p firma -- authority --config "$AUTHORITY_CONFIG" issue \
@@ -62,4 +62,4 @@ cargo run -p firma -- authority --config "$AUTHORITY_CONFIG" issue \
   --output "$OUTPUT_PATH"
 
 ok "capability written: $OUTPUT_PATH"
-ok "pass this canonical seed with firma run --capability-file"
+ok "pass this canonical seed with firma run --capability-file and select its parent runtime with FIRMA_STATE_DIR"

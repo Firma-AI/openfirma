@@ -84,7 +84,7 @@ public_key_path = "firma-authority.pub"
 ca_cert_path = "authority-ca.crt"
 
 [sidecar.capability_seed]
-paths = ["capability-demo-agent.toml"]
+paths = ["capabilities/capability-demo-agent.toml"]
 
 [sidecar.audit]
 sink = "stdout"

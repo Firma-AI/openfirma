@@ -35,7 +35,7 @@ else
   SIDECAR_SRC="$SIDECAR_SRC_DEFAULT"
 fi
 
-mkdir -p "$LOCAL_DIR"
+mkdir -p "$LOCAL_DIR/capabilities"
 ok "ensured local runtime directory: $LOCAL_DIR"
 
 if [[ ! -f "$MAPPING_DST" ]]; then

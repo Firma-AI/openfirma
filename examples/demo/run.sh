@@ -121,11 +121,12 @@ ensure_audit_key() {
 }
 
 ensure_capability_seed() {
-  local seed="$DEMO/capability-demo-agent.toml"
+  local seed="$DEMO/capabilities/capability-demo-agent.toml"
   # Always re-issue. The seed is a short-lived PASETO token and the
   # file-exists check used to silently re-use an expired token from
   # a previous demo run, surfacing as Stage 1 "token expired" denies
   # on the next invocation.
+  mkdir -p "$DEMO/capabilities"
   echo "[demo] issuing capability seed for demo-agent / demo-session"
   (cd "$ROOT" && "$TARGET_DIR/firma" authority \
     --config "$DEMO/firma.toml" \
@@ -168,7 +169,7 @@ ensure_capability_seed
 # ── Sidecar ──────────────────────────────────────────────────────────────────
 
 echo "[demo] starting firma sidecar (log-filter=debug)"
-(cd "$ROOT" && exec "$TARGET_DIR/firma" --log-filter debug sidecar \
+(cd "$ROOT" && FIRMA_STATE_DIR="$DEMO" exec "$TARGET_DIR/firma" --log-filter debug sidecar \
     --config "$DEMO/firma.toml" \
     >"$LOG_DIR/sidecar.log" 2>&1) &
 SIDE_PID=$!

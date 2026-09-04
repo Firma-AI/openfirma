@@ -33,7 +33,7 @@ if (-not $SessionId) {
   Fail "session id must not be empty"
 }
 if (-not $Output) {
-  Fail "--output is required (example: --output .local/capability-codex.toml)"
+  Fail "--output is required (example: --output .local/capabilities/capability-codex.toml)"
 }
 
 Write-Ok "issuing capability token (agent=$AgentId session=$SessionId ttl=${TtlSeconds}s)"
@@ -46,4 +46,4 @@ cargo run -p firma -- authority --config $AuthorityConfig issue `
   --output $Output
 
 Write-Ok "capability written: $Output"
-Write-Ok "pass this canonical seed with firma run --capability-file"
+Write-Ok "pass this canonical seed with firma run --capability-file and select its parent runtime with FIRMA_STATE_DIR"

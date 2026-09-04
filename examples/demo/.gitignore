@@ -3,6 +3,6 @@ firma-authority.key
 firma-authority.pub
 audit.key
 revocations.txt
-capability-demo-agent.toml
+capabilities/
 firma-ca/
 logs/

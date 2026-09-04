@@ -404,30 +404,34 @@ source in the selected profile:
 ```toml
 [run.profiles.generic.capability.source]
 kind = "file"
-path = ".firma/capability-local-dev.toml"
+path = "runtime/capabilities/capability-local-dev.toml"
 ```
 
 The `--capability-file` flag selects the same file source for one invocation:
 
 ```bash
+mkdir -p .firma/runtime/capabilities
+
 firma authority -c .firma/firma.toml issue \
   --agent-id agt_01j0000000e008000000000001 \
   --session-id $(uuidgen) \
   --action communication.external.send \
-  --output .firma/capability-local-dev.toml
+  --output .firma/runtime/capabilities/capability-local-dev.toml
 
-firma run \
+FIRMA_STATE_DIR="$PWD/.firma/runtime" firma run \
   --config .firma/firma.toml \
   --profile generic \
-  --capability-file .firma/capability-local-dev.toml \
+  --capability-file .firma/runtime/capabilities/capability-local-dev.toml \
   -- curl https://example.com
 ```
 
 Run requires the complete signed seed TOML, extracts only `raw_token` into
 `FIRMA_CAPABILITY_TOKEN`, and preserves the source path in
-`FIRMA_CAPABILITY_FILE`. With local Sidecar autostart, the Sidecar also loads,
-verifies, and watches that file. A pre-managed external Sidecar owns its seed
-configuration independently.
+`FIRMA_CAPABILITY_FILE`. With local Sidecar autostart, the file and its resolved
+target must stay beneath the selected `<state-dir>/capabilities/` directory; the
+Sidecar reads only the resolved path and watches both contained parents. A
+pre-managed external Sidecar owns its runtime state and seed configuration
+independently.
 
 ## Step 7: Inspect the effective config
 

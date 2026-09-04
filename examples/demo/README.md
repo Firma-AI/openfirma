@@ -74,7 +74,8 @@ The first run creates local runtime files under `examples/demo/`:
 - `authority-ca.crt` and `authority-ca.key` for Authority transport TLS;
 - `authority.crt` and `authority.key` for the Authority gRPC server cert/key;
 - `audit.key` for signing audit events;
-- `capability-demo-agent.toml` as the pre-issued permission token seed;
+- `capabilities/capability-demo-agent.toml` as the pre-issued permission token
+  seed under the Sidecar runtime boundary;
 - `revocations.txt` as the local revocation file;
 - `firma-ca/` for the Sidecar HTTPS interception CA;
 - `logs/` for Authority, Sidecar, and fixture logs.

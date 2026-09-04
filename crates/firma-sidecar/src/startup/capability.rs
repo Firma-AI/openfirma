@@ -3,10 +3,12 @@
 //! `[sidecar.authority].public_key_path` config.
 //!
 //! Each configured path contains canonical [`firma_core::CapabilitySeed`] TOML.
-//! The Sidecar verifies every raw token and checks its signed claims against the
+//! Before any read or watcher registration, the Sidecar resolves every path and
+//! requires it to remain beneath the canonical runtime capabilities directory.
+//! It then verifies every raw token and checks its signed claims against the
 //! file before adding it to the runtime map.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::config::{CapabilitySeedConfig, SeedFile};
@@ -21,34 +23,129 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+struct ResolvedSeedPath {
+    configured_path: PathBuf,
+    resolved_path: PathBuf,
+    configured_parent: PathBuf,
+}
+
+fn resolve_seed_paths(
+    seed: &CapabilitySeedConfig,
+    capabilities_dir: &Path,
+) -> anyhow::Result<Vec<ResolvedSeedPath>> {
+    if seed.paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let resolved_capabilities_dir = std::fs::canonicalize(capabilities_dir).with_context(|| {
+        format!(
+            "failed to resolve runtime capabilities directory '{}'",
+            capabilities_dir.display()
+        )
+    })?;
+
+    seed.paths
+        .iter()
+        .map(|configured_path| {
+            let resolved_path = std::fs::canonicalize(configured_path).with_context(|| {
+                format!(
+                    "failed to resolve configured capability seed '{}'",
+                    configured_path.display()
+                )
+            })?;
+            if !resolved_path.starts_with(&resolved_capabilities_dir) {
+                anyhow::bail!(
+                    "capability seed '{}' resolves to '{}' and must be under the runtime \
+                     capabilities directory '{}'",
+                    configured_path.display(),
+                    resolved_path.display(),
+                    resolved_capabilities_dir.display()
+                );
+            }
+
+            let configured_parent = configured_path.parent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "configured capability seed '{}' has no parent directory",
+                    configured_path.display()
+                )
+            })?;
+            let resolved_configured_parent = std::fs::canonicalize(configured_parent)
+                .with_context(|| {
+                    format!(
+                        "failed to resolve parent '{}' of configured capability seed '{}'",
+                        configured_parent.display(),
+                        configured_path.display()
+                    )
+                })?;
+            if !resolved_configured_parent.starts_with(&resolved_capabilities_dir) {
+                anyhow::bail!(
+                    "capability seed '{}' resolves to '{}', but its configured parent '{}' \
+                     resolves to '{}' and must be under the runtime capabilities directory \
+                     '{}'",
+                    configured_path.display(),
+                    resolved_path.display(),
+                    configured_parent.display(),
+                    resolved_configured_parent.display(),
+                    resolved_capabilities_dir.display()
+                );
+            }
+
+            Ok(ResolvedSeedPath {
+                configured_path: configured_path.clone(),
+                resolved_path,
+                configured_parent: resolved_configured_parent,
+            })
+        })
+        .collect()
+}
+
 /// Read every seed file referenced by `seed.paths` and assemble a
 /// fully-indexed [`CapabilityMap`].
 ///
 /// # Errors
 ///
-/// Returns an error when a seed file cannot be read, parsed, converted
-/// into a [`CapabilityClaims`] value, or when its `raw_token` fails
-/// PASETO verification.
+/// Returns an error when the runtime directory or a seed path cannot be
+/// resolved, a resolved seed is outside the runtime capabilities directory, a
+/// seed file cannot be read or parsed, a seed cannot be converted into a
+/// [`CapabilityClaims`] value, or its `raw_token` fails PASETO verification.
 pub fn load_capability_map(
     seed: &CapabilitySeedConfig,
     verifier: &dyn TokenVerifier,
+    capabilities_dir: &Path,
 ) -> anyhow::Result<CapabilityMap> {
-    let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(seed.paths.len());
-    for path in &seed.paths {
-        let body = std::fs::read_to_string(path).map_err(|e| {
-            anyhow::anyhow!("failed to read capability seed '{}': {e}", path.display())
+    let resolved_seed_paths = resolve_seed_paths(seed, capabilities_dir)?;
+    load_capability_map_from_resolved(&resolved_seed_paths, verifier)
+}
+
+fn load_capability_map_from_resolved(
+    resolved_seed_paths: &[ResolvedSeedPath],
+    verifier: &dyn TokenVerifier,
+) -> anyhow::Result<CapabilityMap> {
+    let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(resolved_seed_paths.len());
+    for resolved_seed in resolved_seed_paths {
+        let configured_path = &resolved_seed.configured_path;
+        let resolved_path = &resolved_seed.resolved_path;
+        let body = std::fs::read_to_string(resolved_path).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to read capability seed '{}' resolved to '{}': {error}",
+                configured_path.display(),
+                resolved_path.display()
+            )
         })?;
         let file: SeedFile = toml::from_str(&body).map_err(|_| {
             anyhow::anyhow!(
-                "capability seed '{}' is not canonical CapabilitySeed TOML",
-                path.display()
+                "capability seed '{}' resolved to '{}' is not canonical CapabilitySeed TOML",
+                configured_path.display(),
+                resolved_path.display()
             )
         })?;
-        entries.push(
-            seed_into_entry(&file, verifier).map_err(|e| {
-                anyhow::anyhow!("invalid capability seed '{}': {e}", path.display())
-            })?,
-        );
+        entries.push(seed_into_entry(&file, verifier).map_err(|error| {
+            anyhow::anyhow!(
+                "invalid capability seed '{}' resolved to '{}': {error}",
+                configured_path.display(),
+                resolved_path.display()
+            )
+        })?);
     }
     Ok(CapabilityMap::new(entries))
 }
@@ -142,10 +239,65 @@ impl TokenVerifier for RejectAllVerifier {
     }
 }
 
-/// Owns the file watcher and reload task. Dropping it stops the watch and the
-/// reload task.
+fn build_seed_watcher(
+    resolved_seed_paths: &[ResolvedSeedPath],
+    tx_signal: tokio::sync::mpsc::Sender<()>,
+) -> anyhow::Result<notify::RecommendedWatcher> {
+    let event_handler = move |res: notify::Result<notify::Event>| match res {
+        Ok(event)
+            if matches!(
+                event.kind,
+                notify::event::EventKind::Modify(_)
+                    | notify::event::EventKind::Create(_)
+                    | notify::event::EventKind::Remove(_)
+            ) =>
+        {
+            // Coalesced by the bounded channel; a full buffer already means a
+            // reload is pending, so dropping the extra signal is harmless.
+            let _ = tx_signal.try_send(());
+        }
+        Err(error) => tracing::error!(?error, "capability seed watch error"),
+        _ => {}
+    };
+
+    let mut watcher = notify::recommended_watcher(event_handler)
+        .context("failed to create capability seed watcher")?;
+
+    // The seed is written via a temp-file + atomic rename into its parent
+    // directory, so watch the parent directories (deduplicated) non-recursively
+    // rather than the files themselves — the rename target may not exist yet.
+    let mut watched_dirs = HashSet::new();
+    for resolved_seed in resolved_seed_paths {
+        let resolved_parent = resolved_seed.resolved_path.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "resolved capability seed '{}' has no parent directory",
+                resolved_seed.resolved_path.display()
+            )
+        })?;
+        for dir in [resolved_parent, resolved_seed.configured_parent.as_path()] {
+            if watched_dirs.insert(dir.to_path_buf()) {
+                watcher
+                    .watch(dir, notify::RecursiveMode::NonRecursive)
+                    .with_context(|| {
+                        format!(
+                            "failed to watch capability seed directory '{}' for configured \
+                             seed '{}' resolved to '{}'",
+                            dir.display(),
+                            resolved_seed.configured_path.display(),
+                            resolved_seed.resolved_path.display()
+                        )
+                    })?;
+            }
+        }
+    }
+
+    Ok(watcher)
+}
+
+/// Owns the reload task, which exclusively owns the active file watcher.
+/// Dropping the guard aborts the task; the watcher is released when task
+/// termination completes.
 pub struct CapabilityReloader {
-    _watcher: notify::RecommendedWatcher,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -160,56 +312,24 @@ impl CapabilityReloader {
     ///
     /// # Errors
     ///
-    /// Returns an error when the OS file watcher cannot be created or registered.
+    /// Returns an error when a seed's configured parent or resolved target is
+    /// outside the runtime capabilities directory, or the OS file watcher
+    /// cannot be created or registered.
     pub fn spawn(
+        runtime_layout: &firma_runtime_state::RuntimeLayout,
         config: &config::CapabilitySeedConfig,
         token_verifier: Arc<dyn TokenVerifier + Send + Sync>,
         capability_handle: CapabilityMapHandle,
         cancel: CancellationToken,
     ) -> anyhow::Result<Self> {
+        let capabilities_dir = runtime_layout.capabilities_dir();
+        let resolved_seed_paths = resolve_seed_paths(config, &capabilities_dir)?;
         let seed_config = config.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
-        let event_handler = move |res: notify::Result<notify::Event>| match res {
-            Ok(event)
-                if matches!(
-                    event.kind,
-                    notify::event::EventKind::Modify(_)
-                        | notify::event::EventKind::Create(_)
-                        | notify::event::EventKind::Remove(_)
-                ) =>
-            {
-                // Coalesced by the bounded channel; a full buffer already means a
-                // reload is pending, so dropping the extra signal is harmless.
-                let _ = tx_signal.try_send(());
-            }
-            Err(error) => tracing::error!(?error, "capability seed watch error"),
-            _ => {}
-        };
-
-        let mut watcher = notify::recommended_watcher(event_handler)
-            .context("failed to create capability seed watcher")?;
-
-        // The seed is written via a temp-file + atomic rename into its parent
-        // directory, so watch the parent directories (deduplicated) non-recursively
-        // rather than the files themselves — the rename target may not exist yet.
-        let mut watched_dirs = HashSet::new();
-        for path in &seed_config.paths {
-            let Some(dir) = path.parent() else {
-                continue;
-            };
-            if watched_dirs.insert(dir.to_path_buf()) {
-                watcher
-                    .watch(dir, notify::RecursiveMode::NonRecursive)
-                    .with_context(|| {
-                        format!(
-                            "failed to watch capability seed directory {}",
-                            dir.display()
-                        )
-                    })?;
-            }
-        }
+        let watcher = build_seed_watcher(&resolved_seed_paths, tx_signal.clone())?;
 
         let task = tokio::spawn(async move {
+            let mut active_watcher = watcher;
             loop {
                 tokio::select! {
                     () = cancel.cancelled() => break,
@@ -221,31 +341,67 @@ impl CapabilityReloader {
                         // single rebuild.
                         while rx_signal.try_recv().is_ok() {}
 
-                        match load_capability_map(&seed_config, token_verifier.as_ref()) {
+                        let resolved_seed_paths = match resolve_seed_paths(
+                            &seed_config,
+                            &capabilities_dir,
+                        ) {
+                            Ok(paths) => paths,
+                            Err(error) => {
+                                // Do not probe configured paths after resolution
+                                // fails: they may no longer resolve inside the
+                                // runtime boundary. Teardown deletion and invalid
+                                // rewrites both retain the previous verified map.
+                                tracing::error!(
+                                    %error,
+                                    "capability seed reload failed; keeping previous map \
+                                     (it will fail closed on its own expiry)"
+                                );
+                                continue;
+                            }
+                        };
+                        let replacement_watcher = match build_seed_watcher(
+                            &resolved_seed_paths,
+                            tx_signal.clone(),
+                        ) {
+                            Ok(watcher) => watcher,
+                            Err(error) => {
+                                tracing::error!(
+                                    %error,
+                                    "capability seed reload failed; keeping previous map \
+                                     (it will fail closed on its own expiry)"
+                                );
+                                continue;
+                            }
+                        };
+                        let candidate_map = load_capability_map_from_resolved(
+                            &resolved_seed_paths,
+                            token_verifier.as_ref(),
+                        );
+
+                        match candidate_map {
                             Ok(map) => {
                                 capability_handle.store(Arc::new(map));
+                                drop(std::mem::replace(
+                                    &mut active_watcher,
+                                    replacement_watcher,
+                                ));
                                 tracing::info!(
                                     "capability map hot-reloaded from updated seed file(s)"
                                 );
                             }
                             Err(error) => {
-                                // A missing seed file is expected on teardown:
-                                // `firma run`'s guard deletes it, which fires a
-                                // Remove event. Log that at debug; surface real
-                                // reload failures (e.g. a bad re-minted token)
-                                // at error.
-                                if seed_config.paths.iter().any(|p| !p.exists()) {
-                                    tracing::debug!(
-                                        %error,
-                                        "capability seed file absent on reload; keeping previous map"
-                                    );
-                                } else {
-                                    tracing::error!(
-                                        %error,
-                                        "capability seed reload failed; keeping previous map \
-                                         (it will fail closed on its own expiry)"
-                                    );
-                                }
+                                // The replacement watches only paths that passed
+                                // containment. Retain it so a correction in a newly
+                                // selected target directory can trigger recovery.
+                                drop(std::mem::replace(
+                                    &mut active_watcher,
+                                    replacement_watcher,
+                                ));
+                                tracing::error!(
+                                    %error,
+                                    "capability seed reload failed; keeping previous map \
+                                     (it will fail closed on its own expiry)"
+                                );
                             }
                         }
                     }
@@ -253,14 +409,8 @@ impl CapabilityReloader {
             }
         });
 
-        tracing::debug!(
-            directories = watched_dirs.len(),
-            "capability seed hot-reload watcher started"
-        );
-        Ok(Self {
-            _watcher: watcher,
-            task,
-        })
+        tracing::debug!("capability seed hot-reload watcher started");
+        Ok(Self { task })
     }
 }
 
@@ -272,13 +422,17 @@ mod tests {
     use firma_identifiers::TokenId;
     use pasetors::keys::{AsymmetricKeyPair, Generate};
     use pasetors::version4::V4;
-    use std::path::PathBuf;
 
     #[test]
     fn empty_seed_yields_empty_map() {
         let seed = CapabilitySeedConfig::default();
         let verifier = build_token_verifier(None).unwrap();
-        let map = load_capability_map(&seed, verifier.as_ref()).unwrap();
+        let map = load_capability_map(
+            &seed,
+            verifier.as_ref(),
+            Path::new("/directory/need/not/exist"),
+        )
+        .unwrap();
         // `CapabilityMap::select` returns `Err(EnforcementDecision)`
         // when no entry matches; the empty map must always deny.
         let result = map.select("sess", "communication.external.send", "wttr.in");
@@ -287,15 +441,18 @@ mod tests {
 
     #[test]
     fn rejects_unreadable_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let capabilities_dir = temp.path().join("capabilities");
+        std::fs::create_dir(&capabilities_dir).unwrap();
         let seed = CapabilitySeedConfig {
-            paths: vec![PathBuf::from("/definitely/not/here.toml")],
+            paths: vec![capabilities_dir.join("definitely-not-here.toml")],
             hot_reload: true,
         };
         let verifier = build_token_verifier(None).unwrap();
-        let err = load_capability_map(&seed, verifier.as_ref())
+        let err = load_capability_map(&seed, verifier.as_ref(), &capabilities_dir)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("/definitely/not/here.toml"));
+        assert!(err.contains("definitely-not-here.toml"));
     }
 
     #[test]

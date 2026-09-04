@@ -1,5 +1,5 @@
-//! Verifies that `firma sidecar` accepts a capability seed issued through
-//! `firma authority`, while refusing a seed whose claims were tampered with.
+//! Verifies that `firma sidecar` accepts a valid seed in the runtime
+//! capabilities directory, while refusing external or tampered seed files.
 
 #![allow(
     clippy::unwrap_used,
@@ -66,7 +66,9 @@ bundle_ttl = "30s"
     )
     .unwrap();
 
-    let seed_path = tmp.path().join("capability.toml");
+    let capabilities_dir = tmp.path().join("runtime/capabilities");
+    std::fs::create_dir_all(&capabilities_dir).unwrap();
+    let seed_path = capabilities_dir.join("capability.toml");
     let status = Command::new(FIRMA_BIN)
         .args(["authority", "--config"])
         .arg(&auth_toml)
@@ -97,7 +99,11 @@ bundle_ttl = "30s"
     }
 }
 
-fn write_sidecar_config(issued: &IssuedSeed, mapping_host: &str) -> PathBuf {
+fn write_sidecar_config_with_seed(
+    issued: &IssuedSeed,
+    mapping_host: &str,
+    seed_path: &Path,
+) -> PathBuf {
     let mapping = issued.tmp.path().join("mapping-rules.toml");
     std::fs::write(
         &mapping,
@@ -155,12 +161,16 @@ signing_key_path = '{audit_key}'
             ca_dir = ca_dir.display(),
             mapping = mapping.display(),
             pub_key = issued.pub_key_path.display(),
-            seed_path = issued.seed_path.display(),
+            seed_path = seed_path.display(),
             audit_key = audit_key.display(),
         ),
     )
     .unwrap();
     sidecar_toml
+}
+
+fn write_sidecar_config(issued: &IssuedSeed, mapping_host: &str) -> PathBuf {
+    write_sidecar_config_with_seed(issued, mapping_host, &issued.seed_path)
 }
 
 fn generate_audit_key_pem() -> String {
@@ -196,6 +206,13 @@ fn run_sidecar_until_exit(config_path: &Path) -> (i32, String, String) {
         .args(["sidecar", "--config"])
         .arg(config_path)
         .args(["--health-bind-addr", "127.0.0.1:0"])
+        .env(
+            "FIRMA_STATE_DIR",
+            config_path
+                .parent()
+                .expect("config path must have a parent")
+                .join("runtime"),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -240,6 +257,13 @@ fn run_sidecar_until_ready(config_path: &Path, target: SocketAddr) -> (String, S
         .args(["sidecar", "--config"])
         .arg(config_path)
         .args(["--health-bind-addr", "127.0.0.1:0"])
+        .env(
+            "FIRMA_STATE_DIR",
+            config_path
+                .parent()
+                .expect("config path must have a parent")
+                .join("runtime"),
+        )
         .stdout(Stdio::null())
         .stderr(stderr_file)
         .spawn()
@@ -338,6 +362,22 @@ fn issued_seed_admits_request_to_policy_stage() {
     assert!(
         response.starts_with("HTTP/1.1 403 Forbidden") && response.contains("PolicyBundleStale"),
         "CLI-issued seed did not admit the request through Stage 1; response:\n{response}\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn seed_outside_runtime_capabilities_directory_fails_startup() {
+    let issued = issue_seed();
+    let external_seed = issued.tmp.path().join("external-capability.toml");
+    std::fs::copy(&issued.seed_path, &external_seed).expect("copy seed outside runtime directory");
+    let sidecar_toml = write_sidecar_config_with_seed(&issued, "example.test", &external_seed);
+
+    let (code, _stdout, stderr) = run_sidecar_until_exit(&sidecar_toml);
+
+    assert_ne!(code, 0, "expected non-zero exit; stderr:\n{stderr}");
+    assert!(
+        stderr.contains("must be under the runtime capabilities directory"),
+        "stderr should identify the invalid seed location; got:\n{stderr}",
     );
 }
 
