@@ -17,6 +17,7 @@ use crate::backend::{
 use crate::config::MountSpec;
 use crate::error::RunError;
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_runtime_state::RunEntryLayout;
 
 const BWRAP_ROOTFS_MODE_ENV: &str = "FIRMA_RUN_BWRAP_ROOTFS_MODE";
 const BWRAP_RUNTIME_HOME_ENV: &str = "FIRMA_RUN_BWRAP_RUNTIME_HOME";
@@ -215,14 +216,22 @@ impl BwrapMountPlan {
                         handle.runtime_dir.display()
                     ),
                 })?;
+        // Derived from the runtime layout rather than the launch environment:
+        // an operator-supplied `SSL_CERT_FILE` could otherwise aim the CA bind
+        // at a signing key elsewhere in the control-plane runtime.
+        let run_entry = runtime_layout.run_entry_layout(&handle.identity.sandbox_id);
+        let runtime_paths = PlanRuntimePaths {
+            control_plane: &control_plane_runtime,
+            sandbox: &sandbox_runtime,
+            run_entry: &run_entry,
+        };
         let mounts = validate_mounts(handle, &control_plane_runtime, &sandbox_runtime)?;
         let mut plan = Self::empty();
         append_filesystem_layout(
             &mut plan,
             handle,
             &mounts,
-            &control_plane_runtime,
-            &sandbox_runtime,
+            &runtime_paths,
             launch,
             hardening,
         )?;
@@ -373,8 +382,7 @@ fn append_filesystem_layout(
     plan: &mut BwrapMountPlan,
     handle: &SandboxHandle,
     mounts: &[ValidatedMount],
-    control_plane_runtime: &Path,
-    sandbox_runtime: &Path,
+    runtime_paths: &PlanRuntimePaths<'_>,
     launch: &LaunchSpec,
     hardening: &BwrapHardening,
 ) -> Result<(), RunError> {
@@ -417,8 +425,25 @@ fn append_filesystem_layout(
         .collect::<Vec<_>>();
     project_mount_aliases(&mut plan.config_seals, &overlay_specs, masked);
 
-    mask_control_plane_runtime(plan, mounts, control_plane_runtime, sandbox_runtime, launch)?;
+    mask_control_plane_runtime(
+        plan,
+        mounts,
+        runtime_paths.control_plane,
+        runtime_paths.sandbox,
+        launch,
+    )?;
+    mount_ca_material(plan, runtime_paths.run_entry);
     Ok(())
+}
+
+/// Host paths that anchor one sandbox filesystem plan.
+struct PlanRuntimePaths<'a> {
+    /// Canonical control-plane runtime root (`FIRMA_STATE_DIR`).
+    control_plane: &'a Path,
+    /// Canonical private runtime for the sandbox being planned.
+    sandbox: &'a Path,
+    /// Layout of this run's entry inside the control-plane runtime.
+    run_entry: &'a RunEntryLayout,
 }
 
 /// Hide host-side Firma runtime state from the wrapped process tree.
@@ -427,7 +452,9 @@ fn append_filesystem_layout(
 /// runtime root contains per-run Sidecar and Authority sockets, configuration,
 /// metadata, signing keys, and capability seeds, none of which the wrapped
 /// process needs. The sandbox-local bwrap runtime remains available separately
-/// because the proxy bridge and egress guard require its sockets.
+/// because the proxy bridge and egress guard require its sockets, and
+/// [`mount_ca_material`] mounts the Sidecar's public CA material back over
+/// this mask.
 fn mask_control_plane_runtime(
     plan: &mut BwrapMountPlan,
     mounts: &[ValidatedMount],
@@ -471,6 +498,37 @@ fn mask_control_plane_runtime(
         );
     }
     Ok(())
+}
+
+/// Mount the Sidecar's public CA material through the control-plane mask.
+///
+/// [`mask_control_plane_runtime`] tmpfs-masks the whole control-plane runtime,
+/// but the launch environment points `SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
+/// `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `GIT_SSL_CAINFO` at CA
+/// files inside it. Without this restoration the wrapped process opens an
+/// unreadable trust store, silently falls back to the system roots, and every
+/// MITM-intercepted handshake fails with `certificate signed by unknown
+/// authority`.
+///
+/// Each file is bound individually and read-only. Binding
+/// [`RunEntryLayout::ca_dir`] as a directory would also expose
+/// [`RunEntryLayout::ca_key`] and let the wrapped process mint certificates
+/// trusted by anything configured to trust the Sidecar CA.
+///
+/// Missing files are skipped: with HTTPS MITM disabled no CA is generated, and
+/// the bundle exists only under `ca_trust_mode = "append_system_roots"`.
+fn mount_ca_material(plan: &mut BwrapMountPlan, run_entry: &RunEntryLayout) {
+    for source in [run_entry.ca_cert(), run_entry.ca_bundle()] {
+        if !source.is_file() {
+            continue;
+        }
+        plan.sandbox_runtime.bind(
+            BwrapPlanRole::SandboxInfrastructure,
+            source.clone(),
+            source,
+            BwrapBindMode::ReadOnly,
+        );
+    }
 }
 
 /// Resolves every prepared mount to the exact host source that will be emitted
@@ -1377,6 +1435,165 @@ mod tests {
         assert!(
             workspace_mount < mask,
             "workspace-parent mount must precede the mask so the mask hides firma.toml"
+        );
+    }
+
+    /// Sandbox handle with no mounts, used by the CA restoration tests.
+    #[cfg(target_os = "linux")]
+    fn handle_with(
+        runtime_dir: std::path::PathBuf,
+        identity: crate::identity::RunIdentity,
+    ) -> crate::backend::SandboxHandle {
+        crate::backend::SandboxHandle {
+            backend: crate::backend::BackendKind::Bwrap,
+            runtime_dir,
+            identity,
+            mounts: vec![],
+            network_policy: crate::config::NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_restores_public_ca_material_over_control_plane_mask() {
+        // The control-plane mask hides the whole runtime root, but the launch
+        // environment aims `SSL_CERT_FILE` and friends at the run entry's CA.
+        // Each public file must be restored individually and after the mask;
+        // the signing key must stay hidden, so the CA directory is never bound
+        // as a whole.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let control_plane = temp.path().join("control-plane");
+        let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(control_plane.clone());
+        let run_entry = runtime_layout.run_entry_layout(&identity.sandbox_id);
+        std::fs::create_dir_all(run_entry.ca_dir()).expect("mkdir CA dir");
+        for path in [
+            run_entry.ca_cert(),
+            run_entry.ca_bundle(),
+            run_entry.ca_key(),
+        ] {
+            std::fs::write(&path, "").expect("write CA material");
+        }
+
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let mask = rendered
+            .iter()
+            .position(|arg| arg == &canonical(&control_plane))
+            .expect("control-plane runtime masked");
+        for public in [run_entry.ca_cert(), run_entry.ca_bundle()] {
+            let path = public.display().to_string();
+            let bind = rendered
+                .windows(3)
+                .position(|win| win[0] == "--ro-bind" && win[1] == path && win[2] == path)
+                .unwrap_or_else(|| panic!("{path} bound read-only through the mask"));
+            assert!(
+                mask < bind,
+                "{path} must be restored after the control-plane mask"
+            );
+        }
+        let key = run_entry.ca_key().display().to_string();
+        assert!(
+            !rendered.iter().any(|arg| arg == &key),
+            "the CA signing key must never be exposed to the sandbox"
+        );
+        let ca_dir = run_entry.ca_dir().display().to_string();
+        assert!(
+            !rendered.iter().any(|arg| arg == &ca_dir),
+            "binding the CA directory would also expose the signing key"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_skips_absent_ca_material() {
+        // With HTTPS MITM disabled no CA is generated, and the bundle exists
+        // only under `ca_trust_mode = "append_system_roots"`. Binding a missing
+        // source would make bwrap abort the launch.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+        let run_entry = runtime_layout.run_entry_layout(&identity.sandbox_id);
+        std::fs::create_dir_all(run_entry.root()).expect("mkdir run entry");
+
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let ca_dir = run_entry.ca_dir().display().to_string();
+        assert!(
+            !rendered.iter().any(|arg| arg.starts_with(&ca_dir)),
+            "no CA path should be bound when the material is absent: {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_restores_only_the_current_run_ca() {
+        // Run entries are siblings under `<runtime>/run`. A concurrent run's CA
+        // must stay behind the mask: the plan is keyed on this sandbox's
+        // identity, not on whatever CA files happen to exist.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let other = crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+        let run_entry = runtime_layout.run_entry_layout(&identity.sandbox_id);
+        let other_entry = runtime_layout.run_entry_layout(&other.sandbox_id);
+        for entry in [&run_entry, &other_entry] {
+            std::fs::create_dir_all(entry.ca_dir()).expect("mkdir CA dir");
+            std::fs::write(entry.ca_cert(), "").expect("write CA cert");
+        }
+
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let own_cert = run_entry.ca_cert().display().to_string();
+        let other_cert = other_entry.ca_cert().display().to_string();
+        assert!(
+            rendered.iter().any(|arg| arg == &own_cert),
+            "this run's CA certificate must be restored"
+        );
+        assert!(
+            !rendered.iter().any(|arg| arg == &other_cert),
+            "another run's CA certificate must stay behind the mask"
         );
     }
 

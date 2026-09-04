@@ -98,6 +98,50 @@ fn minimal_template_defaults_audit_to_monitorable_file_sink() {
     );
 }
 
+/// Reads `[sidecar.ca].dir` from a synthesized config file.
+fn ca_dir(value: &toml::Value) -> &str {
+    value
+        .as_table()
+        .and_then(|t| t.get("sidecar"))
+        .and_then(toml::Value::as_table)
+        .and_then(|s| s.get("ca"))
+        .and_then(toml::Value::as_table)
+        .and_then(|ca| ca.get("dir"))
+        .and_then(toml::Value::as_str)
+        .expect("sidecar.ca.dir")
+}
+
+#[test]
+fn ca_dir_is_pinned_to_the_run_entry_layout() {
+    // `firma run` derives the sandbox trust env and the bwrap CA bind from
+    // `RunEntryLayout`, so the sidecar must write its MITM CA to exactly that
+    // directory. A template's own `ca.dir` (and the CWD-relative default)
+    // would land the material outside the mounted path, leaving the sandbox
+    // with an unreadable trust store.
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join("template.toml");
+    fs::write(
+        &template,
+        r#"
+[sidecar.ca]
+dir = "/elsewhere/firma-ca"
+"#,
+    )
+    .expect("write template");
+    let marker = tmp.path().join("run-entry");
+    fs::create_dir_all(&marker).expect("mkdir marker");
+    let out = marker.join("sidecar.toml");
+    let sock = marker.join("sidecar.sock");
+    synthesize(SynthesizeRequest {
+        template: resolve_template_sources(Some(&template)).expect("resolve Sidecar template"),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    let expected = firma_runtime_state::RunEntryLayout::from_root(&marker).ca_dir();
+    assert_eq!(ca_dir(&read(&out)), expected.display().to_string());
+}
+
 #[test]
 fn explicit_audit_sink_is_not_overridden_by_fallback() {
     // An operator-configured audit sink must win over the fallback default.

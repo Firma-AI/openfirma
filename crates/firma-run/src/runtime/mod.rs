@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use firma_runtime_state::RuntimeLayout;
+use firma_runtime_state::runtime_paths::{CA_BUNDLE_FILE_NAME, CA_CERT_FILE_NAME, CA_DIR_NAME};
 use firma_secret_provider::IntegrationSpec;
 use serde::Serialize;
 
@@ -718,7 +719,7 @@ fn build_appended_ca_bundle_with_roots(firma_ca_path: &Path, roots: &[PathBuf]) 
         bundle.push(b'\n');
     }
     bundle.extend_from_slice(&firma_ca);
-    let bundle_path = firma_ca_path.with_file_name("firma-ca-bundle.crt");
+    let bundle_path = firma_ca_path.with_file_name(CA_BUNDLE_FILE_NAME);
     if let Err(error) = std::fs::write(&bundle_path, &bundle) {
         tracing::warn!(%error, path = %bundle_path.display(), "failed to write combined CA bundle; using sole firma-ca");
         return None;
@@ -752,7 +753,7 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
     if let Some(ca_dir) = network_overrides.get("FIRMA_SIDECAR_CA_DIR")
         && !ca_dir.trim().is_empty()
     {
-        let path = PathBuf::from(ca_dir).join("firma-ca.crt");
+        let path = PathBuf::from(ca_dir).join(CA_CERT_FILE_NAME);
         if path.is_file() {
             return Some(path);
         }
@@ -770,7 +771,7 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
     if let Ok(ca_dir) = std::env::var("FIRMA_SIDECAR_CA_DIR")
         && !ca_dir.trim().is_empty()
     {
-        let path = PathBuf::from(ca_dir).join("firma-ca.crt");
+        let path = PathBuf::from(ca_dir).join(CA_CERT_FILE_NAME);
         if path.is_file() {
             return Some(path);
         }
@@ -778,11 +779,11 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
 
     let cwd_candidate = std::env::current_dir()
         .ok()
-        .map(|cwd| cwd.join("firma-ca").join("firma-ca.crt"));
+        .map(|cwd| cwd.join(CA_DIR_NAME).join(CA_CERT_FILE_NAME));
     let default_candidates = [
         cwd_candidate,
-        Some(PathBuf::from("/etc/firma/ca/firma-ca.crt")),
-        Some(PathBuf::from("/var/lib/firma/ca/firma-ca.crt")),
+        Some(PathBuf::from("/etc/firma/ca").join(CA_CERT_FILE_NAME)),
+        Some(PathBuf::from("/var/lib/firma/ca").join(CA_CERT_FILE_NAME)),
     ];
 
     default_candidates

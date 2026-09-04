@@ -107,6 +107,8 @@ Go's `crypto/tls` does not respect a single env var by default. The simplest pat
 
 When you launch with `firma run`, the wrapper installs the CA into the sandbox's trust path automatically and sets the appropriate env vars for the runtime profile. You don't need to do anything else for [`firma run`](../firma-run/)-wrapped agents.
 
+The sandbox sees only the public CA material — `firma-ca.crt`, plus `firma-ca-bundle.crt` under `ca_trust_mode = "append_system_roots"`. `firma-ca.key` stays behind the control-plane mask, so a wrapped agent can verify intercepted connections but cannot mint certificates that other CA-trusting processes would accept.
+
 ## Step 4: Verify MITM is in effect
 
 With the env vars set in your agent shell, make a verbose HTTPS call:

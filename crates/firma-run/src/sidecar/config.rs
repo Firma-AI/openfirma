@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::error::RunError;
 use firma_config_loader::AgentProfile;
 use firma_identifiers::AgentId;
+use firma_runtime_state::RunEntryLayout;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 const MINIMAL_MAPPING_RULES_TOML: &str = "\
@@ -898,7 +899,7 @@ fn override_ca_dir(value: &mut toml::Value, out_path: &Path) -> Result<(), RunEr
             out_path.display()
         ))
     })?;
-    let ca_dir = marker_dir.join("firma-ca");
+    let ca_dir = RunEntryLayout::from_root(marker_dir).ca_dir();
     let sidecar = sidecar_table_mut(value)?;
     let ca_table = sidecar
         .entry("ca".to_string())

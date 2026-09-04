@@ -112,6 +112,15 @@ fn derives_all_runtime_contract_paths_from_one_root() {
         run_entry.sidecar_metadata(),
         run_entry.root().join("metadata.toml")
     );
+    // The Sidecar writes this material and firma-run reads it back, so the
+    // exact file names are a cross-crate contract.
+    assert_eq!(run_entry.ca_dir(), run_entry.root().join("firma-ca"));
+    assert_eq!(run_entry.ca_cert(), run_entry.ca_dir().join("firma-ca.crt"));
+    assert_eq!(
+        run_entry.ca_bundle(),
+        run_entry.ca_dir().join("firma-ca-bundle.crt")
+    );
+    assert_eq!(run_entry.ca_key(), run_entry.ca_dir().join("firma-ca.key"));
     assert_eq!(
         layout.capability_seed(&sandbox_id),
         base.join("capabilities").join(format!("{sandbox_id}.toml"))
