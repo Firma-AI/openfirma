@@ -72,6 +72,13 @@ not supported — define them as a full `{ type = "http", ... }` table.
   under opaque `fsp_…` placeholders the gateway resolves later. An entry being
   present is itself the authorization to intercept — no separate policy check
   gates it.
+
+  CLI secret mediation is available on backends that declare shim support:
+  the Linux bwrap backend (host bind-mount) and the macOS VZ guest backend
+  (isolated guest with VSOCK broker bridge). WSL2 and sandbox-exec
+  compatibility mode are unsupported because the wrapped process can call the
+  host directly, so a shim would be redundant. Firecracker support is planned
+  but not yet implemented.
 - **HTTP entry** — mirrored into the autostarted Sidecar's
   `[sidecar].http_secret_providers` so the Sidecar's MITM path can intercept
   matching vault responses. Fail-closed: an unknown vault path is `blocked`, a

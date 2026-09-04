@@ -18,6 +18,68 @@ use crate::config::{
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 
+/// Whether a backend supports CLI secret-provider shim mediation and how.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretShimSupport {
+    /// The backend cannot mediate CLI secret providers.
+    Unsupported { reason: SecretShimUnsupportedReason },
+    /// The backend can bind-mount a host-platform shim over the real provider
+    /// executable because the guest shares the host filesystem and architecture.
+    HostBindMount { guest_target: ShimTarget },
+    /// The guest is an isolated VM that cannot reach the host directly; a
+    /// guest-architecture shim is deployed alongside a redaction-only broker
+    /// bridge so the guest can reach the host secret broker safely.
+    IsolatedGuest {
+        guest_target: ShimTarget,
+        broker_bridge: BrokerBridgeKind,
+    },
+}
+
+/// Why a backend does not support CLI secret-provider shims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretShimUnsupportedReason {
+    /// The guest can call the host directly, so mediation is unnecessary.
+    HostCallable,
+    /// Guest artifact deployment is not yet implemented for this backend.
+    NotYetImplemented,
+}
+
+/// How the guest reaches the host-side secret broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerBridgeKind {
+    /// VSOCK port forwarding to the host broker listener.
+    VsockPort { port: u32 },
+}
+
+/// Target platform triple and executable suffix for a shim binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShimTarget {
+    /// Rust-style target triple (e.g. `"x86_64-unknown-linux-musl"`).
+    pub(crate) triple: &'static str,
+    /// Platform executable suffix (e.g. `""` on Linux, `".exe"` on Windows).
+    pub(crate) exe_suffix: &'static str,
+}
+
+impl ShimTarget {
+    /// Target for a host-platform shim (used by bwrap where guest == host).
+    #[must_use]
+    pub(crate) const fn host() -> Self {
+        Self {
+            triple: std::env::consts::ARCH,
+            exe_suffix: std::env::consts::EXE_SUFFIX,
+        }
+    }
+
+    /// Target for a Linux `x86_64` musl guest (used by VZ guest mode).
+    #[must_use]
+    pub(crate) const fn linux_x86_64_musl() -> Self {
+        Self {
+            triple: "x86_64-unknown-linux-musl",
+            exe_suffix: "",
+        }
+    }
+}
+
 /// Identifies the OS-level mechanism that provides network confinement.
 ///
 /// Used in [`EnforcementProof`] so operators and audit systems can
@@ -396,6 +458,9 @@ pub trait SandboxBackend: Send + Sync {
     ///
     /// Returns an error when backend cleanup fails.
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError>;
+
+    /// Returns whether this backend supports CLI secret-provider shim mediation.
+    fn secret_shim_support(&self) -> SecretShimSupport;
 }
 
 /// Construct backend implementation for a kind.

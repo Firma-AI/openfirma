@@ -10,12 +10,12 @@ use super::{
 };
 
 #[test]
-fn validates_contract_v1() -> Result<()> {
+fn validates_contract_v2() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let json = valid_contract_json(temp.path())?;
     let contract = parse_contract(&json)?;
 
-    assert_eq!(contract.version(), 1);
+    assert_eq!(contract.version(), 2);
     assert_eq!(
         contract.sandbox_id().to_string(),
         "sbx_01j0000000e008000000000001"

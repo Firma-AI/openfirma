@@ -145,7 +145,7 @@ fn contract_accepts_valid_contract() -> TestResult {
 #[test]
 fn contract_rejects_invalid_version() -> TestResult {
     let mut contract = valid_launch_contract();
-    contract.version = 2;
+    contract.version = 99;
 
     let error = expect_init_error(
         validate_contract(&contract),
@@ -154,7 +154,7 @@ fn contract_rejects_invalid_version() -> TestResult {
 
     assert!(matches!(
         error,
-        InitError::InvalidContractVersion { version: 2 }
+        InitError::InvalidContractVersion { version: 99 }
     ));
 
     Ok(())
@@ -759,7 +759,7 @@ fn read_contract_parses_valid_contract_json() -> TestResult {
 
     let contract = read_contract(&contract_path)?;
 
-    assert_eq!(contract.version, 1);
+    assert_eq!(contract.version, 2);
     assert_eq!(contract.command.executable, "/bin/true");
     assert!(!contract.terminal.interactive);
     assert_eq!(contract.mounts.len(), 1);
@@ -2280,6 +2280,7 @@ fn valid_launch_contract() -> LaunchContract {
             name: "preserve_stdio_signals_exit".to_string(),
             mode: "required".to_string(),
         }],
+        secret_shims: None,
     }
 }
 

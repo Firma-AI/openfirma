@@ -152,6 +152,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     let working_dir = resolve_working_dir()?;
 
     let backend = build_backend(profile.backend);
+    let shim_support = backend.secret_shim_support();
     let mut handle = Some(backend.prepare(&PrepareRequest {
         identity: identity.clone(),
         profile: profile.clone(),
@@ -355,6 +356,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 &firma_exe,
                 env::var_os("PATH").as_deref(),
                 secret_services.as_ref(),
+                &shim_support,
             )?;
             let launch = LaunchSpec {
                 executable,
