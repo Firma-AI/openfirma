@@ -42,6 +42,9 @@ pub struct LaunchContract {
     /// Required host invariants recorded in the launch contract.
     #[serde(default)]
     pub invariants: Vec<InvariantContract>,
+    /// Secret shim deployment metadata for guest CLI provider mediation.
+    #[serde(default)]
+    pub secret_shims: Option<SecretShimsContract>,
 }
 
 /// Host runner metadata carried by the launch contract.
@@ -74,6 +77,20 @@ pub struct InvariantContract {
     pub mode: String,
 }
 
+/// Secret shim deployment metadata carried by the launch contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretShimsContract {
+    /// Guest target triple for the shim binary (e.g. "x86_64-unknown-linux-musl").
+    pub guest_target_triple: String,
+    /// Provider names that need shim entries in the guest PATH.
+    pub provider_names: Vec<String>,
+    /// VSOCK port used for the broker bridge.
+    pub broker_vsock_port: u32,
+    /// Host directory containing the shim binary (guest path via virtiofs).
+    pub shim_share_directory: PathBuf,
+}
+
 /// Launch contract that has passed guest-side validation.
 #[derive(Debug)]
 pub struct Contract {
@@ -81,6 +98,7 @@ pub struct Contract {
     terminal: Terminal,
     mounts: Vec<MountContract>,
     network: Network,
+    secret_shims: Option<SecretShimsContract>,
 }
 
 impl Contract {
@@ -103,6 +121,11 @@ impl Contract {
     pub fn terminal(&self) -> &Terminal {
         &self.terminal
     }
+
+    /// Returns the secret shim deployment metadata, if present.
+    pub fn secret_shims(&self) -> Option<&SecretShimsContract> {
+        self.secret_shims.as_ref()
+    }
 }
 
 impl TryFrom<LaunchContract> for Contract {
@@ -117,6 +140,7 @@ impl TryFrom<LaunchContract> for Contract {
             terminal,
             mounts: contract.mounts,
             network,
+            secret_shims: contract.secret_shims,
         })
     }
 }
@@ -489,7 +513,7 @@ fn accept_contract_boundary(contract: &LaunchContract) -> InitResult<(Terminal, 
 fn validate_contract_header(contract: &LaunchContract) -> InitResult<()> {
     observe_host_launch_metadata(contract);
 
-    if contract.version != 1 {
+    if contract.version != 1 && contract.version != 2 {
         return Err(InitError::InvalidContractVersion {
             version: contract.version,
         });
@@ -545,6 +569,14 @@ fn observe_host_launch_metadata(contract: &LaunchContract) {
 
     for mount in &contract.mounts {
         let _ = &mount.source;
+    }
+
+    if let Some(shims) = &contract.secret_shims {
+        let _ = (
+            &shims.guest_target_triple,
+            &shims.provider_names,
+            &shims.shim_share_directory,
+        );
     }
 }
 

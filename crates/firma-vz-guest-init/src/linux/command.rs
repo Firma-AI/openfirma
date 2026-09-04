@@ -1275,6 +1275,7 @@ mod tests {
                 name: "preserve_stdio_signals_exit".to_string(),
                 mode: "required".to_string(),
             }],
+            secret_shims: None,
         }
         .try_into()?)
     }

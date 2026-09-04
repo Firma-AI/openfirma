@@ -216,26 +216,35 @@ function Install-FirmaBinary ($TmpDir) {
     }
     if ($DryRun) {
         $binarySrc = Join-Path $extractDir 'firma.exe'
-        $shimSrc = Join-Path $extractDir 'firma-secret-shim.exe'
     } else {
         $binarySrc = (Get-ChildItem -Path $extractDir -Filter 'firma.exe' -Recurse | Select-Object -First 1).FullName
         if (-not $binarySrc) { Stop-Install "could not find firma.exe inside $script:ArchiveName" }
-        $shimSrc = (Get-ChildItem -Path $extractDir -Filter 'firma-secret-shim.exe' -Recurse | Select-Object -First 1).FullName
-        if (-not $shimSrc) { Stop-Install "could not find firma-secret-shim.exe inside $script:ArchiveName; CLI secret mediation requires it next to firma.exe" }
     }
     Invoke-Step "New-Item -Path $InstallDir" {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     }
     $dest = Join-Path $InstallDir 'firma.exe'
-    $shimDest = Join-Path $InstallDir 'firma-secret-shim.exe'
     Invoke-Step "Move-Item $binarySrc -> $dest" {
         Move-Item -Force -Path $binarySrc -Destination $dest
     }
-    Invoke-Step "Move-Item $shimSrc -> $shimDest" {
-        Move-Item -Force -Path $shimSrc -Destination $shimDest
+
+    # Copy private shim artifacts into libexec if present in the archive.
+    # These are not user-facing commands and must not appear on PATH.
+    if (-not $DryRun) {
+        $shimSrc = (Get-ChildItem -Path $extractDir -Filter 'firma-secret-shim.exe' -Recurse | Select-Object -First 1).FullName
+        if ($shimSrc) {
+            $libexecDir = Join-Path $InstallDir 'libexec\openfirma\secret-shims'
+            Invoke-Step "New-Item -Path $libexecDir" {
+                New-Item -ItemType Directory -Path $libexecDir -Force | Out-Null
+            }
+            $shimDest = Join-Path $libexecDir 'firma-secret-shim.exe'
+            Invoke-Step "Move-Item $shimSrc -> $shimDest" {
+                Move-Item -Force -Path $shimSrc -Destination $shimDest
+            }
+        }
     }
+
     Write-Info "installed: $dest"
-    Write-Info "installed: $shimDest"
 }
 
 function Add-FirmaToPath {

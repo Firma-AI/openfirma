@@ -89,6 +89,22 @@ impl CommandNetworkEnv {
         &self.values
     }
 
+    /// Inserts a key-value pair into the command environment.
+    pub fn insert(&mut self, key: &str, value: String) {
+        self.values.insert(key.to_string(), value);
+    }
+
+    /// Prepends a directory to the PATH environment variable.
+    pub fn prepend_path(&mut self, dir: String) {
+        let current = self.values.get("PATH").cloned().unwrap_or_default();
+        let new_path = if current.is_empty() {
+            dir
+        } else {
+            format!("{dir}:{current}")
+        };
+        self.values.insert("PATH".to_string(), new_path);
+    }
+
     /// Builds command environment from the accepted launch contract.
     fn from_contract(contract: &Contract) -> Self {
         let mut values = contract.command().env.clone();

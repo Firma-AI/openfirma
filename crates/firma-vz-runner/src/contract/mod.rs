@@ -21,7 +21,7 @@ use validation::{
     require_loopback_socket_addr, require_non_empty, require_path,
 };
 
-const SUPPORTED_CONTRACT_VERSION: u32 = 1;
+const SUPPORTED_CONTRACT_VERSION: u32 = 2;
 const SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +39,8 @@ pub struct ContractDocument {
     mounts: Vec<Mount>,
     network: Network,
     invariants: Vec<Invariant>,
+    #[serde(default)]
+    secret_shims: Option<SecretShims>,
 }
 
 impl ContractDocument {
@@ -109,6 +111,7 @@ impl ContractDocument {
         self.validate_mounts(&limits)?;
         self.validate_network(&limits)?;
         self.validate_terminal_network_ports()?;
+        self.validate_secret_shims(&limits)?;
         validate_invariants(&self.invariants)?;
 
         Ok(Contract { document: self })
@@ -284,6 +287,41 @@ impl ContractDocument {
         Ok(())
     }
 
+    /// Validates the optional `secret_shims` contract section.
+    fn validate_secret_shims(&self, limits: &ContractValidationLimits) -> ValidationResult<()> {
+        let Some(shims) = &self.secret_shims else {
+            return Ok(());
+        };
+        require_non_empty(
+            "secret_shims.guest_target_triple",
+            &shims.guest_target_triple,
+        )?;
+        require_len_at_most(
+            "secret_shims.guest_target_triple",
+            shims.guest_target_triple.len(),
+            limits.path_len,
+        )?;
+        require_count_at_most(
+            "secret_shims.provider_names",
+            shims.provider_names.len(),
+            limits.env_vars,
+        )?;
+        for name in &shims.provider_names {
+            require_non_empty("secret_shims.provider_names entry", name)?;
+        }
+        if shims.broker_vsock_port == 0 {
+            return Err(ContractValidationError::ZeroPort {
+                field: "secret_shims.broker_vsock_port",
+            });
+        }
+        require_path(
+            "secret_shims.shim_share_directory",
+            &shims.shim_share_directory,
+            limits.path_len,
+        )?;
+        Ok(())
+    }
+
     /// Validates PTY ports do not reuse the network sidecar VSOCK port.
     fn validate_terminal_network_ports(&self) -> ValidationResult<()> {
         if self.terminal.pty_vsock_port == Some(self.network.vsock_sidecar_port) {
@@ -334,6 +372,11 @@ impl Contract {
 
     pub fn mounts(&self) -> &[Mount] {
         &self.document.mounts
+    }
+
+    /// Returns the optional secret shims contract section.
+    pub fn secret_shims(&self) -> Option<&SecretShims> {
+        self.document.secret_shims.as_ref()
     }
 
     /// Returns host terminal metadata carried by the launch contract.
@@ -557,6 +600,49 @@ pub enum NetworkMode {
 #[serde(rename_all = "snake_case")]
 enum DnsMode {
     ConfinedStub,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretShims {
+    guest_target_triple: String,
+    provider_names: Vec<String>,
+    broker_vsock_port: u32,
+    shim_share_directory: PathBuf,
+}
+
+impl SecretShims {
+    /// Returns the guest target triple for the shim binary.
+    #[expect(
+        dead_code,
+        reason = "used by the runner binary for VSOCK broker bridge planning"
+    )]
+    pub fn guest_target_triple(&self) -> &str {
+        &self.guest_target_triple
+    }
+
+    /// Returns the provider names that need shim entries.
+    #[expect(
+        dead_code,
+        reason = "used by the runner binary for VSOCK broker bridge planning"
+    )]
+    pub fn provider_names(&self) -> &[String] {
+        &self.provider_names
+    }
+
+    /// Returns the VSOCK port used for the broker bridge.
+    #[expect(
+        dead_code,
+        reason = "used by the runner binary for VSOCK broker bridge planning"
+    )]
+    pub const fn broker_vsock_port(&self) -> u32 {
+        self.broker_vsock_port
+    }
+
+    /// Returns the host directory containing the shim binary.
+    pub fn shim_share_directory(&self) -> &Path {
+        &self.shim_share_directory
+    }
 }
 
 #[derive(Debug, Deserialize)]

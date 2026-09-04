@@ -42,4 +42,6 @@ pub enum VmPlanError {
     InvalidCommandPtyPort { field: &'static str },
     #[error("accepted command PTY plan requires both data and control ports")]
     IncompleteCommandPtyPlan,
+    #[error("secret_shims.shim_share_directory must be an existing directory: {path}")]
+    ShimShareDirectoryMissing { path: PathBuf },
 }

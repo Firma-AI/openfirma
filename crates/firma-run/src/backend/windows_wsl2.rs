@@ -4,7 +4,7 @@ use std::process::{Child, Command};
 use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
-    SandboxMount, SandboxRuntimeLayout,
+    SandboxMount, SandboxRuntimeLayout, SecretShimSupport, SecretShimUnsupportedReason,
 };
 use crate::config::MountSpec;
 use crate::config::NetworkPolicy;
@@ -161,6 +161,12 @@ impl SandboxBackend for Wsl2Backend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+
+    fn secret_shim_support(&self) -> SecretShimSupport {
+        SecretShimSupport::Unsupported {
+            reason: SecretShimUnsupportedReason::HostCallable,
+        }
     }
 }
 

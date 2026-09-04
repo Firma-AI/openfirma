@@ -691,20 +691,35 @@ pub(crate) fn resolve_profile_with_layout(
         );
     }
 
-    // CLI secret providers are mediated by bind-mounting the
-    // `firma-secret-shim` binary over the real tool and routing it to a
-    // host-side broker socket. Only the Linux bwrap backend implements both
-    // the mount and the host-socket reachability; on any other backend the
-    // real tool would run unmediated, so fail closed instead.
+    // CLI secret providers are mediated by deploying a shim binary that
+    // proxies the real tool call through a host-side broker. Only backends
+    // that declare shim support (via `SecretShimSupport`) are allowed to
+    // use CLI secret providers; on any other backend the real tool would
+    // run unmediated, so fail closed instead.
     let has_cli_providers = resolved
         .secret_providers
         .values()
         .any(|spec| spec.as_cli().is_some());
-    if has_cli_providers && resolved.backend != BackendKind::Bwrap {
-        return Err(RunError::ConfigValidation(format!(
-            "secret_providers with a CLI entry is unsupported for backend '{}'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider",
-            resolved.backend
-        )));
+    if has_cli_providers {
+        let backend = crate::backend::build_backend(resolved.backend);
+        match backend.secret_shim_support() {
+            crate::backend::SecretShimSupport::HostBindMount { .. }
+            | crate::backend::SecretShimSupport::IsolatedGuest { .. } => {}
+            crate::backend::SecretShimSupport::Unsupported { reason } => {
+                let detail = match reason {
+                    crate::backend::SecretShimUnsupportedReason::HostCallable => {
+                        "the guest can call the host directly, so a shim is not applicable"
+                    }
+                    crate::backend::SecretShimUnsupportedReason::NotYetImplemented => {
+                        "CLI secret mediation is not yet implemented for this backend"
+                    }
+                };
+                return Err(RunError::ConfigValidation(format!(
+                    "secret_providers with a CLI entry is unsupported for backend '{}': {detail}. Remove the CLI entries or use an HTTP provider",
+                    resolved.backend
+                )));
+            }
+        }
     }
 
     resolved.validate()?;
@@ -1704,13 +1719,13 @@ path = '{}'
     #[cfg_attr(
         target_os = "macos",
         should_panic(
-            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'vz'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'vz': the guest can call the host directly, so a shim is not applicable. Remove the CLI entries or use an HTTP provider\")"
         )
     )]
     #[cfg_attr(
         target_os = "windows",
         should_panic(
-            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'wsl2'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'wsl2': the guest can call the host directly, so a shim is not applicable. Remove the CLI entries or use an HTTP provider\")"
         )
     )]
     fn secret_providers_merge_across_defaults_and_profile() {
@@ -1763,13 +1778,13 @@ secret_providers = ["not-a-real-integration"]
     #[cfg_attr(
         target_os = "macos",
         should_panic(
-            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'vz'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'vz': the guest can call the host directly, so a shim is not applicable. Remove the CLI entries or use an HTTP provider\")"
         )
     )]
     #[cfg_attr(
         target_os = "windows",
         should_panic(
-            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'wsl2'; CLI secret mediation requires backend 'bwrap'. Remove the CLI entries or use an HTTP provider\")"
+            expected = "called `Result::unwrap()` on an `Err` value: ConfigValidation(\"secret_providers with a CLI entry is unsupported for backend 'wsl2': the guest can call the host directly, so a shim is not applicable. Remove the CLI entries or use an HTTP provider\")"
         )
     )]
     fn secret_providers_custom_spec_overrides_builtin_of_same_name() {
@@ -2924,7 +2939,7 @@ secret_providers = ["bws"]
         assert!(
             error
                 .to_string()
-                .contains("CLI secret mediation requires backend 'bwrap'"),
+                .contains("CLI entry is unsupported for backend"),
             "unexpected error: {error}"
         );
     }

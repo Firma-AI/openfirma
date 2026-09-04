@@ -86,6 +86,20 @@ impl VmPlan {
             });
         }
 
+        if let Some(shims) = contract.secret_shims() {
+            let shim_dir = shims.shim_share_directory();
+            if !shim_dir.is_dir() {
+                return Err(VmPlanError::ShimShareDirectoryMissing {
+                    path: shim_dir.to_path_buf(),
+                });
+            }
+            directory_shares.push(DirectorySharePlan {
+                name: "secret-shims".to_string(),
+                source: shim_dir.to_path_buf(),
+                read_only: true,
+            });
+        }
+
         let guest_contract_path = guest_runtime_path(contract_relative_path);
         let network_mode = match contract.network_mode() {
             NetworkMode::VsockSidecar => VmNetworkMode::VsockSidecar,

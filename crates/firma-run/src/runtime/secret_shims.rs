@@ -29,15 +29,22 @@ use firma_secret_provider::{
 };
 use tokio::sync::RwLock;
 
-use crate::backend::{SandboxHandle, SandboxMount};
+use crate::backend::{
+    BrokerBridgeKind, SandboxHandle, SandboxMount, SecretShimSupport, ShimTarget,
+};
 use crate::config::{MountSpec, ResolvedProfile};
 use crate::error::RunError;
 use crate::secret::accept::serve_forever;
 
 const FIRMA_BROKER_ADDR: &str = "FIRMA_BROKER_ADDR";
+const FIRMA_SECRET_PROVIDER_NAMES: &str = "FIRMA_SECRET_PROVIDER_NAMES";
 
 /// File name of the shim binary shipped alongside the `firma` executable.
 const SHIM_BIN_NAME: &str = "firma-secret-shim";
+
+/// Private directory name (relative to `firma` install dir) containing
+/// guest-target shim binaries organized by target triple.
+const PRIVATE_SHIM_DIR: &str = "libexec/openfirma/secret-shims";
 
 /// The mounts and env a shimmed launch needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +249,7 @@ pub(super) fn prepare(
     firma_exe: &Path,
     host_path: Option<&OsStr>,
     services: Option<&SecretServices>,
+    shim_support: &SecretShimSupport,
 ) -> Result<(), RunError> {
     if profile.secret_providers.is_empty() {
         return Ok(());
@@ -267,14 +275,38 @@ pub(super) fn prepare(
         .collect();
 
     if !cli_providers.is_empty() {
-        let shim_bin = locate_shim_binary(firma_exe)?;
-        let reals = resolve_real_binaries(&cli_providers, host_path)?;
-        let plan = plan(&shim_bin, &reals, services.broker_addr());
-        handle
-            .mounts
-            .extend(plan.mounts.into_iter().map(SandboxMount::framework));
-        for (key, value) in plan.env {
-            env.insert(key, value);
+        match shim_support {
+            SecretShimSupport::HostBindMount { guest_target } => {
+                let shim_bin = locate_shim_binary(firma_exe, guest_target)?;
+                let reals = resolve_real_binaries(&cli_providers, host_path)?;
+                let plan = plan(&shim_bin, &reals, services.broker_addr());
+                handle
+                    .mounts
+                    .extend(plan.mounts.into_iter().map(SandboxMount::framework));
+                for (key, value) in plan.env {
+                    env.insert(key, value);
+                }
+            }
+            SecretShimSupport::IsolatedGuest {
+                guest_target,
+                broker_bridge,
+            } => {
+                let _shim_bin = locate_shim_binary(firma_exe, guest_target)?;
+                let provider_names: Vec<String> = cli_providers.keys().cloned().collect();
+                env.insert(
+                    FIRMA_SECRET_PROVIDER_NAMES.to_string(),
+                    provider_names.join(","),
+                );
+                env.insert(
+                    FIRMA_BROKER_ADDR.to_string(),
+                    broker_addr_for_bridge(services.broker_addr(), *broker_bridge),
+                );
+            }
+            SecretShimSupport::Unsupported { .. } => {
+                return Err(RunError::Internal(
+                    "secret_shims::prepare called with CLI providers but backend does not support shim mediation".to_string(),
+                ));
+            }
         }
     }
 
@@ -309,6 +341,15 @@ fn plan(shim_bin: &Path, reals: &[(String, PathBuf)], broker_addr: &str) -> Shim
     ShimPlan { mounts, env }
 }
 
+/// Returns the broker address that should be injected into the guest environment.
+///
+/// For `HostBindMount` the host broker is used directly. For `IsolatedGuest`
+/// the host broker address is still used on the host side — the guest sees a
+/// guest-local address injected by guest-init via the VSOCK bridge.
+fn broker_addr_for_bridge(host_broker_addr: &str, _bridge: BrokerBridgeKind) -> String {
+    host_broker_addr.to_string()
+}
+
 /// Resolve each shimmed tool name to its real host path via `PATH`.
 fn resolve_real_binaries(
     providers: &BTreeMap<String, CliIntegrationSpec<SecretMatcher>>,
@@ -323,22 +364,29 @@ fn resolve_real_binaries(
         .collect()
 }
 
-/// Locate the `firma-secret-shim` binary shipped alongside `firma_exe`.
+/// Locate the `firma-secret-shim` binary for the given guest target.
 ///
-/// On Windows the sibling carries the `.exe` suffix Cargo appends to every
-/// binary, matching how the installers place it next to `firma.exe`.
-fn locate_shim_binary(firma_exe: &Path) -> Result<PathBuf, RunError> {
-    let shim_name = format!("{SHIM_BIN_NAME}{}", std::env::consts::EXE_SUFFIX);
-    let candidate = firma_exe.with_file_name(shim_name);
-    if candidate.is_file() {
-        Ok(candidate)
-    } else {
-        Err(RunError::Internal(format!(
-            "secret shim binary not found next to {} (expected {})",
-            firma_exe.display(),
-            candidate.display()
-        )))
+/// Looks in the private target-qualified bundle directory first, then falls
+/// back to a sibling next to `firma_exe` (the legacy bwrap layout).
+fn locate_shim_binary(firma_exe: &Path, target: &ShimTarget) -> Result<PathBuf, RunError> {
+    let shim_name = format!("{SHIM_BIN_NAME}{}", target.exe_suffix);
+    let install_dir = firma_exe.with_file_name("");
+    let private_dir = install_dir.join(PRIVATE_SHIM_DIR).join(target.triple);
+    let private_candidate = private_dir.join(&shim_name);
+    if private_candidate.is_file() {
+        return Ok(private_candidate);
     }
+    let sibling_candidate = firma_exe.with_file_name(&shim_name);
+    if sibling_candidate.is_file() {
+        return Ok(sibling_candidate);
+    }
+    Err(RunError::Internal(format!(
+        "secret shim binary not found for target '{}' next to {} (tried {} and {})",
+        target.triple,
+        firma_exe.display(),
+        private_candidate.display(),
+        sibling_candidate.display(),
+    )))
 }
 
 fn server_endpoint(base: &Path, socket_name: &str) -> Result<ServerEndpoint, RunError> {
@@ -467,14 +515,15 @@ mod tests {
     }
 
     #[test]
-    fn locate_shim_binary_requires_a_platform_named_sibling() {
+    fn locate_shim_binary_finds_sibling_when_no_private_bundle() {
         let dir = tempfile::tempdir().expect("tempdir");
         let firma = dir
             .path()
             .join(format!("firma{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&firma, b"").expect("write firma");
+        let host_target = ShimTarget::host();
         assert!(
-            locate_shim_binary(&firma).is_err(),
+            locate_shim_binary(&firma, &host_target).is_err(),
             "missing sibling must fail"
         );
 
@@ -482,6 +531,38 @@ mod tests {
             .path()
             .join(format!("{SHIM_BIN_NAME}{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&shim, b"").expect("write shim");
-        assert_eq!(locate_shim_binary(&firma).expect("locate"), shim);
+        assert_eq!(
+            locate_shim_binary(&firma, &host_target).expect("locate"),
+            shim
+        );
+    }
+
+    #[test]
+    fn locate_shim_binary_prefers_private_bundle_over_sibling() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let firma = dir
+            .path()
+            .join(format!("firma{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&firma, b"").expect("write firma");
+
+        let sibling = dir
+            .path()
+            .join(format!("{SHIM_BIN_NAME}{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&sibling, b"sibling").expect("write sibling shim");
+
+        let target = ShimTarget {
+            triple: "x86_64-unknown-linux-musl",
+            exe_suffix: "",
+        };
+        let private_dir = dir.path().join(PRIVATE_SHIM_DIR).join(target.triple);
+        std::fs::create_dir_all(&private_dir).expect("create private dir");
+        let private_shim = private_dir.join(format!("{SHIM_BIN_NAME}{}", target.exe_suffix));
+        std::fs::write(&private_shim, b"private").expect("write private shim");
+
+        let resolved = locate_shim_binary(&firma, &target).expect("locate");
+        assert_eq!(
+            resolved, private_shim,
+            "private bundle takes priority over sibling"
+        );
     }
 }

@@ -9,8 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 use crate::backend::{
-    BackendKind, EnforcementProof, LaunchSpec, NetworkConfinement, PrepareRequest, SandboxBackend,
-    SandboxHandle, SandboxMount, SandboxRuntimeLayout,
+    BackendKind, BrokerBridgeKind, EnforcementProof, LaunchSpec, NetworkConfinement,
+    PrepareRequest, SandboxBackend, SandboxHandle, SandboxMount, SandboxRuntimeLayout,
+    SecretShimSupport, SecretShimUnsupportedReason, ShimTarget,
 };
 use crate::config::{MountSpec, NetworkPolicy, SidecarEndpoint};
 use crate::error::RunError;
@@ -22,7 +23,7 @@ const VZ_GUEST_KERNEL_ENV: &str = "FIRMA_RUN_VZ_GUEST_KERNEL";
 const VZ_GUEST_INITRD_ENV: &str = "FIRMA_RUN_VZ_GUEST_INITRD";
 const VZ_GUEST_ROOTFS_ENV: &str = "FIRMA_RUN_VZ_GUEST_ROOTFS";
 const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 1;
-const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
+const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN", "FIRMA_BROKER_ADDR"];
 const VZ_GUEST_HOST_NETWORK_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -40,6 +41,7 @@ const VZ_GUEST_DNS_STUB_ADDR: &str = "127.0.0.1:1053";
 const VZ_GUEST_SIDECAR_VSOCK_PORT: u32 = 18080;
 const VZ_GUEST_COMMAND_PTY_VSOCK_PORT: u32 = 18081;
 const VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT: u32 = 18082;
+const VZ_GUEST_BROKER_VSOCK_PORT: u32 = 18083;
 
 /// Host paths owned by the VZ guest-launch handoff.
 struct VzGuestLayout {
@@ -269,7 +271,7 @@ impl SandboxBackend for VzBackend {
 
         let mode = vz_structural_mode();
         if mode == VzStructuralMode::VzGuest {
-            return start_vz_guest_runner(handle, launch);
+            return start_vz_guest_runner(handle, launch, &self.secret_shim_support());
         }
 
         let mut command = Command::new("sandbox-exec");
@@ -308,6 +310,23 @@ impl SandboxBackend for VzBackend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+
+    fn secret_shim_support(&self) -> SecretShimSupport {
+        let mode = vz_structural_mode();
+        match mode {
+            VzStructuralMode::Compatibility | VzStructuralMode::SandboxExecNetworkDeny => {
+                SecretShimSupport::Unsupported {
+                    reason: SecretShimUnsupportedReason::HostCallable,
+                }
+            }
+            VzStructuralMode::VzGuest => SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_x86_64_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+            },
+        }
     }
 }
 
@@ -377,6 +396,8 @@ struct VzGuestLaunchContract {
     mounts: Vec<MountSpec>,
     network: VzGuestNetworkContract,
     invariants: Vec<VzGuestInvariantContract>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret_shims: Option<VzGuestSecretShimsContract>,
 }
 
 impl VzGuestLaunchContract {
@@ -385,12 +406,14 @@ impl VzGuestLaunchContract {
         handle: &SandboxHandle,
         launch: &LaunchSpec,
         inputs: VzGuestLaunchInputs,
+        shim_support: &SecretShimSupport,
     ) -> Result<Self, RunError> {
         Self::from_launch_with_terminal_snapshot(
             handle,
             launch,
             inputs,
             TerminalSnapshot::from_host(),
+            shim_support,
         )
     }
 
@@ -399,9 +422,25 @@ impl VzGuestLaunchContract {
         launch: &LaunchSpec,
         inputs: VzGuestLaunchInputs,
         terminal_snapshot: TerminalSnapshot,
+        shim_support: &SecretShimSupport,
     ) -> Result<Self, RunError> {
         let terminal =
             VzGuestTerminalContract::from_launch_with_terminal_snapshot(launch, terminal_snapshot);
+
+        let secret_shims = match shim_support {
+            SecretShimSupport::IsolatedGuest {
+                guest_target,
+                broker_bridge,
+            } => Some(VzGuestSecretShimsContract {
+                guest_target_triple: guest_target.triple.to_string(),
+                provider_names: vz_guest_shim_provider_names(&launch.env),
+                broker_vsock_port: match broker_bridge {
+                    BrokerBridgeKind::VsockPort { port } => *port,
+                },
+                shim_share_directory: handle.runtime_dir.join("vz-guest").join("secret-shims"),
+            }),
+            SecretShimSupport::HostBindMount { .. } | SecretShimSupport::Unsupported { .. } => None,
+        };
 
         Ok(Self {
             version: VZ_GUEST_LAUNCH_CONTRACT_VERSION,
@@ -434,6 +473,7 @@ impl VzGuestLaunchContract {
                 handle.identity.full_attribution_headers(),
             )?,
             invariants: VzGuestInvariantContract::required_set(handle.network_policy.fail_closed),
+            secret_shims,
         })
     }
 }
@@ -714,18 +754,42 @@ enum VzGuestInvariantMode {
     DisabledByPolicy,
 }
 
-fn start_vz_guest_runner(handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+struct VzGuestSecretShimsContract {
+    guest_target_triple: String,
+    provider_names: Vec<String>,
+    broker_vsock_port: u32,
+    shim_share_directory: PathBuf,
+}
+
+/// Extracts the provider names that need shims from the launch environment.
+///
+/// Provider names are communicated via the `FIRMA_SECRET_PROVIDER_NAMES` env
+/// var set by `secret_shims::prepare` when it sets up the broker.
+fn vz_guest_shim_provider_names(env: &BTreeMap<String, String>) -> Vec<String> {
+    env.get("FIRMA_SECRET_PROVIDER_NAMES")
+        .map(|value| value.split(',').map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+fn start_vz_guest_runner(
+    handle: &SandboxHandle,
+    launch: &LaunchSpec,
+    shim_support: &SecretShimSupport,
+) -> Result<Child, RunError> {
     let inputs = VzGuestLaunchInputs::from_env()?;
-    start_vz_guest_runner_with_inputs(handle, launch, inputs)
+    start_vz_guest_runner_with_inputs(handle, launch, inputs, shim_support)
 }
 
 fn start_vz_guest_runner_with_inputs(
     handle: &SandboxHandle,
     launch: &LaunchSpec,
     inputs: VzGuestLaunchInputs,
+    shim_support: &SecretShimSupport,
 ) -> Result<Child, RunError> {
     let runner = inputs.runner.clone();
-    let contract = VzGuestLaunchContract::from_launch(handle, launch, inputs)?;
+    let contract = VzGuestLaunchContract::from_launch(handle, launch, inputs, shim_support)?;
     let contract_path = write_vz_guest_launch_contract(handle, &contract)?;
 
     tracing::info!(
@@ -1026,7 +1090,8 @@ mod tests {
     use crate::identity::RunIdentity;
 
     use super::{
-        GuestPtyRequest, GuestTerminalSelection, TerminalSize, TerminalSnapshot,
+        BrokerBridgeKind, GuestPtyRequest, GuestTerminalSelection, SecretShimSupport, ShimTarget,
+        TerminalSize, TerminalSnapshot, VZ_GUEST_BROKER_VSOCK_PORT,
         VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT, VZ_GUEST_COMMAND_PTY_VSOCK_PORT,
         VzGuestLaunchContract, VzGuestLaunchInputs, VzGuestLayout, VzGuestTerminalContract,
         VzStructuralMode, build_sandbox_profile, loopback_port_from, vz_structural_mode_from_flags,
@@ -1100,6 +1165,12 @@ mod tests {
                 kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_x86_64_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
             },
         )
         .expect("guest contract should build from prepared launch")
@@ -1212,6 +1283,12 @@ mod tests {
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
             },
             terminal_snapshot,
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_x86_64_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+            },
         )
         .expect("guest contract should build from prepared launch");
 
@@ -1257,6 +1334,7 @@ mod tests {
                 "runner",
                 "runtime_dir",
                 "sandbox_id",
+                "secret_shims",
                 "terminal",
                 "version",
             ])
@@ -1687,6 +1765,12 @@ mod tests {
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
             },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_x86_64_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+            },
         )
         .expect("guest contract should build from prepared launch");
 
@@ -1813,6 +1897,12 @@ mod tests {
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
             },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_x86_64_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+            },
         )
         .expect_err("non-loopback sidecar endpoint must fail closed");
 
@@ -1880,6 +1970,12 @@ mod tests {
                 kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_x86_64_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
             },
         )
         .expect("guest contract should build from prepared launch");
@@ -1964,6 +2060,12 @@ mod tests {
                 kernel: kernel.clone(),
                 initrd: initrd.clone(),
                 rootfs: rootfs.clone(),
+            },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_x86_64_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
             },
         )
         .expect("fake VZ runner should spawn");
