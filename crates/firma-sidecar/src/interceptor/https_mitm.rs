@@ -29,6 +29,8 @@ use tokio_rustls::TlsAcceptor;
 use x509_parser::parse_x509_certificate;
 use x509_parser::pem::parse_x509_pem;
 
+use firma_runtime_state::runtime_paths::{CA_CERT_FILE_NAME, CA_KEY_FILE_NAME};
+
 use crate::config::HttpsMitmConfig;
 
 /// Runtime state for HTTPS MITM interception.
@@ -226,11 +228,11 @@ impl CaMaterial {
         let cert_path = config
             .ca_cert_path
             .clone()
-            .unwrap_or_else(|| ca_dir.join("firma-ca.crt"));
+            .unwrap_or_else(|| ca_dir.join(CA_CERT_FILE_NAME));
         let key_path = config
             .ca_key_path
             .clone()
-            .unwrap_or_else(|| ca_dir.join("firma-ca.key"));
+            .unwrap_or_else(|| ca_dir.join(CA_KEY_FILE_NAME));
 
         if let Some(parent) = cert_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {

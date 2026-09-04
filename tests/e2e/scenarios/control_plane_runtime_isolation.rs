@@ -6,6 +6,8 @@ use crate::harness::{TestWorld, run_bounded};
 
 const PROBE_ATTEMPTED: &str = "CONTROL-PLANE PROBE ATTEMPTED";
 const ASSET_EXPOSED: &str = "CONTROL-PLANE ASSET EXPOSED";
+const CA_TRUST_READABLE: &str = "CA TRUST READABLE";
+const CA_KEY_EXPOSED: &str = "CA KEY EXPOSED";
 
 #[test]
 fn root_process_cannot_reach_run_control_plane_assets() {
@@ -146,6 +148,89 @@ fn absent_control_plane_runtime_cannot_be_forged() {
         !state_dir.join("forged-control-plane-file").exists(),
         "root process forged the previously absent control-plane runtime"
     );
+}
+
+/// The control-plane mask hides `FIRMA_STATE_DIR`, but the trust environment
+/// (`SSL_CERT_FILE` and friends) points at CA files inside it. The mask must
+/// therefore expose the public CA while still hiding its private key: an
+/// unreadable trust store makes OpenSSL and Go fall back to the system roots,
+/// which breaks every MITM-intercepted handshake.
+#[test]
+fn sandbox_reads_sidecar_ca_without_reaching_its_private_key() {
+    let world = TestWorld::isolated();
+    let cfg_dir = world.path("config");
+    let state = tempfile::tempdir_in(std::env::current_dir().expect("resolve repository cwd"))
+        .expect("create control-plane state outside sandbox tmpfs paths");
+    let state_dir = state.path().to_path_buf();
+    let workspace = world.workspace_path();
+
+    world.scaffold_config(
+        "generic",
+        &cfg_dir,
+        &state_dir,
+        Some(&workspace),
+        &workspace,
+    );
+    let config_file = cfg_dir.join("firma.toml");
+    enable_https_mitm(&config_file);
+
+    let probe_tool = workspace.join("ca-trust-probe");
+    write_ca_trust_probe(&probe_tool);
+    let evidence = workspace.join("ca-trust-probe-ran");
+
+    let output = world.run_firma_with_state_dir(
+        &config_file,
+        &state_dir,
+        &workspace,
+        &["--sidecar", "local", "--authority", "local"],
+        &probe_tool,
+        [&evidence],
+    );
+
+    assert!(output.success(), "CA trust probe failed:\n{output}");
+    assert!(evidence.is_file(), "the CA trust probe did not run");
+    assert!(
+        output.stdout.contains(CA_TRUST_READABLE),
+        "the sandbox could not read the trust store named by SSL_CERT_FILE:\n{output}"
+    );
+    assert!(
+        !output.stdout.contains(CA_KEY_EXPOSED),
+        "the sandbox reached the Sidecar CA private key:\n{output}"
+    );
+}
+
+/// Turns on HTTPS MITM in a scaffolded config so the Sidecar generates CA
+/// material. Fails when the generated setting is absent, so the patch cannot
+/// silently become a no-op.
+fn enable_https_mitm(config_file: &Path) {
+    let config = std::fs::read_to_string(config_file).expect("read scaffolded config");
+    let patched = config.replace(
+        "[sidecar.interceptor.https_mitm]\nenabled = false\n",
+        "[sidecar.interceptor.https_mitm]\nenabled = true\n",
+    );
+    assert_ne!(patched, config, "expected generated https_mitm setting");
+    std::fs::write(config_file, patched).expect("write MITM-enabled config");
+}
+
+/// Reports whether the injected trust store is readable and whether the CA
+/// private key leaked. Neither the certificate nor the key contents are
+/// printed.
+fn write_ca_trust_probe(path: &Path) {
+    let script = format!(
+        r#"#!/bin/sh
+set -eu
+evidence="$1"
+printf '%s\n' attempted >"$evidence"
+if [ -n "${{SSL_CERT_FILE:-}}" ] && [ -r "${{SSL_CERT_FILE}}" ]; then
+  echo "{CA_TRUST_READABLE}"
+fi
+if [ -n "${{FIRMA_SIDECAR_CA_DIR:-}}" ] && [ -r "${{FIRMA_SIDECAR_CA_DIR}}/firma-ca.key" ]; then
+  echo "{CA_KEY_EXPOSED}"
+fi
+"#,
+    );
+    std::fs::write(path, script).expect("write CA trust probe");
+    set_executable(path);
 }
 
 fn assert_probe_positive_control(world: &TestWorld, workspace: &Path, probe_tool: &Path) {

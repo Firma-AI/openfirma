@@ -17,6 +17,7 @@ use crate::backend::{
 use crate::config::MountSpec;
 use crate::error::RunError;
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_runtime_state::RunEntryLayout;
 
 const BWRAP_ROOTFS_MODE_ENV: &str = "FIRMA_RUN_BWRAP_ROOTFS_MODE";
 const BWRAP_RUNTIME_HOME_ENV: &str = "FIRMA_RUN_BWRAP_RUNTIME_HOME";
@@ -215,14 +216,22 @@ impl BwrapMountPlan {
                         handle.runtime_dir.display()
                     ),
                 })?;
+        // Derived from the runtime layout rather than the launch environment:
+        // an operator-supplied `SSL_CERT_FILE` could otherwise aim the CA bind
+        // at a signing key elsewhere in the control-plane runtime.
+        let run_entry = runtime_layout.run_entry_layout(&handle.identity.sandbox_id);
+        let runtime_paths = PlanRuntimePaths {
+            control_plane: &control_plane_runtime,
+            sandbox: &sandbox_runtime,
+            run_entry: &run_entry,
+        };
         let mounts = validate_mounts(handle, &control_plane_runtime, &sandbox_runtime)?;
         let mut plan = Self::empty();
         append_filesystem_layout(
             &mut plan,
             handle,
             &mounts,
-            &control_plane_runtime,
-            &sandbox_runtime,
+            &runtime_paths,
             launch,
             hardening,
         )?;
@@ -373,8 +382,7 @@ fn append_filesystem_layout(
     plan: &mut BwrapMountPlan,
     handle: &SandboxHandle,
     mounts: &[ValidatedMount],
-    control_plane_runtime: &Path,
-    sandbox_runtime: &Path,
+    runtime_paths: &PlanRuntimePaths<'_>,
     launch: &LaunchSpec,
     hardening: &BwrapHardening,
 ) -> Result<(), RunError> {
@@ -417,8 +425,25 @@ fn append_filesystem_layout(
         .collect::<Vec<_>>();
     project_mount_aliases(&mut plan.config_seals, &overlay_specs, masked);
 
-    mask_control_plane_runtime(plan, mounts, control_plane_runtime, sandbox_runtime, launch)?;
+    mask_control_plane_runtime(
+        plan,
+        mounts,
+        runtime_paths.control_plane,
+        runtime_paths.sandbox,
+        launch,
+    )?;
+    mount_ca_material(plan, runtime_paths.run_entry);
     Ok(())
+}
+
+/// Host paths that anchor one sandbox filesystem plan.
+struct PlanRuntimePaths<'a> {
+    /// Canonical control-plane runtime root (`FIRMA_STATE_DIR`).
+    control_plane: &'a Path,
+    /// Canonical private runtime for the sandbox being planned.
+    sandbox: &'a Path,
+    /// Layout of this run's entry inside the control-plane runtime.
+    run_entry: &'a RunEntryLayout,
 }
 
 /// Hide host-side Firma runtime state from the wrapped process tree.
@@ -427,7 +452,9 @@ fn append_filesystem_layout(
 /// runtime root contains per-run Sidecar and Authority sockets, configuration,
 /// metadata, signing keys, and capability seeds, none of which the wrapped
 /// process needs. The sandbox-local bwrap runtime remains available separately
-/// because the proxy bridge and egress guard require its sockets.
+/// because the proxy bridge and egress guard require its sockets, and
+/// [`mount_ca_material`] mounts the Sidecar's public CA material back over
+/// this mask.
 fn mask_control_plane_runtime(
     plan: &mut BwrapMountPlan,
     mounts: &[ValidatedMount],
@@ -471,6 +498,37 @@ fn mask_control_plane_runtime(
         );
     }
     Ok(())
+}
+
+/// Mount the Sidecar's public CA material through the control-plane mask.
+///
+/// [`mask_control_plane_runtime`] tmpfs-masks the whole control-plane runtime,
+/// but the launch environment points `SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
+/// `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `GIT_SSL_CAINFO` at CA
+/// files inside it. Without this restoration the wrapped process opens an
+/// unreadable trust store, silently falls back to the system roots, and every
+/// MITM-intercepted handshake fails with `certificate signed by unknown
+/// authority`.
+///
+/// Each file is bound individually and read-only. Binding
+/// [`RunEntryLayout::ca_dir`] as a directory would also expose
+/// [`RunEntryLayout::ca_key`] and let the wrapped process mint certificates
+/// trusted by anything configured to trust the Sidecar CA.
+///
+/// Missing files are skipped: with HTTPS MITM disabled no CA is generated, and
+/// the bundle exists only under `ca_trust_mode = "append_system_roots"`.
+fn mount_ca_material(plan: &mut BwrapMountPlan, run_entry: &RunEntryLayout) {
+    for source in [run_entry.ca_cert(), run_entry.ca_bundle()] {
+        if !source.is_file() {
+            continue;
+        }
+        plan.sandbox_runtime.bind(
+            BwrapPlanRole::SandboxInfrastructure,
+            source.clone(),
+            source,
+            BwrapBindMode::ReadOnly,
+        );
+    }
 }
 
 /// Resolves every prepared mount to the exact host source that will be emitted
