@@ -1502,15 +1502,7 @@ mod tests {
     use crate::identity::RunIdentity;
     use sha2::{Digest as _, Sha256};
 
-    use super::{
-        BrokerBridgeKind, GuestPtyRequest, GuestTerminalSelection, SecretShimSupport, ShimTarget,
-        TerminalSize, TerminalSnapshot, VZ_GUEST_BROKER_VSOCK_PORT,
-        VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT, VZ_GUEST_COMMAND_PTY_VSOCK_PORT,
-        VzGuestLaunchContract, VzGuestLaunchInputs, VzGuestLayout, VzGuestRunContext,
-        VzGuestTerminalContract, VzStructuralMode, build_sandbox_profile,
-        isolated_guest_shim_support, loopback_port_from, validate_guest_manifest,
-        vz_structural_mode_from_flags, write_vz_guest_launch_contract,
-    };
+    use super::*;
 
     const SHARED_V2_CONTRACT_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/vz-guest-launch-v2.json");
