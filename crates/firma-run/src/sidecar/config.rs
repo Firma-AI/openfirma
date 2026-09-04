@@ -1,10 +1,10 @@
 //! Synthesize a sidecar TOML for an autostarted per-run sidecar.
 //!
 //! Strategy: inherit the operator-supplied sidecar template verbatim, then
-//! normalize to the unified sectioned schema and override
-//! `[sidecar.interceptor]` to bind a Unix-domain socket inside
-//! the per-sandbox marker directory. When no template is available, write a
-//! minimal config (UDS interceptor only — no authority, no policy bundle).
+//! override `[sidecar.interceptor]` to bind a Unix-domain socket inside the
+//! per-sandbox marker directory. Operator templates must use the unified
+//! sectioned schema. When no template is available, write a minimal config
+//! (UDS interceptor only — no authority, no policy bundle).
 //!
 //! The synthesized file is written next to the socket so `firma sidecar
 //! status` (FIR-103) can reconstruct context.
@@ -295,7 +295,7 @@ const VSCODE_GITHUB_MITM_BYPASS_HOSTS: &[&str] =
 
 /// Inputs for [`synthesize`].
 #[doc(hidden)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SynthesizeRequest<'a> {
     /// Authority-registered agent identity.
     pub agent_id: &'a AgentId,
@@ -303,10 +303,8 @@ pub struct SynthesizeRequest<'a> {
     pub execution_profile: AgentProfile,
     /// Effective run session id.
     pub session_id: &'a str,
-    /// Highest-priority template path (typically `--sidecar-config`).
-    pub explicit_template: Option<&'a Path>,
-    /// Fallback template path from the current working directory.
-    pub cwd_template: Option<PathBuf>,
+    /// Template selected and validated before any local-component side effects.
+    pub template: ResolvedTemplate,
     /// UDS path the spawned sidecar must bind.
     pub socket_path: &'a Path,
     /// Optional TCP listen address for autostart proxy mode.
@@ -361,9 +359,24 @@ pub struct SynthesizeRequest<'a> {
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateSource {
+    /// The resolved unified `firma.toml` (`--config` / `FIRMA_CONFIG` /
+    /// discovery) was selected as the template.
     Explicit(PathBuf),
-    Cwd(PathBuf),
+    /// No template file was available; a minimal `[sidecar]` document is
+    /// synthesized.
     Minimal,
+}
+
+/// One selected, schema-validated template snapshot.
+///
+/// Fields remain private so only [`resolve_template_sources`] can establish
+/// that the TOML transformed during synthesis is the TOML that was validated.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct ResolvedTemplate {
+    source: TemplateSource,
+    value: toml::Value,
+    template_dir: Option<PathBuf>,
 }
 
 /// Synthesize the sidecar TOML at `req.out_path`. Returns which template
@@ -374,20 +387,12 @@ pub enum TemplateSource {
 /// Returns I/O, parse, or serialization errors. All variants are wrapped in
 /// [`RunError`] so that callers can fail-closed through the existing path.
 #[doc(hidden)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "request struct carries owned PathBufs the function selects between; cloning to keep callers free of borrow plumbing is the simpler API"
-)]
 pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError> {
-    let source = select_template(&req);
-    let (mut value, template_dir) = match &source {
-        TemplateSource::Explicit(path) | TemplateSource::Cwd(path) => {
-            let abs = std::path::absolute(path).unwrap_or_else(|_| path.clone());
-            (parse_template(path)?, abs.parent().map(Path::to_path_buf))
-        }
-        TemplateSource::Minimal => (toml::Value::Table(toml::value::Table::new()), None),
-    };
-    normalize_to_sectioned_sidecar(&mut value)?;
+    let ResolvedTemplate {
+        source,
+        mut value,
+        template_dir,
+    } = req.template;
     // Per FIR-183: relative resource paths in the operator's template are
     // anchored on the template's `config_dir`. The synthesized file is
     // written into a per-run marker directory, so without this rebase
@@ -493,27 +498,64 @@ fn override_authority_agent_id(
     Ok(())
 }
 
-fn select_template(req: &SynthesizeRequest<'_>) -> TemplateSource {
-    if let Some(path) = req.explicit_template
-        && path.is_file()
-    {
-        return TemplateSource::Explicit(path.to_path_buf());
-    }
-    if let Some(path) = req.cwd_template.as_deref()
-        && path.is_file()
-    {
-        return TemplateSource::Cwd(path.to_path_buf());
-    }
-    TemplateSource::Minimal
-}
-
 fn parse_template(path: &Path) -> Result<toml::Value, RunError> {
-    let text = std::fs::read_to_string(path).map_err(|error| {
-        RunError::Internal(format!("read sidecar template {}: {error}", path.display()))
+    let text = std::fs::read_to_string(path).map_err(|error| RunError::ConfigParse {
+        path: path.to_path_buf(),
+        reason: format!("failed to read Sidecar template: {error}"),
     })?;
+    let config = firma_config_loader::FirmaConfig::parse(path, &text).map_err(|error| {
+        RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: format!("{error:#}"),
+        }
+    })?;
+    let _: firma_config_schema::sidecar::SidecarConfig =
+        config
+            .section("sidecar")
+            .map_err(|error| RunError::ConfigParse {
+                path: path.to_path_buf(),
+                reason: format!("{error:#}"),
+            })?;
     toml::from_str(&text).map_err(|error| RunError::ConfigParse {
         path: path.to_path_buf(),
         reason: error.to_string(),
+    })
+}
+
+/// Select and validate one template snapshot without writing runtime artifacts.
+///
+/// `template_path` is the resolved unified `firma.toml` when one exists on
+/// disk; otherwise a minimal `[sidecar]` document is synthesized.
+///
+/// # Errors
+///
+/// Returns a path-bearing configuration error when the selected template is
+/// unreadable or does not match the unified Sidecar schema.
+#[doc(hidden)]
+pub fn resolve_template_sources(
+    template_path: Option<&Path>,
+) -> Result<ResolvedTemplate, RunError> {
+    let source = template_path.map_or(TemplateSource::Minimal, |path| {
+        TemplateSource::Explicit(path.to_path_buf())
+    });
+    let (value, template_dir) = match &source {
+        TemplateSource::Explicit(path) => {
+            let abs = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+            (parse_template(path)?, abs.parent().map(Path::to_path_buf))
+        }
+        TemplateSource::Minimal => {
+            let mut root = toml::value::Table::new();
+            root.insert(
+                "sidecar".to_string(),
+                toml::Value::Table(toml::value::Table::new()),
+            );
+            (toml::Value::Table(root), None)
+        }
+    };
+    Ok(ResolvedTemplate {
+        source,
+        value,
+        template_dir,
     })
 }
 
@@ -727,23 +769,6 @@ fn override_http_secret_providers(
     );
     Ok(())
 }
-
-fn normalize_to_sectioned_sidecar(value: &mut toml::Value) -> Result<(), RunError> {
-    let root = value
-        .as_table_mut()
-        .ok_or_else(|| RunError::Internal("sidecar template root is not a table".into()))?;
-
-    if root.contains_key("sidecar") {
-        return Ok(());
-    }
-
-    let legacy_flat = std::mem::take(root);
-    let mut new_root = toml::value::Table::new();
-    new_root.insert("sidecar".to_string(), toml::Value::Table(legacy_flat));
-    *root = new_root;
-    Ok(())
-}
-
 /// Resource fields that, per `docs/configuration.md`, resolve under the
 /// owning config file's directory. Each tuple is `(table, key)` rooted
 /// at the `[sidecar]` table.
@@ -1119,20 +1144,26 @@ fn write_atomic(out: &Path, value: &toml::Value) -> Result<(), RunError> {
 
 #[doc(hidden)]
 pub mod testing {
-    pub use super::{SynthesizeRequest, TemplateSource, synthesize};
+    pub use super::{
+        ResolvedTemplate, SynthesizeRequest, TemplateSource, resolve_template_sources, synthesize,
+    };
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        SynthesizeRequest, TemplateSource, configure_capability_seed,
-        normalize_to_sectioned_sidecar, synthesize,
+        SynthesizeRequest, TemplateSource, configure_capability_seed, resolve_template_sources,
+        synthesize,
     };
 
     #[test]
     fn capability_seed_path_is_injected_and_no_preflight() {
-        let mut value = toml::Value::Table(toml::value::Table::new());
-        normalize_to_sectioned_sidecar(&mut value).unwrap();
+        let mut root = toml::value::Table::new();
+        root.insert(
+            "sidecar".to_string(),
+            toml::Value::Table(toml::value::Table::new()),
+        );
+        let mut value = toml::Value::Table(root);
         let seed = std::path::PathBuf::from("/run/firma/capabilities/sb.toml");
         configure_capability_seed(&mut value, Some(seed.as_path())).unwrap();
         let sidecar = value.get("sidecar").unwrap().as_table().unwrap();
@@ -1157,8 +1188,7 @@ mod tests {
             agent_id: &crate::identity::test_agent_id(),
             execution_profile: firma_config_loader::AgentProfile::Vscode,
             session_id: "sess_001",
-            explicit_template: None,
-            cwd_template: None,
+            template: resolve_template_sources(None).unwrap(),
             socket_path: &tmp.path().join("sidecar.sock"),
             listen_addr: Some(
                 "127.0.0.1:18080"

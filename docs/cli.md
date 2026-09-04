@@ -440,9 +440,13 @@ When autostart fires, `firma run`:
 1. Resolves the per-sandbox marker directory under
    `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux), `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback), or `%LOCALAPPDATA%\firma\runtime\run\<sandbox_id>\` (Windows; see platform caveat below).
 2. Synthesizes a sidecar TOML by inheriting the operator template
-   (`--sidecar-config` → `./firma_sidecar.toml` → minimal) and overriding the
-   `[sidecar.interceptor]` section to
-   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`. Relative
+   (the resolved unified `firma.toml` from `--config` / `FIRMA_CONFIG` /
+   discovery, else a minimal config) and overriding the
+   `[sidecar.interceptor]` section to bind a Unix-domain socket at
+   `<marker_dir>/sidecar.sock`. The selected
+   template must be one unified, sectioned `firma.toml` containing a
+   `[sidecar]` section. Invalid templates fail before local components start or
+   run-marker artifacts are created. Relative
    resource paths in the inherited template (e.g. `sidecar.audit.signing_key_path`,
    `sidecar.policy.dir`, `sidecar.mapping.rules_path`, `sidecar.authority.public_key_path`) are
    rebased to absolute paths anchored on the **template's** config
@@ -469,7 +473,6 @@ inputs for recovery. Set `FIRMA_RUN_KEEP_MARKERS` to retain them deliberately.
 | -------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--sidecar <local\|url>`               | —       | `local` autostarts a per-run sidecar. A `tcp://host:port` / `unix:///path` value targets an external sidecar and never autostarts. Omitted: persisted `sidecar_endpoint` (external) else local autostart. |
 | `--no-autostart`                       | off     | Fail with a typed error instead of autostarting any missing component. CI safety net. Incompatible with `--sidecar local` and `--authority local`.                                                        |
-| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Falls back to `./firma_sidecar.toml`, then a synthesized minimal config.                                                                                             |
 | `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for startup publication. `0` reverts to the built-in default.                                                                                                                                |
 
 ### Typed errors

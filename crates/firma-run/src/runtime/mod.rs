@@ -52,8 +52,6 @@ pub struct RunInput {
     /// When set, never autostart — fail with a typed error if the
     /// configured endpoint is unreachable. CI / production safety net.
     pub no_autostart: bool,
-    /// Optional explicit template path for the autostarted sidecar config.
-    pub sidecar_template_path: Option<PathBuf>,
     /// Seconds to wait for the autostarted sidecar's `ready` line.
     pub sidecar_startup_timeout_secs: u64,
     /// Wrapped command and args.
@@ -192,10 +190,10 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             );
         }
 
-        let sidecar_template_path = resolve_sidecar_template_path(
-            args.sidecar_template_path.as_deref(),
-            user_config_path.as_deref(),
-        );
+        // The autostarted Sidecar inherits its template from the resolved
+        // unified `firma.toml` when it exists on disk; a missing file falls
+        // through to the minimal tier during synthesis.
+        let sidecar_template_path = resolve_sidecar_template_path(user_config_path.as_deref());
         let mut flags = AutostartFlags {
             sidecar_autostart: matches!(
                 profile.sidecar_selection,
@@ -363,15 +361,14 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     combine_run_and_teardown_results(run_result, teardown_result)
 }
 
-fn resolve_sidecar_template_path(
-    sidecar_template_path: Option<&Path>,
-    user_config_path: Option<&Path>,
-) -> Option<PathBuf> {
-    sidecar_template_path.map(Path::to_path_buf).or_else(|| {
-        user_config_path
-            .filter(|p| p.is_file())
-            .map(Path::to_path_buf)
-    })
+/// Select the autostarted Sidecar's config template.
+///
+/// The template is the resolved unified `firma.toml` when it exists on disk;
+/// a missing file yields `None`, deferring to minimal synthesis.
+fn resolve_sidecar_template_path(user_config_path: Option<&Path>) -> Option<PathBuf> {
+    user_config_path
+        .filter(|p| p.is_file())
+        .map(Path::to_path_buf)
 }
 
 fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
@@ -1317,7 +1314,6 @@ mod tests {
             preserve_host_user: false,
             print_effective_config: false,
             no_autostart: false,
-            sidecar_template_path: None,
             sidecar_startup_timeout_secs: 10,
             command: vec!["echo".to_string(), "ok".to_string()],
             authority_cli: crate::authority::AuthorityCli::Unset,
@@ -1728,25 +1724,28 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sidecar_template_prefers_explicit_sidecar_config() {
-        let resolved = super::resolve_sidecar_template_path(
-            Some(PathBuf::from("/tmp/from-sidecar-config.toml").as_path()),
-            Some(PathBuf::from("/tmp/user.toml").as_path()),
-        );
-        assert_eq!(
-            resolved,
-            Some(PathBuf::from("/tmp/from-sidecar-config.toml"))
-        );
-    }
-
-    #[test]
-    fn resolve_sidecar_template_falls_back_to_user_config_when_present() {
+    fn resolve_sidecar_template_uses_user_config_when_present() {
         let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let user_cfg = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&user_cfg, "[sidecar]\n").unwrap_or_else(|e| panic!("{e}"));
 
-        let resolved = super::resolve_sidecar_template_path(None, Some(user_cfg.as_path()));
+        let resolved = super::resolve_sidecar_template_path(Some(user_cfg.as_path()));
         assert_eq!(resolved, Some(user_cfg));
+    }
+
+    #[test]
+    fn resolve_sidecar_template_is_none_without_config() {
+        assert_eq!(super::resolve_sidecar_template_path(None), None);
+    }
+
+    #[test]
+    fn resolve_sidecar_template_is_none_when_config_missing() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let missing = tmp.path().join(CONFIG_FILE_NAME);
+        assert_eq!(
+            super::resolve_sidecar_template_path(Some(missing.as_path())),
+            None
+        );
     }
 
     #[test]
@@ -1838,7 +1837,6 @@ mod tests {
             preserve_host_user: false,
             print_effective_config: false,
             no_autostart: false,
-            sidecar_template_path: None,
             sidecar_startup_timeout_secs: 10,
             command: vec!["echo".to_string(), "ok".to_string()],
             authority_cli: crate::authority::AuthorityCli::Unset,

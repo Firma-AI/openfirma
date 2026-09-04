@@ -326,6 +326,52 @@ fn clean_startup_failure_removes_enclosing_run_marker() {
 
 #[cfg(unix)]
 #[test]
+fn invalid_sidecar_template_fails_before_component_orchestration() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(dir.path().join("runtime"));
+    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
+    let marker = runtime_layout
+        .run_entry_layout(&identity.sandbox_id)
+        .into_root();
+    let template = dir.path().join("flat-sidecar.toml");
+    std::fs::write(&template, "[interceptor]\nmode = \"http_proxy\"\n")
+        .expect("write flat Sidecar template");
+    let handle = sandbox_handle(&identity, dir.path());
+    let flags = AutostartFlags {
+        template_path: Some(template.clone()),
+        ..autostart_flags(None)
+    };
+
+    let error = prepare_network_runtime(
+        &runtime_layout,
+        &handle,
+        &enforcement_proof(),
+        &SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:1".parse().expect("sidecar address"),
+        },
+        &identity,
+        &flags,
+        authority(None),
+        &capability(CapabilitySource::Disabled, None),
+    )
+    .err()
+    .expect("flat Sidecar template must fail");
+
+    match error {
+        RunError::ConfigParse { path, reason } => {
+            assert_eq!(path, template);
+            assert!(reason.contains("unknown top-level key `interceptor`"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    assert!(
+        !marker.exists(),
+        "template rejection must precede all run-component artifacts"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
     let status = capability_file_synthesis_fixture()
         .env("FIRMA_RUN_KEEP_MARKERS", "")

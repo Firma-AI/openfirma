@@ -25,7 +25,7 @@ removes the duplicated per-command declarations.
 
 The same env name also fed a **second, unrelated** input: `firma run`'s
 autostart read `FIRMA_SIDECAR_CONFIG_FILE` (`crates/firma-run/src/routing.rs`,
-consumed by `select_template` in `crates/firma-run/src/sidecar/config.rs`) as
+consumed by template selection in `crates/firma-run/src/sidecar/config.rs`) as
 one fallback source for the **sidecar TOML template** used to synthesize the
 per-run sidecar — not the unified `firma.toml`. So setting it to select a
 `firma sidecar` config would also, silently, alter `firma run`'s autostart
@@ -51,6 +51,10 @@ template. Retiring the env removes that cross-talk.
   field on `SynthesizeRequest` / `PrepareRequest`, and the `TemplateSource::Env`
   variant). Template selection becomes `--sidecar-config` → `./firma_sidecar.toml`
   → synthesized minimal; no template feature is lost.
+
+  > **Superseded:** a later change removed `--sidecar-config` and the
+  > `./firma_sidecar.toml` tier. Template selection is now the resolved unified
+  > `firma.toml` (when present on disk) → synthesized minimal.
 
 The path — not a pre-resolved config — is threaded, because consumers apply
 different resolution policies: `doctor` reports resolution as a check instead of
@@ -80,6 +84,10 @@ by commands that do not consume the unified config, such as `token`, `policy`,
   - to select the unified `firma.toml`, export `FIRMA_CONFIG` (same file);
   - to supply a `firma run` autostart sidecar template previously passed via the
     env var, use `--sidecar-config <path>` or `./firma_sidecar.toml`.
+
+    > **Superseded:** `--sidecar-config` and the `./firma_sidecar.toml` tier
+    > were later removed; the autostart template is now taken from the resolved
+    > unified `firma.toml`.
 - Docs updated in the same change: `docs/cli.md`, `crates/firma/README.md`,
   `examples/firma-run/README.md`, the `docs-site` guides (`manage-the-stack.md`,
   `firma-run.md`), and the plan cross-reference in `docs/configuration.md` /

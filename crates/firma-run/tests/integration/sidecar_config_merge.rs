@@ -12,12 +12,14 @@
 )]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use firma_config_loader::{AgentProfile, CONFIG_FILE_NAME};
 use firma_core::SecretNameSource;
 use firma_http::{Authority, Method};
-use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
+use firma_run::sidecar::config::testing::{
+    SynthesizeRequest, TemplateSource, resolve_template_sources, synthesize,
+};
 use firma_secret_provider::MatcherRule;
 use firma_secret_provider::spec::http::{HttpIntegrationSpec, PathAndMatcher};
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
@@ -53,8 +55,7 @@ fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
         agent_id: super::helper::agent_id(),
         execution_profile: AgentProfile::Generic,
         session_id: "sess",
-        explicit_template: None,
-        cwd_template: None,
+        template: resolve_template_sources(None).expect("resolve Sidecar template"),
         socket_path: sock,
         listen_addr: None,
         out_path: out,
@@ -105,7 +106,7 @@ fn explicit_audit_sink_is_not_overridden_by_fallback() {
     fs::write(
         &template,
         r#"
-[audit]
+[sidecar.audit]
 sink = "stdout"
 "#,
     )
@@ -114,7 +115,7 @@ sink = "stdout"
     let sock = tmp.path().join("sidecar.sock");
     let audit = tmp.path().join("audit.jsonl");
     synthesize(SynthesizeRequest {
-        explicit_template: Some(&template),
+        template: resolve_template_sources(Some(&template)).expect("resolve Sidecar template"),
         audit_fallback_path: Some(&audit),
         ..req(&sock, &out)
     })
@@ -201,7 +202,7 @@ fn effective_capability_key_is_written_to_sidecar_authority_config() {
     let sock = tmp.path().join("sidecar.sock");
 
     synthesize(SynthesizeRequest {
-        explicit_template: Some(&template),
+        template: resolve_template_sources(Some(&template)).expect("resolve Sidecar template"),
         authority_pub_key: Some(&effective_key),
         ..req(&sock, &out)
     })
@@ -220,23 +221,23 @@ fn effective_capability_key_is_written_to_sidecar_authority_config() {
 }
 
 #[test]
-fn explicit_template_overrides_interceptor_section_only() {
+fn sectioned_explicit_template_overrides_interceptor_section_only() {
     let tmp = TempDir::new().expect("tmp");
     let template = tmp.path().join("template.toml");
     fs::write(
         &template,
         r#"
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 enabled = false
 
-[mapping]
+[sidecar.mapping]
 rules_path = "/etc/firma/mapping.toml"
 
-[capability_seed]
+[sidecar.capability_seed]
 paths = ["/etc/firma/cap.toml"]
 "#,
     )
@@ -245,7 +246,7 @@ paths = ["/etc/firma/cap.toml"]
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
     let source = synthesize(SynthesizeRequest {
-        explicit_template: Some(&template),
+        template: resolve_template_sources(Some(&template)).expect("resolve Sidecar template"),
         ..req(&sock, &out)
     })
     .expect("synthesize");
@@ -299,32 +300,107 @@ paths = ["/etc/firma/cap.toml"]
 }
 
 #[test]
-fn priority_order_explicit_over_cwd() {
+fn resolved_firma_toml_is_selected_over_minimal() {
     let tmp = TempDir::new().expect("tmp");
 
-    let explicit = tmp.path().join("explicit.toml");
-    let cwd = tmp.path().join("cwd.toml");
-    for path in [&explicit, &cwd] {
-        fs::write(path, "[interceptor]\nmode = \"http_proxy\"\n").expect("write");
-    }
+    let template = tmp.path().join("firma.toml");
+    fs::write(&template, "[sidecar.interceptor]\nmode = \"http_proxy\"\n").expect("write");
 
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
 
     let source = synthesize(SynthesizeRequest {
-        explicit_template: Some(&explicit),
-        cwd_template: Some(cwd.clone()),
+        template: resolve_template_sources(Some(&template)).expect("resolve Sidecar template"),
         ..req(&sock, &out)
     })
     .expect("synthesize");
-    assert_eq!(source, TemplateSource::Explicit(explicit));
+    assert_eq!(source, TemplateSource::Explicit(template));
 
     let source = synthesize(SynthesizeRequest {
-        cwd_template: Some(cwd.clone()),
+        template: resolve_template_sources(None).expect("resolve Sidecar template"),
         ..req(&sock, &out)
     })
     .expect("synthesize");
-    assert_eq!(source, TemplateSource::Cwd(cwd));
+    assert_eq!(source, TemplateSource::Minimal);
+}
+
+#[test]
+fn flat_template_fails_without_writing() {
+    let tmp = TempDir::new().expect("tmp");
+    let template_path = tmp.path().join("template.toml");
+    fs::write(&template_path, "[interceptor]\nmode = \"http_proxy\"\n")
+        .expect("write flat template");
+    let output_dir = tmp.path().join("output");
+    let out = output_dir.join("sidecar.toml");
+    let sock = output_dir.join("sidecar.sock");
+
+    let error =
+        resolve_template_sources(Some(&template_path)).expect_err("flat template must fail");
+    match error {
+        firma_run::error::RunError::ConfigParse { path, reason } => {
+            assert_eq!(path, template_path);
+            assert!(
+                reason.contains("unknown top-level key `interceptor`"),
+                "{reason}"
+            );
+        }
+        other => panic!("unexpected error {other}"),
+    }
+    assert!(
+        !output_dir.exists(),
+        "template resolution wrote output artifacts"
+    );
+    assert!(!out.exists());
+    assert!(!sock.exists());
+}
+
+#[test]
+fn sectioned_template_with_superseded_field_fails_without_writing() {
+    let tmp = TempDir::new().expect("tmp");
+    let template_path = tmp.path().join("template.toml");
+    fs::write(
+        &template_path,
+        "[sidecar.interceptor]\ndrain_timeout_secs = 30\n",
+    )
+    .expect("write invalid sectioned template");
+    let output_dir = tmp.path().join("output");
+
+    let error =
+        resolve_template_sources(Some(&template_path)).expect_err("superseded field must fail");
+    match error {
+        firma_run::error::RunError::ConfigParse { path, reason } => {
+            assert_eq!(path, template_path);
+            assert!(
+                reason.contains("unknown field `drain_timeout_secs`"),
+                "{reason}"
+            );
+        }
+        other => panic!("unexpected error {other}"),
+    }
+    assert!(!output_dir.exists(), "template resolution wrote artifacts");
+}
+
+#[test]
+fn template_without_sidecar_section_fails_without_writing() {
+    let tmp = TempDir::new().expect("tmp");
+    let template_path = tmp.path().join("template.toml");
+    fs::write(&template_path, "[run]\nprofile = \"generic\"\n")
+        .expect("write template without Sidecar section");
+    let output_dir = tmp.path().join("output");
+
+    let error = resolve_template_sources(Some(&template_path))
+        .expect_err("missing Sidecar section must fail");
+    match error {
+        firma_run::error::RunError::ConfigParse { path, reason } => {
+            assert_eq!(path, template_path);
+            assert!(
+                reason.contains("missing required `[sidecar]` section"),
+                "{reason}"
+            );
+        }
+        other => panic!("unexpected error {other}"),
+    }
+    assert!(!output_dir.exists(), "template resolution wrote artifacts");
 }
 
 #[test]
@@ -382,7 +458,7 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
     let sock = marker.join("sidecar.sock");
 
     synthesize(SynthesizeRequest {
-        explicit_template: Some(&template),
+        template: resolve_template_sources(Some(&template)).expect("resolve Sidecar template"),
         ..req(&sock, &out)
     })
     .expect("synthesize");
@@ -490,18 +566,18 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
 }
 
 #[test]
-fn nonexistent_template_paths_fall_through_to_minimal() {
+fn nonexistent_template_fails() {
     let tmp = TempDir::new().expect("tmp");
-    let out = tmp.path().join("sidecar.toml");
-    let sock = tmp.path().join("sidecar.sock");
-    let explicit = PathBuf::from("/does/not/exist/explicit.toml");
-    let source = synthesize(SynthesizeRequest {
-        explicit_template: Some(&explicit),
-        cwd_template: Some(PathBuf::from("/does/not/exist/cwd.toml")),
-        ..req(&sock, &out)
-    })
-    .expect("synthesize");
-    assert_eq!(source, TemplateSource::Minimal);
+    let missing = tmp.path().join("missing.toml");
+
+    let error = resolve_template_sources(Some(&missing)).expect_err("missing template must fail");
+    match error {
+        firma_run::error::RunError::ConfigParse { path, reason } => {
+            assert_eq!(path, missing);
+            assert!(reason.starts_with("failed to read Sidecar template:"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
 }
 
 #[test]

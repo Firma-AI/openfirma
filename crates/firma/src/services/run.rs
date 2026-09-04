@@ -77,7 +77,6 @@ pub fn run(
         print_effective_config: args.print_effective_config,
         sidecar_cli,
         no_autostart: args.no_autostart,
-        sidecar_template_path: args.sidecar_config,
         sidecar_startup_timeout_secs: args.sidecar_startup_timeout_secs,
         command: args.command,
         authority_cli,

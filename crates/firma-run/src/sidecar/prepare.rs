@@ -1,7 +1,7 @@
 //! Filesystem and process preparation for a local Sidecar launch.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use firma_config_loader::AgentProfile;
@@ -63,8 +63,7 @@ pub struct PrepareRequest<'a> {
     pub execution_profile: AgentProfile,
     pub session_id: &'a str,
     pub marker_dir: PathBuf,
-    pub template_path: Option<&'a Path>,
-    pub cwd_template: Option<PathBuf>,
+    pub template: crate::sidecar::config::ResolvedTemplate,
     pub firma_exe: PathBuf,
     pub authority_url: Option<&'a str>,
     pub authority_ca_cert: Option<PathBuf>,
@@ -111,8 +110,7 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         agent_id: req.agent_id,
         execution_profile: req.execution_profile,
         session_id: req.session_id,
-        explicit_template: req.template_path,
-        cwd_template: req.cwd_template,
+        template: req.template,
         socket_path: &socket_path,
         listen_addr,
         out_path: &config_path,
