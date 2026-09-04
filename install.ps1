@@ -227,6 +227,23 @@ function Install-FirmaBinary ($TmpDir) {
     Invoke-Step "Move-Item $binarySrc -> $dest" {
         Move-Item -Force -Path $binarySrc -Destination $dest
     }
+
+    # Copy private shim artifacts into libexec if present in the archive.
+    # These are not user-facing commands and must not appear on PATH.
+    if (-not $DryRun) {
+        $shimSrc = (Get-ChildItem -Path $extractDir -Filter 'firma-secret-shim.exe' -Recurse | Select-Object -First 1).FullName
+        if ($shimSrc) {
+            $libexecDir = Join-Path $InstallDir 'libexec\openfirma\secret-shims'
+            Invoke-Step "New-Item -Path $libexecDir" {
+                New-Item -ItemType Directory -Path $libexecDir -Force | Out-Null
+            }
+            $shimDest = Join-Path $libexecDir 'firma-secret-shim.exe'
+            Invoke-Step "Move-Item $shimSrc -> $shimDest" {
+                Move-Item -Force -Path $shimSrc -Destination $shimDest
+            }
+        }
+    }
+
     Write-Info "installed: $dest"
 }
 

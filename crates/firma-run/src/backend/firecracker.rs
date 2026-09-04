@@ -2,6 +2,7 @@ use std::process::Child;
 
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
+    SecretShimSupport, SecretShimUnsupportedReason,
 };
 use crate::config::NetworkPolicy;
 use crate::error::RunError;
@@ -56,6 +57,7 @@ impl SandboxBackend for FirecrackerBackend {
         _runtime_layout: &firma_runtime_state::RuntimeLayout,
         _handle: &SandboxHandle,
         _launch: &LaunchSpec,
+        _shim_support: &SecretShimSupport,
     ) -> Result<Child, RunError> {
         Err(RunError::UnsupportedBackend {
             backend: BackendKind::Firecracker.to_string(),
@@ -65,5 +67,11 @@ impl SandboxBackend for FirecrackerBackend {
 
     fn teardown(&self, _handle: SandboxHandle) -> Result<(), RunError> {
         Ok(())
+    }
+
+    fn secret_shim_support(&self) -> SecretShimSupport {
+        SecretShimSupport::Unsupported {
+            reason: SecretShimUnsupportedReason::NotYetImplemented,
+        }
     }
 }

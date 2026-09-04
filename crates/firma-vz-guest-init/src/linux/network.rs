@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::thread;
+use std::time::{Duration, Instant};
 
-use super::contract::Contract;
+use serde::Deserialize;
+
+use super::contract::{BROKER_READINESS_BINARY, Contract};
 use super::error::{InitError, InitResult};
 use super::log;
 use super::mount::create_dir;
@@ -19,6 +22,9 @@ const DNS_REFUSED_RCODE: u8 = 5;
 const IFNAMSIZ: usize = 16;
 const NO_PROXY_ENV_KEYS: [&str; 2] = ["NO_PROXY", "no_proxy"];
 const NO_PROXY_VALUE: &str = "127.0.0.1,localhost,::1";
+const BROKER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const BROKER_PROBE_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+const BROKER_PROBE_RESPONSE_LIMIT: u64 = 64 * 1024;
 const PROXY_ENV_KEYS: [&str; 6] = [
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -33,6 +39,7 @@ const PROXY_ENV_KEYS: [&str; 6] = [
 pub struct NetworkServicesPlan {
     proxy: ProxyPlan,
     dns: DnsPlan,
+    broker: Option<BrokerProxyPlan>,
     env: CommandNetworkEnv,
 }
 
@@ -57,9 +64,18 @@ impl TryFrom<&Contract> for NetworkServicesPlan {
         let dns = DnsPlan {
             guest_dns_stub_addr: network.guest_dns_stub_addr(),
         };
+        let broker = contract.secret_shims().map(|shims| BrokerProxyPlan {
+            guest_broker_addr: shims.guest_broker_addr(),
+            broker_vsock_port: shims.broker_vsock_port(),
+        });
         let env = CommandNetworkEnv::from_contract(contract);
 
-        Ok(Self { proxy, dns, env })
+        Ok(Self {
+            proxy,
+            dns,
+            broker,
+            env,
+        })
     }
 }
 
@@ -77,6 +93,13 @@ struct DnsPlan {
     guest_dns_stub_addr: SocketAddr,
 }
 
+/// Accepted guest broker proxy configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BrokerProxyPlan {
+    guest_broker_addr: SocketAddr,
+    broker_vsock_port: std::num::NonZeroU32,
+}
+
 /// Accepted command environment with guest-local network endpoints.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandNetworkEnv {
@@ -87,6 +110,17 @@ impl CommandNetworkEnv {
     /// Returns the accepted command environment map.
     pub fn as_map(&self) -> &BTreeMap<String, String> {
         &self.values
+    }
+
+    /// Prepends a directory to the PATH environment variable.
+    pub fn prepend_path(&mut self, dir: String) {
+        let current = self.values.get("PATH").cloned().unwrap_or_default();
+        let new_path = if current.is_empty() {
+            dir
+        } else {
+            format!("{dir}:{current}")
+        };
+        self.values.insert("PATH".to_string(), new_path);
     }
 
     /// Builds command environment from the accepted launch contract.
@@ -122,6 +156,12 @@ impl CommandNetworkEnv {
             values.insert(
                 "FIRMA_VSOCK_COMMAND_PTY_CONTROL_PORT".to_string(),
                 port.to_string(),
+            );
+        }
+        if let Some(shims) = contract.secret_shims() {
+            values.insert(
+                "FIRMA_BROKER_ADDR".to_string(),
+                format!("tcp://{}", shims.guest_broker_addr()),
             );
         }
 
@@ -163,24 +203,75 @@ impl Drop for GuestNetworkServices {
 struct GuestNetworkListeners {
     proxy: GuestProxyListener,
     dns: GuestDnsListeners,
+    broker: Option<GuestBrokerListener>,
 }
 
 impl GuestNetworkListeners {
     /// Binds every guest network socket before any service thread is spawned.
     fn bind(plan: &NetworkServicesPlan) -> InitResult<Self> {
         let proxy = GuestProxyListener::bind(&plan.proxy)?;
+        let broker = plan
+            .broker
+            .as_ref()
+            .map(GuestBrokerListener::bind)
+            .transpose()?;
         let dns = GuestDnsListeners::bind(&plan.dns)?;
 
-        Ok(Self { proxy, dns })
+        Ok(Self { proxy, dns, broker })
     }
 
     /// Starts all prepared guest network listeners.
     fn start(self) -> InitResult<GuestNetworkServices> {
-        let mut threads = Vec::with_capacity(self.dns.listener_count() + 1);
+        let mut threads = Vec::with_capacity(self.dns.listener_count() + 2);
         threads.push(start_guest_http_proxy(self.proxy)?);
+        if let Some(broker) = self.broker {
+            threads.push(broker.start()?);
+        }
         threads.extend(self.dns.start()?);
 
         Ok(GuestNetworkServices { threads })
+    }
+}
+
+/// Prepared guest broker TCP listener.
+struct GuestBrokerListener {
+    addr: SocketAddr,
+    listener: TcpListener,
+    broker_vsock_port: u32,
+}
+
+impl GuestBrokerListener {
+    /// Binds the guest broker endpoint before any command can start.
+    fn bind(plan: &BrokerProxyPlan) -> InitResult<Self> {
+        let addr = plan.guest_broker_addr;
+        let listener = TcpListener::bind(addr)
+            .map_err(|source| network_setup(format!("bind guest broker proxy {addr}: {source}")))?;
+
+        Ok(Self {
+            addr,
+            listener,
+            broker_vsock_port: plan.broker_vsock_port.get(),
+        })
+    }
+
+    /// Starts the broker accept loop after every local socket is bound.
+    fn start(self) -> InitResult<thread::JoinHandle<()>> {
+        let Self {
+            addr,
+            listener,
+            broker_vsock_port,
+        } = self;
+        let thread = thread::Builder::new()
+            .name("firma-guest-broker-proxy".to_string())
+            .spawn(move || guest_broker_proxy_loop(&listener, broker_vsock_port))
+            .map_err(|source| {
+                network_setup(format!("start guest broker proxy thread: {source}"))
+            })?;
+
+        log(&format!(
+            "guest broker proxy listening at {addr} forwarding to host VSOCK port {broker_vsock_port}"
+        ));
+        Ok(thread)
     }
 }
 
@@ -309,7 +400,12 @@ pub fn start_guest_network_services(
     let listeners = GuestNetworkListeners::bind(plan)?;
     write_resolv_conf(plan.dns.guest_dns_stub_addr)?;
 
-    listeners.start()
+    let services = listeners.start()?;
+    if let Some(broker) = &plan.broker {
+        probe_guest_broker(broker.guest_broker_addr)?;
+    }
+
+    Ok(services)
 }
 
 /// Brings up the guest loopback interface used by the local proxy and DNS stub.
@@ -376,6 +472,161 @@ fn start_guest_http_proxy(proxy: GuestProxyListener) -> InitResult<thread::JoinH
     log(MARKER_GUEST_PROXY_READY);
 
     Ok(thread)
+}
+
+/// Accepts shim clients and forwards their framed broker protocol unchanged.
+fn guest_broker_proxy_loop(listener: &TcpListener, broker_vsock_port: u32) {
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(stream) => {
+                let _ = thread::Builder::new()
+                    .name("firma-guest-broker-proxy-conn".to_string())
+                    .spawn(move || {
+                        if let Err(error) = handle_guest_broker_connection_with(
+                            stream,
+                            broker_vsock_port,
+                            connect_vsock_host,
+                        ) {
+                            log(&format!("guest broker proxy connection failed: {error}"));
+                        }
+                    });
+            }
+            Err(error) => log(&format!("guest broker proxy accept failed: {error}")),
+        }
+    }
+}
+
+/// Proxies one guest broker connection byte-for-byte through host VSOCK.
+fn handle_guest_broker_connection_with<F>(
+    client_stream: TcpStream,
+    broker_vsock_port: u32,
+    connect: F,
+) -> InitResult<()>
+where
+    F: FnOnce(u32) -> io::Result<File>,
+{
+    client_stream
+        .set_nodelay(true)
+        .map_err(|source| network_setup(format!("configure guest broker client: {source}")))?;
+    let mut client_reader = client_stream
+        .try_clone()
+        .map_err(|source| network_setup(format!("clone guest broker client: {source}")))?;
+    let mut client_writer = client_stream;
+    let upstream = connect(broker_vsock_port).map_err(|source| {
+        network_setup(format!(
+            "connect host broker VSOCK port {broker_vsock_port}: {source}"
+        ))
+    })?;
+    let mut upstream_reader = upstream
+        .try_clone()
+        .map_err(|source| network_setup(format!("clone host broker VSOCK stream: {source}")))?;
+    let mut upstream_writer = upstream;
+
+    let request = thread::spawn(move || {
+        let result = io::copy(&mut client_reader, &mut upstream_writer);
+        let _ = upstream_writer.flush();
+        let _ = unsafe { libc::shutdown(upstream_writer.as_raw_fd(), libc::SHUT_WR) };
+        result
+    });
+    io::copy(&mut upstream_reader, &mut client_writer)
+        .map_err(|source| network_setup(format!("copy host broker response: {source}")))?;
+    let _ = client_writer.shutdown(Shutdown::Write);
+
+    match request.join() {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(source)) => Err(network_setup(format!(
+            "copy guest broker request: {source}"
+        ))),
+        Err(_) => Err(network_setup("guest broker request thread panicked")),
+    }
+}
+
+/// Proves that the complete local TCP to host broker path is protocol-ready.
+fn probe_guest_broker(addr: SocketAddr) -> InitResult<()> {
+    probe_guest_broker_until(addr, Instant::now() + BROKER_PROBE_TIMEOUT)
+}
+
+fn probe_guest_broker_until(addr: SocketAddr, deadline: Instant) -> InitResult<()> {
+    loop {
+        match probe_guest_broker_once(addr, deadline) {
+            Ok(()) => {
+                log("guest broker readiness probe succeeded");
+                return Ok(());
+            }
+            Err(error) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(error);
+                }
+                thread::sleep(remaining.min(BROKER_PROBE_RETRY_INTERVAL));
+            }
+        }
+    }
+}
+
+fn probe_guest_broker_once(addr: SocketAddr, deadline: Instant) -> InitResult<()> {
+    let mut stream =
+        TcpStream::connect_timeout(&addr, probe_time_remaining(deadline)?).map_err(|source| {
+            network_setup(format!("connect guest broker readiness probe: {source}"))
+        })?;
+    stream
+        .set_write_timeout(Some(probe_time_remaining(deadline)?))
+        .map_err(|source| network_setup(format!("configure broker readiness probe: {source}")))?;
+    let request = format!("{{\"bin\":\"{BROKER_READINESS_BINARY}\",\"args\":[]}}\n");
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|source| network_setup(format!("write broker readiness probe: {source}")))?;
+
+    let mut response = Vec::new();
+    stream
+        .set_read_timeout(Some(probe_time_remaining(deadline)?))
+        .map_err(|source| network_setup(format!("configure broker readiness probe: {source}")))?;
+    BufReader::new(stream)
+        .take(BROKER_PROBE_RESPONSE_LIMIT + 1)
+        .read_until(b'\n', &mut response)
+        .map_err(|source| network_setup(format!("read broker readiness response: {source}")))?;
+    if response.len() > 64 * 1024 {
+        return Err(network_setup("broker readiness response exceeded 64 KiB"));
+    }
+    if !response.ends_with(b"\n") {
+        return Err(network_setup(
+            "broker readiness response was not newline terminated",
+        ));
+    }
+
+    let response: BrokerProbeResponse = serde_json::from_slice(&response)
+        .map_err(|source| network_setup(format!("parse broker readiness response: {source}")))?;
+    let expected = format!("unconfigured binary {BROKER_READINESS_BINARY}");
+    if response.error() != expected {
+        return Err(network_setup(format!(
+            "broker readiness probe returned unexpected rejection: {}",
+            response.error()
+        )));
+    }
+
+    Ok(())
+}
+
+fn probe_time_remaining(deadline: Instant) -> InitResult<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(network_setup("broker readiness probe deadline elapsed"));
+    }
+    Ok(remaining)
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum BrokerProbeResponse {
+    Rejected { error: String },
+}
+
+impl BrokerProbeResponse {
+    fn error(&self) -> &str {
+        match self {
+            Self::Rejected { error } => error,
+        }
+    }
 }
 
 /// Accepts guest proxy clients and forwards each connection through VSOCK.
@@ -969,21 +1220,25 @@ union IfReqValue {
 mod tests {
     use std::collections::BTreeMap;
     use std::error::Error;
-    use std::io::{self, Read, Write};
+    use std::fs::File;
+    use std::io::{self, BufRead, Read, Write};
     use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
     use std::num::NonZeroU32;
+    use std::os::fd::OwnedFd;
     use std::thread;
+    use std::time::{Duration, Instant};
 
-    use super::super::contract::{Contract, LaunchContract};
+    use super::super::contract::{Contract, LaunchContract, SecretShimsContract};
     use super::super::error::InitError;
     use super::{
-        BodyKind, CommandNetworkEnv, DnsPlan, GuestDnsListener, GuestDnsListeners,
-        GuestNetworkListeners, GuestProxyListener, IfReq, NetworkServicesPlan, ProxyPlan,
-        copy_exact_bytes, dns_refused_response, ensure_buffered, find_crlf, find_header_terminator,
-        forward_requests_with_header_injection, handle_guest_proxy_connection,
-        handle_tcp_dns_stub_connection, parse_request_metadata, read_until_crlf,
-        read_until_header_block, replace_attribution_headers, start_guest_http_proxy,
-        tcp_dns_stub_loop, udp_dns_stub_loop,
+        BodyKind, BrokerProxyPlan, CommandNetworkEnv, DnsPlan, GuestBrokerListener,
+        GuestDnsListener, GuestDnsListeners, GuestNetworkListeners, GuestProxyListener, IfReq,
+        NetworkServicesPlan, ProxyPlan, copy_exact_bytes, dns_refused_response, ensure_buffered,
+        find_crlf, find_header_terminator, forward_requests_with_header_injection,
+        handle_guest_broker_connection_with, handle_guest_proxy_connection,
+        handle_tcp_dns_stub_connection, parse_request_metadata, probe_guest_broker,
+        probe_guest_broker_once, read_until_crlf, read_until_header_block,
+        replace_attribution_headers, start_guest_http_proxy, tcp_dns_stub_loop, udp_dns_stub_loop,
     };
 
     type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -1093,6 +1348,136 @@ mod tests {
     }
 
     #[test]
+    fn network_services_plan_adds_optional_broker_proxy_and_tcp_environment() -> TestResult {
+        let mut launch = valid_launch_contract()?;
+        launch.secret_shims = Some(valid_secret_shims_contract());
+        let contract: Contract = launch.try_into()?;
+
+        let plan = NetworkServicesPlan::try_from(&contract)?;
+        let Some(broker) = plan.broker else {
+            return Err(io::Error::other("network plan omitted broker proxy").into());
+        };
+
+        assert_eq!(broker.guest_broker_addr, "127.0.0.1:18083".parse()?);
+        assert_eq!(broker.broker_vsock_port.get(), 18_083);
+        assert_eq!(
+            plan.command_env()
+                .as_map()
+                .get("FIRMA_BROKER_ADDR")
+                .map(String::as_str),
+            Some("tcp://127.0.0.1:18083")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn broker_listener_reports_bind_conflicts_before_serving() -> TestResult {
+        let existing = TcpListener::bind("127.0.0.1:0")?;
+        let addr = existing.local_addr()?;
+        let Some(broker_vsock_port) = NonZeroU32::new(18_083) else {
+            return Err(io::Error::other("test broker VSOCK port must be non-zero").into());
+        };
+        let plan = BrokerProxyPlan {
+            guest_broker_addr: addr,
+            broker_vsock_port,
+        };
+
+        let error = expect_init_error(
+            GuestBrokerListener::bind(&plan),
+            "broker bind should fail while the address is held",
+        )?;
+
+        assert!(matches!(
+            error,
+            InitError::GuestNetworkSetup { detail }
+                if detail.starts_with(&format!("bind guest broker proxy {addr}:"))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn broker_connection_forwards_bytes_in_both_directions() -> TestResult {
+        let (mut client, guest_side) = connected_tcp_pair()?;
+        let (mut host, vsock_side) = connected_tcp_pair()?;
+        let handler = thread::spawn(move || {
+            handle_guest_broker_connection_with(guest_side, 18_083, |_| {
+                let owned: OwnedFd = vsock_side.into();
+                Ok(File::from(owned))
+            })
+        });
+
+        client.write_all(b"request bytes\n")?;
+        client.shutdown(Shutdown::Write)?;
+        let mut request = Vec::new();
+        host.read_to_end(&mut request)?;
+        assert_eq!(request, b"request bytes\n");
+
+        host.write_all(b"response bytes\n")?;
+        host.shutdown(Shutdown::Write)?;
+        let mut response = Vec::new();
+        client.read_to_end(&mut response)?;
+        assert_eq!(response, b"response bytes\n");
+
+        join_init_handler(handler)??;
+        Ok(())
+    }
+
+    #[test]
+    fn broker_readiness_probe_retries_complete_protocol_until_success() -> TestResult {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let server = thread::spawn(move || -> io::Result<()> {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept()?;
+                drop(stream);
+            }
+            let (stream, _) = listener.accept()?;
+            let mut reader = io::BufReader::new(stream);
+            let mut request = String::new();
+            reader.read_line(&mut request)?;
+            assert_eq!(
+                request,
+                "{\"bin\":\"__firma_broker_readiness_probe__\",\"args\":[]}\n"
+            );
+            reader.get_mut().write_all(
+                b"{\"type\":\"rejected\",\"error\":\"unconfigured binary __firma_broker_readiness_probe__\"}\n",
+            )?;
+            Ok(())
+        });
+
+        probe_guest_broker(addr)?;
+        join_io_handler(server)??;
+        Ok(())
+    }
+
+    #[test]
+    fn broker_readiness_probe_rejects_non_rejection_responses() -> TestResult {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let server = thread::spawn(move || -> io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            let mut request = [0_u8; 128];
+            let _ = stream.read(&mut request)?;
+            stream.write_all(
+                b"{\"type\":\"executed\",\"output\":[],\"status\":{\"type\":\"exit_code\",\"code\":0}}\n",
+            )?;
+            Ok(())
+        });
+
+        let error = expect_init_error(
+            probe_guest_broker_once(addr, Instant::now() + Duration::from_secs(1)),
+            "readiness must require a rejected broker response",
+        )?;
+        assert!(matches!(
+            error,
+            InitError::GuestNetworkSetup { detail }
+                if detail.starts_with("parse broker readiness response:")
+        ));
+        join_io_handler(server)??;
+        Ok(())
+    }
+
+    #[test]
     fn dns_listener_addrs_include_resolver_port_once() -> TestResult {
         let stub_addr: SocketAddr = "127.0.0.1:1053".parse()?;
         let resolver_addr: SocketAddr = "127.0.0.1:53".parse()?;
@@ -1126,6 +1511,7 @@ mod tests {
             dns: DnsPlan {
                 guest_dns_stub_addr: "127.0.0.1:1053".parse()?,
             },
+            broker: None,
             env: CommandNetworkEnv {
                 values: BTreeMap::new(),
             },
@@ -1229,7 +1615,11 @@ mod tests {
             ],
         };
 
-        let listeners = GuestNetworkListeners { proxy, dns };
+        let listeners = GuestNetworkListeners {
+            proxy,
+            dns,
+            broker: None,
+        };
         let services = listeners.start()?;
 
         assert_eq!(services.thread_count(), 3);
@@ -1900,7 +2290,36 @@ mod tests {
         )
     }
 
+    fn join_init_handler(
+        handle: thread::JoinHandle<super::super::error::InitResult<()>>,
+    ) -> Result<super::super::error::InitResult<()>, Box<dyn Error>> {
+        handle.join().map_or_else(
+            |_| Err(io::Error::other("broker handler thread panicked").into()),
+            Ok,
+        )
+    }
+
+    fn join_io_handler(
+        handle: thread::JoinHandle<io::Result<()>>,
+    ) -> Result<io::Result<()>, Box<dyn Error>> {
+        handle.join().map_or_else(
+            |_| Err(io::Error::other("broker server thread panicked").into()),
+            Ok,
+        )
+    }
+
     fn valid_launch_contract() -> TestResult<LaunchContract> {
         Ok(serde_json::from_str(VALID_CONTRACT_JSON)?)
+    }
+
+    fn valid_secret_shims_contract() -> SecretShimsContract {
+        SecretShimsContract {
+            guest_target_triple: "x86_64-unknown-linux-musl".to_string(),
+            provider_names: vec!["op".to_string()],
+            broker_vsock_port: 18_083,
+            guest_broker_addr: "127.0.0.1:18083".to_string(),
+            broker_socket_path: "/host/control/broker.sock".into(),
+            shim_share_directory: "/host/control/secret-shims".into(),
+        }
     }
 }

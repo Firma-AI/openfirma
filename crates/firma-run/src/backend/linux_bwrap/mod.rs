@@ -14,7 +14,7 @@ use self::mount::{BwrapHardening, BwrapMountPlan};
 use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
-    SandboxInfrastructureKind, SandboxMount, SandboxRuntimeLayout,
+    SandboxInfrastructureKind, SandboxMount, SandboxRuntimeLayout, SecretShimSupport, ShimTarget,
 };
 use crate::config::{NetworkPolicy, SandboxIdentityMode};
 use crate::error::RunError;
@@ -199,6 +199,7 @@ impl SandboxBackend for BwrapBackend {
         runtime_layout: &firma_runtime_state::RuntimeLayout,
         handle: &SandboxHandle,
         launch: &LaunchSpec,
+        _shim_support: &SecretShimSupport,
     ) -> Result<Child, RunError> {
         if !cfg!(target_os = "linux") {
             return Err(RunError::UnsupportedBackend {
@@ -288,6 +289,12 @@ impl SandboxBackend for BwrapBackend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+
+    fn secret_shim_support(&self) -> SecretShimSupport {
+        SecretShimSupport::HostBindMount {
+            guest_target: ShimTarget::linux_musl(),
+        }
     }
 }
 

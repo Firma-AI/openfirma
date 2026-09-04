@@ -1,7 +1,11 @@
-use std::collections::BTreeMap;
-use std::path::Path;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    env,
+    ffi::{OsStr, OsString},
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use firma_runtime_state::RuntimeLayout;
 use firma_secret_provider::IntegrationSpec;
@@ -23,6 +27,10 @@ const DEFAULT_SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 10;
 
 #[doc(hidden)]
 pub mod vscode;
+
+/// Secret-mediation shim injection (Unix/bwrap). Wires the broker + shim mounts
+/// into a launch when the profile lists `secret_providers`.
+pub mod secret_shims;
 
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
@@ -142,6 +150,8 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
 
     let capability_token = read_capability_token(&profile.capability.source)?;
     let working_dir = resolve_working_dir()?;
+    let firma_exe = env::current_exe()
+        .map_err(|error| RunError::Internal(format!("resolve current_exe: {error}")))?;
 
     let backend = build_backend(profile.backend);
     let mut handle = Some(backend.prepare(&PrepareRequest {
@@ -149,6 +159,31 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         profile: profile.clone(),
         working_dir: working_dir.clone(),
     })?);
+    let shim_support_result = backend.resolve_secret_shim_support(
+        &runtime_layout,
+        handle
+            .as_ref()
+            .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?,
+        &firma_exe,
+        profile
+            .secret_providers
+            .values()
+            .any(|provider| provider.as_cli().is_some()),
+    );
+    let shim_support = match shim_support_result {
+        Ok(support) => support,
+        Err(error) => {
+            let teardown_result = handle
+                .take()
+                .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
+            return combine_run_and_teardown_results(Err(error), teardown_result);
+        }
+    };
+    // Secret services (gateway + broker) for this run. Assigned once the
+    // profile's providers are known inside the run closure below; dropped
+    // only after sandbox teardown so the agent can resolve placeholders for
+    // its whole lifetime while the plaintext store still cannot outlive the run.
+    let mut secret_services = None;
 
     let run_result = (|| {
         let handle_ref = handle
@@ -224,8 +259,24 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         if let CapabilitySource::File { ref path } = profile.capability.source {
             flags.capability_seed_path = Some(path.clone());
         }
-        let firma_exe = std::env::current_exe()
-            .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
+        // Start the secret services before the Sidecar so its gateway address
+        // is available while the Sidecar config is synthesized. The guard is
+        // held for the whole run: dropping it stops the gateway and broker
+        // and removes their sockets.
+        secret_services = if profile.secret_providers.is_empty() {
+            None
+        } else {
+            Some(secret_shims::SecretServices::start(
+                &runtime_layout,
+                handle_ref,
+                &identity,
+                &profile,
+                &shim_support,
+            )?)
+        };
+        if let Some(services) = &secret_services {
+            flags.secret_gateway_addr = Some(services.gateway_addr.clone());
+        }
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
             ResolveAuthorityRequest {
@@ -318,6 +369,15 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                     .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
                 vscode::ensure_vscode_state_mount(handle_mut, &state_dir);
             }
+            secret_shims::prepare(
+                &mut handle,
+                &profile,
+                &mut env,
+                &firma_exe,
+                env::var_os("PATH").as_deref(),
+                secret_services.as_ref(),
+                &shim_support,
+            )?;
             let launch = LaunchSpec {
                 executable,
                 args: launch_args,
@@ -333,7 +393,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 let handle_ref = handle
                     .as_ref()
                     .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
-                backend.start_agent(&runtime_layout, handle_ref, &launch)?
+                backend.start_agent(&runtime_layout, handle_ref, &launch, &shim_support)?
             };
             // Per-run marker dir under the persistent runtime root, alongside
             // `sidecar.log` / `authority.log`. The caller redirects its foreground
@@ -357,6 +417,11 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     let teardown_result = handle
         .take()
         .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
+
+    // Stop the secret services after sandbox teardown so the agent can still
+    // resolve placeholders while it exits, but before the run returns: the
+    // gateway socket is removed and the plaintext per-run store is dropped.
+    drop(secret_services);
 
     combine_run_and_teardown_results(run_result, teardown_result)
 }
@@ -383,7 +448,7 @@ fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
 }
 
 fn resolve_working_dir() -> Result<PathBuf, RunError> {
-    std::env::current_dir()
+    env::current_dir()
         .map_err(|error| RunError::Internal(format!("failed to read current directory: {error}")))
 }
 
@@ -401,7 +466,7 @@ fn combine_run_and_teardown_results(
 }
 
 fn ensure_required_session_identity() -> Result<(), RunError> {
-    let require = std::env::var("FIRMA_RUN_REQUIRE_SESSION_ID")
+    let require = env::var("FIRMA_RUN_REQUIRE_SESSION_ID")
         .ok()
         .is_some_and(|v| {
             let v = v.trim().to_ascii_lowercase();
@@ -410,7 +475,7 @@ fn ensure_required_session_identity() -> Result<(), RunError> {
     if !require {
         return Ok(());
     }
-    let has_session = std::env::var("FIRMA_RUN_SESSION_ID")
+    let has_session = env::var("FIRMA_RUN_SESSION_ID")
         .ok()
         .is_some_and(|v| !v.trim().is_empty());
     if has_session {
@@ -426,9 +491,9 @@ fn maybe_apply_executable_policy(
     executable: &str,
     args: Vec<String>,
 ) -> Vec<String> {
-    let executable = std::path::Path::new(executable)
+    let executable = Path::new(executable)
         .file_name()
-        .and_then(std::ffi::OsStr::to_str)
+        .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_string();
     let Some(policy) = profile.executable_policies.get(&executable) else {
@@ -504,6 +569,75 @@ fn config_item_matches_key(item: &str, key: &str) -> bool {
     item.split_once('=').is_some_and(|(k, _)| k.trim() == key)
 }
 
+fn resolve_host_executable(
+    executable: &str,
+    host_path: Option<&OsStr>,
+) -> Result<PathBuf, RunError> {
+    let candidate = PathBuf::from(executable);
+    if candidate
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+    {
+        return require_file(candidate, executable);
+    }
+
+    let path_value = host_path
+        .map(OsString::from)
+        .or_else(|| env::var_os("PATH"))
+        .ok_or_else(|| {
+            RunError::ConfigValidation(format!(
+                "cannot resolve executable '{executable}' because host PATH is not set"
+            ))
+        })?;
+    for dir in env::split_paths(&path_value) {
+        for candidate in executable_search_candidates(&dir, executable) {
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(RunError::ConfigValidation(format!(
+        "cannot resolve executable '{executable}' on host PATH"
+    )))
+}
+
+fn require_file(candidate: PathBuf, executable: &str) -> Result<PathBuf, RunError> {
+    if candidate.is_file() {
+        Ok(candidate)
+    } else {
+        Err(RunError::ConfigValidation(format!(
+            "cannot resolve executable '{executable}' at {}",
+            candidate.display()
+        )))
+    }
+}
+
+#[cfg(windows)]
+fn executable_search_candidates(dir: &Path, executable: &str) -> Vec<PathBuf> {
+    let direct = dir.join(executable);
+    if Path::new(executable).extension().is_some() {
+        return vec![direct];
+    }
+
+    let mut candidates = vec![direct];
+    let path_ext = env::var_os("PATHEXT").map_or_else(
+        || ".COM;.EXE;.BAT;.CMD".to_string(),
+        |value| value.to_string_lossy().into_owned(),
+    );
+    candidates.extend(
+        path_ext
+            .split(';')
+            .filter(|extension| !extension.is_empty())
+            .map(|extension| dir.join(format!("{executable}{extension}"))),
+    );
+    candidates
+}
+
+#[cfg(not(windows))]
+fn executable_search_candidates(dir: &Path, executable: &str) -> Vec<PathBuf> {
+    vec![dir.join(executable)]
+}
+
 /// Resolve `executable` to its canonical UTF-8 path, enforce the configured
 /// allowlist policy, and return the canonical string.
 ///
@@ -514,7 +648,7 @@ fn resolve_governed_executable(
     mediator: &crate::config::CommandMediatorConfig,
     executable: &str,
 ) -> Result<String, RunError> {
-    let canonical_path = std::fs::canonicalize(executable).map_err(|error| {
+    let canonical_path = fs::canonicalize(executable).map_err(|error| {
         RunError::Governance(format!(
             "executable '{executable}' could not be resolved (fail-closed): {error}"
         ))
@@ -563,7 +697,7 @@ fn build_execution_env(
     let mut env = BTreeMap::new();
 
     for key in &profile.env_passthrough {
-        if let Ok(value) = std::env::var(key) {
+        if let Ok(value) = env::var(key) {
             env.insert(key.clone(), value);
         }
     }
@@ -637,9 +771,9 @@ fn maybe_apply_claude_settings(
         return Ok(args);
     }
 
-    let executable = std::path::Path::new(executable)
+    let executable = Path::new(executable)
         .file_name()
-        .and_then(std::ffi::OsStr::to_str)
+        .and_then(OsStr::to_str)
         .unwrap_or_default();
     if executable != "claude" {
         return Ok(args);
@@ -661,7 +795,7 @@ fn maybe_apply_claude_settings(
             "failed to serialize Claude settings payload: {error}"
         ))
     })?;
-    std::fs::write(&settings_path, serialized).map_err(|error| {
+    fs::write(&settings_path, serialized).map_err(|error| {
         RunError::Internal(format!(
             "failed to write Claude settings file {}: {error}",
             settings_path.display()
@@ -700,14 +834,14 @@ fn build_appended_ca_bundle(firma_ca_path: &Path) -> Option<PathBuf> {
 /// paths and concatenates the first existing one with the firma CA.
 fn build_appended_ca_bundle_with_roots(firma_ca_path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
     let system_roots = roots.iter().find(|p| p.is_file())?;
-    let mut bundle = match std::fs::read(system_roots) {
+    let mut bundle = match fs::read(system_roots) {
         Ok(bytes) => bytes,
         Err(error) => {
             tracing::warn!(%error, path = %system_roots.display(), "failed to read system CA bundle; using sole firma-ca");
             return None;
         }
     };
-    let firma_ca = match std::fs::read(firma_ca_path) {
+    let firma_ca = match fs::read(firma_ca_path) {
         Ok(bytes) => bytes,
         Err(error) => {
             tracing::warn!(%error, path = %firma_ca_path.display(), "failed to read firma-ca; using sole firma-ca");
@@ -719,7 +853,7 @@ fn build_appended_ca_bundle_with_roots(firma_ca_path: &Path, roots: &[PathBuf]) 
     }
     bundle.extend_from_slice(&firma_ca);
     let bundle_path = firma_ca_path.with_file_name("firma-ca-bundle.crt");
-    if let Err(error) = std::fs::write(&bundle_path, &bundle) {
+    if let Err(error) = fs::write(&bundle_path, &bundle) {
         tracing::warn!(%error, path = %bundle_path.display(), "failed to write combined CA bundle; using sole firma-ca");
         return None;
     }
@@ -758,7 +892,7 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
         }
     }
 
-    if let Ok(explicit) = std::env::var("FIRMA_SIDECAR_CA_CERT_PATH")
+    if let Ok(explicit) = env::var("FIRMA_SIDECAR_CA_CERT_PATH")
         && !explicit.trim().is_empty()
     {
         let path = PathBuf::from(explicit);
@@ -767,7 +901,7 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
         }
     }
 
-    if let Ok(ca_dir) = std::env::var("FIRMA_SIDECAR_CA_DIR")
+    if let Ok(ca_dir) = env::var("FIRMA_SIDECAR_CA_DIR")
         && !ca_dir.trim().is_empty()
     {
         let path = PathBuf::from(ca_dir).join("firma-ca.crt");
@@ -776,7 +910,7 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
         }
     }
 
-    let cwd_candidate = std::env::current_dir()
+    let cwd_candidate = env::current_dir()
         .ok()
         .map(|cwd| cwd.join("firma-ca").join("firma-ca.crt"));
     let default_candidates = [
@@ -807,7 +941,7 @@ fn print_effective_config(
         agent_id: &identity.agent_id,
         execution_profile: &identity.execution_profile,
         profile,
-        working_dir: std::env::current_dir().map_err(|error| {
+        working_dir: env::current_dir().map_err(|error| {
             RunError::Internal(format!(
                 "failed to resolve working dir for snapshot: {error}"
             ))
@@ -824,7 +958,7 @@ fn print_effective_config(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
@@ -854,15 +988,15 @@ mod tests {
     fn appended_ca_bundle_concatenates_system_roots_and_firma_ca() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let system = dir.path().join("system-roots.pem");
-        std::fs::write(&system, b"-----SYSTEM ROOT-----\n").unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&system, b"-----SYSTEM ROOT-----\n").unwrap_or_else(|e| panic!("{e}"));
         let firma_ca = dir.path().join("firma-ca.crt");
-        std::fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
 
         let bundle =
             super::build_appended_ca_bundle_with_roots(&firma_ca, std::slice::from_ref(&system))
                 .unwrap_or_else(|| panic!("bundle should be built"));
         assert_eq!(bundle, dir.path().join("firma-ca-bundle.crt"));
-        let body = std::fs::read_to_string(&bundle).unwrap_or_else(|e| panic!("{e}"));
+        let body = fs::read_to_string(&bundle).unwrap_or_else(|e| panic!("{e}"));
         assert!(body.contains("SYSTEM ROOT"));
         assert!(body.contains("FIRMA CA"));
     }
@@ -871,7 +1005,7 @@ mod tests {
     fn appended_ca_bundle_falls_back_when_no_system_roots() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let firma_ca = dir.path().join("firma-ca.crt");
-        std::fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
         let missing = dir.path().join("does-not-exist.pem");
         assert!(super::build_appended_ca_bundle_with_roots(&firma_ca, &[missing]).is_none());
     }
@@ -1071,7 +1205,7 @@ mod tests {
     fn ca_trust_mode_selects_appended_bundle_at_injection_site() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let ca_cert = dir.path().join("firma-ca.crt");
-        std::fs::write(&ca_cert, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&ca_cert, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
 
         let make_profile = |mode: crate::config::CaTrustMode| ResolvedProfile {
             id: "copilot".to_string(),
@@ -1148,7 +1282,7 @@ mod tests {
         let bundle_path = ca_cert.with_file_name("firma-ca-bundle.crt");
         let system_roots_present = super::SYSTEM_CA_BUNDLE_CANDIDATES
             .iter()
-            .any(|p| std::path::Path::new(p).is_file());
+            .any(|p| Path::new(p).is_file());
         if system_roots_present {
             // A system bundle exists: AppendSystemRoots must point at the
             // generated sibling bundle, and it must contain the firma CA.
@@ -1156,7 +1290,7 @@ mod tests {
                 append_env.get("SSL_CERT_FILE"),
                 Some(&bundle_path.display().to_string())
             );
-            let body = std::fs::read_to_string(&bundle_path).unwrap_or_else(|e| panic!("{e}"));
+            let body = fs::read_to_string(&bundle_path).unwrap_or_else(|e| panic!("{e}"));
             assert!(body.contains("FIRMA CA"));
             assert_ne!(
                 append_env.get("SSL_CERT_FILE"),
@@ -1718,7 +1852,7 @@ mod tests {
         let real_code = host_bin.join("code");
         fs::write(&real_code, "#!/bin/sh\nexit 0\n").unwrap_or_else(|e| panic!("{e}"));
 
-        let resolved = super::vscode::resolve_host_executable("code", Some(host_bin.as_os_str()))
+        let resolved = super::resolve_host_executable("code", Some(host_bin.as_os_str()))
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved, real_code);
     }

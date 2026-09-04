@@ -1,19 +1,22 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fmt::Write as _;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Read as _};
 use std::num::NonZeroU16;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::Mutex;
 
 use crate::backend::{
-    BackendKind, EnforcementProof, LaunchSpec, NetworkConfinement, PrepareRequest, SandboxBackend,
-    SandboxHandle, SandboxMount, SandboxRuntimeLayout,
+    BackendKind, BrokerBridgeKind, EnforcementProof, LaunchSpec, NetworkConfinement,
+    PrepareRequest, SandboxBackend, SandboxHandle, SandboxMount, SandboxRuntimeLayout,
+    SecretShimSupport, SecretShimUnsupportedReason, ShimTarget,
 };
 use crate::config::{MountSpec, NetworkPolicy, SidecarEndpoint};
 use crate::error::RunError;
+use sha2::{Digest as _, Sha256};
 
 const VZ_GUEST_MODE_ENV: &str = "FIRMA_RUN_VZ_GUEST";
 const VZ_STRUCTURAL_NETWORK_ENV: &str = "FIRMA_RUN_VZ_STRUCTURAL_NETWORK";
@@ -21,8 +24,14 @@ const VZ_GUEST_RUNNER_ENV: &str = "FIRMA_RUN_VZ_GUEST_RUNNER";
 const VZ_GUEST_KERNEL_ENV: &str = "FIRMA_RUN_VZ_GUEST_KERNEL";
 const VZ_GUEST_INITRD_ENV: &str = "FIRMA_RUN_VZ_GUEST_INITRD";
 const VZ_GUEST_ROOTFS_ENV: &str = "FIRMA_RUN_VZ_GUEST_ROOTFS";
-const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 1;
-const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
+const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 2;
+const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &[
+    "FIRMA_CAPABILITY_TOKEN",
+    "FIRMA_BROKER_ADDR",
+    "FIRMA_SECRET_PROVIDER_NAMES",
+    "FIRMA_SECRET_SHIM_SHARE_DIRECTORY",
+    "FIRMA_SECRET_BROKER_SOCKET_PATH",
+];
 const VZ_GUEST_HOST_NETWORK_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -40,6 +49,7 @@ const VZ_GUEST_DNS_STUB_ADDR: &str = "127.0.0.1:1053";
 const VZ_GUEST_SIDECAR_VSOCK_PORT: u32 = 18080;
 const VZ_GUEST_COMMAND_PTY_VSOCK_PORT: u32 = 18081;
 const VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT: u32 = 18082;
+const VZ_GUEST_BROKER_VSOCK_PORT: u32 = 18083;
 
 /// Host paths owned by the VZ guest-launch handoff.
 struct VzGuestLayout {
@@ -88,12 +98,25 @@ impl VzGuestLayout {
 ///   This mode reports `structural=true` with
 ///   `network_confinement=macos_vz_guest`.
 #[derive(Debug, Default)]
-pub struct VzBackend;
+pub struct VzBackend {
+    guest_context: Mutex<Option<VzGuestRunContext>>,
+}
 
 impl VzBackend {
     #[must_use]
     pub(crate) fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    fn guest_context(&self) -> Result<VzGuestRunContext, RunError> {
+        let cached = self
+            .guest_context
+            .lock()
+            .map_err(|_| RunError::Internal("VZ guest input cache lock poisoned".to_string()))?
+            .clone();
+        cached.ok_or_else(|| {
+            RunError::Internal("VZ guest run context was not resolved before launch".to_string())
+        })
     }
 }
 
@@ -161,15 +184,7 @@ impl SandboxBackend for VzBackend {
                 }
             }
             VzStructuralMode::VzGuest => {
-                let inputs = VzGuestLaunchInputs::from_env()?;
-                tracing::info!(
-                    mode = "vz_guest",
-                    runner = %inputs.runner.display(),
-                    kernel = %inputs.kernel.display(),
-                    initrd = %inputs.initrd.display(),
-                    rootfs = %inputs.rootfs.display(),
-                    "macOS VZ structural preflight: guest runner and images validated"
-                );
+                tracing::info!(mode = "vz_guest", "macOS VZ structural mode selected");
             }
         }
 
@@ -259,6 +274,7 @@ impl SandboxBackend for VzBackend {
         _runtime_layout: &firma_runtime_state::RuntimeLayout,
         handle: &SandboxHandle,
         launch: &LaunchSpec,
+        shim_support: &SecretShimSupport,
     ) -> Result<Child, RunError> {
         if !cfg!(target_os = "macos") {
             return Err(RunError::UnsupportedBackend {
@@ -269,7 +285,8 @@ impl SandboxBackend for VzBackend {
 
         let mode = vz_structural_mode();
         if mode == VzStructuralMode::VzGuest {
-            return start_vz_guest_runner(handle, launch);
+            let context = self.guest_context()?;
+            return start_vz_guest_runner(handle, launch, context.inputs, shim_support);
         }
 
         let mut command = Command::new("sandbox-exec");
@@ -309,6 +326,79 @@ impl SandboxBackend for VzBackend {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
     }
+
+    fn secret_shim_support(&self) -> SecretShimSupport {
+        let mode = vz_structural_mode();
+        match mode {
+            VzStructuralMode::Compatibility | VzStructuralMode::SandboxExecNetworkDeny => {
+                SecretShimSupport::Unsupported {
+                    reason: SecretShimUnsupportedReason::HostCallable,
+                }
+            }
+            VzStructuralMode::VzGuest => {
+                isolated_guest_shim_support(ShimTarget::linux_musl(), None)
+            }
+        }
+    }
+
+    fn resolve_secret_shim_support(
+        &self,
+        runtime_layout: &firma_runtime_state::RuntimeLayout,
+        handle: &SandboxHandle,
+        firma_exe: &Path,
+        requires_cli_shim: bool,
+    ) -> Result<SecretShimSupport, RunError> {
+        if vz_structural_mode() == VzStructuralMode::VzGuest {
+            let custody_dir = runtime_layout
+                .run_entry_layout(&handle.identity.sandbox_id)
+                .into_root()
+                .join("vz-bundle");
+            let context = VzGuestRunContext::resolve(&custody_dir)?;
+            let guest_target = context.guest_target;
+            let guest_shim = requires_cli_shim
+                .then(|| {
+                    crate::runtime::secret_shims::resolve_guest_shim(
+                        firma_exe,
+                        guest_target,
+                        &context.shim_sha256,
+                    )
+                })
+                .transpose()?;
+            tracing::info!(
+                mode = "vz_guest",
+                runner = %context.inputs.runner.display(),
+                kernel = %context.inputs.kernel.display(),
+                initrd = %context.inputs.initrd.display(),
+                rootfs = %context.inputs.rootfs.display(),
+                guest_target = guest_target.triple,
+                "macOS VZ structural preflight: guest bundle copied into run custody and validated"
+            );
+            let mut cached = self.guest_context.lock().map_err(|_| {
+                RunError::Internal("VZ guest input cache lock poisoned".to_string())
+            })?;
+            if cached.replace(context).is_some() {
+                return Err(RunError::Internal(
+                    "VZ guest run context was resolved more than once".to_string(),
+                ));
+            }
+            drop(cached);
+            return Ok(isolated_guest_shim_support(guest_target, guest_shim));
+        }
+        Ok(self.secret_shim_support())
+    }
+}
+
+fn isolated_guest_shim_support(
+    guest_target: ShimTarget,
+    guest_shim: Option<crate::backend::ResolvedGuestShim>,
+) -> SecretShimSupport {
+    SecretShimSupport::IsolatedGuest {
+        guest_target,
+        broker_bridge: BrokerBridgeKind::VsockPort {
+            port: VZ_GUEST_BROKER_VSOCK_PORT,
+        },
+        guest_shim,
+    }
 }
 
 /// Create the VZ runtime tree with owner-only custody.
@@ -334,11 +424,47 @@ struct VzGuestLaunchInputs {
     rootfs: PathBuf,
 }
 
-impl VzGuestLaunchInputs {
-    fn from_env() -> Result<Self, RunError> {
-        Self::from_env_lookup(|name| std::env::var(name).ok())
+#[derive(Debug, Clone)]
+struct VzGuestRunContext {
+    inputs: VzGuestLaunchInputs,
+    guest_target: ShimTarget,
+    shim_sha256: [u8; 32],
+}
+
+impl VzGuestRunContext {
+    fn resolve(custody_dir: &Path) -> Result<Self, RunError> {
+        Self::resolve_with_lookup(custody_dir, |name| std::env::var(name).ok())
     }
 
+    fn resolve_with_lookup(
+        custody_dir: &Path,
+        lookup: impl FnMut(&str) -> Option<String>,
+    ) -> Result<Self, RunError> {
+        let source = VzGuestLaunchInputs::from_env_lookup(lookup)?;
+        let manifest = VzGuestManifest::read(&source)?;
+        firma_fs::create_private_dir_all(custody_dir).map_err(|error| RunError::Backend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "create private VZ guest bundle custody {}: {error}",
+                custody_dir.display()
+            ),
+        })?;
+        let inputs = source.copy_into(custody_dir)?;
+        #[cfg(unix)]
+        ensure_executable_file(VZ_GUEST_RUNNER_ENV, &inputs.runner)?;
+        #[cfg(not(unix))]
+        ensure_executable_file(VZ_GUEST_RUNNER_ENV, &inputs.runner);
+        validate_runner_contract_version(&inputs.runner)?;
+        manifest.validate_artifacts(&inputs)?;
+        Ok(Self {
+            inputs,
+            guest_target: manifest.guest_target,
+            shim_sha256: manifest.shim_sha256,
+        })
+    }
+}
+
+impl VzGuestLaunchInputs {
     fn from_env_lookup(mut lookup: impl FnMut(&str) -> Option<String>) -> Result<Self, RunError> {
         let runner =
             validate_required_file_env_value(VZ_GUEST_RUNNER_ENV, lookup(VZ_GUEST_RUNNER_ENV))?;
@@ -362,6 +488,279 @@ impl VzGuestLaunchInputs {
             )?,
         })
     }
+
+    fn copy_into(&self, custody_dir: &Path) -> Result<Self, RunError> {
+        Ok(Self {
+            runner: copy_vz_guest_artifact(&self.runner, &custody_dir.join("firma-vz-runner"))?,
+            kernel: copy_vz_guest_artifact(&self.kernel, &custody_dir.join("vmlinuz"))?,
+            initrd: copy_vz_guest_artifact(&self.initrd, &custody_dir.join("initrd.img"))?,
+            rootfs: copy_vz_guest_artifact(&self.rootfs, &custody_dir.join("rootfs.img"))?,
+        })
+    }
+}
+
+fn copy_vz_guest_artifact(source: &Path, destination: &Path) -> Result<PathBuf, RunError> {
+    std::fs::copy(source, destination).map_err(|error| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "copy VZ guest artifact {} into run custody {}: {error}",
+            source.display(),
+            destination.display()
+        ),
+    })?;
+    Ok(destination.to_path_buf())
+}
+
+fn validate_runner_contract_version(runner: &Path) -> Result<(), RunError> {
+    let output = Command::new(runner)
+        .arg("--supported-contract-version")
+        .output()
+        .map_err(|error| RunError::Backend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "failed to query VZ runner contract version {}: {error}",
+                runner.display()
+            ),
+        })?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || version != VZ_GUEST_LAUNCH_CONTRACT_VERSION.to_string() {
+        return Err(RunError::Backend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "VZ runner {} is incompatible: expected contract version {}, got '{}'",
+                runner.display(),
+                VZ_GUEST_LAUNCH_CONTRACT_VERSION,
+                version
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct VzGuestManifest {
+    path: PathBuf,
+    guest_target: ShimTarget,
+    shim_sha256: [u8; 32],
+    kernel_sha256: [u8; 32],
+    initrd_sha256: [u8; 32],
+    rootfs_sha256: [u8; 32],
+}
+
+impl VzGuestManifest {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "manifest parsing and bundle-coherence validation form one fail-closed boundary"
+    )]
+    fn read(inputs: &VzGuestLaunchInputs) -> Result<Self, RunError> {
+        let manifest_path = inputs.initrd.with_file_name("manifest.txt");
+        let manifest = std::fs::read_to_string(&manifest_path).map_err(|error| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "read VZ guest manifest {}: {error}; rebuild guest artifacts with scripts/macos-vz/build-guest-artifacts.sh",
+            manifest_path.display()
+        ),
+    })?;
+        let mut values = BTreeMap::new();
+        for line in manifest.lines().filter(|line| !line.is_empty()) {
+            let (key, value) = line.split_once('=').ok_or_else(|| RunError::Backend {
+                backend: BackendKind::Vz.to_string(),
+                reason: format!(
+                    "VZ guest manifest {} contains a malformed entry",
+                    manifest_path.display()
+                ),
+            })?;
+            if values.insert(key, value).is_some() {
+                return Err(RunError::Backend {
+                    backend: BackendKind::Vz.to_string(),
+                    reason: format!(
+                        "VZ guest manifest {} contains duplicate field '{key}'",
+                        manifest_path.display()
+                    ),
+                });
+            }
+        }
+        let expected_version = VZ_GUEST_LAUNCH_CONTRACT_VERSION.to_string();
+        if values.get("contract_version") != Some(&expected_version.as_str()) {
+            return Err(vz_manifest_error(
+                &manifest_path,
+                "contract_version",
+                &expected_version,
+                values.get("contract_version").copied(),
+            ));
+        }
+        let rust_target = values.get("rust_target").copied().unwrap_or("missing");
+        let guest_target =
+            ShimTarget::from_linux_musl_triple(rust_target).ok_or_else(|| RunError::Backend {
+                backend: BackendKind::Vz.to_string(),
+                reason: format!(
+                    "VZ guest manifest {} has unsupported rust_target '{rust_target}'",
+                    manifest_path.display()
+                ),
+            })?;
+        let shim_sha256 = parse_manifest_sha256(
+            &manifest_path,
+            "shim_sha256",
+            values.get("shim_sha256").copied(),
+        )?;
+
+        let canonical_manifest =
+            std::fs::canonicalize(&manifest_path).map_err(|error| RunError::Backend {
+                backend: BackendKind::Vz.to_string(),
+                reason: format!(
+                    "resolve VZ guest manifest {}: {error}",
+                    manifest_path.display()
+                ),
+            })?;
+        let bundle_dir = canonical_manifest
+            .parent()
+            .ok_or_else(|| RunError::Backend {
+                backend: BackendKind::Vz.to_string(),
+                reason: format!(
+                    "VZ guest manifest {} has no bundle directory",
+                    manifest_path.display()
+                ),
+            })?;
+        for (artifact, path) in [
+            ("kernel", &inputs.kernel),
+            ("initrd", &inputs.initrd),
+            ("rootfs", &inputs.rootfs),
+        ] {
+            let canonical_artifact =
+                std::fs::canonicalize(path).map_err(|error| RunError::Backend {
+                    backend: BackendKind::Vz.to_string(),
+                    reason: format!("resolve VZ guest {artifact} {}: {error}", path.display()),
+                })?;
+            if canonical_artifact.parent() != Some(bundle_dir) {
+                return Err(RunError::Backend {
+                    backend: BackendKind::Vz.to_string(),
+                    reason: format!(
+                        "VZ guest {artifact} {} is not a sibling of manifest {}",
+                        path.display(),
+                        manifest_path.display()
+                    ),
+                });
+            }
+        }
+        Ok(Self {
+            path: manifest_path.clone(),
+            guest_target,
+            shim_sha256,
+            kernel_sha256: parse_manifest_sha256(
+                &manifest_path,
+                "kernel_sha256",
+                values.get("kernel_sha256").copied(),
+            )?,
+            initrd_sha256: parse_manifest_sha256(
+                &manifest_path,
+                "initrd_sha256",
+                values.get("initrd_sha256").copied(),
+            )?,
+            rootfs_sha256: parse_manifest_sha256(
+                &manifest_path,
+                "rootfs_sha256",
+                values.get("rootfs_sha256").copied(),
+            )?,
+        })
+    }
+
+    fn validate_artifacts(&self, inputs: &VzGuestLaunchInputs) -> Result<(), RunError> {
+        for (field, expected, path) in [
+            ("kernel_sha256", &self.kernel_sha256, &inputs.kernel),
+            ("initrd_sha256", &self.initrd_sha256, &inputs.initrd),
+            ("rootfs_sha256", &self.rootfs_sha256, &inputs.rootfs),
+        ] {
+            validate_guest_artifact_hash(&self.path, field, expected, path)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+fn validate_guest_manifest(
+    inputs: &VzGuestLaunchInputs,
+) -> Result<(ShimTarget, [u8; 32]), RunError> {
+    let manifest = VzGuestManifest::read(inputs)?;
+    manifest.validate_artifacts(inputs)?;
+    Ok((manifest.guest_target, manifest.shim_sha256))
+}
+
+fn parse_manifest_sha256(
+    manifest_path: &Path,
+    field: &str,
+    value: Option<&str>,
+) -> Result<[u8; 32], RunError> {
+    let value = value.ok_or_else(|| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "VZ guest manifest {} is missing required {field}; rebuild guest artifacts with scripts/macos-vz/build-guest-artifacts.sh",
+            manifest_path.display()
+        ),
+    })?;
+    let mut digest = [0_u8; 32];
+    if value.len() != 64 || hex::decode_to_slice(value, &mut digest).is_err() {
+        return Err(RunError::Backend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "VZ guest manifest {} has malformed {field}: expected 64 hexadecimal characters, got '{value}'",
+                manifest_path.display()
+            ),
+        });
+    }
+    Ok(digest)
+}
+
+fn validate_guest_artifact_hash(
+    manifest_path: &Path,
+    field: &str,
+    expected: &[u8; 32],
+    artifact_path: &Path,
+) -> Result<(), RunError> {
+    let mut artifact = std::fs::File::open(artifact_path).map_err(|error| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "read VZ guest artifact {}: {error}",
+            artifact_path.display()
+        ),
+    })?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = artifact
+            .read(&mut buffer)
+            .map_err(|error| RunError::Backend {
+                backend: BackendKind::Vz.to_string(),
+                reason: format!(
+                    "read VZ guest artifact {}: {error}",
+                    artifact_path.display()
+                ),
+            })?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let actual: [u8; 32] = digest.finalize().into();
+    if expected != &actual {
+        return Err(vz_manifest_error(
+            manifest_path,
+            field,
+            &hex::encode(expected),
+            Some(&hex::encode(actual)),
+        ));
+    }
+    Ok(())
+}
+
+fn vz_manifest_error(path: &Path, field: &str, expected: &str, actual: Option<&str>) -> RunError {
+    RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "VZ guest manifest {} has incompatible {field}: expected '{expected}', got '{}'",
+            path.display(),
+            actual.unwrap_or("missing")
+        ),
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -377,6 +776,8 @@ struct VzGuestLaunchContract {
     mounts: Vec<MountSpec>,
     network: VzGuestNetworkContract,
     invariants: Vec<VzGuestInvariantContract>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret_shims: Option<VzGuestSecretShimsContract>,
 }
 
 impl VzGuestLaunchContract {
@@ -385,12 +786,14 @@ impl VzGuestLaunchContract {
         handle: &SandboxHandle,
         launch: &LaunchSpec,
         inputs: VzGuestLaunchInputs,
+        shim_support: &SecretShimSupport,
     ) -> Result<Self, RunError> {
         Self::from_launch_with_terminal_snapshot(
             handle,
             launch,
             inputs,
             TerminalSnapshot::from_host(),
+            shim_support,
         )
     }
 
@@ -399,9 +802,42 @@ impl VzGuestLaunchContract {
         launch: &LaunchSpec,
         inputs: VzGuestLaunchInputs,
         terminal_snapshot: TerminalSnapshot,
+        shim_support: &SecretShimSupport,
     ) -> Result<Self, RunError> {
         let terminal =
             VzGuestTerminalContract::from_launch_with_terminal_snapshot(launch, terminal_snapshot);
+
+        let provider_names = vz_guest_shim_provider_names(&launch.env)?;
+        let secret_shims = match (shim_support, provider_names) {
+            (
+                SecretShimSupport::IsolatedGuest {
+                    guest_target,
+                    broker_bridge,
+                    ..
+                },
+                Some(provider_names),
+            ) => Some(VzGuestSecretShimsContract {
+                guest_target_triple: guest_target.triple.to_string(),
+                provider_names,
+                broker_vsock_port: match broker_bridge {
+                    BrokerBridgeKind::VsockPort { port } => *port,
+                },
+                shim_share_directory: required_launch_path(
+                    &launch.env,
+                    "FIRMA_SECRET_SHIM_SHARE_DIRECTORY",
+                )?,
+                broker_socket_path: required_launch_path(
+                    &launch.env,
+                    "FIRMA_SECRET_BROKER_SOCKET_PATH",
+                )?,
+                guest_broker_addr: "127.0.0.1:18083".to_string(),
+            }),
+            (SecretShimSupport::IsolatedGuest { .. }, None)
+            | (
+                SecretShimSupport::HostBindMount { .. } | SecretShimSupport::Unsupported { .. },
+                _,
+            ) => None,
+        };
 
         Ok(Self {
             version: VZ_GUEST_LAUNCH_CONTRACT_VERSION,
@@ -434,6 +870,7 @@ impl VzGuestLaunchContract {
                 handle.identity.full_attribution_headers(),
             )?,
             invariants: VzGuestInvariantContract::required_set(handle.network_policy.fail_closed),
+            secret_shims,
         })
     }
 }
@@ -714,18 +1151,58 @@ enum VzGuestInvariantMode {
     DisabledByPolicy,
 }
 
-fn start_vz_guest_runner(handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
-    let inputs = VzGuestLaunchInputs::from_env()?;
-    start_vz_guest_runner_with_inputs(handle, launch, inputs)
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+struct VzGuestSecretShimsContract {
+    guest_target_triple: String,
+    provider_names: Vec<String>,
+    broker_vsock_port: u32,
+    shim_share_directory: PathBuf,
+    broker_socket_path: PathBuf,
+    guest_broker_addr: String,
+}
+
+/// Extracts the provider names that need shims from the launch environment.
+///
+/// Provider names are communicated via the `FIRMA_SECRET_PROVIDER_NAMES` env
+/// var set by `secret_shims::prepare` when it sets up the broker.
+fn vz_guest_shim_provider_names(
+    env: &BTreeMap<String, String>,
+) -> Result<Option<Vec<String>>, RunError> {
+    env.get("FIRMA_SECRET_PROVIDER_NAMES")
+        .map(|value| {
+            serde_json::from_str::<Vec<String>>(value).map_err(|error| {
+                RunError::Internal(format!(
+                    "parse internal VZ secret provider metadata: {error}"
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn required_launch_path(env: &BTreeMap<String, String>, key: &str) -> Result<PathBuf, RunError> {
+    env.get(key).map(PathBuf::from).ok_or_else(|| {
+        RunError::Internal(format!("internal VZ secret shim metadata is missing {key}"))
+    })
+}
+
+fn start_vz_guest_runner(
+    handle: &SandboxHandle,
+    launch: &LaunchSpec,
+    inputs: VzGuestLaunchInputs,
+    shim_support: &SecretShimSupport,
+) -> Result<Child, RunError> {
+    start_vz_guest_runner_with_inputs(handle, launch, inputs, shim_support)
 }
 
 fn start_vz_guest_runner_with_inputs(
     handle: &SandboxHandle,
     launch: &LaunchSpec,
     inputs: VzGuestLaunchInputs,
+    shim_support: &SecretShimSupport,
 ) -> Result<Child, RunError> {
     let runner = inputs.runner.clone();
-    let contract = VzGuestLaunchContract::from_launch(handle, launch, inputs)?;
+    let contract = VzGuestLaunchContract::from_launch(handle, launch, inputs, shim_support)?;
     let contract_path = write_vz_guest_launch_contract(handle, &contract)?;
 
     tracing::info!(
@@ -1016,7 +1493,6 @@ mod tests {
     #[cfg(unix)]
     use std::collections::BTreeSet;
     use std::num::NonZeroU16;
-    #[cfg(unix)]
     use std::path::Path;
     use std::path::PathBuf;
 
@@ -1024,14 +1500,21 @@ mod tests {
     use crate::config::{NetworkPolicy, SandboxIdentityMode, SidecarEndpoint};
     use crate::error::RunError;
     use crate::identity::RunIdentity;
+    use sha2::{Digest as _, Sha256};
 
     use super::{
-        GuestPtyRequest, GuestTerminalSelection, TerminalSize, TerminalSnapshot,
+        BrokerBridgeKind, GuestPtyRequest, GuestTerminalSelection, SecretShimSupport, ShimTarget,
+        TerminalSize, TerminalSnapshot, VZ_GUEST_BROKER_VSOCK_PORT,
         VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT, VZ_GUEST_COMMAND_PTY_VSOCK_PORT,
-        VzGuestLaunchContract, VzGuestLaunchInputs, VzGuestLayout, VzGuestTerminalContract,
-        VzStructuralMode, build_sandbox_profile, loopback_port_from, vz_structural_mode_from_flags,
-        write_vz_guest_launch_contract,
+        VzGuestLaunchContract, VzGuestLaunchInputs, VzGuestLayout, VzGuestRunContext,
+        VzGuestTerminalContract, VzStructuralMode, build_sandbox_profile,
+        isolated_guest_shim_support, loopback_port_from, validate_guest_manifest,
+        vz_structural_mode_from_flags, write_vz_guest_launch_contract,
     };
+
+    const SHARED_V2_CONTRACT_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/vz-guest-launch-v2.json");
+    const SHARED_V2_CONTRACT_ROOT: &str = "/openfirma-contract-v2";
     #[cfg(unix)]
     use super::{
         VZ_GUEST_INITRD_ENV, VZ_GUEST_KERNEL_ENV, VZ_GUEST_ROOTFS_ENV, VZ_GUEST_RUNNER_ENV,
@@ -1073,6 +1556,118 @@ mod tests {
         }
     }
 
+    fn shared_v2_contract_inputs() -> (SandboxHandle, LaunchSpec, VzGuestLaunchInputs) {
+        let identity = RunIdentity {
+            sandbox_id: "sbx_01j0000000e008000000000001"
+                .parse()
+                .expect("valid fixture sandbox id"),
+            session_id: "ses_contract_v2_fixture".to_string(),
+            agent_id: crate::identity::test_agent_id(),
+            execution_profile: "contract-v2".to_string(),
+        };
+        let handle = SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir: PathBuf::from(format!("{SHARED_V2_CONTRACT_ROOT}/runtime")),
+            identity,
+            mounts: vec![crate::backend::SandboxMount::operator_provided(
+                crate::config::MountSpec {
+                    source: PathBuf::from(format!("{SHARED_V2_CONTRACT_ROOT}/workspace")),
+                    target: PathBuf::from("/workspace"),
+                    read_only: false,
+                },
+            )],
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+        let launch = LaunchSpec {
+            executable: "/usr/bin/true".to_string(),
+            args: vec!["--version".to_string()],
+            cwd: PathBuf::from("/workspace"),
+            env: BTreeMap::from([
+                (
+                    "FIRMA_SECRET_PROVIDER_NAMES".to_string(),
+                    r#"["op","vault"]"#.to_string(),
+                ),
+                (
+                    "FIRMA_SECRET_SHIM_SHARE_DIRECTORY".to_string(),
+                    format!("{SHARED_V2_CONTRACT_ROOT}/sensitive/secret-shims"),
+                ),
+                (
+                    "FIRMA_SECRET_BROKER_SOCKET_PATH".to_string(),
+                    format!("{SHARED_V2_CONTRACT_ROOT}/sensitive/broker.sock"),
+                ),
+            ]),
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:19080"
+                    .parse()
+                    .expect("valid fixture sidecar addr"),
+            },
+            seccomp_filter_path: None,
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            config_file: None,
+        };
+        let inputs = VzGuestLaunchInputs {
+            runner: PathBuf::from(format!("{SHARED_V2_CONTRACT_ROOT}/firma-vz-runner")),
+            kernel: PathBuf::from(format!("{SHARED_V2_CONTRACT_ROOT}/vmlinuz")),
+            initrd: PathBuf::from(format!("{SHARED_V2_CONTRACT_ROOT}/initrd.img")),
+            rootfs: PathBuf::from(format!("{SHARED_V2_CONTRACT_ROOT}/rootfs.img")),
+        };
+
+        (handle, launch, inputs)
+    }
+
+    fn shared_v2_shim_support() -> SecretShimSupport {
+        SecretShimSupport::IsolatedGuest {
+            guest_target: ShimTarget::from_linux_musl_triple("x86_64-unknown-linux-musl")
+                .expect("supported fixture target"),
+            broker_bridge: BrokerBridgeKind::VsockPort {
+                port: VZ_GUEST_BROKER_VSOCK_PORT,
+            },
+            guest_shim: None,
+        }
+    }
+
+    #[test]
+    fn vz_guest_v2_contract_matches_shared_fixture() {
+        let (handle, launch, inputs) = shared_v2_contract_inputs();
+        let contract =
+            VzGuestLaunchContract::from_launch(&handle, &launch, inputs, &shared_v2_shim_support())
+                .expect("fixture contract should build through the production constructor");
+        let mut actual = serde_json::to_value(contract).expect("serialize fixture contract");
+        actual["network"]["attribution_headers"]["x-firma-user"] =
+            serde_json::Value::String("${USER}".to_string());
+        let expected: serde_json::Value =
+            serde_json::from_str(SHARED_V2_CONTRACT_FIXTURE).expect("parse shared fixture");
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual["version"], 2);
+        assert_eq!(
+            actual["secret_shims"],
+            serde_json::json!({
+                "guest_target_triple": "x86_64-unknown-linux-musl",
+                "provider_names": ["op", "vault"],
+                "broker_vsock_port": 18083,
+                "shim_share_directory": "/openfirma-contract-v2/sensitive/secret-shims",
+                "broker_socket_path": "/openfirma-contract-v2/sensitive/broker.sock",
+                "guest_broker_addr": "127.0.0.1:18083",
+            })
+        );
+    }
+
+    #[test]
+    fn vz_guest_contract_omits_secret_shims_without_prepared_metadata() {
+        let (handle, _, inputs) = shared_v2_contract_inputs();
+        let launch = test_launch("no-secret-shims");
+        let contract =
+            VzGuestLaunchContract::from_launch(&handle, &launch, inputs, &shared_v2_shim_support())
+                .expect("launch without CLI metadata should produce a contract");
+        let json = serde_json::to_value(contract).expect("serialize contract");
+
+        assert!(json.get("secret_shims").is_none());
+    }
+
     fn test_terminal_snapshot(interactive: bool) -> TerminalSnapshot {
         TerminalSnapshot {
             interactive,
@@ -1100,6 +1695,13 @@ mod tests {
                 kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+                guest_shim: None,
             },
         )
         .expect("guest contract should build from prepared launch")
@@ -1212,6 +1814,13 @@ mod tests {
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
             },
             terminal_snapshot,
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+                guest_shim: None,
+            },
         )
         .expect("guest contract should build from prepared launch");
 
@@ -1327,7 +1936,7 @@ mod tests {
         rootfs: &Path,
     ) {
         assert_stable_vz_guest_contract_shape(json);
-        assert_eq!(json["version"], 1);
+        assert_eq!(json["version"], 2);
         assert_eq!(json["sandbox_id"], identity.sandbox_id.to_string());
         assert_eq!(
             json["runner"]["path"],
@@ -1437,6 +2046,123 @@ mod tests {
                 rootfs.display().to_string(),
             ),
         ])
+    }
+
+    fn write_guest_bundle(root: &Path, rust_target: &str) -> VzGuestLaunchInputs {
+        let kernel = root.join("vmlinuz");
+        let initrd = root.join("initrd.img");
+        let rootfs = root.join("rootfs.img");
+        std::fs::write(&kernel, b"kernel").expect("write kernel");
+        std::fs::write(&initrd, b"initrd").expect("write initrd");
+        std::fs::write(&rootfs, b"rootfs").expect("write rootfs");
+        let hash = |value: &[u8]| hex::encode(Sha256::digest(value));
+        std::fs::write(
+            root.join("manifest.txt"),
+            format!(
+                "contract_version=2\nrust_target={rust_target}\nkernel_sha256={}\ninitrd_sha256={}\nrootfs_sha256={}\nshim_sha256={}\n",
+                hash(b"kernel"),
+                hash(b"initrd"),
+                hash(b"rootfs"),
+                hash(b"shim")
+            ),
+        )
+        .expect("write manifest");
+        VzGuestLaunchInputs {
+            runner: root.join("runner"),
+            kernel,
+            initrd,
+            rootfs,
+        }
+    }
+
+    #[test]
+    fn guest_manifest_target_is_authoritative_for_shim_selection() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let inputs = write_guest_bundle(tempdir.path(), "aarch64-unknown-linux-musl");
+
+        let (target, shim_sha256) =
+            validate_guest_manifest(&inputs).expect("validate guest bundle");
+        let expected_shim_sha256: [u8; 32] = Sha256::digest(b"shim").into();
+
+        assert_eq!(target.triple, "aarch64-unknown-linux-musl");
+        assert_eq!(shim_sha256, expected_shim_sha256);
+    }
+
+    #[test]
+    fn guest_manifest_requires_shim_digest() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let inputs = write_guest_bundle(tempdir.path(), "x86_64-unknown-linux-musl");
+        let manifest_path = tempdir.path().join("manifest.txt");
+        let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let manifest = manifest
+            .lines()
+            .filter(|line| !line.starts_with("shim_sha256="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&manifest_path, manifest).expect("write manifest without shim digest");
+
+        let error = validate_guest_manifest(&inputs).expect_err("missing shim digest must fail");
+
+        assert_backend_error_contains(&error, "missing required shim_sha256");
+    }
+
+    #[test]
+    fn guest_manifest_rejects_malformed_shim_digest() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let inputs = write_guest_bundle(tempdir.path(), "x86_64-unknown-linux-musl");
+        let manifest_path = tempdir.path().join("manifest.txt");
+        let manifest = std::fs::read_to_string(&manifest_path)
+            .expect("read manifest")
+            .replace(&hex::encode(Sha256::digest(b"shim")), "not-a-sha256-digest");
+        std::fs::write(&manifest_path, manifest).expect("write malformed manifest");
+
+        let error = validate_guest_manifest(&inputs).expect_err("malformed shim digest must fail");
+
+        assert_backend_error_contains(&error, "malformed shim_sha256");
+    }
+
+    #[test]
+    fn guest_manifest_requires_all_artifacts_to_be_siblings() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let other = tempfile::tempdir().expect("other tempdir");
+        let mut inputs = write_guest_bundle(tempdir.path(), "x86_64-unknown-linux-musl");
+        inputs.kernel = other.path().join("vmlinuz");
+        std::fs::write(&inputs.kernel, b"kernel").expect("write displaced kernel");
+
+        let error = validate_guest_manifest(&inputs).expect_err("split bundle must fail");
+
+        assert_backend_error_contains(&error, "not a sibling");
+    }
+
+    #[test]
+    fn guest_manifest_verifies_every_bundle_artifact_checksum() {
+        for (artifact, checksum_field) in [
+            ("vmlinuz", "kernel_sha256"),
+            ("initrd.img", "initrd_sha256"),
+            ("rootfs.img", "rootfs_sha256"),
+        ] {
+            let tempdir = tempfile::tempdir().expect("tempdir");
+            let inputs = write_guest_bundle(tempdir.path(), "x86_64-unknown-linux-musl");
+            std::fs::write(tempdir.path().join(artifact), b"tampered")
+                .expect("tamper guest artifact");
+
+            let error =
+                validate_guest_manifest(&inputs).expect_err("artifact checksum mismatch must fail");
+
+            assert_backend_error_contains(&error, checksum_field);
+            if artifact == "vmlinuz"
+                && let RunError::Backend { backend, reason } = &error
+            {
+                assert_eq!(backend, "vz");
+                let manifest_path = tempdir.path().join("manifest.txt");
+                let manifest_path = manifest_path.display().to_string();
+                assert!(reason.contains(&manifest_path));
+                insta::assert_snapshot!(
+                    error.to_string().replace(&manifest_path, "[MANIFEST]"),
+                    @"backend error (vz): VZ guest manifest [MANIFEST] has incompatible kernel_sha256: expected '6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c', got 'd121be3103007b41edf96f8262925f8c7d61894afe9a041843b631f69445bc57'"
+                );
+            }
+        }
     }
 
     // ── compatibility mode ────────────────────────────────────────────────────
@@ -1687,11 +2413,18 @@ mod tests {
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
             },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+                guest_shim: None,
+            },
         )
         .expect("guest contract should build from prepared launch");
 
         let json = serde_json::to_value(&contract).expect("serialize contract");
-        assert_eq!(json["version"], 1);
+        assert_eq!(json["version"], 2);
         assert_eq!(json["sandbox_id"], identity.sandbox_id.to_string());
         assert_eq!(json["command"]["executable"], "/usr/bin/true");
         assert_eq!(json["command"]["args"][0], "--print");
@@ -1813,6 +2546,13 @@ mod tests {
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
             },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+                guest_shim: None,
+            },
         )
         .expect_err("non-loopback sidecar endpoint must fail closed");
 
@@ -1880,6 +2620,13 @@ mod tests {
                 kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+                guest_shim: None,
             },
         )
         .expect("guest contract should build from prepared launch");
@@ -1965,6 +2712,13 @@ mod tests {
                 initrd: initrd.clone(),
                 rootfs: rootfs.clone(),
             },
+            &SecretShimSupport::IsolatedGuest {
+                guest_target: ShimTarget::linux_musl(),
+                broker_bridge: BrokerBridgeKind::VsockPort {
+                    port: VZ_GUEST_BROKER_VSOCK_PORT,
+                },
+                guest_shim: None,
+            },
         )
         .expect("fake VZ runner should spawn");
         let status = child.wait().expect("fake VZ runner should exit");
@@ -1998,6 +2752,95 @@ mod tests {
             &kernel,
             &initrd,
             &rootfs,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vz_guest_launch_uses_custody_bundle_after_source_replacement() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let source_dir = tempdir.path().join("source");
+        let custody_dir = tempdir.path().join("custody");
+        std::fs::create_dir_all(&source_dir).expect("create source dir");
+        let mut source = write_guest_bundle(&source_dir, "x86_64-unknown-linux-musl");
+        let args_capture_path = tempdir.path().join("runner-args.txt");
+        let contract_copy_path = tempdir.path().join("contract-copy.json");
+        source.runner = write_fake_vz_runner(&source_dir, &args_capture_path, &contract_copy_path);
+        let values = BTreeMap::from([
+            (
+                VZ_GUEST_RUNNER_ENV.to_string(),
+                source.runner.display().to_string(),
+            ),
+            (
+                VZ_GUEST_KERNEL_ENV.to_string(),
+                source.kernel.display().to_string(),
+            ),
+            (
+                VZ_GUEST_INITRD_ENV.to_string(),
+                source.initrd.display().to_string(),
+            ),
+            (
+                VZ_GUEST_ROOTFS_ENV.to_string(),
+                source.rootfs.display().to_string(),
+            ),
+        ]);
+        let context =
+            VzGuestRunContext::resolve_with_lookup(&custody_dir, |key| values.get(key).cloned())
+                .expect("resolve immutable VZ bundle context");
+
+        for path in [&source.kernel, &source.initrd, &source.rootfs] {
+            std::fs::write(path, b"replaced after resolution").expect("replace source artifact");
+        }
+        std::fs::write(&source.runner, b"replaced runner").expect("replace source runner");
+        std::fs::write(
+            source.initrd.with_file_name("manifest.txt"),
+            b"replaced manifest",
+        )
+        .expect("replace source manifest");
+
+        let handle = test_handle(tempdir.path().join("runtime"));
+        let launch = test_launch("immutable-bundle");
+        let expected_inputs = context.inputs.clone();
+        let mut child = start_vz_guest_runner_with_inputs(
+            &handle,
+            &launch,
+            context.inputs,
+            &isolated_guest_shim_support(context.guest_target, None),
+        )
+        .expect("spawn runner from custody");
+        assert!(child.wait().expect("wait for runner").success());
+
+        let contract: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&contract_copy_path).expect("read captured contract"),
+        )
+        .expect("parse captured contract");
+        assert_eq!(
+            contract["runner"]["path"],
+            serde_json::json!(expected_inputs.runner)
+        );
+        assert_eq!(
+            contract["guest"]["kernel"],
+            serde_json::json!(expected_inputs.kernel)
+        );
+        assert_eq!(
+            contract["guest"]["initrd"],
+            serde_json::json!(expected_inputs.initrd)
+        );
+        assert_eq!(
+            contract["guest"]["rootfs"],
+            serde_json::json!(expected_inputs.rootfs)
+        );
+        assert_eq!(
+            std::fs::read(&expected_inputs.kernel).expect("read custody kernel"),
+            b"kernel"
+        );
+        assert_eq!(
+            std::fs::read(&expected_inputs.initrd).expect("read custody initrd"),
+            b"initrd"
+        );
+        assert_eq!(
+            std::fs::read(&expected_inputs.rootfs).expect("read custody rootfs"),
+            b"rootfs"
         );
     }
 

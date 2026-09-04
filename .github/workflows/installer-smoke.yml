@@ -36,6 +36,25 @@ jobs:
           ./install.sh --install-dir "${INSTALL_DIR}"
           "${INSTALL_DIR}/firma" --version
           "${INSTALL_DIR}/firma" help config
+          case "$(uname -m)" in
+            x86_64) SHIM_TARGET=x86_64-unknown-linux-musl ;;
+            arm64 | aarch64) SHIM_TARGET=aarch64-unknown-linux-musl ;;
+            *) exit 1 ;;
+          esac
+          SHIM="${INSTALL_DIR}/libexec/openfirma/secret-shims/${SHIM_TARGET}/firma-secret-shim"
+          test -x "${SHIM}"
+          test "$(uname -s)" = Linux || file "${SHIM}" | grep -F ELF
+          case "${SHIM_TARGET}" in
+            x86_64-*) file "${SHIM}" | grep -F 'x86-64' ;;
+            aarch64-*) file "${SHIM}" | grep -E 'aarch64|ARM64' ;;
+          esac
+          if stat -c '%a' "${SHIM}" >/dev/null 2>&1; then
+            test "$(stat -c '%a' "${SHIM}")" = 755
+          else
+            test "$(stat -f '%Lp' "${SHIM}")" = 755
+          fi
+          test ! -x "${INSTALL_DIR}/firma-secret-shim"
+          ! PATH="${INSTALL_DIR}:${PATH}" command -v firma-secret-shim
       - name: Re-run (already installed exit path)
         env:
           FIRMA_NO_BREW: '1'
@@ -47,17 +66,87 @@ jobs:
           INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
           PATH="${INSTALL_DIR}:${PATH}" ./install.sh --install-dir "${INSTALL_DIR}" | tee out.log
           grep -F 'already installed' out.log
-      - name: Install legacy release
+      - name: Run mocked compatibility and transaction smoke
+        if: runner.os == 'Linux'
+        run: sh scripts/test-install-sh.sh
+
+  homebrew:
+    name: install.sh controlled Homebrew (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-14]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Seed a release binary and verified guest shim
         env:
           FIRMA_NO_BREW: '1'
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./install.sh --install-dir "${RUNNER_TEMP}/seed/bin"
+      - name: Run controlled Homebrew branch
+        env:
+          FIRMA_NO_INIT: '1'
+          FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_BREW_FIXTURE_BINARY: ${{ runner.temp }}/seed/bin/firma
+          FIXTURE_PREFIX: ${{ runner.temp }}/brew-fixture
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          INSTALL_DIR="${RUNNER_TEMP}/firma-legacy-bin"
-          ./install.sh --version v0.1.2 --install-dir "${INSTALL_DIR}"
-          "${INSTALL_DIR}/firma" --version | grep -F '0.1.2'
+          FIXTURE_BIN="${RUNNER_TEMP}/brew-fixture-tools"
+          mkdir -p "${FIXTURE_BIN}"
+          cat > "${FIXTURE_BIN}/brew" <<'EOF'
+          #!/bin/sh
+          set -eu
+          case "$1" in
+            info)
+              printf '%s\n' '{"formulae":[{"versions":{"stable":"fixture"}}]}'
+              ;;
+            ruby)
+              cat >/dev/null
+              "${FIRMA_BREW_FIXTURE_BINARY}" --version | awk '{print $2}'
+              ;;
+            install)
+              dest="${FIXTURE_PREFIX}/Cellar/firma/fixture/bin/firma"
+              mkdir -p "$(dirname "${dest}")"
+              cp "${FIRMA_BREW_FIXTURE_BINARY}" "${dest}"
+              chmod 0755 "${dest}"
+              ;;
+            list)
+              exit 99
+              ;;
+            --prefix)
+              printf '%s\n' "${FIXTURE_PREFIX}"
+              ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 0755 "${FIXTURE_BIN}/brew"
+
+          PATH="${FIXTURE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin" \
+            ./install.sh --install-dir "${RUNNER_TEMP}/unused-bin"
+
+          case "$(uname -m)" in
+            x86_64) SHIM_TARGET=x86_64-unknown-linux-musl ;;
+            arm64 | aarch64) SHIM_TARGET=aarch64-unknown-linux-musl ;;
+            *) exit 1 ;;
+          esac
+          BREW_BIN="${FIXTURE_PREFIX}/Cellar/firma/fixture/bin"
+          VERSION=$("${BREW_BIN}/firma" --version | awk '{print $2}')
+          SHIM="${FIXTURE_PREFIX}/var/openfirma/secret-shims/${VERSION}/${SHIM_TARGET}/firma-secret-shim"
+          SEED_SHIM="${RUNNER_TEMP}/seed/bin/libexec/openfirma/secret-shims/${SHIM_TARGET}/firma-secret-shim"
+          test -x "${BREW_BIN}/firma"
+          test -x "${SHIM}"
+          test ! -e "${BREW_BIN}/libexec"
+          file "${SHIM}" | grep -F ELF
+          test "$(shasum -a 256 "${SHIM}" | awk '{print $1}')" = \
+            "$(shasum -a 256 "${SEED_SHIM}" | awk '{print $1}')"
+          test ! -e "${FIXTURE_PREFIX}/bin/firma-secret-shim"
+          ! PATH="${BREW_BIN}:/usr/bin:/bin" command -v firma-secret-shim
 
   windows:
     name: install.ps1 (${{ matrix.runner }})
@@ -81,6 +170,7 @@ jobs:
           .\install.ps1 -InstallDir $dir
           & (Join-Path $dir 'firma.exe') --version
           & (Join-Path $dir 'firma.exe') help config
+          if (Test-Path (Join-Path $dir 'firma-secret-shim.exe')) { Write-Host 'shim must not be a user-facing command'; exit 1 }
       - name: Re-run (already installed exit path)
         shell: pwsh
         env:

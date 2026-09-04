@@ -63,6 +63,24 @@ pub enum ContractValidationError {
     NonLoopbackSocketAddr { field: &'static str, value: String },
     #[error("{field} must be non-zero")]
     ZeroPort { field: &'static str },
+    #[error("secret_shims provider name must be a single portable path component: {name}")]
+    UnsafeSecretShimProviderName { name: String },
+    #[error("secret_shims provider name is reserved for internal broker readiness checks: {name}")]
+    ReservedSecretShimProviderName { name: String },
+    #[error("secret_shims.provider_names must not be empty when secret_shims is present")]
+    EmptySecretShimProviders,
+    #[error("{field} must not be within guest-writable runtime_dir {runtime_dir}: {path}")]
+    SecretShimPathWithinRuntime {
+        field: &'static str,
+        path: PathBuf,
+        runtime_dir: PathBuf,
+    },
+    #[error("secret_shims.broker_vsock_port must be distinct from network.vsock_sidecar_port")]
+    BrokerPortConflictsWithSidecar,
+    #[error("secret_shims.broker_vsock_port must be distinct from terminal.pty_vsock_port")]
+    BrokerPortConflictsWithPtyData,
+    #[error("secret_shims.broker_vsock_port must be distinct from terminal.pty_control_vsock_port")]
+    BrokerPortConflictsWithPtyControl,
     #[error("network.direct_network_devices_allowed must be false for VZ guest mode")]
     DirectNetworkDevicesAllowed,
     #[error("network.attribution_headers must contain x-firma-sandbox-id")]

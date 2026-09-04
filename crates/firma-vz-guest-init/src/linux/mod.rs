@@ -17,13 +17,13 @@ use std::time::Duration;
 
 use boot::{BootContract, BootNetworkMode, parse_boot_contract};
 use command::execute_contract;
-use contract::{Contract, accept_contract};
+use contract::{Contract, SecretShims, accept_contract};
 use error::InitResult;
 use mount::{
-    SHARE_ROOT, create_dir, load_required_modules, mount_contract_paths, mount_pseudo,
-    mount_virtiofs, setup_pty_devices,
+    SHARE_ROOT, create_dir, create_dir_path, load_required_modules, mount_contract_paths,
+    mount_pseudo, mount_virtiofs, setup_pty_devices,
 };
-use network::{NetworkServicesPlan, start_guest_network_services};
+use network::{CommandNetworkEnv, NetworkServicesPlan, start_guest_network_services};
 use result::{
     GuestHeartbeatPhase, write_boot_heartbeat, write_heartbeat, write_result, write_setup_error,
 };
@@ -101,12 +101,85 @@ fn run_contract(boot: &BootContract) -> InitResult<()> {
         GuestHeartbeatPhase::MountsReady,
     )?;
     let _network_services = start_guest_network_services(&network_services)?;
-    let result = execute_contract(
-        &boot.launch_contract,
-        &contract,
-        network_services.command_env(),
-    );
+
+    let mut command_env = network_services.command_env().clone();
+    if let Some(shims) = contract.secret_shims() {
+        materialize_secret_shims(shims, &mut command_env)?;
+    }
+
+    let result = execute_contract(&boot.launch_contract, &contract, &command_env);
     write_result(&boot.launch_contract, &result)?;
+    Ok(())
+}
+
+/// Materializes guest secret shim entries and injects the broker bridge address.
+///
+/// Creates a private directory with symlinks from each provider name to the
+/// fixed shared shim binary, then prepends that directory to PATH. The network
+/// plan has already injected the guest-local broker TCP endpoint.
+fn materialize_secret_shims(
+    shims: &SecretShims,
+    command_env: &mut CommandNetworkEnv,
+) -> InitResult<()> {
+    let guest_shim_path = Path::new(SHARE_ROOT)
+        .join("secret-shims")
+        .join("firma-secret-shim");
+    materialize_secret_shims_at(
+        shims,
+        command_env,
+        &guest_shim_path,
+        Path::new("/run/firma-secret-shims"),
+    )
+}
+
+/// Materializes validated provider links without mutating the shared binary.
+fn materialize_secret_shims_at(
+    shims: &SecretShims,
+    command_env: &mut CommandNetworkEnv,
+    guest_shim_path: &Path,
+    shim_dir: &Path,
+) -> InitResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    create_dir_path(shim_dir)?;
+    let metadata = std::fs::metadata(guest_shim_path).map_err(|source| {
+        error::InitError::GuestNetworkSetup {
+            detail: format!(
+                "inspect secret shim binary {} for target '{}': {source}",
+                guest_shim_path.display(),
+                shims.guest_target_triple(),
+            ),
+        }
+    })?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        return Err(error::InitError::GuestNetworkSetup {
+            detail: format!(
+                "secret shim must be an executable regular file: {}",
+                guest_shim_path.display()
+            ),
+        });
+    }
+
+    for name in shims.provider_names() {
+        let link_path = shim_dir.join(name);
+        std::os::unix::fs::symlink(guest_shim_path, &link_path).map_err(|source| {
+            error::InitError::CreateSymlink {
+                from: guest_shim_path.to_path_buf(),
+                to: link_path,
+                source,
+            }
+        })?;
+    }
+
+    command_env.prepend_path(shim_dir.display().to_string());
+
+    log(&format!(
+        "materialized {} secret shim(s) in {} for target '{}'",
+        shims.provider_names().len(),
+        shim_dir.display(),
+        shims.guest_target_triple(),
+    ));
+
     Ok(())
 }
 

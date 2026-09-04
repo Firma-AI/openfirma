@@ -13,6 +13,7 @@ use super::log;
 
 const SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
 const SANDBOX_ATTRIBUTION_HEADER: &str = "x-firma-sandbox-id";
+pub const BROKER_READINESS_BINARY: &str = "__firma_broker_readiness_probe__";
 
 /// Raw launch contract shape read from the runtime share.
 #[derive(Debug, Deserialize)]
@@ -42,6 +43,9 @@ pub struct LaunchContract {
     /// Required host invariants recorded in the launch contract.
     #[serde(default)]
     pub invariants: Vec<InvariantContract>,
+    /// Secret shim deployment metadata for guest CLI provider mediation.
+    #[serde(default)]
+    pub secret_shims: Option<SecretShimsContract>,
 }
 
 /// Host runner metadata carried by the launch contract.
@@ -74,6 +78,55 @@ pub struct InvariantContract {
     pub mode: String,
 }
 
+/// Secret shim deployment metadata carried by the launch contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretShimsContract {
+    /// Guest target triple for the shim binary (e.g. "x86_64-unknown-linux-musl").
+    pub guest_target_triple: String,
+    /// Provider names that need shim entries in the guest PATH.
+    pub provider_names: Vec<String>,
+    /// VSOCK port used for the broker bridge.
+    pub broker_vsock_port: u32,
+    /// Guest-local loopback TCP address exposed to secret shims.
+    pub guest_broker_addr: String,
+    /// Host broker socket path carried for cross-component schema agreement.
+    pub broker_socket_path: PathBuf,
+    /// Host directory containing the shim binary (guest path via virtiofs).
+    pub shim_share_directory: PathBuf,
+}
+
+/// Secret shim metadata accepted for guest execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecretShims {
+    guest_target_triple: String,
+    provider_names: Vec<String>,
+    broker_vsock_port: NonZeroU32,
+    guest_broker_addr: SocketAddr,
+}
+
+impl SecretShims {
+    /// Returns the guest target triple for diagnostics.
+    pub fn guest_target_triple(&self) -> &str {
+        &self.guest_target_triple
+    }
+
+    /// Returns the validated provider basenames.
+    pub fn provider_names(&self) -> &[String] {
+        &self.provider_names
+    }
+
+    /// Returns the host broker VSOCK port.
+    pub const fn broker_vsock_port(&self) -> NonZeroU32 {
+        self.broker_vsock_port
+    }
+
+    /// Returns the guest-local broker TCP address.
+    pub const fn guest_broker_addr(&self) -> SocketAddr {
+        self.guest_broker_addr
+    }
+}
+
 /// Launch contract that has passed guest-side validation.
 #[derive(Debug)]
 pub struct Contract {
@@ -81,6 +134,7 @@ pub struct Contract {
     terminal: Terminal,
     mounts: Vec<MountContract>,
     network: Network,
+    secret_shims: Option<SecretShims>,
 }
 
 impl Contract {
@@ -103,6 +157,11 @@ impl Contract {
     pub fn terminal(&self) -> &Terminal {
         &self.terminal
     }
+
+    /// Returns the secret shim deployment metadata, if present.
+    pub fn secret_shims(&self) -> Option<&SecretShims> {
+        self.secret_shims.as_ref()
+    }
 }
 
 impl TryFrom<LaunchContract> for Contract {
@@ -110,13 +169,14 @@ impl TryFrom<LaunchContract> for Contract {
 
     /// Accepts a parsed launch contract after guest-side validation.
     fn try_from(contract: LaunchContract) -> Result<Self, Self::Error> {
-        let (terminal, network) = accept_contract_boundary(&contract)?;
+        let (terminal, network, secret_shims) = accept_contract_boundary(&contract)?;
 
         Ok(Self {
             command: contract.command,
             terminal,
             mounts: contract.mounts,
             network,
+            secret_shims,
         })
     }
 }
@@ -476,20 +536,23 @@ pub fn validate_contract(contract: &LaunchContract) -> InitResult<()> {
 }
 
 /// Accepts the launch contract boundary before moving executable fields.
-fn accept_contract_boundary(contract: &LaunchContract) -> InitResult<(Terminal, Network)> {
+fn accept_contract_boundary(
+    contract: &LaunchContract,
+) -> InitResult<(Terminal, Network, Option<SecretShims>)> {
     validate_contract_header(contract)?;
     let terminal = accept_terminal_contract(&contract.terminal)?;
     let network = accept_network_contract(&contract.network, &contract.sandbox_id)?;
-    validate_terminal_network_port_conflicts(&terminal, &network)?;
+    let secret_shims = accept_secret_shims_contract(contract)?;
+    validate_port_conflicts(&terminal, &network, secret_shims.as_ref())?;
 
-    Ok((terminal, network))
+    Ok((terminal, network, secret_shims))
 }
 
 /// Validates top-level contract fields before accepting substructures.
 fn validate_contract_header(contract: &LaunchContract) -> InitResult<()> {
     observe_host_launch_metadata(contract);
 
-    if contract.version != 1 {
+    if contract.version != 2 {
         return Err(InitError::InvalidContractVersion {
             version: contract.version,
         });
@@ -546,6 +609,85 @@ fn observe_host_launch_metadata(contract: &LaunchContract) {
     for mount in &contract.mounts {
         let _ = &mount.source;
     }
+
+    if let Some(shims) = &contract.secret_shims {
+        let _ = (
+            &shims.guest_target_triple,
+            &shims.provider_names,
+            &shims.guest_broker_addr,
+            &shims.broker_socket_path,
+            &shims.shim_share_directory,
+        );
+    }
+}
+
+/// Accepts optional version-2 secret shim metadata at the guest boundary.
+fn accept_secret_shims_contract(contract: &LaunchContract) -> InitResult<Option<SecretShims>> {
+    let Some(shims) = &contract.secret_shims else {
+        return Ok(None);
+    };
+
+    if shims.guest_target_triple.trim().is_empty() {
+        return Err(contract_setup(
+            "secret_shims.guest_target_triple must not be empty",
+        ));
+    }
+    if shims.provider_names.is_empty() {
+        return Err(contract_setup(
+            "secret_shims.provider_names must not be empty",
+        ));
+    }
+
+    let mut provider_names = std::collections::BTreeSet::new();
+    for name in &shims.provider_names {
+        if !is_portable_basename(name) || name == BROKER_READINESS_BINARY {
+            return Err(contract_setup(format!(
+                "secret_shims provider name must be a portable basename: {name:?}"
+            )));
+        }
+        if !provider_names.insert(name) {
+            return Err(contract_setup(format!(
+                "secret_shims contains duplicate provider name: {name:?}"
+            )));
+        }
+    }
+
+    let broker_vsock_port =
+        NonZeroU32::new(shims.broker_vsock_port).ok_or(InitError::ZeroNetworkPort {
+            field: "secret_shims.broker_vsock_port",
+        })?;
+    let guest_broker_addr =
+        require_loopback_socket_addr("secret_shims.guest_broker_addr", &shims.guest_broker_addr)?;
+
+    if !shims.broker_socket_path.is_absolute() {
+        return Err(contract_setup(format!(
+            "secret_shims.broker_socket_path must be absolute: {}",
+            shims.broker_socket_path.display()
+        )));
+    }
+    if !shims.shim_share_directory.is_absolute() {
+        return Err(contract_setup(format!(
+            "secret_shims.shim_share_directory must be absolute: {}",
+            shims.shim_share_directory.display()
+        )));
+    }
+
+    Ok(Some(SecretShims {
+        guest_target_triple: shims.guest_target_triple.clone(),
+        provider_names: shims.provider_names.clone(),
+        broker_vsock_port,
+        guest_broker_addr,
+    }))
+}
+
+/// Matches the portable basename invariant used by the host broker.
+fn is_portable_basename(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | ':' | '\0'))
 }
 
 /// Accepts terminal metadata into the executable guest shape.
@@ -629,27 +771,72 @@ fn validate_terminal_dimensions(terminal: &TerminalContract) -> InitResult<()> {
 }
 
 /// Validates terminal VSOCK ports do not collide with network VSOCK ports.
-fn validate_terminal_network_port_conflicts(
+fn validate_port_conflicts(
     terminal: &Terminal,
     network: &Network,
+    secret_shims: Option<&SecretShims>,
 ) -> InitResult<()> {
-    let Some(pty) = terminal.pty_plan() else {
+    if let Some(pty) = terminal.pty_plan() {
+        if pty.data_port() == network.vsock_sidecar_port() {
+            return Err(InitError::TerminalPtyPortConflictsWithNetwork);
+        }
+
+        if pty.control_port() == network.vsock_sidecar_port() {
+            return Err(InitError::TerminalPtyControlPortConflictsWithNetwork);
+        }
+
+        if pty.control_port() == pty.data_port() {
+            return Err(InitError::TerminalPtyControlPortConflictsWithPtyPort);
+        }
+    }
+
+    let Some(shims) = secret_shims else {
         return Ok(());
     };
 
-    if pty.data_port() == network.vsock_sidecar_port() {
-        return Err(InitError::TerminalPtyPortConflictsWithNetwork);
+    if shims.broker_vsock_port() == network.vsock_sidecar_port() {
+        return Err(contract_setup(
+            "secret_shims.broker_vsock_port must be distinct from network.vsock_sidecar_port",
+        ));
+    }
+    if terminal
+        .pty_plan()
+        .is_some_and(|pty| pty.data_port() == shims.broker_vsock_port())
+    {
+        return Err(contract_setup(
+            "secret_shims.broker_vsock_port must be distinct from terminal.pty_vsock_port",
+        ));
+    }
+    if terminal
+        .pty_plan()
+        .is_some_and(|pty| pty.control_port() == shims.broker_vsock_port())
+    {
+        return Err(contract_setup(
+            "secret_shims.broker_vsock_port must be distinct from terminal.pty_control_vsock_port",
+        ));
     }
 
-    if pty.control_port() == network.vsock_sidecar_port() {
-        return Err(InitError::TerminalPtyControlPortConflictsWithNetwork);
+    let broker_addr = shims.guest_broker_addr();
+    if broker_addr == network.guest_http_proxy_addr() {
+        return Err(contract_setup(
+            "secret_shims.guest_broker_addr must be distinct from network.guest_http_proxy_addr",
+        ));
     }
-
-    if pty.control_port() == pty.data_port() {
-        return Err(InitError::TerminalPtyControlPortConflictsWithPtyPort);
+    if broker_addr == network.guest_dns_stub_addr()
+        || broker_addr == SocketAddr::new(network.guest_dns_stub_addr().ip(), 53)
+    {
+        return Err(contract_setup(
+            "secret_shims.guest_broker_addr conflicts with the guest DNS listener",
+        ));
     }
 
     Ok(())
+}
+
+fn contract_setup(detail: impl Into<String>) -> InitError {
+    InitError::GuestNetworkSetup {
+        detail: detail.into(),
+    }
 }
 
 /// Accepts the guest network envelope into parsed addresses and ports.

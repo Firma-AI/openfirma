@@ -22,11 +22,18 @@ pub(crate) mod test_utils;
     about = "Run an OpenFirma macOS VZ guest launch contract"
 )]
 struct Args {
-    #[arg(long, value_name = "PATH")]
-    launch_contract: PathBuf,
+    #[arg(
+        long,
+        value_name = "PATH",
+        required_unless_present = "supported_contract_version"
+    )]
+    launch_contract: Option<PathBuf>,
 
     #[arg(long, hide = true)]
     validate_only: bool,
+
+    #[arg(long, hide = true, conflicts_with_all = ["launch_contract", "validate_only"])]
+    supported_contract_version: bool,
 }
 
 /// Parses CLI arguments and maps runner failures to a process exit code.
@@ -43,7 +50,16 @@ fn main() -> ExitCode {
 
 /// Validates the launch contract and optionally starts the configured VM.
 fn run(args: &Args) -> Result<ExitCode> {
-    let contract = contract::ContractDocument::read_from_path(&args.launch_contract)?.validate()?;
+    if args.supported_contract_version {
+        println!("{}", contract::SUPPORTED_CONTRACT_VERSION);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let launch_contract = args
+        .launch_contract
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("--launch-contract is required"))?;
+    let contract = contract::ContractDocument::read_from_path(launch_contract)?.validate()?;
     let vm_plan = vm::VmPlan::from_contract(&contract)?;
 
     if args.validate_only {
@@ -84,8 +100,9 @@ mod tests {
         make_contract_file_owner_only(&contract_path)?;
 
         let code = run(&Args {
-            launch_contract: contract_path,
+            launch_contract: Some(contract_path),
             validate_only: true,
+            supported_contract_version: false,
         })?;
 
         assert_eq!(code, ExitCode::SUCCESS);
@@ -107,8 +124,9 @@ mod tests {
         make_contract_file_owner_only(&contract_path)?;
 
         let error = run(&Args {
-            launch_contract: contract_path,
+            launch_contract: Some(contract_path),
             validate_only: true,
+            supported_contract_version: false,
         })
         .err()
         .ok_or_else(|| anyhow::anyhow!("validate-only should fail on invalid VM plan"))?;

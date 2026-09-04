@@ -72,6 +72,32 @@ not supported — define them as a full `{ type = "http", ... }` table.
   under opaque `fsp_…` placeholders the gateway resolves later. An entry being
   present is itself the authorization to intercept — no separate policy check
   gates it.
+
+  CLI secret mediation is available on backends that declare shim support:
+  the Linux bwrap backend (host bind-mount) and the macOS VZ guest backend
+  (isolated guest with VSOCK broker bridge). WSL2 and sandbox-exec
+  compatibility mode are unsupported because the wrapped process can call the
+  host directly, so a shim would be redundant. Firecracker support is planned
+  but not yet implemented.
+
+  Install with the repository-owned `curl | sh` installer to receive the
+  target-qualified private shim used by these backends. On macOS, that
+  installer completes both its tarball and Homebrew branches by downloading
+  and checksum-verifying the matching Linux-musl shim archive. Running
+  `brew install Firma-AI/openfirma/firma` directly currently installs the CLI
+  only because the external tap does not yet package this private resource;
+  VZ CLI-provider mediation then fails closed during preflight. The shim is
+  intentionally not exposed on `PATH`.
+  A custom VZ guest bundle records the exact shim digest in `manifest.txt`;
+  install that matching shim rather than mixing artifacts from another build.
+  Published releases through `v0.1.6` predate this private artifact. When one
+  of those versions is explicitly selected with `--version`, the installer
+  reports that it is installing the historical CLI only; missing shims in
+  current or newer release archives abort before the installation is changed.
+  Tarball installs keep the shim under
+  `libexec/openfirma/secret-shims/<linux-musl-target>/` beside `firma`.
+  The Homebrew branch preinstalls it outside versioned kegs under
+  `$(brew --prefix)/var/openfirma/secret-shims/<version>/<linux-musl-target>/`.
 - **HTTP entry** — mirrored into the autostarted Sidecar's
   `[sidecar].http_secret_providers` so the Sidecar's MITM path can intercept
   matching vault responses. Fail-closed: an unknown vault path is `blocked`, a

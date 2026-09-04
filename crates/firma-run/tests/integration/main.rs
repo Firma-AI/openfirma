@@ -14,6 +14,7 @@ mod helper;
 mod identity;
 mod log;
 mod profile_alias;
+mod secret_services;
 mod sidecar_config_merge;
 mod sidecar_prepare;
 mod vscode;

@@ -1232,7 +1232,7 @@ mod tests {
         terminal: TerminalContract,
     ) -> Result<Contract, Box<dyn Error>> {
         Ok(LaunchContract {
-            version: 1,
+            version: 2,
             sandbox_id: "sbx_01j0000000e008000000000001"
                 .parse()
                 .expect("valid sandbox ID fixture"),
@@ -1275,6 +1275,7 @@ mod tests {
                 name: "preserve_stdio_signals_exit".to_string(),
                 mode: "required".to_string(),
             }],
+            secret_shims: None,
         }
         .try_into()?)
     }

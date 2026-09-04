@@ -13,8 +13,8 @@ use super::boot::{BootContract, BootNetworkMode, boot_contract_from_cmdline};
 use super::command::{CommandOutcome, execute_contract};
 use super::contract::{
     CommandContract, Contract, DnsMode, GuestContract, InvariantContract, LaunchContract,
-    MountContract, NetworkContract, NetworkMode, RunnerContract, TerminalContract, accept_contract,
-    read_contract, validate_contract,
+    MountContract, NetworkContract, NetworkMode, RunnerContract, SecretShimsContract,
+    TerminalContract, accept_contract, read_contract, validate_contract,
 };
 use super::error::{InitError, InitResult};
 use super::mount::{
@@ -30,6 +30,27 @@ use super::result::{
 type TestResult = Result<(), Box<dyn Error>>;
 
 const VALID_CONTRACT_JSON: &str = include_str!("fixtures/valid-contract.json");
+const SHARED_V2_CONTRACT_FIXTURE: &str =
+    include_str!("../../../../tests/fixtures/vz-guest-launch-v2.json");
+
+#[test]
+fn accepts_shared_producer_v2_contract() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch-v2.json");
+    fs::write(&contract_path, SHARED_V2_CONTRACT_FIXTURE)?;
+
+    let contract = accept_contract(&contract_path)?;
+    let shims = contract
+        .secret_shims()
+        .ok_or_else(|| io::Error::other("shared v2 fixture omitted secret shims"))?;
+
+    assert_eq!(shims.guest_target_triple(), "x86_64-unknown-linux-musl");
+    assert_eq!(shims.provider_names(), &["op", "vault"]);
+    assert_eq!(shims.broker_vsock_port().get(), 18_083);
+    assert_eq!(shims.guest_broker_addr(), "127.0.0.1:18083".parse()?);
+
+    Ok(())
+}
 
 #[test]
 fn boot_contract_accepts_none_network_mode() -> TestResult {
@@ -145,18 +166,171 @@ fn contract_accepts_valid_contract() -> TestResult {
 #[test]
 fn contract_rejects_invalid_version() -> TestResult {
     let mut contract = valid_launch_contract();
-    contract.version = 2;
+    contract.version = 1;
 
     let error = expect_init_error(
         validate_contract(&contract),
-        "contract should reject unknown versions",
+        "guest init must reject obsolete contract versions",
     )?;
 
     assert!(matches!(
         error,
-        InitError::InvalidContractVersion { version: 2 }
+        InitError::InvalidContractVersion { version: 1 }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn contract_accepts_version_two_secret_shim_metadata() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.version = 2;
+    contract.secret_shims = Some(valid_secret_shims_contract());
+
+    let accepted: Contract = contract.try_into()?;
+    let Some(shims) = accepted.secret_shims() else {
+        return Err(io::Error::other("accepted contract omitted secret shims").into());
+    };
+
+    assert_eq!(shims.provider_names(), &["op", "vault"]);
+    assert_eq!(shims.broker_vsock_port().get(), 18_083);
+    assert_eq!(shims.guest_broker_addr(), "127.0.0.1:18083".parse()?);
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_non_portable_or_reserved_provider_names() -> TestResult {
+    for name in [
+        "",
+        ".",
+        "..",
+        "../op",
+        "dir/op",
+        r"dir\op",
+        "C:op",
+        "nul\0name",
+        "__firma_broker_readiness_probe__",
+    ] {
+        let mut contract = valid_launch_contract();
+        contract.version = 2;
+        let mut shims = valid_secret_shims_contract();
+        shims.provider_names = vec![name.to_string()];
+        contract.secret_shims = Some(shims);
+
+        let error = expect_init_error(
+            validate_contract(&contract),
+            "unsafe provider name should fail at the contract boundary",
+        )?;
+        assert_matches!(
+            &error,
+            InitError::GuestNetworkSetup { detail }
+                if detail == &format!(
+                    "secret_shims provider name must be a portable basename: {name:?}"
+                )
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_duplicate_provider_names() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.version = 2;
+    let mut shims = valid_secret_shims_contract();
+    shims.provider_names = vec!["op".to_string(), "op".to_string()];
+    contract.secret_shims = Some(shims);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "duplicate provider links should fail before materialization",
+    )?;
+    assert_matches!(&error, InitError::GuestNetworkSetup { detail } if detail == "secret_shims contains duplicate provider name: \"op\"");
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_invalid_secret_shim_endpoints_and_paths() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.version = 2;
+    let mut shims = valid_secret_shims_contract();
+    shims.guest_broker_addr = "10.0.0.2:18083".to_string();
+    contract.secret_shims = Some(shims);
+    let error = expect_init_error(validate_contract(&contract), "broker must bind loopback")?;
+    assert_matches!(
+        &error,
+        InitError::NonLoopbackNetworkSocketAddr { field, .. }
+            if *field == "secret_shims.guest_broker_addr"
+    );
+
+    let mut contract = valid_launch_contract();
+    contract.version = 2;
+    let mut shims = valid_secret_shims_contract();
+    shims.broker_socket_path = PathBuf::from("broker.sock");
+    contract.secret_shims = Some(shims);
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "broker socket must be absolute",
+    )?;
+    assert_matches!(&error, InitError::GuestNetworkSetup { detail } if detail == "secret_shims.broker_socket_path must be absolute: broker.sock");
+
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_secret_shim_vsock_port_collisions() -> TestResult {
+    for (broker_port, pty, expected) in [
+        (
+            18_080,
+            None,
+            "secret_shims.broker_vsock_port must be distinct from network.vsock_sidecar_port",
+        ),
+        (
+            20_000,
+            Some((20_000, 20_001)),
+            "secret_shims.broker_vsock_port must be distinct from terminal.pty_vsock_port",
+        ),
+        (
+            20_001,
+            Some((20_000, 20_001)),
+            "secret_shims.broker_vsock_port must be distinct from terminal.pty_control_vsock_port",
+        ),
+    ] {
+        let mut contract = valid_launch_contract();
+        contract.version = 2;
+        if let Some((data, control)) = pty {
+            contract.terminal.interactive = true;
+            contract.terminal.pty = true;
+            contract.terminal.pty_vsock_port = Some(data);
+            contract.terminal.pty_control_vsock_port = Some(control);
+        }
+        let mut shims = valid_secret_shims_contract();
+        shims.broker_vsock_port = broker_port;
+        contract.secret_shims = Some(shims);
+
+        let error = expect_init_error(
+            validate_contract(&contract),
+            "broker VSOCK port collision should fail",
+        )?;
+        assert_matches!(&error, InitError::GuestNetworkSetup { detail } if detail == expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_guest_broker_listener_collisions() -> TestResult {
+    for addr in ["127.0.0.1:18080", "127.0.0.1:1053", "127.0.0.1:53"] {
+        let mut contract = valid_launch_contract();
+        contract.version = 2;
+        let mut shims = valid_secret_shims_contract();
+        shims.guest_broker_addr = addr.to_string();
+        contract.secret_shims = Some(shims);
+
+        let error = expect_init_error(
+            validate_contract(&contract),
+            "guest broker address collision should fail",
+        )?;
+        assert_matches!(&error, InitError::GuestNetworkSetup { .. });
+    }
     Ok(())
 }
 
@@ -759,12 +933,36 @@ fn read_contract_parses_valid_contract_json() -> TestResult {
 
     let contract = read_contract(&contract_path)?;
 
-    assert_eq!(contract.version, 1);
+    assert_eq!(contract.version, 2);
     assert_eq!(contract.command.executable, "/bin/true");
     assert!(!contract.terminal.interactive);
     assert_eq!(contract.mounts.len(), 1);
     assert_eq!(contract.network.vsock_sidecar_port, 18080);
 
+    Ok(())
+}
+
+#[test]
+fn read_contract_consumes_version_two_secret_shim_schema() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json()?;
+    json["secret_shims"] = json!({
+        "guest_target_triple": "x86_64-unknown-linux-musl",
+        "provider_names": ["op"],
+        "broker_vsock_port": 18083,
+        "shim_share_directory": "/host/control/secret-shims",
+        "broker_socket_path": "/host/control/broker.sock",
+        "guest_broker_addr": "127.0.0.1:18083"
+    });
+    let contract_path = write_contract_json(temp.path(), &json)?;
+
+    let contract = accept_contract(&contract_path)?;
+    let Some(shims) = contract.secret_shims() else {
+        return Err(io::Error::other("parsed contract omitted secret shims").into());
+    };
+
+    assert_eq!(shims.provider_names(), &["op"]);
+    assert_eq!(shims.guest_broker_addr(), "127.0.0.1:18083".parse()?);
     Ok(())
 }
 
@@ -1002,6 +1200,48 @@ fn accepted_contract_log_message_describes_launch_boundary() -> TestResult {
          attribution_headers=1"
     );
 
+    Ok(())
+}
+
+#[test]
+fn secret_shims_use_stable_read_only_artifact_and_private_links() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let shared_binary = temp.path().join("share").join("firma-secret-shim");
+    let private_dir = temp.path().join("run").join("firma-secret-shims");
+    fs::create_dir_all(shared_binary.parent().ok_or("shim path has no parent")?)?;
+    fs::write(&shared_binary, b"guest shim")?;
+    fs::set_permissions(&shared_binary, fs::Permissions::from_mode(0o555))?;
+
+    let mut launch = valid_launch_contract();
+    launch.version = 2;
+    launch.secret_shims = Some(valid_secret_shims_contract());
+    let contract: Contract = launch.try_into()?;
+    let Some(shims) = contract.secret_shims() else {
+        return Err(io::Error::other("accepted contract omitted secret shims").into());
+    };
+    let plan = NetworkServicesPlan::try_from(&contract)?;
+    let mut env = plan.command_env().clone();
+
+    super::materialize_secret_shims_at(shims, &mut env, &shared_binary, &private_dir)?;
+
+    assert_eq!(fs::read(&shared_binary)?, b"guest shim");
+    assert_eq!(
+        fs::metadata(&shared_binary)?.permissions().mode() & 0o777,
+        0o555
+    );
+    for provider in ["op", "vault"] {
+        let link = private_dir.join(provider);
+        assert_eq!(fs::read_link(link)?, shared_binary);
+    }
+    assert_eq!(
+        env.as_map().get("FIRMA_BROKER_ADDR").map(String::as_str),
+        Some("tcp://127.0.0.1:18083")
+    );
+    assert!(
+        env.as_map()
+            .get("PATH")
+            .is_some_and(|path| path.starts_with(&private_dir.display().to_string()))
+    );
     Ok(())
 }
 
@@ -2229,7 +2469,7 @@ fn write_contract_json(
 
 fn valid_launch_contract() -> LaunchContract {
     LaunchContract {
-        version: 1,
+        version: 2,
         sandbox_id: "sbx_01j0000000e008000000000001"
             .parse()
             .expect("valid sandbox ID fixture"),
@@ -2280,6 +2520,18 @@ fn valid_launch_contract() -> LaunchContract {
             name: "preserve_stdio_signals_exit".to_string(),
             mode: "required".to_string(),
         }],
+        secret_shims: None,
+    }
+}
+
+fn valid_secret_shims_contract() -> SecretShimsContract {
+    SecretShimsContract {
+        guest_target_triple: "x86_64-unknown-linux-musl".to_string(),
+        provider_names: vec!["op".to_string(), "vault".to_string()],
+        broker_vsock_port: 18_083,
+        guest_broker_addr: "127.0.0.1:18083".to_string(),
+        broker_socket_path: PathBuf::from("/host/control/broker.sock"),
+        shim_share_directory: PathBuf::from("/host/control/secret-shims"),
     }
 }
 
