@@ -915,15 +915,9 @@ fn prepare_run_components(
             })?;
         let firma_exe = std::env::current_exe()
             .map_err(|error| RunError::Internal(format!("resolve current executable: {error}")))?;
-        let cwd_template = std::env::current_dir()
-            .ok()
-            .map(|cwd| cwd.join("firma_sidecar.toml"));
         let mut sidecar_template = owns_sidecar
             .then(|| {
-                crate::sidecar::config::resolve_template_sources(
-                    flags.template_path.as_deref(),
-                    cwd_template.as_deref(),
-                )
+                crate::sidecar::config::resolve_template_sources(flags.template_path.as_deref())
             })
             .transpose()?;
         let mut authority_launch = None;

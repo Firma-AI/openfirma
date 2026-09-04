@@ -162,10 +162,11 @@ With `--sidecar local` (also the default when no sidecar endpoint is configured)
 Sidecar alongside the agent process, waits for readiness, and tears it down
 on exit.
 
-Each selected operator template (`--sidecar-config`,
-`FIRMA_SIDECAR_CONFIG_FILE`, or the working-directory fallback) must be a
-unified, sectioned `firma.toml` containing `[sidecar]`. Invalid templates fail
-before local components start or run-marker artifacts are created.
+The Sidecar inherits its template from the resolved `firma.toml`
+(`--config` / `FIRMA_CONFIG` / discovery), else a minimal config. The selected
+template must be a unified, sectioned `firma.toml` containing `[sidecar]`.
+Invalid templates fail before local components start or run-marker artifacts are
+created.
 
 The simplest invocation:
 
@@ -469,7 +470,6 @@ approval_policy = "on-request"
 | `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                                                                                                                                                                                                                                                                                |
 | `--sidecar <local\|url>`                    | `local` autostarts a per-run Sidecar; a `tcp://host:port` / `unix:///path` value targets an external one and never autostarts. Omitted: persisted `sidecar_endpoint` else local autostart.                                                                                                                                                                                            |
 | `--no-autostart`                            | Disable autostart for any missing component and fail loudly. Incompatible with `--sidecar local` and `--authority local`. CI / production safety net.                                                                                                                                                                                                                                 |
-| `--sidecar-config <path>`                   | Sidecar TOML template for autostart. Falls back to `./firma_sidecar.toml`, then a synthesized minimal config.                                                                                                                                                                                                                                                                        |
 | `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                                                                                                                                                                                                                                                                               |
 | `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                                                                                                                                                                                                                                                                                              |
 | `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                                                                                                                                                                                                                                                                                |
