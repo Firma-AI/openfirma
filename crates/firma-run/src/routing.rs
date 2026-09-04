@@ -13,7 +13,7 @@ use firma_process_orchestrator::{
     ComponentEndpoint, ComponentSpec, LifecycleTimeouts, StackTopology, UnixEndpoint,
     spawn_stack_from_plan,
 };
-use firma_runtime_state::RuntimeLayout;
+use firma_runtime_state::{RunEntryLayout, RuntimeLayout};
 use firma_secret_provider::spec::http::HttpIntegrationSpec;
 
 #[cfg(unix)]
@@ -830,8 +830,9 @@ fn sidecar_trust_env_overrides(owned_sidecar_marker: Option<&Path>) -> BTreeMap<
     let Some(marker) = owned_sidecar_marker else {
         return env;
     };
-    let ca_dir = marker.join("firma-ca");
-    let ca_cert = ca_dir.join("firma-ca.crt");
+    let run_entry = RunEntryLayout::from_root(marker);
+    let ca_dir = run_entry.ca_dir();
+    let ca_cert = run_entry.ca_cert();
     env.insert(
         "FIRMA_SIDECAR_CA_DIR".to_string(),
         ca_dir.display().to_string(),

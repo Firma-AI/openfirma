@@ -73,7 +73,53 @@ impl RunEntryLayout {
     pub fn sidecar_metadata(&self) -> PathBuf {
         self.root.join("metadata.toml")
     }
+
+    /// Return the directory holding the per-run Sidecar HTTPS MITM CA.
+    #[must_use]
+    pub fn ca_dir(&self) -> PathBuf {
+        self.root.join(CA_DIR_NAME)
+    }
+
+    /// Return the Sidecar MITM CA certificate.
+    ///
+    /// Public material: wrapped processes must be able to read it to verify
+    /// intercepted TLS connections.
+    #[must_use]
+    pub fn ca_cert(&self) -> PathBuf {
+        self.ca_dir().join(CA_CERT_FILE_NAME)
+    }
+
+    /// Return the Sidecar MITM CA appended to the host's system roots.
+    ///
+    /// Written only under `ca_trust_mode = "append_system_roots"`. Public
+    /// material, like [`RunEntryLayout::ca_cert`].
+    #[must_use]
+    pub fn ca_bundle(&self) -> PathBuf {
+        self.ca_dir().join(CA_BUNDLE_FILE_NAME)
+    }
+
+    /// Return the Sidecar MITM CA private key.
+    ///
+    /// Secret material. Never expose this path to a wrapped process: holding
+    /// the key allows minting certificates trusted by anything configured to
+    /// trust the Sidecar CA.
+    #[must_use]
+    pub fn ca_key(&self) -> PathBuf {
+        self.ca_dir().join(CA_KEY_FILE_NAME)
+    }
 }
+
+/// Directory holding the per-run Sidecar HTTPS MITM CA material.
+pub const CA_DIR_NAME: &str = "firma-ca";
+
+/// File name of the Sidecar MITM CA certificate.
+pub const CA_CERT_FILE_NAME: &str = "firma-ca.crt";
+
+/// File name of the Sidecar MITM CA appended to the host's system roots.
+pub const CA_BUNDLE_FILE_NAME: &str = "firma-ca-bundle.crt";
+
+/// File name of the Sidecar MITM CA private key.
+pub const CA_KEY_FILE_NAME: &str = "firma-ca.key";
 
 impl RuntimeLayout {
     /// Resolve a runtime layout from an optional explicit root and the process
