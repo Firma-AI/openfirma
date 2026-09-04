@@ -22,6 +22,15 @@ Inspect the complete change and read enough surrounding code or documentation
 to understand the affected contracts. Review the intended behavior first, then
 whether the implementation preserves it.
 
+When the planning workflow applied, read the accepted plan and disposition log
+from the original accepted full commit-SHA-and-path locator and the latest
+reviewed locator at that same stable path. Preserve the original accepted
+locator as provenance when a later reviewed plan revision exists. Separately
+validate that the recorded ownership base is the original plan commit's parent;
+the ownership base does not contain the plan. Never rely on a plan path at
+`HEAD`: the plan is removed mechanically after this review. Treat the plan as
+intent and historical context, not as proof or maintained documentation.
+
 Prioritize actionable issues involving:
 
 - correctness bugs and behavior regressions;

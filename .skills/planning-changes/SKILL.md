@@ -15,10 +15,12 @@ questions, research notes, and drafts are transient unless the user requests
 them or they contain durable facts that belong in an existing ADR,
 architecture document, interface, or user guide.
 
-The accepted artifact and its plan-review findings must be available through a
-durable, team-accessible repository path or URL that does not depend on any
-particular agent, chat product, or private conversation. A conversation link
-may supplement that locator but cannot replace it.
+For every Full or Compact change, the accepted artifact and its plan-review
+findings become the first, plan-only commit owned by that pull request, relative
+to an immutable ownership base recorded in the artifact. The durable locator is
+the full commit SHA plus the plan path at that commit, preferably linked as a
+repository blob URL pinned to that SHA. A path at `HEAD`, an agent thread, or a
+private conversation is not a durable locator.
 
 ## Route the work
 
@@ -62,6 +64,98 @@ implementation slices are expected.
 
 Compact mode may combine research, design, and structure in one working
 context. It still requires an independent plan review.
+
+## Plan artifact lifecycle
+
+This section is the source of truth for formal-plan artifacts. It applies only
+to Full and Compact work; it does not create artifacts for the no-plan
+exemptions above.
+
+### Establish the first commit
+
+Before implementation begins:
+
+1. Choose one stable repository-relative Markdown path. That is the only
+   PR-owned plan path for the entire lifecycle; do not rename it, split it, or
+   create a second plan path.
+2. Record the intended ownership base in the plan. The first plan commit must
+   have that exact commit as its parent and change only the stable plan path.
+3. Obtain independent plan review and append every finding and disposition.
+4. While review remains unresolved and no implementation commit exists, amend
+   or replace that first commit at the same path as needed. If findings change
+   the plan, update the first commit, record the resulting candidate commit's
+   new full-SHA-and-path locator, and rerun review under the existing review
+   rules.
+5. Once the complete plan and disposition log are accepted, record the full
+   ownership-base SHA, first-commit SHA, and path in the implementation handoff
+   and PR body. Do not amend the plan commit merely to write its
+   self-referential SHA into the plan.
+
+No implementation, test, user documentation, migration, or behavior change
+belongs in the plan commit. The first implementation commit ends the plan
+commit's mutable phase. From then on, do not amend, reparent, squash, or
+otherwise replace the accepted plan commit, its ownership base, or its
+immutable locator.
+
+If implementation evidence invalidates the accepted design, stop the affected
+slice. Preserve the first commit, update the same stable plan path in a later
+plan-only commit, record the amendment or superseding decision, obtain the
+required independent review, and link both commit-pinned revisions. Do not
+silently rewrite the accepted historical plan or create another plan path.
+Keep the original accepted locator as provenance; the latest reviewed
+same-path plan locator becomes the authority for the current implementation.
+
+### Close the artifact
+
+Keep the stable plan path available in the branch tip through implementation
+verification, post-implementation adversarial review, and required finding
+disposition. Once those are complete, add one final commit that deletes that
+path and changes nothing else. This closing deletion is mechanical and does not
+require another adversarial review; any later code, test, contract, or
+documentation change means the PR was not actually closed and the lifecycle
+must be reopened before review resumes.
+
+The closing deletion commit must be the immediate child of the exact
+independently reviewed implementation tip. Any code, test, contract,
+documentation, or behavior change after that review invalidates the reviewed
+tip evidence; obtain a fresh review before recreating the closing commit.
+
+The final PR tip and effective base-to-tip diff must contain no PR-owned plan
+Markdown. The add-then-delete sequence is absent from the final tree and
+effective diff. A merge strategy that preserves the branch commits can still
+retain the historical plan commit in ancestry; never claim that deletion
+erases it from Git history.
+
+After approval and merge, code, tests, user-facing documentation, migration
+documentation, and stable contracts are the maintained source of truth. The
+commit-pinned plan is historical context, not maintained documentation, and
+must not remain in the checked-out tree on the target branch.
+
+### Stacked pull requests and base changes
+
+Route every PR in a stack independently. Each Full or Compact PR records its own
+immutable ownership base and stable plan path, then owns its own first plan-only
+commit and closing deletion-only commit. Prefer creating a descendant from the
+ancestor PR's closed tip so ancestor plans are already absent. Before accepting
+a descendant, list all ancestor plan paths and verify that its tip does not
+reintroduce any of them.
+
+While a plan is unresolved and implementation has not begun, restack bottom-up,
+replace the affected first commit, update the prospective locator, and rerun
+plan review. After implementation begins, preserve each accepted plan commit
+SHA and its recorded ownership base. Integrate ancestor or target-branch changes
+without rewriting that ownership history. A squash- or rebase-merged ancestor
+can make the current GitHub base-to-tip commit range include historical ancestor
+commits; the recorded ownership base, not the rewritten GitHub base, still
+defines which first commit this PR owns. This does not require a global
+commit-preserving merge policy.
+
+After every base update, verify the lifecycle both against the immutable
+ownership base and against the current PR diff, and confirm that ancestor plan
+paths remain absent from the descendant tip. If maintainers require a clean
+current-base range that cannot preserve the accepted ownership history, stop
+and create a replacement PR with a newly reviewed plan and locator. Never
+silently rewrite the accepted plan SHA to make the range look clean.
 
 ## Full workflow
 
@@ -214,25 +308,18 @@ compatibility, security posture, migration, or a public contract.
 
 Plan review never replaces post-implementation adversarial review.
 
-### 8. Publish the accepted artifact
+### 8. Establish the accepted plan commit
 
-After dispositions are recorded, publish the accepted artifact and unchanged
-reviewer-authored findings at a durable location that the implementation owner,
-human reviewers, and later agents can open without access to the planning
-conversation. Suitable locations include a repository-tracked Markdown file or
-a stable team-accessible issue, pull request, or design-document URL.
+After dispositions are recorded, follow the plan artifact lifecycle above.
+Make the complete accepted artifact and unchanged reviewer-authored findings
+the PR's first plan-only commit. Record its full commit SHA and path in the
+implementation handoff; the eventual PR description must link the same
+commit-pinned artifact.
 
-The artifact must record:
-
-- its durable locator and status;
-- the repository revision researched;
-- the task or requirement source;
-- any artifact it supersedes; and
-- the complete finding disposition log.
-
-Record the same locator in the implementation handoff and eventual pull request
-description. If the plan changes during implementation, update or supersede the
-durable artifact explicitly.
+The artifact must record its status, repository-relative path, researched
+revision, immutable ownership base, task or requirement source, any artifact it
+supersedes, and the complete finding disposition log. The handoff records the
+self-referential immutable locator after the commit exists.
 
 ## Compact workflow
 
@@ -244,8 +331,8 @@ For Compact mode:
 4. produce one or two vertical slices with proof obligations;
 5. assemble a concise artifact from the same template;
 6. obtain a fresh independent review using `reviewing-plans`; and
-7. publish the accepted artifact and findings at a durable, team-accessible
-   locator under the same contract as Full mode.
+7. establish its accepted plan commit and immutable locator under the same
+   lifecycle as Full mode.
 
 Do not skip independent challenge merely because research and design shared a
 context.
@@ -254,7 +341,8 @@ context.
 
 Before implementation, ensure:
 
-- the accepted artifact has a durable, tool-agnostic locator;
+- the accepted artifact is the PR's first plan-only commit relative to its
+  recorded ownership base and has a full commit-SHA-and-path locator;
 - every material Unknown is a visible gap or resolved decision;
 - each affected invariant has one primary owner;
 - runtime invariants have runtime or boundary proof obligations;
@@ -264,7 +352,8 @@ Before implementation, ensure:
 - durable facts target their canonical owning documentation; and
 - plan findings and dispositions remain visible.
 
-Implement slice by slice. If implementation evidence invalidates the design,
-amend the artifact explicitly instead of silently diverging. After final
-verification, follow [`adversarial-review`](../adversarial-review/SKILL.md) on
-the actual change.
+Implement slice by slice without rewriting the accepted plan commit. Follow
+the amendment rule above if implementation evidence invalidates the design.
+After final verification, follow
+[`adversarial-review`](../adversarial-review/SKILL.md) on the actual change,
+dispose its findings, then create the mechanical closing deletion commit.

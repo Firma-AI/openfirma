@@ -61,8 +61,9 @@ review its own work. Give the reviewer:
 - the PR URL, or the final revision when no PR exists;
 - the intended externally observable behavior, if the PR does not state it
   clearly;
-- the durable locator for the accepted design plan and its pre-review
-  disposition log when the planning workflow applied; and
+- the immutable ownership-base SHA, original accepted plan locator, latest
+  reviewed same-path plan locator, and disposition log when the planning
+  workflow applied; and
 - any review priorities explicitly requested by the user.
 
 Do not give the reviewer:
@@ -79,6 +80,15 @@ deviations, unmet proof obligations, newly reachable risks, and dispositions
 that implementation evidence contradicts. When the planning workflow applied
 but its artifact is missing or inaccessible, report the resulting conformance
 and proof-obligation gap instead of silently treating the plan as absent.
+
+When formal planning applied, run this review and dispose its findings before
+the plan's closing deletion-only commit. The plan must still be present in the
+reviewed tip, while the accepted commit-pinned locator remains the durable
+reference. Record the exact reviewed tip SHA; the later mechanical deletion
+must be its immediate child. The deletion changes no behavior or meaning, so it
+does not require another adversarial review. Any intervening or subsequent
+implementation or documentation change requires fresh review and reopening the
+lifecycle defined by [`planning-changes`](../planning-changes/SKILL.md).
 
 Present the reviewer's findings to the user without silently dismissing or
 fixing them. If behavior-changing fixes are made after the review, obtain

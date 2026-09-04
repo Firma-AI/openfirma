@@ -1,6 +1,6 @@
 ---
 name: commit-guidelines
-description: Dirty repo, uncommitted changes, commit, amend, split, changeset, PR history: inspect repository state and prepare atomic Git commits or jj changesets. Use whenever the worktree is already dirty or you are about to commit or rewrite history.
+description: "Dirty repo, uncommitted changes, commit, amend, split, changeset, PR history: inspect repository state and prepare atomic Git commits or jj changesets. Use whenever the worktree is already dirty or you are about to commit or rewrite history."
 ---
 
 # Commit Guidelines
@@ -21,11 +21,14 @@ Prefer local checkpoint commits or jj changesets during substantial work.
 ## Reviewed history
 
 Preserve reviewed history by default and add follow-up revisions for new work.
-Rebasing onto the latest target branch is always allowed to keep reviewed work
-mergeable, including when dependent revisions must be restacked. Limit changes
-to existing revisions during that rebase to resolving conflicts introduced by
-it. Rewrite reviewed history for other reasons only when the user explicitly
-asks.
+Rebasing onto the latest target branch is normally allowed to keep reviewed
+work mergeable, including when dependent revisions must be restacked. Limit
+changes to existing revisions during that rebase to resolving conflicts
+introduced by it. The accepted first plan commit defined by
+[`planning-changes`](../planning-changes/SKILL.md) is an exception: its full
+commit SHA and recorded ownership base are immutable review evidence once
+implementation begins, so do not rebase, reparent, squash, or otherwise rewrite
+them. Rewrite other reviewed history only when the user explicitly asks.
 
 ## Workflow
 
@@ -83,6 +86,44 @@ Group by intent, not by file type.
 For a stack, keep each PR's base-to-head diff limited to that PR's intent.
 Repair and restack bottom-up so dependent revisions are evaluated on corrected
 predecessors.
+
+## Formal-plan PR history
+
+When `planning-changes` routes a PR to Full or Compact planning, its atomic
+history has this shape:
+
+1. first PR-owned commit: add only the complete accepted plan and review
+   disposition Markdown at its one stable path, directly on the recorded
+   ownership base;
+2. middle commits: implementation slices with their tests and maintained docs;
+3. final commit: delete only that stable plan path, after implementation review
+   and finding disposition, as the immediate child of the exact reviewed tip.
+
+The final deletion commit is mechanical. Do not combine it with code, tests,
+user-facing docs, migration docs, contracts, formatting, or metadata. Do not
+append meaningful changes after it. These rules do not apply to a no-plan
+exemption.
+
+The first commit may be amended or replaced while plan review is unresolved and
+before implementation starts, but its plan path must not change. Once accepted
+implementation begins, preserve its full commit SHA and ownership base. If
+later work reopens a closed, unprotected PR, move or drop the old deletion so
+the plan remains available through the new review, then create a new closing
+deletion. If reviewed-history rules prohibit that rewrite, restore the same
+plan path from the latest reviewed plan revision's commit-pinned locator in a
+standalone mechanical commit before new work and delete it again in the final
+mechanical commit. Preserve the original accepted locator as provenance and
+record the latest reviewed locator separately as the source of the restored
+current plan.
+
+For stacked PRs, apply the shape independently to each PR. Restack unresolved
+plans bottom-up and rerun affected plan reviews. Do not restack across an
+accepted plan commit. Integrate the updated base without changing the recorded
+ownership base or accepted SHA. After any base change, verify the PR against its
+ownership base and the current GitHub diff, and confirm that no ancestor plan
+path has reappeared in the descendant tip. If a clean rewritten-base range is
+mandatory, create a replacement PR and replan rather than rewriting the
+accepted plan commit.
 
 ## Git workflow
 
