@@ -14,20 +14,28 @@ use firma_protobuf::v1::audit_service_client::AuditServiceClient;
 use tonic::transport::Channel;
 
 use super::execution_event_to_proto;
+use super::metadata::stream_events_request;
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
+use crate::authority_credentials::ResolvedSidecarCredentials;
 
 /// Audit sink that streams events over gRPC to a remote collector.
 #[derive(Debug)]
 pub struct GrpcAuditSink {
     /// The gRPC endpoint URL (e.g. `https://audit.example.com`).
     endpoint: String,
+    /// Sidecar credentials attached as gRPC metadata when configured.
+    credentials: Option<ResolvedSidecarCredentials>,
 }
 
 impl GrpcAuditSink {
     /// Constructs a new [`GrpcAuditSink`] targeting `endpoint`.
-    pub(crate) fn new(endpoint: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        endpoint: impl Into<String>,
+        credentials: Option<ResolvedSidecarCredentials>,
+    ) -> Self {
         Self {
             endpoint: endpoint.into(),
+            credentials,
         }
     }
 
@@ -60,10 +68,11 @@ impl AuditSink for GrpcAuditSink {
         let (stream_tx, stream_rx) =
             tokio::sync::mpsc::channel::<firma_protobuf::v1::ExecutionEvent>(256);
         let stream = tokio_stream::wrappers::ReceiverStream::new(stream_rx);
+        let request = stream_events_request(stream, self.credentials.as_ref())?;
 
         // Spawn the RPC in a background task so we can keep feeding
         // events without blocking on the server response.
-        let rpc_handle = tokio::spawn(async move { client.stream_events(stream).await });
+        let rpc_handle = tokio::spawn(async move { client.stream_events(request).await });
 
         loop {
             tokio::select! {
@@ -156,13 +165,13 @@ mod tests {
 
     #[test]
     fn test_new_stores_endpoint() {
-        let sink = GrpcAuditSink::new("https://audit.example.com");
+        let sink = GrpcAuditSink::new("https://audit.example.com", None);
         assert_eq!(sink.endpoint, "https://audit.example.com");
     }
 
     #[tokio::test]
     async fn test_sink_returns_bind_error_for_unreachable_endpoint() {
-        let sink = GrpcAuditSink::new("http://127.0.0.1:1");
+        let sink = GrpcAuditSink::new("http://127.0.0.1:1", None);
         let (_tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
 

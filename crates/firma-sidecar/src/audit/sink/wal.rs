@@ -25,7 +25,9 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tonic::transport::Channel;
 
 use super::execution_event_to_proto;
+use super::metadata::stream_events_request;
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
+use crate::authority_credentials::ResolvedSidecarCredentials;
 
 /// Audit sink that streams events over gRPC with local WAL fallback.
 #[derive(Debug)]
@@ -37,6 +39,8 @@ pub struct WalAuditSink {
     /// Maximum WAL file size in bytes. When exceeded the oldest events
     /// are compacted away.
     wal_max_bytes: u64,
+    /// Sidecar credentials attached as gRPC metadata when configured.
+    credentials: Option<ResolvedSidecarCredentials>,
 }
 
 impl WalAuditSink {
@@ -45,11 +49,13 @@ impl WalAuditSink {
         endpoint: impl Into<String>,
         wal_path: impl AsRef<Path>,
         wal_max_bytes: u64,
+        credentials: Option<ResolvedSidecarCredentials>,
     ) -> Self {
         Self {
             endpoint: endpoint.into(),
             wal_path: wal_path.as_ref().to_path_buf(),
             wal_max_bytes,
+            credentials,
         }
     }
 
@@ -436,7 +442,14 @@ impl WalAuditSink {
 
         let (tx, stream_rx) = tokio::sync::mpsc::channel::<firma_protobuf::v1::ExecutionEvent>(256);
         let stream = tokio_stream::wrappers::ReceiverStream::new(stream_rx);
-        let handle = tokio::spawn(async move { client.stream_events(stream).await });
+        let request = match stream_events_request(stream, self.credentials.as_ref()) {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::error!("failed to build audit stream request: {error}");
+                return None;
+            }
+        };
+        let handle = tokio::spawn(async move { client.stream_events(request).await });
 
         tracing::debug!("gRPC stream opened");
         Some((tx, handle))
@@ -518,6 +531,7 @@ mod tests {
             "https://audit.example.com",
             "/var/lib/firma/wal",
             100 * 1024 * 1024,
+            None,
         );
         assert_eq!(sink.endpoint, "https://audit.example.com");
         assert_eq!(sink.wal_path, PathBuf::from("/var/lib/firma/wal"));
@@ -529,7 +543,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let wal_path = dir.path().join("wal.jsonl");
 
-        let sink = WalAuditSink::new("http://127.0.0.1:1", &wal_path, 10 * 1024 * 1024);
+        let sink = WalAuditSink::new("http://127.0.0.1:1", &wal_path, 10 * 1024 * 1024, None);
         let (tx, rx) = mpsc::channel(16);
         let exit = CancellationToken::new();
 
@@ -568,6 +582,7 @@ mod tests {
             "http://127.0.0.1:1",
             "/nonexistent/dir/wal.jsonl",
             10 * 1024 * 1024,
+            None,
         );
         let (_tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
@@ -699,7 +714,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let wal_path = dir.path().join("empty.jsonl");
 
-        let sink = WalAuditSink::new("http://127.0.0.1:1", &wal_path, 10 * 1024 * 1024);
+        let sink = WalAuditSink::new("http://127.0.0.1:1", &wal_path, 10 * 1024 * 1024, None);
         let (tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
 
