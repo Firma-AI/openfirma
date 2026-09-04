@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::io::{ErrorKind, Read as _};
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::sync::Arc;
@@ -30,7 +31,7 @@ use firma_secret_provider::{
 use tokio::sync::RwLock;
 
 use crate::backend::{
-    BrokerBridgeKind, SandboxHandle, SandboxMount, SecretShimSupport, ShimTarget,
+    BrokerBridgeKind, ResolvedGuestShim, SandboxHandle, SandboxMount, SecretShimSupport, ShimTarget,
 };
 use crate::config::{MountSpec, ResolvedProfile};
 use crate::error::RunError;
@@ -38,6 +39,8 @@ use crate::secret::accept::serve_forever;
 
 const FIRMA_BROKER_ADDR: &str = "FIRMA_BROKER_ADDR";
 const FIRMA_SECRET_PROVIDER_NAMES: &str = "FIRMA_SECRET_PROVIDER_NAMES";
+const FIRMA_SECRET_SHIM_SHARE_DIRECTORY: &str = "FIRMA_SECRET_SHIM_SHARE_DIRECTORY";
+const FIRMA_SECRET_BROKER_SOCKET_PATH: &str = "FIRMA_SECRET_BROKER_SOCKET_PATH";
 
 /// File name of the shim binary shipped alongside the `firma` executable.
 const SHIM_BIN_NAME: &str = "firma-secret-shim";
@@ -67,6 +70,8 @@ pub struct SecretServices {
     pub gateway_addr: String,
     /// Formatted broker address, injected into shimmed agent processes.
     broker_addr: String,
+    broker_socket_path: Option<PathBuf>,
+    control_dir: PathBuf,
     shutdown: Option<tokio::sync::mpsc::Sender<()>>,
     join: Option<std::thread::JoinHandle<()>>,
 }
@@ -96,6 +101,7 @@ impl SecretServices {
         handle: &SandboxHandle,
         identity: &crate::identity::RunIdentity,
         profile: &ResolvedProfile,
+        shim_support: &SecretShimSupport,
     ) -> Result<Self, RunError> {
         let gateway_base = runtime_layout
             .run_entry_layout(&identity.sandbox_id)
@@ -106,10 +112,19 @@ impl SecretServices {
                 gateway_base.display()
             ))
         })?;
-        let broker_base = handle.runtime_dir.join("secret-shims");
+        let broker_base = match shim_support {
+            SecretShimSupport::IsolatedGuest { .. } => gateway_base.join("broker"),
+            SecretShimSupport::HostBindMount { .. } | SecretShimSupport::Unsupported { .. } => {
+                handle.runtime_dir.join("secret-shims")
+            }
+        };
         create_private_dir(&broker_base)?;
         let gateway_endpoint = server_endpoint(&gateway_base, "gateway.sock")?;
         let broker_endpoint = server_endpoint(&broker_base, "broker.sock")?;
+        #[cfg(unix)]
+        let broker_socket_path = Some(broker_base.join("broker.sock"));
+        #[cfg(windows)]
+        let broker_socket_path = None;
 
         let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
@@ -201,6 +216,8 @@ impl SecretServices {
         Ok(Self {
             gateway_addr,
             broker_addr,
+            broker_socket_path,
+            control_dir: gateway_base,
             shutdown: Some(shutdown_tx),
             join: Some(thread),
         })
@@ -277,7 +294,7 @@ pub(super) fn prepare(
     if !cli_providers.is_empty() {
         match shim_support {
             SecretShimSupport::HostBindMount { guest_target } => {
-                let shim_bin = locate_shim_binary(firma_exe, guest_target)?;
+                let shim_bin = locate_shim_binary(firma_exe, guest_target, true)?.path;
                 let reals = resolve_real_binaries(&cli_providers, host_path)?;
                 let plan = plan(&shim_bin, &reals, services.broker_addr());
                 handle
@@ -288,14 +305,38 @@ pub(super) fn prepare(
                 }
             }
             SecretShimSupport::IsolatedGuest {
-                guest_target,
                 broker_bridge,
+                guest_shim,
+                ..
             } => {
-                let _shim_bin = locate_shim_binary(firma_exe, guest_target)?;
+                let guest_shim = guest_shim.as_ref().ok_or_else(|| {
+                    RunError::Internal(
+                        "isolated guest secret shim was not resolved for this run".to_string(),
+                    )
+                })?;
+                let shim_share_directory = services.control_dir.join("guest-secret-shims");
+                stage_guest_shim(guest_shim, &shim_share_directory)?;
+                let broker_socket_path = services.broker_socket_path.as_ref().ok_or_else(|| {
+                    RunError::Internal(
+                        "VZ secret broker requires a host Unix socket path".to_string(),
+                    )
+                })?;
                 let provider_names: Vec<String> = cli_providers.keys().cloned().collect();
                 env.insert(
                     FIRMA_SECRET_PROVIDER_NAMES.to_string(),
-                    provider_names.join(","),
+                    serde_json::to_string(&provider_names).map_err(|error| {
+                        RunError::Internal(format!(
+                            "serialize internal VZ secret provider metadata: {error}"
+                        ))
+                    })?,
+                );
+                env.insert(
+                    FIRMA_SECRET_SHIM_SHARE_DIRECTORY.to_string(),
+                    shim_share_directory.display().to_string(),
+                );
+                env.insert(
+                    FIRMA_SECRET_BROKER_SOCKET_PATH.to_string(),
+                    broker_socket_path.display().to_string(),
                 );
                 env.insert(
                     FIRMA_BROKER_ADDR.to_string(),
@@ -366,27 +407,218 @@ fn resolve_real_binaries(
 
 /// Locate the `firma-secret-shim` binary for the given guest target.
 ///
-/// Looks in the private target-qualified bundle directory first, then falls
-/// back to a sibling next to `firma_exe` (the legacy bwrap layout).
-fn locate_shim_binary(firma_exe: &Path, target: &ShimTarget) -> Result<PathBuf, RunError> {
+/// Looks in the private target-qualified bundle directory first, then in the
+/// repository installer's version-qualified Homebrew resource directory, and
+/// finally next to `firma_exe` (the legacy bwrap layout).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedShimArtifact {
+    target: ShimTarget,
+    path: PathBuf,
+}
+
+fn locate_shim_binary(
+    firma_exe: &Path,
+    target: &ShimTarget,
+    allow_sibling: bool,
+) -> Result<ResolvedShimArtifact, RunError> {
     let shim_name = format!("{SHIM_BIN_NAME}{}", target.exe_suffix);
     let install_dir = firma_exe.with_file_name("");
     let private_dir = install_dir.join(PRIVATE_SHIM_DIR).join(target.triple);
     let private_candidate = private_dir.join(&shim_name);
     if private_candidate.is_file() {
-        return Ok(private_candidate);
+        validate_shim_artifact(&private_candidate, target)?;
+        return Ok(ResolvedShimArtifact {
+            target: *target,
+            path: private_candidate,
+        });
+    }
+    let homebrew_candidate = homebrew_private_shim_candidate(firma_exe, target);
+    if let Some(candidate) = &homebrew_candidate
+        && candidate.is_file()
+    {
+        validate_shim_artifact(candidate, target)?;
+        return Ok(ResolvedShimArtifact {
+            target: *target,
+            path: candidate.clone(),
+        });
     }
     let sibling_candidate = firma_exe.with_file_name(&shim_name);
-    if sibling_candidate.is_file() {
-        return Ok(sibling_candidate);
+    if allow_sibling && sibling_candidate.is_file() {
+        validate_shim_artifact(&sibling_candidate, target)?;
+        return Ok(ResolvedShimArtifact {
+            target: *target,
+            path: sibling_candidate,
+        });
     }
+    let homebrew_display = homebrew_candidate.as_deref().map_or_else(
+        || "no Homebrew resource path".to_string(),
+        |path| path.display().to_string(),
+    );
     Err(RunError::Internal(format!(
-        "secret shim binary not found for target '{}' next to {} (tried {} and {})",
+        "secret shim binary not found for target '{}' next to {} (tried {}, {}, and {})",
         target.triple,
         firma_exe.display(),
         private_candidate.display(),
+        homebrew_display,
         sibling_candidate.display(),
     )))
+}
+
+fn homebrew_private_shim_candidate(firma_exe: &Path, target: &ShimTarget) -> Option<PathBuf> {
+    let canonical_exe = firma_exe.canonicalize().ok();
+    let prefix = homebrew_prefix_from_keg(firma_exe)
+        .or_else(|| canonical_exe.as_deref().and_then(homebrew_prefix_from_keg))?;
+    Some(
+        prefix
+            .join("var/openfirma/secret-shims")
+            .join(env!("CARGO_PKG_VERSION"))
+            .join(target.triple)
+            .join(format!("{SHIM_BIN_NAME}{}", target.exe_suffix)),
+    )
+}
+
+fn homebrew_prefix_from_keg(firma_exe: &Path) -> Option<PathBuf> {
+    let bin_dir = firma_exe.parent()?;
+    let keg = bin_dir.parent()?;
+    let rack = keg.parent()?;
+    let cellar = rack.parent()?;
+    if bin_dir.file_name()? != "bin"
+        || rack.file_name()? != "firma"
+        || cellar.file_name()? != "Cellar"
+    {
+        return None;
+    }
+    Some(cellar.parent()?.to_path_buf())
+}
+
+fn stage_guest_shim(artifact: &ResolvedGuestShim, share_directory: &Path) -> Result<(), RunError> {
+    create_private_dir(share_directory)?;
+    let destination = share_directory.join(SHIM_BIN_NAME);
+    std::fs::write(&destination, &artifact.bytes).map_err(|error| {
+        RunError::Internal(format!(
+            "stage secret shim {} for target '{}': {error}",
+            artifact.source_path.display(),
+            artifact.target.triple
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755)).map_err(
+            |error| {
+                RunError::Internal(format!(
+                    "make staged secret shim executable {}: {error}",
+                    destination.display()
+                ))
+            },
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_guest_shim(
+    firma_exe: &Path,
+    target: ShimTarget,
+    expected_sha256: &[u8; 32],
+) -> Result<ResolvedGuestShim, RunError> {
+    use sha2::{Digest as _, Sha256};
+
+    let artifact = locate_shim_binary(firma_exe, &target, false)?;
+    let bytes = std::fs::read(&artifact.path).map_err(|error| {
+        RunError::Internal(format!(
+            "read secret shim {} for SHA-256 verification: {error}",
+            artifact.path.display()
+        ))
+    })?;
+    let actual: [u8; 32] = Sha256::digest(&bytes).into();
+    if actual != *expected_sha256 {
+        return Err(RunError::Internal(format!(
+            "secret shim {} for target '{}' does not match the VZ guest bundle: expected SHA-256 {}, got {}",
+            artifact.path.display(),
+            artifact.target.triple,
+            hex::encode(expected_sha256),
+            hex::encode(actual)
+        )));
+    }
+    Ok(ResolvedGuestShim {
+        target,
+        source_path: artifact.path,
+        bytes: bytes.into(),
+    })
+}
+
+fn validate_shim_artifact(path: &Path, target: &ShimTarget) -> Result<(), RunError> {
+    const ELF64_HEADER_SIZE: usize = 64;
+    const ELFCLASS64: u8 = 2;
+    const ELFDATA2LSB: u8 = 1;
+    const EV_CURRENT: u8 = 1;
+    const ET_EXEC: u16 = 2;
+    const ET_DYN: u16 = 3;
+
+    validate_executable(path)?;
+    let mut bytes = [0_u8; ELF64_HEADER_SIZE];
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        RunError::Internal(format!("read secret shim {}: {error}", path.display()))
+    })?;
+    if let Err(error) = file.read_exact(&mut bytes) {
+        if error.kind() == ErrorKind::UnexpectedEof {
+            return Err(RunError::Internal(format!(
+                "secret shim {} has a truncated ELF header for target '{}'",
+                path.display(),
+                target.triple
+            )));
+        }
+        return Err(RunError::Internal(format!(
+            "read secret shim {}: {error}",
+            path.display()
+        )));
+    }
+    let expected_machine = match target.triple {
+        "x86_64-unknown-linux-musl" => 62_u16,
+        "aarch64-unknown-linux-musl" => 183_u16,
+        other => {
+            return Err(RunError::Internal(format!(
+                "unsupported secret shim target '{other}'"
+            )));
+        }
+    };
+    let file_type = u16::from_le_bytes([bytes[16], bytes[17]]);
+    let machine = u16::from_le_bytes([bytes[18], bytes[19]]);
+    let elf_version = u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    let header_size = usize::from(u16::from_le_bytes([bytes[52], bytes[53]]));
+    let valid = bytes[..4] == *b"\x7fELF"
+        && bytes[4] == ELFCLASS64
+        && bytes[5] == ELFDATA2LSB
+        && bytes[6] == EV_CURRENT
+        && matches!(file_type, ET_EXEC | ET_DYN)
+        && machine == expected_machine
+        && elf_version == u32::from(EV_CURRENT)
+        && header_size == ELF64_HEADER_SIZE;
+    if !valid {
+        return Err(RunError::Internal(format!(
+            "secret shim {} has an incompatible ELF header for target '{}'",
+            path.display(),
+            target.triple
+        )));
+    }
+    Ok(())
+}
+
+fn validate_executable(path: &Path) -> Result<(), RunError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            RunError::Internal(format!("stat secret shim {}: {error}", path.display()))
+        })?;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(RunError::Internal(format!(
+                "secret shim is not executable: {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn server_endpoint(base: &Path, socket_name: &str) -> Result<ServerEndpoint, RunError> {
@@ -428,6 +660,11 @@ fn create_private_dir(path: &Path) -> Result<(), RunError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{BackendKind, BrokerBridgeKind};
+    use crate::config::resolve_profile;
+    use crate::identity::RunIdentity;
+    use crate::runtime::RunInput;
+    use firma_runtime_state::RuntimeLayout;
     use firma_secret_provider::IntegrationRegistry;
 
     fn builtin_spec(name: &str) -> CliIntegrationSpec<SecretMatcher> {
@@ -435,6 +672,121 @@ mod tests {
             .for_binary(name)
             .cloned()
             .unwrap_or_else(|| panic!("missing built-in spec for {name}"))
+    }
+
+    fn vz_run_input(config: PathBuf) -> RunInput {
+        RunInput {
+            profile: "generic".to_string(),
+            config: Some(config),
+            backend: Some(BackendKind::Vz),
+            sidecar_cli: crate::sidecar::SidecarCli::Unset,
+            capability_file: None,
+            identity_mode: None,
+            preserve_host_user: false,
+            print_effective_config: false,
+            no_autostart: false,
+            sidecar_template_path: None,
+            sidecar_startup_timeout_secs: 10,
+            command: vec!["true".to_string()],
+            authority_cli: crate::authority::AuthorityCli::Unset,
+            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
+            user_config_path: None,
+            allow_non_structural: true,
+            monitor_mode: false,
+        }
+    }
+
+    fn resolve_vz_profile(root: &Path, secret_providers: &str) -> ResolvedProfile {
+        let config = root.join("firma.toml");
+        std::fs::write(
+            &config,
+            format!(
+                r#"
+[run.profiles.generic]
+backend = "vz"
+
+[run.profiles.generic.network]
+enforce_network_namespace = false
+
+[run.defaults]
+secret_providers = {secret_providers}
+"#
+            ),
+        )
+        .expect("write VZ profile config");
+        resolve_profile(&vz_run_input(config)).expect("resolve VZ profile")
+    }
+
+    fn isolated_guest_support() -> SecretShimSupport {
+        SecretShimSupport::IsolatedGuest {
+            guest_target: ShimTarget::from_linux_musl_triple("x86_64-unknown-linux-musl")
+                .expect("supported test target"),
+            broker_bridge: BrokerBridgeKind::VsockPort { port: 18_083 },
+            guest_shim: None,
+        }
+    }
+
+    #[test]
+    fn empty_and_http_only_vz_profiles_prepare_without_secret_shim_metadata() {
+        let profiles = [
+            ("empty", "[]"),
+            (
+                "http-only",
+                r#"[{ type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matchers = [{ type = "safe_command", path = "/health" }] }]"#,
+            ),
+        ];
+        for (case, providers) in profiles {
+            let tempdir = tempfile::tempdir().expect("tempdir");
+            let profile = resolve_vz_profile(tempdir.path(), providers);
+            let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
+            let mut handle = Some(SandboxHandle {
+                backend: BackendKind::Vz,
+                runtime_dir: tempdir.path().join("sandbox"),
+                identity: identity.clone(),
+                mounts: Vec::new(),
+                network_policy: profile.network.clone(),
+            });
+            let runtime_layout = RuntimeLayout::from_root(tempdir.path().join("runtime-state"));
+            let support = isolated_guest_support();
+            let services = if profile.secret_providers.is_empty() {
+                None
+            } else {
+                Some(
+                    SecretServices::start(
+                        &runtime_layout,
+                        handle.as_ref().expect("sandbox handle"),
+                        &identity,
+                        &profile,
+                        &support,
+                    )
+                    .expect("start HTTP-only secret services"),
+                )
+            };
+            let mut env = BTreeMap::new();
+
+            prepare(
+                &mut handle,
+                &profile,
+                &mut env,
+                Path::new("/unused/firma"),
+                None,
+                services.as_ref(),
+                &support,
+            )
+            .expect("prepare profile secret shims");
+
+            for key in [
+                FIRMA_SECRET_PROVIDER_NAMES,
+                FIRMA_SECRET_SHIM_SHARE_DIRECTORY,
+                FIRMA_SECRET_BROKER_SOCKET_PATH,
+                FIRMA_BROKER_ADDR,
+            ] {
+                assert!(
+                    !env.contains_key(key),
+                    "{case} profile must not prepare VZ secret-shim metadata key {key}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -521,48 +873,199 @@ mod tests {
             .path()
             .join(format!("firma{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&firma, b"").expect("write firma");
-        let host_target = ShimTarget::host();
+        let host_target = ShimTarget::linux_musl();
         assert!(
-            locate_shim_binary(&firma, &host_target).is_err(),
+            locate_shim_binary(&firma, &host_target, true).is_err(),
             "missing sibling must fail"
         );
 
         let shim = dir
             .path()
             .join(format!("{SHIM_BIN_NAME}{}", std::env::consts::EXE_SUFFIX));
-        std::fs::write(&shim, b"").expect("write shim");
+        write_test_elf(&shim, &host_target);
         assert_eq!(
-            locate_shim_binary(&firma, &host_target).expect("locate"),
+            locate_shim_binary(&firma, &host_target, true)
+                .expect("locate")
+                .path,
             shim
         );
     }
 
     #[test]
-    fn locate_shim_binary_prefers_private_bundle_over_sibling() {
+    fn locate_shim_binary_prefers_local_then_homebrew_bundle_over_sibling() {
         let dir = tempfile::tempdir().expect("tempdir");
         let firma = dir
             .path()
+            .join("Cellar/firma/current/bin")
             .join(format!("firma{}", std::env::consts::EXE_SUFFIX));
+        std::fs::create_dir_all(firma.parent().expect("firma bin dir"))
+            .expect("create firma bin dir");
         std::fs::write(&firma, b"").expect("write firma");
-
-        let sibling = dir
-            .path()
-            .join(format!("{SHIM_BIN_NAME}{}", std::env::consts::EXE_SUFFIX));
-        std::fs::write(&sibling, b"sibling").expect("write sibling shim");
 
         let target = ShimTarget {
             triple: "x86_64-unknown-linux-musl",
             exe_suffix: "",
         };
-        let private_dir = dir.path().join(PRIVATE_SHIM_DIR).join(target.triple);
+        let sibling = firma.with_file_name(format!("{SHIM_BIN_NAME}{}", target.exe_suffix));
+        write_test_elf(&sibling, &target);
+        let private_dir = firma
+            .parent()
+            .expect("firma bin dir")
+            .join(PRIVATE_SHIM_DIR)
+            .join(target.triple);
         std::fs::create_dir_all(&private_dir).expect("create private dir");
         let private_shim = private_dir.join(format!("{SHIM_BIN_NAME}{}", target.exe_suffix));
-        std::fs::write(&private_shim, b"private").expect("write private shim");
+        write_test_elf(&private_shim, &target);
 
-        let resolved = locate_shim_binary(&firma, &target).expect("locate");
+        let homebrew_shim = dir
+            .path()
+            .join("var/openfirma/secret-shims")
+            .join(env!("CARGO_PKG_VERSION"))
+            .join(target.triple)
+            .join(format!("{SHIM_BIN_NAME}{}", target.exe_suffix));
+        std::fs::create_dir_all(homebrew_shim.parent().expect("Homebrew shim dir"))
+            .expect("create Homebrew shim dir");
+        write_test_elf(&homebrew_shim, &target);
+
+        let resolved = locate_shim_binary(&firma, &target, true).expect("locate");
         assert_eq!(
-            resolved, private_shim,
+            resolved.path, private_shim,
             "private bundle takes priority over sibling"
         );
+
+        std::fs::remove_file(&private_shim).expect("remove private shim");
+        assert_eq!(
+            locate_shim_binary(&firma, &target, true)
+                .expect("locate Homebrew resource")
+                .path,
+            homebrew_shim,
+            "version-qualified Homebrew resource takes priority over sibling"
+        );
+
+        std::fs::remove_file(&homebrew_shim).expect("remove Homebrew shim");
+        assert_eq!(
+            locate_shim_binary(&firma, &target, true)
+                .expect("locate sibling")
+                .path,
+            sibling
+        );
+    }
+
+    #[test]
+    fn shim_lookup_rejects_malformed_and_incompatible_elf_headers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let firma = dir.path().join("firma");
+        std::fs::write(&firma, b"").expect("write firma");
+        let target = ShimTarget::from_linux_musl_triple("x86_64-unknown-linux-musl")
+            .expect("supported target");
+        let shim = firma.with_file_name(SHIM_BIN_NAME);
+        let valid_header = test_elf_header(&target);
+
+        let invalid_headers = [
+            ("truncated", valid_header[..63].to_vec()),
+            ("bad magic", mutated_header(&valid_header, 0, 0)),
+            ("32-bit class", mutated_header(&valid_header, 4, 1)),
+            ("big endian", mutated_header(&valid_header, 5, 2)),
+            ("stale ident version", mutated_header(&valid_header, 6, 0)),
+            ("unsupported type", mutated_header(&valid_header, 16, 1)),
+            ("stale ELF version", mutated_header(&valid_header, 20, 0)),
+            ("wrong machine", mutated_header(&valid_header, 18, 183)),
+            ("wrong header size", mutated_header(&valid_header, 52, 63)),
+        ];
+
+        for (case, header) in invalid_headers {
+            std::fs::write(&shim, header).expect("write invalid ELF");
+            make_executable(&shim);
+            assert!(
+                locate_shim_binary(&firma, &target, true).is_err(),
+                "{case} ELF header must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn isolated_guest_staging_uses_the_resolved_shim_bytes_after_source_replacement() {
+        use sha2::{Digest as _, Sha256};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = ShimTarget::from_linux_musl_triple("x86_64-unknown-linux-musl")
+            .expect("supported target");
+        let firma = dir.path().join("firma");
+        let private_dir = dir.path().join(PRIVATE_SHIM_DIR).join(target.triple);
+        std::fs::create_dir_all(&private_dir).expect("create private shim dir");
+        let source = private_dir.join(SHIM_BIN_NAME);
+        write_test_elf(&source, &target);
+        let original = std::fs::read(&source).expect("read shim");
+        let expected: [u8; 32] = Sha256::digest(&original).into();
+        let artifact = resolve_guest_shim(&firma, target, &expected).expect("resolve guest shim");
+        std::fs::write(&source, b"replaced after resolution").expect("replace source shim");
+        let share_directory = dir.path().join("share");
+
+        stage_guest_shim(&artifact, &share_directory).expect("matching shim should stage");
+
+        assert_eq!(
+            std::fs::read(share_directory.join(SHIM_BIN_NAME)).expect("read staged shim"),
+            original
+        );
+    }
+
+    #[test]
+    fn isolated_guest_resolution_rejects_mismatched_shim_digest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = ShimTarget::from_linux_musl_triple("x86_64-unknown-linux-musl")
+            .expect("supported target");
+        let firma = dir.path().join("firma");
+        let private_dir = dir.path().join(PRIVATE_SHIM_DIR).join(target.triple);
+        std::fs::create_dir_all(&private_dir).expect("create private shim dir");
+        write_test_elf(&private_dir.join(SHIM_BIN_NAME), &target);
+
+        let error = resolve_guest_shim(&firma, target, &[0_u8; 32])
+            .expect_err("mismatched shim must not resolve");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the VZ guest bundle")
+        );
+    }
+
+    fn write_test_elf(path: &Path, target: &ShimTarget) {
+        std::fs::write(path, test_elf_header(target)).expect("write test ELF");
+        make_executable(path);
+    }
+
+    fn test_elf_header(target: &ShimTarget) -> Vec<u8> {
+        let machine = match target.triple {
+            "x86_64-unknown-linux-musl" => 62_u16,
+            "aarch64-unknown-linux-musl" => 183_u16,
+            other => panic!("unsupported test target {other}"),
+        };
+        let mut bytes = vec![0_u8; 64];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = 2;
+        bytes[5] = 1;
+        bytes[6] = 1;
+        bytes[16..18].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+        bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[52..54].copy_from_slice(&64_u16.to_le_bytes());
+        bytes
+    }
+
+    fn mutated_header(header: &[u8], offset: usize, value: u8) -> Vec<u8> {
+        let mut mutated = header.to_vec();
+        mutated[offset] = value;
+        mutated
+    }
+
+    fn make_executable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod test executable");
+        }
+        #[cfg(windows)]
+        let _ = path;
     }
 }

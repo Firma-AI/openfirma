@@ -199,6 +199,7 @@ impl SandboxBackend for BwrapBackend {
         runtime_layout: &firma_runtime_state::RuntimeLayout,
         handle: &SandboxHandle,
         launch: &LaunchSpec,
+        _shim_support: &SecretShimSupport,
     ) -> Result<Child, RunError> {
         if !cfg!(target_os = "linux") {
             return Err(RunError::UnsupportedBackend {
@@ -292,7 +293,7 @@ impl SandboxBackend for BwrapBackend {
 
     fn secret_shim_support(&self) -> SecretShimSupport {
         SecretShimSupport::HostBindMount {
-            guest_target: ShimTarget::host(),
+            guest_target: ShimTarget::linux_musl(),
         }
     }
 }

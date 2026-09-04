@@ -131,6 +131,7 @@ impl SandboxBackend for Wsl2Backend {
         _runtime_layout: &firma_runtime_state::RuntimeLayout,
         _handle: &SandboxHandle,
         launch: &LaunchSpec,
+        _shim_support: &SecretShimSupport,
     ) -> Result<Child, RunError> {
         match current_host_mode() {
             Wsl2HostMode::WslLinux => {

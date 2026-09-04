@@ -4,10 +4,79 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::test_utils::{valid_contract_json, valid_contract_json_without_artifacts};
+use crate::vm::VmPlan;
 
 use super::{
     Contract, ContractDocument, ContractValidationError, ContractValidationLimits, InvariantName,
 };
+
+const SHARED_V2_CONTRACT_FIXTURE: &str =
+    include_str!("../../../../tests/fixtures/vz-guest-launch-v2.json");
+const SHARED_V2_CONTRACT_ROOT: &str = "/openfirma-contract-v2";
+
+#[test]
+fn accepts_shared_producer_v2_contract_and_preserves_custody() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let contract_path = write_shared_v2_contract(temp.path())?;
+    let contract = ContractDocument::read_from_path(&contract_path)?.validate()?;
+    let shims = contract
+        .secret_shims()
+        .ok_or_else(|| anyhow::anyhow!("shared v2 fixture must contain secret_shims"))?;
+
+    assert_eq!(contract.version(), 2);
+    assert_eq!(shims.guest_target_triple(), "x86_64-unknown-linux-musl");
+    assert_eq!(shims.provider_names(), &["op", "vault"]);
+    assert_eq!(shims.broker_vsock_port(), 18_083);
+    assert_eq!(
+        shims.shim_share_directory(),
+        temp.path().join("sensitive/secret-shims")
+    );
+    assert_eq!(
+        shims.broker_socket_path(),
+        temp.path().join("sensitive/broker.sock")
+    );
+
+    let writable_sources = std::iter::once(contract.runtime_dir())
+        .chain(
+            contract
+                .mounts()
+                .iter()
+                .filter(|mount| !mount.read_only())
+                .map(super::Mount::source),
+        )
+        .collect::<Vec<_>>();
+    for writable in writable_sources {
+        for sensitive in [shims.shim_share_directory(), shims.broker_socket_path()] {
+            assert!(
+                !writable.starts_with(sensitive) && !sensitive.starts_with(writable),
+                "sensitive path {} must be disjoint from writable share {}",
+                sensitive.display(),
+                writable.display()
+            );
+        }
+    }
+
+    let plan = VmPlan::from_contract(&contract)?;
+    let shim_share = plan
+        .directory_shares
+        .iter()
+        .find(|share| share.name == "secret-shims")
+        .ok_or_else(|| anyhow::anyhow!("VM plan must contain the secret shim share"))?;
+    assert!(shim_share.read_only);
+    assert_eq!(
+        shim_share.source,
+        std::fs::canonicalize(temp.path().join("sensitive/secret-shims"))?
+    );
+    assert_eq!(
+        plan.broker
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("VM plan must contain the broker bridge"))?
+            .socket_path,
+        std::fs::canonicalize(temp.path().join("sensitive/broker.sock"))?
+    );
+
+    Ok(())
+}
 
 #[test]
 fn validates_contract_v2() -> Result<()> {
@@ -418,6 +487,171 @@ fn rejects_direct_network_devices() -> Result<()> {
 }
 
 #[test]
+fn accepts_complete_secret_shims_contract() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    add_valid_secret_shims(&mut json, temp.path());
+
+    let contract = parse_contract(&json)?;
+    let shims = contract
+        .secret_shims()
+        .ok_or_else(|| anyhow::anyhow!("secret shims should be present"))?;
+
+    assert_eq!(shims.guest_target_triple(), "x86_64-unknown-linux-musl");
+    assert_eq!(shims.provider_names(), &["vault"]);
+    assert_eq!(shims.broker_vsock_port(), 18083);
+    assert_eq!(shims.broker_socket_path(), temp.path().join("broker.sock"));
+    assert_eq!(
+        contract.guest_broker_addr()?,
+        Some("127.0.0.1:18084".parse()?)
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_unsafe_secret_shim_provider_basenames() -> Result<()> {
+    for name in [
+        ".",
+        "..",
+        "../vault",
+        "dir/vault",
+        "dir\\vault",
+        "C:vault",
+        "vault\0x",
+    ] {
+        let temp = tempfile::tempdir()?;
+        let mut json = valid_contract_json(temp.path())?;
+        add_valid_secret_shims(&mut json, temp.path());
+        json["secret_shims"]["provider_names"] = json!([name]);
+
+        let error = parse_contract_document(&json)?.validate();
+
+        assert!(matches!(
+            error,
+            Err(ContractValidationError::UnsafeSecretShimProviderName { name: actual })
+                if actual == name
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn rejects_non_loopback_guest_broker_address() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    add_valid_secret_shims(&mut json, temp.path());
+    json["secret_shims"]["guest_broker_addr"] = json!("10.0.0.2:18084");
+
+    let error = parse_contract_document(&json)?.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::NonLoopbackSocketAddr {
+            field: "secret_shims.guest_broker_addr",
+            value,
+        }) if value == "10.0.0.2:18084"
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_relative_broker_socket_path() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    add_valid_secret_shims(&mut json, temp.path());
+    json["secret_shims"]["broker_socket_path"] = json!("broker.sock");
+
+    let error = parse_contract_document(&json)?.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::RelativePath {
+            field: "secret_shims.broker_socket_path",
+            path,
+        }) if path == Path::new("broker.sock")
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_empty_secret_shim_provider_list() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    add_valid_secret_shims(&mut json, temp.path());
+    json["secret_shims"]["provider_names"] = json!([]);
+
+    let error = parse_contract_document(&json)?.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::EmptySecretShimProviders)
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_secret_shim_paths_within_guest_writable_runtime() -> Result<()> {
+    for field in ["shim_share_directory", "broker_socket_path"] {
+        let temp = tempfile::tempdir()?;
+        let mut json = valid_contract_json(temp.path())?;
+        add_valid_secret_shims(&mut json, temp.path());
+        let path = temp.path().join("runtime").join(field);
+        json["secret_shims"][field] = json!(&path);
+
+        let error = parse_contract_document(&json)?.validate();
+
+        assert!(matches!(
+            error,
+            Err(ContractValidationError::SecretShimPathWithinRuntime {
+                path: actual_path,
+                runtime_dir,
+                ..
+            }) if actual_path == path && runtime_dir == temp.path().join("runtime")
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn rejects_broker_vsock_port_collisions() -> Result<()> {
+    for (port, expected) in [
+        (
+            18080,
+            ContractValidationError::BrokerPortConflictsWithSidecar,
+        ),
+        (
+            18081,
+            ContractValidationError::BrokerPortConflictsWithPtyData,
+        ),
+        (
+            18082,
+            ContractValidationError::BrokerPortConflictsWithPtyControl,
+        ),
+    ] {
+        let temp = tempfile::tempdir()?;
+        let mut json = valid_contract_json(temp.path())?;
+        add_valid_secret_shims(&mut json, temp.path());
+        json["terminal"]["interactive"] = json!(true);
+        json["terminal"]["pty"] = json!(true);
+        json["terminal"]["pty_vsock_port"] = json!(18081);
+        json["terminal"]["pty_control_vsock_port"] = json!(18082);
+        json["secret_shims"]["broker_vsock_port"] = json!(port);
+
+        let error = parse_contract_document(&json)?.validate();
+
+        assert_eq!(
+            std::mem::discriminant(
+                &error
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("collision should fail"))?,
+            ),
+            std::mem::discriminant(&expected)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn validates_contract_with_mocked_file_checks() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let json = valid_contract_json_without_artifacts(temp.path())?;
@@ -577,4 +811,70 @@ fn parse_contract(json: &Value) -> Result<Contract> {
 /// Parses a JSON value as a raw contract document.
 fn parse_contract_document(json: &Value) -> Result<ContractDocument> {
     ContractDocument::parse_from_slice(Path::new("test-contract.json"), &serde_json::to_vec(&json)?)
+}
+
+fn add_valid_secret_shims(json: &mut Value, root: &Path) {
+    json["secret_shims"] = json!({
+        "guest_target_triple": "x86_64-unknown-linux-musl",
+        "provider_names": ["vault"],
+        "broker_vsock_port": 18083,
+        "shim_share_directory": root.join("secret-shims"),
+        "broker_socket_path": root.join("broker.sock"),
+        "guest_broker_addr": "127.0.0.1:18084",
+    });
+}
+
+fn write_shared_v2_contract(root: &Path) -> Result<std::path::PathBuf> {
+    let mut json: Value = serde_json::from_str(SHARED_V2_CONTRACT_FIXTURE)?;
+    replace_shared_contract_root(&mut json, root);
+
+    for directory in [
+        root.join("runtime/vz-guest"),
+        root.join("workspace"),
+        root.join("sensitive/secret-shims"),
+    ] {
+        std::fs::create_dir_all(directory)?;
+    }
+    for (file, size) in [
+        ("firma-vz-runner", 1),
+        ("vmlinuz", 1),
+        ("initrd.img", 1),
+        ("rootfs.img", 512),
+        ("sensitive/broker.sock", 1),
+    ] {
+        let artifact = std::fs::File::create(root.join(file))?;
+        artifact.set_len(size)?;
+    }
+
+    let contract_path = root.join("runtime/vz-guest/vz-guest-launch.json");
+    std::fs::write(&contract_path, serde_json::to_vec(&json)?)?;
+    #[cfg(unix)]
+    crate::test_utils::make_contract_file_owner_only(&contract_path)?;
+
+    Ok(contract_path)
+}
+
+fn replace_shared_contract_root(value: &mut Value, root: &Path) {
+    match value {
+        Value::String(text) if text.starts_with(SHARED_V2_CONTRACT_ROOT) => {
+            *text = root
+                .join(
+                    text.trim_start_matches(SHARED_V2_CONTRACT_ROOT)
+                        .trim_start_matches('/'),
+                )
+                .display()
+                .to_string();
+        }
+        Value::Array(values) => {
+            for value in values {
+                replace_shared_contract_root(value, root);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                replace_shared_contract_root(value, root);
+            }
+        }
+        Value::Bool(_) | Value::Null | Value::Number(_) | Value::String(_) => {}
+    }
 }

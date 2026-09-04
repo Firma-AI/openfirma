@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::sync::Arc;
 
 use firma_identifiers::SandboxId;
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,17 @@ pub enum SecretShimSupport {
     IsolatedGuest {
         guest_target: ShimTarget,
         broker_bridge: BrokerBridgeKind,
+        /// Immutable, bundle-matched shim selected for this run.
+        guest_shim: Option<ResolvedGuestShim>,
     },
+}
+
+/// A guest shim whose exact bytes were validated against the guest manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedGuestShim {
+    pub(crate) target: ShimTarget,
+    pub(crate) source_path: PathBuf,
+    pub(crate) bytes: Arc<[u8]>,
 }
 
 /// Why a backend does not support CLI secret-provider shims.
@@ -61,20 +72,37 @@ pub struct ShimTarget {
 }
 
 impl ShimTarget {
-    /// Target for a host-platform shim (used by bwrap where guest == host).
-    #[must_use]
-    pub(crate) const fn host() -> Self {
-        Self {
-            triple: std::env::consts::ARCH,
-            exe_suffix: std::env::consts::EXE_SUFFIX,
+    /// Resolve a supported Linux musl target triple.
+    pub(crate) fn from_linux_musl_triple(triple: &str) -> Option<Self> {
+        match triple {
+            "x86_64-unknown-linux-musl" => Some(Self {
+                triple: "x86_64-unknown-linux-musl",
+                exe_suffix: "",
+            }),
+            "aarch64-unknown-linux-musl" => Some(Self {
+                triple: "aarch64-unknown-linux-musl",
+                exe_suffix: "",
+            }),
+            _ => None,
         }
     }
 
-    /// Target for a Linux `x86_64` musl guest (used by VZ guest mode).
+    /// Linux musl target for the current CPU architecture.
     #[must_use]
-    pub(crate) const fn linux_x86_64_musl() -> Self {
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) const fn linux_musl() -> Self {
         Self {
             triple: "x86_64-unknown-linux-musl",
+            exe_suffix: "",
+        }
+    }
+
+    /// Linux musl target for the current CPU architecture.
+    #[must_use]
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) const fn linux_musl() -> Self {
+        Self {
+            triple: "aarch64-unknown-linux-musl",
             exe_suffix: "",
         }
     }
@@ -450,6 +478,7 @@ pub trait SandboxBackend: Send + Sync {
         runtime_layout: &firma_runtime_state::RuntimeLayout,
         handle: &SandboxHandle,
         launch: &LaunchSpec,
+        shim_support: &SecretShimSupport,
     ) -> Result<Child, RunError>;
 
     /// Tear down backend runtime state after execution.
@@ -461,6 +490,22 @@ pub trait SandboxBackend: Send + Sync {
 
     /// Returns whether this backend supports CLI secret-provider shim mediation.
     fn secret_shim_support(&self) -> SecretShimSupport;
+
+    /// Resolve launch-specific shim support after validating runtime artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a backend's runtime artifact metadata is missing
+    /// or incompatible.
+    fn resolve_secret_shim_support(
+        &self,
+        _runtime_layout: &firma_runtime_state::RuntimeLayout,
+        _handle: &SandboxHandle,
+        _firma_exe: &Path,
+        _requires_cli_shim: bool,
+    ) -> Result<SecretShimSupport, RunError> {
+        Ok(self.secret_shim_support())
+    }
 }
 
 /// Construct backend implementation for a kind.

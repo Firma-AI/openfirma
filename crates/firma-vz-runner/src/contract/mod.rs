@@ -21,8 +21,9 @@ use validation::{
     require_loopback_socket_addr, require_non_empty, require_path,
 };
 
-const SUPPORTED_CONTRACT_VERSION: u32 = 2;
+pub const SUPPORTED_CONTRACT_VERSION: u32 = 2;
 const SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
+const BROKER_READINESS_BINARY: &str = "__firma_broker_readiness_probe__";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -306,8 +307,21 @@ impl ContractDocument {
             shims.provider_names.len(),
             limits.env_vars,
         )?;
+        if shims.provider_names.is_empty() {
+            return Err(ContractValidationError::EmptySecretShimProviders);
+        }
         for name in &shims.provider_names {
             require_non_empty("secret_shims.provider_names entry", name)?;
+            if !is_portable_basename(name) {
+                return Err(ContractValidationError::UnsafeSecretShimProviderName {
+                    name: name.clone(),
+                });
+            }
+            if name == BROKER_READINESS_BINARY {
+                return Err(ContractValidationError::ReservedSecretShimProviderName {
+                    name: name.clone(),
+                });
+            }
         }
         if shims.broker_vsock_port == 0 {
             return Err(ContractValidationError::ZeroPort {
@@ -319,6 +333,42 @@ impl ContractDocument {
             &shims.shim_share_directory,
             limits.path_len,
         )?;
+        require_path(
+            "secret_shims.broker_socket_path",
+            &shims.broker_socket_path,
+            limits.path_len,
+        )?;
+        for (field, path) in [
+            (
+                "secret_shims.shim_share_directory",
+                &shims.shim_share_directory,
+            ),
+            ("secret_shims.broker_socket_path", &shims.broker_socket_path),
+        ] {
+            if path.starts_with(&self.runtime_dir) {
+                return Err(ContractValidationError::SecretShimPathWithinRuntime {
+                    field,
+                    path: path.clone(),
+                    runtime_dir: self.runtime_dir.clone(),
+                });
+            }
+        }
+        require_len_at_most(
+            "secret_shims.guest_broker_addr",
+            shims.guest_broker_addr.len(),
+            limits.dns_stub_addr_len,
+        )?;
+        require_loopback_socket_addr("secret_shims.guest_broker_addr", &shims.guest_broker_addr)?;
+
+        if shims.broker_vsock_port == self.network.vsock_sidecar_port {
+            return Err(ContractValidationError::BrokerPortConflictsWithSidecar);
+        }
+        if Some(shims.broker_vsock_port) == self.terminal.pty_vsock_port {
+            return Err(ContractValidationError::BrokerPortConflictsWithPtyData);
+        }
+        if Some(shims.broker_vsock_port) == self.terminal.pty_control_vsock_port {
+            return Err(ContractValidationError::BrokerPortConflictsWithPtyControl);
+        }
         Ok(())
     }
 
@@ -412,6 +462,22 @@ impl Contract {
             "network.sidecar_host_addr",
             &self.document.network.sidecar_host_addr,
         )
+    }
+
+    /// Returns the validated guest broker loopback address, when secret shims are enabled.
+    pub fn guest_broker_addr(
+        &self,
+    ) -> std::result::Result<Option<std::net::SocketAddr>, ContractValidationError> {
+        self.document
+            .secret_shims
+            .as_ref()
+            .map(|shims| {
+                require_loopback_socket_addr(
+                    "secret_shims.guest_broker_addr",
+                    &shims.guest_broker_addr,
+                )
+            })
+            .transpose()
     }
 }
 
@@ -609,32 +675,36 @@ pub struct SecretShims {
     provider_names: Vec<String>,
     broker_vsock_port: u32,
     shim_share_directory: PathBuf,
+    broker_socket_path: PathBuf,
+    guest_broker_addr: String,
 }
 
 impl SecretShims {
     /// Returns the guest target triple for the shim binary.
-    #[expect(
-        dead_code,
-        reason = "used by the runner binary for VSOCK broker bridge planning"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "used by the runner binary for VSOCK broker bridge planning"
+        )
     )]
     pub fn guest_target_triple(&self) -> &str {
         &self.guest_target_triple
     }
 
     /// Returns the provider names that need shim entries.
-    #[expect(
-        dead_code,
-        reason = "used by the runner binary for VSOCK broker bridge planning"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "used by the runner binary for VSOCK broker bridge planning"
+        )
     )]
     pub fn provider_names(&self) -> &[String] {
         &self.provider_names
     }
 
     /// Returns the VSOCK port used for the broker bridge.
-    #[expect(
-        dead_code,
-        reason = "used by the runner binary for VSOCK broker bridge planning"
-    )]
     pub const fn broker_vsock_port(&self) -> u32 {
         self.broker_vsock_port
     }
@@ -643,6 +713,21 @@ impl SecretShims {
     pub fn shim_share_directory(&self) -> &Path {
         &self.shim_share_directory
     }
+
+    /// Returns the host Unix socket reached by the broker VSOCK bridge.
+    pub fn broker_socket_path(&self) -> &Path {
+        &self.broker_socket_path
+    }
+}
+
+/// Applies the shared portable executable-basename invariant defensively at the contract boundary.
+fn is_portable_basename(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | ':' | '\0'))
 }
 
 #[derive(Debug, Deserialize)]

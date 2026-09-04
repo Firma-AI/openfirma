@@ -11,7 +11,9 @@
 
 use std::path::PathBuf;
 
-use firma_run::backend::{BackendKind, SandboxHandle};
+use firma_run::backend::{
+    BackendKind, SandboxHandle, SecretShimSupport, SecretShimUnsupportedReason,
+};
 use firma_run::config::resolve_profile;
 use firma_run::identity::RunIdentity;
 use firma_run::runtime::RunInput;
@@ -93,7 +95,10 @@ fn secret_services_stop_and_remove_sockets_when_dropped() {
     let providers_config = config_toml(state_dir.path(), "\"bws\"");
     let profile = resolve_profile(&run_input(Some(providers_config))).expect("resolve profile");
 
-    let services = SecretServices::start(&layout, &handle, &identity, &profile)
+    let support = SecretShimSupport::Unsupported {
+        reason: SecretShimUnsupportedReason::HostCallable,
+    };
+    let services = SecretServices::start(&layout, &handle, &identity, &profile, &support)
         .expect("start secret services");
     let gateway_path = layout
         .run_entry_layout(&identity.sandbox_id)
@@ -130,7 +135,10 @@ fn gateway_socket_lives_outside_the_sandbox_runtime_dir() {
     let providers_config = config_toml(state_dir.path(), "\"bws\"");
     let profile = resolve_profile(&run_input(Some(providers_config))).expect("resolve profile");
 
-    let services = SecretServices::start(&layout, &handle, &identity, &profile)
+    let support = SecretShimSupport::Unsupported {
+        reason: SecretShimUnsupportedReason::HostCallable,
+    };
+    let services = SecretServices::start(&layout, &handle, &identity, &profile, &support)
         .expect("start secret services");
 
     // The plaintext gateway must never live inside the sandbox runtime dir the

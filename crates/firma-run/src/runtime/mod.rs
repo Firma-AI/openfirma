@@ -150,14 +150,35 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
 
     let capability_token = read_capability_token(&profile.capability.source)?;
     let working_dir = resolve_working_dir()?;
+    let firma_exe = env::current_exe()
+        .map_err(|error| RunError::Internal(format!("resolve current_exe: {error}")))?;
 
     let backend = build_backend(profile.backend);
-    let shim_support = backend.secret_shim_support();
     let mut handle = Some(backend.prepare(&PrepareRequest {
         identity: identity.clone(),
         profile: profile.clone(),
         working_dir: working_dir.clone(),
     })?);
+    let shim_support_result = backend.resolve_secret_shim_support(
+        &runtime_layout,
+        handle
+            .as_ref()
+            .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?,
+        &firma_exe,
+        profile
+            .secret_providers
+            .values()
+            .any(|provider| provider.as_cli().is_some()),
+    );
+    let shim_support = match shim_support_result {
+        Ok(support) => support,
+        Err(error) => {
+            let teardown_result = handle
+                .take()
+                .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
+            return combine_run_and_teardown_results(Err(error), teardown_result);
+        }
+    };
     // Secret services (gateway + broker) for this run. Assigned once the
     // profile's providers are known inside the run closure below; dropped
     // only after sandbox teardown so the agent can resolve placeholders for
@@ -238,8 +259,6 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         if let CapabilitySource::File { ref path } = profile.capability.source {
             flags.capability_seed_path = Some(path.clone());
         }
-        let firma_exe = env::current_exe()
-            .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
         // Start the secret services before the Sidecar so its gateway address
         // is available while the Sidecar config is synthesized. The guard is
         // held for the whole run: dropping it stops the gateway and broker
@@ -252,6 +271,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 handle_ref,
                 &identity,
                 &profile,
+                &shim_support,
             )?)
         };
         if let Some(services) = &secret_services {
@@ -373,7 +393,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 let handle_ref = handle
                     .as_ref()
                     .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
-                backend.start_agent(&runtime_layout, handle_ref, &launch)?
+                backend.start_agent(&runtime_layout, handle_ref, &launch, &shim_support)?
             };
             // Per-run marker dir under the persistent runtime root, alongside
             // `sidecar.log` / `authority.log`. The caller redirects its foreground

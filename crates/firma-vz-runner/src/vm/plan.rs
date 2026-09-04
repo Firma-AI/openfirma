@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use firma_identifiers::SandboxId;
 
 use crate::contract::{Contract, NetworkMode};
+use crate::vm::error::WritableShareOverlap;
 use crate::vm::{VmPlanError, VmPlanResult};
 
 pub const FIRMA_VIRTIOFS_TAG: &str = "firma";
@@ -29,6 +30,7 @@ pub struct VmPlan {
     pub cols: Option<u16>,
     pub socket_devices: Vec<SocketDevicePlan>,
     pub network_mode: VmNetworkMode,
+    pub broker: Option<BrokerPlan>,
 }
 
 impl VmPlan {
@@ -59,56 +61,43 @@ impl VmPlan {
                 runtime_dir: contract.runtime_dir().to_path_buf(),
             })?;
 
-        if !contract.runtime_dir().is_dir() {
-            return Err(VmPlanError::RuntimeDirMissing {
-                path: contract.runtime_dir().to_path_buf(),
-            });
-        }
-
         validate_rootfs(contract.guest().rootfs())?;
-
-        let mut directory_shares = vec![DirectorySharePlan {
-            name: "runtime".to_string(),
-            source: contract.runtime_dir().to_path_buf(),
-            read_only: false,
-        }];
-
-        for (index, mount) in contract.mounts().iter().enumerate() {
-            if !mount.source().is_dir() {
-                return Err(VmPlanError::MountSourceNotDirectory {
-                    path: mount.source().to_path_buf(),
-                });
-            }
-            directory_shares.push(DirectorySharePlan {
-                name: format!("mount{index}"),
-                source: mount.source().to_path_buf(),
-                read_only: mount.read_only(),
-            });
-        }
-
-        if let Some(shims) = contract.secret_shims() {
-            let shim_dir = shims.shim_share_directory();
-            if !shim_dir.is_dir() {
-                return Err(VmPlanError::ShimShareDirectoryMissing {
-                    path: shim_dir.to_path_buf(),
-                });
-            }
-            directory_shares.push(DirectorySharePlan {
-                name: "secret-shims".to_string(),
-                source: shim_dir.to_path_buf(),
-                read_only: true,
-            });
-        }
+        let PreparedDirectoryShares {
+            runtime_dir,
+            plans: directory_shares,
+            sensitive_paths,
+        } = prepare_directory_shares(contract)?;
 
         let guest_contract_path = guest_runtime_path(contract_relative_path);
         let network_mode = match contract.network_mode() {
             NetworkMode::VsockSidecar => VmNetworkMode::VsockSidecar,
         };
+        let broker = contract
+            .secret_shims()
+            .map(|shims| {
+                Ok(BrokerPlan {
+                    vsock_port: NonZeroU32::new(shims.broker_vsock_port()).ok_or(
+                        VmPlanError::InvalidBrokerPort {
+                            field: "secret_shims.broker_vsock_port",
+                        },
+                    )?,
+                    socket_path: sensitive_paths
+                        .as_ref()
+                        .ok_or(VmPlanError::MissingCanonicalSensitivePaths)?[1]
+                        .canonical
+                        .clone(),
+                    guest_addr: contract
+                        .guest_broker_addr()
+                        .map_err(|source| VmPlanError::GuestBrokerAddr { source })?
+                        .ok_or(VmPlanError::MissingGuestBrokerAddr)?,
+                })
+            })
+            .transpose()?;
 
         Ok(Self {
             version: contract.version(),
             sandbox_id: *contract.sandbox_id(),
-            runtime_dir: contract.runtime_dir().to_path_buf(),
+            runtime_dir,
             kernel: contract.guest().kernel().to_path_buf(),
             initrd: contract.guest().initrd().to_path_buf(),
             rootfs: contract.guest().rootfs().to_path_buf(),
@@ -129,8 +118,151 @@ impl VmPlan {
                 command_pty: CommandPtyPlan::from_contract(contract)?,
             }],
             network_mode,
+            broker,
         })
     }
+}
+
+struct SensitivePath {
+    field: &'static str,
+    configured: PathBuf,
+    canonical: PathBuf,
+}
+
+struct WritableShareSource {
+    name: String,
+    configured: PathBuf,
+    canonical: PathBuf,
+}
+
+struct PreparedDirectoryShares {
+    runtime_dir: PathBuf,
+    plans: Vec<DirectorySharePlan>,
+    sensitive_paths: Option<[SensitivePath; 2]>,
+}
+
+fn prepare_directory_shares(contract: &Contract) -> VmPlanResult<PreparedDirectoryShares> {
+    if !contract.runtime_dir().is_dir() {
+        return Err(VmPlanError::RuntimeDirMissing {
+            path: contract.runtime_dir().to_path_buf(),
+        });
+    }
+    let runtime_dir = canonicalize_path("runtime_dir", contract.runtime_dir())?;
+    let mut writable_sources = vec![WritableShareSource {
+        name: "runtime".to_string(),
+        configured: contract.runtime_dir().to_path_buf(),
+        canonical: runtime_dir.clone(),
+    }];
+    let mut plans = vec![DirectorySharePlan {
+        name: "runtime".to_string(),
+        source: runtime_dir.clone(),
+        read_only: false,
+    }];
+
+    for (index, mount) in contract.mounts().iter().enumerate() {
+        if !mount.source().is_dir() {
+            return Err(VmPlanError::MountSourceNotDirectory {
+                path: mount.source().to_path_buf(),
+            });
+        }
+        let name = format!("mount{index}");
+        let source = if mount.read_only() {
+            mount.source().to_path_buf()
+        } else {
+            let canonical = canonicalize_path("mount.source", mount.source())?;
+            writable_sources.push(WritableShareSource {
+                name: name.clone(),
+                configured: mount.source().to_path_buf(),
+                canonical: canonical.clone(),
+            });
+            canonical
+        };
+        plans.push(DirectorySharePlan {
+            name,
+            source,
+            read_only: mount.read_only(),
+        });
+    }
+
+    let sensitive_paths = prepare_sensitive_paths(contract)?;
+    if let Some(sensitive_paths) = &sensitive_paths {
+        validate_writable_share_separation(&writable_sources, sensitive_paths)?;
+        plans.push(DirectorySharePlan {
+            name: "secret-shims".to_string(),
+            source: sensitive_paths[0].canonical.clone(),
+            read_only: true,
+        });
+    }
+
+    Ok(PreparedDirectoryShares {
+        runtime_dir,
+        plans,
+        sensitive_paths,
+    })
+}
+
+fn prepare_sensitive_paths(contract: &Contract) -> VmPlanResult<Option<[SensitivePath; 2]>> {
+    contract
+        .secret_shims()
+        .map(|shims| {
+            let shim_dir = shims.shim_share_directory();
+            if !shim_dir.is_dir() {
+                return Err(VmPlanError::ShimShareDirectoryMissing {
+                    path: shim_dir.to_path_buf(),
+                });
+            }
+
+            Ok([
+                SensitivePath {
+                    field: "secret_shims.shim_share_directory",
+                    configured: shim_dir.to_path_buf(),
+                    canonical: canonicalize_path("secret_shims.shim_share_directory", shim_dir)?,
+                },
+                SensitivePath {
+                    field: "secret_shims.broker_socket_path",
+                    configured: shims.broker_socket_path().to_path_buf(),
+                    canonical: canonicalize_path(
+                        "secret_shims.broker_socket_path",
+                        shims.broker_socket_path(),
+                    )?,
+                },
+            ])
+        })
+        .transpose()
+}
+
+fn canonicalize_path(field: &'static str, path: &Path) -> VmPlanResult<PathBuf> {
+    std::fs::canonicalize(path).map_err(|source| VmPlanError::CanonicalizePath {
+        field,
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn validate_writable_share_separation(
+    writable_shares: &[WritableShareSource],
+    sensitive_paths: &[SensitivePath; 2],
+) -> VmPlanResult<()> {
+    for share in writable_shares {
+        for sensitive in sensitive_paths {
+            if share.canonical.starts_with(&sensitive.canonical)
+                || sensitive.canonical.starts_with(&share.canonical)
+            {
+                return Err(VmPlanError::WritableShareOverlapsSensitivePath(Box::new(
+                    WritableShareOverlap {
+                        share_name: share.name.clone(),
+                        share_source: share.configured.clone(),
+                        canonical_share_source: share.canonical.clone(),
+                        sensitive_field: sensitive.field,
+                        sensitive_path: sensitive.configured.clone(),
+                        canonical_sensitive_path: sensitive.canonical.clone(),
+                    },
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,6 +287,13 @@ pub struct SocketDevicePlan {
 pub struct CommandPtyPlan {
     pub data_port: NonZeroU32,
     pub control_port: NonZeroU32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokerPlan {
+    pub vsock_port: NonZeroU32,
+    pub socket_path: PathBuf,
+    pub guest_addr: SocketAddr,
 }
 
 impl CommandPtyPlan {
