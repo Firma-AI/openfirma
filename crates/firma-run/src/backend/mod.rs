@@ -72,7 +72,7 @@ impl ShimTarget {
 
     /// Target for a Linux `x86_64` musl guest (used by VZ guest mode).
     #[must_use]
-    pub(crate) const fn linux_x86_64_musl() -> Self {
+    const fn linux_x86_64_musl() -> Self {
         Self {
             triple: "x86_64-unknown-linux-musl",
             exe_suffix: "",

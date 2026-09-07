@@ -119,7 +119,9 @@ impl ContractDocument {
 
     /// Validates that the contract uses the schema version supported by this runner.
     fn validate_version(&self) -> ValidationResult<()> {
-        if self.version != SUPPORTED_CONTRACT_VERSION {
+        // Accept v1 while the producer and guest-init transition to v2 in the
+        // later stack slices. The compatibility path is removed with that flip.
+        if !matches!(self.version, 1 | SUPPORTED_CONTRACT_VERSION) {
             return Err(ContractValidationError::UnsupportedVersion {
                 actual: self.version,
                 supported: SUPPORTED_CONTRACT_VERSION,
