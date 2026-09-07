@@ -181,10 +181,19 @@ impl GenericHttpConnector {
             builder = builder.query(&query);
         }
 
+        // An injected credential replaces the agent's header of the same name.
+        // `RequestBuilder::header` appends, so forwarding both would put two
+        // `Authorization` headers on the wire; upstreams reject that outright
+        // (GitHub answers 401 even when both copies carry the same valid
+        // token), and it lets the agent influence a header the sidecar owns.
+        let injected = view.credentials().headers();
         for (name, value) in http.headers.iter() {
+            if injected.contains_key(name) {
+                continue;
+            }
             builder = builder.header(name, value);
         }
-        for (name, value) in view.credentials().headers() {
+        for (name, value) in injected {
             builder = builder.header(name, value);
         }
 
