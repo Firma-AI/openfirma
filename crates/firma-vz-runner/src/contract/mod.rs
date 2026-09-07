@@ -154,7 +154,7 @@ impl ContractDocument {
             self.command.executable.len(),
             limits.command_arg_len,
         )?;
-        require_path("command.cwd", &self.command.cwd, limits.path_len)?;
+        require_guest_path("command.cwd", &self.command.cwd, limits.path_len)?;
         require_count_at_most("command.args", self.command.args.len(), limits.command_args)?;
         for arg in &self.command.args {
             if arg.is_empty() {

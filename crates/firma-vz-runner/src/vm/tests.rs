@@ -134,7 +134,10 @@ fn vm_plan_carries_optional_secret_broker_transport() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("broker plan should be present"))?;
 
     assert_eq!(broker.vsock_port.get(), 18083);
-    assert_eq!(broker.socket_path, temp.path().join("broker.sock"));
+    assert_eq!(
+        broker.socket_path,
+        std::fs::canonicalize(temp.path().join("broker.sock"))?
+    );
     assert_eq!(broker.guest_addr, "127.0.0.1:18084".parse()?);
     assert_eq!(plan.directory_shares[2].name, "secret-shims");
     assert!(plan.directory_shares[2].read_only);

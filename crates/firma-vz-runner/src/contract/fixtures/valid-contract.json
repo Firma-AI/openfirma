@@ -13,7 +13,7 @@
   "command": {
     "executable": "codex",
     "args": ["--version"],
-    "cwd": "${ROOT}",
+    "cwd": "/workspace",
     "env": {},
     "identity_mode": "host_user"
   },

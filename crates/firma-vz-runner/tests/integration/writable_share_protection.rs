@@ -210,13 +210,25 @@ fn assert_failed(output: Output, root: &Path) -> Result<String> {
         return Err(anyhow!("runner unexpectedly accepted overlapping paths"));
     }
     let stderr = String::from_utf8(output.stderr)?;
-    let root = root.to_str().context("test root path must be UTF-8")?;
-    if !stderr.contains(root) {
+    let root_text = root.to_str().context("test root path must be UTF-8")?;
+    if !stderr.contains(root_text) {
         return Err(anyhow!(
             "runner error did not identify a path beneath the test root"
         ));
     }
-    Ok(stderr.replace(root, "[ROOT]"))
+    let canonical_root = std::fs::canonicalize(root)?;
+    let canonical_root_text = canonical_root
+        .to_str()
+        .context("canonical test root path must be UTF-8")?;
+    let canonical_tmp = std::fs::canonicalize("/tmp")?;
+    let canonical_tmp_text = canonical_tmp
+        .to_str()
+        .context("canonical temporary directory path must be UTF-8")?;
+
+    Ok(stderr
+        .replace(canonical_root_text, "[ROOT]")
+        .replace(root_text, "[ROOT]")
+        .replace(canonical_tmp_text, "/tmp"))
 }
 
 fn write_artifacts(root: &Path) -> Result<()> {

@@ -247,13 +247,13 @@ impl Drop for SecretServices {
 
 /// Prepare secret-shim injection for a launch, mutating `handle` and `env`.
 ///
-/// A no-op when the profile lists no secret providers. Otherwise resolves
+/// A no-op when the profile lists no CLI secret providers. Otherwise resolves
 /// each shimmed tool on the host `PATH` and appends the shim's bind mounts and
 /// environment.
 ///
-/// `services` must be started for the same `profile`. If secret providers are
-/// configured but `services` is `None`, returns [`RunError::Internal`] — the
-/// caller skipped the start step.
+/// `services` must be started for the same `profile`. If CLI secret providers
+/// are configured but `services` is `None`, returns [`RunError::Internal`] —
+/// the caller skipped the start step.
 ///
 /// # Errors
 ///
@@ -268,19 +268,6 @@ pub(super) fn prepare(
     services: Option<&SecretServices>,
     shim_support: &SecretShimSupport,
 ) -> Result<(), RunError> {
-    if profile.secret_providers.is_empty() {
-        return Ok(());
-    }
-    let handle = handle.as_mut().ok_or_else(|| {
-        RunError::Internal("sandbox handle missing for shim injection".to_string())
-    })?;
-    let services = services.ok_or_else(|| {
-        RunError::Internal(
-            "secret_shims::prepare called with secret providers but no started services"
-                .to_string(),
-        )
-    })?;
-
     // Only CLI entries need stdio shim injection (bind mounts over a real
     // executable on PATH); HTTP entries are irrelevant here — they're mirrored
     // into the Sidecar's own config instead (see sidecar::config::synthesize)
@@ -291,63 +278,72 @@ pub(super) fn prepare(
         .filter_map(|(name, spec)| spec.as_cli().map(|cli| (name.clone(), cli.clone())))
         .collect();
 
-    if !cli_providers.is_empty() {
-        match shim_support {
-            SecretShimSupport::HostBindMount { guest_target } => {
-                let shim_bin = locate_shim_binary(firma_exe, guest_target, true)?.path;
-                let reals = resolve_real_binaries(&cli_providers, host_path)?;
-                let plan = plan(&shim_bin, &reals, services.broker_addr());
-                handle
-                    .mounts
-                    .extend(plan.mounts.into_iter().map(SandboxMount::framework));
-                for (key, value) in plan.env {
-                    env.insert(key, value);
-                }
+    if cli_providers.is_empty() {
+        return Ok(());
+    }
+    let handle = handle.as_mut().ok_or_else(|| {
+        RunError::Internal("sandbox handle missing for shim injection".to_string())
+    })?;
+    let services = services.ok_or_else(|| {
+        RunError::Internal(
+            "secret_shims::prepare called with CLI secret providers but no started services"
+                .to_string(),
+        )
+    })?;
+
+    match shim_support {
+        SecretShimSupport::HostBindMount { guest_target } => {
+            let shim_bin = locate_shim_binary(firma_exe, guest_target, true)?.path;
+            let reals = resolve_real_binaries(&cli_providers, host_path)?;
+            let plan = plan(&shim_bin, &reals, services.broker_addr());
+            handle
+                .mounts
+                .extend(plan.mounts.into_iter().map(SandboxMount::framework));
+            for (key, value) in plan.env {
+                env.insert(key, value);
             }
-            SecretShimSupport::IsolatedGuest {
-                broker_bridge,
-                guest_shim,
-                ..
-            } => {
-                let guest_shim = guest_shim.as_ref().ok_or_else(|| {
-                    RunError::Internal(
-                        "isolated guest secret shim was not resolved for this run".to_string(),
-                    )
-                })?;
-                let shim_share_directory = services.control_dir.join("guest-secret-shims");
-                stage_guest_shim(guest_shim, &shim_share_directory)?;
-                let broker_socket_path = services.broker_socket_path.as_ref().ok_or_else(|| {
-                    RunError::Internal(
-                        "VZ secret broker requires a host Unix socket path".to_string(),
-                    )
-                })?;
-                let provider_names: Vec<String> = cli_providers.keys().cloned().collect();
-                env.insert(
-                    FIRMA_SECRET_PROVIDER_NAMES.to_string(),
-                    serde_json::to_string(&provider_names).map_err(|error| {
-                        RunError::Internal(format!(
-                            "serialize internal VZ secret provider metadata: {error}"
-                        ))
-                    })?,
-                );
-                env.insert(
-                    FIRMA_SECRET_SHIM_SHARE_DIRECTORY.to_string(),
-                    shim_share_directory.display().to_string(),
-                );
-                env.insert(
-                    FIRMA_SECRET_BROKER_SOCKET_PATH.to_string(),
-                    broker_socket_path.display().to_string(),
-                );
-                env.insert(
-                    FIRMA_BROKER_ADDR.to_string(),
-                    broker_addr_for_bridge(services.broker_addr(), *broker_bridge),
-                );
-            }
-            SecretShimSupport::Unsupported { .. } => {
-                return Err(RunError::Internal(
+        }
+        SecretShimSupport::IsolatedGuest {
+            broker_bridge,
+            guest_shim,
+            ..
+        } => {
+            let guest_shim = guest_shim.as_ref().ok_or_else(|| {
+                RunError::Internal(
+                    "isolated guest secret shim was not resolved for this run".to_string(),
+                )
+            })?;
+            let shim_share_directory = services.control_dir.join("guest-secret-shims");
+            stage_guest_shim(guest_shim, &shim_share_directory)?;
+            let broker_socket_path = services.broker_socket_path.as_ref().ok_or_else(|| {
+                RunError::Internal("VZ secret broker requires a host Unix socket path".to_string())
+            })?;
+            let provider_names: Vec<String> = cli_providers.keys().cloned().collect();
+            env.insert(
+                FIRMA_SECRET_PROVIDER_NAMES.to_string(),
+                serde_json::to_string(&provider_names).map_err(|error| {
+                    RunError::Internal(format!(
+                        "serialize internal VZ secret provider metadata: {error}"
+                    ))
+                })?,
+            );
+            env.insert(
+                FIRMA_SECRET_SHIM_SHARE_DIRECTORY.to_string(),
+                shim_share_directory.display().to_string(),
+            );
+            env.insert(
+                FIRMA_SECRET_BROKER_SOCKET_PATH.to_string(),
+                broker_socket_path.display().to_string(),
+            );
+            env.insert(
+                FIRMA_BROKER_ADDR.to_string(),
+                broker_addr_for_bridge(services.broker_addr(), *broker_bridge),
+            );
+        }
+        SecretShimSupport::Unsupported { .. } => {
+            return Err(RunError::Internal(
                     "secret_shims::prepare called with CLI providers but backend does not support shim mediation".to_string(),
                 ));
-            }
         }
     }
 
@@ -665,7 +661,6 @@ mod tests {
     use crate::config::resolve_profile;
     use crate::identity::RunIdentity;
     use crate::runtime::RunInput;
-    use firma_runtime_state::RuntimeLayout;
     use firma_secret_provider::IntegrationRegistry;
 
     fn builtin_spec(name: &str) -> CliIntegrationSpec<SecretMatcher> {
@@ -746,22 +741,7 @@ secret_providers = {secret_providers}
                 mounts: Vec::new(),
                 network_policy: profile.network.clone(),
             });
-            let runtime_layout = RuntimeLayout::from_root(tempdir.path().join("runtime-state"));
             let support = isolated_guest_support();
-            let services = if profile.secret_providers.is_empty() {
-                None
-            } else {
-                Some(
-                    SecretServices::start(
-                        &runtime_layout,
-                        handle.as_ref().expect("sandbox handle"),
-                        &identity,
-                        &profile,
-                        &support,
-                    )
-                    .expect("start HTTP-only secret services"),
-                )
-            };
             let mut env = BTreeMap::new();
 
             prepare(
@@ -770,7 +750,7 @@ secret_providers = {secret_providers}
                 &mut env,
                 Path::new("/unused/firma"),
                 None,
-                services.as_ref(),
+                None,
                 &support,
             )
             .expect("prepare profile secret shims");
@@ -881,7 +861,7 @@ secret_providers = {secret_providers}
 
         let shim = dir
             .path()
-            .join(format!("{SHIM_BIN_NAME}{}", std::env::consts::EXE_SUFFIX));
+            .join(format!("{SHIM_BIN_NAME}{}", host_target.exe_suffix));
         write_test_elf(&shim, &host_target);
         assert_eq!(
             locate_shim_binary(&firma, &host_target, true)
