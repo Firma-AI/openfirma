@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::harness::{ProcessOutput, TestWorld, run_bounded};
 
@@ -178,6 +178,26 @@ fn sandbox_reads_sidecar_ca_without_reaching_its_private_key() {
     );
 }
 
+/// `FIRMA_STATE_DIR` may be spelled relative to the working directory. The
+/// sandbox backend hands runtime paths to bubblewrap, which resolves bind
+/// targets against its own root, so a relative spelling that survives
+/// resolution aborts the launch before the agent ever starts.
+#[test]
+fn relative_state_dir_launches_and_keeps_the_trust_store_readable() {
+    let probe = run_ca_trust_probe_spelled(|_| {}, relative_state_dir);
+
+    assert!(
+        probe.output.stdout.contains(CA_TRUST_READABLE),
+        "the sandbox could not read the trust store named by SSL_CERT_FILE:\n{}",
+        probe.output
+    );
+    assert!(
+        !probe.output.stdout.contains(CA_KEY_EXPOSED),
+        "the sandbox reached the Sidecar CA private key:\n{}",
+        probe.output
+    );
+}
+
 /// Under `ca_trust_mode = "append_system_roots"` the trust environment names a
 /// bundle that `firma run` writes into the CA directory. The bundle is produced
 /// before the sandbox filesystem plan is built, so it must be restored through
@@ -246,6 +266,18 @@ fn host_has_system_ca_bundle() -> bool {
 /// Runs the CA trust probe under `firma run` with HTTPS MITM enabled, after
 /// applying `patch_config` to the scaffolded configuration.
 fn run_ca_trust_probe(patch_config: impl FnOnce(&Path)) -> CaTrustProbe {
+    run_ca_trust_probe_spelled(patch_config, |state_dir, _workspace| {
+        state_dir.to_path_buf()
+    })
+}
+
+/// Runs the CA trust probe with `spell_state_dir` choosing how the launch names
+/// the state directory, so a test can hand `firma run` a spelling the operator
+/// is allowed to use but the sandbox backend cannot pass through unchanged.
+fn run_ca_trust_probe_spelled(
+    patch_config: impl FnOnce(&Path),
+    spell_state_dir: impl FnOnce(&Path, &Path) -> PathBuf,
+) -> CaTrustProbe {
     let world = TestWorld::isolated();
     let cfg_dir = world.path("config");
     let state = tempfile::tempdir_in(std::env::current_dir().expect("resolve repository cwd"))
@@ -270,7 +302,7 @@ fn run_ca_trust_probe(patch_config: impl FnOnce(&Path)) -> CaTrustProbe {
 
     let output = world.run_firma_with_state_dir(
         &config_file,
-        &state_dir,
+        &spell_state_dir(&state_dir, &workspace),
         &workspace,
         &["--sidecar", "local", "--authority", "local"],
         &probe_tool,
@@ -283,6 +315,35 @@ fn run_ca_trust_probe(patch_config: impl FnOnce(&Path)) -> CaTrustProbe {
         output,
         _state: state,
     }
+}
+
+/// Spells `state_dir` relative to the working directory `firma run` starts in,
+/// the way an operator running from a project checkout would.
+fn relative_state_dir(state_dir: &Path, working_dir: &Path) -> PathBuf {
+    let state_dir = state_dir.canonicalize().expect("canonicalize state dir");
+    let working_dir = working_dir
+        .canonicalize()
+        .expect("canonicalize working dir");
+    let shared = state_dir
+        .components()
+        .zip(working_dir.components())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative: PathBuf = working_dir
+        .components()
+        .skip(shared)
+        .map(|_| Path::new(".."))
+        .collect();
+    relative.extend(state_dir.components().skip(shared));
+    assert_eq!(
+        working_dir
+            .join(&relative)
+            .canonicalize()
+            .expect("relative state dir resolves"),
+        state_dir,
+        "the relative spelling must name the same directory"
+    );
+    relative
 }
 
 /// Switches the scaffolded run profile to the appended-system-roots trust mode.

@@ -219,7 +219,15 @@ impl BwrapMountPlan {
         // Derived from the runtime layout rather than the launch environment:
         // an operator-supplied `SSL_CERT_FILE` could otherwise aim the CA bind
         // at a signing key elsewhere in the control-plane runtime.
-        let run_entry = runtime_layout.run_entry_layout(&handle.identity.sandbox_id);
+        //
+        // Rooted at the *resolved* control-plane path so the run entry, the
+        // binds taken from it, and the mask that covers them all share one
+        // spelling. Rooting it at the layout's own path would reintroduce any
+        // relative or unnormalized `FIRMA_STATE_DIR` spelling, and bwrap cannot
+        // create a relative bind target beneath its read-only root.
+        let run_entry =
+            firma_runtime_state::RuntimeLayout::from_root(control_plane_runtime.clone())
+                .run_entry_layout(&handle.identity.sandbox_id);
         let runtime_paths = PlanRuntimePaths {
             control_plane: &control_plane_runtime,
             sandbox: &sandbox_runtime,
@@ -1550,6 +1558,61 @@ mod tests {
         assert!(
             !rendered.iter().any(|arg| arg.starts_with(&ca_dir)),
             "no CA path should be bound when the material is absent: {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_normalizes_ca_paths_against_the_resolved_runtime_root() {
+        // bwrap resolves bind targets against its own root, so every emitted
+        // path must be normalized. The plan resolves the control-plane root but
+        // used to derive the run entry from the layout's raw spelling, which
+        // left `..` components (or, for a relative `FIRMA_STATE_DIR`, a
+        // relative path) in the CA binds while the mask covered the resolved
+        // path.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let control_plane = temp.path().join("control-plane");
+        let resolved = firma_runtime_state::RuntimeLayout::from_root(control_plane.clone());
+        std::fs::create_dir_all(resolved.run_entry_layout(&identity.sandbox_id).ca_dir())
+            .expect("mkdir CA dir");
+        std::fs::write(
+            resolved.run_entry_layout(&identity.sandbox_id).ca_cert(),
+            "",
+        )
+        .expect("write CA cert");
+
+        // Same directory, spelled with a traversal component.
+        let unnormalized = firma_runtime_state::RuntimeLayout::from_root(
+            control_plane.join("..").join("control-plane"),
+        );
+
+        let handle = handle_with(runtime_dir, identity.clone());
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let plan = super::BwrapMountPlan::build(&unnormalized, &handle, &launch, &hardening)
+            .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        assert!(
+            rendered.iter().all(|arg| !arg.contains("/..")),
+            "every emitted path must be normalized: {rendered:?}"
+        );
+        let cert = resolved
+            .run_entry_layout(&identity.sandbox_id)
+            .ca_cert()
+            .display()
+            .to_string();
+        assert!(
+            rendered.iter().any(|arg| arg == &cert),
+            "the CA certificate must be bound at its resolved path: {rendered:?}"
         );
     }
 

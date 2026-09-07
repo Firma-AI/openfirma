@@ -28,6 +28,19 @@ fn resolve(
     .expect("resolve runtime layout")
 }
 
+/// Returns a root that is already absolute on every supported platform.
+///
+/// A POSIX-style `/name` is drive-relative on Windows, so resolution prepends
+/// the current drive. Tests about precedence would then assert the runner's
+/// working directory instead of the rule under test.
+fn absolute_root(name: &str) -> PathBuf {
+    #[cfg(unix)]
+    let root = PathBuf::from(format!("/{name}"));
+    #[cfg(windows)]
+    let root = PathBuf::from(format!(r"C:\{name}"));
+    root
+}
+
 #[test]
 #[cfg(unix)]
 fn unix_uses_xdg_runtime_dir_when_set() {
@@ -51,28 +64,86 @@ fn unix_ignores_empty_xdg_runtime_dir() {
 
 #[test]
 fn explicit_root_overrides_environment() {
+    let explicit = absolute_root("explicit");
+    let state_dir = absolute_root("custom-state");
     let layout = resolve(
-        Some(PathBuf::from("/explicit")),
-        Some("/custom/state"),
+        Some(explicit.clone()),
+        Some(&state_dir.to_string_lossy()),
         Some("/run/user/1000"),
         Some(r"C:\AppData"),
         Some(r"C:\Temp"),
         1000,
     );
-    assert_eq!(layout.root(), PathBuf::from("/explicit"));
+    assert_eq!(layout.root(), explicit);
 }
 
 #[test]
 fn firma_state_dir_overrides_platform_environment() {
+    let state_dir = absolute_root("custom-state");
     let layout = resolve(
         None,
-        Some("/custom/state"),
+        Some(&state_dir.to_string_lossy()),
         Some("/run/user/1000"),
         Some(r"C:\AppData"),
         Some(r"C:\Temp"),
         1000,
     );
-    assert_eq!(layout.root(), PathBuf::from("/custom/state"));
+    assert_eq!(layout.root(), state_dir);
+}
+
+/// Consumers hand runtime paths to processes that resolve them elsewhere:
+/// bubblewrap resolves bind targets against its own root, and the trust
+/// environment given to a wrapped process is read from the sandbox working
+/// directory. A relative root must not survive resolution.
+#[test]
+fn relative_firma_state_dir_resolves_against_the_working_directory() {
+    let cwd = std::env::current_dir().expect("resolve working directory");
+    let layout = resolve(None, Some(".firma-state"), None, None, None, 1000);
+    assert_eq!(layout.root(), cwd.join(".firma-state"));
+}
+
+/// The platform branches read environment variables, which are as
+/// operator-supplied as the explicit inputs. A relative one must not survive
+/// either, or it reaches bubblewrap as a bind target it cannot create.
+#[test]
+#[cfg(unix)]
+fn relative_xdg_runtime_dir_resolves_against_the_working_directory() {
+    let cwd = std::env::current_dir().expect("resolve working directory");
+    let layout = resolve(None, None, Some("relative-runtime"), None, None, 1000);
+    assert_eq!(layout.root(), cwd.join("relative-runtime").join("firma"));
+}
+
+#[test]
+#[cfg(windows)]
+fn relative_local_app_data_resolves_against_the_working_directory() {
+    let cwd = std::env::current_dir().expect("resolve working directory");
+    let layout = resolve(None, None, None, Some(r"relative-appdata"), None, 1000);
+    assert_eq!(
+        layout.root(),
+        cwd.join("relative-appdata").join("firma").join("runtime")
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn relative_temp_resolves_against_the_working_directory() {
+    let cwd = std::env::current_dir().expect("resolve working directory");
+    let layout = resolve(None, None, None, None, Some(r"relative-temp"), 1000);
+    assert_eq!(layout.root(), cwd.join("relative-temp").join("firma"));
+}
+
+#[test]
+fn relative_explicit_root_resolves_against_the_working_directory() {
+    let cwd = std::env::current_dir().expect("resolve working directory");
+    let layout = resolve(
+        Some(PathBuf::from("relative-state")),
+        None,
+        None,
+        None,
+        None,
+        1000,
+    );
+    assert_eq!(layout.root(), cwd.join("relative-state"));
 }
 
 #[test]
