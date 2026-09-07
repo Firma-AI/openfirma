@@ -1232,7 +1232,7 @@ mod tests {
         terminal: TerminalContract,
     ) -> Result<Contract, Box<dyn Error>> {
         Ok(LaunchContract {
-            version: 1,
+            version: 2,
             sandbox_id: "sbx_01j0000000e008000000000001"
                 .parse()
                 .expect("valid sandbox ID fixture"),
