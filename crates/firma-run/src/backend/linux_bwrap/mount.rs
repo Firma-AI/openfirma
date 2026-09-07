@@ -16,6 +16,7 @@ use crate::backend::{
 };
 use crate::config::MountSpec;
 use crate::error::RunError;
+use crate::trust::SidecarTrustAnchor;
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 use firma_runtime_state::RunEntryLayout;
 
@@ -440,7 +441,12 @@ fn append_filesystem_layout(
         runtime_paths.sandbox,
         launch,
     )?;
-    mount_ca_material(plan, runtime_paths.run_entry);
+    mount_ca_material(
+        plan,
+        runtime_paths.run_entry,
+        runtime_paths.control_plane,
+        launch.trust_anchor.as_ref(),
+    )?;
     Ok(())
 }
 
@@ -525,11 +531,52 @@ fn mask_control_plane_runtime(
 ///
 /// Missing files are skipped: with HTTPS MITM disabled no CA is generated, and
 /// the bundle exists only under `ca_trust_mode = "append_system_roots"`.
-fn mount_ca_material(plan: &mut BwrapMountPlan, run_entry: &RunEntryLayout) {
-    for source in [run_entry.ca_cert(), run_entry.ca_bundle()] {
-        if !source.is_file() {
-            continue;
+///
+/// The launch's [`SidecarTrustAnchor`] is a cross-check, never a bind source.
+/// It is resolved partly from operator-controlled variables, so honoring it
+/// directly would let `FIRMA_SIDECAR_CA_CERT_PATH` aim a bind at the CA signing
+/// key or any other control-plane secret. Instead, an anchor that the mask
+/// hides but this run's layout does not explain fails the launch: the
+/// alternative is a wrapped process that silently trusts only the host's system
+/// roots while believing it trusts the Sidecar.
+///
+/// The cross-check accepts an anchor only if this plan actually restores it, so
+/// it applies the same existence test the bind loop does. Naming a path this
+/// run's layout would restore is not enough: if the file is absent, the loop
+/// skips it and the anchor stays behind the mask.
+fn mount_ca_material(
+    plan: &mut BwrapMountPlan,
+    run_entry: &RunEntryLayout,
+    control_plane_runtime: &Path,
+    trust_anchor: Option<&SidecarTrustAnchor>,
+) -> Result<(), RunError> {
+    let restored = [run_entry.ca_cert(), run_entry.ca_bundle()]
+        .into_iter()
+        .filter(|source| source.is_file())
+        .collect::<Vec<_>>();
+
+    if let Some(anchor) = trust_anchor {
+        let anchor_path = resolve_path_allow_missing(anchor.path(), "sidecar trust anchor")?;
+        if anchor_path.starts_with(control_plane_runtime)
+            && !restored.iter().any(|candidate| {
+                resolve_path_allow_missing(candidate, "sidecar CA material")
+                    .is_ok_and(|resolved| resolved == anchor_path)
+            })
+        {
+            return Err(RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: format!(
+                    "trust anchor {} lies inside the masked control-plane runtime {} and is not CA material this run restores from {}; \
+                     move an external Sidecar's CA outside FIRMA_STATE_DIR",
+                    anchor_path.display(),
+                    control_plane_runtime.display(),
+                    run_entry.ca_dir().display()
+                ),
+            });
         }
+    }
+
+    for source in restored {
         plan.sandbox_runtime.bind(
             BwrapPlanRole::SandboxInfrastructure,
             source.clone(),
@@ -537,6 +584,7 @@ fn mount_ca_material(plan: &mut BwrapMountPlan, run_entry: &RunEntryLayout) {
             BwrapBindMode::ReadOnly,
         );
     }
+    Ok(())
 }
 
 /// Resolves every prepared mount to the exact host source that will be emitted
@@ -1200,6 +1248,7 @@ mod tests {
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file: None,
+            trust_anchor: None,
         };
         let suffixes = vec![
             ".ssh".to_string(),
@@ -1245,6 +1294,7 @@ mod tests {
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file,
+            trust_anchor: None,
         }
     }
 
@@ -1493,7 +1543,8 @@ mod tests {
         }
 
         let handle = handle_with(runtime_dir, identity);
-        let launch = launch_with_cwd_and_config(cwd, None);
+        let mut launch = launch_with_cwd_and_config(cwd, None);
+        launch.trust_anchor = Some(trust_anchor_for(&run_entry.ca_cert()));
         let hardening = super::BwrapHardening::from_env(&launch.env);
 
         let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
@@ -1558,6 +1609,145 @@ mod tests {
         assert!(
             !rendered.iter().any(|arg| arg.starts_with(&ca_dir)),
             "no CA path should be bound when the material is absent: {rendered:?}"
+        );
+    }
+
+    /// Resolve the trust anchor the way `firma run` does, from a certificate
+    /// path published as a network override.
+    #[cfg(target_os = "linux")]
+    fn trust_anchor_for(cert: &std::path::Path) -> crate::trust::SidecarTrustAnchor {
+        let overrides = BTreeMap::from([(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            cert.display().to_string(),
+        )]);
+        crate::trust::SidecarTrustAnchor::resolve(crate::config::CaTrustMode::Sole, &overrides)
+            .expect("trust anchor resolves for an existing certificate")
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_rejects_a_masked_trust_anchor_outside_this_run() {
+        // An external Sidecar can publish a CA that lives inside
+        // `FIRMA_STATE_DIR` but not in this run's entry. The mask hides it and
+        // the plan cannot restore it, so the wrapped process would open an
+        // unreadable trust store and silently fall back to the system roots.
+        // Failing the launch is the only honest outcome.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let control_plane = temp.path().join("control-plane");
+        let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(control_plane.clone());
+        let external_ca = control_plane.join("external-ca");
+        std::fs::create_dir_all(&external_ca).expect("mkdir external CA dir");
+        let external_cert = external_ca.join("firma-ca.crt");
+        std::fs::write(&external_cert, "").expect("write external CA cert");
+
+        let handle = handle_with(runtime_dir, identity);
+        let mut launch = launch_with_cwd_and_config(cwd, None);
+        launch.trust_anchor = Some(trust_anchor_for(&external_cert));
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let error = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect_err("a masked, unrestorable trust anchor must fail the launch");
+
+        std::assert_matches!(
+            &error,
+            crate::error::RunError::Backend { backend, .. } if backend == "bwrap"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains(&external_cert.display().to_string()),
+            "the error must name the offending anchor: {message}"
+        );
+        assert!(
+            message.contains("FIRMA_STATE_DIR"),
+            "the error must tell the operator how to fix it: {message}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_rejects_a_trust_anchor_this_run_cannot_restore() {
+        // The anchor names a path this run's layout owns, but the file is not
+        // there — the appended bundle is written only under
+        // `ca_trust_mode = "append_system_roots"`, and either file can be
+        // removed between anchor resolution and planning. The bind loop skips
+        // absent sources, so accepting the anchor on its spelling alone would
+        // leave the wrapped process pointed at a path the mask still hides.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+        let run_entry = runtime_layout.run_entry_layout(&identity.sandbox_id);
+        std::fs::create_dir_all(run_entry.ca_dir()).expect("mkdir CA dir");
+        // Resolve the anchor against a real bundle, then remove it.
+        std::fs::write(run_entry.ca_bundle(), "").expect("write CA bundle");
+        let anchor = trust_anchor_for(&run_entry.ca_bundle());
+        std::fs::remove_file(run_entry.ca_bundle()).expect("remove CA bundle");
+
+        let handle = handle_with(runtime_dir, identity);
+        let mut launch = launch_with_cwd_and_config(cwd, None);
+        launch.trust_anchor = Some(anchor);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let error = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect_err("an anchor this run does not restore must fail the launch");
+
+        std::assert_matches!(
+            &error,
+            crate::error::RunError::Backend { backend, .. } if backend == "bwrap"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains(&run_entry.ca_bundle().display().to_string()),
+            "the error must name the offending anchor: {message}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_accepts_a_trust_anchor_outside_the_control_plane_runtime() {
+        // An external Sidecar keeping its CA outside `FIRMA_STATE_DIR` is the
+        // supported arrangement: the mask never covers that path, so there is
+        // nothing to restore and nothing to reject.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let external_cert = temp.path().join("firma-ca.crt");
+        std::fs::write(&external_cert, "").expect("write external CA cert");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let handle = handle_with(runtime_dir, identity);
+        let mut launch = launch_with_cwd_and_config(cwd, None);
+        launch.trust_anchor = Some(trust_anchor_for(&external_cert));
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        assert!(
+            !rendered
+                .iter()
+                .any(|arg| arg == &external_cert.display().to_string()),
+            "an unmasked anchor needs no bind: {rendered:?}"
         );
     }
 

@@ -109,6 +109,16 @@ When you launch with `firma run`, the wrapper installs the CA into the sandbox's
 
 The sandbox sees only the public CA material — `firma-ca.crt`, plus `firma-ca-bundle.crt` under `ca_trust_mode = "append_system_roots"`. `firma-ca.key` stays behind the control-plane mask, so a wrapped agent can verify intercepted connections but cannot mint certificates that other CA-trusting processes would accept.
 
+This works because `firma run` owns the CA location for a Sidecar it starts: it pins `[sidecar.ca].dir` to that run's state entry, and the CA file names are fixed (`firma-ca.crt`, `firma-ca.key`), so the key cannot be configured somewhere the mask does not cover.
+
+**Keep an external Sidecar's CA outside `FIRMA_STATE_DIR`.** When you point `firma run` at a Sidecar you started yourself (`--sidecar tcp://…`), it trusts that Sidecar's CA through `FIRMA_SIDECAR_CA_CERT_PATH` or `FIRMA_SIDECAR_CA_DIR`. The control-plane mask hides everything under `FIRMA_STATE_DIR` from the wrapped process, so a CA published from inside it would be unreadable in the sandbox. `firma run` refuses to launch in that case rather than letting the agent fall back to the host's system roots:
+
+```
+backend error (bwrap): trust anchor /run/user/1000/firma/external-ca/firma-ca.crt lies inside the
+masked control-plane runtime /run/user/1000/firma but is not this run's CA material under
+/run/user/1000/firma/run/<sandbox-id>/firma-ca; move an external Sidecar's CA outside FIRMA_STATE_DIR
+```
+
 ## Step 4: Verify MITM is in effect
 
 With the env vars set in your agent shell, make a verbose HTTPS call:

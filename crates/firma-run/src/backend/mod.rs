@@ -341,6 +341,14 @@ pub struct LaunchSpec {
     /// run. It can sit outside the workspace cwd because config discovery walks
     /// up parent directories.
     pub(crate) config_file: Option<PathBuf>,
+    /// CA file this launch's trust environment names, when the Sidecar
+    /// publishes one.
+    ///
+    /// Backends that hide the control-plane runtime from the wrapped process
+    /// must keep this exact file readable; otherwise the trust environment
+    /// points at something the sandbox cannot open and every intercepted
+    /// handshake fails against the host's system roots instead.
+    pub(crate) trust_anchor: Option<crate::trust::SidecarTrustAnchor>,
 }
 
 /// Backend interface for sandbox runtime implementations.
