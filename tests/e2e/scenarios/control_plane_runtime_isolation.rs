@@ -388,6 +388,17 @@ fi
 if [ -n "${{FIRMA_SIDECAR_CA_DIR:-}}" ] && [ -r "${{FIRMA_SIDECAR_CA_DIR}}/firma-ca.key" ]; then
   echo "{CA_KEY_EXPOSED}"
 fi
+# Masking the key in this mount namespace is not enough: any visible process
+# root reaches the same host path again. Holding the key means minting
+# certificates that every CA-trusting process accepts.
+if [ -n "${{FIRMA_SIDECAR_CA_DIR:-}}" ]; then
+  for aliased_key in /proc/*/root"${{FIRMA_SIDECAR_CA_DIR}}"/firma-ca.key
+  do
+    if [ -r "$aliased_key" ]; then
+      echo "{CA_KEY_EXPOSED} path=$aliased_key"
+    fi
+  done
+fi
 "#,
     );
     std::fs::write(path, script).expect("write CA trust probe");
@@ -434,6 +445,23 @@ do
   if [ -e "$asset" ] && {{ : <"$asset"; }} 2>/dev/null; then
     echo "{ASSET_EXPOSED} path=$asset"
   fi
+done
+# The mask only hides paths in this mount namespace. Every visible process
+# root is a second door to the same host paths, so probe them too: an
+# ancestor's `/proc/<pid>/root` would expose the whole control plane, private
+# CA key included.
+for proc_root in /proc/*/root
+do
+  for asset in \
+    "$proc_root$control_root"/authority.key \
+    "$proc_root$control_root"/run/*/firma-ca/firma-ca.key \
+    "$proc_root$control_root"/run/*/sidecar.toml \
+    "$proc_root$control_root"/capabilities/*.toml
+  do
+    if [ -e "$asset" ] && {{ : <"$asset"; }} 2>/dev/null; then
+      echo "{ASSET_EXPOSED} path=$asset"
+    fi
+  done
 done
 printf '%s\n' forged >"$control_root/run/forged-sidecar.sock" 2>/dev/null || true
 printf '%s\n' attempted >"$evidence"

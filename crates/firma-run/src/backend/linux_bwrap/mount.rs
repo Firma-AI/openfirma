@@ -177,6 +177,13 @@ enum BwrapPlanStep {
         /// Sandbox path populated with the private device filesystem.
         target: PathBuf,
     },
+    /// Mounts a procfs for the sandbox's own PID namespace.
+    Proc {
+        /// Semantic owner of the procfs operation.
+        role: BwrapPlanRole,
+        /// Sandbox path populated with the procfs.
+        target: PathBuf,
+    },
 }
 
 impl BwrapMountPlan {
@@ -297,6 +304,14 @@ impl BwrapMountPhase {
         });
     }
 
+    /// Appends creation of a procfs for the sandbox's own PID namespace.
+    fn proc(&mut self, role: BwrapPlanRole, target: impl Into<PathBuf>) {
+        self.steps.push(BwrapPlanStep::Proc {
+            role,
+            target: target.into(),
+        });
+    }
+
     /// Consumes this phase and appends its operations to bwrap.
     fn emit(self, command: &mut Command) {
         for step in self.steps {
@@ -321,6 +336,10 @@ impl BwrapMountPhase {
                 BwrapPlanStep::Dev { role, target } => {
                     let _ = role;
                     command.arg("--dev").arg(target);
+                }
+                BwrapPlanStep::Proc { role, target } => {
+                    let _ = role;
+                    command.arg("--proc").arg(target);
                 }
             }
         }
@@ -421,6 +440,13 @@ fn append_filesystem_layout(
             .bind(BwrapPlanRole::Layout, "/", "/", BwrapBindMode::ReadWrite);
     }
     plan.layout.dev(BwrapPlanRole::Layout, "/dev");
+    // Must follow the root bind, which would otherwise cover it with the
+    // host's inherited procfs. Paired with `--unshare-pid`: the sandbox's own
+    // procfs shows only its own processes, closing the
+    // `/proc/<pid>/root/<host path>` alias through which an ancestor's mount
+    // namespace — and with it every masked control-plane secret, including the
+    // Sidecar CA signing key — stayed reachable.
+    plan.layout.proc(BwrapPlanRole::Layout, "/proc");
 
     emit_mounts(plan, mounts.iter());
 
@@ -1622,6 +1648,48 @@ mod tests {
         )]);
         crate::trust::SidecarTrustAnchor::resolve(crate::config::CaTrustMode::Sole, &overrides)
             .expect("trust anchor resolves for an existing certificate")
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_mounts_procfs_after_the_root_bind() {
+        // `--unshare-pid` alone leaves the host's inherited procfs in place,
+        // and `/proc/<pid>/root/<host path>` walks around every mask through an
+        // ancestor's mount namespace. The sandbox's own procfs must therefore
+        // land after the read-only root bind that would otherwise cover it.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let root_bind = rendered
+            .windows(3)
+            .position(|win| {
+                (win[0] == "--ro-bind" || win[0] == "--bind") && win[1] == "/" && win[2] == "/"
+            })
+            .expect("host root bound");
+        let procfs = rendered
+            .windows(2)
+            .position(|win| win[0] == "--proc" && win[1] == "/proc")
+            .expect("sandbox procfs mounted");
+        assert!(
+            root_bind < procfs,
+            "the procfs must be mounted after the root bind: {rendered:?}"
+        );
     }
 
     #[test]

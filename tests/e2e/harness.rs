@@ -329,7 +329,7 @@ impl TestWorld {
 /// Stable process, sandbox, Sidecar, agent, and session identity for a live governed run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LiveIdentity {
-    /// PID of the wrapped fixture inside the structural sandbox.
+    /// PID of the wrapped fixture as seen inside the sandbox's own PID namespace.
     pub(crate) process_id: u32,
     /// Initial mount-namespace link target for the wrapped fixture.
     pub(crate) mount_namespace: String,
@@ -361,18 +361,25 @@ pub(crate) struct LiveGovernedRun {
 
 impl LiveGovernedRun {
     /// Returns the original identity after verifying every process and marker remains unchanged.
-    pub(crate) fn identity(&self) -> LiveIdentity {
+    ///
+    /// The sandbox has its own PID namespace, so the wrapped process's identity is only
+    /// observable from inside it: the fixture re-reports the process id and mount namespace it
+    /// announced at readiness. Answering at all proves the same process still serves the
+    /// protocol, and the reported values prove it was neither replaced nor re-entered a
+    /// different mount namespace.
+    pub(crate) fn identity(&mut self) -> LiveIdentity {
         let identity = self.identity.clone().expect("live identity ready");
-        assert!(
-            Path::new(&format!("/proc/{}", identity.process_id)).exists(),
-            "wrapped process {} exited",
-            identity.process_id
+        let nonce = format!("identity-{}", uuid::Uuid::new_v4().simple());
+        let observed = match self.http.identity(&nonce) {
+            Ok(observed) => observed,
+            Err(error) => self.protocol_failure("wrapped process identity", &error),
+        };
+        assert_eq!(
+            observed.process_id, identity.process_id,
+            "wrapped process restarted"
         );
         assert_eq!(
-            std::fs::read_link(format!("/proc/{}/ns/mnt", identity.process_id))
-                .expect("read wrapped process mount namespace")
-                .to_string_lossy(),
-            identity.mount_namespace,
+            observed.mount_namespace, identity.mount_namespace,
             "wrapped process mount namespace changed"
         );
         let marker_path = self.state_path.join("run").join(&identity.sandbox_id);
