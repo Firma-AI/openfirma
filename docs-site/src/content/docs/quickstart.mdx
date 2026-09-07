@@ -7,7 +7,7 @@ import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 This quickstart takes you from nothing installed to a real agent running under enforcement: its outbound calls are checked against policy, allowed or denied, and written to the audit log.
 
-The default install path uses a single precompiled static binary. You do not need a build toolchain, or any API keys, unless you choose to build from source.
+The default install path uses precompiled static binaries. You do not need a build toolchain, or any API keys, unless you choose to build from source.
 
 ## Install
 
@@ -42,7 +42,7 @@ OpenFirma can be installed with a one-line script or built from source. The scri
 
 </Steps>
 
-The installer drops the binary in `~/.local/bin` by default and adds it to your shell's `PATH`.
+The tarball installer drops `firma` in `~/.local/bin` by default and adds that directory to your shell's `PATH`. It keeps backend support binaries in a private `libexec/openfirma` directory beside `firma`. The Homebrew path stores its private guest shim under `$(brew --prefix)/var/openfirma/secret-shims/<version>/<target>/` instead. These support binaries are not commands and must not be added to `PATH`.
 
 </TabItem>
 <TabItem label="From source">

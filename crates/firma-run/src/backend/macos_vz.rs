@@ -335,9 +335,9 @@ impl SandboxBackend for VzBackend {
                     reason: SecretShimUnsupportedReason::HostCallable,
                 }
             }
-            VzStructuralMode::VzGuest => SecretShimSupport::Unsupported {
-                reason: SecretShimUnsupportedReason::HostCallable,
-            },
+            VzStructuralMode::VzGuest => {
+                isolated_guest_shim_support(ShimTarget::linux_musl(), None)
+            }
         }
     }
 
