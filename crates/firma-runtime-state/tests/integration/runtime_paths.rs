@@ -8,24 +8,23 @@
 use std::path::PathBuf;
 
 use firma_runtime_state::RuntimeLayout;
+use firma_runtime_state::runtime_paths::RuntimeRootInputs;
 
-fn resolve(
-    flag: Option<PathBuf>,
-    firma_state_dir: Option<&str>,
-    xdg_runtime_dir: Option<&str>,
-    local_app_data: Option<&str>,
-    temp: Option<&str>,
-    uid: u32,
-) -> RuntimeLayout {
-    RuntimeLayout::resolve_from(
-        flag,
-        firma_state_dir.map(str::to_string),
-        xdg_runtime_dir.map(str::to_string),
-        local_app_data.map(str::to_string),
-        temp.map(str::to_string),
-        uid,
-    )
-    .expect("resolve runtime layout")
+fn resolve(inputs: RuntimeRootInputs) -> RuntimeLayout {
+    RuntimeLayout::resolve_from(inputs).expect("resolve runtime layout")
+}
+
+/// Every platform input set at once, so a test asserting precedence shows only
+/// the input it is about.
+fn every_environment_input() -> RuntimeRootInputs {
+    RuntimeRootInputs {
+        flag: None,
+        firma_state_dir: Some(absolute_root("custom-state").to_string_lossy().into_owned()),
+        xdg_runtime_dir: Some("/run/user/1000".to_string()),
+        local_app_data: Some(r"C:\AppData".to_string()),
+        temp: Some(r"C:\Temp".to_string()),
+        uid: 1000,
+    }
 }
 
 /// Returns a root that is already absolute on every supported platform.
@@ -44,51 +43,49 @@ fn absolute_root(name: &str) -> PathBuf {
 #[test]
 #[cfg(unix)]
 fn unix_uses_xdg_runtime_dir_when_set() {
-    let layout = resolve(None, None, Some("/run/user/1000"), None, None, 1000);
+    let layout = resolve(RuntimeRootInputs {
+        xdg_runtime_dir: Some("/run/user/1000".to_string()),
+        uid: 1000,
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(layout.root(), PathBuf::from("/run/user/1000/firma"));
 }
 
 #[test]
 #[cfg(unix)]
 fn unix_falls_back_to_tmp_when_xdg_runtime_dir_unset() {
-    let layout = resolve(None, None, None, None, None, 1000);
+    let layout = resolve(RuntimeRootInputs {
+        uid: 1000,
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(layout.root(), PathBuf::from("/tmp/firma-1000"));
 }
 
 #[test]
 #[cfg(unix)]
 fn unix_ignores_empty_xdg_runtime_dir() {
-    let layout = resolve(None, None, Some(""), None, None, 42);
+    let layout = resolve(RuntimeRootInputs {
+        xdg_runtime_dir: Some(String::new()),
+        uid: 42,
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(layout.root(), PathBuf::from("/tmp/firma-42"));
 }
 
 #[test]
 fn explicit_root_overrides_environment() {
     let explicit = absolute_root("explicit");
-    let state_dir = absolute_root("custom-state");
-    let layout = resolve(
-        Some(explicit.clone()),
-        Some(&state_dir.to_string_lossy()),
-        Some("/run/user/1000"),
-        Some(r"C:\AppData"),
-        Some(r"C:\Temp"),
-        1000,
-    );
+    let layout = resolve(RuntimeRootInputs {
+        flag: Some(explicit.clone()),
+        ..every_environment_input()
+    });
     assert_eq!(layout.root(), explicit);
 }
 
 #[test]
 fn firma_state_dir_overrides_platform_environment() {
-    let state_dir = absolute_root("custom-state");
-    let layout = resolve(
-        None,
-        Some(&state_dir.to_string_lossy()),
-        Some("/run/user/1000"),
-        Some(r"C:\AppData"),
-        Some(r"C:\Temp"),
-        1000,
-    );
-    assert_eq!(layout.root(), state_dir);
+    let layout = resolve(every_environment_input());
+    assert_eq!(layout.root(), absolute_root("custom-state"));
 }
 
 /// Consumers hand runtime paths to processes that resolve them elsewhere:
@@ -98,7 +95,10 @@ fn firma_state_dir_overrides_platform_environment() {
 #[test]
 fn relative_firma_state_dir_resolves_against_the_working_directory() {
     let cwd = std::env::current_dir().expect("resolve working directory");
-    let layout = resolve(None, Some(".firma-state"), None, None, None, 1000);
+    let layout = resolve(RuntimeRootInputs {
+        firma_state_dir: Some(".firma-state".to_string()),
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(layout.root(), cwd.join(".firma-state"));
 }
 
@@ -109,7 +109,10 @@ fn relative_firma_state_dir_resolves_against_the_working_directory() {
 #[cfg(unix)]
 fn relative_xdg_runtime_dir_resolves_against_the_working_directory() {
     let cwd = std::env::current_dir().expect("resolve working directory");
-    let layout = resolve(None, None, Some("relative-runtime"), None, None, 1000);
+    let layout = resolve(RuntimeRootInputs {
+        xdg_runtime_dir: Some("relative-runtime".to_string()),
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(layout.root(), cwd.join("relative-runtime").join("firma"));
 }
 
@@ -117,7 +120,10 @@ fn relative_xdg_runtime_dir_resolves_against_the_working_directory() {
 #[cfg(windows)]
 fn relative_local_app_data_resolves_against_the_working_directory() {
     let cwd = std::env::current_dir().expect("resolve working directory");
-    let layout = resolve(None, None, None, Some(r"relative-appdata"), None, 1000);
+    let layout = resolve(RuntimeRootInputs {
+        local_app_data: Some(r"relative-appdata".to_string()),
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(
         layout.root(),
         cwd.join("relative-appdata").join("firma").join("runtime")
@@ -128,28 +134,30 @@ fn relative_local_app_data_resolves_against_the_working_directory() {
 #[cfg(windows)]
 fn relative_temp_resolves_against_the_working_directory() {
     let cwd = std::env::current_dir().expect("resolve working directory");
-    let layout = resolve(None, None, None, None, Some(r"relative-temp"), 1000);
+    let layout = resolve(RuntimeRootInputs {
+        temp: Some(r"relative-temp".to_string()),
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(layout.root(), cwd.join("relative-temp").join("firma"));
 }
 
 #[test]
 fn relative_explicit_root_resolves_against_the_working_directory() {
     let cwd = std::env::current_dir().expect("resolve working directory");
-    let layout = resolve(
-        Some(PathBuf::from("relative-state")),
-        None,
-        None,
-        None,
-        None,
-        1000,
-    );
+    let layout = resolve(RuntimeRootInputs {
+        flag: Some(PathBuf::from("relative-state")),
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(layout.root(), cwd.join("relative-state"));
 }
 
 #[test]
 #[cfg(windows)]
 fn windows_uses_local_app_data() {
-    let layout = resolve(None, None, None, Some(r"C:\Users\u\AppData\Local"), None, 0);
+    let layout = resolve(RuntimeRootInputs {
+        local_app_data: Some(r"C:\Users\u\AppData\Local".to_string()),
+        ..RuntimeRootInputs::default()
+    });
     assert_eq!(
         layout.root(),
         PathBuf::from(r"C:\Users\u\AppData\Local\firma\runtime")
