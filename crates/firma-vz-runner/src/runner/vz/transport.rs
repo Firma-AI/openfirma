@@ -1,13 +1,15 @@
 use super::super::RunnerError;
+use super::broker_bridge::BrokerBridgePlan;
 use super::command_pty::{CommandPtyBridgePlan, CommandPtyBridgePorts};
 use super::sidecar_bridge::SidecarBridgePlan;
 use crate::vm::{SocketDeviceKind, VmNetworkMode, VmPlan};
 
 /// Accepted VSOCK transport shape used by the Apple VZ runtime.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct VzTransportPlan {
     sidecar: SidecarBridgePlan,
     command_pty: Option<CommandPtyBridgePlan>,
+    broker: Option<BrokerBridgePlan>,
     socket_device_count: usize,
 }
 
@@ -20,6 +22,11 @@ impl VzTransportPlan {
     /// Returns the accepted command PTY transport plan, when command PTY is enabled.
     pub const fn command_pty(&self) -> Option<&CommandPtyBridgePlan> {
         self.command_pty.as_ref()
+    }
+
+    /// Returns the accepted secret broker transport plan, when enabled.
+    pub const fn broker(&self) -> Option<&BrokerBridgePlan> {
+        self.broker.as_ref()
     }
 
     /// Returns whether this transport plan includes a command PTY bridge.
@@ -68,10 +75,12 @@ impl TryFrom<&VmPlan> for VzTransportPlan {
                 })?)
             }
         };
+        let broker = plan.broker.as_ref().map(BrokerBridgePlan::from_vm_plan);
 
         Ok(Self {
             sidecar,
             command_pty,
+            broker,
             socket_device_count: plan.socket_devices.len(),
         })
     }

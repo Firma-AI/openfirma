@@ -9,6 +9,7 @@ use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSError, NSRunLoop};
 use objc2_virtualization::{VZVirtualMachine, VZVirtualMachineState};
 
 use super::super::{RunnerError, RunnerResult};
+use super::broker_bridge::{install_broker_bridge, preflight_broker_bridge};
 use super::command_pty::{
     host_sigterm_count, install_command_pty_bridge, install_command_pty_control_bridge,
     install_sigterm_handler, record_host_sigint,
@@ -24,6 +25,7 @@ const RUN_LOOP_TICK: Duration = Duration::from_millis(100);
 /// Starts the VM and waits until the guest stops or host interruption wins.
 pub fn run_virtual_machine(vz: &Vz, interrupt_rx: &mpsc::Receiver<()>) -> RunnerResult<()> {
     preflight_sidecar_bridge(vz.transport.sidecar())?;
+    preflight_broker_bridge(vz.transport.broker())?;
 
     let queue = DispatchQueue::main();
     let vm = unsafe {
@@ -48,6 +50,16 @@ pub fn run_virtual_machine(vz: &Vz, interrupt_rx: &mpsc::Receiver<()>) -> Runner
     wait_for_start(&rx)?;
 
     let _vsock_bridges = match install_vsock_bridges(&vm, vz.transport.sidecar()) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            if unsafe { vm.canStop() } {
+                let _ = stop_vm(&vm);
+            }
+            return Err(error);
+        }
+    };
+
+    let _broker_bridge = match install_broker_bridge(&vm, vz.transport.broker()) {
         Ok(bridge) => bridge,
         Err(error) => {
             if unsafe { vm.canStop() } {

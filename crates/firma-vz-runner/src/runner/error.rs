@@ -106,6 +106,19 @@ pub enum RunnerError {
         source: io::Error,
     },
 
+    #[error("connect VSOCK broker bridge upstream {}: {source}", path.display())]
+    BrokerUpstreamConnect {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("secret broker connection registry is poisoned")]
+    BrokerConnectionRegistryPoisoned,
+
+    #[error("secret broker bridge is shutting down")]
+    BrokerBridgeShuttingDown,
+
     #[error("VZ runtime exposed no socket device for Sidecar bridge")]
     MissingRuntimeSocketDevice,
 

@@ -1,3 +1,4 @@
+mod broker_bridge;
 mod command_pty;
 mod config;
 mod lifecycle;
