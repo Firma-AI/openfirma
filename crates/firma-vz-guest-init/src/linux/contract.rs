@@ -552,9 +552,7 @@ fn accept_contract_boundary(
 fn validate_contract_header(contract: &LaunchContract) -> InitResult<()> {
     observe_host_launch_metadata(contract);
 
-    // Accept v1 while the host producer transitions to v2 in the later stack
-    // slice. The compatibility path is removed with that producer flip.
-    if !matches!(contract.version, 1 | 2) {
+    if contract.version != 2 {
         return Err(InitError::InvalidContractVersion {
             version: contract.version,
         });

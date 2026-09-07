@@ -159,27 +159,23 @@ fn boot_contract_rejects_unsupported_network_mode() -> TestResult {
 
 #[test]
 fn contract_accepts_valid_contract() -> TestResult {
-    let mut contract = valid_launch_contract();
-    for version in [1, 2] {
-        contract.version = version;
-        validate_contract(&contract)?;
-    }
+    validate_contract(&valid_launch_contract())?;
     Ok(())
 }
 
 #[test]
 fn contract_rejects_invalid_version() -> TestResult {
     let mut contract = valid_launch_contract();
-    contract.version = 0;
+    contract.version = 1;
 
     let error = expect_init_error(
         validate_contract(&contract),
-        "guest init must reject unsupported contract versions",
+        "guest init must reject obsolete contract versions",
     )?;
 
     assert!(matches!(
         error,
-        InitError::InvalidContractVersion { version: 0 }
+        InitError::InvalidContractVersion { version: 1 }
     ));
 
     Ok(())

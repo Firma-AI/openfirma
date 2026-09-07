@@ -57,6 +57,7 @@ impl SandboxBackend for FirecrackerBackend {
         _runtime_layout: &firma_runtime_state::RuntimeLayout,
         _handle: &SandboxHandle,
         _launch: &LaunchSpec,
+        _shim_support: &SecretShimSupport,
     ) -> Result<Child, RunError> {
         Err(RunError::UnsupportedBackend {
             backend: BackendKind::Firecracker.to_string(),

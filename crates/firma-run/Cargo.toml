@@ -55,6 +55,7 @@ firma-http.workspace = true
 firma-protobuf.workspace = true
 firma-test-helpers.workspace = true
 fs-err.workspace = true
+insta.workspace = true
 pasetors = { workspace = true }
 pretty_assertions.workspace = true
 prost-types.workspace = true

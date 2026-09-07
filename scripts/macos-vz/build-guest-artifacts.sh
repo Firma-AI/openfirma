@@ -23,6 +23,7 @@ Outputs:
   vmlinuz
   initrd.img
   rootfs.img
+  firma-secret-shim
   manifest.txt
 
 Environment:
@@ -439,6 +440,7 @@ if command -v rustup >/dev/null 2>&1; then
 fi
 
 mkdir -p "$out_dir" "$work_dir" "$download_dir"
+cargo_target_dir="$work_dir/cargo-target"
 
 case "$rust_target" in
   aarch64-unknown-linux-musl)
@@ -467,13 +469,29 @@ fi
   -p firma-vz-guest-init \
   --bin firma-vz-guest-init \
   --release \
+  --target-dir "$cargo_target_dir" \
   --target "$rust_target"
 
-guest_init="$repo_root/target/$rust_target/release/firma-vz-guest-init"
+"$cargo_bin" build \
+  --manifest-path "$repo_root/Cargo.toml" \
+  -p firma \
+  --bin firma-secret-shim \
+  --release \
+  --target-dir "$cargo_target_dir" \
+  --target "$rust_target"
+
+guest_init="$cargo_target_dir/$rust_target/release/firma-vz-guest-init"
 if [ ! -x "$guest_init" ]; then
   echo "guest init was not built at $guest_init" >&2
   exit 1
 fi
+guest_secret_shim="$cargo_target_dir/$rust_target/release/firma-secret-shim"
+if [ ! -x "$guest_secret_shim" ]; then
+  echo "guest secret shim was not built at $guest_secret_shim" >&2
+  exit 1
+fi
+cp "$guest_secret_shim" "$out_dir/firma-secret-shim"
+chmod 0755 "$out_dir/firma-secret-shim"
 
 kernel_raw="$work_dir/kernel.raw"
 kernel_apk=""
@@ -621,14 +639,17 @@ chmod 0644 "$out_dir/initrd.img"
 : > "$out_dir/rootfs.img"
 truncate -s "$rootfs_size" "$out_dir/rootfs.img"
 chmod 0644 "$out_dir/rootfs.img"
-clear_macos_xattrs "$out_dir/vmlinuz" "$out_dir/initrd.img" "$out_dir/rootfs.img"
+clear_macos_xattrs "$out_dir/vmlinuz" "$out_dir/initrd.img" "$out_dir/rootfs.img" \
+  "$out_dir/firma-secret-shim"
 
 cat > "$out_dir/manifest.txt" <<EOF
+contract_version=2
 kernel_source=$kernel_source
 kernel_package_sha256=$kernel_package_sha256
 kernel_sha256=$(sha256_file "$out_dir/vmlinuz")
 initrd_sha256=$(sha256_file "$out_dir/initrd.img")
 rootfs_sha256=$(sha256_file "$out_dir/rootfs.img")
+shim_sha256=$(sha256_file "$out_dir/firma-secret-shim")
 module_bundle=$module_bundle
 busybox_static_source=$busybox_static_source
 busybox_static_package_sha256=$busybox_static_package_sha256
@@ -652,6 +673,7 @@ Artifacts:
   kernel:   $out_dir/vmlinuz
   initrd:   $out_dir/initrd.img
   rootfs:   $out_dir/rootfs.img
+  shim:     $out_dir/firma-secret-shim
   manifest: $out_dir/manifest.txt
 
 Use with:

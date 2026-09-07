@@ -79,19 +79,16 @@ fn accepts_shared_producer_v2_contract_and_preserves_custody() -> Result<()> {
 }
 
 #[test]
-fn validates_contract_v1_and_v2_during_transition() -> Result<()> {
+fn validates_contract_v2() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    let mut json = valid_contract_json(temp.path())?;
-    for version in [1, 2] {
-        json["version"] = json!(version);
-        let contract = parse_contract(&json)?;
+    let json = valid_contract_json(temp.path())?;
+    let contract = parse_contract(&json)?;
 
-        assert_eq!(contract.version(), version);
-        assert_eq!(
-            contract.sandbox_id().to_string(),
-            "sbx_01j0000000e008000000000001"
-        );
-    }
+    assert_eq!(contract.version(), 2);
+    assert_eq!(
+        contract.sandbox_id().to_string(),
+        "sbx_01j0000000e008000000000001"
+    );
 
     Ok(())
 }
