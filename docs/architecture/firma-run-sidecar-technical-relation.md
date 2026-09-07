@@ -180,7 +180,6 @@ Important fields:
   - `intercept_hosts`
   - `bypass_hosts`
   - `strict_hosts`
-  - `ca_cert_path` / `ca_key_path`
   - `cert_ttl`
   - `cert_cache_capacity`
 - `[sidecar.ca]`

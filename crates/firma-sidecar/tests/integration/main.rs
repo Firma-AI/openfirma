@@ -9,6 +9,7 @@ mod http_connector;
 mod interceptor_startup;
 mod local_exec_config;
 mod mapping_rules;
+mod mitm_ca_material;
 mod resource_host_rules;
 mod revocation_token_id;
 mod sandbox_identity;

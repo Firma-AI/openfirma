@@ -275,12 +275,6 @@ impl SidecarConfig {
                 rebase(p);
             }
         }
-        if let Some(p) = self.interceptor.https_mitm.ca_cert_path.as_mut() {
-            rebase(p);
-        }
-        if let Some(p) = self.interceptor.https_mitm.ca_key_path.as_mut() {
-            rebase(p);
-        }
         if let Some(p) = self.audit.signing_key_path.as_mut() {
             rebase(p);
         }
@@ -539,14 +533,13 @@ impl Default for ConnectRelayConfig {
 /// When disabled, HTTPS `CONNECT` requests are handled as blind tunnels.
 /// When enabled, hosts matched by `intercept_hosts` are decrypted and
 /// re-encrypted by the sidecar.
+///
+/// CA material always lives at `firma-ca.crt` and `firma-ca.key` under
+/// [`CaConfig::dir`]; neither path is configurable here.
 #[derive(Debug, Clone)]
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     pub(crate) enabled: bool,
-    /// Optional explicit CA certificate path. Defaults under `sidecar.ca.dir`.
-    pub(crate) ca_cert_path: Option<PathBuf>,
-    /// Optional explicit CA private key path. Defaults under `sidecar.ca.dir`.
-    pub(crate) ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
     pub(crate) intercept_hosts: Vec<String>,
     /// Host patterns that should bypass interception and use CONNECT tunnel.
@@ -579,8 +572,6 @@ impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
     fn try_from(s: schema_ic::HttpsMitmConfig) -> Result<Self, Self::Error> {
         let config = Self {
             enabled: s.enabled,
-            ca_cert_path: s.ca_cert_path,
-            ca_key_path: s.ca_key_path,
             intercept_hosts: s.intercept_hosts,
             bypass_hosts: s.bypass_hosts,
             cert_ttl: s.cert_ttl,
@@ -656,8 +647,6 @@ impl Default for HttpsMitmConfig {
         let d = schema_ic::HttpsMitmConfig::default();
         Self {
             enabled: d.enabled,
-            ca_cert_path: d.ca_cert_path,
-            ca_key_path: d.ca_key_path,
             intercept_hosts: d.intercept_hosts,
             bypass_hosts: d.bypass_hosts,
             cert_ttl: d.cert_ttl,
@@ -1132,8 +1121,6 @@ mod tests {
         let mut c = SidecarConfig::default();
         c.authority.tls_client_cert_path = Some(PathBuf::from("tls/client.crt"));
         c.authority.tls_client_key_path = Some(PathBuf::from("tls/client.key"));
-        c.interceptor.https_mitm.ca_cert_path = Some(PathBuf::from("tls/mitm.crt"));
-        c.interceptor.https_mitm.ca_key_path = Some(PathBuf::from("tls/mitm.key"));
         c.credentials.insert(
             "vault".to_string(),
             CredentialConfig {
@@ -1162,14 +1149,6 @@ mod tests {
         assert_eq!(
             c.authority.tls_client_key_path,
             Some(PathBuf::from("/cfg/tls/client.key"))
-        );
-        assert_eq!(
-            c.interceptor.https_mitm.ca_cert_path,
-            Some(PathBuf::from("/cfg/tls/mitm.crt"))
-        );
-        assert_eq!(
-            c.interceptor.https_mitm.ca_key_path,
-            Some(PathBuf::from("/cfg/tls/mitm.key"))
         );
         assert_eq!(
             c.credentials["vault"].secret_path,

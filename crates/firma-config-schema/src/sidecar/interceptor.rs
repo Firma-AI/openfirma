@@ -146,18 +146,17 @@ impl Default for ConnectRelayConfig {
 }
 
 /// HTTPS MITM controls for the HTTP proxy interceptor.
+///
+/// CA material has one location: `firma-ca.crt` and `firma-ca.key` under
+/// `sidecar.ca.dir`. The paths are not configurable here, so a caller that
+/// controls `sidecar.ca.dir` — such as `firma run`, which pins it to the
+/// per-run entry — also controls where the private key lands.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
     #[serde(default = "default_https_mitm_enabled")]
     pub enabled: bool,
-    /// Optional explicit CA certificate path. Defaults under `sidecar.ca.dir`.
-    #[serde(default)]
-    pub ca_cert_path: Option<PathBuf>,
-    /// Optional explicit CA private key path. Defaults under `sidecar.ca.dir`.
-    #[serde(default)]
-    pub ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
     #[serde(default = "default_https_mitm_intercept_hosts")]
     pub intercept_hosts: Vec<String>,
@@ -182,8 +181,6 @@ impl Default for HttpsMitmConfig {
     fn default() -> Self {
         Self {
             enabled: default_https_mitm_enabled(),
-            ca_cert_path: None,
-            ca_key_path: None,
             intercept_hosts: default_https_mitm_intercept_hosts(),
             bypass_hosts: Vec::new(),
             cert_ttl: default_https_mitm_cert_ttl(),

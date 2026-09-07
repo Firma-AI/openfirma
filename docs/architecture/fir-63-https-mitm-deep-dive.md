@@ -81,8 +81,6 @@ Primary objective:
 Add an explicit MITM section under `[sidecar.interceptor.https_mitm]`:
 
 - `enabled` (bool, default `true`)
-- `ca_cert_path` (optional; default under `sidecar.ca.dir`)
-- `ca_key_path` (optional; default under `sidecar.ca.dir`)
 - `intercept_hosts` (list, explicit allowlist)
 - `bypass_hosts` (list)
 - `cert_ttl` (default `"1d"`)
