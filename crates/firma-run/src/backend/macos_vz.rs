@@ -327,6 +327,19 @@ impl SandboxBackend for VzBackend {
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "VZ shim support remains dormant until artifact delivery is complete"
+)]
+const fn isolated_guest_shim_support() -> SecretShimSupport {
+    SecretShimSupport::IsolatedGuest {
+        guest_target: ShimTarget::linux_x86_64_musl(),
+        broker_bridge: BrokerBridgeKind::VsockPort {
+            port: VZ_GUEST_BROKER_VSOCK_PORT,
+        },
+    }
+}
+
 /// Create the VZ runtime tree with owner-only custody.
 ///
 /// VZ guest mode writes launch context under this directory later in the run,
