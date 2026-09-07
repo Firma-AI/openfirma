@@ -5,17 +5,21 @@ use firma_core::SecretMatcher;
 use serde::Serialize;
 
 use super::{MatcherRule, MatchingResolution, NonEmptyVec};
+use crate::broker::{BinaryName, BinaryNameError};
+
+const BROKER_READINESS_BINARY: &str = "__firma_broker_readiness_probe__";
 
 /// A command-classification rule for a CLI secret provider.
 pub type CliMatcherRule<Matcher> = MatcherRule<CommandAndMatcher<Matcher>, CommandPattern>;
 
 /// A CLI integration configuration that has passed cross-field validation.
 ///
-/// Cross-field checks (empty names, `allow_attached_value` without
-/// `takes_value`, conflicting [`FlagSpec`] definitions across
-/// `stripped_options` / `forbidden_options` / per-command
-/// `stripped_options`) are enforced by [`Self::new`] and the
-/// `TryFrom<CliSecretProviderConfig>` impl before this type is constructed.
+/// The portable executable basename and reserved internal broker identity
+/// invariants, plus cross-field checks (empty names, `allow_attached_value`
+/// without `takes_value`, conflicting [`FlagSpec`] definitions across
+/// `stripped_options` / `forbidden_options` / per-command `stripped_options`),
+/// are enforced by [`Self::new`] and the `TryFrom<CliSecretProviderConfig>` impl
+/// before this type is constructed.
 /// Direct field construction outside this crate is not permitted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CliIntegrationSpec<Matcher> {
@@ -53,6 +57,19 @@ pub struct CliIntegrationSpec<Matcher> {
 /// Error returned when validating a [`CliSecretProviderConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CliIntegrationConfigError {
+    /// The executable name is not one portable path component.
+    #[error("invalid CLI binary name: {source}")]
+    InvalidBinaryName {
+        /// Portable basename validation failure.
+        #[source]
+        source: BinaryNameError,
+    },
+    /// The executable name is reserved for the internal broker readiness probe.
+    #[error("CLI binary name `{name}` is reserved for internal broker readiness checks")]
+    ReservedBinaryName {
+        /// Reserved executable name supplied by configuration.
+        name: String,
+    },
     /// An option has no spelling.
     #[error("option name must not be empty")]
     EmptyOptionName,
@@ -150,13 +167,14 @@ fn validate_consistent_options(options: &[FlagSpec]) -> Result<(), CliIntegratio
 impl<Matcher> CliIntegrationSpec<Matcher> {
     /// Validated constructor.
     ///
-    /// Enforces the same cross-field checks as `TryFrom<CliSecretProviderConfig>`:
-    /// empty option names, `allow_attached_value` without `takes_value`, and
-    /// conflicting [`FlagSpec`] definitions.
+    /// Enforces the same validation as `TryFrom<CliSecretProviderConfig>`: a
+    /// portable, non-reserved executable basename, empty option names,
+    /// `allow_attached_value` without `takes_value`, and conflicting
+    /// [`FlagSpec`] definitions.
     ///
     /// # Errors
     ///
-    /// Returns [`CliIntegrationConfigError`] when cross-field validation fails.
+    /// Returns [`CliIntegrationConfigError`] when validation fails.
     pub fn new(
         binary_name: String,
         provider_id: String,
@@ -165,6 +183,11 @@ impl<Matcher> CliIntegrationSpec<Matcher> {
         forbidden_options: Vec<FlagSpec>,
         matchers: Vec<CliMatcherRule<Matcher>>,
     ) -> Result<Self, CliIntegrationConfigError> {
+        BinaryName::new(binary_name.as_str())
+            .map_err(|source| CliIntegrationConfigError::InvalidBinaryName { source })?;
+        if binary_name == BROKER_READINESS_BINARY {
+            return Err(CliIntegrationConfigError::ReservedBinaryName { name: binary_name });
+        }
         validate_consistent_options(&stripped_options)?;
         validate_consistent_options(&forbidden_options)?;
         let command_options = matchers
