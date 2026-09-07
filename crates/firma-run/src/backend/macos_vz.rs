@@ -320,11 +320,8 @@ impl SandboxBackend for VzBackend {
                     reason: SecretShimUnsupportedReason::HostCallable,
                 }
             }
-            VzStructuralMode::VzGuest => SecretShimSupport::IsolatedGuest {
-                guest_target: ShimTarget::linux_x86_64_musl(),
-                broker_bridge: BrokerBridgeKind::VsockPort {
-                    port: VZ_GUEST_BROKER_VSOCK_PORT,
-                },
+            VzStructuralMode::VzGuest => SecretShimSupport::Unsupported {
+                reason: SecretShimUnsupportedReason::HostCallable,
             },
         }
     }
