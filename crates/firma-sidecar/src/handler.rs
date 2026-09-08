@@ -1784,7 +1784,7 @@ impl RequestHandler {
             deny_reason: format!("CONNECT_RELAY_FAILURE: {detail}"),
             enforcement_latency_us: 0,
             context_hash: String::new(),
-            bundle_version: String::new(),
+            bundle_version: self.pipeline.policy_version().unwrap_or_default(),
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
@@ -1823,7 +1823,7 @@ impl RequestHandler {
             deny_reason: format!("{reason}: {detail}"),
             enforcement_latency_us: 0,
             context_hash: String::new(),
-            bundle_version: String::new(),
+            bundle_version: self.pipeline.policy_version().unwrap_or_default(),
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
@@ -4071,6 +4071,10 @@ pub(crate) mod tests {
         assert!(
             payload.agent_id.is_empty() && payload.token_id.is_empty(),
             "pre-validation denial has no known identity"
+        );
+        assert_eq!(
+            payload.bundle_version, "test-v1",
+            "a synthetic deny must carry the bundle version active at decision time"
         );
         assert!(rx.try_recv().is_err());
     }

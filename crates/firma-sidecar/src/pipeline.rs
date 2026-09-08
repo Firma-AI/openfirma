@@ -163,6 +163,17 @@ impl EnforcementPipeline {
         self.mode == SidecarMode::Monitor
     }
 
+    /// Returns the policy bundle version active in the constraint enforcer, if a
+    /// bundle has been installed.
+    ///
+    /// Audit payloads assembled outside [`enforce`](Self::enforce) — synthetic denials
+    /// raised by an interceptor before the pipeline runs — need the same bundle version
+    /// the evaluated decisions carry.
+    #[must_use]
+    pub(crate) fn policy_version(&self) -> Option<String> {
+        self.constraint_enforcer.policy_version()
+    }
+
     /// Install a readiness view for Authority-backed runtime state.
     #[must_use]
     pub(crate) fn with_readiness(mut self, readiness: ReadinessView) -> Self {
@@ -913,7 +924,7 @@ fn audit_decision_fields(
                 decision_code: Decision::Deny,
                 deny_reason: sanitize_audit_reason(&format!("{reason}: {detail}")),
                 context_hash,
-                bundle_version: String::new(),
+                bundle_version: bundle_version.unwrap_or("").to_string(),
                 provenance: String::new(),
                 thread_id: String::new(),
                 parent_action_id: String::new(),
@@ -933,7 +944,7 @@ fn audit_decision_fields(
                 decision_code: Decision::Abort,
                 deny_reason: sanitize_audit_reason(&format!("{}: {detail}", reason.code())),
                 context_hash,
-                bundle_version: String::new(),
+                bundle_version: bundle_version.unwrap_or("").to_string(),
                 provenance: String::new(),
                 thread_id: String::new(),
                 parent_action_id: String::new(),
@@ -947,7 +958,7 @@ fn audit_decision_fields(
             decision_code: Decision::Allow,
             deny_reason: String::new(),
             context_hash: String::new(),
-            bundle_version: String::new(),
+            bundle_version: bundle_version.unwrap_or("").to_string(),
             provenance: String::new(),
             thread_id: String::new(),
             parent_action_id: String::new(),
@@ -1004,7 +1015,7 @@ fn audit_decision_fields(
                     DenyReason::StepUpRequired
                 )),
                 context_hash,
-                bundle_version: String::new(),
+                bundle_version: bundle_version.unwrap_or("").to_string(),
                 provenance: String::new(),
                 thread_id: String::new(),
                 parent_action_id: String::new(),
@@ -1030,7 +1041,7 @@ fn audit_decision_fields(
                     DenyReason::Deferred
                 )),
                 context_hash,
-                bundle_version: String::new(),
+                bundle_version: bundle_version.unwrap_or("").to_string(),
                 provenance: String::new(),
                 thread_id: String::new(),
                 parent_action_id: String::new(),
@@ -2250,6 +2261,10 @@ mod tests {
         assert_eq!(payload.decision, Decision::Deny);
         assert_eq!(payload.action, "raw.http.POST");
         assert_eq!(payload.resource, "api.openai.com/v1/chat/completions");
+        assert_eq!(
+            payload.bundle_version, "test-v1",
+            "bundle_version must be populated from ConstraintEnforcer in Deny audit events"
+        );
     }
 
     #[tokio::test]
@@ -2300,6 +2315,10 @@ mod tests {
         assert_eq!(payload.decision, Decision::Allow); // Passthrough maps to ALLOW
         assert_eq!(payload.action, "raw.http.GET");
         assert_eq!(payload.resource, "not-protected.example.com/any");
+        assert_eq!(
+            payload.bundle_version, "test-v1",
+            "bundle_version must be populated from ConstraintEnforcer in Passthrough audit events"
+        );
     }
 
     #[tokio::test]
