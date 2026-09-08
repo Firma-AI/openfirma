@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+
+use firma_run::env::ExecutionEnv;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -83,7 +85,10 @@ fn prepare_shim_preserves_existing_user_settings() -> Result<(), Box<dyn std::er
             .ok_or("settings path has no parent")?,
     )?;
     fs::write(&settings_path, r#"{"editor.fontSize": 16}"#)?;
-    let mut env = BTreeMap::from([("PATH".to_string(), host_bin.display().to_string())]);
+    let mut env = ExecutionEnv::from(BTreeMap::from([(
+        "PATH".to_string(),
+        host_bin.display().to_string(),
+    )]));
 
     let (executable, args) = testing::prepare_vscode_shim(
         &runtime_dir,
@@ -128,7 +133,7 @@ fn prepare_shim_rejects_malformed_existing_settings() -> Result<(), Box<dyn std:
         &state_dir,
         "code",
         Vec::new(),
-        &mut BTreeMap::new(),
+        &mut ExecutionEnv::default(),
         Some(&host_bin),
     )
     .expect_err("malformed existing settings must fail closed");
@@ -150,7 +155,7 @@ fn prepare_shim_reports_user_data_directory_conflict() -> Result<(), Box<dyn std
         &state_dir,
         "code",
         Vec::new(),
-        &mut BTreeMap::new(),
+        &mut ExecutionEnv::default(),
         Some(&host_bin),
     )
     .expect_err("a state file must not be accepted as the user-data directory");
@@ -172,7 +177,7 @@ fn prepare_shim_reports_shim_write_conflict() -> Result<(), Box<dyn std::error::
         &tmpdir.path().join("state"),
         "code",
         Vec::new(),
-        &mut BTreeMap::new(),
+        &mut ExecutionEnv::default(),
         Some(&host_bin),
     )
     .expect_err("a directory must not be accepted as a shim file");
@@ -263,7 +268,7 @@ fn private_directory_is_created() -> Result<(), Box<dyn std::error::Error>> {
 fn prepend_path_uses_host_path_when_execution_path_is_absent() {
     let shim_dir = Path::new("/tmp/firma-shim");
     let host_path = Path::new("/usr/local/bin");
-    let mut env = BTreeMap::new();
+    let mut env = ExecutionEnv::default();
 
     testing::prepend_path(&mut env, shim_dir, Some(host_path.as_os_str()));
     let expected_path = std::env::join_paths([shim_dir, host_path])
@@ -277,7 +282,7 @@ fn prepend_path_uses_host_path_when_execution_path_is_absent() {
 #[test]
 fn prepend_path_uses_only_shim_directory_without_existing_path() {
     let shim_dir = Path::new("/tmp/firma-shim");
-    let mut env = BTreeMap::new();
+    let mut env = ExecutionEnv::default();
 
     testing::prepend_path(&mut env, shim_dir, None);
 
@@ -414,7 +419,10 @@ fn wayland_configuration_links_relative_host_socket() -> Result<(), Box<dyn std:
     fs::create_dir_all(&desktop_runtime_dir)?;
     let source = host_runtime_dir.join("wayland-0");
     fs::write(&source, "socket")?;
-    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string())]);
+    let env = ExecutionEnv::from(BTreeMap::from([(
+        "WAYLAND_DISPLAY".to_string(),
+        "wayland-0".to_string(),
+    )]));
 
     testing::configure_wayland_socket(&desktop_runtime_dir, &env, Some(&host_runtime_dir))?;
 
@@ -431,7 +439,10 @@ fn wayland_configuration_ignores_absolute_display_path() -> Result<(), Box<dyn s
     let tmpdir = tempfile::tempdir()?;
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
     fs::create_dir(&desktop_runtime_dir)?;
-    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "/tmp/wayland-0".to_string())]);
+    let env = ExecutionEnv::from(BTreeMap::from([(
+        "WAYLAND_DISPLAY".to_string(),
+        "/tmp/wayland-0".to_string(),
+    )]));
 
     testing::configure_wayland_socket(&desktop_runtime_dir, &env, None)?;
 
@@ -450,7 +461,10 @@ fn wayland_configuration_rejects_parent_directory_display() -> Result<(), Box<dy
     fs::create_dir_all(&host_runtime_dir)?;
     fs::create_dir(&desktop_runtime_dir)?;
     fs::write(tmpdir.path().join("nested").join("wayland-0"), "socket")?;
-    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "../wayland-0".to_string())]);
+    let env = ExecutionEnv::from(BTreeMap::from([(
+        "WAYLAND_DISPLAY".to_string(),
+        "../wayland-0".to_string(),
+    )]));
 
     testing::configure_wayland_socket(&desktop_runtime_dir, &env, Some(&host_runtime_dir))?;
 
@@ -466,7 +480,7 @@ fn wayland_configuration_ignores_missing_display_name() -> Result<(), Box<dyn st
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
     fs::create_dir(&desktop_runtime_dir)?;
 
-    testing::configure_wayland_socket(&desktop_runtime_dir, &BTreeMap::new(), None)?;
+    testing::configure_wayland_socket(&desktop_runtime_dir, &ExecutionEnv::default(), None)?;
 
     assert!(fs::read_dir(desktop_runtime_dir)?.next().is_none());
     Ok(())
@@ -479,7 +493,10 @@ fn wayland_configuration_ignores_relative_display_without_host_runtime_dir()
     let tmpdir = tempfile::tempdir()?;
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
     fs::create_dir(&desktop_runtime_dir)?;
-    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string())]);
+    let env = ExecutionEnv::from(BTreeMap::from([(
+        "WAYLAND_DISPLAY".to_string(),
+        "wayland-0".to_string(),
+    )]));
 
     testing::configure_wayland_socket(&desktop_runtime_dir, &env, None)?;
 
@@ -495,7 +512,10 @@ fn wayland_configuration_ignores_missing_host_socket() -> Result<(), Box<dyn std
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
     fs::create_dir(&host_runtime_dir)?;
     fs::create_dir(&desktop_runtime_dir)?;
-    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string())]);
+    let env = ExecutionEnv::from(BTreeMap::from([(
+        "WAYLAND_DISPLAY".to_string(),
+        "wayland-0".to_string(),
+    )]));
 
     testing::configure_wayland_socket(&desktop_runtime_dir, &env, Some(&host_runtime_dir))?;
 
@@ -512,7 +532,7 @@ fn dbus_configuration_links_unix_socket_and_rewrites_address()
     fs::create_dir(&desktop_runtime_dir)?;
     let source = tmpdir.path().join("host-bus");
     fs::write(&source, "socket")?;
-    let mut env = BTreeMap::new();
+    let mut env = ExecutionEnv::default();
     let address = format!("unix:path={}", source.display());
 
     testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some(&address))?;
@@ -532,7 +552,7 @@ fn dbus_configuration_ignores_non_unix_address() -> Result<(), Box<dyn std::erro
     let tmpdir = tempfile::tempdir()?;
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
     fs::create_dir(&desktop_runtime_dir)?;
-    let mut env = BTreeMap::new();
+    let mut env = ExecutionEnv::default();
 
     testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some("tcp:host=localhost"))?;
 
@@ -547,7 +567,7 @@ fn dbus_configuration_ignores_absent_address() -> Result<(), Box<dyn std::error:
     let tmpdir = tempfile::tempdir()?;
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
     fs::create_dir(&desktop_runtime_dir)?;
-    let mut env = BTreeMap::new();
+    let mut env = ExecutionEnv::default();
 
     testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, None)?;
 
@@ -563,7 +583,7 @@ fn dbus_configuration_ignores_missing_host_socket() -> Result<(), Box<dyn std::e
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
     fs::create_dir(&desktop_runtime_dir)?;
     let missing_socket = tmpdir.path().join("missing-bus");
-    let mut env = BTreeMap::new();
+    let mut env = ExecutionEnv::default();
     let address = format!("unix:path={}", missing_socket.display());
 
     testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some(&address))?;

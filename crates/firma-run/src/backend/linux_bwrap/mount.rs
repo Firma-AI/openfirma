@@ -15,6 +15,7 @@ use crate::backend::{
     SandboxMountPlacement,
 };
 use crate::config::MountSpec;
+use crate::env::ExecutionEnv;
 use crate::error::RunError;
 use crate::trust::SidecarTrustAnchor;
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
@@ -35,7 +36,7 @@ pub(super) struct BwrapHardening {
 
 impl BwrapHardening {
     /// Resolves bwrap filesystem-hardening settings from the launch environment.
-    pub(super) fn from_env(env: &BTreeMap<String, String>) -> Self {
+    pub(super) fn from_env(env: &ExecutionEnv) -> Self {
         let readonly_rootfs = env
             .get(BWRAP_ROOTFS_MODE_ENV)
             .is_some_and(|mode| mode == BWRAP_ROOTFS_MODE_READONLY);
@@ -1229,7 +1230,7 @@ mod tests {
             super::BWRAP_MASK_HOME_PATHS_ENV.to_string(),
             ".ssh,.aws,.config/gcloud".to_string(),
         );
-        let hardening = super::BwrapHardening::from_env(&env);
+        let hardening = super::BwrapHardening::from_env(&crate::env::ExecutionEnv::from(env));
         assert!(hardening.readonly_rootfs);
         assert!(hardening.runtime_home_isolation);
         assert_eq!(
@@ -1244,7 +1245,7 @@ mod tests {
 
     #[test]
     fn hardening_from_cleared_profile_env_is_disabled() {
-        let hardening = super::BwrapHardening::from_env(&BTreeMap::new());
+        let hardening = super::BwrapHardening::from_env(&crate::env::ExecutionEnv::default());
 
         assert!(!hardening.readonly_rootfs);
         assert!(!hardening.runtime_home_isolation);
@@ -1267,7 +1268,7 @@ mod tests {
             executable: "/bin/true".to_string(),
             args: vec![],
             cwd: std::path::PathBuf::from("/tmp"),
-            env,
+            env: env.into(),
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
@@ -1313,7 +1314,7 @@ mod tests {
             executable: "/bin/true".to_string(),
             args: vec![],
             cwd,
-            env,
+            env: env.into(),
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
