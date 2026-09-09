@@ -7,4 +7,5 @@ mod connector_failure;
 mod control_plane_runtime_isolation;
 mod deny_http_dispatch;
 mod policy_and_revocation_propagation;
+mod sandbox_procfs_seal;
 mod unclassified_intent;

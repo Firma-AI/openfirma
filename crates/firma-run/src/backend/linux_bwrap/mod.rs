@@ -1,4 +1,5 @@
-mod mount;
+#[doc(hidden)]
+pub mod mount;
 
 use std::env;
 use std::path::PathBuf;

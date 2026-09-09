@@ -3,6 +3,7 @@ mod authority_autostart_marker;
 mod authority_autostart_reuse;
 mod authority_bootstrap_prompt;
 mod backend_selection;
+mod bwrap_procfs;
 mod capability_config;
 mod capability_issue;
 mod capability_lease;

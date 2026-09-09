@@ -1,5 +1,8 @@
 mod firecracker;
-mod linux_bwrap;
+/// Exposed for the crate's integration tests, which exercise the bwrap mount
+/// planner's parsing of the host mount table. Not part of any supported API.
+#[doc(hidden)]
+pub mod linux_bwrap;
 mod macos_vz;
 pub mod platform;
 mod windows_wsl2;

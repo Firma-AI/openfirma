@@ -20,6 +20,16 @@ use crate::trust::SidecarTrustAnchor;
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 use firma_runtime_state::RunEntryLayout;
 
+/// Mount table of the planning process, listing every host mount point and its
+/// filesystem type.
+const HOST_MOUNTINFO_PATH: &str = "/proc/self/mountinfo";
+/// `mountinfo` filesystem type of a procfs instance.
+const PROCFS_FS_TYPE: &str = "proc";
+/// Zero-based index of the mount point in a `mountinfo` line's fixed fields.
+const MOUNTINFO_MOUNT_POINT_FIELD: usize = 4;
+/// Sandbox path holding the procfs of the sandbox's own PID namespace.
+const SANDBOX_PROCFS_TARGET: &str = "/proc";
+
 const BWRAP_ROOTFS_MODE_ENV: &str = "FIRMA_RUN_BWRAP_ROOTFS_MODE";
 const BWRAP_RUNTIME_HOME_ENV: &str = "FIRMA_RUN_BWRAP_RUNTIME_HOME";
 const BWRAP_MASK_HOME_PATHS_ENV: &str = "FIRMA_RUN_BWRAP_MASK_HOME_PATHS";
@@ -89,6 +99,8 @@ pub(super) struct BwrapMountPlan {
     config_seals: BwrapMountPhase,
     /// Explicit framework subpaths restored through configuration seals.
     protected_subpaths: BwrapMountPhase,
+    /// Sandbox procfs re-established over every host procfs a mount aliases.
+    procfs_seals: BwrapMountPhase,
     /// Final masks over host-side control-plane state and its aliases.
     control_plane_seals: BwrapMountPhase,
     /// Restoration of the current sandbox's runtime beneath the sealed root.
@@ -194,6 +206,7 @@ impl BwrapMountPlan {
             overlays: BwrapMountPhase::default(),
             config_seals: BwrapMountPhase::default(),
             protected_subpaths: BwrapMountPhase::default(),
+            procfs_seals: BwrapMountPhase::default(),
             control_plane_seals: BwrapMountPhase::default(),
             sandbox_runtime: BwrapMountPhase::default(),
             infrastructure: BwrapMountPhase::default(),
@@ -210,6 +223,27 @@ impl BwrapMountPlan {
         handle: &SandboxHandle,
         launch: &LaunchSpec,
         hardening: &BwrapHardening,
+    ) -> Result<Self, RunError> {
+        Self::build_against(
+            runtime_layout,
+            handle,
+            launch,
+            hardening,
+            &HostProcfsMounts::from_host()?,
+        )
+    }
+
+    /// Builds the plan against an explicit procfs inventory.
+    ///
+    /// Separated from [`Self::build`] so the seal can be exercised against a
+    /// mount table the test controls, rather than whichever one the machine
+    /// running the tests happens to have.
+    fn build_against(
+        runtime_layout: &firma_runtime_state::RuntimeLayout,
+        handle: &SandboxHandle,
+        launch: &LaunchSpec,
+        hardening: &BwrapHardening,
+        host_procfs: &HostProcfsMounts,
     ) -> Result<Self, RunError> {
         let control_plane_runtime =
             resolve_path_allow_missing(runtime_layout.root(), "control-plane runtime")?;
@@ -241,7 +275,12 @@ impl BwrapMountPlan {
             sandbox: &sandbox_runtime,
             run_entry: &run_entry,
         };
-        let mounts = validate_mounts(handle, &control_plane_runtime, &sandbox_runtime)?;
+        let mounts = validate_mounts(
+            handle,
+            &control_plane_runtime,
+            &sandbox_runtime,
+            host_procfs,
+        )?;
         let mut plan = Self::empty();
         append_filesystem_layout(
             &mut plan,
@@ -250,6 +289,7 @@ impl BwrapMountPlan {
             &runtime_paths,
             launch,
             hardening,
+            host_procfs,
         )?;
         Ok(plan)
     }
@@ -262,6 +302,7 @@ impl BwrapMountPlan {
             self.overlays,
             self.config_seals,
             self.protected_subpaths,
+            self.procfs_seals,
             self.control_plane_seals,
             self.sandbox_runtime,
             self.infrastructure,
@@ -403,9 +444,10 @@ fn mask_sensitive_paths(
 /// 2. ordinary operator and framework overlays;
 /// 3. configuration and sensitive-home seals;
 /// 4. explicit framework-protected subpaths;
-/// 5. the control-plane runtime seal;
-/// 6. the private runtime for the current sandbox;
-/// 7. narrowly validated sandbox infrastructure sourced from that runtime.
+/// 5. the sandbox procfs re-established over every aliased host procfs;
+/// 6. the control-plane runtime seal;
+/// 7. the private runtime for the current sandbox;
+/// 8. narrowly validated sandbox infrastructure sourced from that runtime.
 fn append_filesystem_layout(
     plan: &mut BwrapMountPlan,
     handle: &SandboxHandle,
@@ -413,6 +455,7 @@ fn append_filesystem_layout(
     runtime_paths: &PlanRuntimePaths<'_>,
     launch: &LaunchSpec,
     hardening: &BwrapHardening,
+    host_procfs: &HostProcfsMounts,
 ) -> Result<(), RunError> {
     if hardening.readonly_rootfs {
         plan.layout
@@ -445,8 +488,12 @@ fn append_filesystem_layout(
     // procfs shows only its own processes, closing the
     // `/proc/<pid>/root/<host path>` alias through which an ancestor's mount
     // namespace — and with it every masked control-plane secret, including the
-    // Sidecar CA signing key — stayed reachable.
-    plan.layout.proc(BwrapPlanRole::Layout, "/proc");
+    // Sidecar CA signing key — stayed reachable. This covers `/proc` itself;
+    // `validate_reserved_target` keeps mounts off it and
+    // `project_procfs_aliases` seals every other procfs a recursive bind
+    // carries into the sandbox.
+    plan.layout
+        .proc(BwrapPlanRole::Layout, SANDBOX_PROCFS_TARGET);
 
     emit_mounts(plan, mounts.iter());
 
@@ -459,6 +506,28 @@ fn append_filesystem_layout(
         .map(|mount| &mount.spec)
         .collect::<Vec<_>>();
     project_mount_aliases(&mut plan.config_seals, &overlay_specs, masked);
+
+    // A recursive bind carries the host procfs along with the tree it exposes,
+    // so the layout's own `--proc` is not enough. The layout's host-root bind
+    // is projected alongside the external mounts: on a host with a second
+    // procfs — a leftover `mount --bind /proc /mnt/proc`, an exporter-style
+    // `/host/proc`, a machine directory — that bind alone carries it into the
+    // sandbox, with no operator configuration involved.
+    //
+    // Emitted in its own phase, after the protected-subpath capability. The
+    // phases that follow cannot undo it: the control-plane seals are masks, the
+    // sandbox runtime is restored from the private runtime directory, and
+    // sandbox-infrastructure mounts are confined to fixed `/etc` targets by
+    // `validate_infrastructure_mount`.
+    let host_root_bind = MountSpec {
+        source: PathBuf::from("/"),
+        target: PathBuf::from("/"),
+        read_only: hardening.readonly_rootfs,
+    };
+    let alias_specs = std::iter::once(&host_root_bind)
+        .chain(mounts.iter().map(|mount| &mount.spec))
+        .collect::<Vec<_>>();
+    project_procfs_aliases(&mut plan.procfs_seals, &alias_specs, host_procfs)?;
 
     mask_control_plane_runtime(
         plan,
@@ -613,6 +682,140 @@ fn mount_ca_material(
     Ok(())
 }
 
+/// Host mount points backed by procfs, enumerated once per plan.
+///
+/// The sandbox's own procfs is what keeps `/proc/<pid>/root/<host path>` from
+/// walking around every mask through an ancestor's mount namespace. Two mount
+/// shapes hand that alias back: a mount that lands on the sandbox procfs, and a
+/// mount whose source tree contains a host procfs, since bwrap binds
+/// recursively. Both are decided against this inventory.
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct HostProcfsMounts {
+    /// Normalized host mount points whose filesystem type is procfs.
+    points: Vec<PathBuf>,
+}
+
+impl HostProcfsMounts {
+    /// Reads the planning process's own mount table.
+    ///
+    /// Fails the launch when the table cannot be read or parsed: a procfs set
+    /// that cannot be enumerated cannot be sealed either, and every host that
+    /// runs the bwrap backend has `/proc/self/mountinfo`.
+    fn from_host() -> Result<Self, RunError> {
+        let contents =
+            std::fs::read_to_string(HOST_MOUNTINFO_PATH).map_err(|error| RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: format!(
+                    "failed to read {HOST_MOUNTINFO_PATH} before planning mounts: {error}"
+                ),
+            })?;
+        Self::from_mountinfo(&contents)
+    }
+
+    /// Collects the procfs mount points described by `mountinfo` content.
+    ///
+    /// Each line separates its fixed fields from the filesystem type with a
+    /// ` - ` marker, and the kernel escapes spaces, tabs, newlines, and
+    /// backslashes in the mount point.
+    pub fn from_mountinfo(contents: &str) -> Result<Self, RunError> {
+        let mut points = Vec::new();
+        for line in contents.lines().filter(|line| !line.trim().is_empty()) {
+            let Some((mounted, mount_source)) = line.split_once(" - ") else {
+                return Err(Self::malformed(line));
+            };
+            let Some(fs_type) = mount_source.split_whitespace().next() else {
+                return Err(Self::malformed(line));
+            };
+            if fs_type != PROCFS_FS_TYPE {
+                continue;
+            }
+            let Some(mount_point) = mounted.split_whitespace().nth(MOUNTINFO_MOUNT_POINT_FIELD)
+            else {
+                return Err(Self::malformed(line));
+            };
+            points.push(normalize_absolute_path(Path::new(
+                &unescape_mountinfo_field(mount_point),
+            )));
+        }
+        points.sort();
+        points.dedup();
+        Ok(Self { points })
+    }
+
+    /// Whether `path` is a procfs mount point or lies beneath one.
+    #[must_use]
+    pub fn covers(&self, path: &Path) -> bool {
+        self.points.iter().any(|point| path.starts_with(point))
+    }
+
+    /// Procfs mount points strictly beneath `source`, relative to it.
+    ///
+    /// These are the paths a recursive bind of `source` re-exposes inside the
+    /// sandbox, each relative to that mount's target.
+    fn points_under<'a>(&'a self, source: &'a Path) -> impl Iterator<Item = &'a Path> {
+        self.points.iter().filter_map(move |point| {
+            let relative = point.strip_prefix(source).ok()?;
+            (!relative.as_os_str().is_empty()).then_some(relative)
+        })
+    }
+
+    /// Fails the launch on a `mountinfo` line this parser cannot interpret.
+    fn malformed(line: &str) -> RunError {
+        RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!("failed to parse {HOST_MOUNTINFO_PATH} line '{line}'"),
+        }
+    }
+}
+
+/// Decodes the octal escapes the kernel writes into `mountinfo` path fields.
+fn unescape_mountinfo_field(field: &str) -> String {
+    let mut decoded = String::with_capacity(field.len());
+    let mut rest = field;
+    while let Some(escape) = rest.find('\\') {
+        decoded.push_str(&rest[..escape]);
+        let digits = rest.get(escape + 1..escape + 4);
+        if let Some(byte) = digits.and_then(|digits| u8::from_str_radix(digits, 8).ok()) {
+            decoded.push(char::from(byte));
+            rest = &rest[escape + 4..];
+        } else {
+            decoded.push('\\');
+            rest = &rest[escape + 1..];
+        }
+    }
+    decoded.push_str(rest);
+    decoded
+}
+
+/// Rejects a mount that would take a sandbox path the backend layout owns.
+///
+/// The layout mounts the sandbox's own procfs before any external mount is
+/// emitted, so a mount landing on `/proc` — or on `/`, which re-parents the
+/// whole layout — silently replaces it.
+///
+/// The target is resolved through every existing symlink before the comparison,
+/// the way bwrap resolves a destination at mount time. A lexical check alone
+/// would accept a workspace symlink pointing into the reserved set, and the
+/// workspace is writable by the wrapped process, so that link is plantable — the
+/// same threat [`reject_symlinked_firma_dirs`] fails closed on. The residual
+/// race is also the same: bwrap re-resolves the destination string itself, and
+/// its API takes a path rather than a file descriptor.
+fn validate_reserved_target(target: &Path) -> Result<(), RunError> {
+    let resolved = resolve_path_allow_missing(target, "mount target")?;
+    if resolved != Path::new("/") && !resolved.starts_with(SANDBOX_PROCFS_TARGET) {
+        return Ok(());
+    }
+    Err(RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!(
+            "mount target {} resolves to {}, which is reserved for the sandbox filesystem layout; a mount there would replace the sandbox's own procfs and reopen /proc/<pid>/root onto masked host paths",
+            target.display(),
+            resolved.display()
+        ),
+    })
+}
+
 /// Resolves every prepared mount to the exact host source that will be emitted
 /// and enforces the source, target, and placement constraints associated with
 /// its authority.
@@ -620,6 +823,7 @@ fn validate_mounts(
     handle: &SandboxHandle,
     control_plane_runtime: &Path,
     sandbox_runtime: &Path,
+    host_procfs: &HostProcfsMounts,
 ) -> Result<Vec<ValidatedMount>, RunError> {
     let mounts = handle
         .mounts
@@ -660,6 +864,16 @@ fn validate_mounts(
                         });
                     }
                 }
+            }
+            validate_reserved_target(&mount.spec().target)?;
+            if host_procfs.covers(&source) {
+                return Err(RunError::Backend {
+                    backend: BackendKind::Bwrap.to_string(),
+                    reason: format!(
+                        "refusing procfs-backed mount source {}; the host procfs exposes /proc/<pid>/root, which walks around every sandbox mask",
+                        source.display()
+                    ),
+                });
             }
             if mount.placement() == SandboxMountPlacement::FrameworkProtectedSubpath
                 && (mount.authority() != SandboxMountAuthority::Framework
@@ -1034,6 +1248,65 @@ fn project_mount_aliases(
             }
         }
     }
+}
+
+/// Re-establish the sandbox's own procfs over every host procfs a mount aliases.
+///
+/// bwrap binds recursively, so a mount whose source tree contains a procfs
+/// mount point carries the host's procfs to `<target>/<relative>`. That alias is
+/// the same door the layout closes at `/proc`: it enumerates host processes and
+/// reopens `/proc/<pid>/root/<host path>` onto every masked path. Refusing such
+/// mounts would break legitimate whole-tree binds, so each alias is covered with
+/// a procfs for the sandbox's own PID namespace instead.
+///
+/// A path already inside a sealed one is skipped, not sealed again. The set
+/// starts with the sandbox procfs the layout mounts, which matters on hosts that
+/// bind parts of procfs onto itself: container runtimes do this for their
+/// read-only paths (`/proc/sys`, `/proc/sysrq-trigger`, `/proc/irq`), and each
+/// such point is reported as a procfs of its own. Sealing them individually
+/// would replace the sandbox's sysctl tree with a second procfs root, or fail
+/// the launch outright where the point is a file rather than a directory.
+/// Points arrive sorted, so a parent is always sealed before its children.
+///
+/// A point the planning process cannot stat as an existing directory is skipped:
+/// its alias does not exist inside the bound tree either, and bwrap would fail
+/// the launch trying to create it. Only `NotFound` is a skip. Any other stat
+/// error fails the launch, because a procfs that cannot be inspected is one that
+/// cannot be proven sealed, while the recursive bind carries it in regardless of
+/// whether this process could traverse the path.
+fn project_procfs_aliases(
+    phase: &mut BwrapMountPhase,
+    mounts: &[&MountSpec],
+    host_procfs: &HostProcfsMounts,
+) -> Result<(), RunError> {
+    let mut sealed = vec![PathBuf::from(SANDBOX_PROCFS_TARGET)];
+    for mount in mounts {
+        for relative in host_procfs.points_under(&mount.source) {
+            let alias = normalize_absolute_path(&mount.target.join(relative));
+            if sealed.iter().any(|covered| alias.starts_with(covered)) {
+                continue;
+            }
+            let point = mount.source.join(relative);
+            match std::fs::metadata(&point) {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(RunError::Backend {
+                        backend: BackendKind::Bwrap.to_string(),
+                        reason: format!(
+                            "failed to inspect host procfs mount point {} while sealing its sandbox alias {}: {error}",
+                            point.display(),
+                            alias.display()
+                        ),
+                    });
+                }
+            }
+            phase.proc(BwrapPlanRole::Mask, alias.clone());
+            sealed.push(alias);
+        }
+    }
+    Ok(())
 }
 
 /// The host `$HOME/.firma` directory, if `$HOME` is a usable absolute path.
@@ -1690,6 +1963,471 @@ mod tests {
             root_bind < procfs,
             "the procfs must be mounted after the root bind: {rendered:?}"
         );
+    }
+
+    /// Sandbox handle carrying one operator-provided mount, used by the
+    /// procfs-seal tests.
+    #[cfg(target_os = "linux")]
+    fn handle_with_operator_mount(
+        runtime_dir: std::path::PathBuf,
+        source: std::path::PathBuf,
+        target: std::path::PathBuf,
+    ) -> crate::backend::SandboxHandle {
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        crate::backend::SandboxHandle {
+            mounts: vec![crate::backend::SandboxMount::operator_provided(
+                crate::config::MountSpec {
+                    source,
+                    target,
+                    read_only: true,
+                },
+            )],
+            ..handle_with(runtime_dir, identity)
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_rejects_a_mount_over_the_sandbox_procfs() {
+        // Overlays are emitted after the layout phase, so a mount landing on
+        // `/proc` replaces the sandbox's own procfs with whatever it binds and
+        // reopens `/proc/<pid>/root` onto every masked host path.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let source = temp.path().join("payload");
+        std::fs::create_dir_all(&source).expect("mkdir payload");
+
+        let handle =
+            handle_with_operator_mount(runtime_dir, source, std::path::PathBuf::from("/proc"));
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let error = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect_err("a mount over the sandbox procfs must fail the launch");
+
+        std::assert_matches!(
+            &error,
+            crate::error::RunError::Backend { backend, .. } if backend == "bwrap"
+        );
+        insta::assert_snapshot!(
+            error.to_string(),
+            @"backend error (bwrap): mount target /proc resolves to /proc, which is reserved for the sandbox filesystem layout; a mount there would replace the sandbox's own procfs and reopen /proc/<pid>/root onto masked host paths"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_rejects_a_mount_over_the_sandbox_root() {
+        // A mount at `/` re-parents the sandbox over every baseline layout
+        // step, including the procfs the layout mounts.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let source = temp.path().join("payload");
+        std::fs::create_dir_all(&source).expect("mkdir payload");
+
+        let handle = handle_with_operator_mount(
+            runtime_dir,
+            source,
+            // Spelled unnormalized: the reserved set is decided after `.` and
+            // `..` components are removed.
+            std::path::PathBuf::from("/tmp/.."),
+        );
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let error = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect_err("a mount over the sandbox root must fail the launch");
+
+        std::assert_matches!(
+            &error,
+            crate::error::RunError::Backend { backend, .. } if backend == "bwrap"
+        );
+        insta::assert_snapshot!(
+            error.to_string(),
+            @"backend error (bwrap): mount target /tmp/.. resolves to /, which is reserved for the sandbox filesystem layout; a mount there would replace the sandbox's own procfs and reopen /proc/<pid>/root onto masked host paths"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_rejects_a_mount_target_symlinked_into_the_reserved_set() {
+        // bwrap resolves the destination path at mount time, so a lexical check
+        // would accept a link into the reserved set. The workspace is writable
+        // by the wrapped process, which makes that link plantable.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let source = temp.path().join("payload");
+        std::fs::create_dir_all(&source).expect("mkdir payload");
+        let link = cwd.join("proclink");
+        std::os::unix::fs::symlink("/proc", &link).expect("plant reserved-target symlink");
+
+        let handle = handle_with_operator_mount(runtime_dir, source, link.clone());
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let error = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect_err("a symlinked reserved target must fail the launch");
+
+        let message = error.to_string();
+        assert!(
+            message.contains(&link.display().to_string()),
+            "the error must name the link the operator spelled: {message}"
+        );
+        // Only the temporary workspace path is nondeterministic; the assertion
+        // above proves it was present before it is replaced.
+        let redacted = message.replace(&link.display().to_string(), "[workspace]/proclink");
+        insta::assert_snapshot!(
+            redacted,
+            @"backend error (bwrap): mount target [workspace]/proclink resolves to /proc, which is reserved for the sandbox filesystem layout; a mount there would replace the sandbox's own procfs and reopen /proc/<pid>/root onto masked host paths"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_rejects_a_procfs_backed_mount_source() {
+        // A host procfs bound anywhere inside the sandbox is the same bypass at
+        // a different path: `<target>/<pid>/root` still walks an ancestor's
+        // mount namespace.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let handle = handle_with_operator_mount(
+            runtime_dir,
+            // Spelled without `self`, whose canonical form carries the
+            // planning process's own PID.
+            std::path::PathBuf::from("/proc/sys/kernel"),
+            temp.path().join("host-proc"),
+        );
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let error = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect_err("a procfs-backed mount source must fail the launch");
+
+        std::assert_matches!(
+            &error,
+            crate::error::RunError::Backend { backend, .. } if backend == "bwrap"
+        );
+        insta::assert_snapshot!(
+            error.to_string(),
+            @"backend error (bwrap): refusing procfs-backed mount source /proc/sys/kernel; the host procfs exposes /proc/<pid>/root, which walks around every sandbox mask"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_seals_the_procfs_a_recursive_mount_aliases() {
+        // bwrap binds recursively, so a mount of a tree containing `/proc`
+        // re-exposes the host's procfs at `<target>/proc`. The alias must carry
+        // the sandbox's own procfs, and it must be emitted after the mount that
+        // creates it.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let host_root_alias = cwd.join("host-root");
+        std::fs::create_dir_all(&host_root_alias).expect("mkdir host root alias");
+
+        let handle = handle_with_operator_mount(
+            runtime_dir,
+            std::path::PathBuf::from("/"),
+            host_root_alias.clone(),
+        );
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let plan = super::BwrapMountPlan::build_against(
+            &runtime_layout,
+            &handle,
+            &launch,
+            &hardening,
+            &host_procfs(&["/proc"]),
+        )
+        .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let alias = host_root_alias.join("proc").display().to_string();
+        let host_bind = rendered
+            .iter()
+            .position(|arg| arg == &host_root_alias.display().to_string())
+            .expect("host root mount bound");
+        let alias_procfs = rendered
+            .windows(2)
+            .position(|win| win[0] == "--proc" && win[1] == alias)
+            .expect("aliased procfs sealed");
+        assert!(
+            host_bind < alias_procfs,
+            "the aliased procfs must be sealed after the mount that exposes it: {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_seals_no_alias_for_a_procfs_free_mount() {
+        // The seal is scoped to mounts that actually carry a procfs; an
+        // ordinary workspace bind must keep its plan unchanged.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let handle = handle_with_operator_mount(runtime_dir, cwd.clone(), cwd.clone());
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let plan = super::BwrapMountPlan::build_against(
+            &runtime_layout,
+            &handle,
+            &launch,
+            &hardening,
+            &host_procfs(&["/proc"]),
+        )
+        .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let procfs_mounts = rendered.iter().filter(|arg| *arg == "--proc").count();
+        assert_eq!(
+            procfs_mounts, 1,
+            "only the sandbox's own /proc should be mounted: {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_seals_a_second_host_procfs_without_any_mount() {
+        // A host can carry a procfs outside `/proc`: a leftover
+        // `mount --bind /proc /mnt/proc`, an exporter's `/host/proc`, a machine
+        // directory. The backend's own host-root bind is recursive, so it
+        // carries that procfs into the sandbox with no profile mount involved.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let machine_procfs = temp.path().join("machine").join("proc");
+        std::fs::create_dir_all(&machine_procfs).expect("mkdir second procfs");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let plan = super::BwrapMountPlan::build_against(
+            &runtime_layout,
+            &handle,
+            &launch,
+            &hardening,
+            &host_procfs(&["/proc", &machine_procfs.display().to_string()]),
+        )
+        .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let sealed = rendered
+            .windows(2)
+            .filter(|win| win[0] == "--proc")
+            .map(|win| win[1].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sealed,
+            vec!["/proc".to_string(), machine_procfs.display().to_string()],
+            "both the sandbox procfs and the second host procfs must be sealed, once each: {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_skips_a_procfs_the_host_no_longer_exposes() {
+        // A mount point shadowed on the host by a later mount has no directory
+        // inside the bound tree either. Asking bwrap to mount there would fail
+        // the launch with `Can't mkdir` and seal nothing.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let shadowed = temp.path().join("shadowed").join("proc");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let plan = super::BwrapMountPlan::build_against(
+            &runtime_layout,
+            &handle,
+            &launch,
+            &hardening,
+            &host_procfs(&["/proc", &shadowed.display().to_string()]),
+        )
+        .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        assert!(
+            !rendered.contains(&shadowed.display().to_string()),
+            "an unreachable procfs must not enter the plan: {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_seals_a_container_mount_table_once() {
+        // Container runtimes bind parts of procfs onto itself for their
+        // read-only paths, and the kernel reports each as a procfs of its own.
+        // Sealing them individually would swap the sandbox's sysctl tree for a
+        // second procfs root, and `/proc/sysrq-trigger` is a file, so bwrap
+        // would fail the launch outright.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let plan = super::BwrapMountPlan::build_against(
+            &runtime_layout,
+            &handle,
+            &launch,
+            &hardening,
+            &host_procfs(&["/proc", "/proc/sys", "/proc/sysrq-trigger"]),
+        )
+        .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        let sealed = rendered
+            .windows(2)
+            .filter(|win| win[0] == "--proc")
+            .map(|win| win[1].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sealed,
+            vec!["/proc".to_string()],
+            "a procfs nested in the sandbox procfs must not be sealed again: {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_skips_a_file_backed_procfs_point() {
+        // `--proc` needs a directory. A point that is a file inside the bound
+        // tree would fail the launch with bwrap's own `Can't mkdir`.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+        let file_point = temp.path().join("machine-proc");
+        std::fs::write(&file_point, "").expect("write file-backed procfs point");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let handle = handle_with(runtime_dir, identity);
+        let launch = launch_with_cwd_and_config(cwd, None);
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(temp.path().join("control-plane"));
+
+        let plan = super::BwrapMountPlan::build_against(
+            &runtime_layout,
+            &handle,
+            &launch,
+            &hardening,
+            &host_procfs(&["/proc", &file_point.display().to_string()]),
+        )
+        .expect("build mount plan");
+
+        let rendered = rendered_plan(plan);
+        assert!(
+            !rendered.contains(&file_point.display().to_string()),
+            "a file-backed procfs point must not enter the plan: {rendered:?}"
+        );
+    }
+
+    /// Procfs inventory for a synthetic mount table, so plan assertions do not
+    /// depend on the mount points of the machine running the tests.
+    #[cfg(target_os = "linux")]
+    fn host_procfs(mount_points: &[&str]) -> super::HostProcfsMounts {
+        use std::fmt::Write as _;
+
+        let mut mountinfo = String::new();
+        for (index, point) in mount_points.iter().enumerate() {
+            let _ = writeln!(
+                mountinfo,
+                "{index} 28 0:22 / {point} rw,relatime shared:14 - proc proc rw"
+            );
+        }
+        super::HostProcfsMounts::from_mountinfo(&mountinfo).expect("parse synthetic mountinfo")
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn procfs_aliases_are_sealed_once_per_destination() {
+        // Two mounts exposing the same tree at the same target would otherwise
+        // stack one procfs on another.
+        let mut phase = super::BwrapMountPhase::default();
+        let mounts = [
+            crate::config::MountSpec {
+                source: std::path::PathBuf::from("/"),
+                target: std::path::PathBuf::from("/mnt/host"),
+                read_only: true,
+            },
+            crate::config::MountSpec {
+                source: std::path::PathBuf::from("/"),
+                target: std::path::PathBuf::from("/mnt/host"),
+                read_only: true,
+            },
+        ];
+        let specs = mounts.iter().collect::<Vec<_>>();
+        let host_procfs = super::HostProcfsMounts::from_mountinfo(
+            "23 28 0:22 / /proc rw,relatime shared:14 - proc proc rw\n",
+        )
+        .expect("parse mountinfo");
+
+        super::project_procfs_aliases(&mut phase, &specs, &host_procfs).expect("project aliases");
+
+        let mut command = std::process::Command::new("bwrap");
+        phase.emit(&mut command);
+        let rendered = rendered_args(&command);
+        assert_eq!(rendered, vec!["--proc", "/mnt/host/proc"]);
     }
 
     #[test]
