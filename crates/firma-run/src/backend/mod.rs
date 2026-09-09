@@ -4,7 +4,6 @@ mod macos_vz;
 pub mod platform;
 mod windows_wsl2;
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -15,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{
     MountSpec, NetworkPolicy, ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
 };
+use crate::env::ExecutionEnv;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 
@@ -321,7 +321,7 @@ pub struct LaunchSpec {
     pub(crate) executable: String,
     pub(crate) args: Vec<String>,
     pub(crate) cwd: PathBuf,
-    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) env: ExecutionEnv,
     pub(crate) sidecar_endpoint: SidecarEndpoint,
     /// Optional static seccomp cBPF artifact path resolved by runtime.
     ///

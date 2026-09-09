@@ -278,7 +278,7 @@ mod tests {
             executable: "/bin/echo".to_string(),
             args: vec!["hello".to_string(), "world".to_string()],
             cwd: std::path::PathBuf::from("/tmp"),
-            env,
+            env: env.into(),
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
