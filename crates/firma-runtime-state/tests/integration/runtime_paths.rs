@@ -63,6 +63,17 @@ fn unix_falls_back_to_tmp_when_xdg_runtime_dir_unset() {
 
 #[test]
 #[cfg(unix)]
+fn unix_fallback_defaults_to_the_current_uid() {
+    // The documented construction fills in only the inputs a caller actually
+    // has. A zero-valued default would send every such caller to another
+    // user's `/tmp/firma-0`.
+    let uid = nix::unistd::Uid::current().as_raw();
+    let layout = resolve(RuntimeRootInputs::default());
+    assert_eq!(layout.root(), PathBuf::from(format!("/tmp/firma-{uid}")));
+}
+
+#[test]
+#[cfg(unix)]
 fn unix_ignores_empty_xdg_runtime_dir() {
     let layout = resolve(RuntimeRootInputs {
         xdg_runtime_dir: Some(String::new()),

@@ -34,7 +34,7 @@ pub struct RuntimeLayout {
 ///     ..RuntimeRootInputs::default()
 /// };
 /// ```
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeRootInputs {
     /// Explicit root supplied on the command line; wins over the environment.
     pub flag: Option<PathBuf>,
@@ -47,7 +47,24 @@ pub struct RuntimeRootInputs {
     /// `TEMP`, used only on Windows.
     pub temp: Option<String>,
     /// Effective user id, used only by the Unix `/tmp/firma-$UID` fallback.
+    ///
+    /// Defaults to the effective user id of the current process, not to zero:
+    /// a caller that fills in only the environment variables it has would
+    /// otherwise resolve another user's `/tmp/firma-0`.
     pub uid: u32,
+}
+
+impl Default for RuntimeRootInputs {
+    fn default() -> Self {
+        Self {
+            flag: None,
+            firma_state_dir: None,
+            xdg_runtime_dir: None,
+            local_app_data: None,
+            temp: None,
+            uid: current_uid(),
+        }
+    }
 }
 
 /// Canonical paths within one `<runtime>/run/<sandbox_id>` entry.
