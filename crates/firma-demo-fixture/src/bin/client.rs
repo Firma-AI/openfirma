@@ -1,4 +1,4 @@
-//! Demo fixture CI driver client.
+//! Demo fixture driver client.
 //!
 //! Fires `GET /allow` and `POST /deny` through the sidecar HTTP proxy
 //! and asserts:
@@ -8,8 +8,7 @@
 //!   `{"denied":true,"reason":"...","detail":"..."}`.
 //!
 //! Exits 0 on success, 1 on the first assertion mismatch with a human
-//! readable diagnostic. Used by `just demo-ci` and the `demo-e2e`
-//! GitHub Actions job.
+//! readable diagnostic.
 
 use clap::Parser;
 use reqwest::{Proxy, Url};

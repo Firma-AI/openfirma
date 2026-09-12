@@ -10,6 +10,7 @@ pub mod config;
 pub mod dns_stub;
 #[cfg(target_os = "linux")]
 pub mod egress_guard;
+pub mod env;
 pub mod error;
 pub mod identity;
 pub mod log;
@@ -22,3 +23,4 @@ pub mod seccomp;
 pub(crate) mod secret;
 pub mod sidecar;
 pub(crate) mod supervisor;
+pub(crate) mod trust;

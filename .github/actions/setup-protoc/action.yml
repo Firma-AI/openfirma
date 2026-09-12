@@ -31,7 +31,7 @@ runs:
         PROTOC_VERSION: ${{ inputs.version }}
       run: |
         version="${PROTOC_VERSION#v}"
-        architecture="${RUNNER_ARCH,,}"
+        architecture="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
         cache_path="$RUNNER_TOOL_CACHE/protoc/v$version"
 
         echo "version=$version" >> "$GITHUB_OUTPUT"

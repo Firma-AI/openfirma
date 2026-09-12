@@ -1,11 +1,10 @@
 # Task 010 — Risk Context
 
-| Field            | Value                                                      |
-| ---------------- | ---------------------------------------------------------- |
-| Status           | superseded in part by the `firma-protobuf` 0.2 migration   |
-| Canonical plan   | `.claude/plans/2026-04-22-task-010-budget-risk-context.md` |
-| Scope            | Tasks 1–8 in the Task 010 implementation plan              |
-| Archive location | Left in `docs/tasks/` per working-tree handoff rules       |
+| Field            | Value                                                    |
+| ---------------- | -------------------------------------------------------- |
+| Status           | superseded in part by the `firma-protobuf` 0.2 migration |
+| Scope            | Tasks 1–8 in the Task 010 implementation plan            |
+| Archive location | Left in `docs/tasks/` per working-tree handoff rules     |
 
 ## Acceptance Criteria
 

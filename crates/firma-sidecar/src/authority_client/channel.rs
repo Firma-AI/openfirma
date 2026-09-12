@@ -57,6 +57,9 @@ pub fn build_channel(
 
     if authority.is_https() {
         let pem = ca_cert_pem.ok_or(BuildChannelError::MissingCaCert)?;
+        // Tonic cannot infer its provider if a workspace member also enables
+        // AWS-LC. Keep OpenFirma's Ring default, or the embedder's prior choice.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let ca_cert = Certificate::from_pem(pem);
         let mut tls = ClientTlsConfig::new().ca_certificate(ca_cert);
         if let (Some(cert), Some(key)) = (client_cert_pem, client_key_pem) {

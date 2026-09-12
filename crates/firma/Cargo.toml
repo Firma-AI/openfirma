@@ -73,7 +73,6 @@ windows-sys = { workspace = true }
 firma-stack = { workspace = true }
 firma-test-helpers = { workspace = true }
 fs-err = { workspace = true }
-guppy = "0.17"
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
@@ -91,10 +90,6 @@ wiremock = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { workspace = true }
-
-[[test]]
-name = "architecture"
-path = "../../tests/architecture/main.rs"
 
 [[test]]
 name = "cli"

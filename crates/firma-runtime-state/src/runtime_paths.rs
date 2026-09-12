@@ -21,6 +21,52 @@ pub struct RuntimeLayout {
     root: PathBuf,
 }
 
+/// Inputs consulted, in field order, when resolving a runtime root.
+///
+/// Every field is an environment value read at a process boundary, so build
+/// this from [`Default`] and set only what the caller actually has:
+///
+/// ```
+/// use firma_runtime_state::runtime_paths::RuntimeRootInputs;
+///
+/// let inputs = RuntimeRootInputs {
+///     firma_state_dir: Some("/var/lib/firma".to_string()),
+///     ..RuntimeRootInputs::default()
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRootInputs {
+    /// Explicit root supplied on the command line; wins over the environment.
+    pub flag: Option<PathBuf>,
+    /// `FIRMA_STATE_DIR`.
+    pub firma_state_dir: Option<String>,
+    /// `XDG_RUNTIME_DIR`, used only on Unix.
+    pub xdg_runtime_dir: Option<String>,
+    /// `LOCALAPPDATA`, used only on Windows.
+    pub local_app_data: Option<String>,
+    /// `TEMP`, used only on Windows.
+    pub temp: Option<String>,
+    /// Effective user id, used only by the Unix `/tmp/firma-$UID` fallback.
+    ///
+    /// Defaults to the effective user id of the current process, not to zero:
+    /// a caller that fills in only the environment variables it has would
+    /// otherwise resolve another user's `/tmp/firma-0`.
+    pub uid: u32,
+}
+
+impl Default for RuntimeRootInputs {
+    fn default() -> Self {
+        Self {
+            flag: None,
+            firma_state_dir: None,
+            xdg_runtime_dir: None,
+            local_app_data: None,
+            temp: None,
+            uid: current_uid(),
+        }
+    }
+}
+
 /// Canonical paths within one `<runtime>/run/<sandbox_id>` entry.
 ///
 /// This layout models the files shared between the per-run Sidecar producer
@@ -73,7 +119,53 @@ impl RunEntryLayout {
     pub fn sidecar_metadata(&self) -> PathBuf {
         self.root.join("metadata.toml")
     }
+
+    /// Return the directory holding the per-run Sidecar HTTPS MITM CA.
+    #[must_use]
+    pub fn ca_dir(&self) -> PathBuf {
+        self.root.join(CA_DIR_NAME)
+    }
+
+    /// Return the Sidecar MITM CA certificate.
+    ///
+    /// Public material: wrapped processes must be able to read it to verify
+    /// intercepted TLS connections.
+    #[must_use]
+    pub fn ca_cert(&self) -> PathBuf {
+        self.ca_dir().join(CA_CERT_FILE_NAME)
+    }
+
+    /// Return the Sidecar MITM CA appended to the host's system roots.
+    ///
+    /// Written only under `ca_trust_mode = "append_system_roots"`. Public
+    /// material, like [`RunEntryLayout::ca_cert`].
+    #[must_use]
+    pub fn ca_bundle(&self) -> PathBuf {
+        self.ca_dir().join(CA_BUNDLE_FILE_NAME)
+    }
+
+    /// Return the Sidecar MITM CA private key.
+    ///
+    /// Secret material. Never expose this path to a wrapped process: holding
+    /// the key allows minting certificates trusted by anything configured to
+    /// trust the Sidecar CA.
+    #[must_use]
+    pub fn ca_key(&self) -> PathBuf {
+        self.ca_dir().join(CA_KEY_FILE_NAME)
+    }
 }
+
+/// Directory holding the per-run Sidecar HTTPS MITM CA material.
+pub const CA_DIR_NAME: &str = "firma-ca";
+
+/// File name of the Sidecar MITM CA certificate.
+pub const CA_CERT_FILE_NAME: &str = "firma-ca.crt";
+
+/// File name of the Sidecar MITM CA appended to the host's system roots.
+pub const CA_BUNDLE_FILE_NAME: &str = "firma-ca-bundle.crt";
+
+/// File name of the Sidecar MITM CA private key.
+pub const CA_KEY_FILE_NAME: &str = "firma-ca.key";
 
 impl RuntimeLayout {
     /// Resolve a runtime layout from an optional explicit root and the process
@@ -86,14 +178,14 @@ impl RuntimeLayout {
     ///
     /// Returns an error on Windows when neither `LOCALAPPDATA` nor `TEMP` is set.
     pub fn resolve(flag: Option<PathBuf>) -> Result<Self> {
-        let layout = Self::resolve_from(
+        let layout = Self::resolve_from(RuntimeRootInputs {
             flag,
-            std::env::var("FIRMA_STATE_DIR").ok(),
-            std::env::var("XDG_RUNTIME_DIR").ok(),
-            std::env::var("LOCALAPPDATA").ok(),
-            std::env::var("TEMP").ok(),
-            current_uid(),
-        )?;
+            firma_state_dir: std::env::var("FIRMA_STATE_DIR").ok(),
+            xdg_runtime_dir: std::env::var("XDG_RUNTIME_DIR").ok(),
+            local_app_data: std::env::var("LOCALAPPDATA").ok(),
+            temp: std::env::var("TEMP").ok(),
+            uid: current_uid(),
+        })?;
         debug!(path = %layout.root.display(), "resolved runtime layout");
         Ok(layout)
     }
@@ -108,20 +200,30 @@ impl RuntimeLayout {
     ///
     /// This pure form is public to support environment-independent integration
     /// tests and embedding processes that resolve their own environment.
+    ///
+    /// Every resolved root is made absolute against the current working
+    /// directory, whichever input produced it. A relative root would otherwise
+    /// reach consumers that cannot use one: the sandbox backends pass runtime
+    /// paths to bubblewrap, which resolves bind targets against its own root,
+    /// and the trust environment handed to a wrapped process is read from a
+    /// different working directory than the one `firma run` started in. The
+    /// environment variables the platform branches read are as operator-supplied
+    /// as the explicit ones, so none of them is exempt.
     #[doc(hidden)]
-    pub fn resolve_from(
-        flag: Option<PathBuf>,
-        firma_state_dir: Option<String>,
-        xdg_runtime_dir: Option<String>,
-        local_app_data: Option<String>,
-        temp: Option<String>,
-        uid: u32,
-    ) -> Result<Self> {
+    pub fn resolve_from(inputs: RuntimeRootInputs) -> Result<Self> {
+        let RuntimeRootInputs {
+            flag,
+            firma_state_dir,
+            xdg_runtime_dir,
+            local_app_data,
+            temp,
+            uid,
+        } = inputs;
         if let Some(root) = flag {
-            return Ok(Self::from_root(root));
+            return Ok(Self::from_root(absolute_root(&root)?));
         }
         if let Some(root) = firma_state_dir.filter(|value| !value.is_empty()) {
-            return Ok(Self::from_root(root));
+            return Ok(Self::from_root(absolute_root(Path::new(&root))?));
         }
 
         #[cfg(unix)]
@@ -133,19 +235,21 @@ impl RuntimeLayout {
                     || PathBuf::from(format!("/tmp/firma-{uid}")),
                     |xdg| PathBuf::from(xdg).join("firma"),
                 );
-            Ok(Self::from_root(root))
+            Ok(Self::from_root(absolute_root(&root)?))
         }
 
         #[cfg(windows)]
         {
             let _ = (xdg_runtime_dir, uid);
             if let Some(local) = local_app_data.filter(|value| !value.is_empty()) {
-                return Ok(Self::from_root(
-                    PathBuf::from(local).join("firma").join("runtime"),
-                ));
+                return Ok(Self::from_root(absolute_root(
+                    &PathBuf::from(local).join("firma").join("runtime"),
+                )?));
             }
             if let Some(temp) = temp.filter(|value| !value.is_empty()) {
-                return Ok(Self::from_root(PathBuf::from(temp).join("firma")));
+                return Ok(Self::from_root(absolute_root(
+                    &PathBuf::from(temp).join("firma"),
+                )?));
             }
             Err(crate::RuntimeStateError::StateDirResolve(
                 "neither LOCALAPPDATA nor TEMP is set".into(),
@@ -206,6 +310,17 @@ impl RuntimeLayout {
     pub fn session_state(&self) -> PathBuf {
         self.root.join("session-state.jsonl")
     }
+}
+
+/// Make an operator-supplied runtime root absolute without requiring it to
+/// exist yet; the root is created later by the component that owns it.
+fn absolute_root(root: &Path) -> Result<PathBuf> {
+    std::path::absolute(root).map_err(|error| {
+        crate::RuntimeStateError::StateDirResolve(format!(
+            "failed to make runtime root '{}' absolute: {error}",
+            root.display()
+        ))
+    })
 }
 
 #[cfg(unix)]

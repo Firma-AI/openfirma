@@ -4,8 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-# shellcheck source=../../tool-versions.env
-. "$ROOT/tool-versions.env"
+VERSIONS="$ROOT/tool-versions.env"
+if [ ! -f "$VERSIONS" ]; then
+  VERSIONS="$ROOT/../tool-versions.env"
+fi
+# shellcheck source=/dev/null
+. "$VERSIONS"
 
 if [ "$(cargo binstall -V 2>/dev/null || true)" != "$CARGO_BINSTALL_VERSION" ]; then
   curl -L --proto '=https' --tlsv1.2 -sSf \

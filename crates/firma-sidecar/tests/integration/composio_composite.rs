@@ -277,6 +277,7 @@ impl Connector for MockTlsConnector {
         roots
             .add(self.certificate.clone())
             .map_err(|error| ConnectorError::Network(error.to_string()))?;
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let config = ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
@@ -465,6 +466,7 @@ async fn start_mock_tls_upstream() -> anyhow::Result<(
         generate_simple_self_signed(vec!["mock.composio.test".to_string()])?;
     let certificate = CertificateDer::from(cert.der().to_vec());
     let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![certificate.clone()], private_key)?;
@@ -1448,6 +1450,7 @@ async fn firma_ca_client(ca_dir: &std::path::Path) -> anyhow::Result<TlsConnecto
     for certificate in rustls_pemfile::certs(&mut pem.as_slice()) {
         roots.add(certificate?)?;
     }
+    let _ = rustls::crypto::ring::default_provider().install_default();
     Ok(TlsConnector::from(Arc::new(
         ClientConfig::builder()
             .with_root_certificates(roots)

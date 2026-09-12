@@ -80,6 +80,5 @@ codecov.json
 # Swamp local artefacts
 .swamp/
 
-!.skills/build
 .claude/*.lock
 .claude/specs/

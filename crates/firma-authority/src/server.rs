@@ -48,6 +48,9 @@ impl Server {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        // Tonic uses the process provider. Preserve Ring when another workspace
+        // member enables AWS-LC too; an embedder's explicit choice takes precedence.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         tracing::info!(
             listen_addr = %config.listen_addr,
             policy_dir = %config.policy_dir.display(),

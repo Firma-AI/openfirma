@@ -13,6 +13,7 @@ use crate::backend::{
     SandboxHandle, SandboxMount, SandboxRuntimeLayout,
 };
 use crate::config::{MountSpec, NetworkPolicy, SidecarEndpoint};
+use crate::env::ExecutionEnv;
 use crate::error::RunError;
 
 const VZ_GUEST_MODE_ENV: &str = "FIRMA_RUN_VZ_GUEST";
@@ -752,7 +753,7 @@ fn start_vz_guest_runner_with_inputs(
 ///
 /// The wrapped process may still receive compatibility-mode secret material,
 /// but the launch contract must not create a second persisted copy of it.
-fn vz_guest_contract_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+fn vz_guest_contract_env(env: &ExecutionEnv) -> BTreeMap<String, String> {
     env.iter()
         .filter(|(key, _)| {
             !VZ_GUEST_SECRET_ENV_KEYS.contains(&key.as_str())
@@ -1046,11 +1047,12 @@ mod tests {
             executable: "/usr/bin/true".to_string(),
             args: vec![],
             cwd: PathBuf::from("/tmp"),
-            env,
+            env: env.into(),
             sidecar_endpoint: test_sidecar_endpoint(),
             seccomp_filter_path: None,
             identity_mode: SandboxIdentityMode::SandboxUser,
             config_file: None,
+            trust_anchor: None,
         }
     }
 

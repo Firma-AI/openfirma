@@ -1318,8 +1318,12 @@ async fn handle_mitm_websocket_upgrade_request(
         .path_and_query()
         .map_or("/", |pq| pq.as_str())
         .to_string();
-    let handshake_request =
-        build_upstream_handshake_request(req, &target, &path_and_query, &credentials);
+    let handshake_request = build_upstream_handshake_request(
+        req.headers(),
+        &target.authority,
+        &path_and_query,
+        &credentials,
+    );
 
     let mut upstream = match connect_upstream_tls(&target).await {
         Ok(stream) => stream,
@@ -1473,20 +1477,31 @@ fn is_expected_tls_close_error(error: &std::io::Error) -> bool {
     msg.contains("close_notify") || msg.contains("unexpected-eof")
 }
 
+/// Render the upgrade request forwarded upstream.
+///
+/// Takes the agent's headers and the target authority rather than the whole
+/// request so the rendering — in particular which credential reaches the wire —
+/// is testable without a live hyper body.
 fn build_upstream_handshake_request(
-    req: &Request<Incoming>,
-    target: &ConnectTargetInfo,
+    headers: &hyper::http::HeaderMap,
+    authority: &Authority,
     path_and_query: &str,
     credentials: &firma_core::InjectedCredentials,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(1024);
     out.extend_from_slice(format!("GET {path_and_query} HTTP/1.1\r\n").as_bytes());
+    let injected = credentials.headers();
     let mut has_host = false;
-    for (name, value) in req.headers() {
+    for (name, value) in headers {
         if name.as_str().eq_ignore_ascii_case("host") {
             has_host = true;
         }
         if name.as_str().starts_with("x-firma-") {
+            continue;
+        }
+        // An injected credential replaces the agent's header of the same name;
+        // emitting both would put a duplicate credential on the handshake.
+        if injected.contains_key(name) {
             continue;
         }
         out.extend_from_slice(name.as_str().as_bytes());
@@ -1496,7 +1511,7 @@ fn build_upstream_handshake_request(
     }
     if !has_host {
         out.extend_from_slice(b"Host: ");
-        out.extend_from_slice(target.authority.as_str().as_bytes());
+        out.extend_from_slice(authority.as_str().as_bytes());
         out.extend_from_slice(b"\r\n");
     }
     for (k, v) in credentials.headers() {
@@ -1547,6 +1562,7 @@ async fn connect_upstream_tls(
         .iter()
         .cloned()
         .collect::<RootCertStore>();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
@@ -2603,6 +2619,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("failed to add CA cert to root store: {e}"));
         }
 
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let config = ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
@@ -2637,6 +2654,7 @@ mod tests {
         let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![host.to_string()])?;
         let certificate = CertificateDer::from(cert.der().to_vec());
         let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let tls_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate.clone()], private_key)?;
@@ -3848,5 +3866,62 @@ Content-Length: 10\r\n\
         cancel.cancel();
         upstream_cancel.cancel();
         let _ = server_handle.await;
+    }
+    /// The upgrade handshake is a second credential-injection site, separate
+    /// from the connector's dispatch path. An agent that sets the same header
+    /// must not reach the upstream: two `Authorization` values are rejected
+    /// outright (GitHub answers 401 even when both copies are the same valid
+    /// token), and the agent must not influence a header the sidecar owns.
+    #[test]
+    fn upstream_handshake_replaces_agent_header_with_the_injected_credential() {
+        let mut headers = hyper::http::HeaderMap::new();
+        headers.insert(
+            hyper::http::header::AUTHORIZATION,
+            hyper::http::HeaderValue::from_static("token agent-supplied"),
+        );
+        headers.insert(
+            hyper::http::HeaderName::from_static("sec-websocket-version"),
+            hyper::http::HeaderValue::from_static("13"),
+        );
+        headers.insert(
+            hyper::http::HeaderName::from_static("x-firma-session-id"),
+            hyper::http::HeaderValue::from_static("sess_internal"),
+        );
+        let credentials = InjectedCredentials::new(std::collections::HashMap::from([(
+            firma_http::HeaderName::from_static("authorization"),
+            "Bearer injected".to_string(),
+        )]));
+        let authority = Authority::from_static("upstream.example:443");
+
+        let rendered =
+            build_upstream_handshake_request(&headers, &authority, "/socket", &credentials);
+        let rendered = String::from_utf8(rendered).expect("handshake is valid UTF-8");
+        let lines: Vec<&str> = rendered.lines().collect();
+
+        let authorization: Vec<&&str> = lines
+            .iter()
+            .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+            .collect();
+        assert_eq!(
+            authorization,
+            vec![&"authorization: Bearer injected"],
+            "upstream must receive exactly the injected credential:\n{rendered}"
+        );
+        assert!(
+            lines.contains(&"sec-websocket-version: 13"),
+            "headers the sidecar does not inject must still be forwarded:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("x-firma-"),
+            "internal headers must not leak upstream:\n{rendered}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.to_ascii_lowercase().starts_with("host:"))
+                .count(),
+            1,
+            "exactly one Host header must be sent:\n{rendered}"
+        );
     }
 }

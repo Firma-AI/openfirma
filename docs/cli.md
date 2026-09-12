@@ -244,7 +244,7 @@ The sidecar handles `SIGTERM` and `SIGINT` for graceful shutdown:
 On every successful start the sidecar emits exactly seven INFO lines
 in order. Operators automating the binary should wait for the final
 `ready` line before sending traffic; the `examples/demo/` runbook
-reproduces the contract and the `demo-e2e` CI gate scrapes it.
+reproduces the contract.
 
 ```text
 config loaded             path="…"

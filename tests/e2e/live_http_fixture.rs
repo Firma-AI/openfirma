@@ -23,10 +23,14 @@
 //!
 //! Protocol events are JSON lines prefixed by [`PROTOCOL_PREFIX`], allowing the reader to ignore
 //! libtest output produced by the fixture process under `--nocapture`. The fixture sends `Ready`
-//! first, including its process and mount-namespace identity. For each request it sends `Attempt`
-//! before touching the network, then either `Response` with the HTTP status and raw body bytes or
-//! `Error` with a transport failure. Every request and request-scoped event carries the same nonce,
-//! which prevents a response from being attributed to the wrong E2E stimulus.
+//! first, including its process and mount-namespace identity. For a `get` request it sends
+//! `Attempt` before touching the network, then either `Response` with the HTTP status and raw body
+//! bytes or `Error` with a transport failure. For an `identity` request it re-reports the same
+//! identity it announced at readiness. Every request and request-scoped event carries the same
+//! nonce, which prevents a response from being attributed to the wrong E2E stimulus.
+//!
+//! Identity is a fixture-reported fact rather than a host observation because the sandbox has its
+//! own PID namespace: the wrapped process's own process id names nothing in the host's `/proc`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{ChildStdin, ChildStdout, Command};
@@ -40,15 +44,21 @@ use serde::{Deserialize, Serialize};
 const PROTOCOL_PREFIX: &str = "FIRMA_E2E_HTTP ";
 
 #[derive(Deserialize, Serialize)]
-struct LiveHttpRequest {
-    nonce: String,
-    url: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum LiveHttpRequest {
+    Get { nonce: String, url: String },
+    Identity { nonce: String },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum LiveHttpEvent {
     Ready {
+        process_id: u32,
+        mount_namespace: String,
+    },
+    Identity {
+        nonce: String,
         process_id: u32,
         mount_namespace: String,
     },
@@ -66,8 +76,8 @@ enum LiveHttpEvent {
     },
 }
 
-/// Identity reported by the request fixture after it starts inside the sandbox.
-pub(crate) struct LiveHttpReady {
+/// Identity the request fixture reports about itself from inside the sandbox.
+pub(crate) struct LiveHttpIdentity {
     pub(crate) process_id: u32,
     pub(crate) mount_namespace: String,
 }
@@ -99,12 +109,12 @@ impl LiveHttpClient {
     }
 
     /// Waits for the fixture's first readiness event.
-    pub(crate) fn wait_until_ready(&self, timeout: Duration) -> Result<LiveHttpReady, String> {
+    pub(crate) fn wait_until_ready(&self, timeout: Duration) -> Result<LiveHttpIdentity, String> {
         match self.receive_event(timeout)? {
             LiveHttpEvent::Ready {
                 process_id,
                 mount_namespace,
-            } => Ok(LiveHttpReady {
+            } => Ok(LiveHttpIdentity {
                 process_id,
                 mount_namespace,
             }),
@@ -112,21 +122,33 @@ impl LiveHttpClient {
         }
     }
 
+    /// Asks the fixture to re-report the identity it announced at readiness.
+    ///
+    /// A reply proves the same process is still serving the protocol; the reported values prove
+    /// it was not replaced and did not change mount namespace.
+    pub(crate) fn identity(&mut self, nonce: &str) -> Result<LiveHttpIdentity, String> {
+        self.send(&LiveHttpRequest::Identity {
+            nonce: nonce.to_string(),
+        })?;
+        match self.receive_event(Duration::from_secs(5))? {
+            LiveHttpEvent::Identity {
+                nonce: reported_nonce,
+                process_id,
+                mount_namespace,
+            } if reported_nonce == nonce => Ok(LiveHttpIdentity {
+                process_id,
+                mount_namespace,
+            }),
+            event => Err(format!("expected identity for {nonce}, got {event:?}")),
+        }
+    }
+
     /// Sends one GET request and returns the response received inside the sandbox.
     pub(crate) fn request(&mut self, nonce: &str, url: &str) -> Result<LiveHttpResponse, String> {
-        let stdin = self.stdin.as_mut().ok_or("live HTTP input is closed")?;
-        serde_json::to_writer(
-            &mut *stdin,
-            &LiveHttpRequest {
-                nonce: nonce.to_string(),
-                url: url.to_string(),
-            },
-        )
-        .map_err(|error| format!("serialize live HTTP request: {error}"))?;
-        writeln!(stdin).map_err(|error| format!("terminate live HTTP request: {error}"))?;
-        stdin
-            .flush()
-            .map_err(|error| format!("flush live HTTP request: {error}"))?;
+        self.send(&LiveHttpRequest::Get {
+            nonce: nonce.to_string(),
+            url: url.to_string(),
+        })?;
 
         match self.receive_event(Duration::from_secs(5))? {
             LiveHttpEvent::Attempt {
@@ -167,6 +189,16 @@ impl LiveHttpClient {
             .clone()
     }
 
+    fn send(&mut self, request: &LiveHttpRequest) -> Result<(), String> {
+        let stdin = self.stdin.as_mut().ok_or("live HTTP input is closed")?;
+        serde_json::to_writer(&mut *stdin, request)
+            .map_err(|error| format!("serialize live HTTP request: {error}"))?;
+        writeln!(stdin).map_err(|error| format!("terminate live HTTP request: {error}"))?;
+        stdin
+            .flush()
+            .map_err(|error| format!("flush live HTTP request: {error}"))
+    }
+
     fn receive_event(&self, timeout: Duration) -> Result<LiveHttpEvent, String> {
         match self.events.recv_timeout(timeout) {
             Ok(Ok(event)) => Ok(event),
@@ -200,14 +232,12 @@ process_fixture! {
         let stdin = std::io::stdin();
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
+        let (process_id, mount_namespace) = self_identity();
         write_event(
             &mut stdout,
             &LiveHttpEvent::Ready {
-                process_id: std::process::id(),
-                mount_namespace: std::fs::read_link("/proc/self/ns/mnt")
-                    .expect("read fixture mount namespace")
-                    .to_string_lossy()
-                    .into_owned(),
+                process_id,
+                mount_namespace,
             },
         );
 
@@ -215,29 +245,44 @@ process_fixture! {
             let line = line.expect("read live HTTP request");
             let request: LiveHttpRequest =
                 serde_json::from_str(&line).expect("deserialize live HTTP request");
+            let (nonce, url) = match request {
+                LiveHttpRequest::Identity { nonce } => {
+                    let (process_id, mount_namespace) = self_identity();
+                    write_event(
+                        &mut stdout,
+                        &LiveHttpEvent::Identity {
+                            nonce,
+                            process_id,
+                            mount_namespace,
+                        },
+                    );
+                    continue;
+                }
+                LiveHttpRequest::Get { nonce, url } => (nonce, url),
+            };
             write_event(
                 &mut stdout,
                 &LiveHttpEvent::Attempt {
-                    nonce: request.nonce.clone(),
+                    nonce: nonce.clone(),
                 },
             );
-            let event = match client.get(&request.url).send() {
+            let event = match client.get(&url).send() {
                 Ok(response) => {
                     let status = response.status().as_u16();
                     match response.bytes() {
                         Ok(body) => LiveHttpEvent::Response {
-                            nonce: request.nonce,
+                            nonce,
                             status,
                             body: body.to_vec(),
                         },
                         Err(error) => LiveHttpEvent::Error {
-                            nonce: request.nonce,
+                            nonce,
                             message: format!("read HTTP response body: {error}"),
                         },
                     }
                 }
                 Err(error) => LiveHttpEvent::Error {
-                    nonce: request.nonce,
+                    nonce,
                     message: format!("send HTTP request: {error}"),
                 },
             };
@@ -255,6 +300,17 @@ fn build_tls_config() -> rustls::ClientConfig {
         .with_platform_verifier()
         .expect("configure live HTTP platform verifier")
         .with_no_client_auth()
+}
+
+/// Returns the fixture's own process id and mount namespace as seen from inside the sandbox.
+fn self_identity() -> (u32, String) {
+    (
+        std::process::id(),
+        std::fs::read_link("/proc/self/ns/mnt")
+            .expect("read fixture mount namespace")
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 fn write_event(writer: &mut impl Write, event: &LiveHttpEvent) {

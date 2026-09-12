@@ -259,7 +259,10 @@ pub enum InitError {
 
 impl fmt::Display for InitError {
     /// Formats the init error for serial logs and guest result payloads.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "One exhaustive match keeps every init error's diagnostic together"
+    )]
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CreateDir { path, source } => {

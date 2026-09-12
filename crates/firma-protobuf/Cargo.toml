@@ -1,0 +1,33 @@
+[package]
+name = "firma-protobuf"
+version.workspace = true
+categories = ["network-programming", "api-bindings"]
+edition.workspace = true
+include = [
+  "src/**/*.rs",
+  "build.rs",
+  "proto/**/*.proto",
+  "README.md",
+  "LICENSE",
+]
+keywords = ["firma", "protobuf", "grpc", "tonic", "wire-contract"]
+license = "Apache-2.0"
+publish.workspace = true
+readme = "README.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared Protobuf/gRPC wire contract (firma.v1) for the Firma stack: Authority, Sidecar, and audit planes"
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+tonic-prost-build = { workspace = true }
+
+[lints]
+workspace = true

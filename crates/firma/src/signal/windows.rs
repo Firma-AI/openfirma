@@ -76,7 +76,7 @@ pub fn install_listener(token: CancellationToken) {
 
 #[cfg(test)]
 mod tests {
-    #![expect(
+    #![allow(
         clippy::expect_used,
         reason = "Windows shutdown-event tests use expect to fail fast on setup failures"
     )]

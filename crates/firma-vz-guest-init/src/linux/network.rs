@@ -313,6 +313,10 @@ pub fn start_guest_network_services(
 }
 
 /// Brings up the guest loopback interface used by the local proxy and DNS stub.
+#[expect(
+    unsafe_code,
+    reason = "Loopback configuration requires a raw control socket, ifreq union access, and interface ioctls"
+)]
 fn bring_loopback_up() -> InitResult<()> {
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
@@ -874,6 +878,10 @@ fn write_resolv_conf(dns_stub_addr: SocketAddr) -> InitResult<()> {
 }
 
 /// Connects to a host service using the Linux `AF_VSOCK` host CID.
+#[expect(
+    unsafe_code,
+    reason = "Connecting AF_VSOCK requires passing the initialized sockaddr_vm layout to libc"
+)]
 pub fn connect_vsock_host(port: u32) -> io::Result<File> {
     let socket = open_vsock_socket()?;
     let family = libc::sa_family_t::try_from(AF_VSOCK)
@@ -906,6 +914,10 @@ pub fn connect_vsock_host(port: u32) -> io::Result<File> {
 }
 
 /// Opens a raw Linux `AF_VSOCK` stream socket.
+#[expect(
+    unsafe_code,
+    reason = "The standard library has no VSOCK constructor; libc returns a raw descriptor to adopt"
+)]
 fn open_vsock_socket() -> io::Result<OwnedFd> {
     let fd = unsafe { libc::socket(AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {

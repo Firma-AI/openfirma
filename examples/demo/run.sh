@@ -17,8 +17,16 @@ MODE="${1:-hero}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEMO="$ROOT/examples/demo"
 LOG_DIR="$DEMO/logs"
-TARGET_DIR="$ROOT/target/release"
 LOOPBACK_HOST="127.0.0.1"
+
+if [[ "$MODE" == "ci" ]]; then
+  BUILD_PROFILE="debug"
+  BUILD_ARGS=()
+else
+  BUILD_PROFILE="release"
+  BUILD_ARGS=(--release)
+fi
+TARGET_DIR="$ROOT/target/$BUILD_PROFILE"
 
 mkdir -p "$LOG_DIR"
 
@@ -145,8 +153,8 @@ ensure_revocations_file() {
 
 # ── Build ────────────────────────────────────────────────────────────────────
 
-echo "[demo] building release binaries"
-(cd "$ROOT" && cargo build --release \
+echo "[demo] building $BUILD_PROFILE binaries"
+(cd "$ROOT" && cargo build "${BUILD_ARGS[@]}" \
   -p firma -p firma-demo-fixture)
 
 mkdir -p "$DEMO/firma-ca"

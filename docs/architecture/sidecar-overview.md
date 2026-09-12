@@ -30,7 +30,7 @@ Four invariants shape the design:
 ```mermaid
 graph LR
     core[firma-core<br/>shared types & traits]
-    proto[firma-protobuf<br/>gRPC wire contract -- crates.io]
+    proto[firma-protobuf<br/>in-tree gRPC wire contract]
     grpcproto[firma-grpc-interceptor-proto<br/>gRPC hook contract]
     sidecar[firma-sidecar<br/>enforcement binary]
     authority[firma-authority<br/>reference Authority]
@@ -671,8 +671,8 @@ ready
 
 The contract is locked by
 `crates/firma-sidecar/tests/startup_contract.rs` and consumed by
-`examples/demo/` plus the `demo-e2e` CI gate. Operators automating
-the binary should wait for `ready` before sending traffic.
+`examples/demo/`. Operators automating the binary should wait for `ready`
+before sending traffic.
 
 ## 11. Where to go next
 

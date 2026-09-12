@@ -1,10 +1,10 @@
 # Contributing to OpenFirma
 
-Thank you for your interest in contributing to OpenFirma! We'd love to have you contribute. Here are some resources and guidance to help you get started.
+Thank you for your interest in contributing to OpenFirma.
 
 - [Getting Started](#getting-started)
 - [Issues](#issues)
-- [Pull Requests](#pull-requests)
+- [Contributing changes](#contributing-changes)
 
 ## Getting Started
 
@@ -22,36 +22,25 @@ Install `just` first (`brew install just` on macOS, `cargo binstall just` elsewh
 
 ## Issues
 
-If you find a bug, please create an issue and we'll triage it.
+If you find a bug or want to propose a feature, please create an issue and
+we'll triage it.
 
 - Please search [existing issues](https://github.com/firma-ai/openfirma/issues) before creating a new one.
 - Please include a clear description of the problem along with steps to reproduce it. Logs from `firma doctor` and `firma monitor` really help.
+- Report security vulnerabilities through the process in [SECURITY.md](SECURITY.md), not through a public issue.
 
-## Pull Requests
+## Contributing changes
 
-We actively welcome your Pull Requests! A couple of things to keep in mind before you submit:
+Pull requests are disabled. Start with a public issue describing the motivation,
+expected behavior, and any relevant reproduction. Maintainers will coordinate
+accepted changes.
 
-- If you're fixing an issue, make sure someone else hasn't already created a PR fixing the same issue. Link your PR to the related issue(s).
-- If you're new, we encourage you to take a look at issues tagged with [good first issue](https://github.com/firma-ai/openfirma/labels/good%20first%20issue).
-- If you're submitting a new feature, please open an [issue](https://github.com/firma-ai/openfirma/issues/new) first to discuss it before opening a PR.
-
-PR titles must use `type(scope)!: description`. The scope and breaking `!`
-marker are optional. Accepted types are `ai`, `build`, `chore`, `ci`, `docs`,
-`feat`, `fix`, `perf`, `refactor`, `revert`, `security`, `style`, and `test`.
-
-Release notes are generated from PR titles. `ai`, `build`, `chore`, `ci`,
-`refactor`, `style`, and `test` PRs are grouped under a final, collapsible
-**Internal Improvements** block. Those types cannot use `!`; use a user-facing
-type for a public breaking change.
-
-Before submitting your PR, please run these checks locally:
+When investigating or validating a proposed change locally, run:
 
 ```bash
 just check     # fmt + lint + test + build + audit + dependency check
 just hawk      # unnecessary public API visibility (macOS and Linux)
 ```
-
-Running this before you create the PR will help reduce back and forth during review.
 
 ## License
 

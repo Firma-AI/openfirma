@@ -1,15 +1,15 @@
-//! Shared bits for the demo fixture server and the CI driver client.
+//! Shared bits for the demo fixture server and driver client.
 //!
 //! Two binaries live in this crate:
 //!
 //! - `firma-demo-fixture` — HTTP server with `/allow`, `POST /deny`,
-//!   `/_ping` routes used as the deterministic CI target.
+//!   `/_ping` routes used as the deterministic target.
 //! - `firma-demo-fixture-client` — CLI that drives both routes through
 //!   the sidecar proxy and asserts ALLOW + DENY shape.
 //!
 //! The library surface is intentionally thin: just the canonical
 //! response bodies so the server and the client agree on what counts
-//! as a passing CI run.
+//! as a passing run.
 
 /// Default fixture listen address.
 pub const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:9100";

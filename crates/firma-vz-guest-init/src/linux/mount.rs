@@ -175,6 +175,10 @@ fn mount_path(
 }
 
 /// Calls the Linux `mount(2)` syscall.
+#[expect(
+    unsafe_code,
+    reason = "Guest filesystem setup requires mount(2) with live C-string pointers"
+)]
 fn mount_raw(
     source: &CString,
     target: &CString,
@@ -365,6 +369,10 @@ pub struct ModuleProbeFailure {
 }
 
 /// Loads one kernel module with `finit_module(2)`.
+#[expect(
+    unsafe_code,
+    reason = "Guest driver loading requires the finit_module syscall on an open module file"
+)]
 pub fn load_module(path: &Path) -> InitResult<ModuleLoad> {
     let file = File::open(path).map_err(|error| InitError::OpenModule {
         path: path.to_path_buf(),

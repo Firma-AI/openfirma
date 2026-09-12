@@ -30,8 +30,9 @@ use firma_core::{CapabilityClaims, CapabilitySeed, TokenSigner, TokenVerifier};
 use firma_identifiers::TokenId;
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
-    CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision,
-    PolicyBundleUpdate, RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    CapabilityToken, GetApprovalOutcomeRequest, GetApprovalOutcomeResponse, IssueCapabilityRequest,
+    IssueCapabilityResponse, IssueDecision, PolicyBundleUpdate, RevocationEvent,
+    WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
@@ -150,6 +151,15 @@ impl AuthorityService for MockAuthority {
             approval_url: None,
             approval_expiry: None,
         }))
+    }
+
+    async fn get_approval_outcome(
+        &self,
+        _request: Request<GetApprovalOutcomeRequest>,
+    ) -> Result<Response<GetApprovalOutcomeResponse>, Status> {
+        Err(Status::unimplemented(
+            "mock authority: no approval outcome polling",
+        ))
     }
 
     type WatchPolicyBundleStream =

@@ -88,6 +88,13 @@ mod tests {
         let config = BrokerConfig::default();
         let listener = BrokerListener::bind(&endpoint, config).await.expect("bind");
         let bound = listener.bound_endpoint().expect("bound");
+        #[cfg_attr(
+            windows,
+            expect(
+                clippy::infallible_destructuring_match,
+                reason = "EndpointInner has only the TCP variant on Windows"
+            )
+        )]
         let addr = match bound {
             firma_secret_provider::endpoint::EndpointInner::Tcp(addr) => addr,
             #[cfg(unix)]

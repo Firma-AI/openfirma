@@ -2,9 +2,8 @@
 //!
 //! Locks the seven-line INFO sequence the sidecar emits on every
 //! successful start. The contract is part of the operator-facing
-//! interface: `examples/demo/` and the `demo-e2e` CI gate scrape these
-//! lines to assert readiness, so the order, prefix, and field surface
-//! are all stable.
+//! interface: `examples/demo/` uses these lines to detect readiness, so
+//! the order, prefix, and field surface are all stable.
 //!
 //! The seven lines, in order, are:
 //!

@@ -146,6 +146,10 @@ pub fn log(message: &str) {
 }
 
 /// Powers off the guest and parks the init process if reboot does not return.
+#[expect(
+    unsafe_code,
+    reason = "Guest PID 1 must flush filesystems and invoke the Linux power-off syscall"
+)]
 fn power_off() -> ! {
     log("powering off guest");
     unsafe {

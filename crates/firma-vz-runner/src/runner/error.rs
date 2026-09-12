@@ -12,7 +12,10 @@ type RawFd = i32;
 
 pub type RunnerResult<T> = std::result::Result<T, RunnerError>;
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "The shared error type includes mutually exclusive macOS and unsupported-host variants"
+)]
 #[derive(Debug, Error)]
 pub enum RunnerError {
     #[error("firma-vz-runner is macOS-only; parsed contract v{version} for sandbox {sandbox_id}")]

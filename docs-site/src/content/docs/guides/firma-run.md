@@ -485,6 +485,13 @@ On structural backends, the agent sees:
 - `HTTP_PROXY` and `HTTPS_PROXY` set to the proxy bridge.
 - Whatever filesystem the profile mounts (the `generic` profile mounts very little; `codex` mounts a workspace).
 
+On Linux `bwrap`, two profile mount shapes fail the launch instead of weakening the sandbox, both naming the offending path in the error:
+
+- A mount whose target is, or resolves through symlinks to, `/proc` or `/` — those belong to the sandbox's own filesystem layout, and a mount there would replace the private `/proc` that keeps host processes invisible.
+- A mount whose source is backed by a host procfs, which would expose `/proc/<pid>/root` at another path.
+
+Mounting a whole tree that happens to contain a procfs is still fine: the procfs paths inside it are replaced with the sandbox's own.
+
 It does *not* see:
 
 - Capabilities staged automatically for the host-side Sidecar. An explicit

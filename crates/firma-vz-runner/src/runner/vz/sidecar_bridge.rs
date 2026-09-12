@@ -163,8 +163,7 @@ define_class!(
 
     unsafe impl VZVirtioSocketListenerDelegate for SidecarBridgeDelegate {
         #[unsafe(method(listener:shouldAcceptNewConnection:fromSocketDevice:))]
-        #[allow(non_snake_case)]
-        unsafe fn listener_shouldAcceptNewConnection_fromSocketDevice(
+        unsafe fn listener_should_accept_new_connection_from_socket_device(
             &self,
             _listener: &VZVirtioSocketListener,
             connection: &VZVirtioSocketConnection,

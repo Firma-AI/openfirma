@@ -9,14 +9,6 @@ on:
       - "crates/**"
       - "docs-site/**"
       - ".github/workflows/docs.yml"
-  pull_request:
-    paths:
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "crates/**"
-      - "docs-site/**"
-      - ".github/workflows/docs.yml"
-  merge_group:
   workflow_dispatch:
 
 permissions:

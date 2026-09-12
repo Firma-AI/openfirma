@@ -427,6 +427,10 @@ fn duplicate_pty_slave(slave: &OwnedFd) -> InitResult<File> {
 }
 
 /// Spawns the command process with the PTY slave as its controlling terminal.
+#[expect(
+    unsafe_code,
+    reason = "PTY session and controlling-terminal setup require libc calls in the pre-exec hook"
+)]
 fn spawn_pty_child(
     command: &super::contract::CommandContract,
     stdin: File,
@@ -470,6 +474,10 @@ struct CommandPty {
 }
 
 /// Opens the guest command PTY with the requested terminal size.
+#[expect(
+    unsafe_code,
+    reason = "openpty returns raw descriptors that must be transferred into owned handles"
+)]
 fn open_command_pty(pty_plan: &PtyPlan) -> InitResult<CommandPty> {
     let mut master: libc::c_int = -1;
     let mut slave: libc::c_int = -1;
@@ -695,6 +703,10 @@ fn parse_resize_dimension(value: Option<&str>, original: &str) -> InitResult<Non
 }
 
 /// Resizes the guest command PTY.
+#[expect(
+    unsafe_code,
+    reason = "Changing PTY dimensions requires the TIOCSWINSZ ioctl"
+)]
 fn resize_command_pty(pty_master: &File, rows: u16, cols: u16) -> InitResult<()> {
     let winsize = libc::winsize {
         ws_row: rows,
@@ -720,6 +732,10 @@ fn resize_command_pty(pty_master: &File, rows: u16, cols: u16) -> InitResult<()>
 }
 
 /// Sends a signal to the guest command process group.
+#[expect(
+    unsafe_code,
+    reason = "Signaling the entire child process group requires libc::kill"
+)]
 fn signal_process_group(child_pgid: libc::pid_t, signal: libc::c_int) -> InitResult<()> {
     if unsafe { libc::kill(-child_pgid, signal) } != 0 {
         return Err(InitError::SignalCommandProcessGroup {
@@ -731,6 +747,10 @@ fn signal_process_group(child_pgid: libc::pid_t, signal: libc::c_int) -> InitRes
 }
 
 /// Starts PTY-to-host and host-to-PTY forwarders.
+#[expect(
+    unsafe_code,
+    reason = "The File-backed VSOCK stream requires libc::shutdown to half-close guest output"
+)]
 fn spawn_pty_io_forwarders(
     master: OwnedFd,
     host_stream: File,
@@ -801,6 +821,10 @@ fn send_pty_runtime_event(sender: &Sender<PtyRuntimeEvent>, event: PtyRuntimeEve
 }
 
 /// Duplicates an owned file descriptor for independent stdio ownership.
+#[expect(
+    unsafe_code,
+    reason = "libc::dup returns a new raw descriptor whose ownership must be adopted"
+)]
 fn duplicate_fd(fd: RawFd) -> io::Result<OwnedFd> {
     if fd < 0 {
         return Err(io::Error::new(

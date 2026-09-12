@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_protobuf::v1::{
-    IssueCapabilityRequest, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    GetApprovalOutcomeRequest, IssueCapabilityRequest, WatchPolicyBundleRequest,
+    WatchRevocationsRequest,
 };
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
@@ -138,6 +139,7 @@ async fn issue_capability_e2e() {
         session_id: "test_session".to_string(),
         requested_ttl_seconds: 300,
         credentials: None,
+        issuance_attempt_id: None,
     };
 
     let response = client.issue_capability(request).await.expect("RPC failed");
@@ -167,6 +169,7 @@ async fn issue_capability_e2e() {
             session_id: "test_session".to_string(),
             requested_ttl_seconds: 300,
             credentials: None,
+            issuance_attempt_id: None,
         })
         .await
         .expect("RPC failed")
@@ -174,6 +177,22 @@ async fn issue_capability_e2e() {
     let canonical_token = canonical_response.token.expect("token missing");
     assert_eq!(token.context_hash, canonical_token.context_hash);
 
+    server.stop();
+}
+
+#[tokio::test]
+async fn approval_outcome_polling_is_unimplemented() {
+    let server = TestServer::start().await;
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect to server");
+
+    let status = client
+        .get_approval_outcome(GetApprovalOutcomeRequest::default())
+        .await
+        .expect_err("approval outcome polling unexpectedly succeeded");
+
+    assert_eq!(status.code(), tonic::Code::Unimplemented);
     server.stop();
 }
 
@@ -195,6 +214,7 @@ async fn custom_schema_action_is_issued() {
             session_id: "custom_schema_session".to_string(),
             requested_ttl_seconds: 300,
             credentials: None,
+            issuance_attempt_id: None,
         })
         .await
         .expect("RPC failed")
@@ -224,6 +244,7 @@ async fn action_absent_from_active_schema_aborts_partial_grant() {
             session_id: "unknown_action_session".to_string(),
             requested_ttl_seconds: 300,
             credentials: None,
+            issuance_attempt_id: None,
         })
         .await
         .expect("RPC failed")

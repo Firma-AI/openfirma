@@ -227,25 +227,23 @@ use the same compact duration syntax and validation as the corresponding TOML
 fields.
 
 Resource paths resolve relative to the containing `firma.toml`. This includes
-Sidecar mapping files and explicit MITM CA files; Authority client mTLS files
-and credential secret files; and Run file-provided mount sources, seccomp
-policies, capability files, and capability keys in both defaults and every
-profile.
+Sidecar mapping files; Authority client mTLS files and credential secret files;
+and Run file-provided mount sources, seccomp policies, capability files, and
+capability keys in both defaults and every profile.
 
-| Field                                                                                        | Relative value resolves under |
-| -------------------------------------------------------------------------------------------- | ----------------------------- |
-| `sidecar.policy.dir`                                                                         | `<config_dir>/<value>`        |
-| `sidecar.mapping.rules_path`                                                                 | `<config_dir>/<value>`        |
-| `sidecar.mapping.rules_paths[]`                                                              | `<config_dir>/<value>`        |
-| `sidecar.authority.public_key_path`, mTLS, and credential secret files                       | `<config_dir>/<value>`        |
-| `sidecar.interceptor.https_mitm.ca_cert_path` / `sidecar.interceptor.https_mitm.ca_key_path` | `<config_dir>/<value>`        |
-| `sidecar.audit.file_path`                                                                    | `<config_dir>/<value>`        |
-| `sidecar.audit.signing_key_path`                                                             | `<config_dir>/<value>`        |
-| `authority.policy_dir`                                                                       | `<config_dir>/<value>`        |
-| `authority.issuance_policy_dir`                                                              | `<config_dir>/<value>`        |
-| `authority.schema_path`                                                                      | `<config_dir>/<value>`        |
-| `authority.key_file`                                                                         | `<config_dir>/<value>`        |
-| Run mount sources, seccomp paths, capability files/keys                                      | `<config_dir>/<value>`        |
+| Field                                                                  | Relative value resolves under |
+| ---------------------------------------------------------------------- | ----------------------------- |
+| `sidecar.policy.dir`                                                   | `<config_dir>/<value>`        |
+| `sidecar.mapping.rules_path`                                           | `<config_dir>/<value>`        |
+| `sidecar.mapping.rules_paths[]`                                        | `<config_dir>/<value>`        |
+| `sidecar.authority.public_key_path`, mTLS, and credential secret files | `<config_dir>/<value>`        |
+| `sidecar.audit.file_path`                                              | `<config_dir>/<value>`        |
+| `sidecar.audit.signing_key_path`                                       | `<config_dir>/<value>`        |
+| `authority.policy_dir`                                                 | `<config_dir>/<value>`        |
+| `authority.issuance_policy_dir`                                        | `<config_dir>/<value>`        |
+| `authority.schema_path`                                                | `<config_dir>/<value>`        |
+| `authority.key_file`                                                   | `<config_dir>/<value>`        |
+| Run mount sources, seccomp paths, capability files/keys                | `<config_dir>/<value>`        |
 
 Runtime/state paths, endpoints, sandbox mount targets, and WAL, session,
 revocation, and `sidecar.ca.dir` paths are not re-based. Mask-home values are
@@ -259,8 +257,7 @@ files and are canonicalized when loaded, and CLI path arguments remain verbatim.
 | sockets, pid, listen, logs  | state/runtime dir                         |
 
 > **See also**: `examples/demo/firma.toml` is the canonical
-> end-to-end reference. `just demo-ci` boots the sidecar against it
-> and gates merges via the `demo-e2e` GitHub Actions workflow.
+> end-to-end reference.
 
 ## Minimal Configuration
 
@@ -401,8 +398,6 @@ enforcement only).
 | Field                 | Type         | Default                  | Description                                         |
 | --------------------- | ------------ | ------------------------ | --------------------------------------------------- |
 | `enabled`             | bool         | `true`                   | Enables MITM for hosts matched by `intercept_hosts` |
-| `ca_cert_path`        | path         | none                     | Optional explicit CA certificate path               |
-| `ca_key_path`         | path         | none                     | Optional explicit CA private key path               |
 | `intercept_hosts`     | list<string> | curated common API hosts | Host patterns to intercept (`*` or `*.example.com`) |
 | `bypass_hosts`        | list<string> | `[]`                     | Host patterns to force CONNECT tunnel mode          |
 | `strict_hosts`        | list<string> | `[]`                     | Host patterns that must be intercepted              |
@@ -422,8 +417,12 @@ Validation:
 - If `enabled = true`, `intercept_hosts` must be non-empty.
 - If `enabled = true`, `cert_ttl` and `cert_cache_capacity` must be
   greater than `0`.
-- If `ca_cert_path` / `ca_key_path` are omitted, first-run CA files are created
-  under [`[sidecar.ca].dir`](#ca) as `firma-ca.crt` and `firma-ca.key`.
+- CA material has one location: `firma-ca.crt` and `firma-ca.key` under
+  [`[sidecar.ca].dir`](#ca), created on first run. The individual file paths are
+  not configurable, so whoever sets `dir` also controls where the private key
+  lands. `firma run` relies on this: it pins `dir` to the per-run state entry,
+  publishes the certificate to the sandbox, and keeps the key behind the
+  control-plane mask.
 - CA generation is first-run only. If either CA file already exists, the
   sidecar must load the existing cert/key pair exactly as-is or fail startup;
   it never regenerates, repairs, or replaces CA material from partial,

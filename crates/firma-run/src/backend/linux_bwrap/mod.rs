@@ -1,4 +1,5 @@
-mod mount;
+#[doc(hidden)]
+pub mod mount;
 
 use std::env;
 use std::path::PathBuf;
@@ -214,6 +215,12 @@ impl SandboxBackend for BwrapBackend {
         let mut command = Command::new("bwrap");
         command.arg("--die-with-parent");
         command.arg("--new-session");
+        // The filesystem masks only hide paths in this mount namespace. With
+        // the host PID namespace and its procfs inherited, an ancestor process
+        // remained visible and `/proc/<pid>/root/<host path>` reached every
+        // masked control-plane asset, the Sidecar CA signing key included.
+        // `BwrapMountPlan` mounts the matching procfs over the root bind.
+        command.arg("--unshare-pid");
         if handle.network_policy.enforce_network_namespace {
             command.arg("--unshare-net");
         }

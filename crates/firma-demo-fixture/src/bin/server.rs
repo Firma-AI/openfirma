@@ -31,7 +31,7 @@ use tokio::net::TcpListener;
 #[derive(Parser, Debug)]
 #[command(
     name = "firma-demo-fixture",
-    about = "Deterministic ALLOW/DENY fixture server for the Firma demo CI gate"
+    about = "Deterministic ALLOW/DENY fixture server for the Firma demo"
 )]
 struct Args {
     /// Address to bind. Defaults to `127.0.0.1:9100`.

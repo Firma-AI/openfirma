@@ -1,6 +1,22 @@
+#[expect(
+    unsafe_code,
+    reason = "The native PTY adapter implements Objective-C delegates and POSIX terminal/socket operations"
+)]
 mod command_pty;
+#[expect(
+    unsafe_code,
+    reason = "Virtualization.framework configuration is exposed through unsafe Objective-C bindings"
+)]
 mod config;
+#[expect(
+    unsafe_code,
+    reason = "VM lifecycle control crosses Objective-C callbacks and retained native object pointers"
+)]
 mod lifecycle;
+#[expect(
+    unsafe_code,
+    reason = "The Sidecar VSOCK adapter implements Objective-C delegates and adopts native socket descriptors"
+)]
 mod sidecar_bridge;
 mod transport;
 

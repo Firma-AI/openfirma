@@ -1,45 +1,37 @@
 # Release OpenFirma
 
-OpenFirma releases are prepared and published by GitHub Actions. Do not edit
-versions or push release tags manually.
+OpenFirma releases are exported from the private Firma Team source repository
+and published by GitHub Actions. Do not edit versions or push release tags in
+this public snapshot repository.
 
-## Prepare the release
+## Prepare and validate the release
 
-Dispatch the `Prepare Release` workflow on `main`:
-
-```bash
-gh workflow run prepare-release.yml
-```
-
-The workflow infers the next SemVer version from the changes since the previous
-release. There is no version-bump input. When preparation finishes, it opens a
-release PR containing the proposed version and changelog.
-
-## Review the release PR
-
-Review the complete diff, paying particular attention to:
+Release metadata is source-owned. Prepare and review it in Firma Team before
+exporting a release snapshot. The committed workspace version and newest
+`CHANGELOG.md` release must match. Review the complete candidate diff, paying
+particular attention to:
 
 - The proposed version.
 - The new `CHANGELOG.md` section and its links.
-- Any generated dependency or lockfile changes.
+- Generated dependency and lockfile changes.
+- The `Firma-Team-Source` and `OpenFirma-Tree-SHA256` commit trailers.
 
-Edit the changelog when an entry needs clearer user-facing wording. If the
-release PR becomes stale, dispatch `Prepare Release` again and review the
-updated candidate.
-
-Do not merge until every required check passes, including the release E2E
-matrix. Changes that land immediately ahead of the release PR in the merge
-queue may be included in the release without appearing in its changelog. This
-narrow ordering race is accepted.
+Firma Team CI validates the deterministic standalone snapshot before it is
+published. The public `Snapshot Candidate` workflow then packages the workspace
+without publishing and runs a non-publishing cargo-dist artifact build.
+Promotion fails closed unless its single `Snapshot gate` job succeeds for the
+exact candidate SHA.
 
 ## Publish
 
-Merge the release PR, then monitor the workflows triggered by the merge. A
-successful run creates the version tag, publishes the GitHub Release and its
-artifacts, and updates the Homebrew tap.
+After the approved candidate is promoted to public `main`, `Publish Release
+Tag` revalidates its metadata and provenance trailer format and creates
+`v<version>` at that exact `main` SHA. The tag-triggered `Release` workflow
+publishes the GitHub Release and artifacts and updates the Homebrew tap.
 
-If publication fails, rerun the failed workflow. Do not create the tag or
-partially publish the release by hand.
+Rerunning tag publication is safe only for the same SHA; an existing tag at any
+other SHA fails. If artifact publication fails, rerun it for the same tag. Do
+not move or create a release tag by hand.
 
 ## Verify the release
 

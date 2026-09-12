@@ -104,6 +104,13 @@ fn assert_dynamic_publication(mode: &str) -> anyhow::Result<()> {
     let mut sidecar = fixture.spawn()?;
 
     let endpoint = wait_for_publication(&mut sidecar.0, &fixture.startup_report_path)?;
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::infallible_destructuring_match,
+            reason = "ComponentEndpoint has only the TCP variant on Windows"
+        )
+    )]
     let published = match endpoint {
         firma_stack::ComponentEndpoint::Tcp(published) => published,
         #[cfg(unix)]

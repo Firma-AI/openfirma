@@ -5,7 +5,7 @@ use firma_core::{
     ActionParams, Connector, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
     HttpParams, InjectedCredentials, TransportView,
 };
-use firma_http::{Authority, HeaderMap, Method};
+use firma_http::{Authority, HeaderMap, HeaderName, Method};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::connector::provider::{GenericHttpConnector, HttpConnectorConfig};
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
@@ -15,12 +15,26 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 fn view_for(resource: &str, query: HashMap<String, String>) -> anyhow::Result<TransportView> {
+    view_with(
+        resource,
+        query,
+        HeaderMap::new(),
+        InjectedCredentials::empty(),
+    )
+}
+
+fn view_with(
+    resource: &str,
+    query: HashMap<String, String>,
+    headers: HeaderMap,
+    credentials: InjectedCredentials,
+) -> anyhow::Result<TransportView> {
     let intent = ExecutionIntent {
         action_class: "code.read".to_string(),
         resource: ExecutionIntent::resource_map_from(resource),
         params: ActionParams::Http(HttpParams {
             method: HttpMethod::GET,
-            headers: HeaderMap::new(),
+            headers,
             body: None,
             query,
         }),
@@ -41,7 +55,7 @@ fn view_for(resource: &str, query: HashMap<String, String>) -> anyhow::Result<Tr
         },
         None,
     );
-    Ok(TransportView::new(envelope, InjectedCredentials::empty()))
+    Ok(TransportView::new(envelope, credentials))
 }
 
 fn github_normalizer() -> anyhow::Result<IntentNormalizer> {
@@ -70,6 +84,19 @@ fn receive_pack_body(commands: &[(&str, &str, &str)]) -> Vec<u8> {
 }
 
 async fn serve_one_request(listener: TcpListener, request_line_tx: oneshot::Sender<String>) {
+    serve_capturing_head(listener, request_line_tx, |head| {
+        head.lines().next().unwrap_or_default().to_string()
+    })
+    .await;
+}
+
+/// Accepts one connection, answers `200 OK`, and reports whatever `capture`
+/// extracts from the received request head.
+async fn serve_capturing_head(
+    listener: TcpListener,
+    capture_tx: oneshot::Sender<String>,
+    capture: impl FnOnce(&str) -> String,
+) {
     let Ok((mut stream, _peer)) = listener.accept().await else {
         return;
     };
@@ -84,9 +111,7 @@ async fn serve_one_request(listener: TcpListener, request_line_tx: oneshot::Send
         }
         request.extend_from_slice(&buf[..read]);
     }
-    let request_text = String::from_utf8_lossy(&request);
-    let request_line = request_text.lines().next().unwrap_or_default().to_string();
-    let _ = request_line_tx.send(request_line);
+    let _ = capture_tx.send(capture(&String::from_utf8_lossy(&request)));
     let _ = stream
         .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
         .await;
@@ -113,6 +138,70 @@ async fn connector_does_not_duplicate_query_already_present_in_resource() -> any
     assert_eq!(
         request_line_rx.await?,
         "GET /info/refs?service=git-upload-pack HTTP/1.1"
+    );
+    server.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn connector_replaces_agent_header_with_the_injected_credential() -> anyhow::Result<()> {
+    // The agent can set any header, including one the sidecar injects for this
+    // host. Emitting both puts two `Authorization` values on the wire: GitHub
+    // answers 401 to a duplicated `Authorization` even when both copies carry
+    // the same valid token, and the agent must not get to influence a header
+    // the sidecar owns. Headers it does not inject are still forwarded.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (head_tx, head_rx) = oneshot::channel();
+    let server = tokio::spawn(serve_capturing_head(listener, head_tx, |head| {
+        head.lines()
+            .skip(1)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }));
+
+    let connector = GenericHttpConnector::new(&HttpConnectorConfig {
+        timeout: Duration::from_secs(5),
+        rate_limit: None,
+    })?;
+    let agent_headers = HeaderMap::from([
+        (
+            http::HeaderName::from_static("authorization"),
+            http::HeaderValue::from_static("token agent-supplied"),
+        ),
+        (
+            http::HeaderName::from_static("x-github-api-version"),
+            http::HeaderValue::from_static("2022-11-28"),
+        ),
+    ]);
+    let credentials = InjectedCredentials::new(HashMap::from([(
+        HeaderName::from_static("authorization"),
+        "Bearer injected".to_string(),
+    )]));
+    let view = view_with(
+        &format!("{addr}/user"),
+        HashMap::new(),
+        agent_headers,
+        credentials,
+    )?;
+
+    let response = connector.dispatch(&view).await?;
+    assert_eq!(response.status, 200);
+
+    let headers = head_rx.await?;
+    let authorization: Vec<&str> = headers
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+        .collect();
+    assert_eq!(
+        authorization,
+        vec!["authorization: Bearer injected"],
+        "upstream must receive exactly the injected credential:\n{headers}"
+    );
+    assert!(
+        headers.contains("x-github-api-version: 2022-11-28"),
+        "headers the sidecar does not inject must still be forwarded:\n{headers}"
     );
     server.await?;
     Ok(())

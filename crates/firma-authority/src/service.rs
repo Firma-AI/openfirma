@@ -13,8 +13,9 @@ use firma_identifiers::{AgentId, SessionId};
 use firma_protobuf::v1::RevocationEvent;
 use firma_protobuf::v1::authority_service_server::AuthorityService;
 use firma_protobuf::v1::{
-    CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision,
-    PolicyBundleUpdate, TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    CapabilityToken, GetApprovalOutcomeRequest, GetApprovalOutcomeResponse, IssueCapabilityRequest,
+    IssueCapabilityResponse, IssueDecision, PolicyBundleUpdate, TokenFormat,
+    WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -157,6 +158,15 @@ impl AuthorityService for AuthorityServiceImpl {
                 Err(Status::internal("token signing failed"))
             }
         }
+    }
+
+    async fn get_approval_outcome(
+        &self,
+        _request: TonicRequest<GetApprovalOutcomeRequest>,
+    ) -> Result<Response<GetApprovalOutcomeResponse>, Status> {
+        Err(Status::unimplemented(
+            "approval outcome polling is not supported by the OpenFirma Authority",
+        ))
     }
 
     type WatchPolicyBundleStream =

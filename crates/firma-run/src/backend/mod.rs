@@ -1,10 +1,12 @@
 mod firecracker;
-mod linux_bwrap;
+/// Exposed for the crate's integration tests, which exercise the bwrap mount
+/// planner's parsing of the host mount table. Not part of any supported API.
+#[doc(hidden)]
+pub mod linux_bwrap;
 mod macos_vz;
 pub mod platform;
 mod windows_wsl2;
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -15,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{
     MountSpec, NetworkPolicy, ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
 };
+use crate::env::ExecutionEnv;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 
@@ -321,7 +324,7 @@ pub struct LaunchSpec {
     pub(crate) executable: String,
     pub(crate) args: Vec<String>,
     pub(crate) cwd: PathBuf,
-    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) env: ExecutionEnv,
     pub(crate) sidecar_endpoint: SidecarEndpoint,
     /// Optional static seccomp cBPF artifact path resolved by runtime.
     ///
@@ -341,6 +344,14 @@ pub struct LaunchSpec {
     /// run. It can sit outside the workspace cwd because config discovery walks
     /// up parent directories.
     pub(crate) config_file: Option<PathBuf>,
+    /// CA file this launch's trust environment names, when the Sidecar
+    /// publishes one.
+    ///
+    /// Backends that hide the control-plane runtime from the wrapped process
+    /// must keep this exact file readable; otherwise the trust environment
+    /// points at something the sandbox cannot open and every intercepted
+    /// handshake fails against the host's system roots instead.
+    pub(crate) trust_anchor: Option<crate::trust::SidecarTrustAnchor>,
 }
 
 /// Backend interface for sandbox runtime implementations.

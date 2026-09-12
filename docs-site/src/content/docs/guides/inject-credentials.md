@@ -72,6 +72,14 @@ curl --proxy http://127.0.0.1:8080 \
 
 The Sidecar attached `Authorization: Bearer sk-...` after Stage 2 allowed the call.
 
+### When the agent sends the header too
+
+An injected credential **replaces** an agent-supplied header of the same name. The upstream sees only the Sidecar's value; headers you don't inject are forwarded untouched.
+
+This matters because agents often carry their own credentials. `gh`, for example, reads `GITHUB_TOKEN` or `~/.config/gh/hosts.yml` and sets `Authorization` itself. Sending both is not an option: upstreams reject a duplicated `Authorization` outright — GitHub answers `401 Bad credentials` even when both copies hold the same valid token.
+
+The override is silent. If an agent appears to authenticate as the wrong principal, check whether a credential entry is injecting over a header the agent also sets.
+
 ## Step 3: Inject a GitHub token for HTTPS git
 
 GitHub smart HTTP expects a Basic auth header for git clone, fetch, and push. Use `transform = "github_pat_basic"` to render a token as:

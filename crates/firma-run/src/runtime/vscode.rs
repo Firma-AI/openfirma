@@ -1,6 +1,5 @@
 //! Implements the VS Code runtime integration.
 
-use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -8,6 +7,7 @@ use std::path::PathBuf;
 use crate::backend::{SandboxHandle, SandboxMount};
 use crate::config::MountSpec;
 use crate::config::ResolvedProfile;
+use crate::env::ExecutionEnv;
 use crate::error::RunError;
 
 pub(super) fn should_apply_vscode_shim(profile: &ResolvedProfile, executable: &str) -> bool {
@@ -33,7 +33,7 @@ pub(super) fn prepare_vscode_shim(
     state_dir: &Path,
     executable: &str,
     args: Vec<String>,
-    env: &mut BTreeMap<String, String>,
+    env: &mut ExecutionEnv,
     host_path: Option<&OsStr>,
 ) -> Result<PreparedVscodeShim, RunError> {
     reject_vscode_conflicting_args(&args)?;
@@ -231,7 +231,7 @@ fn set_private_dir_permissions(path: &Path) -> Result<(), RunError> {
 #[cfg(unix)]
 fn configure_vscode_desktop_sockets(
     desktop_runtime_dir: &Path,
-    env: &mut BTreeMap<String, String>,
+    env: &mut ExecutionEnv,
 ) -> Result<(), RunError> {
     configure_vscode_wayland_socket(desktop_runtime_dir, env)?;
     configure_vscode_dbus_socket(desktop_runtime_dir, env)?;
@@ -241,7 +241,7 @@ fn configure_vscode_desktop_sockets(
 #[cfg(unix)]
 fn configure_vscode_wayland_socket(
     desktop_runtime_dir: &Path,
-    env: &BTreeMap<String, String>,
+    env: &ExecutionEnv,
 ) -> Result<(), RunError> {
     let host_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
     configure_vscode_wayland_socket_with_host_runtime_dir(
@@ -254,7 +254,7 @@ fn configure_vscode_wayland_socket(
 #[cfg(unix)]
 fn configure_vscode_wayland_socket_with_host_runtime_dir(
     desktop_runtime_dir: &Path,
-    env: &BTreeMap<String, String>,
+    env: &ExecutionEnv,
     host_runtime_dir: Option<&OsStr>,
 ) -> Result<(), RunError> {
     let Some(wayland_display) = env.get("WAYLAND_DISPLAY").cloned() else {
@@ -315,7 +315,7 @@ fn is_safe_wayland_display_name(wayland_display: &str) -> bool {
 #[cfg(unix)]
 fn configure_vscode_dbus_socket(
     desktop_runtime_dir: &Path,
-    env: &mut BTreeMap<String, String>,
+    env: &mut ExecutionEnv,
 ) -> Result<(), RunError> {
     let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok();
     configure_vscode_dbus_socket_with_address(desktop_runtime_dir, env, address.as_deref())
@@ -324,7 +324,7 @@ fn configure_vscode_dbus_socket(
 #[cfg(unix)]
 fn configure_vscode_dbus_socket_with_address(
     desktop_runtime_dir: &Path,
-    env: &mut BTreeMap<String, String>,
+    env: &mut ExecutionEnv,
     address: Option<&str>,
 ) -> Result<(), RunError> {
     let Some(address) = address else {
@@ -512,7 +512,7 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn prepend_path(env: &mut BTreeMap<String, String>, shim_dir: &Path, host_path: Option<&OsStr>) {
+fn prepend_path(env: &mut ExecutionEnv, shim_dir: &Path, host_path: Option<&OsStr>) {
     let previous = env
         .get("PATH")
         .cloned()
@@ -542,11 +542,11 @@ fn set_executable_permissions(path: &Path) -> Result<(), RunError> {
 /// Exposes VS Code runtime behavior to integration tests.
 #[doc(hidden)]
 pub mod testing {
-    use std::collections::BTreeMap;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::path::PathBuf;
 
+    use crate::env::ExecutionEnv;
     use crate::error::RunError;
 
     /// Prepares the VS Code shim and returns its executable and arguments.
@@ -559,7 +559,7 @@ pub mod testing {
         state_dir: &Path,
         executable: &str,
         args: Vec<String>,
-        env: &mut BTreeMap<String, String>,
+        env: &mut ExecutionEnv,
         host_path: Option<&Path>,
     ) -> Result<(PathBuf, Vec<String>), RunError> {
         let prepared = super::prepare_vscode_shim(
@@ -622,11 +622,7 @@ pub mod testing {
     }
 
     /// Prepends a shim directory to the execution path.
-    pub fn prepend_path(
-        env: &mut BTreeMap<String, String>,
-        shim_dir: &Path,
-        host_path: Option<&OsStr>,
-    ) {
+    pub fn prepend_path(env: &mut ExecutionEnv, shim_dir: &Path, host_path: Option<&OsStr>) {
         super::prepend_path(env, shim_dir, host_path);
     }
 
@@ -676,7 +672,7 @@ pub mod testing {
     #[cfg(unix)]
     pub fn configure_wayland_socket(
         desktop_runtime_dir: &Path,
-        env: &BTreeMap<String, String>,
+        env: &ExecutionEnv,
         host_runtime_dir: Option<&Path>,
     ) -> Result<(), RunError> {
         super::configure_vscode_wayland_socket_with_host_runtime_dir(
@@ -694,7 +690,7 @@ pub mod testing {
     #[cfg(unix)]
     pub fn configure_dbus_socket(
         desktop_runtime_dir: &Path,
-        env: &mut BTreeMap<String, String>,
+        env: &mut ExecutionEnv,
         address: Option<&str>,
     ) -> Result<(), RunError> {
         super::configure_vscode_dbus_socket_with_address(desktop_runtime_dir, env, address)

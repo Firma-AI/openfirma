@@ -1,4 +1,7 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+set dotenv-filename := "tool-versions.env"
+set dotenv-load := true
+set dotenv-required := true
 
 install: install-system install-cargo-tools install-docs-deps install-tools
   @echo "Dev environment ready. Try 'just check' or 'just docs-dev'."
@@ -28,7 +31,7 @@ lint:
 
 hawk:
   # Host-only analysis cannot prove platform-specific public APIs are dead.
-  . ./tool-versions.env; cargo +"$CARGO_HAWK_RUST_VERSION" hawk check --manifest-path Cargo.toml -D warnings -A hawk::dead_public
+  cargo +"$CARGO_HAWK_RUST_VERSION" hawk check -D warnings -A hawk::dead_public
 
 test:
   cargo nextest run --all-features --all-targets --no-fail-fast
@@ -66,9 +69,9 @@ deny:
   cargo deny check licenses bans sources
 
 release-tools-test:
-  . ./tool-versions.env; uvx ruff@$RUFF_VERSION format --check scripts/release
-  . ./tool-versions.env; uvx ruff@$RUFF_VERSION check scripts/release
-  uv run --script scripts/release/test_validate_pr.py
+  uvx ruff@$RUFF_VERSION format --check scripts/release
+  uvx ruff@$RUFF_VERSION check scripts/release
+  python3 scripts/release/test_validate_metadata.py
 
 check: fmt lint test build audit deny release-tools-test
 

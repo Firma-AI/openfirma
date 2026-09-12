@@ -57,11 +57,10 @@ cargo install critcmp
 critcmp before after
 ```
 
-## CI artifacts
+## Benchmark reports
 
-Each GitHub Actions workflow run uploads `target/criterion/**` as the
-`criterion-reports` artifact (14-day retention). See the `bench` job in
-`.github/workflows/ci.yml`.
+Criterion writes local HTML reports under `target/criterion/`. Preserve that
+directory when you need to compare or share results from a benchmark run.
 
 ## Known gaps
 

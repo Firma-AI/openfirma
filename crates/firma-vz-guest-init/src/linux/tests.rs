@@ -1568,7 +1568,10 @@ fn command_result_converts_to_guest_result_shape() -> TestResult {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This table of cases checks the display and source contract for all init errors"
+)]
 fn init_error_display_and_sources_are_stable() -> TestResult {
     assert_error_display(
         &InitError::CreateDir {

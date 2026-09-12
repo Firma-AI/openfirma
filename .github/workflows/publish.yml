@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  release-plz:
-    name: Tag merged release PR
+  tag:
+    name: Validate and create release tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -17,58 +17,49 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Load tool versions
-        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - name: Validate release metadata and provenance
+        id: metadata
+        run: echo "version=$(python3 scripts/release/validate_metadata.py)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          cache: false
-          rustflags: ""
-
-      - name: Install protoc
-        uses: ./.github/actions/setup-protoc
-        with:
-          version: ${{ env.PROTOC_VERSION }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Restore release-plz
-        id: release-plz-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/release-plz
-          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ env.RELEASE_PLZ_REVISION }}
-
-      - name: Install release-plz
-        if: steps.release-plz-cache.outputs.cache-hit != 'true'
-        run: cargo install --locked --git "$RELEASE_PLZ_GIT_URL" --rev "$RELEASE_PLZ_REVISION" release-plz
-
-      - name: Save release-plz
-        if: steps.release-plz-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/release-plz
-          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ env.RELEASE_PLZ_REVISION }}
-
-      - name: Generate releaser token
+      - name: Generate tag-publisher token
         id: token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.RELEASER_APP_ID }}
-          private-key: ${{ secrets.RELEASER_PRIVATE_KEY }}
+          app-id: ${{ secrets.OPENFIRMA_TAG_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.OPENFIRMA_TAG_PUBLISHER_PRIVATE_KEY }}
           permission-contents: write
-          permission-pull-requests: read
 
-      - name: Configure release-plz Git identity
-        uses: release-plz/git-config@59144859caf016f8b817a2ac9b051578729173c4 # v0.1.2
+      - name: Create tag at the exact main SHA
         env:
-          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
-
-      - name: Run release-plz
-        env:
-          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+          APP_ID: ${{ secrets.OPENFIRMA_TAG_PUBLISHER_APP_ID }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG: v${{ steps.metadata.outputs.version }}
         run: |
-          release-plz release \
-            --git-token "$GITHUB_TOKEN" \
-            --config .release-plz.toml \
-            --forge github \
-            --output json
+          set -euo pipefail
+          gh auth setup-git
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA" || {
+            echo "event SHA is no longer origin/main" >&2
+            exit 1
+          }
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            test "$(git rev-parse "refs/tags/$TAG^{}")" = "$GITHUB_SHA" || {
+              echo "$TAG already exists at a different commit" >&2
+              exit 1
+            }
+            echo "$TAG already targets $GITHUB_SHA"
+            exit 0
+          fi
+
+          git config user.name "$APP_SLUG[bot]"
+          git config user.email "$APP_ID+$APP_SLUG[bot]@users.noreply.github.com"
+          git tag -a "$TAG" "$GITHUB_SHA" -m "OpenFirma $TAG"
+          if ! git push origin "refs/tags/$TAG:refs/tags/$TAG"; then
+            # Resolve a concurrent create without ever updating the tag.
+            git tag -d "$TAG"
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            test "$(git rev-parse "refs/tags/$TAG^{}")" = "$GITHUB_SHA" || exit 1
+          fi

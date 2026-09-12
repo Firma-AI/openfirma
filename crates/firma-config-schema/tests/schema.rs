@@ -547,6 +547,17 @@ fn sidecar_rejects_stale_and_nested_fields() {
             "drain_timeout_sec",
             "[interceptor]\ndrain_timeout_sec = 30\n",
         ),
+        // MITM CA material is fixed at `firma-ca.crt` / `firma-ca.key` under
+        // `ca.dir`; the retired per-file overrides let the key escape whatever
+        // boundary the owner of `ca.dir` established.
+        (
+            "ca_cert_path",
+            "[interceptor.https_mitm]\nca_cert_path = \"/tmp/mitm.crt\"\n",
+        ),
+        (
+            "ca_key_path",
+            "[interceptor.https_mitm]\nca_key_path = \"/tmp/mitm.key\"\n",
+        ),
     ] {
         let error = toml::from_str::<sidecar::SidecarConfig>(config)
             .expect_err("unknown sidecar field must fail");

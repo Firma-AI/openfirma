@@ -13,6 +13,7 @@ members = [
   "crates/firma-http",
   "crates/firma-identifiers",
   "crates/firma-process-orchestrator",
+  "crates/firma-protobuf",
   "crates/firma-run",
   "crates/firma-runtime-state",
   "crates/firma-secret-provider",
@@ -26,7 +27,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.6"
+version = "0.2.0-rc1"
 edition = "2024"
 license = "GPL-3.0-only"
 publish = false
@@ -81,24 +82,24 @@ dispatch2 = "0.3"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 either = "1.17"
 elliptic-curve = { version = "0.13", features = ["pem"] }
-firma-audit-schema = { path = "crates/firma-audit-schema", version = "0.1.6" }
-firma-authority = { path = "crates/firma-authority", version = "0.1.5" }
-firma-config-loader = { path = "crates/firma-config-loader", version = "0.1.5" }
-firma-config-schema = { path = "crates/firma-config-schema", version = "0.1.5" }
-firma-core = { path = "crates/firma-core", version = "0.1.5" }
-firma-fs = { path = "crates/firma-fs", version = "0.1.5" }
-firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.1.5" }
-firma-http = { path = "crates/firma-http", version = "0.1.5" }
-firma-identifiers = { path = "crates/firma-identifiers", version = "0.1.5" }
-firma-process-orchestrator = { path = "crates/firma-process-orchestrator", version = "0.1.5" }
-firma-protobuf = "0.2"
-firma-run = { path = "crates/firma-run", version = "0.1.5" }
-firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.5" }
-firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.1.5" }
-firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.5" }
-firma-stack = { path = "crates/firma-stack", version = "0.1.5" }
-firma-test-helpers = { path = "crates/firma-test-helpers", version = "0.1.5" }
-firma-tui = { path = "crates/firma-tui", version = "0.1.5" }
+firma-audit-schema = { path = "crates/firma-audit-schema", version = "0.2.0-rc1" }
+firma-authority = { path = "crates/firma-authority", version = "0.2.0-rc1" }
+firma-config-loader = { path = "crates/firma-config-loader", version = "0.2.0-rc1" }
+firma-config-schema = { path = "crates/firma-config-schema", version = "0.2.0-rc1" }
+firma-core = { path = "crates/firma-core", version = "0.2.0-rc1" }
+firma-fs = { path = "crates/firma-fs", version = "0.2.0-rc1" }
+firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.2.0-rc1" }
+firma-http = { path = "crates/firma-http", version = "0.2.0-rc1" }
+firma-identifiers = { path = "crates/firma-identifiers", version = "0.2.0-rc1" }
+firma-process-orchestrator = { path = "crates/firma-process-orchestrator", version = "0.2.0-rc1" }
+firma-protobuf = { path = "crates/firma-protobuf", version = "0.2.0-rc1" }
+firma-run = { path = "crates/firma-run", version = "0.2.0-rc1" }
+firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.2.0-rc1" }
+firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.2.0-rc1" }
+firma-sidecar = { path = "crates/firma-sidecar", version = "0.2.0-rc1" }
+firma-stack = { path = "crates/firma-stack", version = "0.2.0-rc1" }
+firma-test-helpers = { path = "crates/firma-test-helpers", version = "0.2.0-rc1" }
+firma-tui = { path = "crates/firma-tui", version = "0.2.0-rc1" }
 flate2 = "1"
 form_urlencoded = "1"
 fs-err = "3.3"
@@ -119,7 +120,7 @@ lru = "0.18.2"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
 mime = "0.3"
 nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
-notify = "8"
+notify = "8.2"
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-virtualization = { version = "0.3.2", default-features = false }
@@ -130,7 +131,9 @@ pin-project = "1.1"
 pretty_assertions = "1"
 proptest = "1"
 prost = "0.14"
+prost-build = "0.14"
 prost-types = "0.14"
+protoc-bin-vendored = "3.2"
 quick-xml = "0.41"
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }

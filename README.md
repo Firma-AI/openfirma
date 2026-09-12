@@ -20,7 +20,6 @@ Policy in, signed decision out. Deterministic. At call-level.
 
 <div align="center">
 
-[![CI](https://github.com/Firma-AI/openfirma/actions/workflows/ci.yml/badge.svg)](https://github.com/Firma-AI/openfirma/actions/workflows/ci.yml)
 [![License: GPL 3.0](https://img.shields.io/badge/License-GPL_3.0-blue.svg)](https://opensource.org/licenses/GPL-3.0)
 [![Built with Rust](https://img.shields.io/badge/Built_with-Rust-orange.svg)](https://www.rust-lang.org)
 
@@ -61,7 +60,7 @@ automatically. You can also install directly:
 brew install firma-ai/openfirma/firma
 ```
 
-**Build and install from source** (requires Rust 1.88+ and `protoc`):
+**Build and install from source** (requires Rust and `protoc`):
 
 ```bash
 git clone https://github.com/Firma-AI/openfirma

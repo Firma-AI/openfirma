@@ -137,7 +137,7 @@ execution](../../guides/composio/) for the full integration.
 
 ## The CA: the most security-sensitive piece
 
-When you enable MITM, the Sidecar mints a CA on first run (under `sidecar.ca.dir`). That CA's private key is the most sensitive secret in your OpenFirma deployment: anyone who possesses it can sign certificates that the agent host will trust. Two operational rules:
+When you enable MITM, the Sidecar mints a CA on first run, always as `firma-ca.crt` and `firma-ca.key` under `sidecar.ca.dir`. That directory is the whole configuration surface: the individual file paths cannot be overridden, so the boundary you draw around `sidecar.ca.dir` is the boundary around the private key. That CA's private key is the most sensitive secret in your OpenFirma deployment: anyone who possesses it can sign certificates that the agent host will trust. Two operational rules:
 
 1. **Never regenerate the CA.** Once the agent host trusts it, you have to keep using it. Regenerating means you have to re-trust the new CA on every host. Treat the CA directory as immutable infrastructure.
 2. **Restrict trust to the agent's host.** The CA should be installed in the trust store of *the agent's process*, not the operating system's global trust store. Tools like `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, or per-language equivalents let you scope trust narrowly. The bundled demo uses `SSL_CERT_FILE` for exactly this reason.

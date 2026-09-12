@@ -181,6 +181,7 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
                 .credentials
                 .as_ref()
                 .map(ResolvedSidecarCredentials::to_proto),
+            issuance_attempt_id: None,
         });
         tokio::time::timeout(REQUEST_TIMEOUT, rpc)
             .await

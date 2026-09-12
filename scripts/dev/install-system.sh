@@ -19,8 +19,12 @@ command -v corepack >/dev/null 2>&1 || {
   exit 1
 }
 
-# shellcheck source=../../tool-versions.env
-. "$ROOT/tool-versions.env"
+VERSIONS="$ROOT/tool-versions.env"
+if [ ! -f "$VERSIONS" ]; then
+  VERSIONS="$ROOT/../tool-versions.env"
+fi
+# shellcheck source=/dev/null
+. "$VERSIONS"
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "Installing uv..."

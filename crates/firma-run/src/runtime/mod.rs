@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -9,15 +8,15 @@ use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
 use crate::capability::read_capability_token;
-use crate::config::{
-    CaTrustMode, CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile_with_layout,
-};
+use crate::config::{CapabilitySource, ResolvedProfile, resolve_profile_with_layout};
+use crate::env::ExecutionEnv;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::mediator::enforce_local_command_governance;
 use crate::routing::{AutostartFlags, ResolveAuthorityRequest, prepare_network_runtime};
 use crate::seccomp::resolve_effective_seccomp;
 use crate::supervisor::wait_with_signal_forwarding;
+use crate::trust::SidecarTrustAnchor;
 
 const DEFAULT_SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 10;
 
@@ -269,13 +268,23 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                     "resolved managed static seccomp artifact"
                 );
             }
-            let mut env = build_execution_env(
-                &profile,
-                &identity,
-                capability_token.as_deref(),
-                &effective_endpoint,
-                network_runtime.env_overrides(),
-            );
+            // Resolved once, before the backend plans the sandbox filesystem:
+            // the trust environment below and the mount plan must name the same
+            // file, or the wrapped process opens a masked trust store and
+            // silently falls back to the host's system roots.
+            let trust_anchor =
+                SidecarTrustAnchor::resolve(profile.ca_trust_mode, network_runtime.env_overrides());
+            // Ordered by precedence, lowest first: every step overwrites keys
+            // set by the ones above it.
+            let mut env = ExecutionEnv::new(&profile, &identity, &effective_endpoint)
+                .with_trust_anchor(trust_anchor.as_ref())
+                // After the anchor: an autostarted Sidecar's own
+                // `FIRMA_SIDECAR_CA_CERT_PATH` wins here, while the anchor's
+                // sibling trust variables keep the path its CA trust mode
+                // selected.
+                .with_network_overrides(network_runtime.env_overrides())
+                .with_capability_token(capability_token.as_deref())
+                .with_capability_source(&profile.capability.source);
 
             let mut executable = args
                 .command
@@ -327,6 +336,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
                 identity_mode: profile.identity_mode,
                 config_file: user_config_path.clone(),
+                trust_anchor,
             };
 
             let child = {
@@ -553,80 +563,6 @@ fn enforce_known_executable_policy(
     )))
 }
 
-fn build_execution_env(
-    profile: &ResolvedProfile,
-    identity: &RunIdentity,
-    capability_token: Option<&str>,
-    sidecar_endpoint: &SidecarEndpoint,
-    network_overrides: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-
-    for key in &profile.env_passthrough {
-        if let Ok(value) = std::env::var(key) {
-            env.insert(key.clone(), value);
-        }
-    }
-
-    env.extend(profile.env_set.clone());
-    env.extend(identity.env_pairs());
-
-    match sidecar_endpoint {
-        SidecarEndpoint::Tcp { addr } => {
-            env.insert("HTTP_PROXY".to_string(), format!("http://{addr}"));
-            env.insert("HTTPS_PROXY".to_string(), format!("http://{addr}"));
-            env.insert("http_proxy".to_string(), format!("http://{addr}"));
-            env.insert("https_proxy".to_string(), format!("http://{addr}"));
-            env.insert("ALL_PROXY".to_string(), format!("http://{addr}"));
-            env.insert("all_proxy".to_string(), format!("http://{addr}"));
-        }
-        SidecarEndpoint::Unix { path } => {
-            env.insert(
-                "FIRMA_SIDECAR_UNIX_SOCKET".to_string(),
-                path.display().to_string(),
-            );
-        }
-    }
-
-    if let Some(ca_cert_path) = resolve_sidecar_ca_cert_path(network_overrides) {
-        let effective = match profile.ca_trust_mode {
-            CaTrustMode::AppendSystemRoots => {
-                build_appended_ca_bundle(&ca_cert_path).unwrap_or(ca_cert_path)
-            }
-            CaTrustMode::Sole => ca_cert_path,
-        };
-        inject_sidecar_ca_trust_env(&mut env, &effective);
-    }
-
-    env.extend(network_overrides.clone());
-
-    let attr_headers = build_attribution_headers(profile, identity);
-    env.insert(
-        "FIRMA_RUN_ATTR_HEADERS_JSON".to_string(),
-        serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
-    );
-
-    if let Some(token) = capability_token {
-        env.insert("FIRMA_CAPABILITY_TOKEN".to_string(), token.to_string());
-    }
-
-    if let CapabilitySource::File { path } = &profile.capability.source {
-        env.insert(
-            "FIRMA_CAPABILITY_FILE".to_string(),
-            path.display().to_string(),
-        );
-    }
-
-    env
-}
-
-fn build_attribution_headers(
-    _profile: &ResolvedProfile,
-    identity: &RunIdentity,
-) -> BTreeMap<String, String> {
-    identity.full_attribution_headers()
-}
-
 fn maybe_apply_claude_settings(
     handle: &crate::backend::SandboxHandle,
     profile: &ResolvedProfile,
@@ -675,122 +611,6 @@ fn maybe_apply_claude_settings(
     Ok(merged)
 }
 
-/// Common Linux system CA bundle locations, probed in order.
-const SYSTEM_CA_BUNDLE_CANDIDATES: &[&str] = &[
-    "/etc/ssl/certs/ca-certificates.crt",
-    "/etc/pki/tls/certs/ca-bundle.crt",
-    "/etc/ssl/ca-bundle.pem",
-    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
-    "/etc/ssl/cert.pem",
-];
-
-/// Build `firma-ca-bundle.crt` next to `firma_ca_path`, containing the first
-/// discovered system root bundle followed by the firma CA. Returns `None`
-/// (caller falls back to sole firma-ca) when no system bundle is found or the
-/// write fails.
-fn build_appended_ca_bundle(firma_ca_path: &Path) -> Option<PathBuf> {
-    let roots: Vec<PathBuf> = SYSTEM_CA_BUNDLE_CANDIDATES
-        .iter()
-        .map(PathBuf::from)
-        .collect();
-    build_appended_ca_bundle_with_roots(firma_ca_path, &roots)
-}
-
-/// Testable core of [`build_appended_ca_bundle`]: takes explicit candidate root
-/// paths and concatenates the first existing one with the firma CA.
-fn build_appended_ca_bundle_with_roots(firma_ca_path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
-    let system_roots = roots.iter().find(|p| p.is_file())?;
-    let mut bundle = match std::fs::read(system_roots) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            tracing::warn!(%error, path = %system_roots.display(), "failed to read system CA bundle; using sole firma-ca");
-            return None;
-        }
-    };
-    let firma_ca = match std::fs::read(firma_ca_path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            tracing::warn!(%error, path = %firma_ca_path.display(), "failed to read firma-ca; using sole firma-ca");
-            return None;
-        }
-    };
-    if !bundle.ends_with(b"\n") {
-        bundle.push(b'\n');
-    }
-    bundle.extend_from_slice(&firma_ca);
-    let bundle_path = firma_ca_path.with_file_name("firma-ca-bundle.crt");
-    if let Err(error) = std::fs::write(&bundle_path, &bundle) {
-        tracing::warn!(%error, path = %bundle_path.display(), "failed to write combined CA bundle; using sole firma-ca");
-        return None;
-    }
-    Some(bundle_path)
-}
-
-fn inject_sidecar_ca_trust_env(env: &mut BTreeMap<String, String>, ca_cert_path: &Path) {
-    let path = ca_cert_path.display().to_string();
-    env.insert("FIRMA_SIDECAR_CA_CERT_PATH".to_string(), path.clone());
-    // Python / OpenSSL ecosystem.
-    env.insert("REQUESTS_CA_BUNDLE".to_string(), path.clone());
-    env.insert("SSL_CERT_FILE".to_string(), path.clone());
-    env.insert("CURL_CA_BUNDLE".to_string(), path.clone());
-    // Node.js ecosystem.
-    env.insert("NODE_EXTRA_CA_CERTS".to_string(), path.clone());
-    // Git/libcurl callers.
-    env.insert("GIT_SSL_CAINFO".to_string(), path);
-}
-
-fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) -> Option<PathBuf> {
-    if let Some(explicit) = network_overrides.get("FIRMA_SIDECAR_CA_CERT_PATH")
-        && !explicit.trim().is_empty()
-    {
-        let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-
-    if let Some(ca_dir) = network_overrides.get("FIRMA_SIDECAR_CA_DIR")
-        && !ca_dir.trim().is_empty()
-    {
-        let path = PathBuf::from(ca_dir).join("firma-ca.crt");
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-
-    if let Ok(explicit) = std::env::var("FIRMA_SIDECAR_CA_CERT_PATH")
-        && !explicit.trim().is_empty()
-    {
-        let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-
-    if let Ok(ca_dir) = std::env::var("FIRMA_SIDECAR_CA_DIR")
-        && !ca_dir.trim().is_empty()
-    {
-        let path = PathBuf::from(ca_dir).join("firma-ca.crt");
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-
-    let cwd_candidate = std::env::current_dir()
-        .ok()
-        .map(|cwd| cwd.join("firma-ca").join("firma-ca.crt"));
-    let default_candidates = [
-        cwd_candidate,
-        Some(PathBuf::from("/etc/firma/ca/firma-ca.crt")),
-        Some(PathBuf::from("/var/lib/firma/ca/firma-ca.crt")),
-    ];
-
-    default_candidates
-        .into_iter()
-        .flatten()
-        .find(|candidate| candidate.is_file())
-}
-
 fn print_effective_config(
     identity: &RunIdentity,
     profile: &ResolvedProfile,
@@ -834,7 +654,7 @@ mod tests {
         ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
     };
 
-    use super::{RunIdentity, build_execution_env};
+    use super::{ExecutionEnv, RunIdentity, SidecarTrustAnchor};
     use crate::backend::SandboxHandle;
 
     /// Quotes a path the way the platform's VS Code shim does.
@@ -848,32 +668,6 @@ mod tests {
         {
             super::vscode::testing::shell_single_quote(&value)
         }
-    }
-
-    #[test]
-    fn appended_ca_bundle_concatenates_system_roots_and_firma_ca() {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let system = dir.path().join("system-roots.pem");
-        std::fs::write(&system, b"-----SYSTEM ROOT-----\n").unwrap_or_else(|e| panic!("{e}"));
-        let firma_ca = dir.path().join("firma-ca.crt");
-        std::fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
-
-        let bundle =
-            super::build_appended_ca_bundle_with_roots(&firma_ca, std::slice::from_ref(&system))
-                .unwrap_or_else(|| panic!("bundle should be built"));
-        assert_eq!(bundle, dir.path().join("firma-ca-bundle.crt"));
-        let body = std::fs::read_to_string(&bundle).unwrap_or_else(|e| panic!("{e}"));
-        assert!(body.contains("SYSTEM ROOT"));
-        assert!(body.contains("FIRMA CA"));
-    }
-
-    #[test]
-    fn appended_ca_bundle_falls_back_when_no_system_roots() {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let firma_ca = dir.path().join("firma-ca.crt");
-        std::fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
-        let missing = dir.path().join("does-not-exist.pem");
-        assert!(super::build_appended_ca_bundle_with_roots(&firma_ca, &[missing]).is_none());
     }
 
     #[test]
@@ -914,13 +708,9 @@ mod tests {
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let env = build_execution_env(
-            &profile,
-            &identity,
-            capability_token.as_deref(),
-            &profile.sidecar_endpoint,
-            &BTreeMap::default(),
-        );
+        let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint)
+            .with_capability_token(capability_token.as_deref())
+            .with_capability_source(&profile.capability.source);
         assert!(env.contains_key("HTTP_PROXY"));
         assert_eq!(
             env.get("FIRMA_AGENT_ID"),
@@ -938,6 +728,90 @@ mod tests {
         );
         assert_eq!(headers.get("x-firma-profile"), Some(&"generic".to_string()));
         assert!(headers.contains_key("x-firma-session-id"));
+    }
+
+    /// The additions are layered lowest priority first, so a later group can
+    /// correct an earlier one. Each assertion below pins one of those
+    /// boundaries; reordering the builder chain at the launch site breaks them.
+    #[test]
+    fn execution_env_applies_additions_in_precedence_order() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let ca_cert = tempdir.path().join("firma-ca.crt");
+        fs::write(&ca_cert, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+
+        let profile = ResolvedProfile {
+            id: "generic".to_string(),
+            backend: crate::backend::BackendKind::Bwrap,
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
+            },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::from([
+                // A profile setting must not spoof this run's identity...
+                ("FIRMA_RUN_PROFILE".to_string(), "spoofed".to_string()),
+                // ...nor leave the wrapped process trusting host roots while
+                // the Sidecar terminates TLS.
+                ("SSL_CERT_FILE".to_string(), "/host/roots.pem".to_string()),
+            ]),
+            mounts: Vec::<MountSpec>::new(),
+            seccomp_policy: None,
+            network: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            capability: CapabilityLeaseConfig {
+                source: CapabilitySource::Disabled,
+                public_key_path: None,
+                refresh_ratio: 0.60,
+                grace: Duration::from_secs(30),
+                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+            },
+            sidecar_local_exec: None,
+            secret_gateway_addr: None,
+            secret_providers: BTreeMap::new(),
+            executable_policies: BTreeMap::new(),
+            use_http_proxy_sidecar: false,
+            allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
+        };
+
+        // What an autostarted Sidecar reports about itself: the CA it published
+        // and the port it actually bound, which need not be the one the profile
+        // was resolved with.
+        let network_overrides = BTreeMap::from([
+            (
+                "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+                ca_cert.display().to_string(),
+            ),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:9999".to_string(),
+            ),
+        ]);
+
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let anchor = SidecarTrustAnchor::resolve(profile.ca_trust_mode, &network_overrides);
+        let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint)
+            .with_trust_anchor(anchor.as_ref())
+            .with_network_overrides(&network_overrides);
+
+        assert_eq!(
+            env.get("FIRMA_RUN_PROFILE"),
+            Some(&"generic".to_string()),
+            "run identity must beat profile env_set"
+        );
+        assert_eq!(
+            env.get("SSL_CERT_FILE"),
+            Some(&ca_cert.display().to_string()),
+            "trust anchor must beat profile env_set"
+        );
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:9999".to_string()),
+            "network overrides must beat the resolved Sidecar endpoint"
+        );
     }
 
     #[test]
@@ -984,13 +858,9 @@ mod tests {
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let env = build_execution_env(
-            &profile,
-            &identity,
-            capability_token.as_deref(),
-            &profile.sidecar_endpoint,
-            &BTreeMap::default(),
-        );
+        let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint)
+            .with_capability_token(capability_token.as_deref())
+            .with_capability_source(&profile.capability.source);
         assert_eq!(
             env.get("FIRMA_CAPABILITY_FILE"),
             Some(&token_path.display().to_string())
@@ -1038,33 +908,15 @@ mod tests {
         let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
-        let env = build_execution_env(
-            &profile,
-            &identity,
-            capability_token.as_deref(),
-            &profile.sidecar_endpoint,
-            &BTreeMap::default(),
-        );
+        let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint)
+            .with_capability_token(capability_token.as_deref())
+            .with_capability_source(&profile.capability.source);
 
         assert!(
-            env.keys().all(|key| !key.starts_with("FIRMA_RUN_SECCOMP_")),
+            env.iter()
+                .all(|(key, _)| !key.starts_with("FIRMA_RUN_SECCOMP_")),
             "runtime env must not expose legacy seccomp-path env vars"
         );
-    }
-
-    #[test]
-    fn injects_sidecar_ca_trust_env_vars() {
-        let mut env = BTreeMap::new();
-        let cert_path = PathBuf::from("/tmp/firma-ca/firma-ca.crt");
-        super::inject_sidecar_ca_trust_env(&mut env, &cert_path);
-
-        let expected = cert_path.display().to_string();
-        assert_eq!(env.get("FIRMA_SIDECAR_CA_CERT_PATH"), Some(&expected));
-        assert_eq!(env.get("REQUESTS_CA_BUNDLE"), Some(&expected));
-        assert_eq!(env.get("SSL_CERT_FILE"), Some(&expected));
-        assert_eq!(env.get("CURL_CA_BUNDLE"), Some(&expected));
-        assert_eq!(env.get("NODE_EXTRA_CA_CERTS"), Some(&expected));
-        assert_eq!(env.get("GIT_SSL_CAINFO"), Some(&expected));
     }
 
     #[test]
@@ -1106,8 +958,9 @@ mod tests {
         };
 
         // Route resolve_sidecar_ca_cert_path to our temp firma-ca via the
-        // network override. `env.extend(network_overrides)` later clobbers the
-        // injected FIRMA_SIDECAR_CA_CERT_PATH, so assert on a sibling var
+        // network override. `with_network_overrides` runs after
+        // `with_trust_anchor` and clobbers the injected
+        // FIRMA_SIDECAR_CA_CERT_PATH, so assert on a sibling var
         // (SSL_CERT_FILE) which reflects the effective, mode-selected path.
         let mut overrides = BTreeMap::new();
         overrides.insert(
@@ -1116,21 +969,12 @@ mod tests {
         );
 
         let identity = RunIdentity::new(crate::identity::test_agent_id(), "copilot");
-        let capability_token = crate::capability::read_capability_token(
-            &make_profile(crate::config::CaTrustMode::Sole)
-                .capability
-                .source,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
 
         let sole_profile = make_profile(crate::config::CaTrustMode::Sole);
-        let sole_env = build_execution_env(
-            &sole_profile,
-            &identity,
-            capability_token.as_deref(),
-            &sole_profile.sidecar_endpoint,
-            &overrides,
-        );
+        let sole_anchor = SidecarTrustAnchor::resolve(sole_profile.ca_trust_mode, &overrides);
+        let sole_env = ExecutionEnv::new(&sole_profile, &identity, &sole_profile.sidecar_endpoint)
+            .with_trust_anchor(sole_anchor.as_ref())
+            .with_network_overrides(&overrides);
         // Sole mode always injects the raw firma-ca path, never a bundle.
         assert_eq!(
             sole_env.get("SSL_CERT_FILE"),
@@ -1138,15 +982,13 @@ mod tests {
         );
 
         let append_profile = make_profile(crate::config::CaTrustMode::AppendSystemRoots);
-        let append_env = build_execution_env(
-            &append_profile,
-            &identity,
-            capability_token.as_deref(),
-            &append_profile.sidecar_endpoint,
-            &overrides,
-        );
+        let append_anchor = SidecarTrustAnchor::resolve(append_profile.ca_trust_mode, &overrides);
+        let append_env =
+            ExecutionEnv::new(&append_profile, &identity, &append_profile.sidecar_endpoint)
+                .with_trust_anchor(append_anchor.as_ref())
+                .with_network_overrides(&overrides);
         let bundle_path = ca_cert.with_file_name("firma-ca-bundle.crt");
-        let system_roots_present = super::SYSTEM_CA_BUNDLE_CANDIDATES
+        let system_roots_present = crate::trust::SYSTEM_CA_BUNDLE_CANDIDATES
             .iter()
             .any(|p| std::path::Path::new(p).is_file());
         if system_roots_present {
@@ -1279,13 +1121,9 @@ mod tests {
         let identity = RunIdentity::new(crate::identity::test_agent_id(), "codex");
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
-        let env = build_execution_env(
-            &profile,
-            &identity,
-            capability_token.as_deref(),
-            &profile.sidecar_endpoint,
-            &BTreeMap::default(),
-        );
+        let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint)
+            .with_capability_token(capability_token.as_deref())
+            .with_capability_source(&profile.capability.source);
         assert_eq!(env.get("NO_PROXY"), Some(&String::new()));
         assert_eq!(env.get("no_proxy"), Some(&String::new()));
     }
@@ -1325,13 +1163,7 @@ mod tests {
         let profile =
             crate::config::resolve_profile(&run_args).unwrap_or_else(|error| panic!("{error}"));
         let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
-        let env = build_execution_env(
-            &profile,
-            &identity,
-            None,
-            &profile.sidecar_endpoint,
-            &BTreeMap::new(),
-        );
+        let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint);
 
         for cleared in [
             "FIRMA_RUN_BWRAP_ROOTFS_MODE",
@@ -1496,7 +1328,10 @@ mod tests {
         let real_code = host_bin.join("code");
         fs::write(&real_code, "#!/bin/sh\nexit 0\n").unwrap_or_else(|e| panic!("{e}"));
 
-        let mut env = BTreeMap::from([("PATH".to_string(), host_bin.display().to_string())]);
+        let mut env = ExecutionEnv::from(BTreeMap::from([(
+            "PATH".to_string(),
+            host_bin.display().to_string(),
+        )]));
         let state_dir = tmp.path().join(".firma").join("vscode");
         let prepared = super::vscode::prepare_vscode_shim(
             tmp.path(),
@@ -1598,13 +1433,13 @@ mod tests {
         fs::set_permissions(&real_code, permissions).unwrap_or_else(|e| panic!("{e}"));
 
         let state_dir = tmp.path().join(".firma").join("vscode");
-        let mut env = BTreeMap::from([
+        let mut env = ExecutionEnv::from(BTreeMap::from([
             ("PATH".to_string(), host_bin.display().to_string()),
             (
                 "FIRMA_TEST_VSCODE_RECORD".to_string(),
                 record_path.display().to_string(),
             ),
-        ]);
+        ]));
         let prepared = super::vscode::prepare_vscode_shim(
             tmp.path(),
             &state_dir,
@@ -1686,7 +1521,7 @@ mod tests {
     #[test]
     fn vscode_shim_rejects_state_and_window_conflicts() {
         let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let mut env = BTreeMap::new();
+        let mut env = ExecutionEnv::default();
         let error = super::vscode::prepare_vscode_shim(
             tmp.path(),
             &tmp.path().join("vscode"),

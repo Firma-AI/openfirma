@@ -2,12 +2,6 @@
 
 experimental = ["setup-scripts"]
 
-[scripts.setup.compute-architecture-metadata-unix]
-command = ["tests/architecture/setup-metadata.sh"]
-
-[scripts.setup.compute-architecture-metadata-windows]
-command = ["pwsh", "-NoProfile", "-File", "tests/architecture/setup-metadata.ps1"]
-
 [profile.default]
 default-filter = "not binary_id(firma::e2e)"
 slow-timeout = { period = "60s", terminate-after = 5 }
@@ -20,16 +14,6 @@ status-level = "fail"
 final-status-level = "slow"
 failure-output = "immediate-final"
 success-output = "never"
-
-[[profile.default.scripts]]
-filter = 'binary_id(firma::architecture)'
-platform = { host = "cfg(unix)" }
-setup = "compute-architecture-metadata-unix"
-
-[[profile.default.scripts]]
-filter = 'binary_id(firma::architecture)'
-platform = { host = "cfg(windows)" }
-setup = "compute-architecture-metadata-windows"
 
 # Some live-agent enforcement scenarios require structural confinement (Linux `bwrap`).
 # On macOS `firma run` falls back to non-structural compatibility mode

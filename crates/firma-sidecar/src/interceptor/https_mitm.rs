@@ -29,6 +29,8 @@ use tokio_rustls::TlsAcceptor;
 use x509_parser::parse_x509_certificate;
 use x509_parser::pem::parse_x509_pem;
 
+use firma_runtime_state::runtime_paths::{CA_CERT_FILE_NAME, CA_KEY_FILE_NAME};
+
 use crate::config::HttpsMitmConfig;
 
 /// Runtime state for HTTPS MITM interception.
@@ -49,7 +51,7 @@ impl HttpsMitmRuntime {
     /// Returns an error when CA key/cert generation, loading, or cache
     /// initialization fails.
     pub fn new(config: HttpsMitmConfig, ca_dir: &Path) -> Result<Self, String> {
-        let ca = CaMaterial::load_or_generate(&config, ca_dir)?;
+        let ca = CaMaterial::load_or_generate(ca_dir)?;
         let cache = LeafCertCache::new(config.cert_cache_capacity)?;
         let intercept_hosts = normalize_patterns(&config.intercept_hosts);
         let bypass_hosts = normalize_patterns(&config.bypass_hosts);
@@ -118,6 +120,8 @@ impl HttpsMitmRuntime {
             CertificateDer::from(self.ca.cert_der.clone()),
         ];
         let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
+        // Feature unification may enable AWS-LC alongside OpenFirma's Ring.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(certs, key)
@@ -222,32 +226,23 @@ struct CaMaterial {
 }
 
 impl CaMaterial {
-    fn load_or_generate(config: &HttpsMitmConfig, ca_dir: &Path) -> Result<Self, String> {
-        let cert_path = config
-            .ca_cert_path
-            .clone()
-            .unwrap_or_else(|| ca_dir.join("firma-ca.crt"));
-        let key_path = config
-            .ca_key_path
-            .clone()
-            .unwrap_or_else(|| ca_dir.join("firma-ca.key"));
+    /// Load the CA at its one fixed location under `ca_dir`, generating it on
+    /// first run.
+    ///
+    /// The file names are not configurable: a caller that owns `ca_dir` — such
+    /// as `firma run`, which pins it to the per-run entry — then also owns
+    /// where the private key lands, and can hide that key from the agent while
+    /// publishing the certificate.
+    fn load_or_generate(ca_dir: &Path) -> Result<Self, String> {
+        let cert_path = ca_dir.join(CA_CERT_FILE_NAME);
+        let key_path = ca_dir.join(CA_KEY_FILE_NAME);
 
-        if let Some(parent) = cert_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "failed to create MITM cert directory {}: {e}",
-                    parent.display()
-                )
-            })?;
-        }
-        if let Some(parent) = key_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "failed to create MITM key directory {}: {e}",
-                    parent.display()
-                )
-            })?;
-        }
+        fs::create_dir_all(ca_dir).map_err(|e| {
+            format!(
+                "failed to create MITM CA directory {}: {e}",
+                ca_dir.display()
+            )
+        })?;
 
         let cert_exists = cert_path.exists();
         let key_exists = key_path.exists();
@@ -750,8 +745,6 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            ca_cert_path: Some(cert_path),
-            ca_key_path: Some(key_path),
             cert_ttl: Duration::from_mins(1),
             cert_cache_capacity: 8,
             ..HttpsMitmConfig::default()

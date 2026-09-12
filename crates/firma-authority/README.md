@@ -1,6 +1,10 @@
 # firma-authority
 
-`firma-authority` is the local Authority included with Firma OSS. It is the source of permission for local development and demos: it loads policy, signs short-lived permission tokens, and streams policy and revocation updates to Sidecars.
+`firma-authority` is the local Authority library included with Firma OSS.
+Its Rust library name remains `firma_authority`. Run it through `firma authority`;
+there is no standalone authority binary in this package. It loads policy,
+signs short-lived permission tokens, and streams policy and revocation updates
+to Sidecars.
 
 > This Mini Authority is not a production control plane. It has no high availability, HSM integration, management-plane access control, or production audit backend. Run it on localhost or in isolated development and CI environments.
 
@@ -26,16 +30,16 @@ The important point is that the Authority is not on the hot path for every outbo
 
 ## Quick start
 
-Build the binary:
+Build the library and CLI:
 
 ```bash
-cargo build -p firma-authority
+cargo build -p firma-authority -p firma
 ```
 
 Generate a signing key:
 
 ```bash
-cargo run -p firma-authority -- generate-key --output firma-authority.key
+cargo run -p firma -- authority generate-key --output firma-authority.key
 ```
 
 This writes two files:
@@ -61,7 +65,7 @@ bundle_ttl = "30s"
 Start the Authority (discovers `firma.toml`, or pass `--config`):
 
 ```bash
-cargo run -p firma-authority -- --config firma.toml
+cargo run -p firma -- --config firma.toml authority
 ```
 
 `policy_dir` must contain at least one `.cedar` policy. The binary includes the default schema, so a `schema.cedarschema` file is optional unless you want to override it.
@@ -71,7 +75,7 @@ cargo run -p firma-authority -- --config firma.toml
 For local demos, you can issue a signed capability TOML file:
 
 ```bash
-cargo run -p firma-authority -- --config firma.toml issue   --agent-id agt_01j0000000e008000000000001   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
+cargo run -p firma -- --config firma.toml authority issue   --agent-id agt_01j0000000e008000000000001   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
 ```
 
 The output file contains the signed token and matching claims. Pass it to
@@ -128,7 +132,7 @@ The Sidecar supplies request context such as session ID, timestamp, serialized p
 ## Revoke a token
 
 ```bash
-cargo run -p firma-authority -- --config firma.toml revocations add <token-id> --reason "session-terminated"
+cargo run -p firma -- --config firma.toml authority revocations add <token-id> --reason "session-terminated"
 ```
 
 A connected Sidecar receives the revocation on the stream and denies later requests that use the revoked token.
@@ -136,7 +140,7 @@ A connected Sidecar receives the revocation on the stream and denies later reque
 To compact expired revocation entries:
 
 ```bash
-cargo run -p firma-authority -- --config firma.toml revocations compact
+cargo run -p firma -- --config firma.toml authority revocations compact
 ```
 
 ## Docker

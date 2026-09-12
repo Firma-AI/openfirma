@@ -366,9 +366,13 @@ fn cleanup_failed_child(mut child: Child) {
 
 #[cfg(test)]
 mod tests {
-    #![expect(
+    #![allow(
         clippy::expect_used,
         reason = "Windows platform tests use expect to fail fast on setup failures"
+    )]
+    #![expect(
+        clippy::zombie_processes,
+        reason = "the descendant fixture must outlive its parent to test job cleanup"
     )]
 
     use std::time::Duration;
@@ -388,7 +392,7 @@ mod tests {
     fn closing_owned_job_handles_terminates_descendant() {
         match std::env::var(JOB_FIXTURE_STAGE).as_deref() {
             Ok("grandchild") => loop {
-                std::thread::sleep(Duration::from_secs(60));
+                std::thread::sleep(Duration::from_mins(1));
             },
             Ok("child") => {
                 let marker = std::env::var_os(JOB_FIXTURE_MARKER).expect("fixture marker");
