@@ -1,6 +1,7 @@
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
-use firma_config_schema::{gateway::GatewayConfig, utils::NonZeroDuration};
+use firma_config_schema::gateway::GatewayConfig;
+use firma_config_utils::NonZeroDuration;
 use firma_http::Authority;
 use firma_secret_provider::{
     ExposeSecret, SecretPlaceholder,

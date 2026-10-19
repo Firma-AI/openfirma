@@ -579,15 +579,14 @@ fn apply_parsed_pty_control_message(
                 "FIRMA_PTY_RESIZE rows={} cols={}",
                 size.rows, size.cols
             ));
-            Ok(())
         }
         PtyControlMessage::Signal(signal) => {
             let raw_signal = signal.as_raw_signal();
             signal_process_group(child_pgid, raw_signal)?;
             log(&format!("FIRMA_PTY_SIGNAL signal={raw_signal}"));
-            Ok(())
         }
     }
+    Ok(())
 }
 
 /// Parsed PTY control message from the host runner.
@@ -894,10 +893,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::error::Error;
     use std::fs;
-    use std::os::fd::{AsRawFd as _, OwnedFd};
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream;
-    use std::os::unix::process::ExitStatusExt as _;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
@@ -1256,7 +1253,7 @@ mod tests {
         terminal: TerminalContract,
     ) -> Result<Contract, Box<dyn Error>> {
         Ok(LaunchContract {
-            version: 1,
+            version: 2,
             sandbox_id: "sbx_01j0000000e008000000000001"
                 .parse()
                 .expect("valid sandbox ID fixture"),
@@ -1299,6 +1296,7 @@ mod tests {
                 name: "preserve_stdio_signals_exit".to_string(),
                 mode: "required".to_string(),
             }],
+            secret_shims: None,
         }
         .try_into()?)
     }

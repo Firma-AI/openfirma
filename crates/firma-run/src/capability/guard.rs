@@ -3,7 +3,7 @@
 //! The seed lives at `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`
 //! and must not outlive the run that minted it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Removes its file when dropped.
 #[derive(Debug)]
@@ -17,12 +17,6 @@ impl CapabilityFileGuard {
     #[cfg(any(unix, test))]
     pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
-    }
-
-    /// The guarded path.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 

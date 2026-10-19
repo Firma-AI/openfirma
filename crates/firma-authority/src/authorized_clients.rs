@@ -4,11 +4,15 @@
 //! SAN that a Sidecar client certificate must present for the TLS handshake to
 //! succeed. The set is read once at startup; restart the Authority to rotate
 //! the allow-list.
+//!
+//! Identities are compared verbatim against the certificate identity, so an
+//! entry is never trimmed or normalized. A blank identity cannot match any
+//! certificate and is rejected at load time rather than silently ignored.
 
 use std::collections::HashSet;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::config::ConfigError;
 
@@ -41,22 +45,7 @@ impl AuthorizedClientSet {
         let mut identities = HashSet::new();
 
         for client in file.clients {
-            if !client.identity.trim().is_empty() {
-                identities.insert(client.identity);
-            }
-        }
-
-        for entry in file.authorized {
-            if let Some(cn) = entry.cn
-                && !cn.trim().is_empty()
-            {
-                identities.insert(cn);
-            }
-            if let Some(san) = entry.san
-                && !san.trim().is_empty()
-            {
-                identities.insert(san);
-            }
+            identities.insert(client.identity);
         }
 
         Ok(Self { identities })
@@ -87,32 +76,31 @@ impl AuthorizedClientSet {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AuthorizedClientsFile {
-    #[serde(default)]
-    authorized: Vec<AuthorizedEntry>,
     #[serde(default)]
     clients: Vec<ClientEntry>,
 }
 
 #[derive(Deserialize)]
-#[expect(
-    dead_code,
-    reason = "backward-compatible TOML schema accepts metadata fields that serde deserializes even when the loader ignores them"
-)]
-struct AuthorizedEntry {
-    #[serde(default)]
-    cn: Option<String>,
-    #[serde(default)]
-    san: Option<String>,
-    #[serde(default)]
-    issued_at: Option<String>,
-    #[serde(default)]
-    notes: Option<String>,
+#[serde(deny_unknown_fields)]
+struct ClientEntry {
+    #[serde(deserialize_with = "deserialize_identity")]
+    identity: String,
 }
 
-#[derive(Deserialize)]
-struct ClientEntry {
-    identity: String,
+/// Reject an `identity` that no certificate identity can ever match.
+fn deserialize_identity<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let identity = String::deserialize(deserializer)?;
+    if identity.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "client identity must not be empty or whitespace-only",
+        ));
+    }
+    Ok(identity)
 }
 
 #[cfg(test)]
@@ -125,6 +113,23 @@ mod tests {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(toml.as_bytes()).unwrap();
         f
+    }
+
+    /// Assert that `toml` is rejected with a path-bearing parse error whose
+    /// reason names `expected_in_reason` — the schema element an operator has
+    /// to fix.
+    fn assert_parse_error(toml: &str, expected_in_reason: &str) {
+        let f = write_toml(toml);
+        match AuthorizedClientSet::load(f.path()) {
+            Err(ConfigError::ParseError { path, reason }) => {
+                assert_eq!(path, f.path());
+                assert!(
+                    reason.contains(expected_in_reason),
+                    "parse error does not point at '{expected_in_reason}': {reason}"
+                );
+            }
+            result => panic!("expected path-bearing parse error, got {result:?}"),
+        }
     }
 
     #[test]
@@ -146,22 +151,50 @@ identity = "sidecar-staging"
     }
 
     #[test]
-    fn load_v11_authorized_schema() {
-        let f = write_toml(
+    fn reject_superseded_authorized_schema() {
+        assert_parse_error(
             r#"
 [[authorized]]
 cn = "firma-sidecar-workstation-alice"
-issued_at = "2026-06-01"
-notes = "Alice's laptop"
-
-[[authorized]]
-san = "sidecar-prod-1.internal"
 "#,
+            "authorized",
         );
-        let set = AuthorizedClientSet::load(f.path()).unwrap();
-        assert!(set.contains("firma-sidecar-workstation-alice"));
-        assert!(set.contains("sidecar-prod-1.internal"));
-        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn reject_missing_client_identity() {
+        assert_parse_error("[[clients]]", "identity");
+    }
+
+    #[test]
+    fn reject_unknown_top_level_fields() {
+        assert_parse_error("enabled = true", "enabled");
+    }
+
+    /// Superseded per-entry fields and free-form metadata share one rejection
+    /// branch; `cn` stands in for both.
+    #[test]
+    fn reject_superseded_client_entry_fields() {
+        assert_parse_error(
+            r#"
+[[clients]]
+identity = "firma-sidecar-workstation-alice"
+cn = "firma-sidecar-workstation-alice"
+notes = "unexpected metadata"
+"#,
+            "cn",
+        );
+    }
+
+    #[test]
+    fn reject_blank_client_identity() {
+        assert_parse_error(
+            r#"
+[[clients]]
+identity = "   "
+"#,
+            "client identity must not be empty or whitespace-only",
+        );
     }
 
     #[test]

@@ -66,7 +66,6 @@ This is an architectural distinction, not a blanket immunity claim.
 `examples/firma-run/e2e/run.sh --claude-acceptance` covers:
 
 - shell `curl` egress interception + deny,
-- child-process `wget` interception + deny,
 - write outside working directory blocked by sandbox filesystem policy,
 - sensitive path reads (for example SSH key path) blocked by masked filesystem pathing.
 

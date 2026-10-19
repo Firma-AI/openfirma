@@ -30,6 +30,27 @@ Config lands in `.firma/` inside the current directory, or an explicit
 
 ## Modes
 
+Connected Sidecars consume complete Authority mapping snapshots; there is no
+mapping-source selector. `agent-local` generates mapping files for the local
+mini-authority, which loads them through `[authority].mapping_rules_paths`.
+`agent-remote` generates no local mappings and, on re-runs, removes the local
+`[authority]` section with its mapping paths unless you choose to keep it.
+Existing mapping files remain untouched, including with `--force`. `--mapping`
+and `--extra-hosts` are rejected in remote mode. Every Sidecar requires an
+Authority; unmatched traffic is always denied.
+
+```bash
+firma config --yes --mode agent-remote \
+  --agent-id agt_01j0000000e008000000000001 \
+  --authority-url https://authority.example.com:9443 \
+  --authority-ca-cert ./authority-ca.crt \
+  --authority-pub-key ./workspace.pub
+```
+
+Supply required Sidecar authentication separately. Per-run synthesis with SaaS
+credentials omits fallback mapping paths and files; explicit conflicting settings
+remain visible to Sidecar validation.
+
 | Mode           | What it scaffolds                                                           |
 | -------------- | --------------------------------------------------------------------------- |
 | `agent-local`  | Sidecar + co-located mini-authority (`[authority]` + `[sidecar.authority]`) |
@@ -54,19 +75,23 @@ firma config [--mode <mode>] [--profile <profile>] [--agent-id <agent-id>]
 | `--profile`           | wizard / `generic`       | Execution profile written to `[run].profile`                               |
 | `--agent-id`          | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`         |
 | `--posture`           | wizard / `dev`           | Cedar policy posture written under `policies/`                             |
-| `--mapping`           | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
-| `--extra-hosts`       | none                     | Comma-separated extra hosts the agent may reach                            |
-| `--workspace`         | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
+| `--mapping`           | wizard / profile default | Mapping file(s) listed in `[authority].mapping_rules_paths` — repeat for multiple (`agent-local` / `authority`; rejected in `agent-remote`) |
+| `--extra-hosts`       | none                     | Comma-separated extra hosts the agent may reach, written to `mapping-rules.toml` (`agent-local` / `authority`; rejected in `agent-remote`) |
+| `--workspace`         | CWD                      | Agent RW path for the sandbox. Written to `firma.toml` only when it differs from the project root (the directory holding `.firma/`), which `firma run` derives on its own |
 | `--output-dir` / `-o` | `.firma` in CWD          | Where `firma.toml`, policies, and mappings are written                     |
 | `--state-dir`         | `$FIRMA_STATE_DIR` / XDG | Keys, revocations, generated CA                                            |
 | `--authority-listen`  | `127.0.0.1:50051`        | gRPC listen address (`agent-local` / `authority` modes only)               |
 | `--authority-url`     | wizard prompt            | Authority URL for `agent-remote` mode                                      |
 | `--authority-ca-cert` | wizard prompt            | Authority CA cert PEM path for `agent-remote` mode                         |
-| `--authority-pub-key` | derived from state dir   | Authority public key path                                                  |
+| `--authority-pub-key` | adopted from state dir   | Authority public key path                                                  |
 | `--yes` / `-y`        | off                      | Skip all prompts; use existing values or flag defaults                     |
 | `--force`             | off                      | Overwrite existing files including the authority keypair                   |
 | `--dry-run`           | off                      | Print generated files to stdout without writing to disk                    |
 | `--list-templates`    | off                      | Print the posture × mapping catalogue and exit                             |
+
+Mappings belong to the Authority that publishes them. In `agent-remote` mode,
+configure mappings on the remote Authority; `--mapping` and `--extra-hosts`
+are rejected there.
 
 An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
 file even without `--force`; other existing generated files are still
@@ -84,13 +109,23 @@ When `firma config` finds `firma.toml` in the target directory, it reads the
 current values and uses them as defaults for every prompt and non-interactive
 run. Pass only the flags you want to change; everything else is preserved.
 
+Non-interactive local re-runs preserve the complete
+`authority.mapping_rules_paths` list, including custom files and an explicit
+empty list, unless `--mapping` supplies a new selection. The Authority's list
+takes precedence over ignored connected-Sidecar mapping paths. An explicit
+`--extra-hosts` request adds the generated `mapping-rules.toml` to that list if
+it is not already loaded, so the new rules reach the connected Sidecar.
+
 Changing an existing local-authority config to `--mode agent-remote`
 normally removes the top-level `[authority]` section from the generated
 `firma.toml`; otherwise `firma run` starts the Authority locally instead
 of using only the remote Authority. Non-force runs warn about that.
 Interactive runs ask whether to keep the section and use that answer to
-rewrite `firma.toml`; non-interactive non-force runs preserve the existing
-file. `--force` overwrites the config directly and removes the section.
+rewrite `firma.toml`; non-interactive runs remove the section even without
+`--force`. The command merges `firma.toml` on every run. Switching back to
+`agent-local` removes the remote physical connection override, trust paths,
+mTLS client identity, and PSK credentials so the Sidecar uses the local
+mini-authority. Remote re-runs preserve those connection settings.
 
 ```bash
 # Keep everything, explicitly replace the registered identity
@@ -105,8 +140,8 @@ firma config --yes --dry-run
 ```
 <output-dir>/                    # project-local config dir
   firma.toml                    # unified config (authority + sidecar + run profiles)
-  mapping-rules.toml            # base routing rules
-  mappings/<name>.toml          # one file per selected mapping
+  mapping-rules.toml            # base routing rules (`agent-local`/`authority` only)
+  mappings/<name>.toml          # one file per selected mapping (`agent-local`/`authority` only)
   policies/<posture>.cedar      # Cedar enforcement policy
   issuance-policies/
     issuance.cedar              # token issuance policy
@@ -126,17 +161,22 @@ firma config --yes --dry-run
 `[sidecar.authority]` connect block. `authority` mode emits only
 `[authority]`.
 
+No artifact path is written. The signing key, revocations, TLS material, audit
+log and key, and MITM CA all have defaults that resolve to the state directory
+this run generated them in, so naming them would only pin the file to this
+machine. Each key stays available as an override.
+
 ```toml
 [authority]                   # agent-local and authority modes
 listen_addr   = "127.0.0.1:50051"
-key_file      = "/path/to/state/authority.key"
+policy_dir    = "policies/"
 # ...
 
 [sidecar.authority]           # agent-local and agent-remote modes
 agent_id         = "agt_01j0000000e008000000000001"
 url             = "http://127.0.0.1:50051"
-ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
-public_key_path = "/path/to/state/authority.pub"
+# `agent-remote` also carries ca_cert_path / public_key_path: a remote
+# Authority's anchors are operator-supplied; there is no default.
 # ... plus connect_timeout / reconnect_* / revocation_* tuning
 
 # Uncomment for remote Authorities that require Sidecar PSK authentication.
@@ -178,8 +218,9 @@ keeps `firma run codex` working from a fresh clone without any prior setup.
 **Wizard refuses to run in CI.** `firma config` without `--yes` requires a
 TTY. Pass `--yes` in non-interactive contexts.
 
-**`firma.toml` already exists.** By design, existing files are preserved.
-Use `--force` to overwrite, or remove the file by hand for a clean slate.
+**`firma.toml` already exists.** The command merges configuration changes and
+preserves comments and unrelated settings. Existing mapping files remain on disk
+when switching to remote mode; `--force` is not required to apply that conversion.
 
 **Keys must not go in the config dir.** Keys live in `<state-dir>`, not
 `<output-dir>`. Do not commit `authority.key`. Add `.firma/*.key` to

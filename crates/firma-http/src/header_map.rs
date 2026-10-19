@@ -130,19 +130,11 @@ impl<'de> Deserialize<'de> for HeaderMap {
             .into_iter()
             .try_fold(Self(http::HeaderMap::new()), |mut acc, (k, vv)| {
                 for v in vv {
-                    if acc.contains_key(&*k) {
-                        acc.try_append(
-                            http::HeaderName::from(k.clone()),
-                            http::HeaderValue::from(v),
-                        )
-                        .map_err(serde::de::Error::custom)?;
-                    } else {
-                        acc.try_insert(
-                            http::HeaderName::from(k.clone()),
-                            http::HeaderValue::from(v),
-                        )
-                        .map_err(serde::de::Error::custom)?;
-                    }
+                    acc.try_append(
+                        http::HeaderName::from(k.clone()),
+                        http::HeaderValue::from(v),
+                    )
+                    .map_err(serde::de::Error::custom)?;
                 }
                 Ok(acc)
             })
@@ -153,11 +145,7 @@ impl FromIterator<(http::HeaderName, http::HeaderValue)> for HeaderMap {
     fn from_iter<T: IntoIterator<Item = (http::HeaderName, http::HeaderValue)>>(iter: T) -> Self {
         iter.into_iter()
             .fold(Self(http::HeaderMap::new()), |mut acc, (k, v)| {
-                if acc.contains_key(&k) {
-                    acc.append(k, v);
-                } else {
-                    acc.insert(k, v);
-                }
+                acc.append(k, v);
                 acc
             })
     }

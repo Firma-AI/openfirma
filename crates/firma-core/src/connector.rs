@@ -163,8 +163,7 @@ pub struct ConnectorResponse {
 /// Failure mode reported by a [`Connector`] implementation.
 ///
 /// Variants map onto transport-level outcomes that the sidecar
-/// translates into either an [`Aborted`] or a [`Deny`] response. See
-/// the connector task specification (task 005) for the full table.
+/// translates into either an [`Aborted`] or a [`Deny`] response.
 ///
 /// Target-side 4xx / 5xx responses are **not** represented here; they
 /// are returned as [`ConnectorResponse`] with the upstream status

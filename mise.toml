@@ -1,0 +1,29 @@
+# Development tools for standalone OpenFirma.
+[settings]
+lockfile = true
+lockfile_mode = "generate"
+lockfile_platforms = [
+  "linux-arm64",
+  "linux-arm64-musl",
+  "linux-x64",
+  "linux-x64-musl",
+  "macos-arm64",
+  "macos-x64",
+  "windows-arm64",
+  "windows-x64",
+]
+
+[tools]
+cargo-binstall = "1.21.1"
+cargo-deny = "0.19.9"
+cargo-dist = "0.32.0"
+"cargo:cargo-doc-md" = "0.11.0"
+"cargo:cargo-fuzz" = "0.13.2"
+"cargo:cargo-llvm-cov" = "0.8.4"
+"cargo:cargo-nextest" = "0.9.143"
+dprint = "0.54.0"
+git-cliff = "2.14.1"
+node = "24.16.0"
+protoc = "35.1"
+ruff = "0.16.0"
+uv = "0.11.32"

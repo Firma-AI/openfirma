@@ -5,7 +5,6 @@
 //! every host connector entry becomes a
 //! [`GenericHttpConnector`] registered under its host string.
 
-use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use crate::config;
@@ -18,12 +17,13 @@ use crate::connector::provider::{GenericHttpConnector, HttpConnectorConfig, Rate
 /// # Errors
 ///
 /// Returns an error when a [`GenericHttpConnector`] cannot be built
-/// (TLS setup failure) or when the host rate-limit parameters are
-/// zero (validation should have already caught this).
+/// (TLS setup failure).
 pub fn build_connector_registry(
     cfg: &config::ConnectorConfig,
 ) -> anyhow::Result<Arc<ConnectorRegistry>> {
-    let default = if cfg.default_timeout == std::time::Duration::from_secs(30) {
+    let default = if cfg.default_timeout
+        == firma_config_utils::NonZeroDuration::from_static(std::time::Duration::from_secs(30))
+    {
         GenericHttpConnector::default_for_unconfigured()
     } else {
         GenericHttpConnector::new(&HttpConnectorConfig {
@@ -36,14 +36,12 @@ pub fn build_connector_registry(
     let mut registry = ConnectorRegistry::new(Arc::new(default));
 
     for host_cfg in &cfg.hosts {
-        let rps = NonZeroU32::new(host_cfg.rps)
-            .ok_or_else(|| anyhow::anyhow!("connector host {}: rps must be > 0", host_cfg.host))?;
-        let burst = NonZeroU32::new(host_cfg.burst).ok_or_else(|| {
-            anyhow::anyhow!("connector host {}: burst must be > 0", host_cfg.host)
-        })?;
         let http = GenericHttpConnector::new(&HttpConnectorConfig {
             timeout: host_cfg.timeout,
-            rate_limit: Some(RateLimitConfig { rps, burst }),
+            rate_limit: Some(RateLimitConfig {
+                rps: host_cfg.rps,
+                burst: host_cfg.burst,
+            }),
         })
         .map_err(|e| anyhow::anyhow!("failed to build connector for {}: {e}", host_cfg.host))?;
         registry.register_host(host_cfg.host.clone(), Arc::new(http));
@@ -51,7 +49,7 @@ pub fn build_connector_registry(
             host = host_cfg.host.as_str(),
             rps = host_cfg.rps,
             burst = host_cfg.burst,
-            timeout_ms = u64::try_from(host_cfg.timeout.as_millis()).unwrap_or(u64::MAX),
+            timeout_ms = u64::try_from(host_cfg.timeout.duration().as_millis()).unwrap_or(u64::MAX),
             "connector host override registered"
         );
     }

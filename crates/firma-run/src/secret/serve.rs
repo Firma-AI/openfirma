@@ -278,19 +278,22 @@ mod tests {
     fn echo_spec() -> firma_secret_provider::spec::cli::CliIntegrationSpec<SecretMatcher> {
         use firma_secret_provider::{
             non_empty::NonEmptyVec,
-            spec::{MatcherRule, cli::CommandPattern},
+            spec::{
+                MatcherRule,
+                cli::{CliIntegrationSpecParams, CommandPattern},
+            },
         };
 
         // An exact `SafeCommand` match on the whole argv: passthrough with no
         // extraction, the only execution path still reachable for `echo` now
         // that unconfigured binaries are rejected.
-        firma_secret_provider::spec::cli::CliIntegrationSpec::new(
-            "echo".to_string(),
-            "echo".to_string(),
-            vec![],
-            vec![],
-            vec![],
-            vec![MatcherRule::SafeCommand(CommandPattern::exact(
+        firma_secret_provider::spec::cli::CliIntegrationSpec::new(CliIntegrationSpecParams {
+            binary_name: "echo".to_string(),
+            provider_id: "echo".to_string(),
+            credential_env_vars: vec![],
+            stripped_options: vec![],
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SafeCommand(CommandPattern::exact(
                 NonEmptyVec::new(vec![
                     String::from("hello"),
                     String::from("from"),
@@ -298,7 +301,7 @@ mod tests {
                 ])
                 .expect("non-empty argv"),
             ))],
-        )
+        })
         .unwrap_or_else(|error| panic!("valid spec: {error}"))
     }
 
@@ -352,16 +355,16 @@ mod tests {
     #[tokio::test]
     async fn blocked_forbidden_option_is_rejected() {
         use firma_config_schema::secret_provider::cli::FlagSpec;
-        use firma_secret_provider::spec::cli::CliIntegrationSpec;
+        use firma_secret_provider::spec::cli::{CliIntegrationSpec, CliIntegrationSpecParams};
 
-        let spec = CliIntegrationSpec::new(
-            "bws".to_string(),
-            "bitwarden".to_string(),
-            vec!["BWS_ACCESS_TOKEN".to_string()],
-            vec![],
-            vec![FlagSpec::value("--server-url")],
-            vec![],
-        )
+        let spec = CliIntegrationSpec::new(CliIntegrationSpecParams {
+            binary_name: "bws".to_string(),
+            provider_id: "bitwarden".to_string(),
+            credential_env_vars: vec!["BWS_ACCESS_TOKEN".to_string()],
+            stripped_options: vec![],
+            forbidden_options: vec![FlagSpec::value("--server-url")],
+            matchers: vec![],
+        })
         .unwrap_or_else(|error| panic!("valid spec: {error}"));
         let store = store();
         let request = BrokerRequest {
@@ -387,7 +390,9 @@ mod tests {
             non_empty::vec::NonEmptyVec,
             spec::{
                 MatcherRule,
-                cli::{CliIntegrationSpec, CommandAndMatcher, CommandPattern},
+                cli::{
+                    CliIntegrationSpec, CliIntegrationSpecParams, CommandAndMatcher, CommandPattern,
+                },
             },
         };
 
@@ -399,13 +404,13 @@ mod tests {
             pattern: r"(?m)^(?P<name>[^=]+)=(?P<value>s3cr3t)$".to_string(),
         };
         let payload = "token=s3cr3t".to_string();
-        let spec = CliIntegrationSpec::new(
-            "echo".to_string(),
-            "test".to_string(),
-            vec![],
-            vec![],
-            vec![],
-            vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
+        let spec = CliIntegrationSpec::new(CliIntegrationSpecParams {
+            binary_name: "echo".to_string(),
+            provider_id: "test".to_string(),
+            credential_env_vars: vec![],
+            stripped_options: vec![],
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SensitiveCommand(CommandAndMatcher {
                 command: CommandPattern::prefix(
                     NonEmptyVec::new(vec![payload.clone()]).expect("non-empty"),
                 ),
@@ -413,7 +418,7 @@ mod tests {
                 stripped_options: vec![],
                 append_options: vec![],
             })],
-        )
+        })
         .unwrap_or_else(|error| panic!("valid spec: {error}"));
         let store = RwLock::new(SecretStore::new());
         let request = BrokerRequest {

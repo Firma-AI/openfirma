@@ -79,13 +79,14 @@ $XDG_DATA_HOME/firma/          — platform state dir (keys, revocations, CA)
 
 ```bash
 AGENT_ID="agt_01j0000000e008000000000001" # copy from .firma/firma.toml
+mkdir -p .firma/runtime/capabilities
 firma authority -c .firma/firma.toml issue \
   --agent-id "$AGENT_ID" \
   --session-id $(uuidgen) \
   --action communication.external.send \
   --resource-scope '*.anthropic.com*' \
   --ttl-seconds 28800 \
-  --output .firma/capability-claude.toml
+  --output .firma/runtime/capabilities/capability-claude.toml
 ```
 
 Eight hours is a reasonable working session. If you stop and restart the next morning, you'll mint a fresh one.
@@ -179,6 +180,7 @@ firma authority -c .firma/firma.toml
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... \
+FIRMA_STATE_DIR="$PWD/.firma/runtime" \
 firma sidecar -c .firma/firma.toml
 ```
 
@@ -187,14 +189,14 @@ The `ANTHROPIC_API_KEY` env var is set on the Sidecar's process only. The agent'
 **Terminal 3: the agent under `firma run`.**
 
 ```bash
-firma run \
+FIRMA_STATE_DIR="$PWD/.firma/runtime" firma run \
   --config .firma/firma.toml \
   --profile codex \
-  --capability-file .firma/capability-claude.toml \
+  --capability-file .firma/runtime/capabilities/capability-claude.toml \
   -- claude code
 ```
 
-`--profile codex` is the right shape for coding agents — it mounts your project workspace into the sandbox. `--capability-file` wires in the capability we issued in Step 3.
+`--profile codex` is the right shape for coding agents — it mounts your project workspace into the sandbox. `--capability-file` parses the signed seed TOML issued in Step 3 and exposes only its raw token and original path to the wrapped process. A local Sidecar accepts the seed because both its configured parent and resolved target stay beneath the selected `.firma/runtime/capabilities/` directory.
 
 When Claude Code launches, it inherits no LLM API key from your shell. Its outbound calls hit the proxy bridge, which forwards over UDS to the Sidecar, which validates Stage 1, evaluates Stage 2, and (for permitted Anthropic calls) injects the API key before dispatching upstream.
 
@@ -233,11 +235,11 @@ firma-claude-start() {
     --action communication.external.send \
     --resource-scope '*.anthropic.com*' \
     --ttl-seconds 28800 \
-    --output .firma/capability-claude.toml
-  firma run \
+    --output .firma/runtime/capabilities/capability-claude.toml
+  FIRMA_STATE_DIR="$PWD/.firma/runtime" firma run \
     --config .firma/firma.toml \
     --profile codex \
-    --capability-file .firma/capability-claude.toml \
+    --capability-file .firma/runtime/capabilities/capability-claude.toml \
     -- claude code
 }
 ```
@@ -265,11 +267,13 @@ The `codex` profile provides project workspace mounts for coding agents.
 
 **Claude Code refuses to start: `proxy connection refused`.** The Sidecar isn't running, or the proxy bridge couldn't reach it. Check the Sidecar terminal for `sidecar ready`.
 
-**Calls show `CONNECT` only, no method/path.** Expected when MITM is off: the
-Sidecar authorizes the tunnel but cannot inspect inner HTTPS traffic, so audit
-events lack method/path and Step 5 injection cannot run. Enable
-`[sidecar.interceptor.https_mitm]` for `api.anthropic.com`, confirm
-`intercept_hosts`, and install the generated CA where the agent trusts it.
+**Calls show `CONNECT` only, no method/path.** The host is not being
+intercepted, so the Sidecar authorizes the tunnel but cannot inspect inner
+HTTPS traffic: audit events lack method/path and Step 5 injection cannot run.
+Interception is on for every host by default, so check that the host is not in
+`bypass_hosts`, that the file does not narrow `intercept_hosts`, and that
+`enabled` is not `false` — then install the generated CA where the agent trusts
+it.
 
 **`401 Unauthorized` from Anthropic.** The injected key is wrong. Check `ANTHROPIC_API_KEY` on the Sidecar's environment — not on the agent's.
 

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use firma_config_utils::NonZeroDuration;
 
 const DEFAULT_CONNECT_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(10));
@@ -39,7 +39,7 @@ pub struct SidecarCredentials {
 #[serde(deny_unknown_fields)]
 pub struct AuthorityConfig {
     /// Authority-registered `TypeID` for the agent represented by this Sidecar.
-    /// Accepted for configuration compatibility; parsed by `firma-sidecar`.
+    /// Used by `firma run` to request the agent's session capability.
     #[serde(default)]
     pub agent_id: Option<String>,
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`). When set, the

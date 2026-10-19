@@ -87,7 +87,7 @@ firma-authority export-workspace-public-key \
 
 The file must contain exactly the 32 raw bytes of an Ed25519 public key. PEM,
 OpenSSH, DER, hex, base64, and TOML encodings are not accepted. A relative
-`public_key_path` is resolved from the `firma run` working directory.
+`public_key_path` in `firma.toml` resolves from that file's directory.
 
 `firma run` reads and validates the key before calling `IssueCapability`, then
 uses it to verify the returned PASETO token. The same effective key is written
@@ -100,7 +100,13 @@ key is used.
 Key read failures, files that are not exactly 32 bytes, malformed or expired
 tokens, and signature mismatches fail closed with an error. An explicit
 `--capability-file` uses the same signed TOML representation as the automatic
-per-run capability file.
+per-run capability file. Run parses the complete seed before launch, exports
+only its `raw_token` and original path to the wrapped process, and passes the
+path to a locally autostarted Sidecar for verification and reload. That file
+and its resolved target must stay beneath the selected
+`<state-dir>/capabilities/` directory; the Sidecar reads only the resolved path
+and watches both contained parents. A pre-managed external Sidecar owns its
+runtime state and seed configuration independently.
 
 ## Staying alive: automatic refresh
 
@@ -149,7 +155,7 @@ When the agent makes an outbound call, Stage 1 of the pipeline runs the validati
 
 1. **Selection.** The Sidecar's `CapabilityMap` is keyed by `(session_id, action_class, resource)`. It picks the capability that matches the normalized envelope. If none does, the result is `CapabilityNotFound` (a DENY).
 2. **Signature verification.** The PASETO library verifies the Ed25519 signature against the Authority's public key, which the Sidecar holds in memory and never re-fetches on the hot path.
-3. **Expiry check.** `now()` is compared against `expiry` with a configurable `clock_skew_tolerance` (default `"5s"`). Past expiry → `CapabilityExpired`.
+3. **Expiry check.** `now()` is compared against `expiry` strictly — no skew window is forgiven. Past expiry → `CapabilityExpired`.
 4. **Revocation check.** `token_id` is looked up in the local revocation store — a bloom filter front, LRU cache for false positives. A hit → `CapabilityRevoked`.
 5. **Scope match.** The request's normalized action class must be in `action_set`, and the resource must match `resource_scope`. A miss → `CapabilityScopeMismatch`.
 

@@ -63,6 +63,7 @@ namespace Firma {
         timestamp_ms: Long,
         params: String,
         risk_score: Long,
+        budget_remaining?: Long,
         session_duration_s: Long,
         action_count: Long,
         raw_transport: String,

@@ -4,10 +4,10 @@
 //! override `[sidecar.interceptor]` to bind a Unix-domain socket inside the
 //! per-sandbox marker directory. Operator templates must use the unified
 //! sectioned schema. When no template is available, write a minimal config
-//! (UDS interceptor only — no authority, no policy bundle).
+//! with the selected Authority endpoint injected before launch.
 //!
 //! The synthesized file is written next to the socket so `firma sidecar
-//! status` (FIR-103) can reconstruct context.
+//! status` can reconstruct context.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use firma_core::SecretMatcher;
 use firma_secret_provider::spec::http::HttpIntegrationSpec;
 use p256::ecdsa::SigningKey;
+use p256::elliptic_curve::rand_core::OsRng;
 use p256::pkcs8::{EncodePrivateKey, LineEnding};
-use sha2::{Digest, Sha256};
 
 use crate::error::RunError;
 use firma_config_loader::AgentProfile;
@@ -24,274 +24,8 @@ use firma_identifiers::AgentId;
 use firma_runtime_state::RunEntryLayout;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
-const MINIMAL_MAPPING_RULES_TOML: &str = "\
-[[rules]]
-method = \"CONNECT\"
-host = \"auth.openai.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"api.openai.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"chatgpt.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.chatgpt.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"api.anthropic.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"platform.claude.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"claude.ai\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"console.anthropic.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.anthropic.com\"
-path = \"/\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"auth.openai.com\"
-path = \"/api/accounts/deviceauth/*\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"POST\"
-host = \"auth.openai.com\"
-path = \"/oauth/token\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"auth.openai.com\"
-path = \"/oauth/*\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"api.openai.com\"
-path = \"/v1/*\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"chatgpt.com\"
-path = \"/backend-api/*\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"*.chatgpt.com\"
-path = \"/backend-api/*\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"api.anthropic.com\"
-path = \"/api/*\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"platform.claude.com\"
-path = \"/v1/*\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-host = \"*.anthropic.com\"
-path = \"/*\"
-action_class = \"communication.external.send\"
-";
-
-const VSCODE_MINIMAL_MAPPING_RULES_TOML: &str = "\
-# Visual Studio Code zero-config mapping — CONNECT-level classification for
-# core services, marketplace, account sync, and GitHub account flows.
-
-[[rules]]
-method = \"CONNECT\"
-host = \"update.code.visualstudio.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"code.visualstudio.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.code.visualstudio.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"vscode.dev\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.vscode.dev\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"az764295.vo.msecnd.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"vscodeexperiments.azureedge.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"default.exp-tas.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"marketplace.visualstudio.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.gallerycdn.vsassets.io\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.gallery.vsassets.io\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.vscode-unpkg.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.vscode-cdn.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"vscode-sync.trafficmanager.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.vscode-sync.trafficmanager.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"login.microsoftonline.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"login.live.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.microsoft.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.msauth.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.msftauth.net\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"github.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.github.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"api.github.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"uploads.github.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.githubusercontent.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.ghe.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"accounts.google.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.gstatic.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.googleusercontent.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"appleid.apple.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"idmsa.apple.com\"
-action_class = \"communication.external.send\"
-
-[[rules]]
-method = \"CONNECT\"
-host = \"*.cdn-apple.com\"
-action_class = \"communication.external.send\"
-";
-
-const VSCODE_GITHUB_MITM_BYPASS_HOSTS: &[&str] =
+/// GitHub account hosts the VS Code profile keeps out of HTTPS interception.
+pub(crate) const VSCODE_GITHUB_MITM_BYPASS_HOSTS: &[&str] =
     &["github.com", "api.github.com", "uploads.github.com"];
 
 /// Inputs for [`synthesize`].
@@ -328,9 +62,9 @@ pub struct SynthesizeRequest<'a> {
     /// Sidecar credentials to inject into `[sidecar.authority.credentials]`.
     /// `None` leaves any existing template value untouched.
     pub authority_credentials: Option<&'a SidecarCredentialsConfig>,
-    /// Path of the per-session capability seed minted by `firma run`, appended
-    /// to `[sidecar.capability_seed].paths`. `None` when no seed was minted
-    /// (e.g. `--capability-file` was passed).
+    /// Capability seed path appended to `[sidecar.capability_seed].paths`.
+    /// This is either an explicit file source or a per-session seed minted by
+    /// `firma run`; `None` means no seed is available for local Sidecar setup.
     pub capability_seed_path: Option<&'a Path>,
     /// Audit log path used as the default `file` sink when the template does
     /// not configure an audit sink. Set to the shared state/runtime dir's
@@ -339,10 +73,11 @@ pub struct SynthesizeRequest<'a> {
     /// sidecar's null stdout and `firma monitor` shows nothing. `None` leaves
     /// the audit sink untouched (used by tests that assert template fidelity).
     pub audit_fallback_path: Option<&'a Path>,
-    /// When `true`, override `[sidecar].mode = "monitor"` regardless of the
-    /// operator template. Enables `firma run --monitor` for a single-run
-    /// observe-only mode without editing firma.toml.
-    pub monitor_mode: bool,
+    /// Shared audit signing key, normally `<state_dir>/audit.key`. Used when
+    /// the template names no key: signing every run with the long-lived key
+    /// keeps one verifiable chain in the shared audit log, instead of a per-run
+    /// key that is deleted with its marker directory.
+    pub audit_signing_key_path: Option<&'a Path>,
     /// HTTP-shaped entries mirrored into `[sidecar].http_secret_providers` so the
     /// Sidecar's MITM path can intercept matching vault responses.
     ///
@@ -394,7 +129,7 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
         mut value,
         template_dir,
     } = req.template;
-    // Per FIR-183: relative resource paths in the operator's template are
+    // Relative resource paths in the operator's template are
     // anchored on the template's `config_dir`. The synthesized file is
     // written into a per-run marker directory, so without this rebase
     // the sidecar would resolve relative paths under the marker dir.
@@ -429,14 +164,10 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     if let Some(audit_path) = req.audit_fallback_path {
         ensure_audit_file_sink(&mut value, audit_path)?;
     }
-    if req.monitor_mode {
-        override_sidecar_mode(&mut value, "monitor")?;
-    }
-    ensure_audit_signing_key(&mut value, req.out_path)?;
+    ensure_audit_signing_key(&mut value, req.out_path, req.audit_signing_key_path)?;
     // GitHub is strict-MITM by default, which skips CONNECT enforcement. The
     // VS Code profile classifies its GitHub account traffic at CONNECT level.
     ensure_vscode_github_mitm_bypass(&mut value, req.execution_profile)?;
-    ensure_mapping_rules(&mut value, req.out_path, req.execution_profile)?;
     override_http_secret_providers(&mut value, req.http_secret_providers)?;
     write_atomic(req.out_path, &value)?;
     Ok(source)
@@ -463,6 +194,16 @@ fn ensure_vscode_github_mitm_bypass(
         .ok_or_else(|| {
             RunError::Internal("[sidecar.interceptor.https_mitm] is not a table".into())
         })?;
+    // Explicit interception belongs to the operator: bypass wins over every
+    // intercept list, so a host the operator names for interception must not
+    // be bypassed by a profile default. Unrelated settings keep the bypass.
+    let explicitly_intercepted: Vec<String> = ["intercept_hosts", "strict_hosts"]
+        .into_iter()
+        .filter_map(|key| mitm.get(key).and_then(toml::Value::as_array))
+        .flatten()
+        .filter_map(toml::Value::as_str)
+        .map(str::to_ascii_lowercase)
+        .collect();
     let bypass_hosts = mitm
         .entry("bypass_hosts".to_string())
         .or_insert_with(|| toml::Value::Array(Vec::new()))
@@ -472,9 +213,10 @@ fn ensure_vscode_github_mitm_bypass(
         })?;
 
     for host in VSCODE_GITHUB_MITM_BYPASS_HOSTS {
-        if !bypass_hosts
-            .iter()
-            .any(|configured| configured.as_str() == Some(host))
+        if !explicitly_intercepted.iter().any(|named| named == host)
+            && !bypass_hosts
+                .iter()
+                .any(|configured| configured.as_str() == Some(host))
         {
             bypass_hosts.push(toml::Value::String((*host).to_string()));
         }
@@ -777,15 +519,15 @@ const REBASE_SCALAR_FIELDS: &[&[&str]] = &[
     &["audit", "signing_key_path"],
     &["audit", "file_path"],
     &["policy", "dir"],
-    &["mapping", "rules_path"],
     &["authority", "ca_cert_path"],
     &["authority", "public_key_path"],
+    &["authority", "tls_client_cert_path"],
+    &["authority", "tls_client_key_path"],
     &["authority", "credentials", "pre_shared_key_path"],
 ];
 
 /// Resource list fields anchored to the template's config dir.
-const REBASE_ARRAY_FIELDS: &[&[&str]] =
-    &[&["mapping", "rules_paths"], &["capability_seed", "paths"]];
+const REBASE_ARRAY_FIELDS: &[&[&str]] = &[&["capability_seed", "paths"]];
 
 fn rebase_template_resource_paths(
     value: &mut toml::Value,
@@ -886,12 +628,6 @@ fn sidecar_table_mut(value: &mut toml::Value) -> Result<&mut toml::value::Table,
         .ok_or_else(|| RunError::Internal("[sidecar] is not a table".into()))
 }
 
-fn override_sidecar_mode(value: &mut toml::Value, mode: &str) -> Result<(), RunError> {
-    let sidecar = sidecar_table_mut(value)?;
-    sidecar.insert("mode".to_string(), toml::Value::String(mode.to_string()));
-    Ok(())
-}
-
 fn override_ca_dir(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
     let marker_dir = out_path.parent().ok_or_else(|| {
         RunError::Internal(format!(
@@ -942,7 +678,11 @@ fn ensure_audit_file_sink(value: &mut toml::Value, audit_path: &Path) -> Result<
     Ok(())
 }
 
-fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
+fn ensure_audit_signing_key(
+    value: &mut toml::Value,
+    out_path: &Path,
+    shared_key_path: Option<&Path>,
+) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let audit = sidecar
         .entry("audit".to_string())
@@ -964,14 +704,27 @@ fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<
     if has_env {
         return Ok(());
     }
-    // If a path is configured AND the file exists, keep it.
-    if configured_path.is_some_and(Path::is_file) {
+    // A pinned path is an input, not an output: `firma config` generates the key
+    // at a layout-derived path and then records where it went, and nothing
+    // writes to a path the config supplied. So pass it through even when the
+    // file is missing, and let the Sidecar report the path the operator named.
+    // Substituting other material here would leave the shared audit log holding
+    // events signed by a key nobody chose, with nothing said about it.
+    if configured_path.is_some() {
         return Ok(());
     }
-    // Either no path or the path doesn't exist: generate an ephemeral key in
-    // the marker dir so the synthesized sidecar is self-contained.
-    // (Happens when firma.toml references a long-lived key that hasn't been
-    // provisioned yet, e.g. on a fresh checkout.)
+    // The template names no key, and the shared one is provisioned. Leave the
+    // field unset: the Sidecar resolves an unnamed key to exactly this position
+    // (`AuditSigningKey::StateDefault`), so writing the path here would restate
+    // its rule in a second crate. What matters is that the run does not mint a
+    // throwaway key instead, which would leave the shared audit log holding
+    // events nobody can verify once the marker directory is gone.
+    if shared_key_path.is_some_and(firma_runtime_state::is_material_present) {
+        return Ok(());
+    }
+    // Nothing provisioned anywhere: generate an ephemeral key in the marker dir
+    // so the synthesized sidecar is still self-contained. (Happens on a fresh
+    // checkout, before `firma config` has run.)
 
     let parent = out_path.parent().ok_or_else(|| {
         RunError::Internal(format!(
@@ -981,7 +734,7 @@ fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<
     })?;
     let key_path = parent.join("audit.key");
     let pem = generate_ephemeral_audit_key_pem()?;
-    std::fs::write(&key_path, pem)
+    firma_fs::write_private_file(&key_path, pem.as_bytes())
         .map_err(|error| RunError::Internal(format!("write {}: {error}", key_path.display())))?;
     audit.insert(
         "signing_key_path".to_string(),
@@ -990,69 +743,14 @@ fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<
     Ok(())
 }
 
+/// Mint the per-run P-256 signing key the same way `firma config` mints the
+/// long-lived one: straight from the operating system's CSPRNG.
 fn generate_ephemeral_audit_key_pem() -> Result<String, RunError> {
-    // Derive a fresh P-256 private key per run marker from a per-process UUID.
-    // This avoids shipping static PEM key material in source while preserving
-    // zero-touch autostart behavior.
-    let seed = Sha256::digest(uuid::Uuid::new_v4().as_bytes());
-    let signing_key = SigningKey::from_slice(seed.as_ref())
-        .map_err(|error| RunError::Internal(format!("generate audit signing key: {error}")))?;
+    let signing_key = SigningKey::random(&mut OsRng);
     signing_key
         .to_pkcs8_pem(LineEnding::LF)
         .map(|pem| pem.to_string())
         .map_err(|error| RunError::Internal(format!("encode audit signing key pem: {error}")))
-}
-
-fn ensure_mapping_rules(
-    value: &mut toml::Value,
-    out_path: &Path,
-    execution_profile: AgentProfile,
-) -> Result<(), RunError> {
-    let sidecar = sidecar_table_mut(value)?;
-    let mapping = sidecar
-        .entry("mapping".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[sidecar.mapping] is not a table".into()))?;
-
-    let parent = out_path.parent().ok_or_else(|| {
-        RunError::Internal(format!(
-            "cannot resolve parent dir for synthesized sidecar config {}",
-            out_path.display()
-        ))
-    })?;
-    let rules_path = parent.join("mapping-rules.toml");
-    if !rules_path.exists() {
-        std::fs::write(
-            &rules_path,
-            minimal_mapping_rules_for_profile(execution_profile),
-        )
-        .map_err(|error| RunError::Internal(format!("write {}: {error}", rules_path.display())))?;
-    }
-
-    let has_rules_path = mapping
-        .get("rules_path")
-        .and_then(toml::Value::as_str)
-        .is_some_and(|v| !v.trim().is_empty());
-    if !has_rules_path {
-        mapping.insert(
-            "rules_path".to_string(),
-            toml::Value::String(rules_path.display().to_string()),
-        );
-    }
-
-    if !mapping.contains_key("default_protected") {
-        mapping.insert("default_protected".to_string(), toml::Value::Boolean(true));
-    }
-    Ok(())
-}
-
-fn minimal_mapping_rules_for_profile(execution_profile: AgentProfile) -> &'static str {
-    if execution_profile == AgentProfile::Vscode {
-        VSCODE_MINIMAL_MAPPING_RULES_TOML
-    } else {
-        MINIMAL_MAPPING_RULES_TOML
-    }
 }
 
 /// Append the per-session capability seed file to `[sidecar.capability_seed].paths`
@@ -1152,10 +850,7 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        SynthesizeRequest, TemplateSource, configure_capability_seed, resolve_template_sources,
-        synthesize,
-    };
+    use super::configure_capability_seed;
 
     #[test]
     fn capability_seed_path_is_injected_and_no_preflight() {
@@ -1179,41 +874,5 @@ mod tests {
                 .any(|p| p.as_str() == Some("/run/firma/capabilities/sb.toml"))
         );
         assert!(sidecar.get("preflight").is_none());
-    }
-
-    #[test]
-    fn vscode_minimal_synthesis_writes_marketplace_mapping_rules() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
-        let cfg_path = tmp.path().join("sidecar.toml");
-        let source = synthesize(SynthesizeRequest {
-            agent_id: &crate::identity::test_agent_id(),
-            execution_profile: firma_config_loader::AgentProfile::Vscode,
-            session_id: "sess_001",
-            template: resolve_template_sources(None).unwrap(),
-            socket_path: &tmp.path().join("sidecar.sock"),
-            listen_addr: Some(
-                "127.0.0.1:18080"
-                    .parse()
-                    .unwrap_or_else(|error| panic!("{error}")),
-            ),
-            out_path: &cfg_path,
-            authority_url: None,
-            authority_ca_cert: None,
-            authority_pub_key: None,
-            authority_credentials: None,
-            capability_seed_path: None,
-            audit_fallback_path: None,
-            monitor_mode: false,
-            http_secret_providers: &[],
-        })
-        .unwrap_or_else(|error| panic!("{error}"));
-
-        assert_eq!(source, TemplateSource::Minimal);
-        let rules_path = tmp.path().join("mapping-rules.toml");
-        let rules = std::fs::read_to_string(&rules_path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", rules_path.display()));
-        assert!(rules.contains("marketplace.visualstudio.com"));
-        assert!(rules.contains("vscode-sync.trafficmanager.net"));
-        assert!(!rules.contains("api.openai.com"));
     }
 }

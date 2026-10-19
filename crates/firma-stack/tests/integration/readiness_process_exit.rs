@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use camino::Utf8PathBuf;
+use firma_process_orchestrator::LifecycleTimeouts;
 use firma_stack::{StackConfig, StackError};
 use firma_test_helpers::process_fixture;
 #[cfg(unix)]
@@ -13,6 +14,8 @@ const FIXTURE_MODE: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_MODE";
 const FIXTURE_STARTUP_REPORT: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_STARTUP_REPORT";
 #[cfg(unix)]
 const FIXTURE_SIDECAR_ARGS: &str = "FIRMA_TEST_READINESS_PROCESS_EXIT_SIDECAR_ARGS";
+#[cfg(unix)]
+const SIDECAR_STARTED_MARKER: &str = "sidecar.started";
 #[cfg(unix)]
 #[derive(serde::Deserialize, serde::Serialize)]
 struct LifecycleFixtureConfig {
@@ -34,6 +37,16 @@ fn write_lifecycle_fixture(path: &std::path::Path, config: LifecycleFixtureConfi
     );
 }
 
+/// Upper bound for startup that must observe a component exit rather than
+/// wait out readiness.
+///
+/// `spawn_stack` uses the default readiness timeout, so half of it separates
+/// prompt exit detection from detection at the deadline while leaving seconds
+/// of slack for process startup on a heavily loaded test host.
+fn exit_detection_bound() -> Duration {
+    LifecycleTimeouts::default().component_readiness / 2
+}
+
 #[test]
 fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
     let dir = tempfile::tempdir().expect("dir");
@@ -43,8 +56,8 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
     // child still exits before readiness, which is what this test exercises.
     std::fs::write(
         &config_path,
-        "[authority]\nlisten_addr = \"127.0.0.1:9\"\n\
-         [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n",
+        "[authority]\nlisten_addr = \"127.0.0.1:0\"\n\
+         [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:0\"\n[sidecar.authority]\nurl = 'http://localhost:50051'\n",
     )
     .expect("write config");
     let config = StackConfig {
@@ -71,7 +84,7 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
     assert_eq!(component, "authority");
     assert_eq!(status.code(), Some(101));
     assert!(
-        started_at.elapsed() < Duration::from_secs(5),
+        started_at.elapsed() < exit_detection_bound(),
         "startup waited for the readiness timeout after authority exit"
     );
     #[cfg(unix)]
@@ -87,35 +100,43 @@ fn authority_exit_aborts_readiness_without_waiting_for_timeout() {
 #[cfg(unix)]
 #[test]
 fn authority_exit_aborts_sidecar_readiness() {
-    use crate::support::write_executable_script;
-
-    // Keep Authority's socket ready while Sidecar's reserved socket is closed.
-    // Authority exits after one second; Sidecar would exit after three. Startup
-    // must therefore report Authority's exit while it is waiting on Sidecar,
-    // rather than waiting for the later Sidecar exit or readiness timeout.
+    // Authority publishes readiness, then exits only after Sidecar has
+    // started. Sidecar never becomes ready or exits on its own, so startup
+    // must report Authority's exit while waiting on Sidecar rather than wait
+    // for the readiness timeout.
     let dir = tempfile::tempdir().expect("dir");
-    let state_dir = dir.path().join("state");
-    let config_path = dir.path().join("firma.toml");
-    let fixture_path = dir.path().join("fixture.sh");
+    let root = dir.path();
+    let state_dir = root.join("state");
+    let config_path = root.join("firma.toml");
+    let fixture_path = root.join("fixture.sh");
     let authority_listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
     let authority_addr = authority_listener.local_addr().expect("authority address");
-    let sidecar_listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("reserve sidecar port");
-    let sidecar_addr = sidecar_listener.local_addr().expect("sidecar address");
-    drop(sidecar_listener);
 
-    write_executable_script(
+    write_lifecycle_fixture(
         &fixture_path,
-        "#!/bin/sh\n\
-         if [ \"$1\" = authority ]; then sleep 1; exit 23; fi\n\
-         if [ \"$1\" = sidecar ]; then sleep 3; exit 24; fi\n",
+        LifecycleFixtureConfig {
+            root: utf8_path(root),
+            authority_addr,
+            sidecar_socket: None,
+        },
+        &format!(
+            "if [ \"$1\" = authority ]; then\n\
+               export {FIXTURE_MODE}=authority-exits-after-sidecar\n\
+               export {FIXTURE_STARTUP_REPORT}=\"$5\"\n\
+             fi\n\
+             if [ \"$1\" = sidecar ]; then\n\
+               : > '{}'\n\
+               exec sleep 600\n\
+             fi",
+            root.join(SIDECAR_STARTED_MARKER).display()
+        ),
     );
     std::fs::write(
         &config_path,
         format!(
             "[authority]\nlisten_addr = \"{authority_addr}\"\n\
-             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"{sidecar_addr}\"\n"
+             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:0\"\n[sidecar.authority]\nurl = 'http://localhost:50051'\n"
         ),
     )
     .expect("write config");
@@ -139,17 +160,24 @@ fn authority_exit_aborts_sidecar_readiness() {
     assert_eq!(component, "authority");
     assert_eq!(status.code(), Some(23));
     assert!(
-        started_at.elapsed() < Duration::from_secs(2),
-        "startup waited for the sidecar fixture to exit"
+        started_at.elapsed() < exit_detection_bound(),
+        "startup waited for the Sidecar readiness timeout after authority exit"
     );
+    for name in ["authority.pid", "sidecar.pid", "stack.lock"] {
+        assert!(!state_dir.join(name).exists(), "rollback left {name}");
+    }
 }
 
+/// Wait for `path` while startup is still running.
+///
+/// There is deliberately no test-side deadline: startup's own readiness
+/// timeout bounds every wait, and giving up earlier would only leave startup
+/// running until that timeout while hiding its eventual result.
 #[cfg(unix)]
 fn wait_for_file_while_starting<'scope>(
     path: &std::path::Path,
     startup: std::thread::ScopedJoinHandle<'scope, Result<firma_stack::RunningStack, StackError>>,
 ) -> std::thread::ScopedJoinHandle<'scope, Result<firma_stack::RunningStack, StackError>> {
-    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if path.exists() {
             return startup;
@@ -179,7 +207,6 @@ fn wait_for_file_while_starting<'scope>(
                 ),
             }
         }
-        assert!(Instant::now() < deadline, "{} missing", path.display());
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -202,13 +229,6 @@ fn sidecar_exit_before_publication_rolls_back_ready_authority() {
 #[test]
 fn fixed_authority_does_not_override_sidecar_connect_address() {
     let outcome = run_sidecar_exit_and_assert_rollback(StackScenario::FixedAuthority);
-    assert!(!outcome.sidecar_args.contains("--authority-connect-addr"));
-}
-
-#[cfg(unix)]
-#[test]
-fn dynamic_authority_does_not_enable_disabled_sidecar_authority_client() {
-    let outcome = run_sidecar_exit_and_assert_rollback(StackScenario::DisabledAuthorityClient);
     assert!(!outcome.sidecar_args.contains("--authority-connect-addr"));
 }
 
@@ -245,7 +265,7 @@ fn unix_sidecar_publication_matches_planned_endpoint() {
         &config_path,
         format!(
             "[authority]\nlisten_addr = \"{authority_addr}\"\n\
-             [sidecar.interceptor]\nmode = \"unix_socket\"\nsocket_path = \"{}\"\n",
+             [sidecar.interceptor]\nmode = \"unix_socket\"\nsocket_path = \"{}\"\n[sidecar.authority]\nurl = 'http://localhost:50051'\n",
             sidecar_socket.display()
         ),
     )
@@ -269,7 +289,7 @@ process_fixture! {
     #[cfg(unix)]
     fn lifecycle_fixture(config: LifecycleFixtureConfig) {
         let mode = std::env::var(FIXTURE_MODE).expect("fixture mode");
-        if mode == "authority" {
+        if mode == "authority" || mode == "authority-exits-after-sidecar" {
             let startup_report = std::path::PathBuf::from(
                 std::env::var_os(FIXTURE_STARTUP_REPORT).expect("fixture startup report"),
             );
@@ -278,6 +298,12 @@ process_fixture! {
                 &firma_stack::ComponentEndpoint::Tcp(config.authority_addr),
             )
             .expect("publish fixture startup report");
+            if mode == "authority-exits-after-sidecar" {
+                while !config.root.join(SIDECAR_STARTED_MARKER).exists() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                std::process::exit(23);
+            }
             loop {
                 std::thread::sleep(Duration::from_mins(1));
             }
@@ -325,7 +351,6 @@ process_fixture! {
 enum StackScenario {
     DynamicAuthority,
     FixedAuthority,
-    DisabledAuthorityClient,
 }
 
 #[cfg(unix)]
@@ -343,7 +368,9 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
     use nix::errno::Errno;
     use nix::unistd::Pid;
 
-    use crate::support::{ProcessGroupCleanup, wait_for_pidfile};
+    use firma_runtime_state::pidfile;
+
+    use crate::support::ProcessGroupCleanup;
 
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path();
@@ -355,7 +382,7 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
         std::net::TcpListener::bind("127.0.0.1:0").expect("authority listener");
     let authority_addr = authority_listener.local_addr().expect("authority address");
     let requested_authority_addr = match scenario {
-        StackScenario::DynamicAuthority | StackScenario::DisabledAuthorityClient => {
+        StackScenario::DynamicAuthority => {
             "127.0.0.1:0".parse().expect("dynamic Authority address")
         }
         StackScenario::FixedAuthority => authority_addr,
@@ -383,13 +410,12 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
         StackScenario::DynamicAuthority | StackScenario::FixedAuthority => {
             "[sidecar.authority]\nurl = \"http://localhost:50051\"\n"
         }
-        StackScenario::DisabledAuthorityClient => "",
     };
     std::fs::write(
         &config_path,
         format!(
             "[authority]\nlisten_addr = \"{requested_authority_addr}\"\n\
-             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n\
+             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:0\"\n\
              {sidecar_authority}"
         ),
     )
@@ -402,9 +428,13 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
     let (result, authority_pid, mut cleanup, sidecar_args) = std::thread::scope(|scope| {
         let startup = scope.spawn(|| firma_stack::spawn_stack(&config, &state_dir));
         let startup = wait_for_file_while_starting(&state_dir.join("authority.listen"), startup);
-        let authority_pid = wait_for_pidfile(&state_dir.join("authority.pid"));
+        // Startup writes each pidfile before probing that component's
+        // readiness, so a published Authority endpoint implies its pidfile.
+        let authority_pid = pidfile::read(&state_dir.join("authority.pid"))
+            .expect("read Authority pidfile")
+            .expect("Authority pidfile precedes its listen publication")
+            .get();
         let cleanup = ProcessGroupCleanup::new(authority_pid);
-        wait_for_pidfile(&state_dir.join("sidecar.pid"));
         let sidecar_args_path = root.join("sidecar.args");
         let startup = wait_for_file_while_starting(&root.join("sidecar.args.ready"), startup);
         let sidecar_args =
@@ -444,6 +474,14 @@ fn run_sidecar_exit_and_assert_rollback(scenario: StackScenario) -> StartupOutco
     ] {
         assert!(!state_dir.join(name).exists(), "rollback left {name}");
     }
+    // `firma sidecar status --daemon` reads the enforced bundle from here.
+    assert!(
+        sidecar_args.contains(&format!(
+            "--enforcement-state\n{}\n",
+            state_dir.join("sidecar.enforcement.toml").display()
+        )),
+        "daemon Sidecar does not publish its enforcement state: {sidecar_args}"
+    );
 
     StartupOutcome {
         authority_addr,

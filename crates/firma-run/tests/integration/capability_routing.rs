@@ -142,6 +142,7 @@ fn resolve_remote_authority(
             firma_exe: &config_dir.join("firma"),
             capability_public_key_path,
             working_dir,
+            state_layout: &firma_runtime_state::RuntimeLayout::from_root(working_dir.join("state")),
         },
         &mut prompt,
     )
@@ -220,6 +221,7 @@ fn no_autostart_unreachable_authority_fails_loudly() {
             firma_exe: &firma_exe,
             capability_public_key_path: None,
             working_dir: state_dir.path(),
+            state_layout: &firma_runtime_state::RuntimeLayout::from_root(state_dir.path()),
         },
         &mut prompt,
     );
@@ -388,7 +390,11 @@ process_fixture! {
         let identity = RunIdentity::new(*crate::helper::agent_id(), "generic");
         let missing_key = dir.path().join("missing-firmateam.pub");
         let seed_path = dir.path().join("existing-capability.toml");
-        std::fs::write(&seed_path, "existing seed\n").expect("write seed placeholder");
+        std::fs::write(
+            &seed_path,
+            crate::helper::canonical_seed_toml("v4.public.existing-token"),
+        )
+        .expect("write canonical seed");
         let handle = sandbox_handle(&identity, dir.path());
 
         let error = prepare_network_runtime(

@@ -101,7 +101,6 @@ impl ComponentHandle {
 
 impl StackHandle {
     /// Iterate over ready components in topology and startup order.
-    #[must_use]
     pub fn components(&self) -> impl ExactSizeIterator<Item = &ComponentHandle> {
         self.components.iter()
     }

@@ -6,7 +6,7 @@
 //!   file or environment and constructs an
 //!   [`EventBuilder`](crate::audit::builder::EventBuilder).
 //! - [`spawn_audit_sink`] — spawns the signing adapter plus the
-//!   concrete sink (stdout/file/gRPC/WAL) as background tokio tasks.
+//!   concrete sink (stdout/file/gRPC) as background tokio tasks.
 //! - internal `run_signing_adapter` — sits between the pipeline and
 //!   the concrete sink, signing [`AuditPayload`](crate::audit::AuditPayload)s into
 //!   [`ExecutionEvent`](crate::audit::ExecutionEvent)s on their way out.
@@ -33,67 +33,88 @@ use crate::config;
 /// # Errors
 ///
 /// Returns an error when the sink fails to initialize (invalid
-/// config, inability to connect to an external sink).
+/// config, inability to open the audit log, inability to connect to an
+/// external sink).
 pub fn spawn_audit_sink(
-    config: &config::AuditConfig,
+    config: &config::SidecarConfig,
     payload_rx: mpsc::Receiver<audit::AuditPayload>,
     event_builder: audit::builder::EventBuilder,
     exit: CancellationToken,
 ) -> anyhow::Result<tokio::task::JoinHandle<Result<(), audit::AuditSinkError>>> {
     let (event_tx, event_rx) = mpsc::channel::<audit::ExecutionEvent>(100);
+    let audit_config = &config.audit;
 
     let adapter_exit = exit.clone();
     tokio::spawn(async move {
         run_signing_adapter(payload_rx, event_tx, event_builder, adapter_exit).await;
     });
 
-    match config.sink {
+    match audit_config.sink {
         AuditSink::File => {
-            let path = config.file_path.clone().ok_or_else(|| {
+            let path = audit_config.file_path.clone().ok_or_else(|| {
                 anyhow::anyhow!("file sink requires file_path in audit configuration")
             })?;
-            Ok(tokio::spawn(async move {
-                audit_sink::FileAuditSink::new(path)
-                    .run(event_rx, exit)
-                    .await
-            }))
+            // Opened here, not in the task: a log that cannot be written is a
+            // startup failure, not a detached task nobody joins.
+            let sink = audit_sink::FileAuditSink::open(path)?;
+            Ok(tokio::spawn(async move { sink.run(event_rx, exit).await }))
         }
         AuditSink::Grpc => {
-            let endpoint = config.grpc_url.clone().ok_or_else(|| {
+            let endpoint = audit_config.grpc_url.clone().ok_or_else(|| {
                 anyhow::anyhow!("gRPC sink requires grpc_url in audit configuration")
             })?;
-            Ok(tokio::spawn(async move {
-                audit_sink::GrpcAuditSink::new(endpoint)
-                    .run(event_rx, exit)
-                    .await
-            }))
+            let buffer_path = audit_config.buffer_path.clone().ok_or_else(|| {
+                anyhow::anyhow!("gRPC sink requires buffer_path in audit configuration")
+            })?;
+            let buffer_max_bytes = audit_config.buffer_max_bytes;
+            let credentials = resolve_audit_credentials(config)?;
+            let sink = audit_sink::GrpcAuditSink::new(endpoint, buffer_path, buffer_max_bytes)
+                .with_replay_ack_timeout(audit_config.replay_ack_timeout)
+                .with_credentials(credentials)?;
+            Ok(tokio::spawn(async move { sink.run(event_rx, exit).await }))
         }
         AuditSink::Stdout => Ok(tokio::spawn(async move {
             audit_sink::StdoutAuditSink::new().run(event_rx, exit).await
         })),
         AuditSink::Wal => {
-            let path = config.wal_path.clone().ok_or_else(|| {
+            let path = audit_config.wal_path.clone().ok_or_else(|| {
                 anyhow::anyhow!("WAL sink requires wal_path in audit configuration")
             })?;
-            let grpc_url = config.grpc_url.clone().ok_or_else(|| {
+            let grpc_url = audit_config.grpc_url.clone().ok_or_else(|| {
                 anyhow::anyhow!("WAL sink requires grpc_url in audit configuration")
             })?;
-            let wal_max_bytes = config.wal_max_bytes;
+            let wal_max_bytes = audit_config.wal_max_bytes;
+            let request_timeout = audit_config.wal_request_timeout;
+            let credentials = resolve_audit_credentials(config)?;
             Ok(tokio::spawn(async move {
-                audit_sink::WalAuditSink::new(grpc_url, path, wal_max_bytes)
-                    .run(event_rx, exit)
-                    .await
+                audit_sink::WalAuditSink::new(
+                    grpc_url,
+                    path,
+                    wal_max_bytes,
+                    request_timeout,
+                    credentials,
+                )
+                .run(event_rx, exit)
+                .await
             }))
         }
     }
 }
 
-/// Loads the ECDSA signing key PEM from the audit configuration and
-/// constructs an [`audit::builder::EventBuilder`].
-///
-/// The key is loaded from either `signing_key_path` (file) or
-/// `signing_key_env` (environment variable). Returns an error when
-/// neither is set.
+fn resolve_audit_credentials(
+    config: &config::SidecarConfig,
+) -> anyhow::Result<Option<crate::authority_credentials::ResolvedSidecarCredentials>> {
+    config
+        .authority
+        .credentials
+        .as_ref()
+        .map(crate::authority_credentials::SidecarCredentialsConfig::resolve)
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("failed to resolve authority credentials: {error}"))
+}
+
+/// Loads the ECDSA signing key PEM named by the resolved audit configuration
+/// and constructs an [`audit::builder::EventBuilder`].
 ///
 /// # Errors
 ///
@@ -101,22 +122,36 @@ pub fn spawn_audit_sink(
 pub fn load_audit_event_builder(
     config: &config::AuditConfig,
 ) -> anyhow::Result<audit::builder::EventBuilder> {
-    let pem = if let Some(ref path) = config.signing_key_path {
-        std::fs::read_to_string(path).map_err(|e| {
-            anyhow::anyhow!("failed to read signing key from {}: {e}", path.display())
-        })?
-    } else if let Some(ref env_var) = config.signing_key_env {
-        std::env::var(env_var).map_err(|e| {
-            anyhow::anyhow!("failed to read signing key from env var {env_var}: {e}")
-        })?
-    } else {
-        return Err(anyhow::anyhow!(
-            "audit signing key not configured: set signing_key_path or signing_key_env"
-        ));
+    let pem = match &config.signing_key {
+        config::AuditSigningKey::Env(variable) => std::env::var(variable).map_err(|e| {
+            anyhow::anyhow!("failed to read signing key from env var {variable}: {e}")
+        })?,
+        config::AuditSigningKey::Path(path) => read_signing_key(path, "")?,
+        // Nobody chose this path, so a bare ENOENT reads as a bug. Name the
+        // command that generates it instead.
+        config::AuditSigningKey::StateDefault(path) => read_signing_key(
+            path,
+            " — run `firma config` to generate it, or set signing_key_path",
+        )?,
     };
 
     audit::builder::EventBuilder::new(&pem)
         .map_err(|e| anyhow::anyhow!("failed to initialize audit event builder: {e}"))
+}
+
+/// Read a signing key PEM, appending `remedy` when the file is simply absent.
+fn read_signing_key(path: &std::path::Path, remedy: &str) -> anyhow::Result<String> {
+    std::fs::read_to_string(path).map_err(|e| {
+        let remedy = if e.kind() == std::io::ErrorKind::NotFound {
+            remedy
+        } else {
+            ""
+        };
+        anyhow::anyhow!(
+            "failed to read signing key from {}: {e}{remedy}",
+            path.display()
+        )
+    })
 }
 
 /// Signing adapter that sits between the pipeline and the concrete

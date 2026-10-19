@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use firma_config_utils::NonZeroDuration;
 use firma_core::{
     ActionParams, Connector, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
     HttpParams, InjectedCredentials, TransportView,
@@ -67,7 +68,7 @@ fn github_normalizer() -> anyhow::Result<IntentNormalizer> {
             action_class: "code.write".to_string(),
         }],
     };
-    let table = MappingTable::from_config(&rules, &ActionClassRegistry::v0_1(), true)?;
+    let table = MappingTable::from_config(&rules, &ActionClassRegistry::v0_1())?;
     Ok(IntentNormalizer::new(table))
 }
 
@@ -125,7 +126,7 @@ async fn connector_does_not_duplicate_query_already_present_in_resource() -> any
     let server = tokio::spawn(serve_one_request(listener, request_line_tx));
 
     let connector = GenericHttpConnector::new(&HttpConnectorConfig {
-        timeout: Duration::from_secs(5),
+        timeout: NonZeroDuration::from_static(Duration::from_secs(5)),
         rate_limit: None,
     })?;
     let view = view_for(
@@ -162,7 +163,7 @@ async fn connector_replaces_agent_header_with_the_injected_credential() -> anyho
     }));
 
     let connector = GenericHttpConnector::new(&HttpConnectorConfig {
-        timeout: Duration::from_secs(5),
+        timeout: NonZeroDuration::from_static(Duration::from_secs(5)),
         rate_limit: None,
     })?;
     let agent_headers = HeaderMap::from([
@@ -215,11 +216,11 @@ async fn connector_restores_redacted_query_from_http_params() -> anyhow::Result<
     let server = tokio::spawn(serve_one_request(listener, request_line_tx));
 
     let connector = GenericHttpConnector::new(&HttpConnectorConfig {
-        timeout: Duration::from_secs(5),
+        timeout: NonZeroDuration::from_static(Duration::from_secs(5)),
         rate_limit: None,
     })?;
     let view = view_for(
-        &format!("{addr}/info/refs?access_token=<redacted>&service=git-upload-pack"),
+        &format!("{addr}/info/refs?access_token=[REDACTED]&service=git-upload-pack"),
         HashMap::from([
             ("access_token".to_string(), "secret-token".to_string()),
             ("service".to_string(), "git-upload-pack".to_string()),

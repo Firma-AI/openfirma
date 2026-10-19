@@ -17,6 +17,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use firma_config_schema::sidecar::SidecarConfig;
+
 use super::CONFIG_FILE_NAME;
 
 fn firma() -> Command {
@@ -116,16 +118,16 @@ impl Scaffold {
 
         let cfg_path = config_dir.join(CONFIG_FILE_NAME);
         let text = std::fs::read_to_string(&cfg_path).expect("read firma.toml");
-        let mut config: toml::Value = toml::from_str(&text).expect("parse firma.toml");
-        config["sidecar"]["interceptor"]["listen_addr"] =
-            toml::Value::String("127.0.0.1:0".to_string());
-        config["sidecar"]["authority"]
-            .as_table_mut()
-            .expect("sidecar Authority config")
-            .insert(
-                "connect_addr".to_string(),
-                toml::Value::String("127.0.0.1:1".to_string()),
-            );
+        let parsed = firma_config_loader::FirmaConfig::parse(&cfg_path, &text)
+            .expect("parse unified config");
+        let mut sidecar: SidecarConfig = parsed.section("sidecar").expect("parse sidecar config");
+        sidecar.interceptor.listen_addr = "127.0.0.1:0".parse().expect("fixture address");
+        sidecar.authority.connect_addr = Some("127.0.0.1:1".parse().expect("fixture address"));
+        let mut config: toml::Table = toml::from_str(&text).expect("parse firma.toml");
+        config.insert(
+            "sidecar".to_owned(),
+            toml::Value::try_from(sidecar).expect("serialize sidecar config"),
+        );
         std::fs::write(
             &cfg_path,
             toml::to_string_pretty(&config).expect("serialize firma.toml"),
@@ -274,9 +276,32 @@ fn assert_stack_pid_published(stack_pid: &Path) {
     );
 }
 
-#[test]
-fn scaffold_start_reaches_readiness_and_reports_running_json_status() {
+#[tokio::test]
+async fn scaffold_start_reaches_readiness_and_reports_running_json_status() {
     let scaffold = Scaffold::new();
+    let config_dir = scaffold.cfg_path.parent().expect("config directory");
+    std::fs::write(config_dir.join("custom.toml"), "[[rules]]\nhost = 'localhost:*'\npath = '*'\naction_class = 'communication.internal.send'\n[[rules]]\nhost = 'preserved.test'\naction_class = 'code.read'\n").expect("custom primary mappings");
+    let mut config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&scaffold.cfg_path).expect("read config"))
+            .expect("parse config");
+    config["authority"]["mapping_rules_paths"][0] = toml::Value::String("custom.toml".into());
+    std::fs::write(
+        &scaffold.cfg_path,
+        toml::to_string(&config).expect("serialize custom config"),
+    )
+    .expect("write custom config");
+    let regenerate = firma()
+        .args(["config", "--yes", "--mode", "agent-local", "--output-dir"])
+        .arg(config_dir)
+        .arg("--state-dir")
+        .arg(&scaffold.state_dir)
+        .args(["--authority-listen", "127.0.0.1:0"])
+        .output()
+        .expect("regenerate config");
+    assert!(
+        regenerate.status.success(),
+        "config regeneration failed: {regenerate:?}"
+    );
     let _cleanup = scaffold.cleanup();
 
     let start = scaffold.start();
@@ -296,6 +321,61 @@ fn scaffold_start_reaches_readiness_and_reports_running_json_status() {
     assert_eq!(rows[0]["sandbox_id"], "daemon");
     assert_eq!(rows[0]["state"], "running");
     assert_eq!(rows[0]["listen"], sidecar_addr.to_string());
+    let ca = std::fs::read(
+        firma_runtime_state::RuntimeLayout::from_root(&scaffold.state_dir)
+            .authority_tls_ca_certificate(),
+    )
+    .expect("generated Authority CA");
+    let channel = tonic::transport::Endpoint::from_shared(format!("https://{authority_addr}"))
+        .expect("Authority endpoint")
+        .tls_config(
+            tonic::transport::ClientTlsConfig::new()
+                .ca_certificate(tonic::transport::Certificate::from_pem(ca)),
+        )
+        .expect("Authority TLS")
+        .connect()
+        .await
+        .expect("connect generated Authority");
+    let mut client =
+        firma_protobuf::v1::authority_service_client::AuthorityServiceClient::new(channel);
+    let mut stream = client
+        .watch_policy_bundle(firma_protobuf::v1::WatchPolicyBundleRequest {
+            current_version: String::new(),
+            credentials: None,
+            supported_capabilities: vec![
+                firma_protobuf::v1::PolicyBundleCapability::ActionMappingSnapshotV1 as i32,
+            ],
+        })
+        .await
+        .expect("watch complete generation")
+        .into_inner();
+    let update = tokio::time::timeout(Duration::from_secs(5), stream.message())
+        .await
+        .expect("bounded snapshot delivery")
+        .expect("snapshot RPC")
+        .expect("initial update");
+    let mappings = update
+        .bundle
+        .expect("complete bundle")
+        .mappings
+        .expect("generated mapping paths reached producer");
+    assert!(mappings.default_protected);
+    assert!(mappings.rules.iter().any(
+        |rule| rule.host == "localhost:*" && rule.action_class == "communication.internal.send"
+    ));
+    assert!(
+        mappings
+            .rules
+            .iter()
+            .any(|rule| rule.host == "*.anthropic.com"
+                && rule.action_class == "communication.external.send")
+    );
+    assert!(
+        mappings
+            .rules
+            .iter()
+            .any(|rule| rule.host == "preserved.test" && rule.action_class == "code.read")
+    );
 }
 
 #[test]

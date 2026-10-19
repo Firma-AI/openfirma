@@ -106,7 +106,7 @@ fn record_scoped_singular_metadata_does_not_broadcast() {
         }
     );
     insta::assert_snapshot!(error.to_string(), @"json matcher item_selector selected 0 node(s) in record 1; expected exactly one");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn invalid_domain_among_multiple_matches_fails_before_minting() {
 
     std::assert_matches!(&error, MatcherError::NoHostInUri(uri) if uri == "/hostless");
     insta::assert_snapshot!(error.to_string(), @"no host uri /hostless");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn configured_domain_selector_rejects_zero_matches() {
     let Err(_error) = result else {
         panic!("a configured domain selector with no matches must fail closed");
     };
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn configured_domain_selector_rejects_non_string_matches() {
         let Err(_error) = result else {
             panic!("non-string domain {domain} must fail closed");
         };
-        assert!(minted.is_empty());
+        assert_eq!(minted, [] as [std::string::String; 0]);
     }
 }
 
@@ -325,7 +325,7 @@ fn configured_domain_selector_rejects_mixed_validity() {
     let Err(_error) = result else {
         panic!("a domain selector must reject mixed string and non-string matches");
     };
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn invalid_later_domain_fails_before_minting() {
 
     std::assert_matches!(&error, MatcherError::NoHostInUri(uri) if uri == "/hostless");
     insta::assert_snapshot!(error.to_string(), @"no host uri /hostless");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]

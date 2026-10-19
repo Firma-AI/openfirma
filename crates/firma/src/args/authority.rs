@@ -11,6 +11,21 @@ pub struct Args {
     #[arg(long, hide = true)]
     pub startup_report: Option<PathBuf>,
 
+    /// Serve plaintext gRPC instead of TLS.
+    ///
+    /// Required to serve plaintext at all: with neither `tls_cert_path` nor
+    /// `tls_key_path` configured and no material in the state directory,
+    /// startup fails instead of guessing that plaintext was meant.
+    ///
+    /// It also has to be passed again for each process. `firma run` sets it on
+    /// the Authority it autostarts, which every client reaches over loopback
+    /// `http://`: the `[authority]` section that child reads names no TLS
+    /// paths, and an unnamed pair is exactly what resolves from the host's
+    /// state directory — so without the flag the child would serve TLS to
+    /// clients dialling `http://`.
+    #[arg(long)]
+    pub no_tls: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }

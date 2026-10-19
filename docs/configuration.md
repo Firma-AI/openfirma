@@ -3,8 +3,7 @@
 Every subcommand reads one shared, sectioned `firma.toml`. There is exactly
 **one** schema. A single file holds top-level `[authority]`, `[sidecar.*]`
 (`[sidecar.interceptor]` / `[sidecar.policy]` / `[sidecar.ca]` /
-`[sidecar.audit]` / `[sidecar.mapping]`, plus any bare `[sidecar]` scalars),
-and `[run]`. Commands consume the sections they need. A required section that
+`[sidecar.audit]`), and `[run]`. Commands consume the sections they need. A required section that
 is missing fails closed; diagnostic or optional consumers can inspect multiple
 sections or continue without an optional section.
 
@@ -57,22 +56,21 @@ applies to:
 - Run profile `sidecar_local_exec.timeout` and `hitl_max_wait`;
 - `[sidecar.authority]` `connect_timeout`, `reconnect_min_backoff`, and
   `reconnect_max_backoff`;
+- `[sidecar.audit]` `replay_ack_timeout` and `wal_request_timeout`;
 - `[sidecar.interceptor]` `drain_timeout`;
 - `[sidecar.interceptor.connect_relay]` `setup_timeout` and `session_max`;
 - `[sidecar.connector]` `default_timeout` and each host `timeout`; and
 - `[sidecar.local_exec]` `retry_after` (which must also be at least 1 ms because
   its wire representation uses whole milliseconds).
 
-TTL, retention, grace, and clock-skew durations have field-specific semantics
-instead of inheriting this general non-zero duration rule. Authority
+TTL, retention, and grace durations have field-specific semantics instead of
+inheriting this general non-zero duration rule. Authority
 `max_ttl` and `bundle_ttl` are also strictly non-zero, because zero would make
 their outputs immediately expired or stale. Run profile `capability.grace`,
 `sidecar.authority.revocation_readiness_grace`,
-`sidecar.interceptor.https_mitm.cert_ttl`,
-`sidecar.capability_validation.clock_skew_tolerance`, and
-`sidecar.local_exec.token_ttl` each have their own validation. For example, a
-zero clock-skew tolerance means strict expiry checking, and a zero revocation
-readiness grace means immediate readiness.
+`sidecar.interceptor.https_mitm.cert_ttl`, and `sidecar.local_exec.token_ttl`
+each have their own validation. For example, a zero revocation readiness grace
+means immediate readiness.
 
 Unknown keys are rejected recursively rather than ignored. The only top-level
 keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
@@ -86,7 +84,7 @@ unsupported `backend` anywhere fails startup. Configure process logging with
 ### Run capability sources
 
 Capability sources use a tagged `capability.source` table. A file source names
-the capability file:
+canonical signed capability seed TOML produced by `firma authority issue`:
 
 ```toml
 [run.profiles.codex.capability.source]
@@ -95,6 +93,38 @@ path = "capability.toml"
 ```
 
 Use `kind = "disabled"` without `path` to disable the source.
+For a file source, Run parses the complete seed before preparing the sandbox,
+exports only `raw_token` as `FIRMA_CAPABILITY_TOKEN`, and preserves the
+configured path as `FIRMA_CAPABILITY_FILE`. For local Sidecar autostart, the
+file and its resolved target must stay beneath the selected
+`<state-dir>/capabilities/` directory; the Sidecar reads only the resolved path
+and watches both contained parent directories. A pre-managed external Sidecar
+owns its runtime state and seed list independently.
+
+#### Migrating a bare-token capability file
+
+Earlier releases accepted a file holding only the raw `v4.public....` token, for
+either `path` or `firma run --capability-file`. Such a file now fails closed
+before launch, and so does a Sidecar configured to load it:
+
+```text
+capability seed '/etc/firma/capability.toml' is not canonical CapabilitySeed TOML: key with no value, expected `=`
+```
+
+A bare token carries none of the claims the canonical shape requires, so there
+is nothing to rewrite. Re-issue the capability and point at the new file:
+
+```bash
+firma authority issue \
+  --agent-id agt_01j0000000e008000000000001 \
+  --session-id <session-id> \
+  --action communication.external.send \
+  --output capability.toml
+```
+
+The same applies to a seed that was hand-edited to carry extra fields such as
+operator notes: the loader accepts exactly the fields `firma authority issue`
+writes, and names any additional one in its error.
 
 ### Run executable policies
 
@@ -107,16 +137,19 @@ approval_policy = "on-request"
 
 ## Scaffolded Example
 
-`firma config` writes one sectioned `firma.toml` with all paths
-absolutised under the resolved config and state directories. The shape is:
+`firma config` writes one sectioned `firma.toml`. Policy and mapping paths stay
+relative to the config file, and the artifact files the command generates —
+signing keys, revocations, TLS material, audit log and key, MITM CA — are **not**
+named at all. Each has a default that resolves to the position the material was
+just written to, so naming it would only pin the file to this machine. The
+shape is:
 
 ```toml
 [authority]
+mapping_rules_paths = ["mapping-rules.toml"]
 listen_addr = "127.0.0.1:50051"
-policy_dir = '/home/me/.config/firma/policies'
-issuance_policy_dir = '/home/me/.config/firma/issuance-policies'
-revocation_file = '/run/user/1000/firma/revocations.txt'
-key_file = '/home/me/.config/firma/authority.key'
+policy_dir = "policies/"
+issuance_policy_dir = "issuance-policies/"
 max_ttl = "1h"
 bundle_ttl = "30s"
 
@@ -126,18 +159,59 @@ listen_addr = "127.0.0.1:8080"
 
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"
-url = "http://127.0.0.1:50051"
-public_key_path = '/home/me/.config/firma/authority.pub'
-
-[sidecar.ca]
-dir = '/run/user/1000/firma/generated-firma-ca'
-
-[sidecar.audit]
-signing_key_path = '/home/me/.config/firma/audit.key'
-
-[sidecar.mapping]
-rules_path = '/home/me/.config/firma/mapping-rules.toml'
+url = "https://127.0.0.1:50051"
 ```
+
+The connected Sidecar receives mappings only in the mini-authority's snapshot;
+the producer list in `[authority]` owns them.
+
+Every omitted key remains settable as an override, and an explicit value always
+wins. `--state-dir` selects the root the defaults resolve against at scaffold
+time; the Authority and Sidecar resolve the same root at startup from
+`FIRMA_STATE_DIR` or the platform runtime directory, so export `FIRMA_STATE_DIR`
+when you scaffold somewhere other than the default.
+
+### State-directory defaults
+
+| Key                                        | Unset resolves to                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------ |
+| `authority.key_file`                       | `<state_dir>/authority.key`                                                    |
+| `authority.revocation_file`                | `<state_dir>/revocations.txt`                                                  |
+| `authority.tls_cert_path` / `tls_key_path` | `<state_dir>/tls/authority.{crt,key}` — TLS stays off when neither file exists |
+| `sidecar.ca.dir`                           | `<state_dir>/generated-firma-ca`                                               |
+| `sidecar.audit.file_path`                  | `<state_dir>/audit.jsonl`, with the `file` sink                                |
+| `sidecar.audit.signing_key_path`           | `<state_dir>/audit.key`, unless `signing_key_env` is set                       |
+| `sidecar.authority.public_key_path`        | `<state_dir>/authority.pub`, when that file exists                             |
+| `sidecar.authority.ca_cert_path`           | `<state_dir>/tls/authority-ca.crt`, when that file exists                      |
+
+The Authority trust anchors and the Authority's own TLS pair are adopted only when
+the material is actually present, so a deployment that never generated them
+keeps today's behavior — plaintext gRPC and a reject-all token verifier —
+instead of failing on a file nobody wrote. A half-generated Authority TLS pair
+is rejected rather than silently downgraded to plaintext, and an Authority that
+finds no TLS material logs a warning before serving plaintext.
+
+Because of that, **the state directory is a trust root** for two files:
+`authority.pub` (which capability tokens are verified against) and
+`tls/authority-ca.crt` (which the Authority's TLS identity is verified against).
+Both are adopted from there when the config names none. Keep the state
+directory private — `firma config` creates it mode 0700 — and pin the paths
+explicitly if it is shared.
+
+### Migrating an existing config
+
+Defaults changed, so a hand-written config that relied on the old ones behaves
+differently:
+
+| Key                         | Old default when unset                               | New default                      |
+| --------------------------- | ---------------------------------------------------- | -------------------------------- |
+| `authority.key_file`        | `firma-authority.key`, re-based to `<config_dir>`    | `<state_dir>/authority.key`      |
+| `authority.revocation_file` | `revocations.txt`, relative to the working directory | `<state_dir>/revocations.txt`    |
+| `sidecar.ca.dir`            | `./firma-ca/`, relative to the working directory     | `<state_dir>/generated-firma-ca` |
+
+Set the key explicitly to keep the old location. `sidecar.ca.dir` matters most:
+a new directory means a **new MITM CA**, so anything that already trusts the old
+one stops trusting intercepted TLS until it is re-imported.
 
 The `[sidecar.*]` tables map onto the per-section reference below
 (`[sidecar.interceptor]` documents the same fields as
@@ -209,6 +283,31 @@ Inspect the result before launch:
 firma run --profile generic --print-effective-config -- echo hi
 ```
 
+## The Workspace Mount
+
+`firma run` binds one directory read-write for the agent: the **project root**,
+meaning the directory that holds the `.firma/` the config was loaded from. That
+is derived from where the config file is, not from the directory you invoke
+`firma run` in — so running from a subdirectory still gives the agent the whole
+project.
+
+Because it is derived, `firma config` does not write it. An ordinary scaffolded
+`firma.toml` has no `[[run.profiles.<profile>.mounts]]` block at all, and names
+no path from the machine that generated it.
+
+Two cases are still recorded explicitly, because the derivation would not
+reproduce them:
+
+- `--workspace <dir>` pointing somewhere other than the project root.
+- A config whose directory is not named `.firma`, or whose project root would
+  be `$HOME` or the filesystem root. Those roots are refused: `$HOME` is far
+  wider than a project, and the sensitive-path overlay covers only a fixed
+  suffix list.
+
+Adding any `mounts` entry replaces the derived default entirely, so list every
+path the agent needs. Re-running `firma config` drops a workspace mount it can
+derive and leaves mounts you added by hand alone.
+
 ## Config-Relative Resource Resolution
 
 A resource field holding a **relative** path resolves under the resolved
@@ -227,15 +326,14 @@ use the same compact duration syntax and validation as the corresponding TOML
 fields.
 
 Resource paths resolve relative to the containing `firma.toml`. This includes
-Sidecar mapping files; Authority client mTLS files and credential secret files;
+Authority mapping files; Authority client mTLS files and credential secret files;
 and Run file-provided mount sources, seccomp policies, capability files, and
 capability keys in both defaults and every profile.
 
 | Field                                                                  | Relative value resolves under |
 | ---------------------------------------------------------------------- | ----------------------------- |
 | `sidecar.policy.dir`                                                   | `<config_dir>/<value>`        |
-| `sidecar.mapping.rules_path`                                           | `<config_dir>/<value>`        |
-| `sidecar.mapping.rules_paths[]`                                        | `<config_dir>/<value>`        |
+| `authority.mapping_rules_paths[]`                                      | `<config_dir>/<value>`        |
 | `sidecar.authority.public_key_path`, mTLS, and credential secret files | `<config_dir>/<value>`        |
 | `sidecar.audit.file_path`                                              | `<config_dir>/<value>`        |
 | `sidecar.audit.signing_key_path`                                       | `<config_dir>/<value>`        |
@@ -250,30 +348,43 @@ revocation, and `sidecar.ca.dir` paths are not re-based. Mask-home values are
 home-relative, executable allowlist entries must be absolute paths to existing
 files and are canonicalized when loaded, and CLI path arguments remain verbatim.
 
-| Field                       | Resolves to                               |
-| --------------------------- | ----------------------------------------- |
-| `sidecar.ca.dir`            | as configured (default `./firma-ca/`)     |
-| `authority.revocation_file` | as configured (default `revocations.txt`) |
-| sockets, pid, listen, logs  | state/runtime dir                         |
+| Field                       | Resolves to                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `sidecar.ca.dir`            | as configured (default `<state>/generated-firma-ca`)                                                                |
+| `authority.revocation_file` | as configured — an explicit relative value stays relative to the working directory — else `<state>/revocations.txt` |
+| sockets, pid, listen, logs  | state/runtime dir                                                                                                   |
+
+Fields left unset resolve against the state directory (`--state-dir`, else
+`FIRMA_STATE_DIR`, else the platform runtime directory) instead — see
+[State-directory defaults](#state-directory-defaults) for the full table.
 
 > **See also**: `examples/demo/firma.toml` is the canonical
 > end-to-end reference.
 
 ## Minimal Configuration
 
-An empty file is valid. Defaults are applied for every section:
+Every field has a default except two required inputs: a Sidecar needs its
+Authority endpoint, and an Authority needs at least one mapping file.
 
 ```toml
-# Empty config uses all defaults.
 # Interceptor: HTTP proxy on 0.0.0.0:8080
 # Policy dir: ./policies/
-# CA dir: ./firma-ca/
-# Mapping rules: mapping-rules.toml
+# CA dir: <state>/generated-firma-ca
+# Audit log: <state>/audit.jsonl, signed with <state>/audit.key
+
+[authority]
+mapping_rules_paths = ["mapping-rules.toml"]
+
+[sidecar.authority]
+url = "https://127.0.0.1:50051"
 ```
 
 ## Full Example
 
 ```toml
+[authority]
+mapping_rules_paths = ["/etc/firma/rules.toml"]
+
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
@@ -313,13 +424,6 @@ header = "Authorization"
 secret_path = "/run/secrets/stripe_token"
 prefix = "Bearer "
 
-[sidecar.mapping]
-rules_path = "/etc/firma/rules.toml"
-default_protected = false
-
-[sidecar.capability_validation]
-clock_skew_tolerance = "5s"
-
 [sidecar.constraint_enforcement]
 session_state_capacity = 8192
 session_state_backend = "lru"
@@ -347,11 +451,11 @@ fpr = 0.0001
 lru_capacity = 100000
 
 [sidecar.audit]
-sink = "wal"
+sink = "grpc"
 file_path = "/var/log/firma/audit.jsonl"
 grpc_url = "https://audit.example.com"
-wal_path = "/var/lib/firma/wal"
-wal_max_size = "100 MiB"
+buffer_path = "/var/lib/firma/audit-buffer.jsonl"
+buffer_max_size = "100 MiB"
 signing_key_path = "/etc/firma/audit.pem"
 # signing_key_env = "FIRMA_AUDIT_SIGNING_KEY"
 ```
@@ -391,18 +495,50 @@ Validation:
 ### `[sidecar.interceptor.https_mitm]`
 
 Optional TLS MITM controls for HTTPS `CONNECT` traffic in `http_proxy` mode.
-Defaults are MITM-enabled with a curated common API host list. Hosts not matched
-by `intercept_hosts` stay in transparent CONNECT tunnel mode (destination-level
-enforcement only).
+Interception is on by default for **every** host, and every host is strict, so
+a host that cannot be intercepted is denied rather than tunnelled uninspected.
+Exempt the endpoints that cannot be intercepted through `bypass_hosts`; a
+bypassed host stays in transparent CONNECT tunnel mode with destination-level
+enforcement only. Three cases need it:
 
-| Field                 | Type         | Default                  | Description                                         |
-| --------------------- | ------------ | ------------------------ | --------------------------------------------------- |
-| `enabled`             | bool         | `true`                   | Enables MITM for hosts matched by `intercept_hosts` |
-| `intercept_hosts`     | list<string> | curated common API hosts | Host patterns to intercept (`*` or `*.example.com`) |
-| `bypass_hosts`        | list<string> | `[]`                     | Host patterns to force CONNECT tunnel mode          |
-| `strict_hosts`        | list<string> | `[]`                     | Host patterns that must be intercepted              |
-| `cert_ttl`            | duration     | `"1d"`                   | Leaf certificate cache TTL                          |
-| `cert_cache_capacity` | usize        | `1024`                   | Maximum number of cached leaf certificates          |
+- **Certificate pinning.** The client rejects the Sidecar's leaf certificate.
+- **Upstream mTLS.** The endpoint wants a client certificate the Sidecar does
+  not hold.
+- **Anything tunnelled through `CONNECT` that is not TLS** — SSH via
+  `ProxyCommand`, a database or SMTP tunnel, plaintext on port 443. A strict
+  host refuses a non-TLS payload rather than relaying it, and every host is
+  strict by default. The refusal is audited as `network.connect` with reason
+  `FailClosed` and a detail naming the preface, so check audit before blaming
+  the network.
+
+| Field                 | Type         | Default | Description                                         |
+| --------------------- | ------------ | ------- | --------------------------------------------------- |
+| `enabled`             | bool         | `true`  | Enables MITM for hosts matched by `intercept_hosts` |
+| `intercept_hosts`     | list<string> | `["*"]` | Host patterns to intercept (`*` or `*.example.com`) |
+| `bypass_hosts`        | list<string> | `[]`    | Host patterns to force CONNECT tunnel mode          |
+| `strict_hosts`        | list<string> | `["*"]` | Host patterns that must be intercepted              |
+| `cert_ttl`            | duration     | `"1d"`  | Leaf certificate cache TTL                          |
+| `cert_cache_capacity` | usize        | `1024`  | Maximum number of cached leaf certificates          |
+
+Setting `intercept_hosts` or `strict_hosts` _replaces_ the default, so a file
+that lists hosts explicitly narrows interception and will not pick up a later,
+wider default. `firma config` therefore writes neither key, and strips
+`enabled`, `intercept_hosts` and `strict_hosts` on every run — whoever wrote
+them. A hand-written narrowing, including `enabled = false`, does not survive a
+re-run; the removal only ever widens interception, which is the fail-closed
+direction, but it is not a merge. `firma config` prints a warning naming the
+keys it removed, so a narrowed host that starts hard-denying afterwards is
+traceable to that run. Keep a host uninspected through `bypass_hosts`, which
+`firma config` merges rather than replaces — and which it warns about when it
+holds entries no selected mapping asks for, since a merged list never drops the
+exemptions an earlier selection added.
+
+Turning interception off entirely therefore goes through the same key:
+`bypass_hosts = ["*"]` matches every host and is checked before interception, so
+every tunnel is relayed uninspected. `enabled = false` and
+`intercept_hosts = []` have the same runtime effect but are stripped by the next
+`firma config` run, which leaves the machine intercepting again with only a
+warning to show for it.
 
 Validation:
 
@@ -414,7 +550,8 @@ Validation:
 - Wildcards inside labels (for example `api.*.com`) are rejected.
 - Wildcard suffixes must contain at least two DNS labels (for example
   `*.com` is rejected).
-- If `enabled = true`, `intercept_hosts` must be non-empty.
+- `enabled = true` with an explicitly empty `intercept_hosts` is accepted and
+  treated as MITM disabled, not as an error: there is nothing to intercept.
 - If `enabled = true`, `cert_ttl` and `cert_cache_capacity` must be
   greater than `0`.
 - CA material has one location: `firma-ca.crt` and `firma-ca.key` under
@@ -439,52 +576,48 @@ Validation:
   `Connection: Upgrade` + `Upgrade: websocket`) are policy-evaluated at
   handshake request time and then relayed as upgraded streams when allowed.
 
-Default `intercept_hosts` includes common providers/services such as OpenAI,
-Anthropic/Claude (`api.anthropic.com`, `platform.claude.com`, `claude.ai`,
-`console.anthropic.com`), OpenRouter, Groq, Mistral, Cohere, Google
-GenAI/Vertex, DeepSeek, Together, Fireworks, Replicate, Perplexity, xAI,
-Supabase, Resend, Twilio, SendGrid, Stripe, Slack, and GitHub APIs.
+The default covers every host rather than a curated provider list, because an
+unlisted host is indistinguishable from an ungoverned one: traffic nobody
+thought to enumerate would pass uninspected. Narrowing is an explicit operator
+decision through `bypass_hosts`.
 
 #### Practical operating modes
 
-The sidecar supports progressive rollout patterns. A useful mental model:
+The sidecar supports progressive rollout patterns. Mappings always come from
+the Authority, and its snapshots always protect unmatched traffic. A useful
+mental model:
 
-- `intercept_hosts` controls where you get L7 visibility/enforcement via MITM.
-- `sidecar.mapping.default_protected` controls whether unmapped traffic is blocked by
-  policy (`true`) or allowed by default (`false`).
+- `bypass_hosts` controls where you give up L7 visibility/enforcement; every
+  other host is intercepted.
+- Authority snapshots always protect unmatched traffic. Sidecars cannot override
+  that posture or read local mapping files.
 
-1. Open connectivity + targeted governance (recommended for onboarding)
+1. Targeted HTTPS inspection
 
-Use when you want agents to keep working broadly, but still inspect/enforce
-high-value destinations (for example model APIs, secrets-bearing backends, or
-billing endpoints).
+Use when you need decrypted visibility for selected destinations. Explicit
+Authority rules are still required for every admitted HTTP or CONNECT request.
 
 ```toml
 [sidecar.interceptor.https_mitm]
 enabled = true
 intercept_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
 strict_hosts = ["api.anthropic.com", "api.openai.com"]
-
-[sidecar.mapping]
-default_protected = false
 ```
 
 Behavior:
 
-- Unmapped hosts are allowed (lower friction rollout).
-- This includes plain HTTP requests and HTTPS CONNECT destinations that are not
-  explicitly blocked by mapping/policy.
+- Unmapped HTTP requests and CONNECT destinations are denied.
 - Intercepted hosts still flow through full intent normalization + policy +
   audit.
 - `strict_hosts` fail closed if MITM setup cannot be established.
 
 Audit/log visibility note:
 
-- Hosts outside `intercept_hosts` are handled as CONNECT tunnel flows. They are
-  still governed, but without decrypted L7 request details.
-- For clearer counterpart observability (action/resource-rich audit + explicit
-  sidecar handling logs), include target hosts in `intercept_hosts` and keep
-  them out of `bypass_hosts`.
+- Every host is intercepted by default, so L7 request details are present
+  unless a host sits in `bypass_hosts` or the file narrows `intercept_hosts`.
+- A bypassed host is handled as a CONNECT tunnel flow. It is still governed,
+  but without decrypted L7 request details, so keep a host out of
+  `bypass_hosts` whenever you want action/resource-rich audit for it.
 
 #### Quick Troubleshooting
 
@@ -511,7 +644,14 @@ Audit/log visibility note:
     `MITM CONNECT relay failed after policy allow`. These include
     `failure_class` (`timeout`, `refused`, `reset`, `tls_handshake`, `dns`) so
     operators can distinguish policy allow from upstream network failure.
-  - Add the host to `intercept_hosts` to get richer L7 policy/audit context.
+  - If the host is in `bypass_hosts`, remove it to get richer L7 policy/audit
+    context — it is intercepted by default otherwise.
+- A tunnel opens (`CONNECT` returns 200) and then dies with nothing relayed:
+  - Check audit for a `network.connect` deny whose detail says
+    `received non-TLS CONNECT preface`. Every host is strict by default, so a
+    tunnel carrying something other than TLS is refused rather than relayed.
+  - Add that host to `bypass_hosts` if it must stay reachable; it then tunnels
+    with destination-level enforcement only.
   - For `firma run --profile codex`, wrapper defaults inject:
     - `--sandbox workspace-write`
     - `--ask-for-approval never`
@@ -547,9 +687,6 @@ traffic.
 enabled = true
 intercept_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
 strict_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
-
-[sidecar.mapping]
-default_protected = true
 ```
 
 Behavior:
@@ -565,16 +702,15 @@ certificate-distribution reasons.
 
 ```toml
 [sidecar.interceptor.https_mitm]
-enabled = false
-
-[sidecar.mapping]
-default_protected = false
+bypass_hosts = ["*"]
 ```
 
 Behavior:
 
 - Sidecar enforces at CONNECT destination level for HTTPS.
 - No decrypted request path/body visibility for HTTPS.
+- `bypass_hosts = ["*"]` rather than `enabled = false`: both switch
+  interception off, but only this one survives a `firma config` re-run.
 
 ### `[sidecar.policy]`
 
@@ -592,9 +728,9 @@ Validation:
 
 Certificate authority directory.
 
-| Field | Type | Default       | Description                      |
-| ----- | ---- | ------------- | -------------------------------- |
-| `dir` | path | `./firma-ca/` | Directory containing CA material |
+| Field | Type | Default                      | Description                      |
+| ----- | ---- | ---------------------------- | -------------------------------- |
+| `dir` | path | `<state>/generated-firma-ca` | Directory containing CA material |
 
 Validation:
 
@@ -658,26 +794,19 @@ Validation:
   environment variable must be set and non-empty at startup.
 - Vault mode: `secret_path` must be set and non-empty.
 
-### `[sidecar.mapping]`
+### Authority mapping inputs
 
-Intent normalization and mapping rules configuration.
+`[authority].mapping_rules_paths` selects one or more mapping files, concatenated
+in order. Omitted/empty lists and empty entries are rejected, including by
+config-consuming offline Authority commands such as `firma authority issue`. A
+selected file with no rules — empty, comment-only, or `rules = []` —
+contributes nothing; when every selected file is like that, the Authority
+publishes a deny-all snapshot. Sidecars require `[sidecar.authority].url` and
+complete protected snapshots before readiness; endpoint-free mode is unsupported.
 
-| Field               | Type   | Default              | Description                          |
-| ------------------- | ------ | -------------------- | ------------------------------------ |
-| `rules_path`        | string | `mapping-rules.toml` | Path to the mapping rules TOML file  |
-| `default_protected` | bool   | `true`               | Whether unlisted hosts are protected |
-
-Validation:
-
-- `rules_path` must not be empty.
-
-### `[sidecar.capability_validation]`
-
-Stage 1 settings.
-
-| Field                  | Type     | Default | Description                    |
-| ---------------------- | -------- | ------- | ------------------------------ |
-| `clock_skew_tolerance` | duration | `"0s"`  | Token expiry clock skew window |
+To upgrade, move former Sidecar primary/extra mapping paths to the Authority,
+remove Sidecar mapping keys, and set the endpoint. There is no replacement for
+`default_protected=false`. See the [mapping upgrade guide](../docs-site/src/content/docs/guides/extend-mapping.md).
 
 ### `[sidecar.constraint_enforcement]`
 
@@ -722,23 +851,40 @@ Validation:
   `burst`, and `timeout` must be greater than zero.
 - Duplicate `host` entries are rejected.
 
+### `[sidecar.capability_seed]`
+
+Configures canonical `CapabilitySeed` TOML loaded into Stage 1 at Sidecar
+startup.
+
+| Field        | Type       | Default | Description                                    |
+| ------------ | ---------- | ------- | ---------------------------------------------- |
+| `paths`      | path array | `[]`    | Existing canonical seed TOML files             |
+| `hot_reload` | bool       | `true`  | Watch configured seeds and load valid rewrites |
+
+Every configured file and its resolved target must stay beneath the selected
+Sidecar runtime `<state-dir>/capabilities/` directory. The Sidecar canonicalizes
+that directory, each existing seed, and each configured parent before reading or
+registering a watcher. It reads only the resolved seed and watches only the two
+contained parents. Traversal, external-parent, and symlink paths that cross the
+boundary fail startup. An empty `paths` list does not require the directory to
+exist.
+
 ### `[sidecar.authority]`
 
-Tuning for the background Authority stream clients
-(`WatchPolicyBundle`, `WatchRevocations`). Only consulted when
-`sidecar.authority.url` is set; when unset the sidecar runs in dev
-mode and this section is ignored.
+Authority endpoint and tuning for the background Authority stream clients
+(`WatchPolicyBundle`, `WatchRevocations`). Every Sidecar requires `url`: the
+Authority publishes the policy and mapping snapshot the Sidecar enforces.
 
-| Field                                  | Type     | Default   | Description                                                                      |
-| -------------------------------------- | -------- | --------- | -------------------------------------------------------------------------------- |
-| `connect_addr`                         | address  | none      | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin |
-| `connect_timeout`                      | duration | `"10s"`   | Connection timeout for the tonic channel                                         |
-| `reconnect_min_backoff`                | duration | `"250ms"` | Minimum reconnect backoff                                                        |
-| `reconnect_max_backoff`                | duration | `"30s"`   | Maximum reconnect backoff                                                        |
-| `revocation_readiness_grace`           | duration | `"500ms"` | Grace period after revocation stream opens before readiness                      |
-| `revocation_fail_closed_on_disconnect` | bool     | `false`   | Flip revocation readiness back to false when the stream drops                    |
-| `public_key_path`                      | path     | none      | Authority Ed25519 public key used to verify capabilities.                        |
-| `credentials`                          | section  | none      | Optional Sidecar PSK credentials sent on every Authority RPC.                    |
+| Field                                  | Type     | Default                                             | Description                                                                                                         |
+| -------------------------------------- | -------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `connect_addr`                         | address  | none                                                | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                    |
+| `connect_timeout`                      | duration | `"10s"`                                             | Connection timeout for the tonic channel                                                                            |
+| `reconnect_min_backoff`                | duration | `"250ms"`                                           | Minimum reconnect backoff                                                                                           |
+| `reconnect_max_backoff`                | duration | `"30s"`                                             | Maximum reconnect backoff                                                                                           |
+| `revocation_readiness_grace`           | duration | `"500ms"`                                           | Grace period after revocation stream opens before readiness                                                         |
+| `revocation_fail_closed_on_disconnect` | bool     | `false`                                             | Flip revocation readiness back to false when the stream drops                                                       |
+| `public_key_path`                      | path     | `<state_dir>/authority.pub` when present, else none | Authority Ed25519 public key used to verify capabilities. Unset with no file present keeps the reject-all verifier. |
+| `credentials`                          | section  | none                                                | Optional Sidecar PSK credentials sent on every Authority RPC.                                                       |
 
 Validation:
 
@@ -810,23 +956,90 @@ Defaults give roughly 14 MB total footprint (bloom 2.4 MB + LRU
 Audit event emitter settings. Controls where enforcement events are written and
 how they are signed.
 
-| Field              | Type      | Default     | Description                                      |
-| ------------------ | --------- | ----------- | ------------------------------------------------ |
-| `sink`             | string    | `stdout`    | `stdout`, `file`, `grpc`, `wal`                  |
-| `file_path`        | path      | none        | Append-only file path (required for `file` sink) |
-| `grpc_url`         | string    | none        | Audit service URL (required for `grpc`/`wal`)    |
-| `wal_path`         | path      | none        | Local WAL directory (required for `wal` sink)    |
-| `wal_max_size`     | byte size | `"100 MiB"` | Maximum WAL size                                 |
-| `signing_key_path` | path      | none        | ECDSA private key file path                      |
-| `signing_key_env`  | string    | none        | Env var containing ECDSA private key (PEM)       |
+| Field                 | Type      | Default               | Description                                       |
+| --------------------- | --------- | --------------------- | ------------------------------------------------- |
+| `sink`                | string    | `stdout`              | `stdout`, `file`, `grpc`, `wal`                   |
+| `file_path`           | path      | `<state>/audit.jsonl` | Append-only file path, used by the `file` sink    |
+| `grpc_url`            | string    | none                  | Audit service URL (required for `grpc` and `wal`) |
+| `buffer_path`         | path      | none                  | Local buffer file (required for `grpc` sink)      |
+| `buffer_max_size`     | byte size | `"100 MiB"`           | Maximum local buffer size                         |
+| `replay_ack_timeout`  | duration  | `"30s"`               | Wait for the collector to acknowledge a replay    |
+| `wal_path`            | path      | none                  | Durable journal file (required for `wal`)         |
+| `wal_max_size`        | byte size | `"100 MiB"`           | Maximum pending journal size                      |
+| `wal_request_timeout` | duration  | `"5s"`                | Bound on each `wal` delivery attempt              |
+| `signing_key_path`    | path      | `<state>/audit.key`   | ECDSA private key file path                       |
+| `signing_key_env`     | string    | none                  | Env var containing ECDSA private key (PEM)        |
+
+The `grpc` sink buffers outages. While the stream to `grpc_url` is unavailable it
+appends events to `buffer_path` and replays them in order on reconnect. The
+buffer is bounded by `buffer_max_size`; once full, the oldest events are
+evicted rather than blocking the agent.
+
+Buffered events are cleared only after the audit service acknowledges them, so
+a replay that fails partway leaves them on disk for the next attempt. Events
+survive a Sidecar restart: a new process picks up whatever its predecessor left
+in `buffer_path`.
+
+An unreachable audit service never blocks startup or the enforcement path. The
+Sidecar starts in buffering mode, retries on an exponential backoff between
+250 ms and 30 s, and bounds each connect attempt at 10 s. A replay waits up to
+`replay_ack_timeout` for the collector's acknowledgment and keeps the buffer if
+none arrives. New events queue behind the replay until then, so a larger value
+lengthens the back-pressure on the agent when a collector stalls. Keep it above
+the time the collector needs to persist a full `buffer_max_size` replay: a
+replay that times out is resent whole on every reconnect, and new events keep
+filling the buffer until the oldest are evicted. A collector that
+stays connected but stops reading is treated like a disconnected one: events
+go to the buffer instead of waiting for stream capacity. Events already handed
+to that stream were never acknowledged and are lost with it; the Sidecar
+counts them and reports the total when it stops, separately from the events
+the buffer cap evicted.
+
+A buffer that cannot be written — a full or read-only filesystem, for
+instance — is not a degraded mode. With the stream down there is nowhere else
+for an event to go, so the Sidecar logs the failure and shuts down rather than
+keep enforcing calls whose evidence is discarded. Give `buffer_path` a
+filesystem sized for `buffer_max_size`.
+
+Relative paths in `buffer_path` and `wal_path` resolve against the configuration file's
+directory, as they do for `file_path` and `signing_key_path`.
+
+The buffer holds the same events the `file` sink writes, which name resources,
+agents, and tokens. Its parent directory is created if missing, and on Unix the
+directory is created with mode `0700` and the buffer file with mode `0600`.
 
 Validation:
 
-- `file_path` must be set and non-empty when sink is `file`.
-- `grpc_url` must be set and non-empty when sink is `grpc` or `wal`.
+- `file_path` must be non-empty when set. Unset with the `file` sink resolves
+  to `audit.jsonl` in the state directory.
+- `grpc_url` must be set and non-empty when sink is `grpc` or `wal`, and must parse as
+  an `http://` or `https://` URI with a host. The sink buffers and retries
+  instead of dialing at startup, so an unusable URL is rejected here rather
+  than looking like a collector outage at runtime.
+- `buffer_path` must be set and non-empty when sink is `grpc`.
+- `buffer_max_size` must be greater than zero.
 - `wal_path` must be set and non-empty when sink is `wal`.
 - `wal_max_size` must be greater than zero.
-- `signing_key_path` and `signing_key_env` are mutually exclusive.
+- `signing_key_path` and `signing_key_env` are mutually exclusive. With
+  neither set, the key is read from `audit.key` in the state directory.
+
+The `wal` sink is separate from the buffered `grpc` sink. It syncs each event
+before sending and reclaims it only after a matching durable per-event receipt.
+Capacity exhaustion fails the sink instead of evicting pending records.
+`wal_request_timeout` bounds each delivery attempt, from connecting through the
+collector's durable commit. Set it above the collector's commit latency: an
+attempt that times out is retried a second later, so a collector slower than the
+bound receives the same record repeatedly while the journal fills. A replay pass
+delivers up to 32 records, one attempt at a time, and new events wait for the
+whole pass. Shutdown waits for the attempt in progress, so keep the value well
+below your supervisor's termination grace period: events not yet journaled are
+lost if the process is killed first. Both
+network sinks attach configured Authority credentials, but `grpc` uses legacy
+streaming and rejects run evidence. Live gRPC sends are not journaled and can be
+lost on a broken stream; they do not provide the WAL's durable delivery contract.
+Do not share a file between the two modes. See the
+[audit guide](../docs-site/src/content/docs/guides/audit-log.md) for scope files,
+rejection archives and recovery limits.
 
 ### `[sidecar.local_exec]`
 
@@ -869,7 +1082,7 @@ for `async_token` mode, `firma-run` retries internally with the token until
 
 ## Mapping Rules File
 
-The mapping rules file referenced by `sidecar.mapping.rules_path` defines how raw HTTP
+The files selected by `[authority].mapping_rules_paths` define how raw HTTP
 requests are classified into canonical action classes.
 
 ```toml
@@ -877,11 +1090,12 @@ requests are classified into canonical action classes.
 method = "POST"
 host = "api.openai.com"
 path = "/v1/chat/completions"
-action_class = "llm.inference"
+action_class = "communication.external.send"
 
 [[rules]]
+method = "GET"
 host = "*.example.com"
-action_class = "http.get"
+action_class = "communication.external.read"
 ```
 
 | Field          | Type   | Required | Description                              |
@@ -893,7 +1107,10 @@ action_class = "http.get"
 
 Validation:
 
-- At least one rule must be present.
-- `host` and `action_class` must not be empty.
+- A file may hold no rules; unmatched traffic is denied either way.
+- `host` must not be empty, and `action_class` must name a canonical action
+  class from the registry.
 - `method`, when set, must be a valid HTTP method: `GET`, `POST`, `PUT`,
-  `DELETE`, `PATCH`, `HEAD`, or `OPTIONS`.
+  `DELETE`, `PATCH`, `HEAD`, `OPTIONS`, or `CONNECT`.
+- The same `(method, host, path)` matcher must not appear twice across the
+  selected files.

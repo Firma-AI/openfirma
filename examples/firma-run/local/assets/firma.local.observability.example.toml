@@ -10,7 +10,9 @@ session_max = "20m"
 [sidecar.interceptor.https_mitm]
 enabled = true
 
-# Keep key agent/control planes here so you get full L7 visibility.
+# Listing `intercept_hosts` replaces the intercept-everything default: only
+# these hosts are inspected and anything else tunnels untouched. Drop the key
+# to inspect everything instead.
 intercept_hosts = [
   "api.anthropic.com",
   "platform.claude.com",
@@ -25,9 +27,14 @@ bypass_hosts = []
 # Strict for hosts where deterministic fail-closed behavior is required.
 strict_hosts = ["api.anthropic.com", "platform.claude.com", "chatgpt.com"]
 
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-default_protected = true
+# `firma config` completes this section and lists `mapping-rules.toml` plus the
+# selected profile's shipped mappings in `mapping_rules_paths`.
+[authority]
+policy_dir = "../examples/policies"
+issuance_policy_dir = "../examples/policies"
+
+[sidecar.authority]
+url = "https://127.0.0.1:50051"
 
 [sidecar.audit]
 sink = "file"

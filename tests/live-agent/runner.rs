@@ -234,7 +234,9 @@ async fn run_enforcement(
 ) -> Result<RunOutput, anyhow::Error> {
     let config_path = ctx.config_dir().join("firma.toml");
     let mut cmd = tokio::process::Command::new(firma_bin);
-    cmd.args(["run", "--profile", ctx.agent.profile(), "--config"])
+    // `firma config` does not record the state directory in `firma.toml`.
+    cmd.env("FIRMA_STATE_DIR", &ctx.state_dir)
+        .args(["run", "--profile", ctx.agent.profile(), "--config"])
         .arg(&config_path);
     // macOS VzBackend runs in compatibility mode (sandbox-exec + HTTP_PROXY),
     // which is non-structural; Linux uses bwrap and confines structurally.

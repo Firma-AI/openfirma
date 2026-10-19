@@ -14,6 +14,7 @@ use crate::CapabilityClaims;
 /// [`CapabilityClaims`]; the `raw_token` is authoritative and re-verified at
 /// load time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilitySeed {
     /// Raw PASETO v4.public token string.
     pub raw_token: String,
@@ -108,5 +109,17 @@ context_hash = "cafebabe"
                 .parse::<DateTime<Utc>>()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn rejects_unknown_fields() {
+        let claims = sample_claims();
+        let seed = CapabilitySeed::from_claims(&claims, "v4.public.tok".to_string());
+        let body = format!("{}unknown = \"value\"\n", toml::to_string(&seed).unwrap());
+
+        let error = toml::from_str::<CapabilitySeed>(&body)
+            .expect_err("unknown fields must fail the canonical seed boundary");
+
+        assert!(error.message().contains("unknown field"));
     }
 }

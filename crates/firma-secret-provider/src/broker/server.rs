@@ -35,8 +35,8 @@ use tokio::{net::TcpListener, time::timeout};
 
 use crate::{
     broker::{
-        BrokerRequest, BrokerResponse, drain_remaining, read_bounded_line, stream::BrokerStream,
-        write_all,
+        BROKER_CONTROL_VERSION, BrokerReadinessRequest, BrokerReadinessResponse, BrokerRequest,
+        BrokerResponse, drain_remaining, read_bounded_line, stream::BrokerStream, write_all,
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
@@ -290,11 +290,62 @@ where
         )
         .await;
     }
+    let value = match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value) => value,
+        Err(error) => {
+            return write_response(
+                stream,
+                &BrokerResponse::rejected(format!("malformed broker request: {error}")),
+                config.max_response_size(),
+            )
+            .await;
+        }
+    };
+    if value.get("control").is_some() {
+        return handle_control_request(stream, value, config.max_response_size()).await;
+    }
+
     let response = match serde_json::from_str::<BrokerRequest>(trimmed) {
         Ok(request) => handler(request).await,
-        Err(e) => BrokerResponse::rejected(format!("malformed broker request: {e}")),
+        Err(error) => BrokerResponse::rejected(format!("malformed broker request: {error}")),
     };
     write_response(stream, &response, config.max_response_size()).await
+}
+
+async fn handle_control_request(
+    stream: &mut BrokerStream,
+    value: serde_json::Value,
+    max_response_size: usize,
+) -> io::Result<()> {
+    let request = match serde_json::from_value::<BrokerReadinessRequest>(value) {
+        Ok(request) => request,
+        Err(error) => {
+            return write_response(
+                stream,
+                &BrokerResponse::rejected(format!("malformed broker control request: {error}")),
+                max_response_size,
+            )
+            .await;
+        }
+    };
+    if request.version() != BROKER_CONTROL_VERSION {
+        return write_response(
+            stream,
+            &BrokerResponse::rejected(format!(
+                "unsupported broker control version {}; expected {BROKER_CONTROL_VERSION}",
+                request.version()
+            )),
+            max_response_size,
+        )
+        .await;
+    }
+
+    write_serializable_response(
+        stream,
+        &BrokerReadinessResponse::current(),
+        max_response_size,
+    )
+    .await
 }
 
 /// Serialize `response` into a newline-terminated wire line, or return `None`
@@ -305,7 +356,7 @@ where
 /// or rejected without a meaningful reason. Enforcing the cap here replaces
 /// it with a short, clean error response instead.
 fn serialize_response(
-    response: &BrokerResponse<'_>,
+    response: &impl serde::Serialize,
     max_response_bytes: usize,
 ) -> io::Result<Option<Vec<u8>>> {
     let mut payload = serde_json::to_vec(response)
@@ -315,6 +366,22 @@ fn serialize_response(
     }
     payload.push(b'\n');
     Ok(Some(payload))
+}
+
+async fn write_serializable_response(
+    stream: &mut BrokerStream,
+    response: &(impl serde::Serialize + Sync),
+    max_response_bytes: usize,
+) -> io::Result<()> {
+    let Some(payload) = serialize_response(response, max_response_bytes)? else {
+        return write_response(
+            stream,
+            &BrokerResponse::rejected("response too large"),
+            max_response_bytes,
+        )
+        .await;
+    };
+    write_all(stream, &payload).await
 }
 
 async fn write_response(

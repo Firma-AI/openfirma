@@ -3,7 +3,9 @@ title: Enable HTTPS MITM
 description: Bootstrap the Sidecar's CA, trust it on the agent host, and pick which hosts to inspect at L7.
 ---
 
-CONNECT-only HTTPS gives you destination-level policy ("the agent may not contact this host"). HTTPS MITM gives you full L7 policy ("the agent may not POST a payload over this size to this path"). This guide walks you through enabling MITM safely: bootstrap the CA once, trust it narrowly on the agent host, and decide which hosts deserve L7 inspection.
+CONNECT-only HTTPS gives you destination-level policy ("the agent may not contact this host"). HTTPS MITM gives you full L7 policy ("the agent may not POST a payload over this size to this path"). MITM is **already on for every host**, so this guide is about making it work rather than turning it on: bootstrap the CA once, trust it narrowly on the agent host, and name the hosts that must stay uninspected in `bypass_hosts`.
+
+A host that cannot be intercepted is **denied**, not tunnelled: every host is strict by default. So the two things that make an agent work under this default are the CA being trusted by the agent and every interception-hostile host being listed in `bypass_hosts`.
 
 You should already have a Sidecar running ([Run the sidecar standalone](../run-the-sidecar/)).
 
@@ -24,6 +26,11 @@ Add a `[sidecar.ca]` section to `firma.toml`:
 [sidecar.ca]
 dir = "/tmp/firma-standalone/firma-ca"
 ```
+
+`dir` is optional. Leave the section out and the Sidecar mints its CA into
+`generated-firma-ca/` inside the state directory — the path `firma config`
+writes, so a hand-written config and a scaffolded one share one CA instead of
+minting two.
 
 Restart the Sidecar. On first start with no existing CA, it generates one:
 
@@ -68,9 +75,9 @@ What each list does:
 - **`bypass_hosts`** — explicit fallback to CONNECT-only. Use for hosts that pin certificates or otherwise reject MITM. You'll only see destination-level policy on these.
 - **`strict_hosts`** — if MITM fails for any reason on these hosts (handshake mismatch, parse error), DENY rather than fall back. Use for hosts where you'd rather break the call than enforce a weaker policy on it.
 
-Hosts not in any list use the configured default behavior — typically CONNECT-only.
+With no `[sidecar.interceptor.https_mitm]` block at all, the Sidecar intercepts **every** host and treats every host as strict. Writing `intercept_hosts` *replaces* that default, so the example above narrows interception to three hosts. `firma config` writes neither `intercept_hosts` nor `strict_hosts`, leaving the intercept-everything default in place.
 
-`enabled = true` with an empty `intercept_hosts` is treated as MITM **disabled**, not as an error: there is nothing to intercept, so the Sidecar starts and falls back to CONNECT-only tunnels. This is why a freshly scaffolded `firma config` (which emits an empty `intercept_hosts`) starts cleanly under standalone `firma sidecar --config`. To actually intercept, add at least one host.
+`enabled = true` with an explicitly empty `intercept_hosts` is treated as MITM **disabled**, not as an error: there is nothing to intercept, so the Sidecar starts and falls back to CONNECT-only tunnels.
 
 Restart the Sidecar. The startup log will list how many MITM hosts are configured.
 
@@ -109,16 +116,19 @@ Go's `crypto/tls` does not respect a single env var by default. The simplest pat
 
 When you launch with `firma run`, the wrapper installs the CA into the sandbox's trust path automatically and sets the appropriate env vars for the runtime profile. You don't need to do anything else for [`firma run`](../firma-run/)-wrapped agents.
 
-The sandbox sees only the public CA material — `firma-ca.crt`, plus `firma-ca-bundle.crt` under `ca_trust_mode = "append_system_roots"`. `firma-ca.key` stays behind the control-plane mask, so a wrapped agent can verify intercepted connections but cannot mint certificates that other CA-trusting processes would accept.
+The sandbox sees only the public CA material — `firma-ca.crt`, plus `firma-ca-bundle.crt` under `ca_trust_mode = "append_system_roots"`. `firma-ca.key` stays behind the control-plane mask, in this run's entry and in `generated-firma-ca/` alike, so a wrapped agent can verify intercepted connections but cannot mint certificates that other CA-trusting processes would accept.
 
 This works because `firma run` owns the CA location for a Sidecar it starts: it pins `[sidecar.ca].dir` to that run's state entry, and the CA file names are fixed (`firma-ca.crt`, `firma-ca.key`), so the key cannot be configured somewhere the mask does not cover.
 
-**Keep an external Sidecar's CA outside `FIRMA_STATE_DIR`.** When you point `firma run` at a Sidecar you started yourself (`--sidecar tcp://…`), it trusts that Sidecar's CA through `FIRMA_SIDECAR_CA_CERT_PATH` or `FIRMA_SIDECAR_CA_DIR`. The control-plane mask hides everything under `FIRMA_STATE_DIR` from the wrapped process, so a CA published from inside it would be unreadable in the sandbox. `firma run` refuses to launch in that case rather than letting the agent fall back to the host's system roots:
+**An external Sidecar's CA belongs in `generated-firma-ca/` or outside `FIRMA_STATE_DIR`.** When you point `firma run` at a Sidecar you started yourself (`--sidecar tcp://…`), it trusts that Sidecar's CA through `FIRMA_SIDECAR_CA_CERT_PATH` or `FIRMA_SIDECAR_CA_DIR`, or — failing both — by probing the state directory's `generated-firma-ca/`, the working directory's `firma-ca/`, `/etc/firma/ca/`, and `/var/lib/firma/ca/` in that order.
+
+The control-plane mask hides everything under `FIRMA_STATE_DIR` from the wrapped process. Two paths are restored through it, read-only and certificate-only: this run's own entry and `generated-firma-ca/`, which is where a Sidecar with no `[sidecar.ca].dir` mints. A CA published anywhere else inside the state directory stays unreadable in the sandbox, and `firma run` refuses to launch rather than letting the agent fall back to the host's system roots:
 
 ```
 backend error (bwrap): trust anchor /run/user/1000/firma/external-ca/firma-ca.crt lies inside the
-masked control-plane runtime /run/user/1000/firma but is not this run's CA material under
-/run/user/1000/firma/run/<sandbox-id>/firma-ca; move an external Sidecar's CA outside FIRMA_STATE_DIR
+masked control-plane runtime /run/user/1000/firma and is not CA material this run restores from
+/run/user/1000/firma/run/<sandbox-id>/firma-ca or /run/user/1000/firma/generated-firma-ca; move an
+external Sidecar's CA to one of those directories or outside FIRMA_STATE_DIR
 ```
 
 ## Step 4: Verify MITM is in effect
@@ -151,20 +161,24 @@ CONNECT-only calls show only the host:
 
 If you don't see method, path, and provider on a host you intended to MITM, walk through the configuration step by step.
 
-## Picking what to MITM
+## Picking what to leave uninspected
 
-A reasonable default policy:
+Every host is intercepted, so the only decision left is which hosts to exempt:
 
-| Host class                                                | MITM?                |
-| --------------------------------------------------------- | -------------------- |
-| LLM provider APIs (OpenAI, Anthropic, Mistral)            | Optional — shipped mappings tunnel via CONNECT; enable MITM when you need L7 policy or credential injection ([Inject credentials](../inject-credentials/)) |
-| SaaS APIs you have admin access to (Stripe, Slack, GitHub)| Yes                  |
-| Your own services / internal SaaS                         | Yes                  |
-| Third-party SaaS where MITM violates terms                | No (CONNECT-only)    |
-| Banking, healthcare, certificate-pinning APIs             | No (CONNECT-only)    |
-| Self-signed internal services                             | No (CONNECT-only)    |
+| Host class                                                | Intercepted?                  |
+| --------------------------------------------------------- | ----------------------------- |
+| LLM provider APIs (OpenAI, Anthropic, Mistral)            | Yes, by default — that is what gives you L7 policy, HTTPS credential injection, and HTTPS secret-provider interception ([Inject credentials](../inject-credentials/)). The shipped mappings classify both the CONNECT preface and the decrypted requests, so the posture is the same either way. |
+| SaaS APIs you have admin access to (Stripe, Slack, GitHub)| Yes, by default               |
+| Your own services / internal SaaS                         | Yes, by default               |
+| Third-party SaaS where MITM violates terms                | No — `bypass_hosts`           |
+| Banking, healthcare, certificate-pinning APIs             | No — `bypass_hosts`           |
+| Self-signed internal services                             | No — `bypass_hosts`           |
 
-Add to `intercept_hosts` only what you actually want L7 visibility on. Everything else — `bypass_hosts` or untouched (default).
+Add the rows marked `bypass_hosts` to that list; it is checked before interception, and it is the one interception key `firma config` merges rather than strips, so the entry survives a re-run. Narrowing `intercept_hosts` instead opts every host you forgot to list out of inspection as well — and a re-run removes it, widening interception back to everything.
+
+To opt out globally, write `bypass_hosts = ["*"]`: the pattern matches every host, so every tunnel is relayed uninspected. `enabled = false` and `intercept_hosts = []` do the same at runtime but do not survive `firma config`, which strips both.
+
+Each of these hosts keeps destination-level policy only, so the mapping rules that classify its decrypted requests never fire for it.
 
 ## What about cert pinning?
 
@@ -179,7 +193,11 @@ Don't try to "fix" a pinning error by changing the pin — pinning is a security
 
 **`x509: certificate signed by unknown authority`** in the agent. The agent process didn't pick up the CA. Re-export the env var in the *exact* shell that launches the agent, or use `firma run`.
 
-**MITM works for some hosts but not others.** Wildcards in `intercept_hosts` are leading-only (`*.anthropic.com`). They don't match across multiple labels (`*.anthropic.com` does not match `api.dev.anthropic.com`). Add explicit entries.
+**MITM works for some hosts but not others.** Wildcards in `intercept_hosts` are
+leading-only (`*.anthropic.com`) and match one or more preceding labels, so that
+pattern covers both `api.anthropic.com` and `api.dev.anthropic.com`. Mid-name
+wildcards are not supported. Add exact entries when you need a narrower trust
+scope.
 
 **Sidecar logs `mitm_handshake_failed`.** The agent's TLS client rejected the cert the Sidecar minted. Usually means the agent doesn't trust your CA — re-check trust setup. If the host is sensitive, add it to `strict_hosts` so the failure denies instead of falling back.
 

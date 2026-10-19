@@ -74,49 +74,143 @@ pub(crate) fn resolve_persist_target(existing_config: Option<&Path>) -> Result<P
 ///
 /// Existing sections/comments survive the round-trip; parent directories
 /// and the file are created when missing. Idempotent: an existing
-/// `[authority]` table is left untouched.
+/// `[authority]` table is left untouched. Generated mapping and policy inputs
+/// are written next to the file unless authored ones already exist there.
 ///
 /// # Errors
 ///
 /// - [`RunError::ConfigParse`] when the existing file is not valid TOML.
+/// - [`RunError::AuthorityUnknownProfile`] when `profile` is not registered.
 /// - [`RunError::Internal`] on I/O or serialization failure.
-pub(crate) fn persist_authority_section(path: &Path) -> Result<(), RunError> {
-    let mut doc: DocumentMut = match fs::read_to_string(path) {
+pub(crate) fn persist_authority_section(path: &Path, profile: &str) -> Result<(), RunError> {
+    let mut doc = read_document(path)?;
+    if doc.as_table().contains_key("authority") {
+        return Ok(());
+    }
+    let parent = config_dir(path);
+    fs::create_dir_all(parent)
+        .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", parent.display())))?;
+
+    let mut authority = Table::new();
+    authority.set_implicit(false);
+    authority.insert("listen_addr", value(DEFAULT_LISTEN_ADDR));
+    authority.insert(
+        "mapping_rules_paths",
+        value(generated_mapping_paths(parent)?),
+    );
+    let enforcement =
+        firma_authority::cedar_for(profile).map_err(|_| RunError::AuthorityUnknownProfile {
+            name: profile.to_string(),
+        })?;
+    crate::authority::defaults::materialize_policy(&parent.join("policies"), profile, enforcement)?;
+    crate::authority::defaults::materialize_policy(
+        &parent.join("issuance-policies"),
+        profile,
+        crate::authority::defaults::issuance_policy(profile)?,
+    )?;
+    authority.insert("policy_dir", value("policies"));
+    authority.insert("issuance_policy_dir", value("issuance-policies"));
+    doc.as_table_mut()
+        .insert("authority", Item::Table(authority));
+    write_document(path, &doc)
+}
+
+/// Give an `[authority]` section written before the Authority owned mappings
+/// the generated inputs the first-run prompt now persists.
+///
+/// Earlier releases persisted exactly `listen_addr = "[::1]:0"`, leaving
+/// mappings to the Sidecar and policies to directories nothing created. Any
+/// other section was authored and is left to validation, which requires
+/// explicit mapping inputs. Policy directories are generated only where none
+/// exist yet.
+///
+/// # Errors
+///
+/// - [`RunError::ConfigParse`] when the file is not valid TOML.
+/// - [`RunError::AuthorityUnknownProfile`] when `profile` is not registered.
+/// - [`RunError::Internal`] on I/O failure.
+pub(crate) fn backfill_mapping_inputs(path: &Path, profile: &str) -> Result<(), RunError> {
+    let mut doc = read_document(path)?;
+    let Some(authority) = doc.get_mut("authority").and_then(Item::as_table_like_mut) else {
+        return Ok(());
+    };
+    // Only the exact section earlier prompts wrote is repaired; any other
+    // section was authored and must name its mapping inputs explicitly.
+    let previously_generated = authority.len() == 1
+        && authority
+            .get("listen_addr")
+            .and_then(Item::as_str)
+            .is_some_and(|listen| listen == DEFAULT_LISTEN_ADDR);
+    if !previously_generated {
+        return Ok(());
+    }
+    let dir = config_dir(path);
+    authority.insert("mapping_rules_paths", value(generated_mapping_paths(dir)?));
+    let enforcement =
+        firma_authority::cedar_for(profile).map_err(|_| RunError::AuthorityUnknownProfile {
+            name: profile.to_string(),
+        })?;
+    for (default_dir, content) in [
+        ("policies", enforcement),
+        (
+            "issuance-policies",
+            crate::authority::defaults::issuance_policy(profile)?,
+        ),
+    ] {
+        let default_dir = dir.join(default_dir);
+        if !default_dir.exists() {
+            crate::authority::defaults::materialize_policy(&default_dir, profile, content)?;
+        }
+    }
+    write_document(path, &doc)?;
+    tracing::info!(
+        config = %path.display(),
+        "added generated mapping inputs to the existing [authority] section"
+    );
+    Ok(())
+}
+
+/// Write the generated mapping file in `dir` unless one already exists, and
+/// return the config-relative path list naming it.
+fn generated_mapping_paths(dir: &Path) -> Result<toml_edit::Array, RunError> {
+    let mapping_path = dir.join(GENERATED_MAPPING_FILE);
+    if !mapping_path.exists() {
+        fs::write(
+            &mapping_path,
+            crate::authority::defaults::persisted_mapping_rules(),
+        )
+        .map_err(|e| RunError::Internal(format!("write {}: {e}", mapping_path.display())))?;
+    }
+    Ok(toml_edit::Array::from_iter([GENERATED_MAPPING_FILE]))
+}
+
+const GENERATED_MAPPING_FILE: &str = "mapping-rules.toml";
+
+fn config_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn read_document(path: &Path) -> Result<DocumentMut, RunError> {
+    match fs::read_to_string(path) {
         Ok(text) => text
             .parse()
             .map_err(|e: toml_edit::TomlError| RunError::ConfigParse {
                 path: path.to_path_buf(),
                 reason: e.to_string(),
-            })?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
-        Err(e) => {
-            return Err(RunError::Internal(format!(
-                "read user config {}: {e}",
-                path.display()
-            )));
-        }
-    };
-
-    if doc.as_table().contains_key("authority") {
-        return Ok(());
+            }),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(DocumentMut::new()),
+        Err(e) => Err(RunError::Internal(format!(
+            "read user config {}: {e}",
+            path.display()
+        ))),
     }
+}
 
-    let mut authority = Table::new();
-    authority.set_implicit(false);
-    authority.insert("listen_addr", value(DEFAULT_LISTEN_ADDR));
-    doc.as_table_mut()
-        .insert("authority", Item::Table(authority));
-
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)
-            .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", parent.display())))?;
-    }
-
+fn write_document(path: &Path, doc: &DocumentMut) -> Result<(), RunError> {
     fs::write(path, doc.to_string())
-        .map_err(|e| RunError::Internal(format!("write {}: {e}", path.display())))?;
-    Ok(())
+        .map_err(|e| RunError::Internal(format!("write {}: {e}", path.display())))
 }
 
 #[cfg(test)]
@@ -128,7 +222,7 @@ mod tests {
     fn persist_creates_file_with_section_when_missing() {
         let tmp = tempdir().unwrap();
         let target = tmp.path().join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
-        persist_authority_section(&target).unwrap();
+        persist_authority_section(&target, firma_authority::DEFAULT_PROFILE).unwrap();
         let contents = fs::read_to_string(&target).unwrap();
         assert!(contents.contains("[authority]"));
         assert!(contents.contains(r#"listen_addr = "[::1]:0""#));
@@ -139,7 +233,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let target = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&target, "[run]\nprofile = \"generic\"\n").unwrap();
-        persist_authority_section(&target).unwrap();
+        persist_authority_section(&target, firma_authority::DEFAULT_PROFILE).unwrap();
         let contents = fs::read_to_string(&target).unwrap();
         assert!(contents.contains("[run]"), "got: {contents}");
         assert!(
@@ -159,7 +253,7 @@ mod tests {
         let target = tmp.path().join(CONFIG_FILE_NAME);
         let original = "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n";
         fs::write(&target, original).unwrap();
-        persist_authority_section(&target).unwrap();
+        persist_authority_section(&target, firma_authority::DEFAULT_PROFILE).unwrap();
         let contents = fs::read_to_string(&target).unwrap();
         assert!(contents.contains("127.0.0.1:50051"), "got: {contents}");
         assert!(
@@ -173,7 +267,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let target = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&target, "not = valid = toml\n").unwrap();
-        let err = persist_authority_section(&target).unwrap_err();
+        let err = persist_authority_section(&target, firma_authority::DEFAULT_PROFILE).unwrap_err();
         assert!(matches!(err, RunError::ConfigParse { .. }));
     }
 

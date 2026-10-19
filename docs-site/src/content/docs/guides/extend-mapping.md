@@ -11,6 +11,13 @@ You should already understand [Action classes](../../concepts/action-classes/) (
 
 ## Step 1: Decide what action classes the destination's calls map to
 
+File-based mappings belong to the local mini-authority's
+`[authority].mapping_rules_paths`. Sidecars always consume complete snapshots
+from an Authority and never read local mapping files. For Firma Team,
+manage mappings centrally and generate remote configuration with `firma config
+--mode agent-remote`; do not add local mapping paths. See
+[Configuration setup](../initialize-a-project/) for migration and generation.
+
 Before you write a single rule, decide which canonical classes the destination's endpoints belong to. The 52-class registry is documented in `docs/markdown/firma_action_class_registry.md` in the repository.
 
 A useful exercise: list the destination's most common endpoints and what each one *does*, then assign the closest class. For a hypothetical `acme-saas.com` with three endpoints:
@@ -73,35 +80,40 @@ Field-by-field:
 
 For wildcards, prefer specificity. `path = "*"` matches everything; `path = "/api/v1/*"` matches anything under v1 at any depth; `path = "/api/v1/users/*/notify"` matches that shape with any middle section.
 
-## Step 3: Merge the file into the Sidecar config
+## Step 3: Select the file in Authority configuration
 
-In `firma.toml`:
+For the local mini-authority, add the file to the complete producer list in
+`firma.toml`, keeping the existing files:
 
 ```toml
-[sidecar.mapping]
-rules_path        = "/path/to/default-mapping.toml"
-rules_paths       = [
+[authority]
+mapping_rules_paths = [
+  "/path/to/default-mapping.toml",
   "/path/to/acme-saas.toml",
 ]
-default_protected = true
 ```
 
-`rules_path` is the primary file (often the project's general mappings). `rules_paths` is a list of additional files merged in. The Sidecar concatenates all of them and:
+The Authority concatenates the selected files in order. Relative paths resolve
+against the Authority config directory. It:
 
 - **Compiles** at startup. If any file is malformed or any rule references an unknown action class, startup fails fast.
-- **Rejects duplicate `(method, host, path)` tuples** across all merged files. Fail-closed: if two files disagree on what an endpoint is, the Sidecar refuses to boot rather than guess.
+- **Rejects duplicate `(method, host, path)` tuples** across all merged files. Conflicting inputs cannot be published.
 
-This duplicate-detection is why merging works — you can ship a vendor-supplied file alongside your overrides and trust the Sidecar to surface conflicts.
+At least one mapping file is required; an omitted or empty path list is invalid.
+A selected file that is empty, holds only comments, or contains `rules = []`
+publishes no rules. When no selected file has rules, the snapshot is
+intentionally deny-all.
+This requirement also applies to config-consuming Authority administration and
+offline issuance commands, although offline issuance does not load the mappings.
 
 ## Step 4: Restart and verify
 
-Restart the Sidecar. The startup log includes:
-
-```text
-INFO firma_sidecar::startup::mapping: loaded 3 mapping files
-INFO firma_sidecar::startup::mapping: 47 total rules (44 base + 3 extension)
-INFO firma_sidecar: sidecar ready
-```
+Restart the Authority after changing its configured file list. File-content
+changes are watched in daemon mode: valid updates publish mappings, policy and
+schema together; invalid reloads retain the accepted generation. The connected
+Sidecar logs `enforcement snapshot swapped` when a complete generation activates.
+Locally owned `firma run` inputs are frozen before agent startup; restart the run
+to use authored changes.
 
 Make a test call:
 
@@ -121,15 +133,33 @@ The audit event should show:
 
 Note that the audit event records the resource as an opaque UID. The internal `provider` hint is set only for hosts in the Sidecar's known allowlist (currently `github`, `stripe`, `gmail`). For your own destinations, policies should key on the exact resource UID.
 
-## When to use `default_protected = true` vs `false`
+## Upgrade existing configuration
 
-Two stances:
+Mappings are owned exclusively by the Authority. Move the former Sidecar primary
+and extra paths into `[authority].mapping_rules_paths`, in the same order, and
+remove `[sidecar.mapping]` and any nested enforcement mapping settings. Configure
+`[sidecar.authority].url`; a directly launched Sidecar still needs an Authority.
+For a remote deployment, configure mappings on that Authority instead of placing
+paths on the Sidecar machine.
 
-**`default_protected = true` — fail-closed** (production default). Anything not in the mapping is denied. You discover gaps via DENY events, fill them in, and never let unknown traffic through.
+Configs whose `[authority]` section an earlier `firma run` first-run prompt
+wrote have no `mapping_rules_paths`. `firma run` backfills them automatically
+with the generated `mapping-rules.toml`. The Authority rejects any other
+`[authority]` section without the key until you add it.
 
-**`default_protected = false` — passthrough** (development convenience). Unmapped traffic flows without enforcement. Easy to start with; dangerous to keep.
+Legacy Sidecar mapping keys are rejected by every command that reads the file,
+including the Authority, the Sidecar, and `firma config` when it validates
+existing configuration. Repair those keys before regenerating. The
+former `default_protected=false` bypass has no replacement: unmatched traffic is
+always denied. Add explicit rules for legitimate destinations and inspect DENY
+events for gaps.
 
-The shipped demo uses `false` so the demo can focus on its specific routes. Your real workloads should use `true`. Plan time to enumerate the destinations the agent legitimately uses before flipping the switch.
+When rerunning `firma config`, generated `mappings/<vendor>.toml` selections are
+updated independently of their position in the list, however the path is
+spelled. Custom mapping paths are preserved and duplicate paths, including
+different spellings of one file, are removed; a custom file with a vendor
+basename outside `mappings/` remains an authored source unless it is a link to
+the generated file.
 
 ## Working with the shipped vendor mappings
 
@@ -140,11 +170,11 @@ The repo includes four vendor files under `crates/firma-sidecar/config/mappings/
 - `gmail.toml` — 41 Gmail REST endpoints → 7 classes.
 - `composio.toml` — Composio execution transports and hosted MCP → 1 class. It is coarse on purpose: the per-tool class comes from the pinned catalogs described in the [Composio guide](../composio/), not from the path.
 
-Add them to `rules_paths`:
+Add them to `mapping_rules_paths`:
 
 ```toml
-[sidecar.mapping]
-rules_paths = [
+[authority]
+mapping_rules_paths = [
   "crates/firma-sidecar/config/mappings/github.toml",
   "crates/firma-sidecar/config/mappings/stripe.toml",
   "crates/firma-sidecar/config/mappings/gmail.toml",
@@ -153,7 +183,9 @@ rules_paths = [
 ]
 ```
 
-These vendor files are reviewed and tested. Use them as-is; if you need to override a single rule, the easier path is to add the override to your extensions file and let the duplicate-detection at startup tell you about the conflict — then remove the original from your `rules_paths` rather than editing the vendor file.
+These vendor files are reviewed and tested. Duplicate matchers are rejected, so
+an extension cannot silently override a vendor rule. Select a nonconflicting
+authored file instead when changing an existing matcher.
 
 ## Common gotchas
 
@@ -161,7 +193,9 @@ These vendor files are reviewed and tested. Use them as-is; if you need to overr
 
 **`duplicate rule (POST, api.acme-saas.com, /api/v1/users/*)` at startup.** Two files disagree. Find the duplicate, decide which one wins, remove the loser.
 
-**Calls match `default_protected` instead of your rule.** The rule's `host` or `path` is wrong. The most common mistake is `path = "/api/v1/users/42"` (exact ID) when the real path varies — use `/api/v1/users/*` instead.
+**Calls are denied as unclassified.** Check the rule's `host` and `path`. A path
+such as `/api/v1/users/42` matches only that exact ID; use `/api/v1/users/*` for
+variable IDs.
 
 **HTTPS calls don't get matched.** Without MITM, the Sidecar only sees `CONNECT host:443`. Either set `method = "CONNECT"` in your rule (destination-level policy only) or [enable MITM for the host](../https-mitm/) so the inner method/path is visible.
 

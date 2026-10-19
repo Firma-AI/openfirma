@@ -3,11 +3,27 @@ title: Inject credentials
 description: Attach upstream credentials at the Sidecar instead of letting agents hold them.
 ---
 
-A capability proves an agent is *authorized* to make a call. A **credential** is what the upstream service itself wants to see — an `Authorization: Bearer …` header, an API key in a query string, an mTLS client cert. OpenFirma can attach these at the Sidecar after a request is allowed, so the agent process never holds the secret.
+A capability proves an agent is *authorized* to make a call. A **credential** is
+what the upstream service itself wants to see. OpenFirma's static injection
+currently attaches HTTP headers, such as `Authorization: Bearer …`, at the
+Sidecar after a request is allowed.
 
-This is one of the highest-value reasons to deploy a Sidecar at all: a compromised agent that never touches the credential cannot exfiltrate it.
+If you are choosing between fixed injection and dynamic vault placeholders,
+start with [Secrets without handing them to agents](../../concepts/secrets/).
 
-You should already have a Sidecar running with HTTPS MITM enabled for the relevant hosts ([Enable HTTPS MITM](../https-mitm/)). MITM is required because credential injection happens at L7 — the Sidecar must be able to decrypt and modify the request. `firma config --mapping anthropic` (or `openai`) scaffolds CONNECT mappings with **empty** `intercept_hosts` by default — add `api.anthropic.com` / `api.openai.com` to `[sidecar.interceptor.https_mitm].intercept_hosts` before expecting injection to work.
+This keeps the credential out of the agent before dispatch and reduces direct
+exposure. It is not response masking: an authorized upstream that reflects the
+injected header can still expose its value to the agent.
+
+You should already have a Sidecar running. Credential injection happens at L7:
+HTTPS requests entering through the HTTP proxy therefore require MITM for the
+target host ([Enable HTTPS MITM](../https-mitm/)). Plain HTTP and requests that
+arrive already decoded through the gRPC or Unix-socket interceptor do not need
+TLS interception. The Sidecar intercepts every host by
+default and `firma config` writes no interception keys, so injection works for
+these hosts out of the box — the agent only has to trust the generated CA. Do
+not narrow `intercept_hosts` to make it work: that opts every host you did not
+list out of inspection, injection included.
 
 ## Step 1: Decide what you're injecting and where
 
@@ -116,9 +132,23 @@ secret_path = "/run/secrets/openai-api-key"
 
 Configure Vault Agent separately to render the secret value into `/run/secrets/openai-api-key` with permissions readable only by the Sidecar process.
 
-The Sidecar reads the file per call. If the file is missing or unreadable when a request comes in, the Sidecar returns `CREDENTIAL_INJECTION_FAILED` and aborts the already-allowed call — fail-closed by design. The agent receives a `504` with `"aborted": true`; the capability token remains active.
+The Sidecar reads the file per call. If the file is missing or unreadable when a
+request comes in, the Sidecar returns `CREDENTIAL_INJECTION_FAILED` and aborts
+the already-allowed call — fail-closed by design. HTTP and Unix-socket HTTP
+clients receive a `504` with `"aborted": true`; the gRPC interceptor returns
+`allowed = false` with an `ABORT:CREDENTIAL_INJECTION_FAILED` reason. The
+capability token remains active.
 
 For the development workflow, `basic` is simpler. For production, `vault` is the answer. Don't mix them in a single deployment unless you have a clear reason.
+
+### Mixing `basic` and `vault` entries
+
+When a configuration contains both modes, the Sidecar tries the complete
+`basic` provider first. It consults the `vault` provider only when `basic` has no
+entry for the target host. Entries from both modes for the same host do not
+merge: if `basic` owns that host, its headers win and same-host vault headers
+are not read. Prefer one mode per host, especially during rotation, so source
+precedence is unambiguous.
 
 ## Step 5: Verify injection
 
@@ -134,7 +164,12 @@ The audit event records the allowed dispatch, but not whether a credential was i
 }
 ```
 
-If the upstream returns `401` for a host you expected injection on, you have a misconfiguration — usually `target_host` exact-match mismatch (the request hit `oai.openai.com` and your config has `api.openai.com`) or a missing secret source.
+If the upstream returns `401` for a host you expected injection on, the request
+may have missed the exact `target_host` entry (for example, it hit
+`oai.openai.com` while the config names `api.openai.com`) or the injected value
+may be invalid or expired. A missing basic source prevents startup; a missing
+vault file aborts before upstream dispatch, so neither produces an upstream
+`401`.
 
 ## Where injection sits in the pipeline
 
@@ -158,11 +193,14 @@ If you genuinely need different credentials per *call* (e.g. multi-tenant agent 
 
 ## Common gotchas
 
-**`Authorization` already present.** If the agent set the header itself (a curl with `-H 'Authorization: ...'`), the Sidecar's behavior depends on configuration; by default, the Sidecar's value wins. Always assume injection clobbers — if you need pass-through behavior, do not configure injection for that host.
+**`Authorization` already present.** If the agent set the header itself (a curl
+with `-H 'Authorization: ...'`), the injected value always replaces it. There is
+no precedence setting. If you need pass-through behavior, do not configure that
+header for the host.
 
 **`OPENAI_API_KEY` not set; injection silently disabled.** Wrong — it's not silent. The Sidecar fails startup with an error pointing at the missing env var. Fail-closed at startup is the right shape.
 
-**MITM is off for the host.** The Sidecar can't modify a request it never decrypted. Add the host to `intercept_hosts` (see [Enable HTTPS MITM](../https-mitm/)).
+**MITM is off for the host.** The Sidecar can't modify a request it never decrypted. Check that the host is not in `bypass_hosts` and that the file does not narrow `intercept_hosts` (see [Enable HTTPS MITM](../https-mitm/)).
 
 **GitHub PAT attached to API calls.** Scope git credentials to `github.com`, not `api.github.com`. GitHub REST API credentials should use their own credential entry and policy.
 

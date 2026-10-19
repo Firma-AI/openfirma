@@ -11,9 +11,9 @@ use prost_types::Timestamp;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
-use crate::authority_client::backoff::ExponentialBackoff;
 use crate::authority_client::readiness::ReadinessFlag;
 use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::backoff::ExponentialBackoff;
 
 /// Server-streaming task for revocation events.
 pub(crate) struct RevocationTask {

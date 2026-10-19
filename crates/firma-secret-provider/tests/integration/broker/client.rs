@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use firma_config_schema::{broker::BrokerConfig, utils::NonZeroDuration};
+use firma_config_schema::broker::BrokerConfig;
+use firma_config_utils::NonZeroDuration;
 use firma_http::Str;
 #[cfg(not(unix))]
 use firma_secret_provider::endpoint::EndpointInner;

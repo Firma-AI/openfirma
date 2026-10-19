@@ -108,22 +108,18 @@ logs.
 
 ## Atomic multi-tool requests
 
-OpenFirma decodes and evaluates every child in input order. In enforce mode, a
-deny or remediation outcome blocks the entire request and admitted siblings are
+OpenFirma decodes and evaluates every child in input order. A deny or
+remediation outcome blocks the entire request and admitted siblings are
 audited as aborted for batch atomicity. The connector is called zero times.
 
 When every child is allowed, the original request is dispatched exactly once
-and the same connector outcome is copied to every child audit event. Monitor
-mode also dispatches once while retaining each would-block reason.
+and the same connector outcome is copied to every child audit event.
 
-Two session-state consequences are deliberate and fail-conservative. Every
+One session-state consequence is deliberate and fail-conservative: every
 evaluated child enters the session's `prior_action_classes` history before
 the batch verdict, so children later aborted for batch atomicity still
 count toward policies like "deny after N sends" even though they never
-dispatched. And when monitor mode forwards a batch in which every child
-would have blocked, the dispatch carries no injected credentials, so the
-observed upstream outcome (typically an auth failure) is not representative
-of what a partially admitted batch would see.
+dispatched.
 
 ## Pinned catalogs
 

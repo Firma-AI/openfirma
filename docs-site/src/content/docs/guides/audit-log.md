@@ -11,16 +11,100 @@ You should already have a Sidecar running with the `[sidecar.audit]` block confi
 
 The `[sidecar.audit]` block in `firma.toml` selects a sink:
 
-| Sink     | Configuration                                           | Use when                                                                      |
-| -------- | ------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `stdout` | `sink = "stdout"`                                       | Local dev or production on Cloud Run; pipe into `jq` or ship structured JSON. |
-| `file`   | `sink = "file"`, `file_path = "..."`                    | Single-host deployments with rotation handled outside.                        |
-| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_size = "100 MiB"` | High-throughput; resilient to crashes; consume with a separate tail process. |
-| `grpc`   | `sink = "grpc"`, `grpc_url = "..."`                     | Centralized collector ingesting from many Sidecars.                           |
+| Sink     | Configuration                                                                          | Use when                                                                      |
+| -------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `stdout` | `sink = "stdout"`                                                                      | Local dev or production on Cloud Run; pipe into `jq` or ship structured JSON. |
+| `file`   | `sink = "file"`, `file_path = "..."`                                                   | Single-host deployments with rotation handled outside.                        |
+| `grpc`   | `sink = "grpc"`, `grpc_url = "..."`, `buffer_path = "..."`, `buffer_max_size = "100 MiB"` | Centralized collector ingesting from many Sidecars.                           |
+| `wal`    | `sink = "wal"`, `grpc_url = "..."`, `wal_path = "..."`, `wal_max_size = "100 MiB"` | Journal before delivery; retain events until acknowledged or archived as rejected. |
+
+The `grpc` sink buffers events while the collector is unreachable and replays them
+on reconnect. Past `buffer_max_size`, the oldest buffered events are evicted.
+Events sent over a live stream are not journaled and can be lost if that stream
+breaks before the collector stores them. Use `wal` when each event must remain
+pending until a matching durable acknowledgement arrives.
+
+Buffered events are cleared only once the collector acknowledges them, and the buffer outlives the process, so a replay that fails partway and a Sidecar restart both leave the events intact for the next attempt.
+
+Both network sinks attach configured sidecar credentials. They use separate file
+formats and delivery contracts; do not share a buffer path with a WAL journal.
+Buffered `grpc` rejects records carrying run evidence, including empty evidence,
+before sending them to a legacy collector. An existing buffer containing such a
+record is retained and startup fails; it must not be silently downgraded to an
+unknown actor. Use `wal` for evidence-aware delivery.
 
 For this guide, assume `sink = "file"` and `file_path = "/tmp/firma-standalone/logs/audit.jsonl"`.
 
 The audit worker signs events off the hot path with the ECDSA P-256 key configured under `signing_key_path`. Signing never blocks the request: the Sidecar acknowledges the decision to the agent, then the worker handles delivery and signing.
+
+## Durable delivery
+
+Use `wal` when delivery must survive a collector outage or worker restart:
+
+```toml
+[sidecar.audit]
+sink = "wal"
+grpc_url = "https://collector.example.com"
+wal_path = "/var/lib/firma/audit.jsonl"
+wal_max_size = "100 MiB"
+signing_key_path = "/etc/firma/audit.pem"
+```
+
+Create the parent directory first and keep it private. On Unix, the sink creates
+queue, scope, lock, and rejection files with mode `0600`; on Windows, restrict
+access using the directory ACL. Only one writer may use a WAL path at a time.
+
+Each event is appended and synced before the evidence-aware `SubmitEvent` RPC.
+Only a receipt confirming durable persistence of that exact event permits removal.
+A successful send to a local channel or an HTTP/gRPC connection is not that receipt.
+Lost responses cause replay; the collector must deduplicate by its authenticated
+workspace, sidecar, and source event ID. The legacy `StreamEvents` method is not a
+fallback: an old server could silently discard newer attribution evidence.
+Upgrade collectors before workers. An unsupported collector leaves WAL records
+pending. The buffered `grpc` sink continues using the legacy streaming contract;
+it does not provide the WAL's per-event durable acknowledgement guarantee.
+
+`wal_request_timeout` (default `5s`) bounds each delivery attempt, from connecting
+through the collector's durable commit. Keep it above the collector's commit
+latency, or a slower collector receives the same record on every retry while the
+journal fills. Keep it well below your supervisor's termination grace period,
+because shutdown waits for the attempt in progress. The buffered `grpc` sink's
+equivalent is `replay_ack_timeout` (default `30s`), the wait for a replay
+acknowledgement. The [configuration reference](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md#sidecaraudit)
+covers both trade-offs.
+
+`run_evidence`, when present, is retained with its original event through reconnects.
+It is opaque, not a human identity, and not authenticated by the legacy event
+signature. No current producer issues it. Collectors must explicitly reject
+unsupported or invalid evidence rather than store an unknown actor in its place.
+
+The sibling `audit.jsonl.scope` pins the endpoint and workspace/sidecar identity,
+not the PSK or current user. PSK rotation is permitted; using the queue for another
+workspace or sidecar is refused. Keep the scope and queue together during recovery.
+A nonempty older WAL without a scope file is left intact and refused. Archive it
+for explicit migration after establishing its original destination; use a new WAL
+path for new traffic. Do not fabricate a scope from the current login.
+
+A permanent `INVALID_ARGUMENT` response moves that one record to
+`audit.jsonl.rejected.jsonl`, including its exact original bytes and rejection
+reason. The archive is synced before queue removal, allowing later runs to proceed.
+Malformed local records are archived the same way. The archive's `record` field
+is a JSON byte array, so even non-UTF-8 fragments survive. Interrupted tail writes
+are separated before appending again; an incomplete archive line remains available
+for inspection. Archive-write failure stops the sink without reclaiming records.
+Inspect and retain rejection archives according to your retention policy; they
+can contain sensitive evidence and are never pruned automatically.
+
+`wal_max_size` bounds pending bytes, not rejected archives. At capacity, the sink
+fails explicitly and retains pending records instead of evicting the oldest ones.
+The Sidecar reports a terminal sink failure and shuts down with a failure status,
+including while waiting for Authority readiness. Free capacity or correct the
+reported storage error before restarting. Readiness is not a delivery check.
+This guarantee starts at successful journal sync: the asynchronous producer
+channel is not durable, and this sink does not promise capture of events lost
+before sync or after sink failure. Reconnect attempts continue once a second even
+without new traffic. Shutdown retains unacknowledged records; a stopped sink may
+need to restart to finish a backlog.
 
 ## Anatomy of an audit event
 
@@ -63,6 +147,18 @@ Field-by-field:
 - **`thread_id`** — server-derived conversation thread identity (AARM R2 G2). Groups admitted actions within a session into a causal thread. Empty for pre-dispatch outcomes.
 - **`parent_action_id`** — provenance anchor of the prior admitted action in this thread (AARM R2 G2). Empty for the first admitted action or pre-dispatch outcomes.
 - **`signature`** — DER-encoded ECDSA P-256 signature, serialized as a standard (padded) base64 string. The compact opaque value round-trips through structured JSON log pipelines (such as Cloud Logging) without byte loss, so `sink = "stdout"` is reliable for production on Cloud Run.
+
+The optional `run_evidence` extension retains opaque bytes for a future run
+attribution protocol. Current producers leave it absent. Its presence does not
+authenticate a human actor, and the legacy ECDSA signature does not cover it.
+Collectors without a supported verifier reject supplied evidence, including an
+empty value, rather than treating it as unknown attribution.
+
+The shared gRPC contract adds `SubmitEvent` and a `durably_persisted` receipt
+marker. Evidence-aware clients must not fall back to `StreamEvents` on an older
+collector: that server could discard fields it does not understand. The WAL sink
+uses this contract. Buffered `grpc` retains legacy streaming and rejects supplied
+evidence instead of passing it to a collector that might silently discard it.
 
 ## Deserialize records in Rust
 
@@ -151,7 +247,7 @@ Generate the public key from the signing key:
 openssl ec -in /tmp/firma-standalone/audit.key -pubout -out /tmp/firma-standalone/audit.pub
 ```
 
-Verification of a single line is straightforward in any language with ECDSA P-256 support. The signed payload is the SHA-256 digest of all fields except `signature`, concatenated in declaration order with newlines. A pseudocode verifier:
+Verification of a single line is straightforward in any language with ECDSA P-256 support. The signed payload is the SHA-256 digest of the original execution fields, excluding `signature` and `run_evidence`, concatenated in declaration order with newlines. A pseudocode verifier:
 
 ```python
 import base64, json, hashlib
@@ -208,7 +304,7 @@ The Sidecar could not find or verify a capability matching `(session_id, action,
 
 ### Stage 1: `TokenExpired`
 
-The token is past its `expiry`. Issue a fresh one. If this happens "right after" issuance, you have clock drift between Authority and Sidecar — bump `[sidecar.capability_validation].clock_skew_tolerance`.
+The token is past its `expiry`. Issue a fresh one.
 
 ### Stage 1: `TokenRevoked`
 

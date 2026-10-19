@@ -7,6 +7,7 @@ pub mod connector;
 pub mod credential;
 pub mod decision;
 pub mod envelope;
+pub mod mapping;
 pub mod policy;
 pub mod run_audit;
 pub mod token;
@@ -24,6 +25,10 @@ pub use decision::{
 pub use envelope::{
     ActionParams, DbQueryParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
     HttpParams, ToolUseParams,
+};
+pub use mapping::{
+    glob_match, glob_patterns_overlap, mapping_specificity, normalize_mapping_host,
+    split_mapping_authority,
 };
 pub use policy::PolicyBundle;
 pub use run_audit::{RunAuditEvent, RunAuditMessage};

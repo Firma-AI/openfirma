@@ -1,13 +1,15 @@
 use super::super::RunnerError;
+use super::broker_bridge::BrokerBridgePlan;
 use super::command_pty::{CommandPtyBridgePlan, CommandPtyBridgePorts};
 use super::sidecar_bridge::SidecarBridgePlan;
 use crate::vm::{SocketDeviceKind, VmNetworkMode, VmPlan};
 
 /// Accepted VSOCK transport shape used by the Apple VZ runtime.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct VzTransportPlan {
     sidecar: SidecarBridgePlan,
     command_pty: Option<CommandPtyBridgePlan>,
+    broker: Option<BrokerBridgePlan>,
     socket_device_count: usize,
 }
 
@@ -20,6 +22,11 @@ impl VzTransportPlan {
     /// Returns the accepted command PTY transport plan, when command PTY is enabled.
     pub const fn command_pty(&self) -> Option<&CommandPtyBridgePlan> {
         self.command_pty.as_ref()
+    }
+
+    /// Returns the accepted secret broker transport plan, when enabled.
+    pub const fn broker(&self) -> Option<&BrokerBridgePlan> {
+        self.broker.as_ref()
     }
 
     /// Returns whether this transport plan includes a command PTY bridge.
@@ -56,7 +63,7 @@ impl TryFrom<&VmPlan> for VzTransportPlan {
         let sidecar = SidecarBridgePlan::from_parts(
             socket_device.sidecar_port,
             socket_device.sidecar_host_addr,
-        )?;
+        );
         let command_pty = match (plan.pty, socket_device.command_pty) {
             (false, _) => None,
             (true, None) => return Err(RunnerError::CommandPtyMissingPlan),
@@ -68,10 +75,12 @@ impl TryFrom<&VmPlan> for VzTransportPlan {
                 })?)
             }
         };
+        let broker = plan.broker.as_ref().map(BrokerBridgePlan::from_vm_plan);
 
         Ok(Self {
             sidecar,
             command_pty,
+            broker,
             socket_device_count: plan.socket_devices.len(),
         })
     }
@@ -97,7 +106,7 @@ mod tests {
 
         assert_eq!(
             transport.sidecar().guest_port().get(),
-            plan.socket_devices[0].sidecar_port
+            plan.socket_devices[0].sidecar_port.get()
         );
         assert!(transport.command_pty().is_none());
         assert!(!transport.command_pty_enabled());
@@ -158,20 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn transport_plan_rejects_zero_sidecar_port() -> Result<()> {
-        let (_temp, mut plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
-        plan.socket_devices[0].sidecar_port = 0;
-
-        let error = VzTransportPlan::try_from(&plan)
-            .err()
-            .ok_or_else(|| anyhow::anyhow!("zero sidecar port should fail"))?;
-
-        assert!(matches!(error, RunnerError::ZeroSidecarPort));
-
-        Ok(())
-    }
-
-    #[test]
     fn transport_plan_rejects_missing_command_pty_subplan() -> Result<()> {
         let (_temp, mut plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
         plan.pty = true;
@@ -194,7 +189,7 @@ mod tests {
             .and_then(|socket_device| socket_device.command_pty)
             .ok_or_else(|| anyhow::anyhow!("command PTY subplan should exist"))?
             .data_port;
-        plan.socket_devices[0].sidecar_port = pty_port.get();
+        plan.socket_devices[0].sidecar_port = pty_port;
 
         let error = VzTransportPlan::try_from(&plan)
             .err()

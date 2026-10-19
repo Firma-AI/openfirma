@@ -124,16 +124,17 @@ handful of URLs, so the per-tool class comes from the pinned catalogs the
 You compose them, plus any project-specific rules, in `firma.toml`:
 
 ```toml
-[sidecar.mapping]
-rules_path = "config/mappings/default.toml"
-rules_paths = [
+[authority]
+mapping_rules_paths = [
+  "config/mappings/default.toml",
   "crates/firma-sidecar/config/mappings/github.toml",
   "crates/firma-sidecar/config/mappings/stripe.toml",
 ]
-default_protected = true
 ```
 
-`default_protected = true` means **a request that matches no rule is treated as a protected action with no class assigned** — and because the pipeline is fail-closed, that is a DENY. Set it to `false` only when you explicitly want unmapped traffic to pass through (the bundled demo does this).
+Authority snapshots are always protected by default: a request matching no rule
+has no class and is denied. Sidecars cannot override this posture or load local
+mapping files. See the [mapping configuration and upgrade guide](../../guides/extend-mapping/).
 
 For a hands-on walkthrough of writing your own rules, see [Extend the action-class mapping](../../guides/extend-mapping/).
 

@@ -79,12 +79,11 @@ impl PersistentSessionStateStore {
     /// Returns an error if the file cannot be created/opened for append.
     /// A corrupt or unreadable log is treated as an empty cache (graceful
     /// degradation) rather than a hard failure.
-    pub(crate) fn open(path: impl AsRef<Path>, capacity: usize) -> std::io::Result<Self> {
-        let cap = NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
+    pub(crate) fn open(path: impl AsRef<Path>, capacity: NonZeroUsize) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let cache = replay(&path, cap).unwrap_or_else(|err| {
+        let cache = replay(&path, capacity).unwrap_or_else(|err| {
             tracing::warn!(?err, ?path, "session-state log unreadable; starting fresh");
-            LruCache::new(cap)
+            LruCache::new(capacity)
         });
         let file = OpenOptions::new()
             .create(true)
@@ -312,7 +311,8 @@ mod tests {
     #[test]
     fn record_action_returns_monotonic_count() {
         let path = tmpfile();
-        let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+        let store =
+            PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap()).expect("open");
         assert_eq!(store.record_action(&sid("sess_a")), 1);
         assert_eq!(store.record_action(&sid("sess_a")), 2);
         assert_eq!(store.record_action(&sid("sess_a")), 3);
@@ -323,7 +323,8 @@ mod tests {
     #[test]
     fn isolates_sessions() {
         let path = tmpfile();
-        let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+        let store =
+            PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap()).expect("open");
         assert_eq!(store.record_action(&sid("sess_a")), 1);
         assert_eq!(store.record_action(&sid("sess_b")), 1);
         assert_eq!(store.record_action(&sid("sess_a")), 2);
@@ -334,7 +335,8 @@ mod tests {
     #[test]
     fn signals_defaults_for_unknown_session() {
         let path = tmpfile();
-        let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+        let store =
+            PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap()).expect("open");
         let signals = store.signals(&sid("never_seen"));
         assert_eq!(signals.action_count, 0);
         assert_eq!(signals.risk_score, 0.0);
@@ -345,7 +347,8 @@ mod tests {
     #[test]
     fn signals_reflects_recorded_actions() {
         let path = tmpfile();
-        let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+        let store =
+            PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap()).expect("open");
         store.record_action(&sid("sess_a"));
         store.record_action(&sid("sess_a"));
         let signals = store.signals(&sid("sess_a"));
@@ -358,13 +361,15 @@ mod tests {
     fn state_survives_restart() {
         let path = tmpfile();
         {
-            let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+            let store = PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap())
+                .expect("open");
             store.record_action(&sid("sess_a"));
             store.record_action(&sid("sess_a"));
             store.record_action(&sid("sess_a"));
         } // drop flushes/closes
         // A fresh store pointing at the same log must rebuild the cache.
-        let store = PersistentSessionStateStore::open(&path, 16).expect("reopen");
+        let store = PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap())
+            .expect("reopen");
         let signals = store.signals(&sid("sess_a"));
         assert_eq!(signals.action_count, 3);
         // The next action continues from the persisted count.
@@ -376,7 +381,8 @@ mod tests {
     fn evicted_session_is_restored_on_restart() {
         let path = tmpfile();
         {
-            let store = PersistentSessionStateStore::open(&path, 1).expect("open");
+            let store = PersistentSessionStateStore::open(&path, NonZeroUsize::new(1).unwrap())
+                .expect("open");
             store.record_action(&sid("sess_a"));
             store.record_action(&sid("sess_a"));
             // sess_b evicts sess_a from the in-memory cache (capacity 1).
@@ -385,7 +391,8 @@ mod tests {
             assert_eq!(store.signals(&sid("sess_a")).action_count, 0);
         }
         // ...but the log retained it, so a restart restores sess_a=2.
-        let store = PersistentSessionStateStore::open(&path, 16).expect("reopen");
+        let store = PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap())
+            .expect("reopen");
         assert_eq!(store.signals(&sid("sess_a")).action_count, 2);
         let _ = std::fs::remove_file(&path);
     }
@@ -394,7 +401,8 @@ mod tests {
     fn missing_log_starts_empty() {
         let path = tmpfile();
         // The file does not exist yet; open must succeed and report 0.
-        let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+        let store =
+            PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap()).expect("open");
         assert_eq!(store.signals(&sid("anything")).action_count, 0);
         let _ = std::fs::remove_file(&path);
     }
@@ -410,7 +418,8 @@ mod tests {
         use crate::enforcement::session::state::{HISTORY_CAP, Outcome};
         let path = tmpfile();
         {
-            let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+            let store = PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap())
+                .expect("open");
             store.record_action(&sid("sess_a"));
             store.record_outcome(
                 &sid("sess_a"),
@@ -421,7 +430,8 @@ mod tests {
             store.record_outcome(&sid("sess_a"), "filesystem.delete", "h/y", Outcome::Deny);
         }
         // Reopen: history + deny_count must be restored from the log.
-        let store = PersistentSessionStateStore::open(&path, 16).expect("reopen");
+        let store = PersistentSessionStateStore::open(&path, NonZeroUsize::new(16).unwrap())
+            .expect("reopen");
         let signals = store.signals(&sid("sess_a"));
         assert_eq!(signals.deny_count, 1);
         assert_eq!(signals.history.len(), 2);

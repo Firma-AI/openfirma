@@ -3,9 +3,14 @@ mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 drain_timeout = "5s"
 
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-default_protected = false
+# `firma config` completes this section and lists `mapping-rules.toml` plus the
+# selected profile's shipped mappings in `mapping_rules_paths`.
+[authority]
+policy_dir = "../examples/policies"
+issuance_policy_dir = "../examples/policies"
+
+[sidecar.authority]
+url = "https://127.0.0.1:50051"
 
 [sidecar.audit]
 sink = "file"

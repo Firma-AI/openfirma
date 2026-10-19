@@ -243,7 +243,7 @@ fn small_terminal_renders_without_error() -> anyhow::Result<()> {
 
     let text = render_text(&app, 24, 8)?;
 
-    assert!(!text.is_empty());
+    assert_ne!(text, "");
 
     Ok(())
 }

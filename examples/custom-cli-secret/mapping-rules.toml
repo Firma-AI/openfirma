@@ -1,0 +1,2 @@
+# This CLI-only example authorizes no outbound HTTP actions.
+rules = []

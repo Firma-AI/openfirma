@@ -9,7 +9,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use firma_config_utils::NonZeroDuration;
 
 const DEFAULT_CONNECTION_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(1));

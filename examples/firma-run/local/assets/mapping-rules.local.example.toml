@@ -1,5 +1,6 @@
-[[rules]]
-method = "GET"
-host = "never.match.local"
-path = "/"
-action_class = "communication.external.send"
+# Operator-authored mapping rules for the local Authority.
+#
+# `firma config` lists this file in `[authority].mapping_rules_paths` next to
+# the shipped mappings for the selected profile and appends generated
+# localhost rules here. Add `[[rules]]` entries for any other destination the
+# agent must reach; unmatched traffic is denied as unclassified.

@@ -134,22 +134,18 @@ impl ResolvedConfig {
 }
 
 /// Resolution failure. Fail-closed; a selected config could not be loaded.
+///
+/// The message already renders the complete reason chain, so the reason is
+/// not also exposed as a source that `{:#}` would render a second time.
 #[derive(Debug, thiserror::Error)]
 #[error("failed to load `{path}` from {config_source:?}: {reason:#}")]
 pub struct ConfigResolveError {
     pub config_source: ConfigSource,
     pub path: PathBuf,
-    #[source]
     reason: anyhow::Error,
 }
 
 impl ConfigResolver {
-    /// Create a new [`ConfigResolver`].
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Set an upper bound for walk-up resolution.
     ///
     /// The upper bound is _inclusive_—i.e. if `ceiling` contains

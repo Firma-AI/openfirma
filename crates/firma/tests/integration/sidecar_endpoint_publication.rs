@@ -11,10 +11,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use firma_config_schema::sidecar::{
+    AuditConfig, AuditSink, CaConfig, InterceptorConfig, InterceptorMode, PolicyConfig,
+    SidecarConfig,
+};
 use p256::pkcs8::{EncodePrivateKey as _, LineEnding};
 use wait_timeout::ChildExt as _;
 
-use super::CONFIG_FILE_NAME;
+use super::{CONFIG_FILE_NAME, config_fixture::write_section};
 
 #[derive(serde::Deserialize)]
 struct StartupReport {
@@ -41,18 +45,18 @@ impl Drop for RunningSidecar {
 
 #[test]
 fn http_proxy_port_zero_publishes_nonzero_effective_endpoint() -> anyhow::Result<()> {
-    assert_dynamic_publication("http_proxy")
+    assert_dynamic_publication(InterceptorMode::HttpProxy)
 }
 
 #[test]
 fn grpc_port_zero_publishes_nonzero_effective_endpoint() -> anyhow::Result<()> {
-    assert_dynamic_publication("grpc")
+    assert_dynamic_publication(InterceptorMode::Grpc)
 }
 
 #[test]
 fn bind_failure_does_not_publish_an_endpoint() -> anyhow::Result<()> {
     let occupied = TcpListener::bind("127.0.0.1:0")?;
-    let fixture = SidecarFixture::new("http_proxy", occupied.local_addr()?)?;
+    let fixture = SidecarFixture::new(InterceptorMode::HttpProxy, occupied.local_addr()?)?;
     let mut sidecar = fixture.spawn()?;
 
     let status = sidecar.wait_for_exit()?;
@@ -98,7 +102,7 @@ fn unix_bind_failure_does_not_publish_an_endpoint() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn assert_dynamic_publication(mode: &str) -> anyhow::Result<()> {
+fn assert_dynamic_publication(mode: InterceptorMode) -> anyhow::Result<()> {
     let requested: SocketAddr = "127.0.0.1:0".parse()?;
     let fixture = SidecarFixture::new(mode, requested)?;
     let mut sidecar = fixture.spawn()?;
@@ -154,28 +158,38 @@ fn wait_for_publication(
 }
 
 struct SidecarFixture {
-    _root: tempfile::TempDir,
+    _authority: super::authority_fixture::LocalAuthority,
+    root: tempfile::TempDir,
     config_path: PathBuf,
     startup_report_path: PathBuf,
 }
 
 impl SidecarFixture {
-    fn new(mode: &str, listen_addr: SocketAddr) -> anyhow::Result<Self> {
+    fn new(mode: InterceptorMode, listen_addr: SocketAddr) -> anyhow::Result<Self> {
         let root = tempfile::tempdir()?;
-        let interceptor = format!("mode = \"{mode}\"\nlisten_addr = \"{listen_addr}\"");
-        Self::write(root, &interceptor)
+        Self::write(
+            root,
+            InterceptorConfig {
+                mode,
+                listen_addr,
+                ..InterceptorConfig::default()
+            },
+        )
     }
 
     #[cfg(unix)]
     fn new_unix(root: tempfile::TempDir, socket_path: &Path) -> anyhow::Result<Self> {
-        let interceptor = format!(
-            "mode = \"unix_socket\"\nsocket_path = '{}'",
-            socket_path.display()
-        );
-        Self::write(root, &interceptor)
+        Self::write(
+            root,
+            InterceptorConfig {
+                mode: InterceptorMode::UnixSocket,
+                socket_path: Some(socket_path.to_path_buf()),
+                ..InterceptorConfig::default()
+            },
+        )
     }
 
-    fn write(root: tempfile::TempDir, interceptor: &str) -> anyhow::Result<Self> {
+    fn write(root: tempfile::TempDir, interceptor: InterceptorConfig) -> anyhow::Result<Self> {
         let policy_dir = root.path().join("policies");
         std::fs::create_dir_all(&policy_dir)?;
         std::fs::write(
@@ -195,23 +209,35 @@ impl SidecarFixture {
         )?;
         let ca_dir = root.path().join("ca");
         let config_path = root.path().join(CONFIG_FILE_NAME);
-        std::fs::write(
+        let authority = super::authority_fixture::LocalAuthority::start(
+            root.path(),
+            &policy_dir,
+            &mapping_path,
+        )?;
+        write_section(
             &config_path,
-            format!(
-                "[sidecar.interceptor]\n{interceptor}\n\
-                 [sidecar.policy]\ndir = '{}'\n\
-                 [sidecar.ca]\ndir = '{}'\n\
-                 [sidecar.mapping]\nrules_path = '{}'\ndefault_protected = true\n\
-                 [sidecar.audit]\nsink = \"stdout\"\nsigning_key_path = '{}'\n",
-                policy_dir.display(),
-                ca_dir.display(),
-                mapping_path.display(),
-                audit_key_path.display(),
-            ),
+            "sidecar",
+            &SidecarConfig {
+                interceptor,
+                policy: PolicyConfig { dir: policy_dir },
+                ca: CaConfig { dir: Some(ca_dir) },
+                authority: firma_config_schema::sidecar::AuthorityConfig {
+                    url: Some(authority.url.clone()),
+                    public_key_path: Some(authority.public_key.clone()),
+                    ..Default::default()
+                },
+                audit: AuditConfig {
+                    sink: AuditSink::Stdout,
+                    signing_key_path: Some(audit_key_path),
+                    ..AuditConfig::default()
+                },
+                ..SidecarConfig::default()
+            },
         )?;
         let startup_report_path = root.path().join("sidecar.startup.toml");
         Ok(Self {
-            _root: root,
+            _authority: authority,
+            root,
             config_path,
             startup_report_path,
         })
@@ -221,6 +247,9 @@ impl SidecarFixture {
         let child = Command::new(env!("CARGO_BIN_EXE_firma"))
             .args(["sidecar", "--config"])
             .arg(&self.config_path)
+            // A temporary state directory: the host default would let the
+            // developer's own audit key and trust anchors decide the outcome.
+            .env("FIRMA_STATE_DIR", self.root.path().join("state"))
             .args(["--health-bind-addr", "127.0.0.1:0"])
             .arg("--startup-report")
             .arg(&self.startup_report_path)

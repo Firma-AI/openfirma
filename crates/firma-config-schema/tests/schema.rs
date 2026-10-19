@@ -8,89 +8,12 @@
 
 use bytesize::ByteSize;
 use firma_config_schema::sidecar::infra::{
-    CaConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
+    CaConfig, CredentialMode, CredentialTransform, PolicyConfig,
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
-use firma_config_schema::utils::{NonZeroDuration, ZeroDurationError};
 use firma_config_schema::{authority, gateway, run, secret_matcher, sidecar};
-use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::num::NonZeroU64;
 use std::time::Duration;
-
-#[test]
-fn non_zero_duration_accepts_friendly_compact_durations() {
-    for (json, expected) in [
-        (r#""1h""#, Duration::from_hours(1)),
-        (r#""30s""#, Duration::from_secs(30)),
-        (r#""500ms""#, Duration::from_millis(500)),
-    ] {
-        let non_zero_duration: NonZeroDuration =
-            serde_json::from_str(json).expect("friendly non-zero duration parses");
-        assert_eq!(non_zero_duration.duration(), expected);
-    }
-}
-
-#[test]
-fn non_zero_duration_rejects_equivalent_friendly_zero_values() {
-    for value in ["0ns", "0ms", "0s", "0m", "0h"] {
-        let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value);
-        let error =
-            NonZeroDuration::deserialize(deserializer).expect_err("zero duration must fail");
-        assert_eq!(error.to_string(), "duration must be greater than zero");
-    }
-}
-
-#[test]
-fn non_zero_duration_accepts_sub_millisecond_non_zero_duration() {
-    let non_zero_duration: NonZeroDuration =
-        serde_json::from_str(r#""1ns""#).expect("nanosecond duration parses");
-
-    assert_eq!(non_zero_duration.duration(), Duration::from_nanos(1));
-}
-
-#[test]
-fn non_zero_duration_construction_rejects_zero() {
-    assert_eq!(NonZeroDuration::new(Duration::ZERO), Err(ZeroDurationError));
-    assert_eq!(
-        NonZeroDuration::try_from(Duration::ZERO),
-        Err(ZeroDurationError)
-    );
-    assert_eq!(
-        ZeroDurationError.to_string(),
-        "duration must be greater than zero"
-    );
-
-    let duration = Duration::from_nanos(1);
-    let non_zero_duration =
-        NonZeroDuration::try_from(duration).expect("non-zero duration constructs successfully");
-    assert_eq!(Duration::from(non_zero_duration), duration);
-}
-
-#[test]
-fn non_zero_duration_serialization_round_trips_with_friendly_representation() {
-    let non_zero_duration = NonZeroDuration::new(Duration::new(65, 123_456_789))
-        .expect("non-zero duration constructs successfully");
-
-    let serialized =
-        serde_json::to_string(&non_zero_duration).expect("non-zero duration serializes");
-    let value: serde_json::Value =
-        serde_json::from_str(&serialized).expect("serialized non-zero duration is JSON");
-    assert!(
-        value.is_string(),
-        "non-zero duration must serialize as a string"
-    );
-
-    let deserialized: NonZeroDuration =
-        serde_json::from_str(&serialized).expect("serialized non-zero duration deserializes");
-    assert_eq!(deserialized, non_zero_duration);
-
-    let whole_seconds = NonZeroU64::new(90).expect("test fixture is non-zero");
-    assert_eq!(
-        NonZeroDuration::from(whole_seconds).duration(),
-        Duration::from_secs(90)
-    );
-}
 
 #[test]
 fn authority_max_ttl_is_non_zero_and_preserves_friendly_values() {
@@ -155,11 +78,14 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
         Duration::from_mins(10)
     );
     assert!(config.https_mitm.enabled);
-    assert!(config.https_mitm.bypass_hosts.is_empty());
     assert_eq!(
-        config.https_mitm.intercept_hosts,
-        config.https_mitm.strict_hosts,
+        config.https_mitm.bypass_hosts,
+        [] as [std::string::String; 0]
     );
+    // Interception is on for every host and fails closed everywhere unless an
+    // operator exempts a host through `bypass_hosts`.
+    assert_eq!(config.https_mitm.intercept_hosts, vec!["*".to_string()]);
+    assert_eq!(config.https_mitm.strict_hosts, vec!["*".to_string()]);
 }
 
 #[test]
@@ -190,7 +116,7 @@ fn byte_size_fields_require_unit_bearing_strings() {
         "[interceptor]\nmax_request_body_size = 4194304\n",
         "[interceptor]\nmax_decompressed_body_size = 16000000\n",
         "[interceptor]\ntotal_body_budget = 67108864\n",
-        "[audit]\nwal_max_size = 104857600\n",
+        "[audit]\nbuffer_max_size = 104857600\n",
         "[secret_gateway]\nmax_buffer_size = 10000000\n",
         "[interceptor]\nmax_request_body_size = \"4194304\"\n",
     ] {
@@ -421,7 +347,7 @@ fn sidecar_scalar_fields_accept_human_readable_units() {
         default_timeout = "30s"
 
         [audit]
-        wal_max_size = "100 MiB"
+        buffer_max_size = "100 MiB"
         "#,
     )
     .expect("human-readable scalar values deserialize");
@@ -436,7 +362,68 @@ fn sidecar_scalar_fields_accept_human_readable_units() {
         config.connector.default_timeout.duration(),
         Duration::from_secs(30)
     );
-    assert_eq!(config.audit.wal_max_size, ByteSize::mib(100));
+    assert_eq!(config.audit.buffer_max_size, ByteSize::mib(100));
+}
+
+#[test]
+fn wal_audit_sink_keeps_its_separate_delivery_configuration() {
+    let config = toml::from_str::<sidecar::audit::AuditConfig>(
+        "sink = \"wal\"\nwal_path = \"audit.jsonl\"\nwal_max_size = \"8 MiB\"\n",
+    )
+    .expect("evidence-aware WAL configuration");
+    assert_eq!(config.sink, sidecar::AuditSink::Wal);
+    assert_eq!(
+        config.wal_path.as_deref(),
+        Some(std::path::Path::new("audit.jsonl"))
+    );
+    assert_eq!(config.wal_max_size, ByteSize::mib(8));
+    assert_eq!(config.buffer_path, None);
+}
+
+#[test]
+fn unknown_audit_sink_lists_the_supported_values() {
+    let error = toml::from_str::<sidecar::audit::AuditConfig>("sink = \"syslog\"\n")
+        .expect_err("an unknown sink must be rejected");
+
+    assert_eq!(
+        error.message(),
+        "unknown audit.sink `syslog`: expected one of `stdout`, `file`, `grpc`, `wal`"
+    );
+}
+
+#[test]
+fn every_audit_sink_survives_a_serde_round_trip() {
+    // `AuditSink` derives `Serialize` but hand-writes `Deserialize` to list
+    // supported values on failure. Nothing makes the compiler
+    // keep the two in step, so a variant added to only one side would ship a
+    // value the Sidecar writes but refuses to read back.
+    for sink in sidecar::AuditSink::ALL {
+        let encoded = serde_json::to_string(&sink).expect("sink serializes");
+        let decoded: sidecar::AuditSink =
+            serde_json::from_str(&encoded).expect("serialized sink deserializes");
+
+        assert_eq!(decoded, sink);
+        assert_eq!(encoded, format!("\"{sink}\""));
+    }
+}
+
+#[test]
+fn sidecar_byte_sizes_survive_a_toml_round_trip() {
+    let mut config = sidecar::SidecarConfig::default();
+    config.interceptor.max_request_body_size = ByteSize::b(12_345);
+    config.audit.wal_max_size = ByteSize::b(67_890);
+    config.secret_gateway.max_buffer_size = ByteSize::b(98_765);
+
+    let encoded = toml::to_string(&config).expect("Sidecar config serializes");
+    let decoded: sidecar::SidecarConfig =
+        toml::from_str(&encoded).expect("serialized Sidecar config deserializes");
+
+    assert_eq!(
+        decoded.interceptor.max_request_body_size,
+        ByteSize::b(12_345)
+    );
+    assert_eq!(decoded.audit.wal_max_size, ByteSize::b(67_890));
+    assert_eq!(decoded.secret_gateway.max_buffer_size, ByteSize::b(98_765));
 }
 
 #[test]
@@ -455,7 +442,6 @@ fn superseded_numeric_scalar_keys_are_rejected() {
         "[interceptor.connect_relay]\nsetup_timeout_secs = 10\n",
         "[interceptor.connect_relay]\nsession_max_secs = 600\n",
         "[interceptor.https_mitm]\ncert_ttl_secs = 86400\n",
-        "[capability_validation]\nclock_skew_tolerance_seconds = 5\n",
         "[connector]\ndefault_timeout_ms = 30000\n",
         "[[connector.hosts]]\nhost = \"api.example.com\"\nrps = 1\nburst = 1\ntimeout_ms = 5000\n",
         "[connector]\nhosts = [{ host = \"api.example.com\", rps = 1, burst = 1, timeout_ms = 5000 }]\n",
@@ -491,14 +477,6 @@ fn superseded_numeric_scalar_keys_are_rejected() {
 #[test]
 fn sidecar_infra_enums_use_snake_case() {
     assert_eq!(
-        serde_json::from_str::<SidecarMode>(r#""enforce""#).expect("mode"),
-        SidecarMode::Enforce,
-    );
-    assert_eq!(
-        serde_json::from_str::<SidecarMode>(r#""monitor""#).expect("mode"),
-        SidecarMode::Monitor,
-    );
-    assert_eq!(
         serde_json::from_str::<CredentialMode>(r#""basic""#).expect("mode"),
         CredentialMode::Basic,
     );
@@ -518,10 +496,9 @@ fn infra_sections_default_to_documented_paths() {
         PolicyConfig::default().dir,
         std::path::PathBuf::from("./policies/"),
     );
-    assert_eq!(
-        CaConfig::default().dir,
-        std::path::PathBuf::from("./firma-ca/"),
-    );
+    // No sentinel: an unset CA directory is resolved against the state
+    // directory at startup, not carried as a working-directory-relative path.
+    assert_eq!(CaConfig::default().dir, None);
 }
 
 #[test]

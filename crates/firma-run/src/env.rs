@@ -189,6 +189,14 @@ impl ExecutionEnv {
         self.vars.insert(key, value)
     }
 
+    /// Remove `key`, returning the value it held.
+    ///
+    /// Used by launch preparation that must prevent sensitive host or profile
+    /// variables from entering the sandbox.
+    pub(crate) fn remove(&mut self, key: &str) -> Option<String> {
+        self.vars.remove(key)
+    }
+
     /// Iterate the variables in key order.
     pub(crate) fn iter(&self) -> btree_map::Iter<'_, String, String> {
         self.vars.iter()

@@ -2,6 +2,21 @@ use std::path::PathBuf;
 
 use firma_secret_provider::IntegrationConfigError;
 
+/// Why a required secret-shim artifact cannot be used.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SecretShimArtifactIssue {
+    #[error("artifact is missing")]
+    Missing,
+    #[error("artifact cannot be read: {0}")]
+    Unreadable(String),
+    #[error("artifact is not executable")]
+    NotExecutable,
+    #[error("artifact is incompatible with {expected}: {actual}")]
+    IncompatibleElf { expected: String, actual: String },
+    #[error("artifact SHA-256 is {actual}, but the guest manifest requires {expected}")]
+    Sha256Mismatch { expected: String, actual: String },
+}
+
 /// Error type used by `firma-run` runtime orchestration.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -42,6 +57,20 @@ pub enum RunError {
 
     #[error("backend error ({backend}): {reason}")]
     Backend { backend: String, reason: String },
+
+    #[error(
+        "secret shim artifact for target '{target}' at {path} is unusable: {issue}. Reinstall OpenFirma or install the matching target-qualified secret-shim bundle"
+    )]
+    SecretShimArtifact {
+        target: String,
+        path: PathBuf,
+        issue: SecretShimArtifactIssue,
+    },
+
+    #[error(
+        "cannot discover the Homebrew secret-shim resource from {firma_exe}: {reason}. Reinstall OpenFirma with Homebrew or use a complete target-qualified bundle"
+    )]
+    SecretShimDiscovery { firma_exe: PathBuf, reason: String },
 
     #[error("profile '{profile}' is incompatible with backend '{backend}': {reason}")]
     UnsupportedProfileBackend {

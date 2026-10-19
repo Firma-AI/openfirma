@@ -2,6 +2,7 @@
 
 use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig, load_section};
 use firma_config_schema::{authority, run, sidecar};
+use firma_test_helpers::toml_fence_after;
 use fs_err as fs;
 use serde::Deserialize;
 use std::assert_matches;
@@ -272,34 +273,75 @@ fn tracked_unified_config_examples_match_the_strict_schema() {
             ),
         ),
     ] {
+        let toml = toml.unwrap_or_else(|| panic!("{name}: TOML fence after marker exists"));
         let path = tmp.path().join(format!("{name}.toml"));
         fs::write(&path, toml).expect("write documentation example");
         assert_unified_config_parses(&path);
     }
 
+    let examples =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/firma-run");
     for path in [
-        "../../examples/firma-run/local-command-governance/configs/base-profile.toml",
-        "../../examples/firma-run/local/assets/firma_run.local.example.toml",
+        "local-command-governance/configs/base-profile.toml",
+        "local/assets/firma_run.local.example.toml",
     ] {
-        assert_unified_config_parses(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path));
+        assert_unified_config_parses(&examples.join(path));
     }
+    // Managed setup never configures local mapping files, so the managed
+    // example carries no local `[authority]` section or `mapping_rules_paths`.
+    assert!(
+        assert_unified_config_parses(&examples.join("firma.managed.example.toml")).is_none(),
+        "managed example must not configure a local [authority] section"
+    );
 }
 
-fn toml_fence_after<'a>(markdown: &'a str, marker: &str) -> &'a str {
-    markdown
-        .split_once(marker)
-        .and_then(|(_, remainder)| remainder.split_once("```toml"))
-        .and_then(|(_, remainder)| remainder.split_once("```").map(|(toml, _)| toml))
-        .expect("TOML fence after marker exists")
-}
-
-fn assert_unified_config_parses(path: &std::path::Path) {
+/// Parses every unified section of `path` and returns its `[authority]` section.
+fn assert_unified_config_parses(path: &std::path::Path) -> Option<authority::AuthorityConfig> {
     let config = FirmaConfig::load(path).expect("load unified config example");
-    let _: Option<authority::AuthorityConfig> = config
-        .optional_section("authority")
-        .expect("parse authority section");
     let _: Option<sidecar::SidecarConfig> = config
         .optional_section("sidecar")
         .expect("parse sidecar section");
     let _: Option<run::FileConfig> = config.optional_section("run").expect("parse run section");
+    config
+        .optional_section("authority")
+        .expect("parse authority section")
+}
+
+/// Rendered example templates must load under the strict schema, and every
+/// Authority they start must publish mapping inputs: the Authority rejects a
+/// configuration without them, and Sidecars no longer read local mappings.
+#[test]
+fn tracked_config_templates_render_to_valid_authority_owned_mappings() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    for template in [
+        "../../examples/firma-git-demo/config/firma.toml.tmpl",
+        "../../examples/firma-git-demo/config/firma-issue.toml.tmpl",
+    ] {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(template);
+        let text = fs::read_to_string(&source).expect("read config template");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
+        fs::write(&path, render_placeholders(&text)).expect("write rendered template");
+
+        if let Some(authority) = assert_unified_config_parses(&path) {
+            assert!(
+                !authority.mapping_rules_paths.is_empty(),
+                "{template} starts an Authority without mapping inputs"
+            );
+        }
+    }
+}
+
+/// Replace every `{{NAME}}` template placeholder with a loopback address, which
+/// is valid wherever the templates interpolate an address or a path.
+fn render_placeholders(template: &str) -> String {
+    let mut rendered = String::new();
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once("{{") {
+        let (_, remainder) = after.split_once("}}").expect("closed placeholder");
+        rendered.push_str(before);
+        rendered.push_str("127.0.0.1:1");
+        rest = remainder;
+    }
+    rendered.push_str(rest);
+    rendered
 }

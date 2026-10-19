@@ -5,8 +5,9 @@ use firma_secret_provider::{
     GatewayRequest, PlaceholderResult, PushRequest, PushResponse, ResolveRequest,
     SecretPlaceholder,
     broker::{
-        BinaryName, BinaryNameError, BrokerExitStatus, BrokerOutputChunk, BrokerRequest,
-        BrokerResponse, DecodedBrokerResponse,
+        BROKER_CONTROL_VERSION, BinaryName, BinaryNameError, BrokerExitStatus, BrokerOutputChunk,
+        BrokerReadinessRequest, BrokerReadinessResponse, BrokerRequest, BrokerResponse,
+        DecodedBrokerResponse,
     },
 };
 
@@ -104,6 +105,28 @@ fn broker_request_round_trips() {
     insta::assert_snapshot!(wire, @r#"{"bin":"bws","args":["secret","get","abc"]}"#);
     let back: BrokerRequest = serde_json::from_str(&wire).expect("deserialize");
     assert_eq!(back, request);
+}
+
+#[test]
+fn broker_readiness_wire_types_are_versioned() {
+    let request = serde_json::to_string(&BrokerReadinessRequest::current()).expect("serialize");
+    insta::assert_snapshot!(request, @r#"{"control":{"type":"readiness","version":1}}"#);
+    let response = serde_json::to_string(&BrokerReadinessResponse::current()).expect("serialize");
+    insta::assert_snapshot!(response, @r#"{"type":"ready","version":1}"#);
+
+    let decoded: BrokerReadinessResponse =
+        serde_json::from_str(&response).expect("deserialize readiness response");
+    assert_eq!(decoded.version(), BROKER_CONTROL_VERSION);
+}
+
+#[test]
+fn current_readiness_request_fails_legacy_execution_decoding() {
+    let wire = serde_json::to_string(&BrokerReadinessRequest::current()).expect("serialize");
+    let error = serde_json::from_str::<BrokerRequest>(&wire)
+        .expect_err("a legacy broker must reject the new control frame");
+    assert_eq!(error.classify(), serde_json::error::Category::Data);
+    assert_eq!(error.line(), 1);
+    assert_eq!(error.column(), wire.len());
 }
 
 #[test]

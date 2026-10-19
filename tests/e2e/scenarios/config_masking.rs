@@ -248,7 +248,13 @@ fn normalized_duplicate_mount_target_fails_closed() {
     let workspace = world.workspace_path();
     let config_dir = workspace.join(".firma");
     let config_file = scaffold_mask_test_config(&world, &config_dir, &workspace);
+    // Both entries are written here rather than relying on a scaffolded
+    // workspace mount to supply one half: a config whose workspace `firma run`
+    // derives unaided carries no mounts block, and the first operator entry
+    // replaces the derived default wholesale. The pair must therefore be
+    // explicit for the colliding targets to reach the backend at all.
     let parent_dir_target = config_dir.join("..");
+    append_profile_mount(&config_file, &workspace, &workspace);
     append_profile_mount(&config_file, &workspace, &parent_dir_target);
 
     let shell = format!(

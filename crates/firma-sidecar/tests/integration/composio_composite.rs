@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use firma_config_schema::sidecar::{SidecarMode, TenancyMode};
 use firma_core::{
     AbortReason, ActionParams, CapabilityClaims, Connector, ConnectorError, ConnectorResponse,
     DenyReason, ExecutionEnvelope, InjectedCredentials, ModificationSpec, RevocationStore,
@@ -358,7 +358,6 @@ fn claims() -> anyhow::Result<CapabilityClaims> {
 fn pipeline(
     mode: PolicyMode,
     credential_mode: CredentialMode,
-    sidecar_mode: SidecarMode,
 ) -> anyhow::Result<EnforcementPipeline> {
     let claims = claims()?;
     let capability_map = CapabilityMap::new(vec![
@@ -377,7 +376,6 @@ fn pipeline(
             }],
         },
         &ActionClassRegistry::v0_1(),
-        false,
     )?;
     Ok(EnforcementPipeline::new(PipelineArgs {
         normalizer: IntentNormalizer::new(mapping),
@@ -385,16 +383,15 @@ fn pipeline(
             capability_map,
             Arc::new(MockVerifier { claims }),
             Arc::new(NoRevocations),
-            Duration::ZERO,
-            TenancyMode::SingleAgent,
         ),
         constraint_enforcer: ConstraintEnforcer::new(Arc::new(TestPolicy(mode))),
         credential_injector: Box::new(TestCredentials {
             mode: credential_mode,
         }),
-        session_state_store: Arc::new(firma_sidecar::enforcement::LruSessionStateStore::new(16)),
-    })
-    .with_mode(sidecar_mode))
+        session_state_store: Arc::new(firma_sidecar::enforcement::LruSessionStateStore::new(
+            const { NonZeroUsize::new(16).unwrap() },
+        )),
+    }))
 }
 
 fn request_and_actions() -> anyhow::Result<(RawRequest, Vec<ComposioAction>)> {
@@ -516,20 +513,13 @@ async fn start_mock_tls_upstream() -> anyhow::Result<(
 #[tokio::test]
 async fn allowed_children_share_one_atomic_dispatch() -> anyhow::Result<()> {
     let (request, actions) = request_and_actions()?;
-    let result = pipeline(
-        PolicyMode::Allow,
-        CredentialMode::Shared,
-        SidecarMode::Enforce,
-    )?
-    .enforce_composite(&request, "sess_composite", &actions)
-    .await;
+    let result = pipeline(PolicyMode::Allow, CredentialMode::Shared)?
+        .enforce_composite(&request, "sess_composite", &actions)
+        .await;
 
     assert!(matches!(
         result.disposition,
-        CompositeDisposition::Dispatch {
-            monitor_override: false,
-            transport: Some(_)
-        }
+        CompositeDisposition::Dispatch { .. }
     ));
     assert_eq!(result.children.len(), 2);
     assert!(
@@ -555,13 +545,9 @@ async fn allowed_children_share_one_atomic_dispatch() -> anyhow::Result<()> {
 #[tokio::test]
 async fn empty_action_slice_fails_closed() -> anyhow::Result<()> {
     let (request, _) = request_and_actions()?;
-    let result = pipeline(
-        PolicyMode::Allow,
-        CredentialMode::Shared,
-        SidecarMode::Enforce,
-    )?
-    .enforce_composite(&request, "sess_composite", &[])
-    .await;
+    let result = pipeline(PolicyMode::Allow, CredentialMode::Shared)?
+        .enforce_composite(&request, "sess_composite", &[])
+        .await;
 
     assert!(matches!(
         result.disposition,
@@ -581,13 +567,9 @@ async fn empty_action_slice_fails_closed() -> anyhow::Result<()> {
 #[tokio::test]
 async fn deny_preserves_blocker_and_aborts_allowed_sibling() -> anyhow::Result<()> {
     let (request, actions) = request_and_actions()?;
-    let result = pipeline(
-        PolicyMode::DenySend,
-        CredentialMode::Shared,
-        SidecarMode::Enforce,
-    )?
-    .enforce_composite(&request, "sess_composite", &actions)
-    .await;
+    let result = pipeline(PolicyMode::DenySend, CredentialMode::Shared)?
+        .enforce_composite(&request, "sess_composite", &actions)
+        .await;
 
     assert!(matches!(
         result.disposition,
@@ -621,7 +603,7 @@ async fn every_remediation_blocks_composio_dispatch() -> anyhow::Result<()> {
         PolicyMode::DeferRead,
     ] {
         let (request, actions) = request_and_actions()?;
-        let result = pipeline(mode, CredentialMode::Shared, SidecarMode::Enforce)?
+        let result = pipeline(mode, CredentialMode::Shared)?
             .enforce_composite(&request, "sess_composite", &actions[..1])
             .await;
         assert!(matches!(
@@ -632,47 +614,14 @@ async fn every_remediation_blocks_composio_dispatch() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A credential-injection failure is an operational abort: it blocks the
+/// whole batch rather than letting an admitted sibling dispatch.
 #[tokio::test]
-async fn monitor_retains_would_block_reason_and_dispatches_once() -> anyhow::Result<()> {
+async fn credential_injection_failure_aborts_the_whole_batch() -> anyhow::Result<()> {
     let (request, actions) = request_and_actions()?;
-    let result = pipeline(
-        PolicyMode::DenySend,
-        CredentialMode::Shared,
-        SidecarMode::Monitor,
-    )?
-    .enforce_composite(&request, "sess_composite", &actions)
-    .await;
-
-    assert!(matches!(
-        result.disposition,
-        CompositeDisposition::Dispatch {
-            monitor_override: true,
-            transport: Some(_)
-        }
-    ));
-    assert_eq!(
-        *result.children[1].audit_payload.decision(),
-        firma_sidecar::audit::Decision::Allow
-    );
-    assert!(
-        result.children[1]
-            .audit_payload
-            .deny_reason()
-            .starts_with("monitor_mode:")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn monitor_keeps_credential_injection_abort_blocking() -> anyhow::Result<()> {
-    let (request, actions) = request_and_actions()?;
-    let result = pipeline(
-        PolicyMode::Allow,
-        CredentialMode::Fail,
-        SidecarMode::Monitor,
-    )?
-    .enforce_composite(&request, "sess_composite", &actions)
-    .await;
+    let result = pipeline(PolicyMode::Allow, CredentialMode::Fail)?
+        .enforce_composite(&request, "sess_composite", &actions)
+        .await;
 
     assert!(matches!(
         result.disposition,
@@ -686,10 +635,6 @@ async fn monitor_keeps_credential_injection_abort_blocking() -> anyhow::Result<(
                 ..
             }
         ) && *child.audit_payload.decision() == firma_sidecar::audit::Decision::Abort
-            && !child
-                .audit_payload
-                .deny_reason()
-                .starts_with("monitor_mode:")
     }));
     Ok(())
 }
@@ -697,13 +642,9 @@ async fn monitor_keeps_credential_injection_abort_blocking() -> anyhow::Result<(
 #[tokio::test]
 async fn credential_disagreement_aborts_the_whole_batch() -> anyhow::Result<()> {
     let (request, actions) = request_and_actions()?;
-    let result = pipeline(
-        PolicyMode::Allow,
-        CredentialMode::Disagree,
-        SidecarMode::Enforce,
-    )?
-    .enforce_composite(&request, "sess_composite", &actions)
-    .await;
+    let result = pipeline(PolicyMode::Allow, CredentialMode::Disagree)?
+        .enforce_composite(&request, "sess_composite", &actions)
+        .await;
 
     assert!(matches!(
         result.disposition,
@@ -728,11 +669,7 @@ async fn protected_composio_hosts_reject_protocol_upgrades() -> anyhow::Result<(
     let registry = Arc::new(ConnectorRegistry::new(connector));
     let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
     let handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
         registry,
         audit_tx,
     );
@@ -771,93 +708,6 @@ async fn protected_composio_hosts_reject_protocol_upgrades() -> anyhow::Result<(
     Ok(())
 }
 
-/// Monitor mode must not change agent-visible behavior: a request the
-/// decoder would deny (unknown tool) is forwarded once and the audit
-/// record keeps the would-deny reason.
-#[tokio::test]
-async fn monitor_forwards_protocol_denial_with_would_deny_audit() -> anyhow::Result<()> {
-    let connector = Arc::new(CountingConnector {
-        dispatches: AtomicUsize::new(0),
-        firma_header_seen: AtomicBool::new(false),
-    });
-    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
-    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
-    let handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Monitor,
-        )?),
-        registry,
-        audit_tx,
-    )
-    .with_composio_catalogs(catalogs()?);
-
-    let response = handler
-        .handle(
-            direct_request("GMAIL_TOOL_NOT_IN_CATALOG"),
-            "sess_composite",
-        )
-        .await;
-
-    assert!(matches!(response, HandledResponse::Passthrough(_)));
-    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
-    let audit = audit_rx
-        .recv()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("missing protocol denial audit"))?;
-    assert_eq!(*audit.decision(), firma_sidecar::audit::Decision::Allow);
-    assert!(audit.deny_reason().starts_with("monitor_mode:"));
-    assert!(audit.deny_reason().contains("unknown_tool"));
-    Ok(())
-}
-
-/// Monitor mode observes protocol upgrades on protected Composio hosts
-/// instead of hard-blocking them; the returned audit payload keeps the
-/// would-deny reason.
-#[tokio::test]
-async fn monitor_observes_composio_protocol_upgrade() -> anyhow::Result<()> {
-    let connector = Arc::new(CountingConnector {
-        dispatches: AtomicUsize::new(0),
-        firma_header_seen: AtomicBool::new(false),
-    });
-    let registry = Arc::new(ConnectorRegistry::new(connector));
-    let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
-    let handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Monitor,
-        )?),
-        registry,
-        audit_tx,
-    );
-
-    let authorization = handler
-        .authorize_upgrade(
-            RawRequest {
-                method: Method::POST,
-                host: Authority::from_static("backend.composio.dev"),
-                path: "/upgrade".to_string(),
-                headers: HeaderMap::new(),
-                body: Some(b"{}".to_vec()),
-                is_https: true,
-            },
-            "sess_composite",
-        )
-        .await;
-
-    let UpgradeAuthorization::Allow { audit_payload, .. } = authorization else {
-        anyhow::bail!("expected observed Composio upgrade in monitor mode");
-    };
-    assert_eq!(
-        *audit_payload.decision(),
-        firma_sidecar::audit::Decision::Allow
-    );
-    assert!(audit_payload.deny_reason().starts_with("monitor_mode:"));
-    Ok(())
-}
-
 #[tokio::test]
 async fn handler_dispatches_original_batch_once_and_audits_every_child() -> anyhow::Result<()> {
     let (mut request, _) = request_and_actions()?;
@@ -872,11 +722,7 @@ async fn handler_dispatches_original_batch_once_and_audits_every_child() -> anyh
     let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
     let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
     let handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
         registry,
         audit_tx,
     )
@@ -912,11 +758,7 @@ async fn handler_atomic_denial_dispatches_zero_times() -> anyhow::Result<()> {
     let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
     let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
     let handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::DenySend,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::DenySend, CredentialMode::Shared)?),
         registry,
         audit_tx,
     )
@@ -955,7 +797,6 @@ async fn session_creation_binding_a_denied_account_is_refused() -> anyhow::Resul
         Arc::new(pipeline(
             PolicyMode::DenyExecutiveAccount,
             CredentialMode::Shared,
-            SidecarMode::Enforce,
         )?),
         registry,
         audit_tx,
@@ -1025,7 +866,6 @@ async fn session_update_binding_a_denied_account_is_refused() -> anyhow::Result<
         Arc::new(pipeline(
             PolicyMode::DenyExecutiveAccount,
             CredentialMode::Shared,
-            SidecarMode::Enforce,
         )?),
         registry,
         audit_tx,
@@ -1082,40 +922,6 @@ async fn session_update_binding_a_denied_account_is_refused() -> anyhow::Result<
     Ok(())
 }
 
-#[tokio::test]
-async fn handler_monitor_override_still_dispatches_only_once() -> anyhow::Result<()> {
-    let (request, _) = request_and_actions()?;
-    let connector = Arc::new(CountingConnector {
-        dispatches: AtomicUsize::new(0),
-        firma_header_seen: AtomicBool::new(false),
-    });
-    let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
-    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
-    let handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::DenySend,
-            CredentialMode::Shared,
-            SidecarMode::Monitor,
-        )?),
-        registry,
-        audit_tx,
-    )
-    .with_composio_catalogs(catalogs()?);
-
-    let response = handler.handle(request, "sess_composite").await;
-
-    assert!(matches!(response, HandledResponse::Passthrough(_)));
-    assert_eq!(connector.dispatches.load(Ordering::SeqCst), 1);
-    for _ in 0..2 {
-        let audit = audit_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("missing child audit"))?;
-        assert_eq!(*audit.decision(), firma_sidecar::audit::Decision::Allow);
-    }
-    Ok(())
-}
-
 async fn read_headers(stream: &mut TcpStream) -> anyhow::Result<String> {
     read_response_headers(stream).await
 }
@@ -1145,11 +951,7 @@ async fn proxy_preserves_agent_cookie_after_allow() -> anyhow::Result<()> {
     let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
     let handler = Arc::new(
         RequestHandler::new(
-            Arc::new(pipeline(
-                PolicyMode::Allow,
-                CredentialMode::Shared,
-                SidecarMode::Enforce,
-            )?),
+            Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
             registry,
             audit_tx,
         )
@@ -1242,11 +1044,7 @@ async fn proxy_returns_structured_denial_for_request(request: &[u8]) -> anyhow::
     let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
     let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
     let handler = Arc::new(RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
         registry,
         audit_tx,
     ));
@@ -1286,11 +1084,7 @@ async fn unix_socket_returns_structured_denial_for_non_text_session_id() -> anyh
     let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
     let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(4);
     let handler = Arc::new(RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
         registry,
         audit_tx,
     ));
@@ -1346,11 +1140,7 @@ async fn connect_to_mitm_proxy(
     let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
     let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(8);
     let handler = Arc::new(RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
         registry,
         audit_tx,
     ));
@@ -1473,11 +1263,7 @@ async fn composio_denial_travels_through_the_mitm_proxy_stack() -> anyhow::Resul
     let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(8);
     let handler = Arc::new(
         RequestHandler::new(
-            Arc::new(pipeline(
-                PolicyMode::Allow,
-                CredentialMode::Shared,
-                SidecarMode::Enforce,
-            )?),
+            Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
             registry,
             audit_tx,
         )
@@ -1579,11 +1365,7 @@ async fn composio_mock_tls_demo_covers_enforcement_outcomes() -> anyhow::Result<
 
     let (allow_audit_tx, _allow_audit_rx) = tokio::sync::mpsc::channel(2);
     let allow_handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
         Arc::clone(&registry),
         allow_audit_tx,
     )
@@ -1596,11 +1378,7 @@ async fn composio_mock_tls_demo_covers_enforcement_outcomes() -> anyhow::Result<
 
     let (deny_audit_tx, _deny_audit_rx) = tokio::sync::mpsc::channel(2);
     let deny_handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::DenySend,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::DenySend, CredentialMode::Shared)?),
         Arc::clone(&registry),
         deny_audit_tx,
     )
@@ -1614,12 +1392,8 @@ async fn composio_mock_tls_demo_covers_enforcement_outcomes() -> anyhow::Result<
     let (batch_request, _) = request_and_actions()?;
     let (batch_audit_tx, _batch_audit_rx) = tokio::sync::mpsc::channel(4);
     let batch_handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::DenySend,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
-        Arc::clone(&registry),
+        Arc::new(pipeline(PolicyMode::DenySend, CredentialMode::Shared)?),
+        registry,
         batch_audit_tx,
     )
     .with_composio_catalogs(catalogs()?);
@@ -1627,41 +1401,9 @@ async fn composio_mock_tls_demo_covers_enforcement_outcomes() -> anyhow::Result<
     assert!(matches!(batch_denied, HandledResponse::Deny { .. }));
     assert_eq!(dispatches.load(Ordering::SeqCst), 1);
 
-    let (monitor_request, _) = request_and_actions()?;
-    let (monitor_audit_tx, mut monitor_audit_rx) = tokio::sync::mpsc::channel(4);
-    let monitor_handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::DenySend,
-            CredentialMode::Shared,
-            SidecarMode::Monitor,
-        )?),
-        registry,
-        monitor_audit_tx,
-    )
-    .with_composio_catalogs(catalogs()?);
-    let monitored = monitor_handler
-        .handle(monitor_request, "sess_composite")
-        .await;
-    assert!(matches!(monitored, HandledResponse::Passthrough(_)));
-    assert_eq!(dispatches.load(Ordering::SeqCst), 2);
-    let monitor_audits = [
-        monitor_audit_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("missing first monitor audit"))?,
-        monitor_audit_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("missing second monitor audit"))?,
-    ];
-    assert!(monitor_audits.iter().all(|audit| {
-        *audit.decision() == firma_sidecar::audit::Decision::Allow
-            && (audit.deny_reason().is_empty() || audit.deny_reason().starts_with("monitor_mode:"))
-    }));
-
     cancellation.cancel();
     println!(
-        "Composio mock TLS demo: allow=forwarded deny=blocked batch=atomic monitor=forwarded upstream_dispatches=2"
+        "Composio mock TLS demo: allow=forwarded deny=blocked batch=atomic upstream_dispatches=1"
     );
     Ok(())
 }
@@ -1686,11 +1428,7 @@ async fn paginated_lifecycle_read_dispatches_with_its_cursor() -> anyhow::Result
     let registry = Arc::new(ConnectorRegistry::new(connector.clone()));
     let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(4);
     let handler = RequestHandler::new(
-        Arc::new(pipeline(
-            PolicyMode::Allow,
-            CredentialMode::Shared,
-            SidecarMode::Enforce,
-        )?),
+        Arc::new(pipeline(PolicyMode::Allow, CredentialMode::Shared)?),
         registry,
         audit_tx,
     )

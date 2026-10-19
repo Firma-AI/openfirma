@@ -297,33 +297,42 @@ that outlives the run.
 
 ## Step 4: Configure secret providers (optional)
 
-Keep real secret values out of the agent by declaring which vaults the agent
-may use. Add `secret_providers` under `[run.defaults]` or a single
-`[run.profiles.<id>]` — see [Rehydrate & mask secrets with the secret
-gateway](../secret-gateway/) for the full spec:
+Mediate supported vault output through placeholders by declaring which vaults
+the agent may use. See [Secrets without handing them to
+agents](../../concepts/secrets/) for the workflow. Add `secret_providers` under
+`[run.defaults]` or a single `[run.profiles.<id>]` — see [Rehydrate & mask
+secrets with the secret gateway](../secret-gateway/) for the full spec:
 
 ```toml
 [run.defaults]
 secret_providers = [
-  "bws", # built-in Bitwarden Secrets CLI — shim + broker
+  "bws", # built-in Bitwarden Secrets Manager CLI — shim + broker
   { type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matchers = [
     { type = "sensitive_command", path = "/GetSecretValue", matcher = { type = "json", record_path = "$", value_path = "$.SecretString", name = { source = "path", path = "$.Name" } } },
   ] },
 ]
 ```
 
-- `secret_providers = ["bws", "op"]` — bare strings activate built-ins (CLI only).
+- `secret_providers = ["bws", "op", "vault", "doppler"]` — bare strings
+  activate Bitwarden Secrets Manager (`bws`), 1Password (`op`), HashiCorp Vault
+  (`vault`), and Doppler (`doppler`) built-ins (CLI only).
 - `{ type = "cli", binary_name = "...", provider_id = "...", credential_env_vars = [...], matchers = [...] }` — custom CLI vault with per-command `sensitive_command` / `safe_command` / `blocked_command` classification and `SecretMatcher` extraction.
 - `{ type = "http", provider_id = "...", host = "...", matchers = [...] }` — custom HTTP vault mirrored into the per-run Sidecar's `http_secret_providers` for MITM interception.
+
+See the [secret provider reference](../secret-provider-reference/) for the
+built-in command matrix, full custom schema, matcher language, domain scoping,
+limits, and failure behavior.
 
 Merged across defaults + active profile; later entries win on key collision
 (`binary_name` for CLI, `provider_id` for HTTP). An unknown bare name fails
 closed. Presence is authorization — no separate policy check gates interception.
 
-The Sidecar never sees plaintext the agent learned elsewhere: CLI secrets are
-extracted in the broker, stored under `fsp_…` placeholders in a per-run
-`SecretStore`, and resolved via `FIRMA_SECRET_GATEWAY_ADDR`; HTTP vault
-responses are placeholder-ized in the MITM path.
+CLI secrets extracted from sensitive-command stdout are stored under `fsp_…`
+placeholders in a per-run `SecretStore` and resolved by the Sidecar via
+`FIRMA_SECRET_GATEWAY_ADDR`; HTTP vault responses are placeholder-ized in the
+MITM path. Provider stderr is replayed unchanged, and response masking has the
+boundaries documented in the reference, so this is not a general data-loss
+prevention boundary.
 
 ## Step 5: What `firma run` does
 
@@ -337,7 +346,7 @@ On structural backends, `firma run`:
 4. Sets `HTTP_PROXY=http://127.0.0.1:18080` (and the HTTPS variant).
 5. Launches `curl https://example.com` inside the sandbox under a sandbox identity.
 
-The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. With automatically staged capabilities, the `curl` invocation never sees a token; it just talks to the proxy. If you use `--capability-file`, `firma run` exports capability material into the wrapped process environment, so do not use that mode when token non-exposure is a hard requirement.
+The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. With automatically staged capabilities, the `curl` invocation never sees a token; it just talks to the proxy. If you use `--capability-file`, `firma run` parses the canonical seed and exports its raw token into the wrapped process environment, so do not use that mode when token non-exposure is a hard requirement.
 
 On current macOS `vz` and Windows/WSL2 `wsl2`, `firma run` instead starts a host-side proxy bridge, injects proxy environment variables, clears `NO_PROXY`, and refuses to launch unless non-structural mode is explicitly allowed. A cooperative HTTP client is mediated and audited; a non-cooperative client can still bypass by ignoring proxy variables or opening direct sockets. The runtime logs this as a `backend compatibility proof`, not a structural proof.
 
@@ -404,24 +413,38 @@ source in the selected profile:
 ```toml
 [run.profiles.generic.capability.source]
 kind = "file"
-path = ".firma/capability-local-dev.toml"
+path = "runtime/capabilities/capability-local-dev.toml"
 ```
 
 The `--capability-file` flag selects the same file source for one invocation:
 
 ```bash
+mkdir -p .firma/runtime/capabilities
+
 firma authority -c .firma/firma.toml issue \
   --agent-id agt_01j0000000e008000000000001 \
   --session-id $(uuidgen) \
   --action communication.external.send \
-  --output .firma/capability-local-dev.toml
+  --output .firma/runtime/capabilities/capability-local-dev.toml
 
-firma run \
+FIRMA_STATE_DIR="$PWD/.firma/runtime" firma run \
   --config .firma/firma.toml \
   --profile generic \
-  --capability-file .firma/capability-local-dev.toml \
+  --capability-file .firma/runtime/capabilities/capability-local-dev.toml \
   -- curl https://example.com
 ```
+
+Run requires the complete signed seed TOML, extracts only `raw_token` into
+`FIRMA_CAPABILITY_TOKEN`, and preserves the source path in
+`FIRMA_CAPABILITY_FILE`. With local Sidecar autostart, the file and its resolved
+target must stay beneath the selected `<state-dir>/capabilities/` directory; the
+Sidecar reads only the resolved path and watches both contained parents. A
+pre-managed external Sidecar owns its runtime state and seed configuration
+independently.
+
+A file holding only the bare token — the shape earlier releases accepted — is
+rejected before launch. It carries none of the claims, so there is nothing to
+convert: re-issue it with `firma authority issue` as above.
 
 ## Step 7: Inspect the effective config
 
@@ -471,10 +494,9 @@ approval_policy = "on-request"
 | `--sidecar <local\|url>`                    | `local` autostarts a per-run Sidecar; a `tcp://host:port` / `unix:///path` value targets an external one and never autostarts. Omitted: persisted `sidecar_endpoint` else local autostart.                                                                                                                                                                                            |
 | `--no-autostart`                            | Disable autostart for any missing component and fail loudly. Incompatible with `--sidecar local` and `--authority local`. CI / production safety net.                                                                                                                                                                                                                                 |
 | `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                                                                                                                                                                                                                                                                               |
-| `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                                                                                                                                                                                                                                                                                              |
+| `--capability-file <path>`                  | Canonical signed capability seed TOML for this run.                                                                                                                                                                                                                                                                                                                                  |
 | `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                                                                                                                                                                                                                                                                                |
 | `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                                                                                                                                                                                                                                                                                    |
-| `--monitor`                                 | Run in observe-only mode for this invocation. Every call is allowed through; `firma monitor` shows the original deny reason prefixed with `monitor_mode:`. This flag is the explicit opt-in: it sets `FIRMA_ALLOW_MONITOR_MODE=1` on the autostarted sidecar. A config that sets `mode = "monitor"` without that env var downgrades to `enforce` at startup. Never use in production. |
 
 ## What does and does not pass through
 
@@ -495,8 +517,8 @@ Mounting a whole tree that happens to contain a procfs is still fine: the procfs
 It does *not* see:
 
 - Capabilities staged automatically for the host-side Sidecar. An explicit
-  file capability source exports capability material into the wrapped process
-  environment, so do not use it when token non-exposure is required.
+  file capability source exports the seed's raw token and path into the wrapped
+  process environment, so do not use it when token non-exposure is required.
 - Host environment variables (the sandbox starts with a stripped env).
 - Host filesystem outside profile-mounted paths.
 

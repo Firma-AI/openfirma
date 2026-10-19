@@ -61,7 +61,7 @@ fn existing_plaintext_h2_authority_is_reused_without_autostart_plan() {
         &cfg,
         format!(
             concat!(
-                "[authority]\n",
+                "[authority]\nmapping_rules_paths = ['mapping-rules.toml']\n",
                 "listen_addr = \"{authority_address}\"\n",
                 "[sidecar.authority]\n",
                 "public_key_path = \"authority.pub\"\n",
@@ -85,6 +85,7 @@ fn existing_plaintext_h2_authority_is_reused_without_autostart_plan() {
             firma_exe: &firma_exe,
             capability_public_key_path: Some(std::path::Path::new("firmateam.pub")),
             working_dir: &tmp.path().join("workspace"),
+            state_layout: &firma_runtime_state::RuntimeLayout::from_root(tmp.path().join("state")),
         },
         &mut prompt,
     );

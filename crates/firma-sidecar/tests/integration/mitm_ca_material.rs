@@ -8,6 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use super::state_layout::empty_state_beside;
 use firma_runtime_state::RuntimeLayout;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::handler::RequestHandler;
@@ -42,18 +43,17 @@ listen_addr = "127.0.0.1:0"
 enabled = true
 intercept_hosts = ["api.openai.com"]
 
-[mapping]
-rules_path = '{}'
-default_protected = false
+[authority]
+url = "http://127.0.0.1:50051"
 
 [ca]
 dir = '{}'
 "#,
-            rules_path.display(),
             ca_dir.display()
         ),
     )?;
-    SidecarConfig::load_from_path(&config_path).map_err(anyhow::Error::msg)
+    SidecarConfig::load_from_path(&config_path, &empty_state_beside(&config_path))
+        .map_err(anyhow::Error::msg)
 }
 
 #[tokio::test]

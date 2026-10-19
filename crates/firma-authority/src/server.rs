@@ -136,17 +136,18 @@ fn load_authority_service(config: &AuthorityConfig) -> Result<AuthorityServiceIm
     let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).context("invalid signing key")?);
 
     tracing::info!(policy_dir = %config.policy_dir.display(), "loading enforcement policy store");
-    let policy_store = CedarPolicyStore::load(
+    let policy_store = CedarPolicyStore::load_with_mappings(
         &config.policy_dir,
         config.schema_path.clone(),
-        config.bundle_ttl_seconds().get(),
+        config.bundle_ttl_seconds(),
+        config.mapping_rules_paths.clone(),
     )?;
 
     tracing::info!(issuance_policy_dir = %config.issuance_policy_dir.display(), "loading issuance policy store");
     let issuance_policy_store = CedarPolicyStore::load(
         &config.issuance_policy_dir,
         config.schema_path.clone(),
-        config.bundle_ttl_seconds().get(),
+        config.bundle_ttl_seconds(),
     )?;
 
     let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds().get()));
@@ -186,42 +187,39 @@ where
     F: Future<Output = ()> + Send + 'static,
     H: tonic_health::pb::health_server::Health + Send + Sync + 'static,
 {
-    match (
-        &config.tls.cert,
-        &config.tls.key,
-        &config.tls.mtls_client_ca_cert,
-        &config.tls.authorized_clients,
-    ) {
-        (Some(cert_path), Some(key_path), Some(ca_cert_path), Some(clients_path)) => {
-            build_mtls_future(
-                cert_path,
-                key_path,
-                ca_cert_path,
-                clients_path,
-                authority_service,
-                health_service,
-                listener,
-                shutdown_signal,
-            )
-            .await
-        }
-        (Some(cert_path), Some(key_path), None, None) => {
-            build_tls_future(
-                cert_path,
-                key_path,
-                authority_service,
-                health_service,
-                listener,
-                shutdown_signal,
-            )
-            .await
-        }
-        _ => Ok(build_plain_future(
+    let Some(material) = config.tls.material() else {
+        return Ok(build_plain_future(
             authority_service,
             health_service,
             listener,
             shutdown_signal,
-        )),
+        ));
+    };
+    match material.mtls() {
+        Some(mtls) => {
+            build_mtls_future(
+                material.cert(),
+                material.key(),
+                mtls.client_ca_cert(),
+                mtls.authorized_clients(),
+                authority_service,
+                health_service,
+                listener,
+                shutdown_signal,
+            )
+            .await
+        }
+        None => {
+            build_tls_future(
+                material.cert(),
+                material.key(),
+                authority_service,
+                health_service,
+                listener,
+                shutdown_signal,
+            )
+            .await
+        }
     }
 }
 
@@ -307,7 +305,7 @@ where
         .with_context(|| format!("failed to read TLS key {}", key_path.display()))?;
     let identity = Identity::from_pem(cert_pem, key_pem);
     let tls_config = ServerTlsConfig::new().identity(identity);
-    tracing::info!("TLS enabled on gRPC server (server-only, V1)");
+    tracing::info!("TLS enabled on gRPC server (server-only)");
 
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
     let mut builder = TonicServer::builder()

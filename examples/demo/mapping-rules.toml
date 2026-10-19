@@ -1,9 +1,15 @@
 # Mapping rules for the release demo.
 #
 # Mapped (method, host, path) tuples reach the enforcement pipeline.
-# All other hosts PASSTHROUGH because [sidecar.mapping].default_protected
-# is false in `firma.toml` — that keeps unrelated agent traffic (OpenAI,
-# whatever) out of the demo's policy story.
+# The mini-authority publishes these rules as a protected snapshot; unmatched
+# hosts are denied before Cedar. Add explicit rules for other required traffic.
+
+# Hero demo: model requests use the same communication
+# capability as the tools. The SDK attaches the demo session to model requests.
+[[rules]]
+host = "api.openai.com"
+path = "*"
+action_class = "communication.external.send"
 
 # CI: positive ALLOW path against the local fixture server.
 [[rules]]

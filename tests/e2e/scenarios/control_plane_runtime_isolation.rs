@@ -293,7 +293,7 @@ fn run_ca_trust_probe_spelled(
         &workspace,
     );
     let config_file = cfg_dir.join("firma.toml");
-    enable_https_mitm(&config_file);
+    assert_https_mitm_left_to_the_default(&config_file);
     patch_config(&config_file);
 
     let probe_tool = workspace.join("ca-trust-probe");
@@ -357,17 +357,19 @@ fn append_system_roots(config_file: &Path) {
     std::fs::write(config_file, patched).expect("write appended-roots config");
 }
 
-/// Turns on HTTPS MITM in a scaffolded config so the Sidecar generates CA
-/// material. Fails when the generated setting is absent, so the patch cannot
-/// silently become a no-op.
-fn enable_https_mitm(config_file: &Path) {
+/// Asserts that a scaffolded config leaves HTTPS MITM to the Sidecar default,
+/// which is what makes the Sidecar generate the CA material these probes read.
+///
+/// `firma config` used to write `enabled = false`, so this helper patched it to
+/// `true`. It now writes no `https_mitm` keys at all and the default intercepts
+/// every host, so the check is that nothing pins the setting back off — a
+/// generated key would silently take these scenarios out of MITM again.
+fn assert_https_mitm_left_to_the_default(config_file: &Path) {
     let config = std::fs::read_to_string(config_file).expect("read scaffolded config");
-    let patched = config.replace(
-        "[sidecar.interceptor.https_mitm]\nenabled = false\n",
-        "[sidecar.interceptor.https_mitm]\nenabled = true\n",
+    assert!(
+        !config.contains("[sidecar.interceptor.https_mitm]"),
+        "scaffolded config must leave interception to the default: {config}"
     );
-    assert_ne!(patched, config, "expected generated https_mitm setting");
-    std::fs::write(config_file, patched).expect("write MITM-enabled config");
 }
 
 /// Reports which trust store the launch environment named, whether it is

@@ -1,6 +1,14 @@
-# Visual Studio Code mapping — CONNECT-level classification for VS Code core
-# services, marketplace, account sync, and common embedded agent extensions.
-# This mapping intentionally avoids HTTPS MITM in v1.
+# Visual Studio Code mapping — classification for VS Code core services,
+# marketplace, account sync, and common embedded agent extensions.
+#
+# The Sidecar intercepts every host by default, so these hosts are decrypted
+# and their inner requests are classified individually. The CONNECT rules below
+# still classify the tunnel preface; the REST fallbacks at the end of the file
+# cover the inner requests, which would otherwise match nothing — and a
+# protected host with no matching rule is denied as unclassified, which would
+# break VS Code outright. VS Code and its extensions must therefore trust the
+# Sidecar CA; move any host that rejects interception into
+# https_mitm.bypass_hosts.
 
 # VS Code core update, docs, web, and experiments.
 [[rules]]
@@ -105,20 +113,15 @@ method = "CONNECT"
 host = "*.msftauth.net"
 action_class = "communication.external.send"
 
-# GitHub account and repository flows.
-[[rules]]
-method = "CONNECT"
-host = "github.com"
-action_class = "communication.external.send"
-
+# GitHub account and repository flows. github.com and api.github.com are not
+# here: the `github` mapping owns them, classifying the CONNECT preface as
+# code.write and each decrypted endpoint individually, and the `vscode` profile
+# loads it alongside this file. Listing them here too would duplicate those
+# CONNECT matchers and fail startup. The wildcard retains communication for
+# other GitHub subdomains and never overrides the more specific exact hosts.
 [[rules]]
 method = "CONNECT"
 host = "*.github.com"
-action_class = "communication.external.send"
-
-[[rules]]
-method = "CONNECT"
-host = "api.github.com"
 action_class = "communication.external.send"
 
 [[rules]]
@@ -144,11 +147,11 @@ action_class = "communication.external.send"
 # origin-tracker.githubusercontent.com by *.githubusercontent.com;
 # collector.github.com and copilot-reports.github.com by *.github.com.
 #
-# The plan-scoped rules are kept alongside *.githubcopilot.com on purpose:
-# the current glob matcher lets a leading * span multiple labels, so the
-# first rule already matches api.individual.githubcopilot.com, but the
-# matcher's documented contract is single-label wildcards. The explicit
-# plan-scoped rules keep Copilot coverage correct under either semantics.
+# The plan-scoped rules are redundant under the matcher's contract: a leading
+# * spans host labels, so *.githubcopilot.com already matches
+# api.individual.githubcopilot.com. They are kept to name the plan-scoped
+# endpoints this template covers, which is also what the REST fallbacks below
+# are matched against.
 [[rules]]
 method = "CONNECT"
 host = "*.githubcopilot.com"
@@ -230,4 +233,226 @@ action_class = "communication.external.send"
 [[rules]]
 method = "CONNECT"
 host = "*.cdn-apple.com"
+action_class = "communication.external.send"
+
+# REST fallback (post-MITM). One entry per CONNECT host above that was not
+# already intercepted, keeping that host's action class, so interception does
+# not change the policy outcome for any host — it only stops the decrypted
+# inner requests from being denied as unclassified.
+#
+# github.com and api.github.com are deliberately absent, and have no CONNECT
+# rule here either: the `github` mapping the `vscode` profile loads classifies
+# their decrypted requests per endpoint, and an endpoint matching none of those
+# is denied as unclassified on purpose. A catch-all here would land in the same
+# merged host and turn every unknown GitHub endpoint into code.write, which any
+# posture permitting writes then allows — fail-closed traded for fail-open on
+# the one host family where the fine-grained rules already exist.
+#
+# uploads.github.com has no fallback either, for the same reason: it merges
+# into the same owner set, and its CONNECT rule stays here only because the
+# `github` mapping contributes none. A decrypted request to it is denied until
+# an operator classifies the endpoint they actually use.
+[[rules]]
+host = "update.code.visualstudio.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "code.visualstudio.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.code.visualstudio.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "vscode.dev"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.vscode.dev"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "az764295.vo.msecnd.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "vscodeexperiments.azureedge.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "default.exp-tas.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "marketplace.visualstudio.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.gallerycdn.vsassets.io"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.gallery.vsassets.io"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.vscode-unpkg.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.vscode-cdn.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "vscode-sync.trafficmanager.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.vscode-sync.trafficmanager.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "login.microsoftonline.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "login.live.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.microsoft.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.msauth.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.msftauth.net"
+path = "*"
+action_class = "communication.external.send"
+
+# Named individually rather than as *.github.com: that wildcard spans labels in
+# the current matcher, so a catch-all under it would also answer for
+# api.github.com and uploads.github.com and re-create exactly the fail-open this
+# file avoids above. These are the two github.com hosts the Copilot allowlist
+# documents, and any other subdomain stays unclassified until someone names it.
+[[rules]]
+host = "collector.github.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "copilot-reports.github.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.githubusercontent.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.ghe.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.githubcopilot.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.individual.githubcopilot.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.business.githubcopilot.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.enterprise.githubcopilot.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "copilot-reports-*.b01.azurefd.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "usagereports*.blob.core.windows.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "ai.azure.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "api.catalog.azureml.ms"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.api.azureml.ms"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "amlwlrt4*.blob.core.windows.net"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "accounts.google.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.gstatic.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.googleusercontent.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "appleid.apple.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "idmsa.apple.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.cdn-apple.com"
+path = "*"
 action_class = "communication.external.send"

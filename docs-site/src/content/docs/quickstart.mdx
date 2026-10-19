@@ -7,7 +7,7 @@ import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 This quickstart takes you from nothing installed to a real agent running under enforcement: its outbound calls are checked against policy, allowed or denied, and written to the audit log.
 
-The default install path uses a single precompiled static binary. You do not need a build toolchain, or any API keys, unless you choose to build from source.
+The default install path uses precompiled static binaries. You do not need a build toolchain, or any API keys, unless you choose to build from source.
 
 ## Install
 
@@ -42,7 +42,11 @@ OpenFirma can be installed with a one-line script or built from source. The scri
 
 </Steps>
 
-The installer drops the binary in `~/.local/bin` by default and adds it to your shell's `PATH`.
+The tarball installer drops `firma` in `~/.local/bin` by default and adds that directory to your shell's `PATH`. It keeps backend support binaries in a private `libexec/openfirma` directory beside `firma`. The Homebrew path stores its private guest shim under `$(brew --prefix)/var/openfirma/secret-shims/<version>/<target>/` instead. These support binaries are not commands and must not be added to `PATH`.
+
+On macOS, a failed Homebrew inspection, resource preparation, or install falls back to the verified release tarball. Linux and macOS installs are serialized per destination and restore the previous private runtime shim after ordinary failures or caught `INT`, `HUP`, and `TERM` signals. Because the CLI and its private shim live at separate paths, `SIGKILL` or power loss during the final replacement can still leave a mixed installation; rerun the installer to repair it.
+
+The Windows installer installs only `firma.exe`. It does not install the optional secret shim from release archives: CLI secret-provider mediation is not supported by the current Windows/WSL2 compatibility backend, and the installer does not attempt WSL mediation.
 
 </TabItem>
 <TabItem label="From source">
@@ -125,52 +129,6 @@ firma run --config .firma/firma.toml --allow-non-structural -- \
 </Tabs>
 
 Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. `-k` just lets this single `curl` skip certificate setup; for real agents `firma run` installs and trusts its generated CA inside the sandbox automatically, so you rarely need it. To inspect or install that CA yourself, see [Enable HTTPS MITM](../guides/https-mitm/).
-
-## Try observe-only mode first
-
-If you want to see what firma would classify and deny before writing mapping rules, use **monitor mode**. In this mode every request is allowed through — the enforcement pipeline still runs and classifies the call, but any DENY is overridden to ALLOW. `firma monitor` shows the original deny reason prefixed with `monitor_mode:` so you can see exactly what would have been blocked.
-
-Enable it for a single run without editing any file:
-
-<Tabs>
-<TabItem label="Linux">
-
-```bash
-firma run --monitor --config .firma/firma.toml -- \
-  curl -kfsS https://api.github.com/users/firma-ai
-```
-
-</TabItem>
-<TabItem label="macOS / WSL2">
-
-```bash
-firma run --monitor --config .firma/firma.toml --allow-non-structural -- \
-  curl -kfsS https://api.github.com/users/firma-ai
-```
-
-</TabItem>
-</Tabs>
-
-Or set it permanently in `.firma/firma.toml`:
-
-```toml
-[sidecar]
-mode = "monitor"
-```
-
-When active, the sidecar prints a warning at startup:
-
-```
-MONITOR MODE ACTIVE — enforcement is observing only; all calls are allowed through. Never use in production.
-```
-
-In `firma monitor`, overridden decisions appear with the original reason:
-
-```
-2024-05-08T14:15:51Z  ALLOW    GET  api.github.com/users/firma-ai  class=communication.external.send  agent=generic  reason=monitor_mode: scope_mismatch
-```
-
-Switch back to enforcing mode by removing the `mode` line or changing it to `mode = "enforce"`.
 
 ## Watch the decisions
 

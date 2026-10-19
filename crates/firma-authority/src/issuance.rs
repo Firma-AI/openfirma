@@ -112,6 +112,8 @@ mod tests {
     use pasetors::keys::{AsymmetricKeyPair, Generate};
     use pasetors::version4::V4;
 
+    const BUNDLE_TTL: NonZeroU32 = NonZeroU32::new(30).unwrap();
+
     fn max_ttl(seconds: u32) -> NonZeroU32 {
         assert!(seconds > 0);
         NonZeroU32::new(seconds).unwrap_or(NonZeroU32::MIN)
@@ -129,7 +131,7 @@ mod tests {
             firma_core::cedar::FIRMA_SCHEMA,
         )
         .unwrap();
-        Arc::new(CedarPolicyStore::load(&dir, None, 30).unwrap())
+        Arc::new(CedarPolicyStore::load(&dir, None, BUNDLE_TTL).unwrap())
     }
 
     #[tokio::test]
@@ -150,7 +152,7 @@ mod tests {
         let out = issue_capability(&store, &signer, max_ttl(600), &req)
             .await
             .unwrap();
-        assert!(!out.raw_token.is_empty());
+        assert_ne!(out.raw_token, "");
         assert_eq!(out.claims.action_set, actions);
         assert_eq!(out.claims.resource_scope, "wttr.in*");
     }
@@ -199,7 +201,7 @@ mod tests {
             firma_core::cedar::FIRMA_SCHEMA,
         )
         .unwrap();
-        Arc::new(CedarPolicyStore::load(&dir, None, 30).unwrap())
+        Arc::new(CedarPolicyStore::load(&dir, None, BUNDLE_TTL).unwrap())
     }
 
     #[tokio::test]
@@ -264,7 +266,7 @@ mod tests {
             firma_core::cedar::FIRMA_SCHEMA,
         )
         .unwrap();
-        let store = Arc::new(CedarPolicyStore::load(&dir, None, 30).unwrap());
+        let store = Arc::new(CedarPolicyStore::load(&dir, None, BUNDLE_TTL).unwrap());
 
         let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
         let signer = Arc::new(PasetoV4Signer::try_new(kp.secret.as_bytes()).unwrap());

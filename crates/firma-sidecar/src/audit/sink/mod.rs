@@ -2,7 +2,10 @@
 
 mod file;
 mod grpc;
+mod grpc_integration_tests;
+mod metadata;
 mod stdout;
+mod submission;
 mod wal;
 
 pub use self::file::FileAuditSink;
@@ -10,7 +13,25 @@ pub use self::grpc::GrpcAuditSink;
 pub use self::stdout::StdoutAuditSink;
 pub use self::wal::WalAuditSink;
 
+use std::path::Path;
+
 use crate::audit::ExecutionEvent;
+
+/// Create `dir` and its missing parents, private to this user on Unix.
+///
+/// Every sink that puts events on disk goes through here: the events name
+/// resources, agents, and tokens, so the directory holding them must not be
+/// group- or world-readable.
+fn create_private_dir_all(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
 
 /// Converts the persisted audit representation into its gRPC transport form.
 fn execution_event_to_proto(value: ExecutionEvent) -> firma_protobuf::v1::ExecutionEvent {
@@ -46,5 +67,6 @@ fn execution_event_to_proto(value: ExecutionEvent) -> firma_protobuf::v1::Execut
         provenance: value.provenance,
         thread_id: value.thread_id,
         parent_action_id: value.parent_action_id,
+        run_evidence: value.run_evidence.map(|evidence| evidence.0),
     }
 }

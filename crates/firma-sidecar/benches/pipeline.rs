@@ -3,12 +3,11 @@
 #![allow(clippy::expect_used)]
 
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
-use firma_config_schema::sidecar::TenancyMode;
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 use firma_http::{Authority, HeaderMap, Method};
 use firma_identifiers::TokenId;
@@ -79,7 +78,7 @@ fn mapping_table() -> MappingTable {
             action_class: BENCH_ACTION_CLASS.to_string(),
         }],
     };
-    MappingTable::from_config(&rules, &registry, true).expect("mapping compiles")
+    MappingTable::from_config(&rules, &registry).expect("mapping compiles")
 }
 
 fn build_pipeline() -> EnforcementPipeline {
@@ -92,8 +91,6 @@ fn build_pipeline() -> EnforcementPipeline {
         }]),
         Arc::new(MockVerifier { claims }),
         Arc::new(NoRevocations),
-        Duration::from_secs(0),
-        TenancyMode::SingleAgent,
     );
     let evaluator: Arc<dyn firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation> =
         Arc::new(
@@ -106,7 +103,9 @@ fn build_pipeline() -> EnforcementPipeline {
         capability_validator: validator,
         constraint_enforcer: enforcer,
         credential_injector: Box::new(NullCredentialInjector),
-        session_state_store: Arc::new(LruSessionStateStore::new(16)),
+        session_state_store: Arc::new(LruSessionStateStore::new(
+            const { NonZeroUsize::new(16).unwrap() },
+        )),
     })
 }
 

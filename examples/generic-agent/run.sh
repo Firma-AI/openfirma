@@ -148,7 +148,7 @@ automatic per-session capability issuance.
   # DENY — protected HTTPS action without a capability
   curl -sx $PROXY --cacert "$CA_CERT" https://pypi.org/simple/requests/ -o /dev/null -w "pypi.org   → %{http_code} (expect 403)\n"
 
-  # DENY — not mapped → default_protected blocks before Cedar
+  # DENY — not mapped → denied as unclassified before Cedar
   curl -sx $PROXY http://evil.com/ -o /dev/null -w "evil.com   → %{http_code} (expect 403)\n"
 
   # DENY — cloud metadata endpoint (not mapped)

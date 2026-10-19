@@ -27,9 +27,9 @@ The v0.1 registry is a bounded configuration-time enum. Per-request
 identifiers below are normative for FEP v0.1; new **canonical** identifiers
 are added only in a minor protocol revision.
 
-Operators MAY extend the registry with deployment-specific classes at
-configuration time, provided those classes conform to the §2.3.2 naming
-rules. See §Extending the registry for the coupled sites and procedure.
+The shipped registry cannot be extended through configuration. Source builds
+may add deployment-specific classes provided they follow the §2.3.2 naming
+rules and update every coupled site under §Extending the registry.
 
 Identifiers listed in alphabetical order.
 
@@ -52,16 +52,16 @@ Identifiers listed in alphabetical order.
 | `system.install`               | System        | High       | Install a package or runtime dependency                    |
 
 Risk levels above are the Firma OSS v0.1 starting values. They are an
-implementation choice (encoded in `registry.rs::RiskLevel`), not part of
-the FEP spec. They drive telemetry grouping and default HITL thresholds;
-they do NOT drive Cedar decisions on their own.
+implementation guideline, not part of the FEP spec. The current runtime does
+not attach this metadata to registry entries, and risk levels do not drive
+Cedar decisions on their own.
 
 ### GitHub coverage — extended in-place
 
 The registry appends 12 classes covering code/issue/repo/notification/security
 domains so the OSS Sidecar can classify GitHub REST traffic deterministically
 without encoding the provider into the action class. Extension is **in-place**
-on `ActionClassRegistry::v0_1()` — no registry version bump. A future FEP
+in `firma_core::ActionClass` — no registry version bump. A future FEP
 revision should absorb these or mark them optional.
 
 | Action class          | Domain       | Risk     | Notes                                        |
@@ -220,28 +220,28 @@ Operator-facing mapping files ship under
 | `gmail.toml`    | 41 Gmail REST endpoints → 7 action classes                    |
 | `composio.toml` | Composio execution transports and hosted MCP → 1 action class |
 
-Enable a shipped file via the sidecar `[enforcement.mapping]` config:
+Select shipped files in Authority configuration. Relative entries resolve
+against the directory containing `firma.toml`, not the working directory; the
+paths below assume `firma.toml` sits in the OpenFirma repository root.
 
 ```toml
 # Option 1 — use the shipped file as the sole mapping source.
-[enforcement.mapping]
-rules_path = "crates/firma-sidecar/config/mappings/github.toml"
+[authority]
+mapping_rules_paths = ["crates/firma-sidecar/config/mappings/github.toml"]
 
 # Option 2 — merge multiple shipped files on top of a local default.
-[enforcement.mapping]
-rules_path = "config/mappings/default.toml"
-rules_paths = [
+[authority]
+mapping_rules_paths = [
+  "config/mappings/default.toml",
   "crates/firma-sidecar/config/mappings/github.toml",
   "crates/firma-sidecar/config/mappings/stripe.toml",
   "crates/firma-sidecar/config/mappings/gmail.toml",
 ]
 ```
 
-`rules_paths` is additive. Rule lists from `rules_path` and each `rules_paths`
-entry are concatenated before `MappingTable::from_config` runs specificity
-sort. Duplicate `(method, host, path)` tuples across merged files fail at
-startup (fail-closed) — the loader rejects collisions rather than silently
-preferring one source.
+The Authority concatenates selected rule lists in order and rejects duplicate
+`(method, host, path)` tuples before publication. Connected Sidecars compile
+complete protected snapshots and never select local input files.
 
 ## Naming rules (FEP §2.3.2)
 
@@ -293,9 +293,8 @@ wants "allow Slack posts to #general, deny everything else" matches on
 
 ## Canonical mappings (authoring guidance)
 
-Operators supply the mapping rules via the TOML file referenced by
-`sidecar.mapping.rules_path` (default: `mapping-rules.toml`, see
-`crates/firma-sidecar/src/enforcement/config.rs`). Each rule maps
+Operators supply mapping rules through `[authority].mapping_rules_paths`, which
+must select at least one TOML file (see `crates/firma-authority/src/mappings.rs`). Each rule maps
 `(host, path, method)` to one registry identifier. Rules validate against
 the registry at load time; unknown identifiers fail startup.
 
@@ -360,44 +359,37 @@ be classified more specifically (FEP §2.3.6 anti-convenience rule).
 
 Components that bind to the registry:
 
+- `crates/firma-core/src/action_class.rs` — `ActionClass` and
+  `ActionClass::ALL` are the only identifier catalog and enumeration source.
 - `crates/firma-sidecar/src/enforcement/registry.rs` —
-  `ActionClassRegistry::v0_1()` defines the exact set of 52 names (15 FEP
-  v0.1 + 12 GitHub + 12 Stripe + 5 Gmail + 4 Calendar + 4 Notion) plus their domain and risk level.
-  Construction MUST fail if the set drifts from this document.
+  `ActionClassRegistry::v0_1()` is a compatibility view backed by
+  `ActionClass::ALL`; it does not maintain a second catalog.
 - `crates/firma-sidecar/src/normalizer.rs` +
   `crates/firma-sidecar/src/normalizer/mapping.rs` — mapping rules validated
   against the registry at load time.
 - Operator-supplied `mapping-rules.toml` (path configured via
-  `sidecar.mapping.rules_path` in `firma.toml`) — rule authors MUST review
+  `[authority].mapping_rules_paths` in `firma.toml`) — rule authors MUST review
   new entries against §2.3.2 naming rules and the authoring guidance in
   this document.
 - `crates/firma-core/firma.cedarschema` — canonical schema embedded in
   the binary; declares the 52 actions for Cedar type-checking. Identifiers
-  MUST be byte-identical to the Sidecar registry.
+  MUST be byte-identical to `ActionClass::ALL`.
 
-- `crates/firma-authority/src/cedar_loader.rs` — hardcoded action
-  allow-list used during policy validation MUST stay in sync with the
-  registry.
-- `crates/firma-authority/src/service.rs` — issuance fixtures and
-  capability `action_set` values MUST draw only from the registry.
-
-A conformance test in the Sidecar crate asserts that
-`ActionClassRegistry::v0_1()` returns exactly the 52 identifiers listed
-above, in any order. Any drift fails CI.
+Conformance tests compare `ActionClass::ALL` with the Cedar schema and load one
+mapping rule for every canonical class. Any drift fails CI.
 
 ## Extending the registry
 
-Operators MAY add canonical classes beyond the v0.1 set at configuration
-time, provided identifiers conform to the §2.3.2 naming rules. Typical
-reasons to extend: a deployment-specific domain
+Adding a canonical class requires a coordinated source change; configuration
+cannot add identifiers to the catalog. Typical reasons to extend a source
+build include a deployment-specific domain
 (e.g. `compliance.report.file`), or a finer split where the existing class
 is too coarse for the policy surface (e.g. `payment.refund` distinct from
 `payment.transfer`).
 
-Per-request (runtime) extension remains forbidden — the registry is fixed
-once the Sidecar loads. Identifiers added here are still subject to the FEP
-compatibility contract in §Versioning: once deployed into capability
-tokens, they MUST NOT be renamed or repurposed.
+Per-request extension remains forbidden. Identifiers added in a source build
+are still subject to the FEP compatibility contract in §Versioning: once
+deployed into capability tokens, they MUST NOT be renamed or repurposed.
 
 ### Checklist
 
@@ -406,22 +398,21 @@ Every site MUST use the byte-identical identifier.
 
 1. Pick the identifier per §Naming rules. Reject transport, provider, and
    implementation-layer names.
-2. Pick the risk level (`Low` / `Medium` / `High` / `Critical`) by blast
-   radius on misuse, not by observed frequency.
-3. Register in `ActionClassRegistry` (`registry.rs`): add an
-   `ActionClassDefinition` entry with `name`, `domain`, `risk_level`.
-4. Declare in the Cedar schema (`crates/firma-core/firma.cedarschema`): add an
-   `action "<name>" appliesTo { ... }` block using the shared
+2. Add one variant and identifier mapping to the `action_classes!` invocation
+   in `crates/firma-core/src/action_class.rs`. `ActionClass::ALL`, parsing, and
+   display are generated from that entry.
+3. Record any risk guidance in this document by blast radius on misuse, not by
+   observed frequency. Risk guidance is not part of the runtime catalog.
+4. Declare the action in the Cedar schema
+   (`crates/firma-core/firma.cedarschema`) using the shared
    `EnforcementContext`. `EnforcementContext` shape MUST NOT change.
-5. Allow in the Cedar loader (`cedar_loader.rs`): add the identifier to
-   the hardcoded action allow-list used during policy validation.
-6. Add a mapping rule in `mapping-rules.toml` mapping concrete
+5. Add a mapping rule in `mapping-rules.toml` mapping concrete
    `(host, path, method)` triples to the new class. Without a mapping
    rule, traffic for this class fails closed with `UNCLASSIFIED_INTENT`.
-7. Author a Cedar policy (`default.cedar` or operator bundle) with
+6. Author a Cedar policy (`default.cedar` or operator bundle) with
    `permit` / `forbid` rules referencing `Firma::Action::"<name>"`.
-8. Add a conformance test asserting the new identifier is present in the
-   registry and in the Cedar schema, so drift between the two fails CI.
+7. Extend focused behavior coverage where the class introduces a new provider
+   or policy surface. Catalog/schema parity is already checked generically.
 
 ### Worked example: `payment.refund`
 
@@ -429,14 +420,10 @@ Scenario: an operator needs to distinguish refunds from the generic
 `payment.transfer` class because refund policies differ (for instance,
 no HITL below a fixed amount).
 
-`registry.rs`:
+`crates/firma-core/src/action_class.rs`:
 
 ```rust
-ActionClassDefinition {
-    name: "payment.refund",
-    domain: "payment",
-    risk_level: RiskLevel::High,
-},
+PaymentRefund => "payment.refund",
 ```
 
 `crates/firma-core/firma.cedarschema`:
@@ -448,9 +435,6 @@ action "payment.refund" appliesTo {
     context: EnforcementContext
 };
 ```
-
-`cedar_loader.rs`: add `"payment.refund"` to the action allow-list
-constant.
 
 `mapping-rules.toml`:
 
@@ -497,8 +481,8 @@ The registry is versioned with the FEP protocol. Compatibility rules
 - identifiers MAY be deprecated but MUST NOT be silently repurposed;
 - removal requires a major protocol revision.
 
-Firma OSS tracks the FEP registry version through the `ActionClassRegistry`
-constructor (`v0_1`). A future `v0_2` constructor adds new classes without
-removing existing ones. Callers that enumerate actions MUST read from the
-registry instance; hardcoding identifier lists elsewhere is a drift hazard
-and should be reviewed against this document.
+Firma OSS tracks the current catalog through `firma_core::ActionClass`.
+Callers that enumerate actions MUST use `ActionClass::ALL`; hardcoding
+identifier lists elsewhere is a drift hazard and should be reviewed against
+this document. `ActionClassRegistry::v0_1()` remains only as a Sidecar API
+compatibility facade over that canonical slice.

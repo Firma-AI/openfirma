@@ -10,6 +10,7 @@ mod windows_wsl2;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::sync::Arc;
 
 use firma_identifiers::SandboxId;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,113 @@ use crate::config::{
 use crate::env::ExecutionEnv;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
+
+/// Whether a backend can support CLI secret-provider shim mediation and how.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretShimCapability {
+    /// The backend cannot mediate CLI secret providers.
+    Unsupported { reason: SecretShimUnsupportedReason },
+    /// The backend can bind-mount a host-platform shim over the real provider
+    /// executable because the guest shares the host filesystem and architecture.
+    HostBindMount { target: ShimTarget },
+    /// The guest is an isolated VM that cannot reach the host directly; a
+    /// guest-architecture shim is deployed alongside a redaction-only broker
+    /// bridge so the guest can reach the host secret broker safely.
+    IsolatedGuest { broker_bridge: BrokerBridgeKind },
+}
+
+/// Launch-ready secret-shim support after run-specific artifact resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedSecretShimSupport {
+    /// This launch has no CLI providers and needs no shim artifact.
+    NotRequired,
+    /// The host-platform shim can be bind-mounted into the sandbox.
+    HostBindMount { target: ShimTarget },
+    /// An isolated guest shim has been validated against its bundle manifest.
+    IsolatedGuest {
+        broker_bridge: BrokerBridgeKind,
+        guest_shim: ResolvedGuestShim,
+    },
+}
+
+/// A guest shim whose exact bytes were validated against the guest manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedGuestShim {
+    pub(crate) target: ShimTarget,
+    pub(crate) source_path: PathBuf,
+    pub(crate) bytes: Arc<[u8]>,
+}
+
+/// Host-only metadata prepared for an isolated guest's secret-shim contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IsolatedGuestLaunchMetadata {
+    pub(crate) provider_names: Vec<String>,
+    pub(crate) shim_share_directory: PathBuf,
+    pub(crate) broker_socket_path: PathBuf,
+    pub(crate) guest_broker_addr: std::net::SocketAddr,
+}
+
+/// Why a backend does not support CLI secret-provider shims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretShimUnsupportedReason {
+    /// The guest can call the host directly, so mediation is unnecessary.
+    HostCallable,
+    /// Guest artifact deployment is not yet implemented for this backend.
+    NotYetImplemented,
+}
+
+/// How the guest reaches the host-side secret broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerBridgeKind {
+    /// VSOCK port forwarding to the host broker listener.
+    VsockPort { port: u32 },
+}
+
+/// Target platform triple and executable suffix for a shim binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShimTarget {
+    /// Rust-style target triple (e.g. `"x86_64-unknown-linux-musl"`).
+    pub(crate) triple: &'static str,
+    /// Platform executable suffix (e.g. `""` on Linux, `".exe"` on Windows).
+    pub(crate) exe_suffix: &'static str,
+}
+
+impl ShimTarget {
+    /// Resolve a supported Linux musl target triple.
+    pub(crate) fn from_linux_musl_triple(triple: &str) -> Option<Self> {
+        match triple {
+            "x86_64-unknown-linux-musl" => Some(Self {
+                triple: "x86_64-unknown-linux-musl",
+                exe_suffix: "",
+            }),
+            "aarch64-unknown-linux-musl" => Some(Self {
+                triple: "aarch64-unknown-linux-musl",
+                exe_suffix: "",
+            }),
+            _ => None,
+        }
+    }
+
+    /// Linux musl target for the current CPU architecture.
+    #[must_use]
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) const fn linux_musl() -> Self {
+        Self {
+            triple: "x86_64-unknown-linux-musl",
+            exe_suffix: "",
+        }
+    }
+
+    /// Linux musl target for the current CPU architecture.
+    #[must_use]
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) const fn linux_musl() -> Self {
+        Self {
+            triple: "aarch64-unknown-linux-musl",
+            exe_suffix: "",
+        }
+    }
+}
 
 /// Identifies the OS-level mechanism that provides network confinement.
 ///
@@ -325,6 +433,9 @@ pub struct LaunchSpec {
     pub(crate) args: Vec<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) env: ExecutionEnv,
+    /// Host-only isolated shim metadata. This is serialized into the dedicated
+    /// contract section, never into the guest command environment.
+    pub(crate) isolated_secret_shims: Option<IsolatedGuestLaunchMetadata>,
     pub(crate) sidecar_endpoint: SidecarEndpoint,
     /// Optional static seccomp cBPF artifact path resolved by runtime.
     ///
@@ -344,6 +455,9 @@ pub struct LaunchSpec {
     /// run. It can sit outside the workspace cwd because config discovery walks
     /// up parent directories.
     pub(crate) config_file: Option<PathBuf>,
+    /// Host login state path, resolved before guest environment construction.
+    /// Linux bwrap seals it even when the guest does not inherit its selector.
+    pub(crate) host_connection_dir: Option<PathBuf>,
     /// CA file this launch's trust environment names, when the Sidecar
     /// publishes one.
     ///
@@ -399,6 +513,7 @@ pub trait SandboxBackend: Send + Sync {
         runtime_layout: &firma_runtime_state::RuntimeLayout,
         handle: &SandboxHandle,
         launch: &LaunchSpec,
+        shim_support: &ResolvedSecretShimSupport,
     ) -> Result<Child, RunError>;
 
     /// Tear down backend runtime state after execution.
@@ -407,6 +522,38 @@ pub trait SandboxBackend: Send + Sync {
     ///
     /// Returns an error when backend cleanup fails.
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError>;
+
+    /// Returns whether this backend supports CLI secret-provider shim mediation.
+    fn secret_shim_capability(&self) -> SecretShimCapability;
+
+    /// Resolve launch-specific shim support after validating runtime artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a backend's runtime artifact metadata is missing
+    /// or incompatible.
+    fn resolve_secret_shim_support(
+        &self,
+        _runtime_layout: &firma_runtime_state::RuntimeLayout,
+        _handle: &SandboxHandle,
+        _firma_exe: &Path,
+        requires_cli_shim: bool,
+    ) -> Result<ResolvedSecretShimSupport, RunError> {
+        if !requires_cli_shim {
+            return Ok(ResolvedSecretShimSupport::NotRequired);
+        }
+        match self.secret_shim_capability() {
+            SecretShimCapability::HostBindMount { target } => {
+                Ok(ResolvedSecretShimSupport::HostBindMount { target })
+            }
+            SecretShimCapability::Unsupported { reason } => Err(RunError::Internal(format!(
+                "secret shim resolution requested for unsupported backend: {reason:?}"
+            ))),
+            SecretShimCapability::IsolatedGuest { .. } => Err(RunError::Internal(
+                "isolated guest backend did not resolve its secret shim artifact".to_string(),
+            )),
+        }
+    }
 }
 
 /// Construct backend implementation for a kind.

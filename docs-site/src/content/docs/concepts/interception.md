@@ -114,10 +114,10 @@ strict_hosts    = ["api.github.com"]
 - **`bypass_hosts`** — explicit list to fall back to CONNECT-only. Use for hosts where MITM would break (cert pinning, mTLS) but you still want destination-level policy.
 - **`strict_hosts`** — if MITM fails for any reason on these hosts (cert mismatch, handshake failure, internal error), **deny the connection** instead of falling back to CONNECT. Use for hosts where you'd rather break the call than enforce a weaker policy on it.
 
-Hosts not in any list use the configured default (typically CONNECT-only).
+With no `https_mitm` block at all, every host is intercepted and every host is strict. Listing `intercept_hosts`, as above, replaces that default and narrows it.
 
 :::note
-`firma config` **merges** `strict_hosts` rather than overwriting it. On the first run it seeds the list to the intercepted hosts (fail-closed); on a re-run it appends any newly intercepted hosts but preserves entries you added by hand. So you can harden a single host by adding one line to `strict_hosts` without re-listing the whole set, and re-running `firma config` will not wipe that edit. (`intercept_hosts`, by contrast, is fully replaced to reflect the current selection.)
+`firma config` writes neither `intercept_hosts` nor `strict_hosts`, and strips `enabled`, `intercept_hosts` and `strict_hosts` on every run — including ones you wrote by hand. Pinning them in the file would freeze today's posture and keep a later, wider default from ever reaching that machine. The removal only widens interception (fail-closed), but it is not a merge, so narrow by hand through `bypass_hosts` instead: that key is **merged** rather than overwritten, and survives a re-run.
 :::
 
 For the operator-side workflow — generating the CA, trusting it on the agent host, choosing what to MITM — see [Enable HTTPS MITM](../../guides/https-mitm/).
@@ -146,20 +146,21 @@ If the CA private key is ever exposed, the only correct response is to stop usin
 
 ## Comparison and recommendation
 
-| Need                                                | Recommended mode                       |
+| Need                                                | Recommended transport                  |
 | --------------------------------------------------- | -------------------------------------- |
-| Try OpenFirma against an existing agent             | HTTP proxy + CONNECT-only              |
-| Local coding agent on your dev machine              | HTTP proxy + MITM for known hosts      |
-| Containerized agent in a multi-tenant host          | Unix socket + MITM                     |
-| Production web app calling LLM APIs                 | HTTP proxy + MITM, `strict_hosts` set  |
+| Try OpenFirma against an existing agent             | HTTP proxy (MITM already on)           |
+| Local coding agent on your dev machine              | HTTP proxy                             |
+| Containerized agent in a multi-tenant host          | Unix socket                            |
+| Production web app calling LLM APIs                 | HTTP proxy                             |
 | Custom SDK with no proxy support                    | gRPC interceptor                       |
-| Third-party agent talking to a host you don't own   | CONNECT-only via `bypass_hosts`        |
+| Third-party agent talking to a host you don't own   | HTTP proxy + the host in `bypass_hosts`|
 
-Start in CONNECT-only mode. Add MITM hosts as you decide which ones you want L7 policy on. Use `strict_hosts` for the small set of hosts you *cannot* afford to talk to under weaker rules.
+Interception is not a mode you opt into: every host is intercepted and every host is strict, so the transport is the only choice above. Two things follow from that. The agent has to trust the Sidecar CA for every host it reaches — see [Enable HTTPS MITM](../../guides/https-mitm/) for how to scope that trust to the agent's process. And any host that rejects interception, or that you are not allowed to inspect, has to be named in `bypass_hosts`: it falls back to CONNECT-only there instead of being denied. `bypass_hosts = ["*"]` turns interception off entirely and is the only global opt-out that survives a `firma config` re-run.
 
 ## Where to go next
 
 - [Connectors](../connectors/) — what happens to a request *after* the Sidecar allows it.
 - [The sandbox boundary](../sandbox/) — how `firma run` forces traffic through the Sidecar even for agents that ignore env vars.
 - [Enable HTTPS MITM](../../guides/https-mitm/) — operator-side walkthrough.
-- [Rehydrate & mask secrets (secret gateway)](../../guides/secret-gateway/) — MITM'd HTTP vault responses feed this path once you need placeholder-based secret handling.
+- [Secrets without handing them to agents](../secrets/) — how vault placeholders
+  move through the Sidecar and into allowed requests.

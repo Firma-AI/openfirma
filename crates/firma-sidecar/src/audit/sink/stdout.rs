@@ -70,39 +70,10 @@ impl AuditSink for StdoutAuditSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audit::Decision;
+    use crate::audit::test_support::sample_event;
 
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
-
-    fn sample_event(id: &str) -> ExecutionEvent {
-        ExecutionEvent {
-            event_id: id.to_string(),
-            session_id: "sess-1".parse().expect("literal session id"),
-            token_id: "ctok_01j0000000e008000000000001"
-                .parse()
-                .expect("literal token id"),
-            agent_id: "agt_01j0000000e008000000000001"
-                .parse()
-                .expect("literal agent id"),
-            action: "http_get".to_string(),
-            resource: "https://api.example.com/v1".to_string(),
-            decision: Decision::Allow,
-            deny_reason: String::new(),
-            enforcement_latency_us: 42,
-            context_hash: "abc123".to_string(),
-            bundle_version: "v1".to_string(),
-            timestamp: Some(1_700_000_000_000_000_000),
-            dispatch_status: 0,
-            dispatch_latency_us: 0,
-            response_size: 0,
-            sandbox_id: String::new(),
-            provenance: String::new(),
-            thread_id: String::new(),
-            parent_action_id: String::new(),
-            signature: vec![0xDE, 0xAD],
-        }
-    }
 
     #[tokio::test]
     async fn test_sink_processes_events_and_shuts_down() {

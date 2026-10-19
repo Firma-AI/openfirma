@@ -28,12 +28,11 @@ pub struct SidecarBridgePlan {
 
 impl SidecarBridgePlan {
     /// Accepts the sidecar bridge fields after the VSOCK transport shape is known.
-    pub fn from_parts(sidecar_port: u32, sidecar_host_addr: SocketAddr) -> RunnerResult<Self> {
-        let guest_port = NonZeroU32::new(sidecar_port).ok_or(RunnerError::ZeroSidecarPort)?;
-        Ok(Self {
+    pub const fn from_parts(guest_port: NonZeroU32, sidecar_host_addr: SocketAddr) -> Self {
+        Self {
             guest_port,
             sidecar_host_addr,
-        })
+        }
     }
 
     /// Returns the guest-side VSOCK port used for Sidecar traffic.
@@ -279,7 +278,7 @@ mod tests {
 
         assert_eq!(
             sidecar_bridge.guest_port.get(),
-            plan.socket_devices[0].sidecar_port
+            plan.socket_devices[0].sidecar_port.get()
         );
         assert_eq!(
             sidecar_bridge.sidecar_host_addr,
@@ -319,20 +318,6 @@ mod tests {
             error,
             RunnerError::InvalidSocketDeviceCount { count: 2 }
         ));
-        Ok(())
-    }
-
-    #[test]
-    fn sidecar_bridge_plan_rejects_zero_sidecar_port() -> anyhow::Result<()> {
-        let (_temp, mut plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
-        plan.socket_devices[0].sidecar_port = 0;
-
-        let error = VzTransportPlan::try_from(&plan)
-            .err()
-            .ok_or_else(|| anyhow::anyhow!("zero sidecar port should fail"))?;
-
-        assert!(matches!(error, RunnerError::ZeroSidecarPort));
-
         Ok(())
     }
 

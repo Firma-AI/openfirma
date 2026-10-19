@@ -83,7 +83,6 @@ pub fn run(
         authority_profile: args.authority_profile,
         user_config_path: config,
         allow_non_structural: args.allow_non_structural,
-        monitor_mode: args.monitor,
     };
     // Redirect the stderr log surface into the per-run marker dir once the
     // wrapped agent's TUI owns the terminal, and restore it to stderr after the

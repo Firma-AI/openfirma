@@ -8,15 +8,12 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use firma_config_utils::NonZeroDuration;
 
 /// Sentinel: unset `policy_dir`.
 const DEFAULT_POLICY_DIR: &str = "policies/";
 /// Sentinel: unset `issuance_policy_dir`.
 const DEFAULT_ISSUANCE_POLICY_DIR: &str = "issuance-policies/";
-/// Sentinel: unset `key_file`.
-const DEFAULT_KEY_FILE: &str = "firma-authority.key";
-
 /// Behavior-free representation of `[authority]`.
 ///
 /// TLS fields remain direct members so the public TOML keys stay flat without
@@ -33,17 +30,31 @@ pub struct AuthorityConfig {
     pub issuance_policy_dir: PathBuf,
     /// Optional path to the Cedar schema file.
     pub schema_path: Option<PathBuf>,
+    /// Ordered mapping rule files included in enforcement snapshots.
+    /// At least one file is required. A file with no rules classifies nothing,
+    /// so all traffic is denied.
+    pub mapping_rules_paths: Vec<PathBuf>,
     /// Path to the revocation file.
-    pub revocation_file: PathBuf,
+    ///
+    /// Unset defaults to `revocations.txt` in the resolved state directory.
+    pub revocation_file: Option<PathBuf>,
     /// Strictly non-zero maximum token TTL.
     pub max_ttl: NonZeroDuration,
     /// Path to the Ed25519 signing key file.
-    pub key_file: PathBuf,
+    ///
+    /// Unset defaults to `authority.key` in the resolved state directory.
+    pub key_file: Option<PathBuf>,
     /// Strictly non-zero policy bundle TTL advertised to Sidecars.
     pub bundle_ttl: NonZeroDuration,
     /// Path to the TLS certificate file.
+    ///
+    /// Unset defaults to `tls/authority.crt` in the resolved state directory, and
+    /// TLS stays off when nothing was generated there.
     pub tls_cert_path: Option<PathBuf>,
     /// Path to the TLS private key file.
+    ///
+    /// Unset defaults to `tls/authority.key` in the resolved state directory, and
+    /// TLS stays off when nothing was generated there.
     pub tls_key_path: Option<PathBuf>,
     /// Path to the CA certificate used to verify Sidecar mTLS clients.
     pub mtls_client_ca_cert_path: Option<PathBuf>,
@@ -60,9 +71,10 @@ impl Default for AuthorityConfig {
             policy_dir: PathBuf::from(DEFAULT_POLICY_DIR),
             issuance_policy_dir: PathBuf::from(DEFAULT_ISSUANCE_POLICY_DIR),
             schema_path: None,
-            revocation_file: PathBuf::from("revocations.txt"),
+            mapping_rules_paths: Vec::new(),
+            revocation_file: None,
             max_ttl: NonZeroDuration::from_static(Duration::from_hours(1)),
-            key_file: PathBuf::from(DEFAULT_KEY_FILE),
+            key_file: None,
             bundle_ttl: NonZeroDuration::from_static(Duration::from_secs(30)),
             tls_cert_path: None,
             tls_key_path: None,

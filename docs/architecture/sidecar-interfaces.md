@@ -11,8 +11,8 @@ Every outbound agent call passes through this chain:
 Interceptor -> Normalizer -> Stage 1 -> Stage 2 -> Envelope assembly
 ```
 
-Each stage short-circuits on failure. A `Deny` or `Passthrough` decision exits
-the pipeline immediately.
+Each stage short-circuits on failure. A `Deny` decision exits the pipeline
+immediately.
 
 ## Interceptor
 
@@ -73,16 +73,17 @@ pub fn normalize(
   the v0.1 Action Class Registry.
 - `timestamp: DateTime<Utc>`, captured when the request is normalized.
 
-**Failure:** Returns `EnforcementDecision::Deny` when a protected request cannot
-be mapped to a known action class or uses an unrecognized HTTP method. Returns
-`EnforcementDecision::Passthrough` when the host is not protected.
+**Failure:** Returns `EnforcementDecision::Deny` when a request cannot be mapped
+to a known action class or uses an unrecognized HTTP method. The mapping rules
+come from the Authority's snapshot, which is always protected: there is no
+passthrough for unmatched hosts.
 
 **Invariants:**
 
 - Classification is deterministic and rule based.
 - Sensitive headers such as `authorization`, `cookie`, and `x-api-key` are
   stripped before they enter the envelope.
-- Unclassifiable protected actions fail closed.
+- Unclassifiable actions fail closed.
 
 ## Stage 1: Capability Validation
 
@@ -197,8 +198,9 @@ private and exposed through shared-reference getters.
 The pipeline produces exactly one `EnforcementDecision` per evaluated request.
 The AARM R4 five-decision set (`ALLOW`, `DENY`, `MODIFY`, `STEP_UP`, `DEFER`)
 is required for conformance; `ABORT` is a post-ALLOW local-failure variant and
-`PASSTHROUGH` covers non-protected traffic (serialized on the wire as `ALLOW`
-with an empty `token_id`). See `crates/firma-sidecar/src/enforcement/decision.rs`
+`PASSTHROUGH` covers recognized Composio discovery requests forwarded without
+enforcement credentials (serialized on the wire as `ALLOW` with an empty
+`token_id`). See `crates/firma-sidecar/src/enforcement/decision.rs`
 and `crates/firma-protobuf/proto/firma/v1/types.proto` (`EnforcementDecision`).
 
 ```rust
@@ -252,10 +254,10 @@ projects them onto these `EnforcementDecision` variants.
 
 ## Data Flow Summary
 
-| Stage       | Input                            | Output                   | On failure          |
-| ----------- | -------------------------------- | ------------------------ | ------------------- |
-| Interceptor | Transport data                   | `RawRequest`             | Deny                |
-| Normalizer  | `&RawRequest`                    | `NormalizedEnvelope`     | Deny or passthrough |
-| Stage 1     | `&NormalizedEnvelope`            | `ValidatedCapability`    | Deny                |
-| Stage 2     | `&NormalizedEnvelope` and claims | `Ok(())`                 | Deny                |
-| Assembly    | Normalized envelope and token    | `Box<ExecutionEnvelope>` | N/A                 |
+| Stage       | Input                            | Output                   | On failure |
+| ----------- | -------------------------------- | ------------------------ | ---------- |
+| Interceptor | Transport data                   | `RawRequest`             | Deny       |
+| Normalizer  | `&RawRequest`                    | `NormalizedEnvelope`     | Deny       |
+| Stage 1     | `&NormalizedEnvelope`            | `ValidatedCapability`    | Deny       |
+| Stage 2     | `&NormalizedEnvelope` and claims | `Ok(())`                 | Deny       |
+| Assembly    | Normalized envelope and token    | `Box<ExecutionEnvelope>` | N/A        |

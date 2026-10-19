@@ -41,10 +41,13 @@ firma config --profile vscode --posture dev
 ```
 
 This selects the `vscode` mapping. The mapping is CONNECT-level in v1: VS Code
-core services, marketplace hosts, Settings Sync, and Microsoft and GitHub
-account or repository flows are classified as `communication.external.send`.
-That includes GitHub.com, hosted GitHub Enterprise (`*.ghe.com`), and the
-Google and Apple identity-provider hosts GitHub can use during sign-in.
+core services, marketplace hosts, Settings Sync, Microsoft account flows,
+hosted GitHub Enterprise (`*.ghe.com`), and the Google and Apple identity
+providers GitHub can use during sign-in map to
+`communication.external.send`. Exact `github.com` and `api.github.com`
+connections map to `code.write`, including GitHub sign-in over those hosts:
+the Sidecar cannot distinguish a sign-in from a write inside an opaque tunnel.
+Other GitHub subdomains use `communication.external.send`.
 
 GitHub Copilot works out of the box: the mapping covers the hosts from
 GitHub's Copilot allowlist (`*.githubcopilot.com` plus the plan-scoped

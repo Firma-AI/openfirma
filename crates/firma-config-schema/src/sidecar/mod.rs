@@ -20,36 +20,26 @@ pub mod infra;
 pub mod interceptor;
 pub mod local_exec;
 pub mod revocation;
-pub mod tenancy;
 
 pub use audit::{AuditConfig, AuditSink};
 pub use authority::{AuthorityConfig, SidecarCredentials};
 pub use capability_seed::CapabilitySeedConfig;
 pub use connector::{ConnectorConfig, HostConnectorConfig};
-pub use enforcement::{
-    CapabilityValidationConfig, ConstraintEnforcementConfig, EnforcementConfig, MappingConfig,
-    SessionStateBackend,
-};
-pub use infra::{
-    CaConfig, CredentialConfig, CredentialMode, CredentialTransform, PolicyConfig, SidecarMode,
-};
+pub use enforcement::{ConstraintEnforcementConfig, EnforcementConfig, SessionStateBackend};
+pub use infra::{CaConfig, CredentialConfig, CredentialMode, CredentialTransform, PolicyConfig};
 pub use interceptor::{ConnectRelayConfig, HttpsMitmConfig, InterceptorConfig, InterceptorMode};
 pub use local_exec::{DefaultAction, LocalExecConfig};
 pub use revocation::RevocationConfig;
-pub use tenancy::{TenancyConfig, TenancyMode};
 
 /// Top-level sidecar configuration, deserialized from the `[sidecar]` section
 /// of `firma.toml`.
 ///
 /// Contains both infrastructure settings (interceptor, policy, CA,
-/// credentials) and enforcement-engine settings (mapping, capability
-/// validation, constraint enforcement).
+/// credentials) and enforcement-engine settings (constraint
+/// enforcement).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SidecarConfig {
-    /// Enforcement mode: `"enforce"` (default) or `"monitor"`.
-    #[serde(default)]
-    pub mode: SidecarMode,
     /// Interceptor settings (mode, listen address or socket path, drain
     /// timeout).
     #[serde(default)]
@@ -71,12 +61,6 @@ pub struct SidecarConfig {
     /// Background Authority stream client tuning.
     #[serde(default)]
     pub authority: AuthorityConfig,
-    /// Intent normalization / mapping rules.
-    #[serde(default)]
-    pub mapping: MappingConfig,
-    /// Capability validation settings.
-    #[serde(default)]
-    pub capability_validation: CapabilityValidationConfig,
     /// Constraint enforcement settings.
     #[serde(default)]
     pub constraint_enforcement: ConstraintEnforcementConfig,
@@ -93,9 +77,6 @@ pub struct SidecarConfig {
     /// local-exec endpoint is not started.
     #[serde(default)]
     pub local_exec: Option<LocalExecConfig>,
-    /// Tenancy settings (agent isolation mode).
-    #[serde(default)]
-    pub tenancy: TenancyConfig,
     /// HTTP secret-provider registry for MITM interception.
     #[serde(default)]
     pub http_secret_providers: Vec<HttpSecretProviderConfig>,

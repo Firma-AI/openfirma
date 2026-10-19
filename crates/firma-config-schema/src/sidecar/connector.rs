@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use firma_config_utils::NonZeroDuration;
 
 /// Default dispatch timeout (30s) applied to the registry default connector.
 const DEFAULT_TIMEOUT: NonZeroDuration = NonZeroDuration::from_static(Duration::from_secs(30));

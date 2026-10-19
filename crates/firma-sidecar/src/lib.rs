@@ -26,14 +26,15 @@
 //!   all types needed to construct and inspect the pipeline are re-exported
 //!   from here.
 //! - [`audit`] — Audit event emitter. Produces a signed event for every
-//!   enforcement decision. Supports stdout, file, gRPC, and WAL output
-//!   sinks.
+//!   enforcement decision. Supports stdout, file, and gRPC output sinks; the
+//!   gRPC sink buffers to disk while the stream is down.
 //! - [`startup`] — Per-subsystem builders that translate
 //!   [`config::SidecarConfig`] into runtime components.
 
 pub mod audit;
 pub mod authority_client;
 pub mod authority_credentials;
+pub(crate) mod backoff;
 pub mod body_encoding;
 pub mod composio;
 pub mod config;

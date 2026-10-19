@@ -99,25 +99,25 @@ impl RunEntryLayout {
     /// Return the per-run Sidecar Unix socket path.
     #[must_use]
     pub fn sidecar_socket(&self) -> PathBuf {
-        self.root.join("sidecar.sock")
+        self.root.join(SIDECAR_SOCKET_FILE_NAME)
     }
 
     /// Return the generated per-run Sidecar configuration path.
     #[must_use]
     pub fn sidecar_config(&self) -> PathBuf {
-        self.root.join("sidecar.toml")
+        self.root.join(SIDECAR_CONFIG_FILE_NAME)
     }
 
     /// Return the per-run Sidecar PID file path.
     #[must_use]
     pub fn sidecar_pid(&self) -> PathBuf {
-        self.root.join("sidecar.pid")
+        self.root.join(SIDECAR_PID_FILE_NAME)
     }
 
     /// Return the per-run Sidecar metadata path.
     #[must_use]
     pub fn sidecar_metadata(&self) -> PathBuf {
-        self.root.join("metadata.toml")
+        self.root.join(SIDECAR_METADATA_FILE_NAME)
     }
 
     /// Return the directory holding the per-run Sidecar HTTPS MITM CA.
@@ -167,6 +167,71 @@ pub const CA_BUNDLE_FILE_NAME: &str = "firma-ca-bundle.crt";
 /// File name of the Sidecar MITM CA private key.
 pub const CA_KEY_FILE_NAME: &str = "firma-ca.key";
 
+/// File name of a Sidecar Unix socket.
+const SIDECAR_SOCKET_FILE_NAME: &str = "sidecar.sock";
+
+/// File name of a generated Sidecar configuration.
+const SIDECAR_CONFIG_FILE_NAME: &str = "sidecar.toml";
+
+/// File name of a Sidecar PID file.
+const SIDECAR_PID_FILE_NAME: &str = "sidecar.pid";
+
+/// File name of the per-run Sidecar metadata.
+const SIDECAR_METADATA_FILE_NAME: &str = "metadata.toml";
+
+/// Directory holding the minted capability seeds.
+const CAPABILITIES_DIR_NAME: &str = "capabilities";
+
+/// Directory holding the per-run entries.
+const RUN_DIR_NAME: &str = "run";
+
+/// File name of the shared audit log.
+const AUDIT_LOG_FILE_NAME: &str = "audit.jsonl";
+
+/// File name of the persistent enforcement session state.
+const SESSION_STATE_FILE_NAME: &str = "session-state.jsonl";
+
+/// File name of the Authority Ed25519 capability signing key.
+const AUTHORITY_KEY_FILE_NAME: &str = "authority.key";
+
+/// File name of the Authority public verification key.
+const AUTHORITY_PUBLIC_KEY_FILE_NAME: &str = "authority.pub";
+
+/// File name of the audit signing key.
+const AUDIT_KEY_FILE_NAME: &str = "audit.key";
+
+/// File name of the revocation list.
+const REVOCATIONS_FILE_NAME: &str = "revocations.txt";
+
+/// Directory holding the Sidecar's generated HTTPS MITM CA outside a per-run
+/// entry.
+const GENERATED_CA_DIR_NAME: &str = "generated-firma-ca";
+
+/// Environment variable every Firma process resolves its state directory from.
+///
+/// Exported so the processes that *set* it for a child name the same variable
+/// [`RuntimeLayout::resolve`] reads.
+pub const STATE_DIR_ENV: &str = "FIRMA_STATE_DIR";
+
+/// Directory holding the Authority TLS material.
+const TLS_DIR_NAME: &str = "tls";
+
+/// File name of the Authority server TLS certificate.
+const AUTHORITY_TLS_CERTIFICATE_FILE_NAME: &str = "authority.crt";
+
+/// File name of the Authority server TLS private key.
+///
+/// Deliberately spelled out rather than reusing [`AUTHORITY_KEY_FILE_NAME`]:
+/// the two artifacts share a file name but are different keys in different
+/// directories, and renaming one must not silently rename the other.
+const AUTHORITY_TLS_PRIVATE_KEY_FILE_NAME: &str = "authority.key";
+
+/// File name of the CA certificate a Sidecar verifies the Authority against.
+const AUTHORITY_TLS_CA_CERTIFICATE_FILE_NAME: &str = "authority-ca.crt";
+
+/// File name of the CA private key that issues Authority TLS certificates.
+const AUTHORITY_TLS_CA_PRIVATE_KEY_FILE_NAME: &str = "authority-ca.key";
+
 impl RuntimeLayout {
     /// Resolve a runtime layout from an optional explicit root and the process
     /// environment.
@@ -180,7 +245,7 @@ impl RuntimeLayout {
     pub fn resolve(flag: Option<PathBuf>) -> Result<Self> {
         let layout = Self::resolve_from(RuntimeRootInputs {
             flag,
-            firma_state_dir: std::env::var("FIRMA_STATE_DIR").ok(),
+            firma_state_dir: std::env::var(STATE_DIR_ENV).ok(),
             xdg_runtime_dir: std::env::var("XDG_RUNTIME_DIR").ok(),
             local_app_data: std::env::var("LOCALAPPDATA").ok(),
             temp: std::env::var("TEMP").ok(),
@@ -272,7 +337,7 @@ impl RuntimeLayout {
     /// Return `<runtime>/capabilities`.
     #[must_use]
     pub fn capabilities_dir(&self) -> PathBuf {
-        self.root.join("capabilities")
+        self.root.join(CAPABILITIES_DIR_NAME)
     }
 
     /// Return `<runtime>/capabilities/<sandbox_id>.toml`.
@@ -284,7 +349,7 @@ impl RuntimeLayout {
     /// Return `<runtime>/run`.
     #[must_use]
     pub fn run_dir(&self) -> PathBuf {
-        self.root.join("run")
+        self.root.join(RUN_DIR_NAME)
     }
 
     /// Return the canonical layout for `<runtime>/run/<sandbox_id>`.
@@ -296,19 +361,136 @@ impl RuntimeLayout {
     /// Return the default shared audit log path.
     #[must_use]
     pub fn audit_log(&self) -> PathBuf {
-        self.root.join("audit.jsonl")
+        self.root.join(AUDIT_LOG_FILE_NAME)
     }
 
     /// Return the default long-lived sidecar Unix socket path.
     #[must_use]
     pub fn sidecar_socket(&self) -> PathBuf {
-        self.root.join("sidecar.sock")
+        self.root.join(SIDECAR_SOCKET_FILE_NAME)
     }
 
     /// Return the default persistent enforcement session-state path.
     #[must_use]
     pub fn session_state(&self) -> PathBuf {
-        self.root.join("session-state.jsonl")
+        self.root.join(SESSION_STATE_FILE_NAME)
+    }
+
+    /// Return the default Authority Ed25519 signing-key path.
+    #[must_use]
+    pub fn authority_key(&self) -> PathBuf {
+        self.root.join(AUTHORITY_KEY_FILE_NAME)
+    }
+
+    /// Return the default Authority public verification-key path.
+    #[must_use]
+    pub fn authority_public_key(&self) -> PathBuf {
+        self.root.join(AUTHORITY_PUBLIC_KEY_FILE_NAME)
+    }
+
+    /// Return the default audit signing-key path.
+    #[must_use]
+    pub fn audit_key(&self) -> PathBuf {
+        self.root.join(AUDIT_KEY_FILE_NAME)
+    }
+
+    /// Return the default revocation-list path.
+    #[must_use]
+    pub fn revocations(&self) -> PathBuf {
+        self.root.join(REVOCATIONS_FILE_NAME)
+    }
+
+    /// Return the default directory for the Sidecar's generated HTTPS MITM CA
+    /// outside a per-run entry.
+    #[must_use]
+    pub fn generated_ca_dir(&self) -> PathBuf {
+        self.root.join(GENERATED_CA_DIR_NAME)
+    }
+
+    /// Return the long-lived Sidecar's MITM CA certificate.
+    ///
+    /// Public material, like [`RunEntryLayout::ca_cert`]: a wrapped process
+    /// cannot verify an intercepted handshake without reading it.
+    #[must_use]
+    pub fn generated_ca_cert(&self) -> PathBuf {
+        self.generated_ca_dir().join(CA_CERT_FILE_NAME)
+    }
+
+    /// Return the long-lived Sidecar's MITM CA appended to the host's system
+    /// roots.
+    ///
+    /// Written only under `ca_trust_mode = "append_system_roots"`. Public
+    /// material, like [`RuntimeLayout::generated_ca_cert`].
+    #[must_use]
+    pub fn generated_ca_bundle(&self) -> PathBuf {
+        self.generated_ca_dir().join(CA_BUNDLE_FILE_NAME)
+    }
+
+    /// Return the long-lived Sidecar's MITM CA private key.
+    ///
+    /// Secret material, like [`RunEntryLayout::ca_key`]. Never expose this path
+    /// to a wrapped process.
+    #[must_use]
+    pub fn generated_ca_key(&self) -> PathBuf {
+        self.generated_ca_dir().join(CA_KEY_FILE_NAME)
+    }
+
+    /// Return the directory holding Authority TLS material.
+    #[must_use]
+    pub fn tls_dir(&self) -> PathBuf {
+        self.root.join(TLS_DIR_NAME)
+    }
+
+    /// Return the default Authority server TLS certificate path.
+    #[must_use]
+    pub fn authority_tls_certificate(&self) -> PathBuf {
+        self.tls_dir().join(AUTHORITY_TLS_CERTIFICATE_FILE_NAME)
+    }
+
+    /// Return the default Authority server TLS private-key path.
+    ///
+    /// Distinct from [`RuntimeLayout::authority_key`], which is the capability
+    /// signing key: same file name, different directory.
+    #[must_use]
+    pub fn authority_tls_private_key(&self) -> PathBuf {
+        self.tls_dir().join(AUTHORITY_TLS_PRIVATE_KEY_FILE_NAME)
+    }
+
+    /// Return the default path of the CA certificate a Sidecar verifies the
+    /// Authority's TLS identity against.
+    #[must_use]
+    pub fn authority_tls_ca_certificate(&self) -> PathBuf {
+        self.tls_dir().join(AUTHORITY_TLS_CA_CERTIFICATE_FILE_NAME)
+    }
+
+    /// Return the default path of the CA private key that issues Authority TLS
+    /// certificates.
+    #[must_use]
+    pub fn authority_tls_ca_private_key(&self) -> PathBuf {
+        self.tls_dir().join(AUTHORITY_TLS_CA_PRIVATE_KEY_FILE_NAME)
+    }
+}
+
+/// Whether the artifact at `path` is anything other than provably absent.
+///
+/// This is the question every consumer of a state-directory default has to
+/// answer before adopting one: `firma config` writes the material, and a
+/// deployment that never generated it must keep its "no anchor configured"
+/// behavior instead of failing on a file nobody wrote.
+///
+/// Only a clean `NotFound` counts as absent. A candidate that exists but cannot
+/// be stat-ed — a directory mode that hides it, for instance — is reported as
+/// present, so the component that opens it reports the real permission error
+/// rather than silently degrading. A directory standing where a file belongs is
+/// absent: it is not material anyone can read.
+///
+/// Prefer this over [`Path::is_file`], which folds both of those cases into
+/// "absent".
+#[must_use]
+pub fn is_material_present(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
     }
 }
 

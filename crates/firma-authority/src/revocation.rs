@@ -394,7 +394,7 @@ impl RevocationStore {
 
         Ok(RevocationStoreWatcher {
             _watcher: watcher,
-            task,
+            _task: task,
             store: self,
             tx: tx_broadcast,
         })
@@ -405,7 +405,7 @@ impl RevocationStore {
 /// Dropping this handle stops the file watch and the reload task.
 pub struct RevocationStoreWatcher {
     _watcher: notify::RecommendedWatcher,
-    task: JoinHandle<()>,
+    _task: JoinHandle<()>,
     store: RevocationStore,
     tx: broadcast::Sender<RevocationEntry>,
 }
@@ -423,11 +423,6 @@ impl RevocationStoreWatcher {
     #[must_use]
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
         self.tx.subscribe()
-    }
-
-    /// Abort the background reload task immediately.
-    pub fn abort(&self) {
-        self.task.abort();
     }
 }
 

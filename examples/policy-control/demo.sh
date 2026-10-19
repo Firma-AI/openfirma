@@ -61,7 +61,7 @@ control() {
 }
 
 prepare_state() {
-  mkdir -p "$STATE/generated-firma-ca"
+  mkdir -p "$STATE/capabilities" "$STATE/generated-firma-ca"
   : > "$STATE/audit.jsonl"
   touch "$STATE/revocations.txt"
 
@@ -76,7 +76,7 @@ prepare_state() {
       -out "$STATE/audit.key" >/dev/null 2>&1
   fi
 
-  rm -f "$STATE"/capability-*.toml "$STATE/capability.toml"
+  rm -f "$STATE"/capabilities/capability-*.toml
 }
 
 start_fixture() {
@@ -90,7 +90,7 @@ start_fixture() {
 
 issue_capability() {
   local action="$1"
-  local output="$STATE/capability-${action//./-}.toml"
+  local output="$STATE/capabilities/capability-${action//./-}.toml"
 
   "$FIRMA" authority --config "$CONFIG" issue \
     --agent-id "$AGENT_ID" \

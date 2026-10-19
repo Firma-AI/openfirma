@@ -5,15 +5,14 @@
     reason = "Authority-wired capability manifest support is defined now but not consumed yet"
 )]
 
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
+
 use firma_config_schema::sidecar::enforcement::{self as schema, SessionStateBackend};
+use firma_core::HttpMethod;
 use firma_http::Method;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::time::Duration;
-
-const VALID_HTTP_METHODS: &[&str] = &[
-    "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT",
-];
+use strum::IntoEnumIterator;
 
 // ---------------------------------------------------------------------------
 // Enforcement configuration
@@ -21,14 +20,9 @@ const VALID_HTTP_METHODS: &[&str] = &[
 
 /// Validated enforcement engine configuration.
 ///
-/// Groups the three enforcement sub-systems: intent-mapping rules, capability
-/// validation (Stage 1), and constraint enforcement (Stage 2).
+/// Configurable constraint enforcement (Stage 2).
 #[derive(Debug, Clone, Default)]
 pub struct EnforcementConfig {
-    /// Intent normalization / mapping rules.
-    pub mapping: MappingConfig,
-    /// Capability validation settings.
-    pub capability_validation: CapabilityValidationConfig,
     /// Constraint enforcement settings.
     pub constraint_enforcement: ConstraintEnforcementConfig,
 }
@@ -36,102 +30,18 @@ pub struct EnforcementConfig {
 /// Error validating an [`EnforcementConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnforcementConfigError {
-    /// `sidecar.mapping.rules_path` was empty.
-    #[error("mapping.rules_path must not be empty")]
-    EmptyRulesPath,
-    /// A `sidecar.mapping.rules_paths` entry was empty.
-    #[error("mapping.rules_paths[{index}] must not be empty")]
-    EmptyRulesPathEntry {
-        /// Index of the offending entry.
-        index: usize,
-    },
     /// `sidecar.constraint_enforcement.session_state_capacity` was zero.
     #[error("constraint_enforcement.session_state_capacity must be at least 1")]
     ZeroSessionStateCapacity,
-}
-
-impl EnforcementConfig {
-    /// Re-base every relative mapping path (`rules_path` and each entry of
-    /// `rules_paths`) against `config_dir`; absolute paths untouched.
-    pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
-        let rebase = |p: &mut PathBuf| {
-            if !p.as_os_str().is_empty() && p.is_relative() {
-                *p = config_dir.join(&*p);
-            }
-        };
-        rebase(&mut self.mapping.rules_path);
-        for p in &mut self.mapping.rules_paths {
-            rebase(p);
-        }
-    }
 }
 
 impl TryFrom<schema::EnforcementConfig> for EnforcementConfig {
     type Error = EnforcementConfigError;
 
     fn try_from(s: schema::EnforcementConfig) -> Result<Self, Self::Error> {
-        if s.mapping.rules_path.as_os_str().is_empty() {
-            return Err(EnforcementConfigError::EmptyRulesPath);
-        }
-        for (index, p) in s.mapping.rules_paths.iter().enumerate() {
-            if p.as_os_str().is_empty() {
-                return Err(EnforcementConfigError::EmptyRulesPathEntry { index });
-            }
-        }
-        if s.constraint_enforcement.session_state_capacity == 0 {
-            return Err(EnforcementConfigError::ZeroSessionStateCapacity);
-        }
         Ok(Self {
-            mapping: s.mapping.into(),
-            capability_validation: s.capability_validation.into(),
-            constraint_enforcement: s.constraint_enforcement.into(),
+            constraint_enforcement: s.constraint_enforcement.try_into()?,
         })
-    }
-}
-
-/// Validated mapping rules configuration.
-#[derive(Debug, Clone)]
-pub struct MappingConfig {
-    /// Path to the primary mapping rules TOML file.
-    pub rules_path: PathBuf,
-    /// Additional mapping rule files merged on top of `rules_path`.
-    pub rules_paths: Vec<PathBuf>,
-    /// Whether unlisted hosts are protected by default.
-    pub default_protected: bool,
-}
-
-impl Default for MappingConfig {
-    fn default() -> Self {
-        Self {
-            rules_path: default_mapping_path(),
-            rules_paths: Vec::new(),
-            default_protected: true,
-        }
-    }
-}
-
-impl From<schema::MappingConfig> for MappingConfig {
-    fn from(s: schema::MappingConfig) -> Self {
-        Self {
-            rules_path: s.rules_path,
-            rules_paths: s.rules_paths,
-            default_protected: s.default_protected,
-        }
-    }
-}
-
-/// Validated capability validation configuration.
-#[derive(Debug, Clone, Default)]
-pub struct CapabilityValidationConfig {
-    /// Clock skew tolerance for expiry checks. Default: zero (strict).
-    pub clock_skew_tolerance: Duration,
-}
-
-impl From<schema::CapabilityValidationConfig> for CapabilityValidationConfig {
-    fn from(s: schema::CapabilityValidationConfig) -> Self {
-        Self {
-            clock_skew_tolerance: s.clock_skew_tolerance,
-        }
     }
 }
 
@@ -139,7 +49,7 @@ impl From<schema::CapabilityValidationConfig> for CapabilityValidationConfig {
 #[derive(Debug, Clone)]
 pub struct ConstraintEnforcementConfig {
     /// Maximum number of active sessions tracked in the session-state cache.
-    pub capacity: usize,
+    pub capacity: NonZeroUsize,
     /// Session-state storage backend.
     pub backend: SessionStateBackend,
     /// Optional path for the persistent session-state JSONL file.
@@ -156,13 +66,16 @@ impl Default for ConstraintEnforcementConfig {
     }
 }
 
-impl From<schema::ConstraintEnforcementConfig> for ConstraintEnforcementConfig {
-    fn from(s: schema::ConstraintEnforcementConfig) -> Self {
-        Self {
-            capacity: s.session_state_capacity,
+impl TryFrom<schema::ConstraintEnforcementConfig> for ConstraintEnforcementConfig {
+    type Error = EnforcementConfigError;
+
+    fn try_from(s: schema::ConstraintEnforcementConfig) -> Result<Self, Self::Error> {
+        Ok(Self {
+            capacity: NonZeroUsize::new(s.session_state_capacity)
+                .ok_or(EnforcementConfigError::ZeroSessionStateCapacity)?,
             backend: s.session_state_backend,
             path: s.session_state_path,
-        }
+        })
     }
 }
 
@@ -192,62 +105,20 @@ impl MappingRuleConfig {
     ///
     /// Returns a message describing the first invalid field.
     pub fn validate(&self) -> Result<(), String> {
-        let host = self.host.trim();
-        if host.is_empty() {
-            return Err("host must not be empty".into());
-        }
-        // Load-time normalization strips trailing dots and default ports,
-        // which would silently promote a degenerate pattern like `*.` or
-        // `*:443` into the bare catch-all, or erase one like `:443`
-        // entirely. Validate against the same normalization the mapping
-        // table applies so no spelling can slip between the two.
-        let normalized = crate::normalizer::mapping::normalize_host_pattern(host);
-        if normalized.is_empty() || normalized.starts_with(':') {
-            return Err(format!(
-                "host pattern '{host}' normalizes to a host with an empty name and can never match"
-            ));
-        }
-        if normalized == "*" && host != "*" {
-            return Err(format!(
-                "host pattern '{host}' would normalize to the bare catch-all '*'; write '*' explicitly if that is intended"
-            ));
-        }
-        // A port-scoped promotion is just as silent: `*.:8443` normalizes to
-        // `*:8443` and would match every host on that port. The only
-        // accepted spellings for a wildcard name are a literal `*`, alone or
-        // with a port.
-        let normalized_name = match normalized.rsplit_once(':') {
-            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-                name
-            }
-            _ => normalized.as_str(),
-        };
-        // Judge the written name literally, trimming only the trailing dots
-        // of the whole spelling so a dotted port (`*:8443.`) still splits;
-        // trimming the name part itself would hide exactly the promotion
-        // this check rejects (`*.:8443`).
-        let written = host.trim_end_matches('.');
-        let written_name = match written.rsplit_once(':') {
-            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-                name
-            }
-            _ => written,
-        };
-        if normalized_name == "*" && written_name != "*" {
-            return Err(format!(
-                "host pattern '{host}' would normalize its name to the catch-all '*'; write the '*' explicitly if that is intended"
-            ));
-        }
+        firma_core::mapping::validate_authored_mapping_host(&self.host)?;
         if self.action_class.trim().is_empty() {
             return Err("action_class must not be empty".into());
         }
         if let Some(ref method) = self.method
-            && !VALID_HTTP_METHODS.contains(&method.as_str())
+            && method.as_str().parse::<HttpMethod>().is_err()
         {
             return Err(format!(
                 "invalid HTTP method '{}'; expected one of: {}",
                 method,
-                VALID_HTTP_METHODS.join(", ")
+                HttpMethod::iter()
+                    .map(HttpMethod::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         Ok(())
@@ -276,9 +147,6 @@ impl MappingRulesFile {
     /// Returns a message identifying the first invalid rule (by
     /// index).
     pub fn validate(&self) -> Result<(), String> {
-        if self.rules.is_empty() {
-            return Err("mapping rules file contains no rules".into());
-        }
         for (i, rule) in self.rules.iter().enumerate() {
             rule.validate().map_err(|e| format!("rule {i}: {e}"))?;
         }
@@ -325,19 +193,8 @@ impl CapabilityManifestEntry {
 // Defaults
 // ---------------------------------------------------------------------------
 
-/// Sentinel: unset `sidecar.mapping.rules_path`.
-pub const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
-
-fn default_mapping_path() -> PathBuf {
-    PathBuf::from(DEFAULT_MAPPING_PATH)
-}
-
-const fn default_true() -> bool {
-    true
-}
-
-const fn default_session_state_capacity() -> usize {
-    8192
+const fn default_session_state_capacity() -> NonZeroUsize {
+    const { NonZeroUsize::new(8192).unwrap() }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,16 +274,6 @@ mod tests {
     }
 
     // -- MappingRulesFile ---------------------------------------------------
-
-    #[test]
-    fn test_empty_rules_file_rejected() {
-        let file = MappingRulesFile { rules: vec![] };
-        let err = file.validate().unwrap_err();
-        assert!(
-            err.contains("no rules"),
-            "error should mention no rules: {err}"
-        );
-    }
 
     #[test]
     fn test_rules_file_cascading_validation() {
@@ -510,68 +357,12 @@ mod tests {
         assert!(EnforcementConfig::try_from(SchemaEnforcement::default()).is_ok());
     }
 
-    #[test]
-    fn mapping_config_rules_paths_defaults_empty() {
-        let schema: SchemaEnforcement = toml::from_str(
-            r#"
-            [mapping]
-            rules_path = "config/mappings/default.toml"
-            "#,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        let cfg = EnforcementConfig::try_from(schema).unwrap();
-        assert!(cfg.mapping.rules_paths.is_empty());
-    }
-
-    #[test]
-    fn mapping_config_rules_paths_parses_vec() {
-        let schema: SchemaEnforcement = toml::from_str(
-            r#"
-            [mapping]
-            rules_path = "a.toml"
-            rules_paths = ["b.toml", "c.toml"]
-            "#,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        let cfg = EnforcementConfig::try_from(schema).unwrap();
-        assert_eq!(
-            cfg.mapping.rules_paths,
-            vec![PathBuf::from("b.toml"), PathBuf::from("c.toml")]
-        );
-    }
-
-    #[test]
-    fn mapping_config_empty_rules_path_entry_rejected() {
-        let schema: SchemaEnforcement = toml::from_str(
-            r#"
-            [mapping]
-            rules_path = "a.toml"
-            rules_paths = ["b.toml", ""]
-            "#,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        assert!(matches!(
-            EnforcementConfig::try_from(schema),
-            Err(EnforcementConfigError::EmptyRulesPathEntry { index: 1 })
-        ));
-    }
-
-    #[test]
-    fn empty_rules_path_rejected() {
-        let mut schema = SchemaEnforcement::default();
-        schema.mapping.rules_path = PathBuf::new();
-        assert!(matches!(
-            EnforcementConfig::try_from(schema),
-            Err(EnforcementConfigError::EmptyRulesPath)
-        ));
-    }
-
     // -- SessionStateBackend / capacity (AARM R2 G4) -----------------------
 
     #[test]
     fn session_state_defaults_to_lru_and_8192() {
         let ce = ConstraintEnforcementConfig::default();
-        assert_eq!(ce.capacity, 8192);
+        assert_eq!(ce.capacity.get(), 8192);
         assert_eq!(ce.backend, SessionStateBackend::Lru);
         assert!(ce.path.is_none());
     }
@@ -586,8 +377,8 @@ mod tests {
             "#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        let cfg = ConstraintEnforcementConfig::from(schema);
-        assert_eq!(cfg.capacity, 4096);
+        let cfg = ConstraintEnforcementConfig::try_from(schema).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(cfg.capacity.get(), 4096);
         assert_eq!(cfg.backend, SessionStateBackend::Persistent);
         assert_eq!(
             cfg.path.as_deref(),

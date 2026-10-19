@@ -1,6 +1,6 @@
 //! Renderer and exit-code mapping for `firma sidecar status`.
 //!
-//! Exit codes (FIR-104): 0 all running, 1 any unhealthy/stopped,
+//! Exit codes: 0 all running, 1 any unhealthy/stopped,
 //! 2 internal error.
 
 // M-CANONICAL-DOCS: module-level doc above; public items documented below.
@@ -25,6 +25,35 @@ pub fn format_uptime(secs: Option<u64>) -> String {
     )
 }
 
+/// Versions longer than this are shortened in the table; JSON keeps them whole.
+const BUNDLE_LABEL_CHARS: usize = 12;
+
+/// Format the enforced bundle as `<version>`, `<version> (stale)`, or `-`.
+///
+/// Standalone Authority versions are 64-character digests, so the table shows
+/// a prefix followed by `…`.
+fn bundle_label(entry: &SidecarEntry, now: chrono::DateTime<chrono::Utc>) -> String {
+    if entry.policy_bundle_version.is_empty() {
+        return "-".to_string();
+    }
+    let version = &entry.policy_bundle_version;
+    let version = if version.chars().count() > BUNDLE_LABEL_CHARS {
+        format!(
+            "{}…",
+            version.chars().take(BUNDLE_LABEL_CHARS).collect::<String>()
+        )
+    } else {
+        version.clone()
+    };
+    let stale = chrono::DateTime::parse_from_rfc3339(&entry.policy_bundle_expires_at)
+        .is_ok_and(|expires_at| expires_at <= now);
+    if stale {
+        format!("{version} (stale)")
+    } else {
+        version
+    }
+}
+
 fn state_label(state: State) -> &'static str {
     match state {
         State::Running => "running",
@@ -44,9 +73,10 @@ pub fn exit_code_for(rows: &[SidecarEntry]) -> u8 {
 /// Render a docker-ps-style fixed-column table including a header row.
 #[must_use]
 pub fn render_pretty(rows: &[SidecarEntry]) -> String {
+    let now = chrono::Utc::now();
     let mut out = format!(
-        "{:<13} {:<10} {:<7} {:<10} {:<48} {}\n",
-        "SANDBOX_ID", "AGENT", "PID", "STATE", "LISTEN", "UPTIME"
+        "{:<13} {:<10} {:<7} {:<10} {:<21} {:<48} {}\n",
+        "SANDBOX_ID", "AGENT", "PID", "STATE", "BUNDLE", "LISTEN", "UPTIME"
     );
     for r in rows {
         let pid_cell = r.pid.map_or_else(|| "-".to_string(), |pid| pid.to_string());
@@ -59,11 +89,12 @@ pub fn render_pretty(rows: &[SidecarEntry]) -> String {
         // writeln! avoids the extra allocation from format!+push_str.
         let _ = writeln!(
             out,
-            "{:<13} {:<10} {:<7} {:<10} {:<48} {}",
+            "{:<13} {:<10} {:<7} {:<10} {:<21} {:<48} {}",
             r.sandbox_id,
             r.agent_id,
             pid_cell,
             state_label(r.state),
+            bundle_label(r, now),
             listen_cell,
             format_uptime(r.uptime_secs),
         );
@@ -71,7 +102,7 @@ pub fn render_pretty(rows: &[SidecarEntry]) -> String {
     out
 }
 
-/// Run `firma sidecar status`. Maps FIR-104 exit codes onto [`ExitCode`].
+/// Run `firma sidecar status`. Maps the exit codes above onto [`ExitCode`].
 ///
 /// Internal failures print to stderr and map to exit code 2 so the caller
 /// does not double-report.
@@ -128,12 +159,19 @@ fn collect_daemon() -> anyhow::Result<Vec<SidecarEntry>> {
     let Some(c) = stack.components.into_iter().find(|c| c.name == "sidecar") else {
         return Ok(Vec::new());
     };
+    let (policy_bundle_version, policy_bundle_expires_at) =
+        firma_runtime_state::enforcement_state::read(
+            &firma_runtime_state::enforcement_state::daemon_path(&state_dir),
+        )
+        .map(|state| (state.version, state.expires_at))
+        .unwrap_or_default();
     Ok(vec![SidecarEntry {
         sandbox_id: "daemon".to_string(),
         agent_id: "daemon".to_string(),
         session_id: String::new(),
         authority_url: String::new(),
-        policy_bundle_version: String::new(),
+        policy_bundle_version,
+        policy_bundle_expires_at,
         pid: c.pid,
         started_at: String::new(),
         state: c.state,
@@ -177,6 +215,7 @@ mod tests {
             session_id: String::new(),
             authority_url: String::new(),
             policy_bundle_version: String::new(),
+            policy_bundle_expires_at: String::new(),
             pid: firma_runtime_state::UserProcessId::new(1234),
             started_at: String::new(),
             state,
@@ -289,6 +328,7 @@ mod tests {
             session_id: String::new(),
             authority_url: String::new(),
             policy_bundle_version: String::new(),
+            policy_bundle_expires_at: String::new(),
             pid: None,
             started_at: String::new(),
             state: State::Unknown,

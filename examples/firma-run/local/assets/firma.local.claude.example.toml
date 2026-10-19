@@ -1,3 +1,8 @@
+[authority]
+policy_dir = "../examples/policies"
+issuance_policy_dir = "../examples/generic-agent/issuance-policies"
+mapping_rules_paths = ["mapping-rules.toml"]
+
 [sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
@@ -9,6 +14,9 @@ session_max = "20m"
 
 [sidecar.interceptor.https_mitm]
 enabled = true
+
+# Listing `intercept_hosts` replaces the intercept-everything default, so
+# only these hosts are inspected and anything else tunnels untouched.
 intercept_hosts = [
   "api.anthropic.com",
   "platform.claude.com",
@@ -17,20 +25,13 @@ intercept_hosts = [
 ]
 bypass_hosts = []
 
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-default_protected = true
-
 [sidecar.policy]
 dir = "../examples/policies"
 
 [sidecar.authority]
-url = "http://127.0.0.1:50051"
+url = "https://127.0.0.1:50051"
 agent_id = "agt_01j0000000e008000000000001"
 public_key_path = "firma-authority.pub"
-
-[sidecar.capability_seed]
-paths = ["capability-claude.toml"]
 
 [sidecar.audit]
 sink = "file"

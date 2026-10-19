@@ -1,11 +1,11 @@
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 use std::collections::BTreeMap;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 use std::io;
 #[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -313,31 +313,82 @@ clients may report connection failures via http://{bridge_listen_addr} (pre-side
         return relay_tcp_to_tcp(&client, &upstream);
     }
 
-    let mut upstream_read = upstream.try_clone()?;
-    let mut client_write = client.try_clone()?;
-    let response_copy = thread::spawn(move || io::copy(&mut upstream_read, &mut client_write));
+    relay_with_header_injection(
+        &mut client,
+        &mut upstream,
+        attribution_headers,
+        "host proxy bridge response copy panic",
+    )
+}
 
-    let forward_result =
-        forward_requests_with_header_injection(&mut client, &mut upstream, attribution_headers);
-    let reverse_result = response_copy
-        .join()
-        .map_err(|_| io::Error::other("host proxy bridge response copy panic"))?;
+/// A relay endpoint: cloneable per direction, and half-closeable.
+///
+/// [`TcpStream`] and [`UnixStream`] both expose `try_clone` and `shutdown`,
+/// but std gives them no common trait, and the relays need one so a single
+/// copy helper can serve both the TCP-upstream (macOS host) and Unix-upstream
+/// (sandbox) topologies.
+#[cfg(unix)]
+trait RelayStream: Read + Write + Send + Sized + 'static {
+    fn try_clone_stream(&self) -> io::Result<Self>;
+    fn half_close(&self, how: Shutdown) -> io::Result<()>;
+}
 
-    forward_result?;
-    reverse_result?;
-    Ok(())
+#[cfg(unix)]
+impl RelayStream for TcpStream {
+    fn try_clone_stream(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+
+    fn half_close(&self, how: Shutdown) -> io::Result<()> {
+        self.shutdown(how)
+    }
+}
+
+#[cfg(unix)]
+impl RelayStream for UnixStream {
+    fn try_clone_stream(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+
+    fn half_close(&self, how: Shutdown) -> io::Result<()> {
+        self.shutdown(how)
+    }
+}
+
+/// Spawn one direction of a relay, propagating the half-close on completion.
+///
+/// `io::copy` returning is the only signal that this direction is finished,
+/// and nothing in the process will write to `sink` again. Without the shutdown
+/// the peer never receives a FIN, so the opposite direction's copy blocks
+/// forever on a stream that no longer has a writer, and the whole connection —
+/// this thread, both sockets, and the sidecar tunnel behind them — is never
+/// reclaimed. The sidecar's own relay gets this from `copy_bidirectional`,
+/// which shuts the opposite write half down on EOF; the bridge has to do it by
+/// hand.
+///
+/// Only the sink's write half and the source's read half close, so a peer that
+/// half-closes still receives the rest of the traffic flowing the other way.
+/// Both shutdowns are best-effort: a peer that already vanished makes them
+/// fail, and there is nothing left to reclaim in that case.
+#[cfg(unix)]
+fn spawn_relay_half<S, T>(mut source: S, mut sink: T) -> JoinHandle<io::Result<u64>>
+where
+    S: RelayStream,
+    T: RelayStream,
+{
+    thread::spawn(move || {
+        let copied = io::copy(&mut source, &mut sink);
+        let _ = sink.half_close(Shutdown::Write);
+        let _ = source.half_close(Shutdown::Read);
+        copied
+    })
 }
 
 /// TCP-to-TCP bidirectional relay (no header injection).
 #[cfg(unix)]
 fn relay_tcp_to_tcp(client: &TcpStream, upstream: &TcpStream) -> io::Result<()> {
-    let mut client_read = client.try_clone()?;
-    let mut client_write = client.try_clone()?;
-    let mut upstream_read = upstream.try_clone()?;
-    let mut upstream_write = upstream.try_clone()?;
-
-    let c_to_u = thread::spawn(move || io::copy(&mut client_read, &mut upstream_write));
-    let u_to_c = thread::spawn(move || io::copy(&mut upstream_read, &mut client_write));
+    let c_to_u = spawn_relay_half(client.try_clone()?, upstream.try_clone()?);
+    let u_to_c = spawn_relay_half(upstream.try_clone()?, client.try_clone()?);
 
     c_to_u
         .join()
@@ -442,15 +493,62 @@ sandbox clients may report connection failures via http://{bridge_listen_addr} (
         return relay_tcp_to_unix(&client, &upstream);
     }
 
-    let mut upstream_read = upstream.try_clone()?;
-    let mut client_write = client.try_clone()?;
-    let response_copy = thread::spawn(move || io::copy(&mut upstream_read, &mut client_write));
+    relay_with_header_injection(
+        &mut client,
+        &mut upstream,
+        attribution_headers,
+        "proxy bridge response copy panic",
+    )
+}
 
-    let forward_result =
-        forward_requests_with_header_injection(&mut client, &mut upstream, attribution_headers);
+/// Relay one connection whose forward direction rewrites attribution headers.
+///
+/// The response direction is a plain copy on its own thread, so this reduces to
+/// the same teardown obligation [`spawn_relay_half`] carries: whoever finishes
+/// first has to tell the other peer, or the sibling blocks forever.
+///
+/// The forward loop ends when the client stops sending. Half-closing the
+/// upstream write side is what lets the sidecar finish its response and close,
+/// which is in turn what ends the response copy. Skipping it is the leak: the
+/// client sits in `FIN_WAIT2`, the bridge in `CLOSE_WAIT`, and the sidecar
+/// holds both the CONNECT tunnel and its upstream TLS connection open.
+///
+/// A forward error is different in kind: nothing will arrive on either socket
+/// again, so both are torn down completely. Leaving the response thread parked
+/// would strand the `join` below along with it.
+#[cfg(unix)]
+fn relay_with_header_injection<U>(
+    client: &mut TcpStream,
+    upstream: &mut U,
+    attribution_headers: &BTreeMap<String, String>,
+    copy_panic_message: &'static str,
+) -> io::Result<()>
+where
+    U: RelayStream,
+{
+    let response_copy = spawn_relay_half(upstream.try_clone_stream()?, client.try_clone_stream()?);
+
+    let forward_result = firma_http::forward_http1_requests(
+        client,
+        upstream,
+        attribution_headers,
+        |method, target| {
+            tracing::debug!(
+                method,
+                target = %sanitized_request_target_for_log(target),
+                "proxy bridge forwarding request headers"
+            );
+        },
+    );
+    let _ = upstream.half_close(Shutdown::Write);
+    if forward_result.is_err() {
+        let _ = upstream.half_close(Shutdown::Both);
+        let _ = client.half_close(Shutdown::Both);
+    }
+
     let reverse_result = response_copy
         .join()
-        .map_err(|_| io::Error::other("proxy bridge response copy panic"))?;
+        .map_err(|_| io::Error::other(copy_panic_message))?;
 
     forward_result?;
     reverse_result?;
@@ -459,13 +557,8 @@ sandbox clients may report connection failures via http://{bridge_listen_addr} (
 
 #[cfg(unix)]
 fn relay_tcp_to_unix(client: &TcpStream, upstream: &UnixStream) -> io::Result<()> {
-    let mut client_read = client.try_clone()?;
-    let mut client_write = client.try_clone()?;
-    let mut upstream_read = upstream.try_clone()?;
-    let mut upstream_write = upstream.try_clone()?;
-
-    let t1 = thread::spawn(move || io::copy(&mut client_read, &mut upstream_write));
-    let t2 = thread::spawn(move || io::copy(&mut upstream_read, &mut client_write));
+    let t1 = spawn_relay_half(client.try_clone()?, upstream.try_clone()?);
+    let t2 = spawn_relay_half(upstream.try_clone()?, client.try_clone()?);
 
     let first = t1
         .join()
@@ -490,238 +583,6 @@ fn load_attr_headers_from_env() -> BTreeMap<String, String> {
     serde_json::from_str::<BTreeMap<String, String>>(&raw).unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// HTTP/1.1 request header injection — generic over upstream write sink
-// ---------------------------------------------------------------------------
-
-/// Parse HTTP/1.1 request headers from `client`, inject any missing
-/// attribution headers, and relay the enriched bytes to `upstream`.
-/// Handles `Content-Length`, chunked bodies, and `CONNECT` tunnels.
-///
-/// The function is generic over the upstream write type so it can serve both
-/// the Unix-socket path (structural / bwrap sandbox) and the TCP path
-/// (non-structural / macOS host bridge).
-#[cfg(unix)]
-fn forward_requests_with_header_injection<W>(
-    client: &mut TcpStream,
-    upstream: &mut W,
-    attribution_headers: &BTreeMap<String, String>,
-) -> io::Result<()>
-where
-    W: Write,
-{
-    let mut buffer = Vec::new();
-    loop {
-        let header_end = read_until_header_block(client, &mut buffer)?;
-        let Some(header_end) = header_end else {
-            // EOF.
-            return Ok(());
-        };
-
-        // Reuse allocation and avoid per-request copies.
-        let mut request = std::mem::take(&mut buffer);
-        let mut remaining = request.split_off(header_end + 4);
-        request.truncate(header_end);
-
-        let meta = parse_request_metadata(&request)?;
-        tracing::debug!(
-            method = %meta.method,
-            target = %sanitized_request_target_for_log(&meta.target),
-            "proxy bridge forwarding request headers"
-        );
-        replace_attribution_headers(&mut request, attribution_headers)?;
-
-        // `request` already ends with \r\n (the CRLF of the last header
-        // line). Write one more \r\n to complete the blank-line terminator.
-        // Writing \r\n\r\n here would produce three CRLFs, injecting a
-        // spurious blank line into the stream (e.g. into a CONNECT tunnel
-        // before the TLS ClientHello, corrupting the TLS handshake).
-        upstream.write_all(&request)?;
-        upstream.write_all(b"\r\n")?;
-
-        match meta.body {
-            BodyKind::None => {}
-            BodyKind::ContentLength(mut bytes_left) => {
-                if !remaining.is_empty() {
-                    let take = remaining.len().min(bytes_left);
-                    upstream.write_all(&remaining[..take])?;
-                    remaining.drain(..take);
-                    bytes_left -= take;
-                }
-                copy_exact_bytes(client, upstream, bytes_left)?;
-            }
-            BodyKind::Chunked => {
-                forward_chunked_body(client, upstream, &mut remaining)?;
-            }
-        }
-
-        if !remaining.is_empty() {
-            buffer.extend_from_slice(&remaining);
-        }
-
-        if meta.method.eq_ignore_ascii_case("CONNECT") {
-            if !buffer.is_empty() {
-                upstream.write_all(&buffer)?;
-                buffer.clear();
-            }
-            io::copy(client, upstream)?;
-            return Ok(());
-        }
-    }
-}
-
-#[cfg(any(unix, test))]
-fn replace_attribution_headers(
-    header_block: &mut Vec<u8>,
-    attribution_headers: &BTreeMap<String, String>,
-) -> io::Result<()> {
-    let head_str = std::str::from_utf8(header_block).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "request headers are not valid utf-8",
-        )
-    })?;
-    let mut lines = head_str.split("\r\n");
-    let Some(request_line) = lines.next() else {
-        return Ok(());
-    };
-    let authoritative_names = attribution_headers
-        .keys()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<std::collections::BTreeSet<_>>();
-
-    let mut rebuilt = String::new();
-    rebuilt.push_str(request_line);
-    rebuilt.push_str("\r\n");
-    for line in head_str.split("\r\n").skip(1) {
-        if line.is_empty() {
-            continue;
-        }
-        if line.split_once(':').is_some_and(|(name, _)| {
-            authoritative_names.contains(&name.trim().to_ascii_lowercase())
-        }) {
-            continue;
-        }
-        rebuilt.push_str(line);
-        rebuilt.push_str("\r\n");
-    }
-
-    for (name, value) in attribution_headers {
-        rebuilt.push_str(name);
-        rebuilt.push_str(": ");
-        rebuilt.push_str(value);
-        rebuilt.push_str("\r\n");
-    }
-
-    *header_block = rebuilt.into_bytes();
-    Ok(())
-}
-
-#[cfg(any(unix, test))]
-fn find_header_terminator(buffer: &[u8]) -> Option<usize> {
-    buffer.windows(4).position(|w| w == b"\r\n\r\n")
-}
-
-#[cfg(unix)]
-fn read_until_header_block(
-    client: &mut TcpStream,
-    buffer: &mut Vec<u8>,
-) -> io::Result<Option<usize>> {
-    if let Some(pos) = find_header_terminator(buffer) {
-        return Ok(Some(pos));
-    }
-    let mut chunk = [0_u8; 4096];
-    loop {
-        let read = client.read(&mut chunk)?;
-        if read == 0 {
-            if buffer.is_empty() {
-                return Ok(None);
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "connection closed mid-request headers",
-            ));
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-        if let Some(pos) = find_header_terminator(buffer) {
-            return Ok(Some(pos));
-        }
-        if buffer.len() > 1024 * 128 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "request headers exceed 128KiB",
-            ));
-        }
-    }
-}
-
-#[cfg(any(unix, test))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BodyKind {
-    None,
-    ContentLength(usize),
-    Chunked,
-}
-
-#[cfg(any(unix, test))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RequestMetadata {
-    method: String,
-    target: String,
-    body: BodyKind,
-}
-
-#[cfg(any(unix, test))]
-fn parse_request_metadata(header_block: &[u8]) -> io::Result<RequestMetadata> {
-    let head_str = std::str::from_utf8(header_block).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "request headers are not valid utf-8",
-        )
-    })?;
-
-    let mut lines = head_str.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
-    let mut request_line_parts = request_line.split_whitespace();
-    let method = request_line_parts.next().unwrap_or_default().to_string();
-    let target = request_line_parts.next().unwrap_or_default().to_string();
-
-    let mut transfer_chunked = false;
-    let mut content_length = None;
-    for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            let name_lc = name.trim().to_ascii_lowercase();
-            let value_trim = value.trim();
-            if name_lc == "transfer-encoding" && value_trim.to_ascii_lowercase().contains("chunked")
-            {
-                transfer_chunked = true;
-            } else if name_lc == "content-length" {
-                content_length = value_trim.parse::<usize>().ok();
-            }
-        }
-    }
-
-    let body = if transfer_chunked {
-        BodyKind::Chunked
-    } else if let Some(n) = content_length {
-        if n == 0 {
-            BodyKind::None
-        } else {
-            BodyKind::ContentLength(n)
-        }
-    } else {
-        BodyKind::None
-    };
-
-    Ok(RequestMetadata {
-        method,
-        target,
-        body,
-    })
-}
-
 #[cfg(any(unix, test))]
 fn sanitized_request_target_for_log(target: &str) -> &str {
     let query = target.find('?');
@@ -735,236 +596,9 @@ fn sanitized_request_target_for_log(target: &str) -> &str {
     &target[..end]
 }
 
-#[cfg(unix)]
-fn copy_exact_bytes<W>(client: &mut TcpStream, upstream: &mut W, mut left: usize) -> io::Result<()>
-where
-    W: Write,
-{
-    let mut chunk = [0_u8; 8192];
-    while left > 0 {
-        let to_read = chunk.len().min(left);
-        let read = client.read(&mut chunk[..to_read])?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "connection closed mid-request body",
-            ));
-        }
-        upstream.write_all(&chunk[..read])?;
-        left -= read;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn forward_chunked_body<W>(
-    client: &mut TcpStream,
-    upstream: &mut W,
-    buffer: &mut Vec<u8>,
-) -> io::Result<()>
-where
-    W: Write,
-{
-    loop {
-        let line_end = read_until_crlf(client, buffer)?;
-        let line = &buffer[..line_end];
-        let size_hex = std::str::from_utf8(line)
-            .ok()
-            .and_then(|s| s.split(';').next())
-            .map(str::trim)
-            .unwrap_or_default();
-        let chunk_size = usize::from_str_radix(size_hex, 16)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size line"))?;
-        upstream.write_all(&buffer[..line_end + 2])?;
-        buffer.drain(..line_end + 2);
-
-        let needed = chunk_size + 2;
-        ensure_buffered(client, buffer, needed)?;
-        upstream.write_all(&buffer[..needed])?;
-        buffer.drain(..needed);
-
-        if chunk_size == 0 {
-            // Forward trailing headers until CRLF CRLF.
-            loop {
-                let tail_end = read_until_crlf(client, buffer)?;
-                upstream.write_all(&buffer[..tail_end + 2])?;
-                let is_blank = tail_end == 0;
-                buffer.drain(..tail_end + 2);
-                if is_blank {
-                    return Ok(());
-                }
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn ensure_buffered(client: &mut TcpStream, buffer: &mut Vec<u8>, needed: usize) -> io::Result<()> {
-    let mut chunk = [0_u8; 4096];
-    while buffer.len() < needed {
-        let read = client.read(&mut chunk)?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "connection closed while buffering body",
-            ));
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn read_until_crlf(client: &mut TcpStream, buffer: &mut Vec<u8>) -> io::Result<usize> {
-    if let Some(pos) = find_crlf(buffer) {
-        return Ok(pos);
-    }
-    let mut chunk = [0_u8; 1024];
-    loop {
-        let read = client.read(&mut chunk)?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "connection closed while reading chunk line",
-            ));
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-        if let Some(pos) = find_crlf(buffer) {
-            return Ok(pos);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn find_crlf(buffer: &[u8]) -> Option<usize> {
-    buffer.windows(2).position(|w| w == b"\r\n")
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use super::{
-        BodyKind, find_header_terminator, parse_request_metadata, replace_attribution_headers,
-        sanitized_request_target_for_log,
-    };
-
-    #[test]
-    fn finds_header_terminator() {
-        let req = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\nbody";
-        let pos = find_header_terminator(req).expect("terminator");
-        assert_eq!(&req[pos..pos + 4], b"\r\n\r\n");
-    }
-
-    #[test]
-    fn appends_missing_attr_headers() {
-        let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n".to_vec();
-        let mut headers = BTreeMap::new();
-        headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
-        headers.insert("x-firma-profile".to_string(), "claude-code".to_string());
-        replace_attribution_headers(&mut req_head, &headers).expect("replace headers");
-        let rendered = String::from_utf8(req_head).expect("utf8");
-        assert!(rendered.contains("x-firma-session-id: sess_001\r\n"));
-        assert!(rendered.contains("x-firma-profile: claude-code\r\n"));
-    }
-
-    #[test]
-    fn replaces_untrusted_attr_headers_case_insensitively() {
-        let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nX-Firma-Sandbox-Id: spoofed\r\nX-Firma-Session-Id: spoofed\r\nX-Firma-Agent: spoofed\r\nX-Unrelated: retained\r\n".to_vec();
-        let mut headers = BTreeMap::new();
-        headers.insert("x-firma-session-id".to_string(), "injected".to_string());
-        headers.insert("x-firma-agent".to_string(), "vscode".to_string());
-        headers.insert(
-            "x-firma-sandbox-id".to_string(),
-            "sbx_01j0000000e008000000000001".to_string(),
-        );
-
-        replace_attribution_headers(&mut req_head, &headers).expect("replace headers");
-        let rendered = String::from_utf8(req_head).expect("utf8");
-
-        assert!(rendered.contains("x-firma-session-id: injected\r\n"));
-        assert!(rendered.contains("x-firma-agent: vscode\r\n"));
-        assert!(rendered.contains("x-firma-sandbox-id: sbx_01j0000000e008000000000001\r\n"));
-        assert!(rendered.contains("X-Unrelated: retained\r\n"));
-        assert!(!rendered.contains("spoofed"));
-    }
-
-    #[test]
-    fn replace_attribution_headers_rejects_non_utf8_header_block() {
-        let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n".to_vec();
-        req_head.push(0xFF);
-        let mut headers = BTreeMap::new();
-        headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
-
-        let error = replace_attribution_headers(&mut req_head, &headers)
-            .expect_err("non-utf8 headers must fail closed");
-
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-    }
-
-    #[test]
-    fn header_block_ends_with_single_crlf_for_terminator() {
-        // `replace_attribution_headers` rebuilds the header block and always
-        // ends with `\r\n`. The caller then writes exactly one more `\r\n`
-        // to complete the blank-line terminator (`\r\n\r\n` total). Verify
-        // that the rebuilt block ends with `\r\n` so that one extra `\r\n`
-        // produces exactly the correct HTTP blank-line separator — not a
-        // spurious extra blank line that would corrupt CONNECT tunnels.
-        let mut req_head =
-            b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n".to_vec();
-        let mut headers = BTreeMap::new();
-        headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
-        replace_attribution_headers(&mut req_head, &headers).expect("replace headers");
-        assert!(
-            req_head.ends_with(b"\r\n"),
-            "header block must end with \\r\\n so caller can append one more \\r\\n"
-        );
-        assert!(
-            !req_head.ends_with(b"\r\n\r\n"),
-            "header block must NOT already contain the blank-line terminator"
-        );
-    }
-
-    #[test]
-    fn parses_content_length_body_metadata() {
-        let req = b"POST http://example.com/upload HTTP/1.1\r\nHost: example.com\r\nContent-Length: 12\r\n\r\n";
-        let meta = parse_request_metadata(req).expect("metadata");
-        assert_eq!(meta.method, "POST");
-        assert_eq!(meta.target, "http://example.com/upload");
-        assert_eq!(meta.body, BodyKind::ContentLength(12));
-    }
-
-    #[test]
-    fn zero_or_invalid_content_length_is_treated_as_no_body() {
-        let zero = b"POST http://example.com/upload HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
-        let invalid = b"POST http://example.com/upload HTTP/1.1\r\nContent-Length: nope\r\n\r\n";
-
-        assert_eq!(
-            parse_request_metadata(zero).expect("zero metadata").body,
-            BodyKind::None
-        );
-        assert_eq!(
-            parse_request_metadata(invalid)
-                .expect("invalid content length metadata")
-                .body,
-            BodyKind::None
-        );
-    }
-
-    #[test]
-    fn parses_chunked_body_metadata() {
-        let req = b"POST http://example.com/upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n";
-        let meta = parse_request_metadata(req).expect("metadata");
-        assert_eq!(meta.body, BodyKind::Chunked);
-    }
-
-    #[test]
-    fn chunked_transfer_encoding_wins_over_content_length() {
-        let req = b"POST http://example.com/upload HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\nContent-Length: 12\r\n\r\n";
-        let meta = parse_request_metadata(req).expect("metadata");
-
-        assert_eq!(meta.body, BodyKind::Chunked);
-    }
+    use super::sanitized_request_target_for_log;
 
     #[test]
     fn sanitizes_request_target_for_debug_logs() {
@@ -997,7 +631,7 @@ mod host_bridge_tests {
     /// Verifies that `HostBridgeHandle` injects `x-firma-session-id` into a
     /// plain HTTP request routed through the bridge.
     ///
-    /// This is the regression test for FIR-213: on macOS (non-structural path)
+    /// Regression test: on macOS (non-structural path)
     /// the bridge was never started, so the sidecar received an empty
     /// `session_id` and denied every request.
     #[test]
@@ -1187,6 +821,186 @@ mod host_bridge_tests {
         assert_eq!(
             occurrences, 1,
             "x-firma-session-id appears {occurrences} times (expected 1); got:\n{captured_str}"
+        );
+    }
+}
+
+/// Relay teardown tests.
+///
+/// A relay direction finishing is only half the story: the peer has to observe
+/// it. These cover the half-close propagation that keeps a finished connection
+/// from stranding its sibling copy thread, both sockets, and the sidecar tunnel
+/// behind them. Unix-only for the same reason as [`host_bridge_tests`].
+#[cfg(test)]
+#[cfg(unix)]
+mod relay_teardown_tests {
+    use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::{relay_tcp_to_tcp, relay_with_header_injection};
+
+    /// How long a correct implementation is given to propagate the FIN. Failure
+    /// here is a hang, so every wait is bounded rather than left to the harness.
+    const PROPAGATION_TIMEOUT: Duration = Duration::from_secs(3);
+
+    /// Connect a client to `listener` and return both ends.
+    fn connected_pair(listener: &TcpListener) -> (TcpStream, TcpStream) {
+        let addr: SocketAddr = listener.local_addr().expect("local_addr");
+        let near = TcpStream::connect(addr).expect("connect");
+        let (far, _) = listener.accept().expect("accept");
+        (near, far)
+    }
+
+    /// A client that half-closes must be visible as EOF at the upstream.
+    ///
+    /// Without the propagation the upstream keeps waiting for bytes that will
+    /// never come, so the reverse copy thread never returns and the relay never
+    /// reclaims the connection.
+    #[test]
+    fn relay_propagates_client_half_close_to_upstream() {
+        let client_listener = TcpListener::bind("127.0.0.1:0").expect("client bind");
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
+
+        let (mut client, bridge_client) = connected_pair(&client_listener);
+        let (bridge_upstream, mut upstream) = connected_pair(&upstream_listener);
+
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(relay_tcp_to_tcp(&bridge_client, &bridge_upstream));
+        });
+
+        client.write_all(b"ping").expect("client write");
+        client.shutdown(Shutdown::Write).expect("client half-close");
+
+        upstream
+            .set_read_timeout(Some(PROPAGATION_TIMEOUT))
+            .expect("read timeout");
+
+        let mut received = [0u8; 4];
+        upstream.read_exact(&mut received).expect("upstream read");
+        assert_eq!(&received, b"ping");
+
+        let mut trailing = [0u8; 1];
+        let eof = upstream.read(&mut trailing);
+        assert!(
+            matches!(eof, Ok(0)),
+            "upstream never saw the client's half-close; read returned {eof:?}"
+        );
+
+        // The upstream's own close is what ends the reverse direction. A relay
+        // that propagated the FIN reaches this; one that did not has a copy
+        // thread parked on a socket with no writer left.
+        drop(upstream);
+        let relay_result = done_rx
+            .recv_timeout(PROPAGATION_TIMEOUT)
+            .expect("relay never returned after both sides closed");
+        assert!(relay_result.is_ok(), "relay failed: {relay_result:?}");
+    }
+
+    /// The header-injecting path owes the same half-close as the plain relay.
+    ///
+    /// Its forward direction is a parsing loop rather than a copy, so the
+    /// shutdown has to be issued by the caller once that loop returns.
+    #[test]
+    fn header_injection_relay_propagates_client_half_close_to_upstream() {
+        let client_listener = TcpListener::bind("127.0.0.1:0").expect("client bind");
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
+
+        let (mut client, mut bridge_client) = connected_pair(&client_listener);
+        let (mut bridge_upstream, mut upstream) = connected_pair(&upstream_listener);
+
+        let mut headers = BTreeMap::new();
+        headers.insert("x-firma-session-id".to_string(), "sess_607".to_string());
+
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = relay_with_header_injection(
+                &mut bridge_client,
+                &mut bridge_upstream,
+                &headers,
+                "test copy panic",
+            );
+            let _ = done_tx.send(result);
+        });
+
+        client
+            .write_all(b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+            .expect("client write");
+        client.shutdown(Shutdown::Write).expect("client half-close");
+
+        upstream
+            .set_read_timeout(Some(PROPAGATION_TIMEOUT))
+            .expect("read timeout");
+
+        let mut forwarded = Vec::new();
+        let mut chunk = [0u8; 512];
+        let eof = loop {
+            match upstream.read(&mut chunk) {
+                Ok(0) => break Ok(0),
+                Ok(n) => forwarded.extend_from_slice(&chunk[..n]),
+                Err(error) => break Err(error),
+            }
+        };
+        assert!(
+            matches!(eof, Ok(0)),
+            "upstream never saw the client's half-close; read returned {eof:?}"
+        );
+        let forwarded = String::from_utf8_lossy(&forwarded);
+        assert!(
+            forwarded.contains("x-firma-session-id: sess_607"),
+            "attribution header was not injected; got:\n{forwarded}"
+        );
+
+        drop(upstream);
+        let relay_result = done_rx
+            .recv_timeout(PROPAGATION_TIMEOUT)
+            .expect("relay never returned after both sides closed");
+        assert!(relay_result.is_ok(), "relay failed: {relay_result:?}");
+    }
+
+    /// A forward-path error must tear both halves down, not just report.
+    ///
+    /// The response thread is parked on an upstream that will never speak
+    /// again, so without the teardown the `join` inside the relay is what
+    /// hangs — the error never even reaches the caller.
+    #[test]
+    fn header_injection_relay_unblocks_response_copy_on_forward_error() {
+        let client_listener = TcpListener::bind("127.0.0.1:0").expect("client bind");
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
+
+        let (mut client, mut bridge_client) = connected_pair(&client_listener);
+        let (mut bridge_upstream, _upstream) = connected_pair(&upstream_listener);
+
+        let mut headers = BTreeMap::new();
+        headers.insert("x-firma-session-id".to_string(), "sess_607".to_string());
+
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = relay_with_header_injection(
+                &mut bridge_client,
+                &mut bridge_upstream,
+                &headers,
+                "test copy panic",
+            );
+            let _ = done_tx.send(result);
+        });
+
+        // Non-UTF-8 in the request line fails header parsing. The upstream is
+        // held open and silent for the whole test, so only the error-path
+        // teardown can end the response copy.
+        client
+            .write_all(b"GET \xff\xfe HTTP/1.1\r\nHost: example.com\r\n\r\n")
+            .expect("client write");
+
+        let relay_result = done_rx
+            .recv_timeout(PROPAGATION_TIMEOUT)
+            .expect("relay never returned after a forward-path error");
+        assert!(
+            relay_result.is_err(),
+            "malformed request headers should surface as an error, got {relay_result:?}"
         );
     }
 }

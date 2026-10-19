@@ -25,4 +25,4 @@ examples/firma-run/e2e/run.sh --keep-artifacts
 
 ## What it checks
 
-The harness starts a temporary `firma-sidecar`, runs a command through `firma run`, confirms audit output was written, stops the Sidecar, and then confirms that the next wrapped command fails instead of bypassing enforcement.
+The harness starts a temporary Authority and Sidecar, runs a command through `firma run`, confirms the command ran and its audit decision was written, stops the Sidecar, and then confirms that the next wrapped command reports the unreachable Sidecar instead of bypassing enforcement.

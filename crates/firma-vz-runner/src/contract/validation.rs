@@ -141,6 +141,9 @@ pub fn require_loopback_socket_addr(
             value: value.to_string(),
         });
     }
+    if addr.port() == 0 {
+        return Err(ContractValidationError::ZeroPort { field });
+    }
 
     Ok(addr)
 }

@@ -154,10 +154,8 @@ sequenceDiagram
     Handler->>Pipeline: enforce(&req, session_id)
     Pipeline->>Pipeline: check ReadinessFlag<br/>(DENY PolicyBundleNotReady /<br/>RevocationCacheNotReady if not yet hydrated)
     Pipeline->>Normalizer: normalize(&req)
-    alt protected + classifiable
+    alt classifiable
         Normalizer-->>Pipeline: NormalizedEnvelope
-    else unprotected host
-        Normalizer-->>Pipeline: PASSTHROUGH
     else unclassifiable
         Normalizer-->>Pipeline: DENY UNCLASSIFIED_INTENT
     end
@@ -176,7 +174,7 @@ sequenceDiagram
         Connector->>Target: outbound request + creds
         Target-->>Connector: response
         Connector-->>Handler: ConnectorResponse | Timeout | Network err
-    else PASSTHROUGH
+    else PASSTHROUGH (recognized Composio discovery)
         Handler->>Connector: dispatch(synthetic envelope, empty creds)
         Connector->>Target: forward untouched
         Target-->>Connector: response
@@ -203,7 +201,6 @@ flowchart TB
     ready -->|policy not ready| denyready1([DENY<br/>PolicyBundleNotReady])
     ready -->|revocation not ready| denyready2([DENY<br/>RevocationCacheNotReady])
     norm -->|classified| s1{Stage 1<br/>CapabilityValidator}
-    norm -->|unprotected host| passthrough([PASSTHROUGH])
     norm -->|unknown method<br/>or unclassifiable| deny1([DENY<br/>UNCLASSIFIED_INTENT<br/>or MALFORMED_REQUEST])
 
     s1 -->|token found<br/>verify ok| s2{Stage 2<br/>ConstraintEnforcer}
@@ -412,9 +409,9 @@ that shuts the rest of the runtime down.
 `ReadinessFlag` is a `tokio::sync::watch` producer with a matching
 `ReadinessView` consumer. The pipeline's readiness check is a single
 atomic borrow on the watch channel — no lock, no allocation. When
-`sidecar.authority.url` is unset (dev mode), the pipeline is constructed with
-a view that is pre-populated to all-ready so local runs do not wedge
-behind a stream that will never connect.
+the policy bundle or revocation stream has not hydrated, the pipeline denies
+with `PolicyBundleNotReady` or `RevocationCacheNotReady`. Every Sidecar
+requires `sidecar.authority.url`; there is no pre-hydrated local mode.
 
 ## 6. Dispatch and the abort path
 
@@ -657,21 +654,23 @@ crates/firma-sidecar/src/
 ## 10. Standalone startup sequence
 
 `firma sidecar --config <path>` (and `examples/demo/run.sh`) emit
-exactly seven INFO lines on every successful start, in order:
+exactly six INFO lines on every successful start, in order:
 
 ```text
 config loaded             path="…"
-mapping table loaded      rules=N
-policy bundle loaded      version="…" policies=N
-authority stream connected endpoint="…"
 connector registry built  hosts=N default_timeout_ms=T
 interceptor listening     addr="…"
-ready
+authority stream connected endpoint="…"
+policy bundle loaded      version=… ttl_seconds=N
+sidecar ready
 ```
+
+Lines 4–6 appear only after both Authority streams hydrate; line 5 carries the
+Authority bundle version the Sidecar enforces.
 
 The contract is locked by
 `crates/firma-sidecar/tests/startup_contract.rs` and consumed by
-`examples/demo/`. Operators automating the binary should wait for `ready`
+`examples/demo/`. Operators automating the binary should wait for `sidecar ready`
 before sending traffic.
 
 ## 11. Where to go next

@@ -9,6 +9,7 @@ use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSError, NSRunLoop};
 use objc2_virtualization::{VZVirtualMachine, VZVirtualMachineState};
 
 use super::super::{RunnerError, RunnerResult};
+use super::broker_bridge::{BrokerBridge, install_broker_bridge};
 use super::command_pty::{
     host_sigterm_count, install_command_pty_bridge, install_command_pty_control_bridge,
     install_sigterm_handler, record_host_sigint,
@@ -57,7 +58,7 @@ pub fn run_virtual_machine(vz: &Vz, interrupt_rx: &mpsc::Receiver<()>) -> Runner
         }
     };
 
-    let _command_pty_bridge = match install_command_pty_bridge(&vm, vz.transport.command_pty()) {
+    let broker_bridge = match install_broker_bridge(&vm, vz.transport.broker()) {
         Ok(bridge) => bridge,
         Err(error) => {
             if unsafe { vm.canStop() } {
@@ -67,23 +68,50 @@ pub fn run_virtual_machine(vz: &Vz, interrupt_rx: &mpsc::Receiver<()>) -> Runner
         }
     };
 
+    let _command_pty_bridge = match install_command_pty_bridge(&vm, vz.transport.command_pty()) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            let result = finish_with_broker_shutdown(Err(error), broker_bridge);
+            if unsafe { vm.canStop() } {
+                let _ = stop_vm(&vm);
+            }
+            return result;
+        }
+    };
+
     let _command_pty_control_bridge =
         match install_command_pty_control_bridge(&vm, vz.transport.command_pty()) {
             Ok(bridge) => bridge,
             Err(error) => {
+                let result = finish_with_broker_shutdown(Err(error), broker_bridge);
                 if unsafe { vm.canStop() } {
                     let _ = stop_vm(&vm);
                 }
-                return Err(error);
+                return result;
             }
         };
 
     eprintln!("firma-vz-runner: VM started");
 
-    let stop_reason = wait_for_stop(&vm, interrupt_rx)?;
-    eprintln!("firma-vz-runner: VM stopped: {stop_reason}");
+    let result = wait_for_stop(&vm, interrupt_rx).map(|stop_reason| {
+        eprintln!("firma-vz-runner: VM stopped: {stop_reason}");
+    });
+    finish_with_broker_shutdown(result, broker_bridge)
+}
 
-    Ok(())
+fn finish_with_broker_shutdown(
+    operation: RunnerResult<()>,
+    broker_bridge: Option<BrokerBridge>,
+) -> RunnerResult<()> {
+    let shutdown = broker_bridge.map_or(Ok(()), BrokerBridge::shutdown);
+    match (operation, shutdown) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(operation), Err(shutdown)) => Err(RunnerError::BrokerBridgeCleanup {
+            operation: Box::new(operation),
+            shutdown: Box::new(shutdown),
+        }),
+    }
 }
 
 /// Waits for the asynchronous VZ start callback with a bounded timeout.

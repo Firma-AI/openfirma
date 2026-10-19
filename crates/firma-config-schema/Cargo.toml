@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 bytesize = { workspace = true, features = ["serde"] }
+firma-config-utils.workspace = true
 jiff = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 

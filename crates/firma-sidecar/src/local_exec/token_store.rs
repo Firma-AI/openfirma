@@ -23,11 +23,9 @@
 //!   on retry until an operator explicitly approves them. Only
 //!   [`TokenState::Approved`] tokens are consumable.
 //!
-//! The default implementation is [`InMemoryTokenStore`]. Alternative backends
-//! (Redis, distributed stores, test doubles) implement [`TokenStore`] and are
-//! passed to [`super::handler::LocalExecHandler`] via
-//! [`super::handler::LocalExecHandler::with_store`].
+//! The default implementation is [`InMemoryTokenStore`].
 
+use firma_config_utils::NonZeroDuration;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -132,9 +130,7 @@ pub enum RevokeResult {
 /// Implementations must be `Send + Sync` so they can be shared behind an
 /// [`Arc`](std::sync::Arc) across connection-handler tasks.
 ///
-/// The default implementation is [`InMemoryTokenStore`]. Custom backends
-/// (Redis, distributed stores, test doubles) implement this trait and are
-/// passed to [`super::handler::LocalExecHandler::with_store`].
+/// The default implementation is [`InMemoryTokenStore`].
 pub trait TokenStore: Send + Sync {
     /// Issue a new approval token in [`TokenState::Pending`] state and return
     /// its opaque ID.
@@ -197,7 +193,7 @@ pub trait TokenStore: Send + Sync {
 /// retry.
 pub struct InMemoryTokenStore {
     tokens: Mutex<HashMap<String, HitlToken>>,
-    ttl: Duration,
+    ttl: NonZeroDuration,
     /// Grace window after expiry during which the record is kept so that
     /// late retries receive `Expired` rather than `Unknown`.
     expiry_grace: Duration,
@@ -214,7 +210,7 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl InMemoryTokenStore {
     /// Create a new store. `ttl` is the lifetime of each issued token.
     #[must_use]
-    pub(crate) fn new(ttl: Duration) -> Self {
+    pub(crate) fn new(ttl: NonZeroDuration) -> Self {
         Self {
             tokens: Mutex::new(HashMap::new()),
             ttl,
@@ -236,7 +232,7 @@ impl InMemoryTokenStore {
             session_id,
             sandbox_id,
             agent_id,
-            expires_at: Instant::now() + self.ttl,
+            expires_at: Instant::now() + self.ttl.duration(),
             state: TokenState::Pending,
         };
         let mut guard = lock_or_recover(&self.tokens);
@@ -378,13 +374,6 @@ impl InMemoryTokenStore {
     fn len(&self) -> usize {
         lock_or_recover(&self.tokens).len()
     }
-
-    /// Whether the store has no live records. Intended for tests and metrics.
-    #[cfg(test)]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        lock_or_recover(&self.tokens).is_empty()
-    }
 }
 
 impl TokenStore for InMemoryTokenStore {
@@ -443,7 +432,7 @@ mod tests {
     }
 
     fn store() -> InMemoryTokenStore {
-        InMemoryTokenStore::new(Duration::from_mins(1))
+        InMemoryTokenStore::new(NonZeroDuration::from_static(Duration::from_mins(1)))
     }
 
     fn issue_token(store: &InMemoryTokenStore) -> String {
@@ -563,7 +552,7 @@ mod tests {
 
     #[test]
     fn expired_token_rejected() {
-        let s = InMemoryTokenStore::new(Duration::ZERO);
+        let s = InMemoryTokenStore::new(NonZeroDuration::from_static(Duration::from_nanos(1)));
         let id = issue_token(&s);
         std::thread::sleep(Duration::from_millis(1));
         let result =
@@ -625,7 +614,7 @@ mod tests {
     fn prune_removes_fully_expired_records() {
         let s = InMemoryTokenStore {
             tokens: std::sync::Mutex::new(HashMap::new()),
-            ttl: Duration::ZERO,
+            ttl: NonZeroDuration::from_static(Duration::from_nanos(1)),
             expiry_grace: Duration::ZERO,
         };
         let _ = issue_token(&s);

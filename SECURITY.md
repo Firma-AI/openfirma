@@ -80,7 +80,9 @@ result in fail-closed denials. Revocation updates use a separate stream.
 
 ### Protected-by-Default
 
-Set `sidecar.mapping.default_protected = true` in production. Requests to unmapped hosts are PASSTHROUGH (no enforcement) when this is false.
+Every Sidecar requires an Authority endpoint and protected-by-default mapping
+snapshots. Configure explicit mapping inputs on the Authority; unmatched
+requests are denied and Sidecar configuration cannot disable that posture.
 
 ### Credential Scoping
 
@@ -106,7 +108,7 @@ Stage 2 evaluates policy using a fresh `Utc::now()` rather than the normalized t
 
 ## Dependency Security
 
-Run `cargo audit` to check for vulnerable dependencies in the Rust workspace. This project does not accept dependencies with known CVEs.
+Run `cargo deny check advisories` (`just audit`) to check for vulnerable, unmaintained and yanked dependencies in the Rust workspace. This project does not accept dependencies with known CVEs.
 
 ## Operational Security
 

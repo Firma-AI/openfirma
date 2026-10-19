@@ -35,7 +35,7 @@ else
   SIDECAR_SRC="$SIDECAR_SRC_DEFAULT"
 fi
 
-mkdir -p "$LOCAL_DIR"
+mkdir -p "$LOCAL_DIR/capabilities"
 ok "ensured local runtime directory: $LOCAL_DIR"
 
 if [[ ! -f "$MAPPING_DST" ]]; then
@@ -71,12 +71,15 @@ fi
 cat <<'EOM'
 
 Next steps:
-1) Start sidecar:
-   cargo run -p firma -- sidecar -c .local/firma.toml
+1) Complete the local Authority configuration and generate trust material:
+   cargo run -p firma -- config --yes --mode agent-local --profile codex --agent-id agt_01j0000000e008000000000001 --output-dir .local
 
-2) In a new terminal, run Codex through the wrapper:
-   cargo run -p firma -- run --profile codex -- codex
+2) Start the Authority (the Sidecar requires its streams):
+   cargo run -p firma -- authority --config .local/firma.toml
 
-3) Optional structural E2E smoke:
+3) In a new terminal, run Codex with a per-session Sidecar:
+   cargo run -p firma -- run --config .local/firma.toml --profile codex --authority https://127.0.0.1:50051 --sidecar local -- codex
+
+4) Optional structural E2E smoke:
    examples/firma-run/e2e/run.sh
 EOM

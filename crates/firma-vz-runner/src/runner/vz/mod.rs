@@ -1,5 +1,10 @@
 #[expect(
     unsafe_code,
+    reason = "The broker VSOCK adapter implements Objective-C delegates and duplicates a native connection descriptor"
+)]
+mod broker_bridge;
+#[expect(
+    unsafe_code,
     reason = "The native PTY adapter implements Objective-C delegates and POSIX terminal/socket operations"
 )]
 mod command_pty;

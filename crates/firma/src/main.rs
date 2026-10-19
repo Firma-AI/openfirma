@@ -31,6 +31,8 @@ fn main() -> ExitCode {
         #[cfg(target_os = "linux")]
         Command::EgressGuardedRun(a) => services::egress_guarded_run::run(a),
         Command::Doctor(a) => Ok(services::doctor::run(a, config.as_deref())),
+        Command::Login(a) => block_on_async_detached(services::login::run(a)),
+        Command::Logout => block_on_async(services::logout::run()),
         Command::Config(a) => services::config::run(&a),
         Command::Control(a) => services::control::run(&a, config.as_deref()),
         Command::Policy(a) => services::policy::run(a),
@@ -51,13 +53,29 @@ fn main() -> ExitCode {
     }
 }
 
+/// Like [`block_on_async`], but returns without waiting for blocking tasks:
+/// `firma login` can leave a terminal read that cannot be cancelled, and the
+/// process then exits without it.
+fn block_on_async_detached<F>(fut: F) -> anyhow::Result<ExitCode>
+where
+    F: std::future::Future<Output = anyhow::Result<ExitCode>>,
+{
+    let runtime = runtime()?;
+    let result = runtime.block_on(fut);
+    runtime.shutdown_background();
+    result
+}
+
 fn block_on_async<F>(fut: F) -> anyhow::Result<ExitCode>
 where
     F: std::future::Future<Output = anyhow::Result<ExitCode>>,
 {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    runtime()?.block_on(fut)
+}
+
+fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|e| anyhow::anyhow!("failed to build tokio runtime: {e}"))?;
-    runtime.block_on(fut)
+        .map_err(|e| anyhow::anyhow!("failed to build tokio runtime: {e}"))
 }

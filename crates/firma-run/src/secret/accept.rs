@@ -75,17 +75,28 @@ pub async fn serve_forever<S>(
 mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use firma_config_schema::broker::BrokerConfig;
+    use firma_config_utils::NonZeroDuration;
     use firma_secret_provider::{endpoint::server::ServerEndpoint, store::SecretStore};
     use tokio::sync::RwLock;
 
     use super::serve_forever;
     use firma_secret_provider::broker::server::BrokerListener;
 
-    async fn bind_tcp() -> (BrokerListener, std::net::SocketAddr) {
+    fn test_config() -> BrokerConfig {
+        BrokerConfig {
+            // Process startup can exceed the production default while the
+            // Windows CI runner executes the workspace test suite in parallel.
+            operation_timeout: NonZeroDuration::new(Duration::from_secs(30))
+                .expect("non-zero timeout"),
+            ..BrokerConfig::default()
+        }
+    }
+
+    async fn bind_tcp(config: BrokerConfig) -> (BrokerListener, std::net::SocketAddr) {
         let endpoint = ServerEndpoint::from_str("tcp://127.0.0.1:0").expect("valid endpoint");
-        let config = BrokerConfig::default();
         let listener = BrokerListener::bind(&endpoint, config).await.expect("bind");
         let bound = listener.bound_endpoint().expect("bound");
         #[cfg_attr(
@@ -107,18 +118,21 @@ mod tests {
     {
         use firma_secret_provider::{
             non_empty::NonEmptyVec,
-            spec::{MatcherRule, cli::CommandPattern},
+            spec::{
+                MatcherRule,
+                cli::{CliIntegrationSpecParams, CommandPattern},
+            },
         };
 
         // Exact `SafeCommand` on the whole argv so `echo` is classified as a
         // known-safe passthrough (unconfigured binaries are rejected now).
-        firma_secret_provider::spec::cli::CliIntegrationSpec::new(
-            "echo".to_string(),
-            "echo".to_string(),
-            vec![],
-            vec![],
-            vec![],
-            vec![MatcherRule::SafeCommand(CommandPattern::exact(
+        firma_secret_provider::spec::cli::CliIntegrationSpec::new(CliIntegrationSpecParams {
+            binary_name: "echo".to_string(),
+            provider_id: "echo".to_string(),
+            credential_env_vars: vec![],
+            stripped_options: vec![],
+            forbidden_options: vec![],
+            matchers: vec![MatcherRule::SafeCommand(CommandPattern::exact(
                 NonEmptyVec::new(vec![
                     String::from("hello"),
                     String::from("from"),
@@ -126,13 +140,14 @@ mod tests {
                 ])
                 .expect("non-empty argv"),
             ))],
-        )
+        })
         .unwrap_or_else(|error| panic!("valid spec: {error}"))
     }
 
     #[tokio::test]
     async fn echo_end_to_end() {
-        let (listener, addr) = bind_tcp().await;
+        let config = test_config();
+        let (listener, addr) = bind_tcp(config).await;
         let store = Arc::new(RwLock::new(SecretStore::new()));
 
         let spec = echo_spec();
@@ -147,10 +162,8 @@ mod tests {
             &format!("tcp://{addr}"),
         )
         .expect("valid client endpoint");
-        let client = firma_secret_provider::broker::client::BrokerClient::new(
-            client_endpoint,
-            BrokerConfig::default(),
-        );
+        let client =
+            firma_secret_provider::broker::client::BrokerClient::new(client_endpoint, config);
         let output = client
             .run("echo", &["hello", "from", "broker"])
             .await
@@ -173,18 +186,18 @@ mod tests {
     #[tokio::test]
     async fn blocked_command_is_rejected() {
         use firma_config_schema::secret_provider::cli::FlagSpec;
-        use firma_secret_provider::spec::cli::CliIntegrationSpec;
+        use firma_secret_provider::spec::cli::{CliIntegrationSpec, CliIntegrationSpecParams};
 
-        let spec = CliIntegrationSpec::new(
-            "bws".to_string(),
-            "bitwarden".to_string(),
-            vec!["BWS_ACCESS_TOKEN".to_string()],
-            vec![],
-            vec![FlagSpec::value("--server-url")],
-            vec![],
-        )
+        let spec = CliIntegrationSpec::new(CliIntegrationSpecParams {
+            binary_name: "bws".to_string(),
+            provider_id: "bitwarden".to_string(),
+            credential_env_vars: vec!["BWS_ACCESS_TOKEN".to_string()],
+            stripped_options: vec![],
+            forbidden_options: vec![FlagSpec::value("--server-url")],
+            matchers: vec![],
+        })
         .unwrap_or_else(|error| panic!("valid spec: {error}"));
-        let (listener, addr) = bind_tcp().await;
+        let (listener, addr) = bind_tcp(BrokerConfig::default()).await;
         let store = Arc::new(RwLock::new(SecretStore::new()));
         let spec_clone = spec.clone();
         let server = tokio::spawn(serve_forever(

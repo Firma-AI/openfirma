@@ -29,7 +29,6 @@ fn run_input_inner(backend: Option<BackendKind>, config: Option<PathBuf>) -> Run
         authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
         user_config_path: None,
         allow_non_structural: true,
-        monitor_mode: false,
     }
 }
 

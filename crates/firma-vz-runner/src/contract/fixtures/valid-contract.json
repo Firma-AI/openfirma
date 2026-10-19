@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "sandbox_id": "sbx_01j0000000e008000000000001",
   "runtime_dir": "${ROOT}/runtime",
   "runner": {
@@ -13,7 +13,7 @@
   "command": {
     "executable": "codex",
     "args": ["--version"],
-    "cwd": "${ROOT}",
+    "cwd": "/workspace",
     "env": {},
     "identity_mode": "host_user"
   },

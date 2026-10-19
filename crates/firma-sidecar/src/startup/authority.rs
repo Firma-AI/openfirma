@@ -1,11 +1,10 @@
 //! Authority stream client spawn helper.
 //!
 //! Wires the shared tonic channel and spawns the background
-//! `WatchPolicyBundle` / `WatchRevocations` tasks when
-//! `authority.url`
-//! is configured. Returns `Ok(None)` when the Authority integration is
-//! disabled so the binary still runs in dev mode against local state.
+//! `WatchPolicyBundle` / `WatchRevocations` tasks for the required Authority
+//! endpoint. Production readiness depends on both streams hydrating.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -16,7 +15,7 @@ use crate::authority_client::{self, AuthorityClientHandle, AuthorityDeps};
 use crate::config;
 use crate::startup::pipeline::PipelineRuntime;
 
-/// Spawn the Authority stream clients when `authority.url` is set.
+/// Spawn the required Authority stream clients.
 /// Uses the shared policy snapshot, revocation store, and readiness
 /// flag owned by the [`PipelineRuntime`].
 ///
@@ -29,14 +28,23 @@ pub fn spawn_authority_client(
     config: &config::SidecarConfig,
     runtime: &PipelineRuntime,
     cancel: CancellationToken,
-) -> anyhow::Result<Option<AuthorityClientHandle>> {
-    let endpoint = match config.authority.target()? {
-        config::AuthorityTarget::Disabled => {
-            tracing::debug!("authority.url not set; Authority stream clients disabled");
-            return Ok(None);
-        }
-        config::AuthorityTarget::Enabled(endpoint) => endpoint,
-    };
+) -> anyhow::Result<AuthorityClientHandle> {
+    spawn_authority_client_publishing(config, runtime, cancel, None)
+}
+
+/// Spawn the Authority stream clients, publishing each accepted bundle's
+/// version to `enforcement_state` for status readers.
+///
+/// # Errors
+///
+/// Same as [`spawn_authority_client`].
+pub fn spawn_authority_client_publishing(
+    config: &config::SidecarConfig,
+    runtime: &PipelineRuntime,
+    cancel: CancellationToken,
+    enforcement_state: Option<PathBuf>,
+) -> anyhow::Result<AuthorityClientHandle> {
+    let endpoint = config.authority.target()?;
 
     let ca_cert_pem: Option<Vec<u8>> = if let Some(ref path) = config.authority.ca_cert_path {
         let bytes = std::fs::read(path)
@@ -98,7 +106,17 @@ pub fn spawn_authority_client(
         cancel,
         config: config.authority.clone(),
         credentials,
+        enforcement_state,
         bundle_parser: Arc::new(CedarBundleParser),
+        composio_coverage_warnings: if config.interceptor.mode
+            == firma_config_schema::sidecar::InterceptorMode::HttpProxy
+        {
+            crate::startup::interceptor::composio_mitm_coverage_warnings(
+                &config.interceptor.https_mitm,
+            )
+        } else {
+            Vec::new()
+        },
     });
-    Ok(Some(handle))
+    Ok(handle)
 }

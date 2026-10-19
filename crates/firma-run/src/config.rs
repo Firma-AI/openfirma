@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
 use firma_config_schema::secret_provider::SecretProviderPatch;
+use firma_config_utils::NonZeroDuration;
 use firma_core::SecretMatcher;
 use firma_runtime_state::RuntimeLayout;
 use firma_secret_provider::IntegrationSpec;
@@ -218,17 +219,6 @@ pub enum SidecarEndpoint {
     Unix { path: PathBuf },
 }
 
-impl SidecarEndpoint {
-    /// Returns the HTTP proxy URL when represented as TCP endpoint.
-    #[must_use]
-    pub fn proxy_url(&self) -> Option<String> {
-        match self {
-            Self::Tcp { addr } => Some(format!("http://{addr}")),
-            Self::Unix { .. } => None,
-        }
-    }
-}
-
 impl FromStr for SidecarEndpoint {
     type Err = String;
 
@@ -319,15 +309,13 @@ pub struct ExecutableLaunchPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandMediatorConfig {
     pub(crate) endpoint: CommandMediatorEndpoint,
-    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
-    pub(crate) timeout: Duration,
+    pub(crate) timeout: NonZeroDuration,
     pub(crate) hitl_mode: CommandMediatorHitlMode,
     /// Maximum total wall-clock time `firma-run` will block waiting for a
     /// human to approve a `pending_hitl` token. Applies only when
     /// `hitl_mode = "async_token"`. Fail-closed once exceeded.
     /// Default: 5 minutes.
-    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
-    pub(crate) hitl_max_wait: Duration,
+    pub(crate) hitl_max_wait: NonZeroDuration,
     pub(crate) enforce_known_executables: bool,
     pub(crate) allowed_executables: BTreeSet<PathBuf>,
 }
@@ -538,7 +526,10 @@ pub(crate) fn resolve_profile_with_layout(
         || args.profile.clone(),
         |profile| profile.as_str().to_string(),
     );
-    let mut patch = built_in_profile(&profile_id)?;
+    // The built-in workspace mount is anchored on the project root the config
+    // pins, not on the working directory, so a run launched from a
+    // subdirectory still binds the whole project.
+    let mut patch = built_in_profile(&profile_id, &built_in_workspace(args.config.as_deref()))?;
 
     if let Some(path) = &args.config {
         let file_patch = read_config(path, &profile_id)?;
@@ -689,6 +680,37 @@ pub(crate) fn resolve_profile_with_layout(
             backend = %resolved.backend,
             "claude-code profile is running in compatibility mode; full Linux structural confinement guarantees require backend=bwrap"
         );
+    }
+
+    // CLI secret providers are mediated by deploying a shim binary that
+    // proxies the real tool call through a host-side broker. Only backends
+    // that declare shim capability are allowed to
+    // use CLI secret providers; on any other backend the real tool would
+    // run unmediated, so fail closed instead.
+    let has_cli_providers = resolved
+        .secret_providers
+        .values()
+        .any(|spec| spec.as_cli().is_some());
+    if has_cli_providers {
+        let backend = crate::backend::build_backend(resolved.backend);
+        match backend.secret_shim_capability() {
+            crate::backend::SecretShimCapability::HostBindMount { .. }
+            | crate::backend::SecretShimCapability::IsolatedGuest { .. } => {}
+            crate::backend::SecretShimCapability::Unsupported { reason } => {
+                let detail = match reason {
+                    crate::backend::SecretShimUnsupportedReason::HostCallable => {
+                        "the guest can call the host directly, so a shim is not applicable"
+                    }
+                    crate::backend::SecretShimUnsupportedReason::NotYetImplemented => {
+                        "CLI secret mediation is not yet implemented for this backend"
+                    }
+                };
+                return Err(RunError::ConfigValidation(format!(
+                    "secret_providers with a CLI entry is unsupported for backend '{}': {detail}. Remove the CLI entries or use an HTTP provider",
+                    resolved.backend
+                )));
+            }
+        }
     }
 
     resolved.validate()?;
@@ -884,6 +906,11 @@ fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> Result<SeccompPolicyC
     })
 }
 
+const DEFAULT_COMMAND_MEDIATOR_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_millis(500));
+const DEFAULT_COMMAND_MEDIATOR_HITL_MAX_WAIT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_mins(5));
+
 fn sidecar_local_exec_from_patch(
     patch: &CommandMediatorPatch,
     sidecar_endpoint: &SidecarEndpoint,
@@ -897,13 +924,11 @@ fn sidecar_local_exec_from_patch(
         canonicalize_allowed_executables(patch.allowed_executables.as_deref().unwrap_or_default())?;
     Ok(CommandMediatorConfig {
         endpoint,
-        timeout: patch
-            .timeout
-            .map_or(Duration::from_millis(500), |timeout| timeout.duration()),
+        timeout: patch.timeout.unwrap_or(DEFAULT_COMMAND_MEDIATOR_TIMEOUT),
         hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
         hitl_max_wait: patch
             .hitl_max_wait
-            .map_or(Duration::from_mins(5), |timeout| timeout.duration()),
+            .unwrap_or(DEFAULT_COMMAND_MEDIATOR_HITL_MAX_WAIT),
         enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
         allowed_executables,
     })
@@ -1006,7 +1031,7 @@ fn derive_sidecar_local_exec_endpoint(
 /// Decides whether the managed default seccomp policy applies to a given
 /// profile/backend pair. Every recognized agent profile shares the same managed
 /// baseline on the bwrap backend, so all agents enforce `credential.write`
-/// identically (FIR-274 parity requirement). `filesystem.delete` is not part of
+/// identically. `filesystem.delete` is not part of
 /// the seccomp baseline: seccomp cannot encode path scopes, so workspace-scoped
 /// delete is enforced structurally by the read-only rootfs plus read-write
 /// workspace mount instead. The OS gate (`target_os = "linux"`) is applied
@@ -1142,7 +1167,7 @@ fn resolved_runtime_layout() -> RuntimeLayout {
 }
 
 pub(crate) fn env_truthy(name: &str) -> bool {
-    std::env::var(name).ok().is_some_and(|value| {
+    std::env::var(name).is_ok_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
@@ -1195,6 +1220,52 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
 
     let profile_patch = parsed.profiles.get(profile).cloned().unwrap_or_default();
     Ok(parsed.defaults.merge(profile_patch))
+}
+
+/// The project root a config pins: the directory holding its `.firma/`.
+///
+/// This is the workspace `firma run` binds read-write when nothing configures
+/// a mount. It is derived from where the config file *is*, never from the
+/// process working directory, so a run launched from a subdirectory still gets
+/// the whole project — and the value does not depend on how the config path
+/// reached this process.
+///
+/// `None` means "no project root to derive", and the caller supplies its own
+/// fallback. Keeping that distinct from a derived path is what lets
+/// `firma config` omit the mount *only* when this would reproduce it.
+///
+/// Rejects two roots that would hand the agent far more than a project:
+/// `$HOME`, whose sensitive-path overlay covers only a fixed suffix list, and
+/// the filesystem root. A config living in either still records its workspace
+/// explicitly.
+///
+/// The derived root is absolute and free of `.`/`..`: it becomes a mount
+/// source, and profile validation rejects a relative one. That normalization
+/// is also what makes the `$HOME` comparison mean anything —
+/// `~/sub/../.firma/firma.toml` names `$HOME` and must be refused like every
+/// other spelling of it.
+#[must_use]
+pub fn workspace_root(config_file: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    let config_file = std::path::absolute(config_file?).ok()?;
+    let config_dir = config_file.parent()?;
+    if config_dir.file_name()? != firma_config_loader::CONFIG_DIR_NAME {
+        return None;
+    }
+    let root = firma_fs::normalize_absolute_path(config_dir.parent()?);
+    if root.parent().is_none()
+        || home.is_some_and(|home| firma_fs::normalize_absolute_path(home) == root)
+    {
+        return None;
+    }
+    Some(root)
+}
+
+/// Resolve the workspace `built_in_profile` binds, falling back to the working
+/// directory when the config pins no project root.
+fn built_in_workspace(config_file: Option<&Path>) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    workspace_root(config_file, home.as_deref())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 fn rebase_file_paths(config: &mut FileConfig, config_dir: &Path) {
@@ -1267,7 +1338,7 @@ mod tests {
     use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
-    use firma_config_schema::utils::NonZeroDuration;
+    use firma_config_utils::NonZeroDuration;
     use firma_core::SecretMatcher;
     use firma_secret_provider::{MatcherRule, spec::cli::CommandAndMatcher};
     use pretty_assertions::assert_eq;
@@ -1280,6 +1351,7 @@ mod tests {
         ExecutableLaunchPolicyPatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch,
         ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode,
         capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
+        workspace_root,
     };
 
     #[cfg(target_os = "linux")]
@@ -1391,6 +1463,98 @@ mod tests {
         );
     }
 
+    /// An absolute `$HOME` to build config paths under.
+    ///
+    /// Built with `std::path::absolute` rather than written literally because
+    /// `workspace_root` absolutizes its argument: on Windows a rootless
+    /// `/home/u` gains the current drive, and a literal expectation would
+    /// compare `C:\home\u` against `/home/u`.
+    fn home_dir() -> PathBuf {
+        std::path::absolute(std::path::Path::new("/home/u")).expect("absolute home")
+    }
+
+    /// The workspace is the directory holding `.firma/`, derived from where the
+    /// config is rather than from the working directory — so a run launched
+    /// from a subdirectory still binds the whole project.
+    #[test]
+    fn workspace_root_is_the_directory_holding_the_config_dir() {
+        let home = home_dir();
+        assert_eq!(
+            workspace_root(
+                Some(&home.join("proj").join(".firma").join("firma.toml")),
+                Some(&home),
+            ),
+            Some(home.join("proj"))
+        );
+    }
+
+    /// Each rejection returns `None` rather than a guessed path: the caller
+    /// picks its own fallback, and `firma config` uses the same distinction to
+    /// decide whether the mount still has to be written into the file.
+    #[test]
+    fn workspace_root_refuses_roots_it_must_not_hand_to_an_agent() {
+        let home = home_dir();
+        let filesystem_root = home
+            .ancestors()
+            .last()
+            .expect("every absolute path has a root");
+        for (config, why) in [
+            (None, "no config at all"),
+            (
+                Some(home.join("proj").join("firma.toml")),
+                "parent is not a `.firma` directory",
+            ),
+            (
+                Some(home.join(".firma").join("firma.toml")),
+                "root is $HOME, whose overlay covers only a fixed suffix list",
+            ),
+            (
+                Some(filesystem_root.join(".firma").join("firma.toml")),
+                "root is the filesystem root",
+            ),
+            (
+                Some(
+                    home.join("sub")
+                        .join("..")
+                        .join(".firma")
+                        .join("firma.toml"),
+                ),
+                "root spells $HOME with a `..`, which the guard must still catch",
+            ),
+        ] {
+            assert_eq!(
+                workspace_root(config.as_deref(), Some(&home)),
+                None,
+                "must not derive a workspace when {why}"
+            );
+        }
+    }
+
+    /// A relative `--config` is resolved against the working directory here and
+    /// nowhere else. The mount source it feeds must be absolute — profile
+    /// validation rejects a relative one — so `firma run --config
+    /// proj/.firma/firma.toml` would otherwise fail outright.
+    #[test]
+    fn workspace_root_absolutizes_a_relative_config_path() {
+        let cwd = std::env::current_dir().expect("working directory");
+        assert_eq!(
+            workspace_root(Some(std::path::Path::new("proj/.firma/firma.toml")), None),
+            Some(cwd.join("proj"))
+        );
+    }
+
+    /// Absent `HOME` must not make the `$HOME` guard vacuous — but it also must
+    /// not reject an ordinary project, which is reachable in service and
+    /// container contexts where `HOME` is unset.
+    #[test]
+    fn workspace_root_without_home_still_derives_an_ordinary_project() {
+        let app = std::path::absolute(std::path::Path::new("/srv/app")).expect("absolute app dir");
+        assert_eq!(
+            workspace_root(Some(&app.join(".firma").join("firma.toml")), None),
+            Some(app)
+        );
+    }
+
     #[test]
     fn allowed_executable_parent_alias_is_stored_canonically() {
         let dir = tempfile::tempdir().unwrap();
@@ -1463,7 +1627,7 @@ mod tests {
     #[test]
     fn capability_patch_empty_actions_remain_explicitly_empty() {
         let resolved = capability_from_patch(lease_patch(Some(Vec::new())));
-        assert!(resolved.requested_actions.is_empty());
+        assert_eq!(resolved.requested_actions, [] as [String; 0]);
     }
 
     #[test]
@@ -1486,7 +1650,7 @@ mod tests {
         run_args.config = Some(config_path);
 
         let resolved = resolve_profile(&run_args).unwrap();
-        assert!(resolved.capability.requested_actions.is_empty());
+        assert_eq!(resolved.capability.requested_actions, [] as [String; 0]);
     }
 
     fn args(profile: &str) -> RunInput {
@@ -1506,7 +1670,6 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
             allow_non_structural: true,
-            monitor_mode: false,
         }
     }
 
@@ -1685,6 +1848,7 @@ path = '{}'
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn secret_providers_merge_across_defaults_and_profile() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
@@ -1700,6 +1864,7 @@ secret_providers = ["op"]
 
         let mut run_args = args("codex");
         run_args.config = Some(config_path);
+        run_args.backend = Some(BackendKind::Bwrap);
 
         let resolved = resolve_profile(&run_args).unwrap();
         // Defaults and profile are additive; blank entries are dropped.
@@ -1732,6 +1897,7 @@ secret_providers = ["not-a-real-integration"]
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn secret_providers_custom_spec_overrides_builtin_of_same_name() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
@@ -1763,6 +1929,7 @@ secret_providers = [
 
         let mut run_args = args("codex");
         run_args.config = Some(config_path);
+        run_args.backend = Some(BackendKind::Bwrap);
 
         let resolved = resolve_profile(&run_args).unwrap();
         let spec = resolved.secret_providers.get("bws").unwrap();
@@ -1989,7 +2156,8 @@ approval_policy = "never"
         )
         .unwrap();
 
-        let built_in = crate::profile::built_in_profile("generic").unwrap();
+        let built_in =
+            crate::profile::built_in_profile("generic", std::path::Path::new("/ws")).unwrap();
         let defaults = file.defaults;
         let selected = file.profiles["generic"].clone();
         let mut run_args = args("generic");
@@ -2533,9 +2701,15 @@ approval_policy = "never"
         let resolved = resolve_profile(&run_args).unwrap();
         let mediator = resolved.sidecar_local_exec.unwrap();
 
-        assert_eq!(mediator.timeout, Duration::from_secs(1));
+        assert_eq!(
+            mediator.timeout,
+            NonZeroDuration::from_static(Duration::from_secs(1))
+        );
         assert_eq!(mediator.hitl_mode, CommandMediatorHitlMode::AsyncToken);
-        assert_eq!(mediator.hitl_max_wait, Duration::from_mins(5));
+        assert_eq!(
+            mediator.hitl_max_wait,
+            NonZeroDuration::from_static(Duration::from_mins(5))
+        );
         assert!(!mediator.enforce_known_executables);
         assert!(mediator.allowed_executables.is_empty());
     }
@@ -2683,7 +2857,7 @@ approval_policy = "never"
 
         assert!(resolved.env_passthrough.is_empty());
         assert!(resolved.env_set.is_empty());
-        assert!(resolved.mounts.is_empty());
+        assert_eq!(resolved.mounts, [] as [super::MountSpec; 0]);
     }
 
     #[test]
@@ -2858,6 +3032,65 @@ fail_closed = true
                 .to_string()
                 .contains("enforce_network_namespace=true is unsupported"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn cli_secret_providers_on_non_bwrap_backend_are_rejected() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let backend = non_bwrap_backend_for_current_host();
+        let toml = format!(
+            r#"
+[run.profiles.generic]
+backend = "{backend}"
+
+[run.defaults]
+secret_providers = ["bws"]
+"#
+        );
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+
+        let error = resolve_profile(&run_args).expect_err("expected validation error");
+        assert!(
+            error
+                .to_string()
+                .contains("CLI entry is unsupported for backend"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn http_secret_providers_are_allowed_on_non_bwrap_backends() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        let backend = non_bwrap_backend_for_current_host();
+        let toml = format!(
+            r#"
+[run.profiles.generic]
+backend = "{backend}"
+
+[run.defaults]
+secret_providers = [
+  {{ type = "http", provider_id = "aws-secrets-manager", host = "secretsmanager.*.amazonaws.com", matchers = [
+    {{ type = "sensitive_command", path = "/GetSecretValue", matcher = {{ type = "json", record_path = "$", value_path = "$.SecretString", name = {{ source = "path", path = "$.Name" }} }} }},
+  ] }},
+]
+"#
+        );
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).expect("HTTP provider must not be backend-gated");
+        assert!(
+            resolved
+                .secret_providers
+                .contains_key("aws-secrets-manager")
         );
     }
 
@@ -3048,7 +3281,10 @@ timeout = "700ms"
         run_args.config = Some(config_path);
         let resolved = resolve_profile(&run_args).unwrap();
         let mediator = resolved.sidecar_local_exec.unwrap();
-        assert_eq!(mediator.timeout, Duration::from_millis(700));
+        assert_eq!(
+            mediator.timeout,
+            NonZeroDuration::from_static(Duration::from_millis(700))
+        );
     }
 
     #[test]

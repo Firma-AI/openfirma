@@ -182,20 +182,6 @@ impl<'a> HeadlessRunner<'a> {
         }
     }
 
-    /// Creates a headless runner with an injected rewrite handler.
-    #[must_use]
-    pub fn with_policy_rewrite_handler(
-        policy_dir: Option<PathBuf>,
-        audit_rows: Option<&'a Receiver<AuditRow>>,
-        handler: PolicyRewriteHandler,
-    ) -> Self {
-        Self {
-            app: App::new(policy_dir, audit_rows.is_some()),
-            event_probe: None,
-            sources: Sources::with_policy_rewrite_handler(audit_rows, handler),
-        }
-    }
-
     /// Creates a headless runner with an injected rewrite handler and dispatch
     /// probe.
     ///

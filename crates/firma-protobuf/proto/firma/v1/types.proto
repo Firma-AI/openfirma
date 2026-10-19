@@ -214,12 +214,12 @@ enum EnforcementDecision {
   ENFORCEMENT_DECISION_DEFER = 6;
 }
 
-// PolicyBundle is the set of Cedar policy files distributed from
-// Authority to Sidecar. Stored as human-readable text; compiled into
-// an in-memory policy set at load time. Treated as immutable during
-// evaluation — Stage 2 evaluates against a stable snapshot.
+// PolicyBundle is one complete, immutable enforcement snapshot distributed from
+// Authority to Sidecar. Cedar policies, entity schema, and managed mappings share
+// one version and TTL; receivers compile all components before atomic activation.
+// Updates replace the complete snapshot, never append rules or apply deltas.
 message PolicyBundle {
-  // Bundle version identifier for debugging and audit correlation.
+  // Version of the complete snapshot, including mappings when present.
   string version = 1;
   // Serialized Cedar policy files.
   bytes policies = 2;
@@ -228,6 +228,51 @@ message PolicyBundle {
   // Time-to-live in seconds. If TTL expires without refresh,
   // the Sidecar enters fail-closed mode.
   uint32 ttl_seconds = 4;
+  // Complete effective mappings. Absence is a legacy policy-only payload,
+  // NOT an empty mapping snapshot. Connected OpenFirma receivers must reject an
+  // absent or invalid snapshot before readiness; they must not use local files
+  // or infer defaults. Presence with zero rules is valid and keeps unmatched
+  // protected traffic denied. Negotiation is in WatchPolicyBundleRequest.
+  ActionMappingSnapshot mappings = 5;
+}
+
+// ActionMappingSnapshot contains all effective rules selected by the Authority.
+// Mini-authority uses configured file order, then rule position; Team uses rules
+// from enabled workspace mapping sets, ordered by normalized owner host and
+// authored rule position.
+// Disabled sets contribute no rules; set IDs, names, and authored metadata are
+// not runtime inputs. Receivers apply OpenFirma specificity ordering stably,
+// preserving this order for ties. This payload has no independent version or TTL:
+// PolicyBundle owns freshness and atomic consistency for every component.
+message ActionMappingSnapshot {
+  // Must be 1 for this contract. Zero and unknown versions are invalid.
+  uint32 format_version = 1;
+  // Complete rules, including an empty list when no sets are enabled.
+  // Receivers validate the entire list, including duplicate effective tuples,
+  // before compiling; invalid candidates never partially replace good state.
+  repeated ActionMappingRule rules = 2;
+  // Must be true in managed mode, including when rules is empty. False (the
+  // proto3 default, including omission) is invalid, not a protection opt-out.
+  bool default_protected = 3;
+}
+
+// ActionMappingRule is a normalized effective matcher, not a TOML set rule.
+// Hosts include composed subdomains and use OpenFirma normalization and '*'
+// wildcard semantics, including ports, IPv4, and bracketed IPv6. The canonical
+// mapping domain and ActionClass catalog own validation, not protobuf decoding.
+// Explicit digit/'*' port patterns contain at most five characters and retain
+// their scope; normalization must not turn authored patterns into catch-alls.
+message ActionMappingRule {
+  // Absence means any method. Present values must be a supported uppercase
+  // method (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, CONNECT); empty is invalid.
+  optional string method = 1;
+  // Full normalized host pattern, never a relative subdomain. Empty is invalid.
+  string host = 2;
+  // Absence means any path. A present '*' remains distinct from absence for
+  // specificity ordering; a present empty string is invalid.
+  optional string path = 3;
+  // Canonical firma_core::ActionClass identifier; unknown/empty values fail closed.
+  string action_class = 4;
 }
 
 // RevocationEvent signals the invalidation of a previously issued

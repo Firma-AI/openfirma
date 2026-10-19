@@ -101,5 +101,6 @@ fn audit_event(session_id: &str, resource: &str) -> AuditEvent {
         thread_id: String::new(),
         parent_action_id: String::new(),
         signature: Vec::new(),
+        run_evidence: None,
     }
 }

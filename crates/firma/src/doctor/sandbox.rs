@@ -295,7 +295,9 @@ fn decode_console_output(bytes: &[u8]) -> String {
     let payload = bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes);
     if payload.len() >= 2 && payload.len().is_multiple_of(2) && looks_like_utf16_le(payload) {
         let units: Vec<u16> = payload
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         return String::from_utf16_lossy(&units);
@@ -311,7 +313,12 @@ fn looks_like_utf16_le(payload: &[u8]) -> bool {
     if pairs == 0 {
         return false;
     }
-    let zero_high_bytes = payload.chunks_exact(2).filter(|c| c[1] == 0x00).count();
+    let zero_high_bytes = payload
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter(|c| c[1] == 0x00)
+        .count();
     zero_high_bytes * 5 >= pairs * 4
 }
 
@@ -387,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn linux_missing_firecracker_is_warn_not_fail() {
         // firecracker is never auto-selected on Linux (bwrap is); its absence
-        // is not a failure, just an unused optional backend (FIR-193).
+        // is not a failure, just an unused optional backend.
         let mut m = HashMap::new();
         m.insert(Backend::Bwrap, outcome_ok("bubblewrap 0.9.0"));
         m.insert(

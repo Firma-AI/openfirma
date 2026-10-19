@@ -2,8 +2,6 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::contract::ContractValidationError;
-
 pub type VmPlanResult<T> = std::result::Result<T, VmPlanError>;
 
 #[derive(Debug, Error)]
@@ -33,13 +31,29 @@ pub enum VmPlanError {
     },
     #[error("virtiofs mount source must be an existing directory: {path}")]
     MountSourceNotDirectory { path: PathBuf },
-    #[error("read VZ Sidecar host endpoint from launch contract: {source}")]
-    SidecarHostAddr {
+    #[error("secret_shims.shim_share_directory must be an existing directory: {path}")]
+    ShimShareDirectoryMissing { path: PathBuf },
+    #[error("canonicalize {field} path {path}: {source}")]
+    CanonicalizePath {
+        field: &'static str,
+        path: PathBuf,
         #[source]
-        source: ContractValidationError,
+        source: std::io::Error,
     },
-    #[error("{field} must be non-zero in the accepted command PTY plan")]
-    InvalidCommandPtyPort { field: &'static str },
-    #[error("accepted command PTY plan requires both data and control ports")]
-    IncompleteCommandPtyPlan,
+    #[error(transparent)]
+    GuestShareOverlapsSensitivePath(Box<GuestShareOverlap>),
+}
+
+#[derive(Debug, Error)]
+#[error(
+    "{share_access} guest share {share_name} source {share_source} aliases or overlaps {sensitive_field} {sensitive_path} (canonical paths: {canonical_share_source}, {canonical_sensitive_path})"
+)]
+pub struct GuestShareOverlap {
+    pub share_name: String,
+    pub share_access: &'static str,
+    pub share_source: PathBuf,
+    pub canonical_share_source: PathBuf,
+    pub sensitive_field: &'static str,
+    pub sensitive_path: PathBuf,
+    pub canonical_sensitive_path: PathBuf,
 }

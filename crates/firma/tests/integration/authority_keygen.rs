@@ -12,6 +12,8 @@
     reason = "test code: panics are acceptable test failures"
 )]
 
+use super::firma_bin;
+
 #[test]
 fn generate_key_writes_both_files() {
     let tmp = tempfile::tempdir().unwrap();
@@ -101,10 +103,6 @@ fn generate_key_refuses_to_overwrite_existing_pub_file() {
 
     let after = std::fs::read(&pub_key).unwrap();
     assert_eq!(after, sentinel, "pre-existing .pub file was modified");
-}
-
-fn firma_bin() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
 fn generate_key(path: &std::path::Path) -> std::process::Output {

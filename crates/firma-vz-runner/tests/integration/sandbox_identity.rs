@@ -90,7 +90,7 @@ fn rejects_mismatched_sandbox_attribution_header() -> Result<()> {
 fn rejects_unsupported_host_after_validation() -> Result<()> {
     let stderr = run_contract(|_| Ok(()), false)?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: firma-vz-runner is macOS-only; parsed contract v1 for sandbox sbx_01j0000000e008000000000001");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: firma-vz-runner is macOS-only; parsed contract v2 for sandbox sbx_01j0000000e008000000000001");
     Ok(())
 }
 

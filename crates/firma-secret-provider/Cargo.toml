@@ -12,6 +12,7 @@ base64 = { workspace = true }
 bytesize = { workspace = true, features = ["serde"] }
 either = { workspace = true }
 firma-config-schema = { workspace = true }
+firma-config-utils.workspace = true
 firma-core = { workspace = true }
 firma-http = { workspace = true }
 http = { workspace = true }

@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use firma_config_utils::NonZeroDuration;
 use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::{ActionClass, CapabilitySeed, TokenVerifier};
 use firma_identifiers::AgentId;
@@ -69,6 +70,10 @@ pub(crate) const DEFAULT_RESOURCE_SCOPE: &str = "*";
 /// short enough to limit token exposure if a seed file is leaked.
 #[cfg(unix)]
 pub(crate) const DEFAULT_TTL_SECONDS: i32 = 900;
+
+/// Upper bound on dialing the Authority.
+const AUTHORITY_CONNECT_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::from_static(Duration::from_secs(10));
 
 /// Upper bound on a single `IssueCapability` request once connected. Prevents a
 /// stalled Authority from hanging the mint (and, for the background refresher,
@@ -156,7 +161,7 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
         })?;
         let channel = build_channel(
             &endpoint,
-            Duration::from_secs(10),
+            AUTHORITY_CONNECT_TIMEOUT,
             ca_pem.as_deref(),
             None,
             None,

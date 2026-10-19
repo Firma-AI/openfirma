@@ -37,6 +37,7 @@ pub fn add_mapping_rules(
 
 pub fn issue_capability(
     cfg_dir: &Path,
+    state_dir: &Path,
     agent_id: &str,
     session_id: &str,
     actions: &[&str],
@@ -44,9 +45,14 @@ pub fn issue_capability(
     ttl_secs: u64,
 ) -> Result<PathBuf, anyhow::Error> {
     let config_path = cfg_dir.join("firma.toml");
-    let seed_path = cfg_dir.join("capability-seed.toml");
+    // The Sidecar only loads seeds from the runtime capabilities directory.
+    let capabilities_dir = state_dir.join("capabilities");
+    fs_err::create_dir_all(&capabilities_dir)?;
+    let seed_path = capabilities_dir.join("capability-seed.toml");
     let mut cmd = std::process::Command::new(crate::firma_bin());
-    cmd.arg("authority")
+    // `firma config` does not record the state directory in `firma.toml`.
+    cmd.env("FIRMA_STATE_DIR", state_dir)
+        .arg("authority")
         .args(["--config"])
         .arg(&config_path)
         .arg("issue")

@@ -1,6 +1,23 @@
 use firma_config_schema::secret_provider::SecretProviderConfig;
 use firma_core::{SecretMatcher, SecretNameSource};
-use firma_secret_provider::{IntegrationConfigError, IntegrationSpec, MatchingResolution};
+use firma_secret_provider::{
+    IntegrationConfigError, IntegrationSpec, MatchingResolution,
+    broker::BinaryNameError,
+    spec::cli::{CliIntegrationConfigError, CliIntegrationSpec, CliIntegrationSpecParams},
+};
+
+fn cli_spec(
+    binary_name: &str,
+) -> Result<CliIntegrationSpec<SecretMatcher>, CliIntegrationConfigError> {
+    CliIntegrationSpec::new(CliIntegrationSpecParams {
+        binary_name: String::from(binary_name),
+        provider_id: String::from("example"),
+        credential_env_vars: Vec::new(),
+        stripped_options: Vec::new(),
+        forbidden_options: Vec::new(),
+        matchers: Vec::new(),
+    })
+}
 
 #[test]
 fn cli_config_deserializes_and_validates() {
@@ -98,4 +115,57 @@ matchers = []
         )
     );
     insta::assert_snapshot!(error.to_string(), @"option name must not be empty");
+}
+
+#[test]
+fn cli_spec_rejects_empty_binary_name() {
+    let Err(error) = cli_spec("") else {
+        panic!("empty binary name must fail validation");
+    };
+    std::assert_matches!(
+        &error,
+        CliIntegrationConfigError::InvalidBinaryName {
+            source: BinaryNameError::Empty
+        }
+    );
+    insta::assert_snapshot!(error.to_string(), @"invalid CLI binary name: binary name must not be empty");
+}
+
+#[test]
+fn cli_config_accepts_former_readiness_probe_name() {
+    let config: SecretProviderConfig = toml::from_str(
+        r#"
+type = "cli"
+binary_name = "__firma_broker_readiness_probe__"
+provider_id = "example"
+credential_env_vars = []
+matchers = []
+"#,
+    )
+    .unwrap_or_else(|error| panic!("plain config: {error}"));
+
+    let spec = IntegrationSpec::try_from(config)
+        .unwrap_or_else(|error| panic!("former readiness name should be available: {error}"));
+    assert_eq!(
+        spec.as_cli().map(CliIntegrationSpec::binary_name),
+        Some("__firma_broker_readiness_probe__")
+    );
+}
+
+#[test]
+fn cli_spec_rejects_non_basename_binary_names() {
+    let binary_names = [".", "..", "dir/bws", r"dir\bws", "C:bws", "bws\0shim"];
+
+    for binary_name in binary_names {
+        let Err(error) = cli_spec(binary_name) else {
+            panic!("non-basename binary name must fail validation: {binary_name:?}");
+        };
+        assert_eq!(
+            error,
+            CliIntegrationConfigError::InvalidBinaryName {
+                source: BinaryNameError::NotBasename(String::from(binary_name)),
+            },
+            "unexpected error for {binary_name:?}"
+        );
+    }
 }

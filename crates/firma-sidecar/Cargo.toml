@@ -24,6 +24,7 @@ ecdsa = { workspace = true }
 elliptic-curve = { workspace = true }
 firma-audit-schema = { workspace = true }
 firma-config-schema = { workspace = true }
+firma-config-utils.workspace = true
 firma-core = { workspace = true }
 firma-fs = { workspace = true }
 firma-grpc-interceptor-proto = { workspace = true }
@@ -58,6 +59,8 @@ rustls-platform-verifier = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+strum = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, default-features = false, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { workspace = true }

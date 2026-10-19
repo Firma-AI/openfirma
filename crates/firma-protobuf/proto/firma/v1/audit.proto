@@ -13,15 +13,19 @@ import "google/protobuf/timestamp.proto";
 // enforcement decision (ALLOW, DENY, ABORT). No call enters or exits the
 // Sidecar without a corresponding ExecutionEvent record.
 //
-// The Sidecar is the sole producer. It streams events over a long-lived
-// client-streaming RPC. If the connection drops, the Sidecar buffers events
-// in a local WAL and replays them on reconnect.
+// The Sidecar is the producer. The WAL sink journals before SubmitEvent;
+// the buffered gRPC sink uses StreamEvents and rejects run evidence.
 //
-// Each event carries an ECDSA signature over all preceding fields, making
-// the audit log tamper-evident and independently verifiable.
+// The legacy ECDSA signature covers the original execution fields, not the
+// run_evidence extension. Collectors must not treat it as human attribution.
 // =============================================================================
 
 service AuditService {
+  // Evidence-aware, single-event delivery. Success acknowledges durable storage
+  // (including an idempotent replay). Clients must not fall back to StreamEvents:
+  // older collectors can silently discard fields they do not understand.
+  rpc SubmitEvent(ExecutionEvent) returns (StreamEventsResponse);
+
   // StreamEvents is a client-streaming RPC. The Sidecar opens a persistent
   // stream and pushes ExecutionEvent messages after every enforce() call.
   // The server acknowledges with a summary containing the last received
@@ -88,14 +92,21 @@ message ExecutionEvent {
   // anchor of the prior admitted action in this thread. Empty for the
   // first admitted action or pre-dispatch outcomes. Covered by `signature`.
   string parent_action_id = 20;
+  // Opaque per-event run evidence. Absence is unknown attribution; present but
+  // unsupported or invalid evidence must be rejected, never downgraded. The
+  // evidence format and verification are not enabled yet. The legacy ECDSA
+  // signature does not authenticate this extension.
+  optional bytes run_evidence = 21;
 }
 
-// StreamEventsResponse is returned when the client half-closes the stream.
-// It summarizes what the server received, allowing the client to verify
-// delivery completeness.
+// Delivery receipt: returned after SubmitEvent, or after the legacy stream
+// half-closes. A successful transport alone does not establish persistence.
 message StreamEventsResponse {
   // Event ID of the last event the server persisted.
   string last_event_id = 1;
   // Total number of events received in this stream session.
   int64 events_received = 2;
+  // True only after storage commit. Queueing in memory is not persistence.
+  // A client reclaiming its WAL also checks count and last_event_id.
+  bool durably_persisted = 3;
 }

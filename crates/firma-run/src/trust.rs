@@ -7,6 +7,9 @@
 //! control-plane mask. Resolving it twice, from different inputs, is what let
 //! a masked certificate reach the agent as a silent fallback to the system
 //! roots instead of a launch failure.
+//!
+//! An autostarted Sidecar publishes its CA directory through the network
+//! overrides, so the fallback probes below matter only for an external one.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -152,10 +155,18 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
         }
     }
 
+    // Where a long-lived Sidecar mints its CA when `sidecar.ca.dir` names no
+    // directory. Probed ahead of the working-directory candidate because it is
+    // resolved, not guessed: it is the path `firma config` writes and the one
+    // the Sidecar defaults to.
+    let state_candidate = firma_runtime_state::RuntimeLayout::resolve(None)
+        .ok()
+        .map(|layout| layout.generated_ca_cert());
     let cwd_candidate = std::env::current_dir()
         .ok()
         .map(|cwd| cwd.join(CA_DIR_NAME).join(CA_CERT_FILE_NAME));
     let default_candidates = [
+        state_candidate,
         cwd_candidate,
         Some(PathBuf::from("/etc/firma/ca").join(CA_CERT_FILE_NAME)),
         Some(PathBuf::from("/var/lib/firma/ca").join(CA_CERT_FILE_NAME)),

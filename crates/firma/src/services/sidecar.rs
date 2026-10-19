@@ -14,8 +14,14 @@ use firma_secret_provider::{
     gateway::client::{GATEWAY_ADDR_ENV, GatewayClient},
 };
 use firma_sidecar::{
-    audit::AuditPayload, authority_client::readiness::ReadinessFlag, composio::ComposioCatalogs,
-    config, connector::ConnectorRegistry, handler, health, pipeline::EnforcementPipeline, startup,
+    audit::{AuditPayload, AuditSinkError},
+    authority_client::readiness::ReadinessFlag,
+    composio::ComposioCatalogs,
+    config,
+    connector::ConnectorRegistry,
+    handler, health,
+    pipeline::EnforcementPipeline,
+    startup,
     startup::CapabilityReloader,
 };
 #[cfg(unix)]
@@ -103,7 +109,7 @@ fn fail(msg: &str) -> ExitCode {
 /// hot-swapped into Stage 1 without a restart. Returns `None` when hot-reload is
 /// disabled. The returned guard stops the watch on drop.
 fn spawn_capability_reload(
-    runtime_layout: &RuntimeLayout,
+    runtime_layout: &firma_runtime_state::RuntimeLayout,
     config: &config::SidecarConfig,
     pipeline_runtime: &startup::PipelineRuntime,
     exit: &CancellationToken,
@@ -210,7 +216,7 @@ async fn serve(
         source = ?resolved.source,
         "config resolved"
     );
-    let config = read_config(&resolved, args.authority_connect_addr)?;
+    let config = read_config(&resolved, args.authority_connect_addr, &runtime_layout)?;
     debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
@@ -226,19 +232,20 @@ async fn serve(
     let shutdown_handler = {
         let exit = exit.clone();
         tokio::spawn(async move {
-            wait_for_shutdown(exit).await;
+            tokio::select! {
+                () = exit.cancelled() => {},
+                () = wait_for_shutdown(exit.clone()) => {},
+            }
         })
     };
 
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
     let audit_event_builder =
         startup::load_audit_event_builder(&config.audit)?.with_sandbox_id(sandbox_id);
-    let audit_sink = startup::spawn_audit_sink(
-        &config.audit,
-        audit_payload_rx,
-        audit_event_builder,
-        exit.clone(),
-    )?;
+    let audit_sink =
+        startup::spawn_audit_sink(&config, audit_payload_rx, audit_event_builder, exit.clone())?;
+    // Supervision must run while startup waits for Authority hydration too.
+    let audit_sink = tokio::spawn(supervise_audit_sink(audit_sink, exit.clone()));
 
     // Out-of-band ingest for the `firma run` audit channel (e.g. loopback
     // connections the egress guard blocks at the sandbox boundary). Bound only
@@ -248,8 +255,19 @@ async fn serve(
     let run_audit_handle = spawn_run_audit_listener(&audit_payload_tx, &exit);
 
     let pipeline_runtime = startup::build_pipeline_runtime(&runtime_layout, &config)?;
-    let authority_handle =
-        startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
+    // A restarted Sidecar must not report its predecessor's bundle as
+    // enforced before it hydrates.
+    if let Some(path) = &args.enforcement_state
+        && let Err(error) = firma_runtime_state::enforcement_state::remove(path)
+    {
+        tracing::warn!(path = %path.display(), %error, "stale enforcement state not removed");
+    }
+    let authority_handle = startup::spawn_authority_client_publishing(
+        &config,
+        &pipeline_runtime,
+        exit.clone(),
+        args.enforcement_state.clone(),
+    )?;
     let _capability_reload =
         spawn_capability_reload(&runtime_layout, &config, &pipeline_runtime, &exit)?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
@@ -266,20 +284,13 @@ async fn serve(
 
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
 
-    let report = build_startup_report(
-        resolved.config_file(),
-        &config,
-        pipeline_runtime.mapping_rules_loaded,
-        &interceptor.listen_addr,
-    );
+    let report = build_startup_report(resolved.config_file(), &config, &interceptor.listen_addr);
     startup::log_pre_ready_sequence(&report);
     emit_operator_routing_hints(&config, &interceptor.listen_addr);
 
     // Hold `ready` until Authority streams hydrate so the first
-    // wrapped-agent call cannot race the readiness gate (FIR-183).
-    // `wait_until_fully_ready` returns immediately when no Authority is
-    // configured because the pipeline pre-seeds both readiness flags as
-    // true in that mode.
+    // wrapped-agent call cannot race the readiness gate.
+    // Every production Sidecar starts with both readiness flags withheld.
     let health_readiness_mirror = if wait_for_streams_ready(&pipeline_runtime, exit.clone()).await
         == StreamReadinessOutcome::Hydrated
     {
@@ -288,6 +299,8 @@ async fn serve(
             &config.interceptor,
             &interceptor.listen_addr,
         )?;
+        let (version, ttl_seconds) = pipeline_runtime.enforced_bundle();
+        startup::log_authority_hydrated(&report, version.as_deref(), ttl_seconds);
         startup::log_ready_line();
         health::mark_ready(&health_ready);
         Some(spawn_health_readiness_mirror(
@@ -300,9 +313,10 @@ async fn serve(
     };
 
     let authority_stream_tasks = async {
-        if let Some(handle) = authority_handle {
-            let _ = tokio::join!(handle.policy_task, handle.revocation_task);
-        }
+        let _ = tokio::join!(
+            authority_handle.policy_task,
+            authority_handle.revocation_task
+        );
     };
     let local_exec_task = async {
         if let Some(handle) = local_exec_handle {
@@ -320,7 +334,7 @@ async fn serve(
             let _ = handle.await;
         }
     };
-    let _ = tokio::join!(
+    let (audit_result, ..) = tokio::join!(
         audit_sink,
         health_server,
         health_readiness_task,
@@ -332,7 +346,41 @@ async fn serve(
     );
     debug!("firma sidecar exiting");
 
-    Ok(ExitCode::SUCCESS)
+    Ok(audit_result?)
+}
+
+/// Watches the audit sink and takes the Sidecar down with it when it fails.
+///
+/// A sink returns an error only once it can no longer record events anywhere —
+/// a buffer it cannot write, for instance. Staying up past that point would
+/// keep enforcing calls while their evidence trail silently disappears, so the
+/// failure becomes a shutdown. This is the boundary that logs it; the sink
+/// propagates.
+///
+/// A sink that returns `Ok` has been cancelled and drained, which is the normal
+/// shutdown path and needs no action. That it cannot happen while the Sidecar is
+/// still serving is a property of the sink's run loop, not of this function, so
+/// the case is logged rather than assumed away: a future early `Ok` would
+/// otherwise leave the process serving unaudited and silent.
+async fn supervise_audit_sink(
+    sink: JoinHandle<Result<(), AuditSinkError>>,
+    exit: CancellationToken,
+) -> ExitCode {
+    let failure = match sink.await {
+        Ok(Ok(())) => {
+            debug!("audit sink finished; no further events will be recorded");
+            return ExitCode::SUCCESS;
+        }
+        Ok(Err(err)) => format!("{err}"),
+        Err(join_err) => format!("audit sink task terminated abnormally: {join_err}"),
+    };
+
+    tracing::error!(
+        error = %failure,
+        "audit sink stopped recording events; shutting the sidecar down"
+    );
+    exit.cancel();
+    ExitCode::FAILURE
 }
 
 fn write_startup_report(
@@ -364,7 +412,7 @@ fn write_startup_report(
 }
 
 fn propagated_sandbox_id() -> anyhow::Result<Option<firma_identifiers::SandboxId>> {
-    // Per-run identity stamped on every emitted audit event (FIR-185).
+    // Per-run identity stamped on every emitted audit event.
     // Set by `firma run`'s prepared Sidecar command; empty in daemon mode.
     let Some(value) = std::env::var_os("FIRMA_RUN_SANDBOX_ID") else {
         return Ok(None);
@@ -443,7 +491,9 @@ fn spawn_health_readiness_mirror(
         }
         let mut updates = readiness.subscribe();
         loop {
-            if updates.borrow().fully_ready() {
+            // Serving, not just hydrated: an expired bundle denies every
+            // request, so probes must stop routing traffic here.
+            if updates.borrow().serving() {
                 health::mark_ready(&ready);
             } else {
                 health::mark_not_ready(&ready);
@@ -468,27 +518,16 @@ fn spawn_health_readiness_mirror(
 fn build_startup_report<'a>(
     config_path: &'a Path,
     config: &'a config::SidecarConfig,
-    mapping_rules: usize,
     interceptor_addr: &str,
 ) -> startup::StartupReport<'a> {
-    let (policy_bundle_version, policy_count) =
-        startup::compute_policy_bundle_version(&config.policy.dir)
-            .unwrap_or_else(|_| ("00000000".to_string(), 0));
-    let authority_endpoint = config
-        .authority
-        .url
-        .clone()
-        .unwrap_or_else(|| "(disabled)".to_string());
-
     startup::StartupReport {
         config_path,
-        mapping_rules,
-        policy_bundle_version,
-        policy_count,
-        authority_endpoint,
+        authority_endpoint: config.authority.url.clone(),
         connector_hosts: config.connector.hosts.len(),
-        connector_default_timeout_ms: u64::try_from(config.connector.default_timeout.as_millis())
-            .unwrap_or(u64::MAX),
+        connector_default_timeout_ms: u64::try_from(
+            config.connector.default_timeout.duration().as_millis(),
+        )
+        .unwrap_or(u64::MAX),
         interceptor_addr: interceptor_addr.to_string(),
     }
 }
@@ -520,6 +559,7 @@ fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr:
 fn read_config(
     resolved: &firma_config_loader::ResolvedConfig,
     authority_connect_addr: Option<std::net::SocketAddr>,
+    state: &RuntimeLayout,
 ) -> anyhow::Result<config::SidecarConfig> {
     let mut schema = resolved
         .config
@@ -528,7 +568,7 @@ fn read_config(
     if let Some(connect_addr) = authority_connect_addr {
         schema.authority.connect_addr = Some(connect_addr);
     }
-    let mut config = config::SidecarConfig::try_from(schema)
+    let mut config = config::SidecarConfig::resolve(schema, state)
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
     config.rebase_defaults(&resolved.config_dir());
     Ok(config)
@@ -545,6 +585,68 @@ mod tests {
 
     use super::*;
 
+    /// A config with nothing configured, resolved against a state directory
+    /// these cases never read from.
+    fn default_config() -> config::SidecarConfig {
+        let mut schema = firma_config_schema::sidecar::SidecarConfig::default();
+        schema.authority.url = Some("http://localhost:50051".into());
+        config::SidecarConfig::resolve(schema, &RuntimeLayout::from_root("/state"))
+            .expect("a configured endpoint is valid")
+    }
+
+    /// The sink reports a failure by returning it, and the only thing that
+    /// turns that into a shutdown is this supervisor. A Sidecar that keeps
+    /// enforcing calls it can no longer audit is the state the fail-closed
+    /// choice exists to prevent.
+    #[tokio::test]
+    async fn a_failed_audit_sink_cancels_the_sidecar() {
+        let exit = CancellationToken::new();
+        let sink = tokio::spawn(async {
+            Err(AuditSinkError::ServerError(
+                "buffer is unwritable".to_owned(),
+            ))
+        });
+
+        supervise_audit_sink(sink, exit.clone()).await;
+
+        assert!(
+            exit.is_cancelled(),
+            "a sink that can no longer record events must take the Sidecar down"
+        );
+    }
+
+    /// A panicking sink records nothing either, so it has to end the same way
+    /// a returned error does.
+    #[tokio::test]
+    async fn an_audit_sink_that_panics_cancels_the_sidecar() {
+        let exit = CancellationToken::new();
+        let sink = tokio::spawn(async {
+            panic!("audit sink panicked");
+        });
+
+        supervise_audit_sink(sink, exit.clone()).await;
+
+        assert!(
+            exit.is_cancelled(),
+            "a sink that panicked must take the Sidecar down"
+        );
+    }
+
+    /// The ordinary shutdown path: the sink was cancelled and drained, and the
+    /// supervisor must not read that as a failure.
+    #[tokio::test]
+    async fn a_drained_audit_sink_leaves_the_sidecar_running() {
+        let exit = CancellationToken::new();
+        let sink = tokio::spawn(async { Ok(()) });
+
+        supervise_audit_sink(sink, exit.clone()).await;
+
+        assert!(
+            !exit.is_cancelled(),
+            "a sink that finished its drain is not a failure"
+        );
+    }
+
     #[test]
     fn authority_connect_addr_cli_override_takes_precedence_over_config() {
         let directory = tempfile::tempdir().expect("create config directory");
@@ -560,7 +662,8 @@ mod tests {
             .expect("explicit config exists");
         let cli_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 42000);
 
-        let config = read_config(&resolved, Some(cli_address)).expect("read config");
+        let state = RuntimeLayout::from_root(directory.path());
+        let config = read_config(&resolved, Some(cli_address), &state).expect("read config");
 
         assert_eq!(config.authority.connect_addr, Some(cli_address));
     }
@@ -570,6 +673,7 @@ mod tests {
         let ready = health::readiness_flag();
         let (readiness, _view) = ReadinessFlag::new(ReadinessState {
             policy_bundle_ready: true,
+            policy_bundle_fresh: true,
             revocation_ready: true,
         });
         let readiness = Arc::new(readiness);
@@ -618,59 +722,16 @@ mod tests {
     }
 
     #[test]
-    fn build_startup_report_falls_back_when_policy_dir_unreadable_and_authority_disabled() {
-        let dir = tempfile::tempdir().unwrap();
-        // A regular file, not a directory: `read_dir` fails with a real IO
-        // error (not `NotFound`, which `compute_policy_bundle_version`
-        // already handles as "no policies"), so the report must fall back
-        // to the "00000000"/0 defaults rather than propagating the error.
-        let not_a_dir = dir.path().join("not-a-directory");
-        std::fs::write(&not_a_dir, b"oops").unwrap();
-        let mut cfg = config::SidecarConfig::default();
-        cfg.policy.dir = not_a_dir;
-        cfg.authority.url = None;
+    fn build_startup_report_uses_authority_url_and_connector_settings() {
+        let mut cfg = default_config();
+        cfg.authority.url = "https://auth.test:9443".to_string();
+        cfg.connector.default_timeout =
+            firma_config_utils::NonZeroDuration::from_static(Duration::from_secs(5));
 
         let config_path = Path::new("firma.toml");
-        let report = build_startup_report(config_path, &cfg, 3, "127.0.0.1:9000");
-
-        assert_eq!(report.policy_bundle_version, "00000000");
-        assert_eq!(report.policy_count, 0);
-        assert_eq!(report.authority_endpoint, "(disabled)");
-        assert_eq!(report.mapping_rules, 3);
-        assert_eq!(report.connector_hosts, cfg.connector.hosts.len());
-        assert_eq!(
-            report.connector_default_timeout_ms,
-            u64::try_from(cfg.connector.default_timeout.as_millis()).unwrap_or(u64::MAX)
-        );
-        assert_eq!(report.interceptor_addr, "127.0.0.1:9000");
-    }
-
-    #[test]
-    fn build_startup_report_uses_authority_url_and_computed_policy_bundle() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("a.cedar"),
-            b"permit(principal, action, resource);",
-        )
-        .unwrap();
-
-        let mut cfg = config::SidecarConfig::default();
-        cfg.policy.dir = dir.path().to_path_buf();
-        cfg.authority.url = Some("https://auth.test:9443".to_string());
-        cfg.connector.default_timeout = std::time::Duration::from_secs(5);
-
-        let config_path = Path::new("firma.toml");
-        let report = build_startup_report(config_path, &cfg, 1, "127.0.0.1:9001");
+        let report = build_startup_report(config_path, &cfg, "127.0.0.1:9001");
 
         assert_eq!(report.authority_endpoint, "https://auth.test:9443");
-        assert_eq!(report.policy_count, 1);
-        assert_eq!(report.policy_bundle_version.len(), 8);
-        assert!(
-            report
-                .policy_bundle_version
-                .chars()
-                .all(|c| c.is_ascii_hexdigit())
-        );
         assert_eq!(report.connector_hosts, cfg.connector.hosts.len());
         assert_eq!(report.connector_default_timeout_ms, 5_000);
     }

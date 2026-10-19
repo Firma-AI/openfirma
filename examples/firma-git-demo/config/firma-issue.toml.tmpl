@@ -1,6 +1,7 @@
 [authority]
 listen_addr = "{{AUTHORITY_ADDR}}"
 policy_dir = "issuance-policies/"
+mapping_rules_paths = ["{{ROOT}}/crates/firma-sidecar/config/mappings/github.toml"]
 revocation_file = "revocations.txt"
 key_file = "firma-authority.key"
 tls_cert_path = "authority.crt"

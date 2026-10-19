@@ -5,17 +5,36 @@ use firma_core::SecretMatcher;
 use serde::Serialize;
 
 use super::{MatcherRule, MatchingResolution, NonEmptyVec};
+use crate::broker::{BinaryName, BinaryNameError};
 
 /// A command-classification rule for a CLI secret provider.
 pub type CliMatcherRule<Matcher> = MatcherRule<CommandAndMatcher<Matcher>, CommandPattern>;
 
+/// Named inputs for constructing a validated [`CliIntegrationSpec`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliIntegrationSpecParams<Matcher> {
+    /// Executable basename used to select this integration.
+    pub binary_name: String,
+    /// Stable identifier recorded for secrets from this integration.
+    pub provider_id: String,
+    /// Environment variables forwarded to authenticate the provider CLI.
+    pub credential_env_vars: Vec<String>,
+    /// Integration-wide options ignored while identifying command words.
+    pub stripped_options: Vec<FlagSpec>,
+    /// Options that make an invocation unsafe.
+    pub forbidden_options: Vec<FlagSpec>,
+    /// Rules that classify invocations and configure secret extraction.
+    pub matchers: Vec<CliMatcherRule<Matcher>>,
+}
+
 /// A CLI integration configuration that has passed cross-field validation.
 ///
-/// Cross-field checks (empty names, `allow_attached_value` without
-/// `takes_value`, conflicting [`FlagSpec`] definitions across
-/// `stripped_options` / `forbidden_options` / per-command
-/// `stripped_options`) are enforced by [`Self::new`] and the
-/// `TryFrom<CliSecretProviderConfig>` impl before this type is constructed.
+/// The portable executable basename invariant, plus cross-field checks (empty
+/// names, `allow_attached_value`
+/// without `takes_value`, conflicting [`FlagSpec`] definitions across
+/// `stripped_options` / `forbidden_options` / per-command `stripped_options`),
+/// are enforced by [`Self::new`] and the `TryFrom<CliSecretProviderConfig>` impl
+/// before this type is constructed.
 /// Direct field construction outside this crate is not permitted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CliIntegrationSpec<Matcher> {
@@ -53,6 +72,13 @@ pub struct CliIntegrationSpec<Matcher> {
 /// Error returned when validating a [`CliSecretProviderConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CliIntegrationConfigError {
+    /// The executable name is not one portable path component.
+    #[error("invalid CLI binary name: {source}")]
+    InvalidBinaryName {
+        /// Portable basename validation failure.
+        #[source]
+        source: BinaryNameError,
+    },
     /// An option has no spelling.
     #[error("option name must not be empty")]
     EmptyOptionName,
@@ -82,14 +108,14 @@ impl TryFrom<CliSecretProviderConfig> for CliIntegrationSpec<SecretMatcher> {
             .into_iter()
             .map(MatcherRule::try_from)
             .collect::<Result<Vec<_>, _>>()?;
-        Self::new(
-            config.binary_name,
-            config.provider_id,
-            config.credential_env_vars,
-            config.stripped_options,
-            config.forbidden_options,
+        Self::new(CliIntegrationSpecParams {
+            binary_name: config.binary_name,
+            provider_id: config.provider_id,
+            credential_env_vars: config.credential_env_vars,
+            stripped_options: config.stripped_options,
+            forbidden_options: config.forbidden_options,
             matchers,
-        )
+        })
     }
 }
 
@@ -150,21 +176,27 @@ fn validate_consistent_options(options: &[FlagSpec]) -> Result<(), CliIntegratio
 impl<Matcher> CliIntegrationSpec<Matcher> {
     /// Validated constructor.
     ///
-    /// Enforces the same cross-field checks as `TryFrom<CliSecretProviderConfig>`:
-    /// empty option names, `allow_attached_value` without `takes_value`, and
-    /// conflicting [`FlagSpec`] definitions.
+    /// Enforces the same validation as `TryFrom<CliSecretProviderConfig>`: a
+    /// portable, non-reserved executable basename, empty option names,
+    /// `allow_attached_value` without `takes_value`, and conflicting
+    /// [`FlagSpec`] definitions.
     ///
     /// # Errors
     ///
-    /// Returns [`CliIntegrationConfigError`] when cross-field validation fails.
+    /// Returns [`CliIntegrationConfigError`] when validation fails.
     pub fn new(
-        binary_name: String,
-        provider_id: String,
-        credential_env_vars: Vec<String>,
-        stripped_options: Vec<FlagSpec>,
-        forbidden_options: Vec<FlagSpec>,
-        matchers: Vec<CliMatcherRule<Matcher>>,
+        params: CliIntegrationSpecParams<Matcher>,
     ) -> Result<Self, CliIntegrationConfigError> {
+        let CliIntegrationSpecParams {
+            binary_name,
+            provider_id,
+            credential_env_vars,
+            stripped_options,
+            forbidden_options,
+            matchers,
+        } = params;
+        BinaryName::new(binary_name.as_str())
+            .map_err(|source| CliIntegrationConfigError::InvalidBinaryName { source })?;
         validate_consistent_options(&stripped_options)?;
         validate_consistent_options(&forbidden_options)?;
         let command_options = matchers

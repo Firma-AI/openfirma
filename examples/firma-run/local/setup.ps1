@@ -38,7 +38,7 @@ foreach ($arg in $args) {
 
 $sidecarSrc = if ($setupMode -eq "observability") { $sidecarSrcObservability } else { $sidecarSrcDefault }
 
-New-Item -ItemType Directory -Path $localDir -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $localDir "capabilities") -Force | Out-Null
 Write-Ok "ensured local runtime directory: $localDir"
 
 if (-not (Test-Path -Path $mappingDst -PathType Leaf)) {
@@ -69,11 +69,14 @@ if (-not (Test-Path -Path $auditKeyDst -PathType Leaf)) {
 
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "1) Start sidecar:"
-Write-Host "   cargo run -p firma -- sidecar -c .local/firma.toml"
+Write-Host "1) Complete the local Authority configuration and generate trust material:"
+Write-Host "   cargo run -p firma -- config --yes --mode agent-local --profile codex --agent-id agt_01j0000000e008000000000001 --output-dir .local"
 Write-Host ""
-Write-Host "2) In a new terminal, run Codex through the wrapper:"
-Write-Host "   cargo run -p firma -- run --profile codex -- codex"
+Write-Host "2) Start the Authority (the Sidecar requires its streams):"
+Write-Host "   cargo run -p firma -- authority --config .local/firma.toml"
 Write-Host ""
-Write-Host "3) Optional structural E2E smoke (Linux-only):"
+Write-Host "3) In a new terminal, run Codex with a per-session Sidecar:"
+Write-Host "   cargo run -p firma -- run --config .local/firma.toml --profile codex --authority https://127.0.0.1:50051 --sidecar local -- codex"
+Write-Host ""
+Write-Host "4) Optional structural E2E smoke (Linux-only):"
 Write-Host "   examples/firma-run/e2e/run.sh"

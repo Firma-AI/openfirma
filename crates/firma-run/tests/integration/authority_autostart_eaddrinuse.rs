@@ -33,7 +33,7 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
 
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
-    std::fs::write(&cfg, format!("[authority]\nlisten_addr = \"{address}\"\n")).unwrap();
+    std::fs::write(&cfg, format!("[authority]\nmapping_rules_paths = ['mapping-rules.toml']\nlisten_addr = \"{address}\"\n")).unwrap();
     let identity = firma_run::identity::RunIdentity::new(*super::helper::agent_id(), "test");
     let flags = AutostartFlags::default();
     let firma_exe = PathBuf::from("/bin/false");
@@ -49,6 +49,7 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
             firma_exe: &firma_exe,
             capability_public_key_path: None,
             working_dir: tmp.path(),
+            state_layout: &firma_runtime_state::RuntimeLayout::from_root(tmp.path().join("state")),
         },
         &mut prompt,
     );

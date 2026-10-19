@@ -1,18 +1,18 @@
 //! Enforcement pipeline construction.
 //!
-//! Reads the mapping rules file, assembles the normalizer, both
+//! Assembles an initially protected empty normalizer, both
 //! enforcement stages, and the credential injector, and wraps them in
 //! an [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline).
 
 use std::sync::Arc;
 
-use firma_config_schema::sidecar::{InterceptorMode, SidecarMode};
 use firma_core::{RevocationStore, TokenVerifier};
 
 use crate::authority_client::readiness::{ReadinessFlag, ReadinessState};
-use crate::authority_client::swappable_policy::SwappablePolicyEvaluation;
+use crate::authority_client::swappable_policy::{RuntimeSnapshot, SwappablePolicyEvaluation};
 use crate::config;
 use crate::enforcement::capability_validation::CapabilityMapHandle;
+use crate::enforcement::constraint_enforcement::PolicyEvaluation as _;
 use crate::enforcement::revocation::BloomLruRevocationStore;
 use crate::pipeline;
 use crate::startup::capability::{build_token_verifier, load_capability_map};
@@ -34,53 +34,17 @@ pub struct PipelineRuntime {
     /// Stage 1 token verifier, shared with the seed-reload task so re-minted
     /// tokens are re-verified with the same verifier the hot path uses.
     pub token_verifier: Arc<dyn TokenVerifier + Send + Sync>,
-    /// Total mapping rule count loaded across primary + extra files.
-    /// Surfaced for the standalone-startup log contract (line 2).
-    pub mapping_rules_loaded: usize,
 }
 
-/// Load and merge mapping rule files from `config`.
-fn load_mapping_rules(config: &config::SidecarConfig) -> anyhow::Result<config::MappingRulesFile> {
-    let mut all_rules: Vec<config::MappingRuleConfig> = Vec::new();
-
-    let primary_path = &config.enforcement.mapping.rules_path;
-    let primary_content = std::fs::read_to_string(primary_path).map_err(|e| {
-        anyhow::anyhow!(
-            "failed to read mapping rules from '{}': {e}",
-            primary_path.display()
-        )
-    })?;
-    let primary_file: config::MappingRulesFile = toml::from_str(&primary_content).map_err(|e| {
-        anyhow::anyhow!(
-            "failed to parse mapping rules '{}': {e}",
-            primary_path.display()
-        )
-    })?;
-    primary_file
-        .validate()
-        .map_err(|e| anyhow::anyhow!("invalid mapping rules '{}': {e}", primary_path.display()))?;
-    all_rules.extend(primary_file.rules);
-
-    for extra_path in &config.enforcement.mapping.rules_paths {
-        let extra_content = std::fs::read_to_string(extra_path).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to read mapping rules from '{}': {e}",
-                extra_path.display()
-            )
-        })?;
-        let extra_file: config::MappingRulesFile = toml::from_str(&extra_content).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to parse mapping rules '{}': {e}",
-                extra_path.display()
-            )
-        })?;
-        extra_file.validate().map_err(|e| {
-            anyhow::anyhow!("invalid mapping rules '{}': {e}", extra_path.display())
-        })?;
-        all_rules.extend(extra_file.rules);
+impl PipelineRuntime {
+    /// Version and TTL of the currently enforced Authority bundle.
+    ///
+    /// The version is `None` until the first Authority bundle is accepted.
+    #[must_use]
+    pub fn enforced_bundle(&self) -> (Option<String>, u32) {
+        let snapshot = self.swappable_policy.load();
+        (snapshot.version(), snapshot.ttl_seconds())
     }
-
-    Ok(config::MappingRulesFile { rules: all_rules })
 }
 
 /// Build the session-state store from the configured backend and capacity.
@@ -126,29 +90,6 @@ fn build_session_state_store(
     }
 }
 
-/// Name of the environment variable that must be set to `"1"` to honor a
-/// configured `monitor` mode. Prevents an accidental enforcement bypass when
-/// `mode = "monitor"` is left set in a production config.
-const MONITOR_MODE_ENV: &str = "FIRMA_ALLOW_MONITOR_MODE";
-
-/// Resolve the effective enforcement mode, gating `monitor` behind an
-/// explicit env-var opt-in.
-///
-/// Monitor mode is a silent enforcement bypass (every DENY → ALLOW). Requiring
-/// `FIRMA_ALLOW_MONITOR_MODE=1` ensures a dev config that leaves
-/// `mode = "monitor"` set cannot accidentally disable enforcement in
-/// production. Returns [`SidecarMode::Enforce`] when monitor mode is
-/// requested without the opt-in; otherwise returns the configured mode
-/// unchanged.
-#[must_use]
-fn resolve_effective_mode(configured: SidecarMode, monitor_env_value: Option<&str>) -> SidecarMode {
-    if configured == SidecarMode::Monitor && monitor_env_value != Some("1") {
-        SidecarMode::Enforce
-    } else {
-        configured
-    }
-}
-
 /// Return whether any mapping rule host would match a protected Composio
 /// host at runtime.
 ///
@@ -160,9 +101,9 @@ fn resolve_effective_mode(configured: SidecarMode, monitor_env_value: Option<&st
 /// Composio traffic can never evade this check through its spelling. A
 /// catch-all `*` rule counts: it does govern Composio traffic.
 #[must_use]
-pub fn mapping_references_composio_hosts(rules: &config::MappingRulesFile) -> bool {
-    rules.rules.iter().any(|rule| {
-        let pattern = canonical_rule_host_pattern(&rule.host);
+pub fn mapping_hosts_reference_composio<'a>(hosts: impl IntoIterator<Item = &'a str>) -> bool {
+    hosts.into_iter().any(|host| {
+        let pattern = canonical_rule_host_pattern(host);
         crate::composio::PROTECTED_HOSTS
             .iter()
             .any(|host| crate::normalizer::mapping::glob_match(&pattern, host))
@@ -190,28 +131,6 @@ fn canonical_rule_host_pattern(host: &str) -> String {
     }
 }
 
-/// Warn when mapping rules opt into Composio governance but the HTTPS MITM
-/// configuration cannot decode traffic to the protected Composio hosts.
-///
-/// The pinned catalogs load unconditionally, yet the decoder only sees
-/// requests the proxy terminates. A deployment whose mapping rules would
-/// match the Composio hosts (including through wildcards and catch-alls)
-/// intends to govern that traffic, so every coverage gap is surfaced at
-/// startup instead of silently degrading to opaque tunnels. Deployments
-/// whose rules cannot match those hosts stay quiet.
-fn warn_on_composio_mitm_gaps(config: &config::SidecarConfig, rules: &config::MappingRulesFile) {
-    if config.interceptor.mode != InterceptorMode::HttpProxy
-        || !mapping_references_composio_hosts(rules)
-    {
-        return;
-    }
-    for warning in
-        crate::startup::interceptor::composio_mitm_coverage_warnings(&config.interceptor.https_mitm)
-    {
-        tracing::warn!("{warning}");
-    }
-}
-
 /// Build the enforcement pipeline plus stream-client shared state.
 ///
 /// # Errors
@@ -221,17 +140,8 @@ pub fn build_pipeline_runtime(
     runtime_layout: &firma_runtime_state::RuntimeLayout,
     config: &config::SidecarConfig,
 ) -> anyhow::Result<PipelineRuntime> {
-    let merged_file = load_mapping_rules(config)?;
-    let mapping_rules_loaded = merged_file.rule_count();
-    warn_on_composio_mitm_gaps(config, &merged_file);
-
-    let registry = pipeline::ActionClassRegistry::v0_1();
-    let table = pipeline::MappingTable::from_config(
-        &merged_file,
-        &registry,
-        config.enforcement.mapping.default_protected,
-    )
-    .map_err(|e| anyhow::anyhow!("failed to build mapping table: {e}"))?;
+    config.authority.target()?;
+    let table = pipeline::MappingTable::empty_protected();
 
     let normalizer = pipeline::IntentNormalizer::with_custom_query_params(
         table,
@@ -248,11 +158,10 @@ pub fn build_pipeline_runtime(
     tracing::debug!("Stage 1 using configured capability seed and authority public key");
     let token_verifier: Arc<dyn TokenVerifier + Send + Sync> =
         build_token_verifier(config.authority.public_key_path.as_deref())?.into();
-    let capabilities_dir = runtime_layout.capabilities_dir();
     let capability_map = load_capability_map(
         &config.capability_seed,
         token_verifier.as_ref(),
-        &capabilities_dir,
+        &runtime_layout.capabilities_dir(),
     )?;
 
     // Shared handle: the reload task swaps in a fresh map on seed-file changes.
@@ -261,50 +170,25 @@ pub fn build_pipeline_runtime(
         capability_handle.clone(),
         Arc::clone(&token_verifier),
         Arc::clone(&revocation_store_dyn),
-        config
-            .enforcement
-            .capability_validation
-            .clock_skew_tolerance,
-        config.tenancy.mode,
     );
 
     let initial_policy: Box<dyn pipeline::PolicyEvaluation + Send + Sync> =
         Box::new(crate::authority_client::swappable_policy::DenyAllPolicyEvaluation);
-    let swappable_policy = Arc::new(SwappablePolicyEvaluation::new(initial_policy));
+    let swappable_policy = Arc::new(SwappablePolicyEvaluation::from_snapshot(
+        RuntimeSnapshot::new(normalizer.clone(), initial_policy.into(), 0, None),
+    ));
     let policy_for_stage: Arc<dyn pipeline::PolicyEvaluation + Send + Sync> =
         Arc::clone(&swappable_policy) as Arc<dyn pipeline::PolicyEvaluation + Send + Sync>;
     let constraint_enforcer = pipeline::ConstraintEnforcer::new(policy_for_stage);
 
     let credential_injector = build_credential_injector(&config.credentials)?;
 
-    let initial_readiness = if config.authority.url.is_some() {
-        ReadinessState::default()
-    } else {
-        ReadinessState {
-            policy_bundle_ready: true,
-            revocation_ready: true,
-        }
-    };
+    let initial_readiness = ReadinessState::default();
     let (readiness, readiness_view) = ReadinessFlag::new(initial_readiness);
     let readiness = Arc::new(readiness);
 
     let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
         build_session_state_store(runtime_layout, config)?;
-
-    let monitor_env_value = std::env::var(MONITOR_MODE_ENV).ok();
-    let effective_mode = resolve_effective_mode(config.mode, monitor_env_value.as_deref());
-    if effective_mode == SidecarMode::Monitor {
-        tracing::warn!(
-            "MONITOR MODE ACTIVE — enforcement is observing only; all calls \
-             are allowed through. Never use in production."
-        );
-    } else if config.mode == SidecarMode::Monitor {
-        tracing::error!(
-            "monitor mode requested via config but {MONITOR_MODE_ENV} is not set \
-             to '1'; downgrading to enforce mode for safety. Set \
-             {MONITOR_MODE_ENV}=1 to honor monitor mode."
-        );
-    }
 
     let pipeline = pipeline::EnforcementPipeline::new(pipeline::PipelineArgs {
         normalizer,
@@ -314,7 +198,7 @@ pub fn build_pipeline_runtime(
         session_state_store,
     })
     .with_readiness(readiness_view)
-    .with_mode(effective_mode);
+    .with_runtime_snapshot(Arc::clone(&swappable_policy));
     tracing::debug!("enforcement pipeline initialized");
 
     Ok(PipelineRuntime {
@@ -324,56 +208,5 @@ pub fn build_pipeline_runtime(
         readiness,
         capability_handle,
         token_verifier,
-        mapping_rules_loaded,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn enforce_mode_is_unchanged_without_env_opt_in() {
-        assert_eq!(
-            resolve_effective_mode(SidecarMode::Enforce, None),
-            SidecarMode::Enforce
-        );
-    }
-
-    #[test]
-    fn monitor_mode_downgrades_without_env_opt_in() {
-        assert_eq!(
-            resolve_effective_mode(SidecarMode::Monitor, None),
-            SidecarMode::Enforce
-        );
-    }
-
-    #[test]
-    fn monitor_mode_downgrades_with_wrong_env_value() {
-        assert_eq!(
-            resolve_effective_mode(SidecarMode::Monitor, Some("0")),
-            SidecarMode::Enforce
-        );
-        assert_eq!(
-            resolve_effective_mode(SidecarMode::Monitor, Some("true")),
-            SidecarMode::Enforce
-        );
-        assert_eq!(
-            resolve_effective_mode(SidecarMode::Monitor, Some("")),
-            SidecarMode::Enforce
-        );
-    }
-
-    #[test]
-    fn monitor_mode_honored_only_with_explicit_opt_in() {
-        assert_eq!(
-            resolve_effective_mode(SidecarMode::Monitor, Some("1")),
-            SidecarMode::Monitor
-        );
-        // Enforce mode is never upgraded to monitor regardless of the env var.
-        assert_eq!(
-            resolve_effective_mode(SidecarMode::Enforce, Some("1")),
-            SidecarMode::Enforce
-        );
-    }
 }

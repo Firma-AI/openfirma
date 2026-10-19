@@ -1,7 +1,10 @@
 //! Built-in agent profiles shared across `firma-run` and the `firma` CLI.
 
+use serde::{Deserialize, Serialize};
+
 /// The set of built-in agent profiles `firma run` recognises.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum AgentProfile {
     /// Anthropic Claude Code CLI.
@@ -61,13 +64,13 @@ impl AgentProfile {
     pub fn description(self) -> &'static str {
         match self {
             Self::Generic => "general-purpose sandbox, no agent-specific defaults",
-            Self::Codex => "OpenAI Codex CLI — sets up OpenAI mapping by default",
-            Self::ClaudeCode => "Anthropic Claude Code — sets up Anthropic mapping by default",
+            Self::Codex => "OpenAI Codex CLI — local mappings default to OpenAI and GitHub",
+            Self::ClaudeCode => "Anthropic Claude Code — local mappings default to Anthropic",
             Self::Copilot => {
-                "GitHub Copilot CLI — sets up Copilot mapping and github MITM bypass by default"
+                "GitHub Copilot CLI — local mappings default to Copilot with GitHub MITM bypass"
             }
             Self::Vscode => {
-                "Visual Studio Code — sets up VS Code, marketplace, account, and GitHub mapping by default"
+                "Visual Studio Code — local mappings default to VS Code services and accounts"
             }
         }
     }

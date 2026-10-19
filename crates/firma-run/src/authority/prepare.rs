@@ -7,19 +7,12 @@ use std::process::{Command, Stdio};
 use firma_authority::{AuthorityConfig, AuthorityConfigBuilder};
 use firma_config_schema::authority as authority_schema;
 use firma_identifiers::{AgentId, SandboxId};
+use firma_runtime_state::RuntimeLayout;
 
 use crate::error::RunError;
 
 const LOOPBACK_EPHEMERAL: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0));
-const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r"// Local autostart profile for `firma run`.
-//
-// Governs token *issuance* only. Runtime enforcement is handled by the
-// sidecar's Cedar policy bundle (dev.cedar). All registered action classes
-// are permitted here so the sidecar can classify and enforce without the
-// Authority becoming the bottleneck for local dev.
-permit(principal, action, resource);
-";
 
 /// Files owned by one locally autostarted Authority instance.
 struct AuthorityAutostartLayout {
@@ -127,8 +120,12 @@ pub struct PrepareRequest<'a> {
     pub session_id: &'a str,
     pub marker_dir: PathBuf,
     pub profile_name: &'a str,
+    pub execution_profile: firma_config_loader::AgentProfile,
     pub firma_exe: PathBuf,
     pub user_config_path: Option<PathBuf>,
+    /// Runtime layout the caller resolved, used for the artifact paths a
+    /// persisted `[authority]` section leaves unset.
+    pub state: &'a RuntimeLayout,
 }
 
 /// Validate and materialize everything needed to launch a local Authority.
@@ -146,17 +143,25 @@ pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunE
     let pid_path = layout.pid();
     let metadata_path = layout.metadata();
 
-    let authority_config = if let Some(ref user_config) = req.user_config_path {
-        persisted_authority_config(user_config)?
+    let persisted = if let Some(ref user_config) = req.user_config_path {
+        persisted_authority_config(user_config, req.state)?
     } else {
-        ephemeral_authority_config(req, &layout)?
+        None
+    };
+    let authority_config = match persisted {
+        Some(config) => config,
+        None => ephemeral_authority_config(req, &layout)?,
     };
     let pub_key_path = authority_config.key_file().with_extension("pub");
     // Serialize the schema (wire) form, not the validated config: the schema
     // owns the stable TOML keys the child process reads back.
-    let authority_schema = authority_config
+    let mut authority_schema = authority_config
         .to_schema()
         .map_err(|error| RunError::Internal(format!("invalid synthetic config: {error}")))?;
+    crate::authority::freeze::freeze_mapping_inputs(
+        &mut authority_schema,
+        &req.marker_dir.join("mapping-inputs"),
+    )?;
     let inner = toml::to_string_pretty(&authority_schema).map_err(|error| {
         RunError::Internal(format!("invalid synthetic authority config: {error}"))
     })?;
@@ -168,7 +173,10 @@ pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunE
     let child_environment = std::env::vars_os()
         .filter(|(key, _)| !key.to_string_lossy().starts_with("FIRMA_AUTHORITY_"));
     command
-        .args(["authority", "--config"])
+        // `--no-tls` survives the process boundary: the synthesized section
+        // below names no TLS paths, and the child would otherwise re-resolve the
+        // host's material and serve TLS to a client dialling `http://`.
+        .args(["authority", "--no-tls", "--config"])
         .arg(&authority_toml)
         .env_clear()
         .envs(child_environment)
@@ -192,24 +200,39 @@ pub fn prepare(req: &PrepareRequest<'_>) -> Result<PreparedAuthorityLaunch, RunE
     })
 }
 
-fn persisted_authority_config(user_config: &Path) -> Result<AuthorityConfig, RunError> {
+fn persisted_authority_config(
+    user_config: &Path,
+    state: &RuntimeLayout,
+) -> Result<Option<AuthorityConfig>, RunError> {
     let config_dir = user_config.parent().unwrap_or_else(|| Path::new("."));
-    let file = firma_config_loader::FirmaConfig::load(user_config)
-        .map_err(|error| RunError::Internal(format!("load {}: {error}", user_config.display())))?;
-    let schema = file
-        .section::<firma_config_schema::authority::AuthorityConfig>("authority")
-        .map_err(|error| RunError::Internal(format!("parse authority config: {error}")))?;
+    let file = firma_config_loader::FirmaConfig::load(user_config).map_err(|error| {
+        RunError::ConfigParse {
+            path: user_config.to_path_buf(),
+            reason: error.to_string(),
+        }
+    })?;
+    let Some(schema) = file
+        .optional_section::<firma_config_schema::authority::AuthorityConfig>("authority")
+        .map_err(|error| RunError::ConfigParse {
+            path: user_config.to_path_buf(),
+            reason: error.to_string(),
+        })?
+    else {
+        return Ok(None);
+    };
     // Build via the Authority's own builder: rebase paths, then force the
     // autostart overrides (loopback listener, no TLS) on the config, then
     // validate on build.
-    let config = AuthorityConfigBuilder::new(schema)
+    let config = AuthorityConfigBuilder::new(schema, state)
         .rebase_defaults(config_dir)
         .without_tls()
         .listen_addr(LOOPBACK_EPHEMERAL.to_string())
         .build()
-        .map_err(|error| RunError::Internal(format!("invalid authority config: {error}")))?;
+        .map_err(|error| {
+            RunError::ConfigValidation(format!("invalid authority config: {error}"))
+        })?;
     ensure_authority_key(config.key_file())?;
-    Ok(config)
+    Ok(Some(config))
 }
 
 fn ensure_authority_key(key_path: &Path) -> Result<(), RunError> {
@@ -239,19 +262,21 @@ fn ephemeral_authority_config(
     let cedar_path = layout.policy(req.profile_name);
     let key_path = layout.private_key();
     let revocation_file = layout.revocations();
+    let primary = {
+        let path = layout.root.join("mapping-rules.toml");
+        std::fs::write(
+            &path,
+            crate::authority::defaults::mapping_rules(req.execution_profile),
+        )
+        .map_err(|error| RunError::Internal(format!("write {}: {error}", path.display())))?;
+        path
+    };
+    let mapping_rules_paths = vec![primary];
     firma_fs::create_private_dir_all(&policy_dir)
         .map_err(|error| RunError::Internal(error.to_string()))?;
     firma_fs::create_private_dir_all(&keys_dir)
         .map_err(|error| RunError::Internal(error.to_string()))?;
-    let cedar = if req.profile_name == firma_authority::DEFAULT_PROFILE {
-        AUTOSTART_LOCAL_DEVELOPER_POLICY
-    } else {
-        firma_authority::cedar_for(req.profile_name).map_err(|_| {
-            RunError::AuthorityUnknownProfile {
-                name: req.profile_name.to_string(),
-            }
-        })?
-    };
+    let cedar = crate::authority::defaults::issuance_policy(req.profile_name)?;
     std::fs::write(&cedar_path, cedar)
         .map_err(|error| RunError::Internal(format!("write {}: {error}", cedar_path.display())))?;
     std::fs::write(&revocation_file, b"").map_err(|error| {
@@ -265,16 +290,25 @@ fn ephemeral_authority_config(
     })?;
     // Build the ephemeral config through the validating builder so it cannot
     // be constructed in an invalid state. The schema carries the shape and
-    // defaults (no TLS, `max_ttl_seconds = 3600`, etc.); only the non-default
-    // paths and loopback listener are set here.
-    AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
-        listen_addr: LOOPBACK_EPHEMERAL.to_string(),
-        policy_dir: policy_dir.clone(),
-        issuance_policy_dir: policy_dir,
-        revocation_file,
-        key_file: key_path,
-        ..authority_schema::AuthorityConfig::default()
-    })
+    // defaults (`max_ttl_seconds = 3600`, etc.); only the non-default paths and
+    // loopback listener are set here. `without_tls` is explicit: this Authority
+    // is reached over loopback `http://`, and the host's own TLS material must
+    // not be adopted just because it exists. The state root is the run's own
+    // marker directory for the same reason: every path this config resolves
+    // belongs to this run, never to the host's shared state directory.
+    AuthorityConfigBuilder::new(
+        authority_schema::AuthorityConfig {
+            listen_addr: LOOPBACK_EPHEMERAL.to_string(),
+            policy_dir: policy_dir.clone(),
+            issuance_policy_dir: policy_dir,
+            mapping_rules_paths,
+            revocation_file: Some(revocation_file),
+            key_file: Some(key_path),
+            ..authority_schema::AuthorityConfig::default()
+        },
+        &RuntimeLayout::from_root(&layout.root),
+    )
+    .without_tls()
     .build()
     .map_err(|error| RunError::Internal(format!("invalid authority config: {error}")))
 }

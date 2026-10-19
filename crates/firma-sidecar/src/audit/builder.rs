@@ -106,6 +106,7 @@ impl EventBuilder {
             thread_id: payload.thread_id,
             parent_action_id: payload.parent_action_id,
             signature: Vec::new(),
+            run_evidence: None,
         };
 
         event.signature = self.sign(&event);
@@ -322,11 +323,11 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         assert_eq!(event.action, "communication.external.send");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
         assert_eq!(event.decision, Decision::Allow);
-        assert!(event.deny_reason.is_empty());
+        assert_eq!(event.deny_reason, "");
         assert_eq!(event.enforcement_latency_us, 150);
         assert_eq!(event.context_hash, "ctx_abc");
         assert!(event.timestamp.is_some());
-        assert!(!event.signature.is_empty());
+        assert_ne!(event.signature, [] as [u8; 0]);
     }
 
     #[test]
@@ -350,7 +351,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         assert_eq!(event.decision, Decision::Deny);
         assert!(event.deny_reason.contains("token expired"));
         assert_eq!(event.action, "communication.external.send");
-        assert!(!event.signature.is_empty());
+        assert_ne!(event.signature, [] as [u8; 0]);
     }
 
     #[test]
@@ -365,8 +366,8 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let event = builder.build(payload);
 
         assert_eq!(event.decision, Decision::Allow);
-        assert!(event.token_id.is_empty());
-        assert!(event.agent_id.is_empty());
+        assert_eq!(event.token_id, "");
+        assert_eq!(event.agent_id, "");
     }
 
     #[test]
@@ -582,7 +583,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(10));
         let event = builder.build(payload);
 
-        assert!(event.sandbox_id.is_empty());
+        assert_eq!(event.sandbox_id, "");
     }
 
     #[test]
@@ -604,6 +605,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         assert!(event.deny_reason.contains("unclassified intent"));
         assert_eq!(event.action, "raw.http.POST");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
-        assert!(!event.signature.is_empty());
+        assert_ne!(event.signature, [] as [u8; 0]);
     }
 }

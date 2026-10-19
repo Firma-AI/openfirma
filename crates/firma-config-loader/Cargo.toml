@@ -23,5 +23,6 @@ toml = { workspace = true }
 
 [dev-dependencies]
 firma-config-schema = { workspace = true }
+firma-test-helpers = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

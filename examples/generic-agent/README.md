@@ -113,7 +113,7 @@ Exits 0 on PASS, non-zero on FAIL. Linux-only; requires `bwrap` and
 
 The shipped provider mappings in `crates/firma-sidecar/config/mappings/`
 (`github.toml`, `gmail.toml`) are merged on top — see
-`firma.toml [sidecar.mapping] rules_paths`.
+`firma.toml [authority].mapping_rules_paths`.
 
 ## Issuance vs enforcement
 
@@ -142,7 +142,7 @@ Allowlist via `mapping-rules.toml`:
 - `localhost`, `127.0.0.1` (loopback — assumes trusted)
 
 Defense-in-depth Cedar `forbid` on `169.254.169.254*` (cloud metadata).
-Unmapped hosts are denied before Cedar by `default_protected = true`.
+Unmapped hosts are denied before Cedar by the protected Authority snapshot.
 
 RFC-1918 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) cannot be
 expressed as CIDR in Cedar. Enforce at the OS / network layer:

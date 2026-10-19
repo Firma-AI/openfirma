@@ -2,7 +2,8 @@
 //!
 //! Some scenarios must issue multiple requests through one `firma run` process so they can prove
 //! that policy, revocation, and capability changes take effect without restarting the sandbox or
-//! Sidecar. This module provides that stimulus as a Rust `process_fixture!` instead of relying on a
+//! Sidecar. Scenarios about agent-writable governance inputs also need the same sandboxed process
+//! to modify a file between requests. This module provides that stimulus as a Rust `process_fixture!` instead of relying on a
 //! shell and `curl`, which would add host-tool dependencies and expose only command exit codes.
 //!
 //! # Wiring
@@ -26,13 +27,16 @@
 //! first, including its process and mount-namespace identity. For a `get` request it sends
 //! `Attempt` before touching the network, then either `Response` with the HTTP status and raw body
 //! bytes or `Error` with a transport failure. For an `identity` request it re-reports the same
-//! identity it announced at readiness. Every request and request-scoped event carries the same
-//! nonce, which prevents a response from being attributed to the wrong E2E stimulus.
+//! identity it announced at readiness. For a `write` request it rewrites the file in place, then
+//! replaces it through a sibling rename, and sends `Written` or `Error`. Every request and
+//! request-scoped event carries the same nonce, which prevents a response from being attributed
+//! to the wrong E2E stimulus.
 //!
 //! Identity is a fixture-reported fact rather than a host observation because the sandbox has its
 //! own PID namespace: the wrapped process's own process id names nothing in the host's `/proc`.
 
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, ChildStdout, Command};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
@@ -46,8 +50,18 @@ const PROTOCOL_PREFIX: &str = "FIRMA_E2E_HTTP ";
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum LiveHttpRequest {
-    Get { nonce: String, url: String },
-    Identity { nonce: String },
+    Get {
+        nonce: String,
+        url: String,
+    },
+    Identity {
+        nonce: String,
+    },
+    Write {
+        nonce: String,
+        path: PathBuf,
+        contents: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -63,6 +77,9 @@ enum LiveHttpEvent {
         mount_namespace: String,
     },
     Attempt {
+        nonce: String,
+    },
+    Written {
         nonce: String,
     },
     Response {
@@ -176,6 +193,33 @@ impl LiveHttpClient {
         }
     }
 
+    /// Rewrites `path` from inside the sandbox and waits for the fixture to confirm the write.
+    ///
+    /// The fixture first modifies the file in place and then replaces it through a sibling
+    /// rename, so both common editor update patterns reach any watcher of `path`.
+    pub(crate) fn write_file(
+        &mut self,
+        nonce: &str,
+        path: &Path,
+        contents: &str,
+    ) -> Result<(), String> {
+        self.send(&LiveHttpRequest::Write {
+            nonce: nonce.to_string(),
+            path: path.to_path_buf(),
+            contents: contents.to_string(),
+        })?;
+        match self.receive_event(Duration::from_secs(5))? {
+            LiveHttpEvent::Written {
+                nonce: written_nonce,
+            } if written_nonce == nonce => Ok(()),
+            LiveHttpEvent::Error {
+                nonce: failed_nonce,
+                message,
+            } if failed_nonce == nonce => Err(format!("write {nonce} failed: {message}")),
+            event => Err(format!("expected write result for {nonce}, got {event:?}")),
+        }
+    }
+
     /// Closes the request stream so the fixture can finish cleanly.
     pub(crate) fn close_input(&mut self) {
         self.stdin.take();
@@ -258,6 +302,21 @@ process_fixture! {
                     );
                     continue;
                 }
+                LiveHttpRequest::Write {
+                    nonce,
+                    path,
+                    contents,
+                } => {
+                    let event = match rewrite_file(&path, &contents) {
+                        Ok(()) => LiveHttpEvent::Written { nonce },
+                        Err(error) => LiveHttpEvent::Error {
+                            nonce,
+                            message: format!("rewrite {}: {error}", path.display()),
+                        },
+                    };
+                    write_event(&mut stdout, &event);
+                    continue;
+                }
                 LiveHttpRequest::Get { nonce, url } => (nonce, url),
             };
             write_event(
@@ -300,6 +359,15 @@ fn build_tls_config() -> rustls::ClientConfig {
         .with_platform_verifier()
         .expect("configure live HTTP platform verifier")
         .with_no_client_auth()
+}
+
+/// Modifies `path` in place, then atomically replaces it with the same contents.
+fn rewrite_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)?;
+    let mut replacement = path.as_os_str().to_owned();
+    replacement.push(".replacement");
+    std::fs::write(&replacement, contents)?;
+    std::fs::rename(&replacement, path)
 }
 
 /// Returns the fixture's own process id and mount namespace as seen from inside the sandbox.

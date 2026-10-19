@@ -63,9 +63,6 @@ pub enum RunnerError {
     #[error("VZ VM plan must request a Virtio VSOCK sidecar device")]
     InvalidSocketDeviceKind,
 
-    #[error("VZ VM plan VSOCK sidecar port must be non-zero")]
-    ZeroSidecarPort,
-
     #[error("terminal.pty=true requires a VM command PTY data port")]
     CommandPtyMissingPlan,
 
@@ -107,6 +104,30 @@ pub enum RunnerError {
         addr: SocketAddr,
         #[source]
         source: io::Error,
+    },
+
+    #[error("secret broker connection registry is poisoned")]
+    BrokerConnectionRegistryPoisoned,
+
+    #[error("secret broker bridge is shutting down")]
+    BrokerBridgeShuttingDown,
+
+    #[error("secret broker bridge has reached its {limit}-connection limit")]
+    BrokerBridgeCapacity { limit: usize },
+
+    #[error("spawn secret broker bridge supervisor: {source}")]
+    BrokerBridgeSupervisorSpawn {
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("secret broker bridge supervisor panicked during shutdown")]
+    BrokerBridgeSupervisorPanicked,
+
+    #[error("{operation}; additionally failed to shut down secret broker bridge: {shutdown}")]
+    BrokerBridgeCleanup {
+        operation: Box<Self>,
+        shutdown: Box<Self>,
     },
 
     #[error("VZ runtime exposed no socket device for Sidecar bridge")]

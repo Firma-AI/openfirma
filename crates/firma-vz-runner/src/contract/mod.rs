@@ -1,5 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -21,8 +23,15 @@ use validation::{
     require_loopback_socket_addr, require_non_empty, require_path,
 };
 
-const SUPPORTED_CONTRACT_VERSION: u32 = 1;
-const SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
+pub const SUPPORTED_CONTRACT_VERSION: u32 = 2;
+const FORBIDDEN_COMMAND_ENV_KEYS: &[&str] = &[
+    "FIRMA_CAPABILITY_TOKEN",
+    "FIRMA_SECRET_BROKER_ADDR",
+    "FIRMA_SECRET_PROVIDER_NAMES",
+    "FIRMA_SECRET_SHIM_SHARE_DIRECTORY",
+    "FIRMA_SECRET_BROKER_SOCKET_PATH",
+];
+const VMADDR_PORT_ANY: u32 = u32::MAX;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +48,8 @@ pub struct ContractDocument {
     mounts: Vec<Mount>,
     network: Network,
     invariants: Vec<Invariant>,
+    #[serde(default)]
+    secret_shims: Option<SecretShims>,
 }
 
 impl ContractDocument {
@@ -105,13 +116,25 @@ impl ContractDocument {
         self.validate_runtime(&limits)?;
         self.validate_guest(&limits, &mut is_file)?;
         self.validate_command(&limits)?;
-        self.validate_terminal()?;
+        let command_pty_ports = self.validate_terminal()?;
         self.validate_mounts(&limits)?;
-        self.validate_network(&limits)?;
-        self.validate_terminal_network_ports()?;
+        let network = self.validate_network(&limits)?;
+        let guest_broker = self.validate_secret_shims(&limits)?;
+        validate_guest_broker_listener_collisions(&network, guest_broker.as_ref())?;
+        let vsock_ports = VsockPorts {
+            sidecar: network.vsock_sidecar_port,
+            command_pty: command_pty_ports,
+            broker: guest_broker.as_ref().map(|broker| broker.vsock_port),
+        };
+        validate_vsock_port_collisions(&vsock_ports)?;
         validate_invariants(&self.invariants)?;
 
-        Ok(Contract { document: self })
+        Ok(Contract {
+            document: self,
+            sidecar_host_addr: network.sidecar_host_addr,
+            guest_broker,
+            vsock_ports,
+        })
     }
 
     /// Validates that the contract uses the schema version supported by this runner.
@@ -150,7 +173,7 @@ impl ContractDocument {
             self.command.executable.len(),
             limits.command_arg_len,
         )?;
-        require_path("command.cwd", &self.command.cwd, limits.path_len)?;
+        require_guest_path("command.cwd", &self.command.cwd, limits.path_len)?;
         require_count_at_most("command.args", self.command.args.len(), limits.command_args)?;
         for arg in &self.command.args {
             if arg.is_empty() {
@@ -165,7 +188,7 @@ impl ContractDocument {
             require_len_at_most("command.env value", value.len(), limits.env_value_len)?;
         }
 
-        for key in SECRET_ENV_KEYS {
+        for key in FORBIDDEN_COMMAND_ENV_KEYS {
             if self.command.env.contains_key(*key) {
                 return Err(ContractValidationError::SecretEnvSerialized { key });
             }
@@ -176,7 +199,7 @@ impl ContractDocument {
     }
 
     /// Validates terminal metadata while PTY transport is still unsupported.
-    fn validate_terminal(&self) -> ValidationResult<()> {
+    fn validate_terminal(&self) -> ValidationResult<Option<CommandPtyPorts>> {
         self.terminal.validate()
     }
 
@@ -192,7 +215,10 @@ impl ContractDocument {
     }
 
     /// Validates the sidecar proxy, DNS stub, and attribution header contract.
-    fn validate_network(&self, limits: &ContractValidationLimits) -> ValidationResult<()> {
+    fn validate_network(
+        &self,
+        limits: &ContractValidationLimits,
+    ) -> ValidationResult<AcceptedNetwork> {
         let _ = self.network.mode;
         let _ = self.network.dns_mode;
 
@@ -202,7 +228,7 @@ impl ContractDocument {
             limits.dns_stub_addr_len,
         )?;
 
-        require_loopback_socket_addr(
+        let guest_http_proxy_addr = require_loopback_socket_addr(
             "network.guest_http_proxy_addr",
             &self.network.guest_http_proxy_addr,
         )?;
@@ -213,23 +239,25 @@ impl ContractDocument {
             limits.dns_stub_addr_len,
         )?;
 
-        require_loopback_socket_addr(
+        let guest_dns_stub_addr = require_loopback_socket_addr(
             "network.guest_dns_stub_addr",
             &self.network.guest_dns_stub_addr,
         )?;
 
-        if self.network.vsock_sidecar_port == 0 {
-            return Err(ContractValidationError::ZeroPort {
-                field: "network.vsock_sidecar_port",
-            });
-        }
+        let vsock_sidecar_port = require_vsock_port(
+            "network.vsock_sidecar_port",
+            self.network.vsock_sidecar_port,
+        )?;
 
         require_len_at_most(
             "network.sidecar_host_addr",
             self.network.sidecar_host_addr.len(),
             limits.dns_stub_addr_len,
         )?;
-        require_loopback_socket_addr("network.sidecar_host_addr", &self.network.sidecar_host_addr)?;
+        let sidecar_host_addr = require_loopback_socket_addr(
+            "network.sidecar_host_addr",
+            &self.network.sidecar_host_addr,
+        )?;
 
         if self.network.direct_network_devices_allowed {
             return Err(ContractValidationError::DirectNetworkDevicesAllowed);
@@ -281,32 +309,126 @@ impl ContractDocument {
             });
         }
 
-        Ok(())
+        Ok(AcceptedNetwork {
+            guest_http_proxy_addr,
+            guest_dns_stub_addr,
+            sidecar_host_addr,
+            vsock_sidecar_port,
+        })
     }
 
-    /// Validates PTY ports do not reuse the network sidecar VSOCK port.
-    fn validate_terminal_network_ports(&self) -> ValidationResult<()> {
-        if self.terminal.pty_vsock_port == Some(self.network.vsock_sidecar_port) {
-            return Err(ContractValidationError::TerminalPtyPortConflictsWithSidecar);
+    /// Validates the optional `secret_shims` contract section.
+    fn validate_secret_shims(
+        &self,
+        limits: &ContractValidationLimits,
+    ) -> ValidationResult<Option<GuestBroker>> {
+        let Some(shims) = &self.secret_shims else {
+            return Ok(None);
+        };
+        require_non_empty(
+            "secret_shims.guest_target_triple",
+            &shims.guest_target_triple,
+        )?;
+        require_len_at_most(
+            "secret_shims.guest_target_triple",
+            shims.guest_target_triple.len(),
+            limits.path_len,
+        )?;
+        require_count_at_most(
+            "secret_shims.provider_names",
+            shims.provider_names.len(),
+            limits.env_vars,
+        )?;
+        if shims.provider_names.is_empty() {
+            return Err(ContractValidationError::EmptySecretShimProviders);
         }
-
-        if self.terminal.pty_control_vsock_port == Some(self.network.vsock_sidecar_port) {
-            return Err(ContractValidationError::TerminalPtyControlPortConflictsWithSidecar);
+        let mut provider_names = BTreeSet::new();
+        for name in &shims.provider_names {
+            require_non_empty("secret_shims.provider_names entry", name)?;
+            if !is_portable_basename(name) {
+                return Err(ContractValidationError::UnsafeSecretShimProviderName {
+                    name: name.clone(),
+                });
+            }
+            if !provider_names.insert(name.as_str()) {
+                return Err(ContractValidationError::DuplicateSecretShimProviderName {
+                    name: name.clone(),
+                });
+            }
         }
-
-        if self.terminal.pty_control_vsock_port == self.terminal.pty_vsock_port
-            && self.terminal.pty_control_vsock_port.is_some()
-        {
-            return Err(ContractValidationError::TerminalPtyControlPortConflictsWithDataPort);
+        let broker_vsock_port =
+            require_vsock_port("secret_shims.broker_vsock_port", shims.broker_vsock_port)?;
+        require_path(
+            "secret_shims.shim_share_directory",
+            &shims.shim_share_directory,
+            limits.path_len,
+        )?;
+        require_path(
+            "secret_shims.broker_socket_path",
+            &shims.broker_socket_path,
+            limits.path_len,
+        )?;
+        for (field, path) in [
+            (
+                "secret_shims.shim_share_directory",
+                &shims.shim_share_directory,
+            ),
+            ("secret_shims.broker_socket_path", &shims.broker_socket_path),
+        ] {
+            if path.starts_with(&self.runtime_dir) {
+                return Err(ContractValidationError::SecretShimPathWithinRuntime {
+                    field,
+                    path: path.clone(),
+                    runtime_dir: self.runtime_dir.clone(),
+                });
+            }
         }
+        require_len_at_most(
+            "secret_shims.guest_broker_addr",
+            shims.guest_broker_addr.len(),
+            limits.dns_stub_addr_len,
+        )?;
+        let guest_addr = require_loopback_socket_addr(
+            "secret_shims.guest_broker_addr",
+            &shims.guest_broker_addr,
+        )?;
 
-        Ok(())
+        Ok(Some(GuestBroker {
+            guest_addr,
+            vsock_port: broker_vsock_port,
+        }))
     }
+}
+
+fn validate_guest_broker_listener_collisions(
+    network: &AcceptedNetwork,
+    guest_broker: Option<&GuestBroker>,
+) -> ValidationResult<()> {
+    let Some(guest_broker) = guest_broker else {
+        return Ok(());
+    };
+    let dns_resolver_addr = SocketAddr::new(network.guest_dns_stub_addr.ip(), 53);
+    for (field, addr) in [
+        (
+            "network.guest_http_proxy_addr",
+            network.guest_http_proxy_addr,
+        ),
+        ("network.guest_dns_stub_addr", network.guest_dns_stub_addr),
+        ("guest DNS resolver listener", dns_resolver_addr),
+    ] {
+        if guest_broker.guest_addr == addr {
+            return Err(ContractValidationError::GuestBrokerAddrCollision { field });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
 pub struct Contract {
     document: ContractDocument,
+    sidecar_host_addr: SocketAddr,
+    guest_broker: Option<GuestBroker>,
+    vsock_ports: VsockPorts,
 }
 
 impl Contract {
@@ -336,6 +458,11 @@ impl Contract {
         &self.document.mounts
     }
 
+    /// Returns the optional secret shims contract section.
+    pub fn secret_shims(&self) -> Option<&SecretShims> {
+        self.document.secret_shims.as_ref()
+    }
+
     /// Returns host terminal metadata carried by the launch contract.
     pub const fn terminal(&self) -> &Terminal {
         &self.document.terminal
@@ -347,29 +474,61 @@ impl Contract {
     }
 
     /// Returns the guest VSOCK port reserved for Sidecar traffic.
-    pub const fn vsock_sidecar_port(&self) -> u32 {
-        self.document.network.vsock_sidecar_port
+    pub const fn vsock_sidecar_port(&self) -> NonZeroU32 {
+        self.vsock_ports.sidecar
     }
 
-    /// Returns the optional command PTY data VSOCK port.
-    pub const fn command_pty_vsock_port(&self) -> Option<u32> {
-        self.document.terminal.pty_vsock_port()
-    }
-
-    /// Returns the optional command PTY control VSOCK port.
-    pub const fn command_pty_control_vsock_port(&self) -> Option<u32> {
-        self.document.terminal.pty_control_vsock_port()
+    pub(crate) const fn command_pty_ports(&self) -> Option<(NonZeroU32, NonZeroU32)> {
+        match self.vsock_ports.command_pty {
+            Some(ports) => Some((ports.data, ports.control)),
+            None => None,
+        }
     }
 
     /// Returns the host Sidecar endpoint reached by the runner bridge.
-    pub fn sidecar_host_addr(
-        &self,
-    ) -> std::result::Result<std::net::SocketAddr, ContractValidationError> {
-        require_loopback_socket_addr(
-            "network.sidecar_host_addr",
-            &self.document.network.sidecar_host_addr,
-        )
+    pub const fn sidecar_host_addr(&self) -> SocketAddr {
+        self.sidecar_host_addr
     }
+
+    /// Returns the validated guest broker loopback address, when secret shims are enabled.
+    pub const fn guest_broker_addr(&self) -> Option<SocketAddr> {
+        match &self.guest_broker {
+            Some(broker) => Some(broker.guest_addr),
+            None => None,
+        }
+    }
+
+    /// Returns the validated broker VSOCK port, when secret shims are enabled.
+    pub const fn broker_vsock_port(&self) -> Option<NonZeroU32> {
+        self.vsock_ports.broker
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AcceptedNetwork {
+    guest_http_proxy_addr: SocketAddr,
+    guest_dns_stub_addr: SocketAddr,
+    sidecar_host_addr: SocketAddr,
+    vsock_sidecar_port: NonZeroU32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GuestBroker {
+    guest_addr: SocketAddr,
+    vsock_port: NonZeroU32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommandPtyPorts {
+    data: NonZeroU32,
+    control: NonZeroU32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VsockPorts {
+    sidecar: NonZeroU32,
+    command_pty: Option<CommandPtyPorts>,
+    broker: Option<NonZeroU32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -449,24 +608,31 @@ impl Terminal {
     }
 
     /// Validates terminal metadata and PTY transport port requirements.
-    fn validate(&self) -> ValidationResult<()> {
-        match (self.pty, self.pty_vsock_port) {
-            (true, Some(port)) if port != 0 => {}
-            (true, _) => return Err(ContractValidationError::TerminalPtyRequiresVsockPort),
-            (false, Some(_)) => return Err(ContractValidationError::TerminalPtyPortRequiresPty),
-            (false, None) => {}
-        }
-
-        match (self.pty, self.pty_control_vsock_port) {
-            (true, Some(port)) if port != 0 => {}
-            (true, _) => return Err(ContractValidationError::TerminalPtyRequiresControlVsockPort),
-            (false, Some(_)) => {
+    fn validate(&self) -> ValidationResult<Option<CommandPtyPorts>> {
+        if !self.pty {
+            if self.pty_vsock_port.is_some() {
+                return Err(ContractValidationError::TerminalPtyPortRequiresPty);
+            }
+            if self.pty_control_vsock_port.is_some() {
                 return Err(ContractValidationError::TerminalPtyControlPortRequiresPty);
             }
-            (false, None) => {}
+
+            require_optional_non_empty("terminal.term", self.term.as_deref())?;
+            reject_zero_terminal_dimension("terminal.rows", self.rows)?;
+            reject_zero_terminal_dimension("terminal.cols", self.cols)?;
+            return Ok(None);
         }
 
-        if self.pty && !self.interactive {
+        let data_port = self
+            .pty_vsock_port
+            .and_then(NonZeroU32::new)
+            .ok_or(ContractValidationError::TerminalPtyRequiresVsockPort)?;
+        let control_port = self
+            .pty_control_vsock_port
+            .and_then(NonZeroU32::new)
+            .ok_or(ContractValidationError::TerminalPtyRequiresControlVsockPort)?;
+
+        if !self.interactive {
             return Err(ContractValidationError::TerminalPtyRequiresInteractive);
         }
 
@@ -474,17 +640,12 @@ impl Terminal {
         reject_zero_terminal_dimension("terminal.rows", self.rows)?;
         reject_zero_terminal_dimension("terminal.cols", self.cols)?;
 
-        Ok(())
-    }
-
-    /// Returns the optional guest PTY data VSOCK port.
-    pub const fn pty_vsock_port(&self) -> Option<u32> {
-        self.pty_vsock_port
-    }
-
-    /// Returns the optional guest PTY control VSOCK port.
-    pub const fn pty_control_vsock_port(&self) -> Option<u32> {
-        self.pty_control_vsock_port
+        reject_reserved_vsock_port("terminal.pty_vsock_port", data_port)?;
+        reject_reserved_vsock_port("terminal.pty_control_vsock_port", control_port)?;
+        Ok(Some(CommandPtyPorts {
+            data: data_port,
+            control: control_port,
+        }))
     }
 }
 
@@ -557,6 +718,126 @@ pub enum NetworkMode {
 #[serde(rename_all = "snake_case")]
 enum DnsMode {
     ConfinedStub,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretShims {
+    guest_target_triple: String,
+    provider_names: Vec<String>,
+    broker_vsock_port: u32,
+    shim_share_directory: PathBuf,
+    broker_socket_path: PathBuf,
+    guest_broker_addr: String,
+}
+
+impl SecretShims {
+    /// Returns the guest target triple for the shim binary.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "used by the runner binary for VSOCK broker bridge planning"
+        )
+    )]
+    pub fn guest_target_triple(&self) -> &str {
+        &self.guest_target_triple
+    }
+
+    /// Returns the provider names that need shim entries.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "used by the runner binary for VSOCK broker bridge planning"
+        )
+    )]
+    pub fn provider_names(&self) -> &[String] {
+        &self.provider_names
+    }
+    /// Returns the host directory containing the shim binary.
+    pub fn shim_share_directory(&self) -> &Path {
+        &self.shim_share_directory
+    }
+
+    /// Returns the host Unix socket reached by the broker VSOCK bridge.
+    pub fn broker_socket_path(&self) -> &Path {
+        &self.broker_socket_path
+    }
+}
+
+/// Applies the shared portable executable-basename invariant defensively at the contract boundary.
+fn is_portable_basename(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | ':' | '\0'))
+}
+
+fn require_vsock_port(field: &'static str, port: u32) -> ValidationResult<NonZeroU32> {
+    let port = NonZeroU32::new(port).ok_or(ContractValidationError::ZeroPort { field })?;
+    reject_reserved_vsock_port(field, port)?;
+    Ok(port)
+}
+
+fn reject_reserved_vsock_port(field: &'static str, port: NonZeroU32) -> ValidationResult<()> {
+    if port.get() == VMADDR_PORT_ANY {
+        return Err(ContractValidationError::ReservedVsockPort { field });
+    }
+    Ok(())
+}
+
+fn validate_vsock_port_collisions(ports: &VsockPorts) -> ValidationResult<()> {
+    let pairs = [
+        (
+            ports.command_pty.map(|pty| pty.data),
+            "terminal.pty_vsock_port",
+            Some(ports.sidecar),
+            "network.vsock_sidecar_port",
+        ),
+        (
+            ports.command_pty.map(|pty| pty.control),
+            "terminal.pty_control_vsock_port",
+            Some(ports.sidecar),
+            "network.vsock_sidecar_port",
+        ),
+        (
+            ports.command_pty.map(|pty| pty.control),
+            "terminal.pty_control_vsock_port",
+            ports.command_pty.map(|pty| pty.data),
+            "terminal.pty_vsock_port",
+        ),
+        (
+            ports.broker,
+            "secret_shims.broker_vsock_port",
+            Some(ports.sidecar),
+            "network.vsock_sidecar_port",
+        ),
+        (
+            ports.broker,
+            "secret_shims.broker_vsock_port",
+            ports.command_pty.map(|pty| pty.data),
+            "terminal.pty_vsock_port",
+        ),
+        (
+            ports.broker,
+            "secret_shims.broker_vsock_port",
+            ports.command_pty.map(|pty| pty.control),
+            "terminal.pty_control_vsock_port",
+        ),
+    ];
+
+    for (first, first_field, second, second_field) in pairs {
+        if first.is_some() && first == second {
+            return Err(ContractValidationError::VsockPortCollision {
+                first_field,
+                second_field,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

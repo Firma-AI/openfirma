@@ -7,6 +7,8 @@ use tokio::sync::watch;
 pub struct ReadinessState {
     /// A policy bundle has been applied successfully.
     pub policy_bundle_ready: bool,
+    /// The enforced policy bundle has not passed its TTL deadline.
+    pub policy_bundle_fresh: bool,
     /// The revocation stream has connected and passed its initial barrier.
     pub revocation_ready: bool,
 }
@@ -16,6 +18,13 @@ impl ReadinessState {
     #[must_use]
     pub fn fully_ready(self) -> bool {
         self.policy_bundle_ready && self.revocation_ready
+    }
+
+    /// Both streams have hydrated and the enforced bundle is still fresh, so
+    /// the sidecar can admit traffic that its policy would allow.
+    #[must_use]
+    pub fn serving(self) -> bool {
+        self.fully_ready() && self.policy_bundle_fresh
     }
 }
 
@@ -38,10 +47,38 @@ impl ReadinessFlag {
         (Self { tx }, ReadinessView { rx })
     }
 
-    /// Mark the policy bundle stream ready or not ready.
-    pub(crate) fn set_policy_bundle_ready(&self, ready: bool) {
-        self.tx
-            .send_modify(|state| state.policy_bundle_ready = ready);
+    /// Record that a fresh policy bundle was just published.
+    ///
+    /// Callers publish the bundle before calling this, so a concurrent
+    /// [`refresh_policy_bundle_freshness`](Self::refresh_policy_bundle_freshness)
+    /// that runs afterwards observes the new generation.
+    pub(crate) fn mark_policy_bundle_swapped(&self) {
+        self.tx.send_modify(|state| {
+            state.policy_bundle_ready = true;
+            state.policy_bundle_fresh = true;
+        });
+    }
+
+    /// Recompute bundle freshness under the readiness lock.
+    ///
+    /// `is_fresh` runs while the lock is held, so it must read the currently
+    /// published generation rather than a value captured earlier. Returns the
+    /// new freshness when it changed.
+    pub(crate) fn refresh_policy_bundle_freshness(
+        &self,
+        is_fresh: impl FnOnce() -> bool,
+    ) -> Option<bool> {
+        let mut changed = None;
+        self.tx.send_if_modified(|state| {
+            let fresh = is_fresh();
+            if state.policy_bundle_fresh == fresh {
+                return false;
+            }
+            state.policy_bundle_fresh = fresh;
+            changed = Some(fresh);
+            true
+        });
+        changed
     }
 
     /// Mark the revocation stream ready or not ready.
@@ -92,6 +129,7 @@ impl ReadinessView {
     pub(crate) fn all_ready() -> Self {
         let (_flag, view) = ReadinessFlag::new(ReadinessState {
             policy_bundle_ready: true,
+            policy_bundle_fresh: true,
             revocation_ready: true,
         });
         view
@@ -115,7 +153,7 @@ mod tests {
         };
 
         // Hot path must still be blocked while only one stream is up.
-        flag.set_policy_bundle_ready(true);
+        flag.mark_policy_bundle_swapped();
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(!waiter.is_finished(), "must wait for both streams");
 
@@ -131,6 +169,7 @@ mod tests {
     async fn wait_until_fully_ready_returns_immediately_when_already_ready() {
         let (flag, _view) = ReadinessFlag::new(ReadinessState {
             policy_bundle_ready: true,
+            policy_bundle_fresh: true,
             revocation_ready: true,
         });
         tokio::time::timeout(Duration::from_millis(50), flag.wait_until_fully_ready())

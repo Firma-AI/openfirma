@@ -88,6 +88,23 @@ pub struct ExecutionEvent {
     /// transports may retain the raw bytes.
     #[serde(with = "base64_signature")]
     pub signature: Vec<u8>,
+    /// Opaque evidence captured with this event, never supplied by a replay session.
+    ///
+    /// The legacy event signature does not authenticate this extension. Collectors
+    /// must reject supplied evidence until its format and verifier are supported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_evidence: Option<RunEvidence>,
+}
+
+/// Uninterpreted run evidence. Deserializing these bytes establishes no authority.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct RunEvidence(pub Vec<u8>);
+
+impl std::fmt::Debug for RunEvidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RunEvidence(<redacted>)")
+    }
 }
 
 /// Serde adapter for the signature's base64 JSON representation.

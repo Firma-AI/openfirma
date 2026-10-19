@@ -20,6 +20,7 @@
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
+use std::num::NonZeroUsize;
 
 use firma_http::HeaderMap;
 use thiserror::Error;
@@ -74,7 +75,7 @@ impl SupportedEncoding {
     fn decode(
         &mut self,
         body: &[u8],
-        max_decompressed_bytes: usize,
+        max_decompressed_bytes: NonZeroUsize,
     ) -> Result<Vec<u8>, BodyEncodingError> {
         match self {
             Self::Gzip => {
@@ -159,8 +160,9 @@ impl SupportedEncoding {
 /// allocation here.
 fn bounded_read_to_end<R: Read>(
     reader: R,
-    max_decompressed_bytes: usize,
+    max_decompressed_bytes: NonZeroUsize,
 ) -> Result<Vec<u8>, BodyEncodingError> {
+    let max_decompressed_bytes = max_decompressed_bytes.get();
     let mut out = Vec::new();
     reader
         .take(max_decompressed_bytes as u64 + 1)
@@ -200,7 +202,7 @@ pub(crate) enum BodyEncodingError {
 pub(crate) async fn decode_body<'a>(
     body: &'a [u8],
     headers: &HeaderMap,
-    max_decompressed_bytes: usize,
+    max_decompressed_bytes: NonZeroUsize,
 ) -> Result<(Cow<'a, [u8]>, Option<SupportedEncoding>), BodyEncodingError> {
     let Some(mut encoding) =
         SupportedEncoding::from_headers(headers).map_err(BodyEncodingError::UnsupportedEncoding)?
@@ -267,9 +269,10 @@ mod tests {
     #[tokio::test]
     async fn decode_body_without_encoding_borrows() {
         let body = b"plaintext body";
-        let (decoded, encoding) = decode_body(body, &HeaderMap::new(), 1024)
-            .await
-            .expect("decode succeeds");
+        let (decoded, encoding) =
+            decode_body(body, &HeaderMap::new(), NonZeroUsize::new(1024).unwrap())
+                .await
+                .expect("decode succeeds");
         assert_eq!(decoded.as_ref(), body);
         assert_eq!(encoding, None);
         assert!(matches!(decoded, Cow::Borrowed(_)));
@@ -280,10 +283,13 @@ mod tests {
         let encoded = encode_body(plaintext.clone(), Some(encoding.clone()))
             .await
             .expect("encode succeeds");
-        let (decoded, decoded_encoding) =
-            decode_body(&encoded, &headers_with_encoding(header_value), 1024 * 1024)
-                .await
-                .expect("decode succeeds");
+        let (decoded, decoded_encoding) = decode_body(
+            &encoded,
+            &headers_with_encoding(header_value),
+            const { NonZeroUsize::new(1024 * 1024).unwrap() },
+        )
+        .await
+        .expect("decode succeeds");
         assert_eq!(decoded.as_ref(), plaintext.as_slice());
         assert_eq!(decoded_encoding, Some(encoding));
     }
@@ -317,10 +323,13 @@ mod tests {
         encoder.write_all(&plaintext).expect("encode succeeds");
         let compressed = encoder.finish().expect("finish succeeds");
 
-        let (decoded, encoding) =
-            decode_body(&compressed, &headers_with_encoding("deflate"), 1024 * 1024)
-                .await
-                .expect("zlib-wrapped deflate decodes");
+        let (decoded, encoding) = decode_body(
+            &compressed,
+            &headers_with_encoding("deflate"),
+            NonZeroUsize::new(1024 * 1024).unwrap(),
+        )
+        .await
+        .expect("zlib-wrapped deflate decodes");
         assert_eq!(decoded.as_ref(), plaintext.as_slice());
         assert_eq!(
             encoding,
@@ -344,9 +353,13 @@ mod tests {
         let encoded = encode_body(plaintext, Some(SupportedEncoding::Gzip))
             .await
             .expect("encode succeeds");
-        let error = decode_body(&encoded, &headers_with_encoding("gzip"), 1024)
-            .await
-            .expect_err("decompressed size exceeds the limit");
+        let error = decode_body(
+            &encoded,
+            &headers_with_encoding("gzip"),
+            NonZeroUsize::new(1024).unwrap(),
+        )
+        .await
+        .expect_err("decompressed size exceeds the limit");
         assert!(matches!(
             error,
             BodyEncodingError::DecompressedTooLarge { limit: 1024 }

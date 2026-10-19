@@ -15,12 +15,13 @@
 //! - Optional TLS MITM interception for configured hosts.
 
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
+use firma_config_utils::NonZeroDuration;
 use firma_core::{AbortReason, DenyReason};
 use firma_http::{Authority, HeaderMap, Method};
 use http_body::Body as _;
@@ -49,17 +50,17 @@ use crate::handler::{
 use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
 
-const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
-const DEFAULT_TOTAL_BODY_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_MAX_REQUEST_BODY_BYTES: NonZeroUsize = NonZeroUsize::new(4 * 1024 * 1024).unwrap();
+const DEFAULT_TOTAL_BODY_BUDGET_BYTES: NonZeroUsize = NonZeroUsize::new(64 * 1024 * 1024).unwrap();
 const CONNECT_PREFACE_MAX_BYTES: usize = 32;
 
 struct BodyBudget {
     used: AtomicUsize,
-    ceiling: usize,
+    ceiling: NonZeroUsize,
 }
 
 impl BodyBudget {
-    fn new(ceiling: usize) -> Self {
+    fn new(ceiling: NonZeroUsize) -> Self {
         Self {
             used: AtomicUsize::new(0),
             ceiling,
@@ -71,8 +72,9 @@ impl BodyBudget {
             return true;
         }
         self.used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
-                cur.checked_add(n).filter(|&next| next <= self.ceiling)
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                cur.checked_add(n)
+                    .filter(|&next| next <= self.ceiling.get())
             })
             .is_ok()
     }
@@ -82,7 +84,7 @@ impl BodyBudget {
             return true;
         }
         self.used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
                 cur.checked_sub(n)
             })
             .is_ok()
@@ -131,9 +133,9 @@ pub struct HttpInterceptor {
     handler: Option<Arc<RequestHandler>>,
     https_mitm_config: HttpsMitmConfig,
     ca_dir: PathBuf,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     connect_relay: ConnectRelayConfig,
-    total_body_budget_bytes: usize,
+    total_body_budget_bytes: NonZeroUsize,
 }
 
 impl HttpInterceptor {
@@ -168,14 +170,20 @@ impl HttpInterceptor {
 
     /// Set the maximum request body size accepted by the interceptor.
     #[must_use]
-    pub(crate) fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
+    pub(crate) fn with_max_request_body_bytes(
+        mut self,
+        max_request_body_bytes: NonZeroUsize,
+    ) -> Self {
         self.max_request_body_bytes = max_request_body_bytes;
         self
     }
 
     /// Set the global ceiling for concurrent request body buffering.
     #[must_use]
-    pub(crate) fn with_total_body_budget_bytes(mut self, total_body_budget_bytes: usize) -> Self {
+    pub(crate) fn with_total_body_budget_bytes(
+        mut self,
+        total_body_budget_bytes: NonZeroUsize,
+    ) -> Self {
         self.total_body_budget_bytes = total_body_budget_bytes;
         self
     }
@@ -321,7 +329,7 @@ async fn serve_connection(
     socket: TcpStream,
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     connect_relay: ConnectRelayConfig,
     budget: Arc<BodyBudget>,
 ) -> Result<(), InterceptorError> {
@@ -356,7 +364,7 @@ async fn handle_request(
     mut req: Request<Incoming>,
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     connect_relay: ConnectRelayConfig,
     budget: Arc<BodyBudget>,
 ) -> anyhow::Result<Response<Full<Bytes>>> {
@@ -374,7 +382,7 @@ async fn handle_request(
 
     let session_hint = header_session_id(&req);
     // Capture host + session before `req` is consumed so a malformed
-    // request can still emit an attributable deny audit event (FIR-208).
+    // request can still emit an attributable deny audit event.
     let host = match host_with_default_port(&req, false) {
         Ok(host) => host,
         Err(detail) => {
@@ -457,7 +465,7 @@ async fn handle_request(
 ///
 /// Always preflighted so a fallback to a blind CONNECT tunnel cannot
 /// bypass enforcement. Strict hosts fail closed — on preflight failure
-/// this emits a fail-closed deny audit event (FIR-208) and returns the
+/// this emits a fail-closed deny audit event and returns the
 /// 403 to send back via `Err`. Non-strict hosts fall back to a blind
 /// tunnel (returning `effective_mitm = None`) but only after the
 /// CONNECT-level decision is enforced by the caller.
@@ -467,7 +475,7 @@ async fn preflight_mitm_acceptor(
     target_info: &ConnectTargetInfo,
     mitm_candidate: Option<Arc<HttpsMitmRuntime>>,
     strict_mitm: bool,
-) -> Result<(Option<TlsAcceptor>, Option<Arc<HttpsMitmRuntime>>), Response<Full<Bytes>>> {
+) -> Result<(Option<TlsAcceptor>, Option<Arc<HttpsMitmRuntime>>), Box<Response<Full<Bytes>>>> {
     let mut prepared_acceptor: Option<TlsAcceptor> = None;
     let mut effective_mitm = mitm_candidate;
     if let Some(runtime) = effective_mitm.as_ref() {
@@ -490,10 +498,10 @@ async fn preflight_mitm_acceptor(
                             &detail,
                         )
                         .await;
-                    return Err(deny_json_response(
+                    return Err(Box::new(deny_json_response(
                         StatusCode::FORBIDDEN,
                         crate::handler::deny_body_json(DenyReason::FailClosed, &detail),
-                    ));
+                    )));
                 }
                 tracing::warn!(
                     host = %target_info.host,
@@ -510,7 +518,7 @@ async fn handle_connect_request(
     req: &mut Request<Incoming>,
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     connect_relay: ConnectRelayConfig,
     budget: Arc<BodyBudget>,
 ) -> anyhow::Result<Response<Full<Bytes>>> {
@@ -551,7 +559,7 @@ async fn handle_connect_request(
     .await
     {
         Ok(pair) => pair,
-        Err(response) => return Ok(response),
+        Err(response) => return Ok(*response),
     };
 
     // MITM-intercepted hosts (preflight succeeded): by default skip CONNECT-level
@@ -653,7 +661,7 @@ fn spawn_connect_relay(
     handler: Arc<RequestHandler>,
     mitm_candidate: Option<Arc<HttpsMitmRuntime>>,
     prepared_acceptor: Option<TlsAcceptor>,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     limits: ConnectRelayLimits,
     strict_mitm: bool,
     budget: Arc<BodyBudget>,
@@ -782,29 +790,35 @@ async fn relay_connect_tunnel(
     target: &str,
     limits: ConnectRelayLimits,
 ) -> Result<TunnelRelayStats, String> {
-    let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
-        .await
-        .map_err(|_| format!("upgrade timed out after {:?}", limits.setup_timeout))?
-        .map_err(|e| format!("upgrade failed: {e}"))?;
-    let mut downstream = TokioIo::new(upgraded);
-    let mut upstream = tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target))
+    let upgraded = tokio::time::timeout(limits.setup_timeout.duration(), on_upgrade)
         .await
         .map_err(|_| {
             format!(
-                "upstream connect timed out after {:?} for {target}",
-                limits.setup_timeout
+                "upgrade timed out after {:?}",
+                limits.setup_timeout.duration()
             )
         })?
-        .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+        .map_err(|e| format!("upgrade failed: {e}"))?;
+    let mut downstream = TokioIo::new(upgraded);
+    let mut upstream =
+        tokio::time::timeout(limits.setup_timeout.duration(), TcpStream::connect(target))
+            .await
+            .map_err(|_| {
+                format!(
+                    "upstream connect timed out after {:?} for {target}",
+                    limits.setup_timeout.duration()
+                )
+            })?
+            .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
     let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
-        limits.session_max,
+        limits.session_max.duration(),
         copy_bidirectional(&mut downstream, &mut upstream),
     )
     .await
     .map_err(|_| {
         format!(
             "CONNECT tunnel exceeded {:?} session cap",
-            limits.session_max
+            limits.session_max.duration()
         )
     })?
     .map_err(|e| format!("tunnel relay failed: {e}"))?;
@@ -812,6 +826,43 @@ async fn relay_connect_tunnel(
         downstream_to_upstream_bytes,
         upstream_to_downstream_bytes,
     })
+}
+
+/// Audits a strict host's refusal of a tunnel that is not carrying TLS.
+///
+/// A strict host skips the CONNECT decision — the caller allows it because each
+/// decrypted request is enforced instead — so without this the only trace of the
+/// refusal is the relay failure the caller logs, which reads as an outage rather
+/// than a policy outcome. Any tunnel that is not TLS lands here: SSH through the
+/// proxy, a database or SMTP tunnel, plaintext on 443. The detail names
+/// `bypass_hosts` because that is the only way to keep such a host reachable.
+async fn deny_non_tls_strict_tunnel(
+    handler: &RequestHandler,
+    session_id: &str,
+    target: &ConnectTargetInfo,
+    preface: &[u8],
+    first_non_crlf: u8,
+) {
+    let detail = format!(
+        "strict MITM requires TLS tunneled traffic; received non-TLS CONNECT preface (first_non_crlf=0x{first_non_crlf:02x}) for {}. Add the host to interceptor.https_mitm.bypass_hosts to tunnel it uninspected",
+        target.host
+    );
+    tracing::warn!(
+        host = %target.host,
+        session_id = %session_id,
+        first_byte = format_args!("0x{first_non_crlf:02x}"),
+        preface = %hex_preface(preface),
+        "strict MITM denied a non-TLS CONNECT payload"
+    );
+    handler
+        .emit_synthetic_deny(
+            session_id,
+            "network.connect",
+            &resource_label_from_host(&target.host),
+            DenyReason::FailClosed,
+            &detail,
+        )
+        .await;
 }
 
 #[expect(
@@ -824,26 +875,30 @@ async fn relay_connect_mitm(
     handler: Arc<RequestHandler>,
     connect_session_id: String,
     acceptor: TlsAcceptor,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     limits: ConnectRelayLimits,
     strict_mitm: bool,
     budget: Arc<BodyBudget>,
 ) -> Result<(), String> {
-    let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
+    let (setup_timeout, session_max) = (
+        limits.setup_timeout.duration(),
+        limits.session_max.duration(),
+    );
+    let upgraded = tokio::time::timeout(setup_timeout, on_upgrade)
         .await
-        .map_err(|_| format!("upgrade timed out after {:?}", limits.setup_timeout))?
+        .map_err(|_| format!("upgrade timed out after {setup_timeout:?}"))?
         .map_err(|e| format!("upgrade failed: {e}"))?;
     let mut downstream = TokioIo::new(upgraded);
     let mut preface = [0_u8; CONNECT_PREFACE_MAX_BYTES];
     let preface_len = tokio::time::timeout(
-        limits.setup_timeout,
+        setup_timeout,
         read_connect_preface(&mut downstream, &mut preface),
     )
     .await
     .map_err(|_| {
         format!(
             "downstream preface read timed out after {:?} for {}",
-            limits.setup_timeout, target.host
+            setup_timeout, target.host
         )
     })?
     .map_err(|e| format!("downstream preface read failed for {}: {e}", target.host))?;
@@ -852,10 +907,18 @@ async fn relay_connect_mitm(
     let tls_header_valid = is_likely_tls_record_header(&preface[..preface_len], tls_start);
     if !tls_header_valid {
         if strict_mitm {
-            return Err(format!(
-                "strict MITM requires TLS tunneled traffic; received non-TLS CONNECT preface (first_non_crlf=0x{:02x}) for {}",
-                first_non_crlf, target.host
-            ));
+            deny_non_tls_strict_tunnel(
+                &handler,
+                &connect_session_id,
+                &target,
+                &preface[..preface_len],
+                first_non_crlf,
+            )
+            .await;
+            // Reported as a denial, so returning `Err` here would have the
+            // caller log and audit the same refusal a second time as a relay
+            // failure. Dropping `downstream` closes the tunnel.
+            return Ok(());
         }
         tracing::warn!(
             host = %target.host,
@@ -874,12 +937,12 @@ async fn relay_connect_mitm(
     }
 
     let downstream = PrefetchedStream::new(downstream, &preface[tls_start..preface_len]);
-    let tls_stream = tokio::time::timeout(limits.setup_timeout, acceptor.accept(downstream))
+    let tls_stream = tokio::time::timeout(setup_timeout, acceptor.accept(downstream))
         .await
         .map_err(|_| {
             format!(
                 "downstream TLS handshake timed out after {:?} for {}",
-                limits.setup_timeout, target.host
+                setup_timeout, target.host
             )
         })?
         .map_err(|e| format!("downstream TLS handshake failed for {}: {e}", target.host))?;
@@ -908,13 +971,10 @@ async fn relay_connect_mitm(
             }),
         )
         .with_upgrades();
-    tokio::time::timeout(limits.session_max, serve)
+    tokio::time::timeout(session_max, serve)
         .await
         .map_err(|_| {
-            format!(
-                "HTTPS MITM relay exceeded {:?} session cap for {}",
-                limits.session_max, target_host
-            )
+            format!("HTTPS MITM relay exceeded {session_max:?} session cap for {target_host}")
         })?
         .map_err(|e| format!("HTTPS MITM connection failed: {e}"))?;
     Ok(())
@@ -1058,36 +1118,41 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
     limits: ConnectRelayLimits,
     prefetched: &[u8],
 ) -> Result<TunnelRelayStats, String> {
-    let mut upstream =
-        tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target.as_str()))
-            .await
-            .map_err(|_| {
-                format!(
-                    "upstream connect timed out after {:?} for {target}",
-                    limits.setup_timeout
-                )
-            })?
-            .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+    let mut upstream = tokio::time::timeout(
+        limits.setup_timeout.duration(),
+        TcpStream::connect(target.as_str()),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "upstream connect timed out after {:?} for {target}",
+            limits.setup_timeout.duration()
+        )
+    })?
+    .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
     if !prefetched.is_empty() {
-        tokio::time::timeout(limits.setup_timeout, upstream.write_all(prefetched))
-            .await
-            .map_err(|_| {
-                format!(
-                    "upstream prefetch write timed out after {:?} for {target}",
-                    limits.setup_timeout
-                )
-            })?
-            .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
+        tokio::time::timeout(
+            limits.setup_timeout.duration(),
+            upstream.write_all(prefetched),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "upstream prefetch write timed out after {:?} for {target}",
+                limits.setup_timeout.duration()
+            )
+        })?
+        .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
     }
     let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
-        limits.session_max,
+        limits.session_max.duration(),
         copy_bidirectional(&mut downstream, &mut upstream),
     )
     .await
     .map_err(|_| {
         format!(
             "CONNECT tunnel exceeded {:?} session cap",
-            limits.session_max
+            limits.session_max.duration()
         )
     })?
     .map_err(|e| format!("tunnel relay failed: {e}"))?;
@@ -1099,8 +1164,8 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
 
 #[derive(Clone)]
 struct ConnectRelayLimits {
-    setup_timeout: Duration,
-    session_max: Duration,
+    setup_timeout: NonZeroDuration,
+    session_max: NonZeroDuration,
 }
 
 fn connect_relay_limits(config: &ConnectRelayConfig) -> ConnectRelayLimits {
@@ -1139,7 +1204,7 @@ async fn handle_mitm_https_request(
     handler: Arc<RequestHandler>,
     target: ConnectTargetInfo,
     connect_session_id: &str,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     budget: Arc<BodyBudget>,
 ) -> anyhow::Result<Response<Full<Bytes>>> {
     if req.method() == http::Method::CONNECT {
@@ -1336,7 +1401,7 @@ async fn handle_mitm_websocket_upgrade_request(
                 "websocket upstream TLS connect failed"
             );
             // Post-ALLOW relay failure: no upstream response was produced,
-            // so this is an ABORT, not a policy DENY (FIR-46).
+            // so this is an ABORT, not a policy DENY.
             let detail = format!("upstream websocket connect failed: {detail}");
             handler
                 .emit_upgrade_abort_audit(audit_payload, AbortReason::ConnectorFailure, &detail)
@@ -1357,7 +1422,7 @@ async fn handle_mitm_websocket_upgrade_request(
             "websocket upstream handshake write failed"
         );
         // Post-ALLOW relay failure: no upstream response was produced,
-        // so this is an ABORT, not a policy DENY (FIR-46).
+        // so this is an ABORT, not a policy DENY.
         let detail = format!("upstream websocket handshake write failed: {e}");
         handler
             .emit_upgrade_abort_audit(audit_payload, AbortReason::ConnectorFailure, &detail)
@@ -1380,7 +1445,7 @@ async fn handle_mitm_websocket_upgrade_request(
                 "websocket upstream handshake read failed"
             );
             // Post-ALLOW relay failure: no upstream response was produced,
-            // so this is an ABORT, not a policy DENY (FIR-46).
+            // so this is an ABORT, not a policy DENY.
             let detail = format!("upstream websocket handshake read failed: {detail}");
             handler
                 .emit_upgrade_abort_audit(audit_payload, AbortReason::ConnectorFailure, &detail)
@@ -1654,7 +1719,7 @@ fn build_websocket_switching_response(headers: Vec<(String, String)>) -> Respons
 async fn build_raw_https_request(
     req: Request<Incoming>,
     target: &ConnectTargetInfo,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     budget: Arc<BodyBudget>,
 ) -> anyhow::Result<(RawRequest, BudgetGuard)> {
     let mut raw = build_raw_https_request_head(&req, target)?;
@@ -1709,7 +1774,7 @@ fn host_matches_connect_target(requested: &ConnectTargetInfo, connect: &ConnectT
 
 async fn build_raw_request(
     req: Request<Incoming>,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     budget: Arc<BodyBudget>,
 ) -> anyhow::Result<(RawRequest, BudgetGuard)> {
     let mut raw = build_raw_request_head(&req, false)?;
@@ -1721,11 +1786,11 @@ async fn build_raw_request(
 
 async fn read_body_with_limit(
     mut body: Incoming,
-    max_request_body_bytes: usize,
+    max_request_body_bytes: NonZeroUsize,
     budget: Arc<BodyBudget>,
 ) -> anyhow::Result<(Option<Vec<u8>>, BudgetGuard)> {
     if let Some(upper) = body.size_hint().upper()
-        && upper > max_request_body_bytes as u64
+        && upper > max_request_body_bytes.get() as u64
     {
         return Err(anyhow::anyhow!(
             "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
@@ -1742,7 +1807,7 @@ async fn read_body_with_limit(
                 guard.release(out.len());
                 anyhow::anyhow!("MALFORMED_REQUEST: request body size overflow")
             })?;
-            if new_len > max_request_body_bytes {
+            if new_len > max_request_body_bytes.get() {
                 guard.release(out.len());
                 return Err(anyhow::anyhow!(
                     "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
@@ -1879,8 +1944,7 @@ fn header_session_id(req: &Request<Incoming>) -> String {
 }
 
 /// Emits a malformed-request DENY audit event and builds the 403 to
-/// return, so pre-pipeline rejections still surface in `firma monitor`
-/// (FIR-208).
+/// return, so pre-pipeline rejections still surface in `firma monitor`.
 async fn deny_malformed(
     handler: &RequestHandler,
     session_id: &str,
@@ -1985,7 +2049,6 @@ mod tests {
     use tokio_rustls::TlsConnector;
 
     use super::*;
-    use firma_config_schema::sidecar::TenancyMode;
 
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
@@ -2081,8 +2144,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -2092,8 +2154,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2103,7 +2163,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2119,8 +2179,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -2130,8 +2189,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2141,7 +2198,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2177,8 +2234,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -2188,8 +2244,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2199,7 +2253,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(FailingCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2217,8 +2271,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -2228,8 +2281,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2239,14 +2290,13 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(FailingCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
 
     /// Builds a pipeline that DENYs classified requests to `host` (empty
-    /// capability map). Uses `default_protected: false` so unmapped hosts
-    /// pass through.
+    /// capability map). Unmapped requests fail classification.
     fn test_pipeline_deny_for_host(host: &str) -> Arc<EnforcementPipeline> {
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
@@ -2258,16 +2308,13 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2277,7 +2324,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2293,16 +2340,13 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2312,7 +2356,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2436,21 +2480,30 @@ mod tests {
         String::from_utf8_lossy(&out).to_string()
     }
 
-    async fn read_connect_response(stream: &mut TcpStream) -> String {
+    async fn send_connect_request(
+        proxy_addr: SocketAddr,
+        request: &str,
+    ) -> anyhow::Result<(TcpStream, String)> {
+        let mut stream = TcpStream::connect(proxy_addr).await?;
+        stream.write_all(request.as_bytes()).await?;
+        let response = read_connect_response(&mut stream).await?;
+        Ok((stream, response))
+    }
+
+    async fn read_connect_response(stream: &mut TcpStream) -> anyhow::Result<String> {
         let mut buf = Vec::new();
         let mut chunk = [0u8; 512];
         for _ in 0..32 {
-            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk)).await {
-                Ok(Ok(0) | Err(_)) | Err(_) => break,
-                Ok(Ok(n)) => {
-                    buf.extend_from_slice(&chunk[..n]);
-                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                }
+            let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk))
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out reading CONNECT response headers"))??;
+            anyhow::ensure!(read > 0, "proxy closed before completing CONNECT response");
+            buf.extend_from_slice(&chunk[..read]);
+            if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+                return Ok(String::from_utf8_lossy(&buf).to_string());
             }
         }
-        String::from_utf8_lossy(&buf).to_string()
+        anyhow::bail!("CONNECT response headers exceed 16 KiB")
     }
 
     /// Starts the HTTP proxy interceptor and waits for it to be ready.
@@ -2478,7 +2531,7 @@ mod tests {
         addr: SocketAddr,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
-        max_request_body_bytes: usize,
+        max_request_body_bytes: NonZeroUsize,
     ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
         let interceptor =
             HttpInterceptor::new(addr).with_max_request_body_bytes(max_request_body_bytes);
@@ -2528,7 +2581,7 @@ mod tests {
         cancel: CancellationToken,
         mitm_config: HttpsMitmConfig,
         ca_dir: std::path::PathBuf,
-        max_request_body_bytes: usize,
+        max_request_body_bytes: NonZeroUsize,
     ) -> (
         SocketAddr,
         tokio::task::JoinHandle<Result<(), super::super::InterceptorError>>,
@@ -2558,8 +2611,8 @@ mod tests {
         addr: SocketAddr,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
-        max_request_body_bytes: usize,
-        total_body_budget_bytes: usize,
+        max_request_body_bytes: NonZeroUsize,
+        total_body_budget_bytes: NonZeroUsize,
     ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
         let interceptor = HttpInterceptor::new(addr)
             .with_max_request_body_bytes(max_request_body_bytes)
@@ -2713,16 +2766,10 @@ mod tests {
             ca_dir.path().to_path_buf(),
         )
         .await;
-        let mut stream = TcpStream::connect(proxy_address).await?;
-        stream
-            .write_all(
-                format!(
-                    "CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\nx-firma-session-id: _test_\r\n\r\n"
-                )
-                .as_bytes(),
-            )
-            .await?;
-        let response = read_connect_response(&mut stream).await;
+        let connect_request = format!(
+            "CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\nx-firma-session-id: _test_\r\n\r\n"
+        );
+        let (stream, response) = send_connect_request(proxy_address, &connect_request).await?;
         anyhow::ensure!(
             response.starts_with("HTTP/1.1 200"),
             "expected CONNECT 200, got {response:?}"
@@ -2917,18 +2964,21 @@ mod tests {
     #[test]
     fn subsecond_relay_timeout_diagnostics_do_not_truncate_to_zero() {
         let limits = ConnectRelayLimits {
-            setup_timeout: Duration::from_millis(500),
-            session_max: Duration::from_millis(750),
+            setup_timeout: NonZeroDuration::from_static(Duration::from_millis(500)),
+            session_max: NonZeroDuration::from_static(Duration::from_millis(750)),
         };
 
         assert_eq!(
-            format!("upgrade timed out after {:?}", limits.setup_timeout),
+            format!(
+                "upgrade timed out after {:?}",
+                limits.setup_timeout.duration()
+            ),
             "upgrade timed out after 500ms"
         );
         assert_eq!(
             format!(
                 "CONNECT tunnel exceeded {:?} session cap",
-                limits.session_max
+                limits.session_max.duration()
             ),
             "CONNECT tunnel exceeded 750ms session cap"
         );
@@ -3033,8 +3083,13 @@ mod tests {
         let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
 
-        let server_handle =
-            start_proxy_with_body_limit(proxy_addr, handler, cancel.clone(), 4).await;
+        let server_handle = start_proxy_with_body_limit(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            NonZeroUsize::new(4).unwrap(),
+        )
+        .await;
 
         let request = format!(
             "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
@@ -3131,12 +3186,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_proxy_passthrough_for_unmapped_host() {
+    async fn test_proxy_denies_unmapped_host() {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let proxy_addr = free_addr();
         let host = format!("127.0.0.1:{}", upstream_addr.port());
-        // Pipeline maps only api.openai.com, default_protected=false →
-        // unmapped hosts pass through.
+        // Pipeline maps only api.openai.com.
         let handler = test_handler(test_pipeline_deny_for_host("api.openai.com"));
         let cancel = CancellationToken::new();
 
@@ -3149,10 +3203,7 @@ mod tests {
         );
 
         let status = proxy_request(proxy_addr, &request).await;
-        assert_eq!(
-            status, 200,
-            "expected 200 for passthrough (unmapped) request"
-        );
+        assert_eq!(status, 403, "expected denial for an unmapped request");
 
         cancel.cancel();
         upstream_cancel.cancel();
@@ -3168,21 +3219,15 @@ mod tests {
         let cancel = CancellationToken::new();
         let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
 
-        let mut stream = TcpStream::connect(proxy_addr)
-            .await
-            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
         let connect_req = format!(
             "CONNECT {host} HTTP/1.1\r\n\
              Host: {host}\r\n\
              x-firma-session-id: _test_\r\n\
              \r\n"
         );
-        stream
-            .write_all(connect_req.as_bytes())
+        let (mut stream, response) = send_connect_request(proxy_addr, &connect_req)
             .await
-            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
-
-        let response = read_connect_response(&mut stream).await;
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
         assert!(
             response.starts_with("HTTP/1.1 200"),
             "expected CONNECT 200, got: {response:?}"
@@ -3275,15 +3320,10 @@ mod tests {
         )
         .await;
 
-        let mut stream = TcpStream::connect(proxy_addr)
-            .await
-            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
         let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n";
-        stream
-            .write_all(connect_req.as_bytes())
+        let (stream, connect_response) = send_connect_request(proxy_addr, connect_req)
             .await
-            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
-        let connect_response = read_connect_response(&mut stream).await;
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
         assert!(
             connect_response.starts_with("HTTP/1.1 200"),
             "expected CONNECT 200, got: {connect_response:?}"
@@ -3355,18 +3395,13 @@ Content-Length: 2\r\n\
         )
         .await;
 
-        let mut stream = TcpStream::connect(proxy_addr)
-            .await
-            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
         let host = format!("localhost:{}", target_addr.port());
         let connect_req = format!(
             "CONNECT {host} HTTP/1.1\r\nHost: {host}\r\nx-firma-session-id: _test_\r\n\r\n"
         );
-        stream
-            .write_all(connect_req.as_bytes())
+        let (mut stream, connect_response) = send_connect_request(proxy_addr, &connect_req)
             .await
-            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
-        let connect_response = read_connect_response(&mut stream).await;
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
         assert!(
             connect_response.starts_with("HTTP/1.1 200"),
             "expected CONNECT 200, got: {connect_response:?}"
@@ -3413,15 +3448,10 @@ Content-Length: 2\r\n\
         )
         .await;
 
-        let mut stream = TcpStream::connect(proxy_addr)
-            .await
-            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
         let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n";
-        stream
-            .write_all(connect_req.as_bytes())
+        let (mut stream, connect_response) = send_connect_request(proxy_addr, connect_req)
             .await
-            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
-        let connect_response = read_connect_response(&mut stream).await;
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
         assert!(
             connect_response.starts_with("HTTP/1.1 200"),
             "expected CONNECT 200, got: {connect_response:?}"
@@ -3532,19 +3562,14 @@ Content-Length: 2\r\n\
             cancel.clone(),
             mitm_config,
             ca_tempdir.path().to_path_buf(),
-            4,
+            NonZeroUsize::new(4).unwrap(),
         )
         .await;
 
-        let mut stream = TcpStream::connect(proxy_addr)
-            .await
-            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
         let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n";
-        stream
-            .write_all(connect_req.as_bytes())
+        let (stream, connect_response) = send_connect_request(proxy_addr, connect_req)
             .await
-            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
-        let connect_response = read_connect_response(&mut stream).await;
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
         assert!(
             connect_response.starts_with("HTTP/1.1 200"),
             "expected CONNECT 200, got: {connect_response:?}"
@@ -3644,8 +3669,96 @@ Content-Length: 10\r\n\
     }
 
     #[tokio::test]
+    async fn test_proxy_connect_strict_mitm_non_tls_payload_emits_deny_audit() {
+        // A strict host skips the CONNECT decision, so a non-TLS payload it
+        // then refuses has no other record. Any tunnel that is not TLS — SSH
+        // through the proxy, a database tunnel — lands here; it has to read as
+        // a denial rather than as an unexplained dead connection.
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let (handler, mut audit_rx) = test_handler_with_audit(test_pipeline_allow_connect());
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            strict_hosts: vec!["localhost".to_string()],
+            cert_ttl: Duration::from_mins(5),
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let (target_addr, target_cancel) = mock_connect_target().await;
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let mut stream = TcpStream::connect(proxy_addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
+        let host = format!("localhost:{}", target_addr.port());
+        let connect_req = format!(
+            "CONNECT {host} HTTP/1.1\r\nHost: {host}\r\nx-firma-session-id: _test_\r\n\r\n"
+        );
+        stream
+            .write_all(connect_req.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
+        let connect_response = read_connect_response(&mut stream)
+            .await
+            .unwrap_or_else(|e| panic!("failed to read CONNECT response: {e}"));
+        assert!(
+            connect_response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got: {connect_response:?}"
+        );
+
+        stream
+            .write_all(b"ping")
+            .await
+            .unwrap_or_else(|e| panic!("failed to write tunnel payload: {e}"));
+        let mut reply = [0u8; 4];
+        let relayed = stream.read_exact(&mut reply).await;
+        assert!(
+            relayed.is_err(),
+            "a strict host must not relay a non-TLS payload, got {:?}",
+            std::str::from_utf8(&reply)
+        );
+
+        let payload = tokio::time::timeout(Duration::from_secs(5), audit_rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for the deny audit event"))
+            .unwrap_or_else(|| panic!("audit channel closed before the deny event"));
+        assert_eq!(payload.decision, crate::audit::Decision::Deny);
+        assert!(
+            payload.deny_reason.contains("non-TLS CONNECT preface"),
+            "deny audit should name the refused preface, got {:?}",
+            payload.deny_reason
+        );
+        assert!(
+            payload.deny_reason.contains("bypass_hosts"),
+            "deny audit should name the escape hatch, got {:?}",
+            payload.deny_reason
+        );
+        // One refusal, one event: returning `Ok` instead of the relay error is
+        // what keeps the caller from auditing the same refusal again, so a
+        // second event arriving here is the regression this test exists for.
+        let second = tokio::time::timeout(Duration::from_secs(1), audit_rx.recv()).await;
+        assert!(
+            second.is_err(),
+            "the refusal must be audited once, got a second event: {second:?}"
+        );
+
+        cancel.cancel();
+        target_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
     async fn test_proxy_connect_strict_mitm_preflight_failure_emits_deny_audit() {
-        // Regression (FIR-208): a strict-MITM preflight failure is a
+        // Regression: a strict-MITM preflight failure is a
         // fail-closed network-layer DENY. It must surface in monitor, so
         // the proxy has to emit an audit event — not just return 403.
         let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -3726,7 +3839,9 @@ Content-Length: 10\r\n\
 
         let request =
             format!("CONNECT {connect_authority} HTTP/1.1\r\nHost: {connect_authority}\r\n\r\n");
-        let response = proxy_response(proxy_addr, &request).await;
+        let (_stream, response) = send_connect_request(proxy_addr, &request)
+            .await
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
         let status = response
             .lines()
             .next()
@@ -3746,7 +3861,7 @@ Content-Length: 10\r\n\
 
     #[test]
     fn test_body_budget_acquire_within_ceiling() {
-        let budget = BodyBudget::new(16);
+        let budget = BodyBudget::new(NonZeroUsize::new(16).unwrap());
         assert!(budget.try_acquire(8));
         assert!(budget.try_acquire(8));
         assert!(!budget.try_acquire(1));
@@ -3754,7 +3869,7 @@ Content-Length: 10\r\n\
 
     #[test]
     fn test_body_budget_release_allows_reacquire() {
-        let budget = BodyBudget::new(8);
+        let budget = BodyBudget::new(NonZeroUsize::new(8).unwrap());
         assert!(budget.try_acquire(8));
         assert!(budget.try_release(8));
         assert!(budget.try_acquire(8));
@@ -3762,13 +3877,14 @@ Content-Length: 10\r\n\
 
     #[test]
     fn test_body_budget_acquire_zero_always_succeeds() {
-        let budget = BodyBudget::new(0);
+        let budget = BodyBudget::new(NonZeroUsize::MIN);
+        assert!(budget.try_acquire(1));
         assert!(budget.try_acquire(0));
     }
 
     #[test]
     fn test_body_budget_release_zero_is_noop() {
-        let budget = BodyBudget::new(8);
+        let budget = BodyBudget::new(NonZeroUsize::new(8).unwrap());
         assert!(budget.try_acquire(4));
         assert!(budget.try_release(0));
         assert!(budget.try_acquire(4));
@@ -3784,8 +3900,8 @@ Content-Length: 10\r\n\
         let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
 
-        let budget = 4usize;
-        let max_body = 4usize;
+        let budget = NonZeroUsize::new(4).unwrap();
+        let max_body = NonZeroUsize::new(4).unwrap();
         let server_handle =
             start_proxy_with_budget(proxy_addr, handler, cancel.clone(), max_body, budget).await;
 
@@ -3840,8 +3956,8 @@ Content-Length: 10\r\n\
         let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
 
-        let budget = 4usize;
-        let max_body = 4usize;
+        let budget = NonZeroUsize::new(4).unwrap();
+        let max_body = NonZeroUsize::new(4).unwrap();
         let server_handle =
             start_proxy_with_budget(proxy_addr, handler, cancel.clone(), max_body, budget).await;
 

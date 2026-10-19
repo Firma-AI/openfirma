@@ -41,16 +41,10 @@ pub enum ContractValidationError {
     TerminalPtyPortRequiresPty,
     #[error("terminal.pty=true requires terminal.interactive=true")]
     TerminalPtyRequiresInteractive,
-    #[error("terminal.pty_vsock_port must be distinct from network.vsock_sidecar_port")]
-    TerminalPtyPortConflictsWithSidecar,
     #[error("terminal.pty=true requires non-zero terminal.pty_control_vsock_port")]
     TerminalPtyRequiresControlVsockPort,
     #[error("terminal.pty_control_vsock_port requires terminal.pty=true")]
     TerminalPtyControlPortRequiresPty,
-    #[error("terminal.pty_control_vsock_port must be distinct from network.vsock_sidecar_port")]
-    TerminalPtyControlPortConflictsWithSidecar,
-    #[error("terminal.pty_control_vsock_port must be distinct from terminal.pty_vsock_port")]
-    TerminalPtyControlPortConflictsWithDataPort,
     #[error("{field} must be non-zero when set")]
     ZeroTerminalDimension { field: &'static str },
     #[error("{field} must be a host:port socket address, got {value}")]
@@ -63,6 +57,27 @@ pub enum ContractValidationError {
     NonLoopbackSocketAddr { field: &'static str, value: String },
     #[error("{field} must be non-zero")]
     ZeroPort { field: &'static str },
+    #[error("{field} must not use reserved VMADDR_PORT_ANY port 4294967295")]
+    ReservedVsockPort { field: &'static str },
+    #[error("{first_field} must be distinct from {second_field}")]
+    VsockPortCollision {
+        first_field: &'static str,
+        second_field: &'static str,
+    },
+    #[error("secret_shims provider name must be a single portable path component: {name}")]
+    UnsafeSecretShimProviderName { name: String },
+    #[error("secret_shims provider name must be unique: {name}")]
+    DuplicateSecretShimProviderName { name: String },
+    #[error("secret_shims.provider_names must not be empty when secret_shims is present")]
+    EmptySecretShimProviders,
+    #[error("secret_shims.guest_broker_addr must be distinct from {field}")]
+    GuestBrokerAddrCollision { field: &'static str },
+    #[error("{field} must not be within guest-writable runtime_dir {runtime_dir}: {path}")]
+    SecretShimPathWithinRuntime {
+        field: &'static str,
+        path: PathBuf,
+        runtime_dir: PathBuf,
+    },
     #[error("network.direct_network_devices_allowed must be false for VZ guest mode")]
     DirectNetworkDevicesAllowed,
     #[error("network.attribution_headers must contain x-firma-sandbox-id")]

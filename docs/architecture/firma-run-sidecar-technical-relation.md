@@ -177,9 +177,9 @@ Important fields:
   - `session_max` (default `"10m"`)
 - `[sidecar.interceptor.https_mitm]`
   - `enabled` (default true)
-  - `intercept_hosts`
-  - `bypass_hosts`
-  - `strict_hosts`
+  - `intercept_hosts` (default `["*"]`)
+  - `bypass_hosts` (default `[]`)
+  - `strict_hosts` (default `["*"]`)
   - `cert_ttl`
   - `cert_cache_capacity`
 - `[sidecar.ca]`
@@ -253,9 +253,14 @@ E2E harness currently validates:
 
 If interoperability issues occur:
 
-1. narrow `intercept_hosts` scope, or
-2. move problematic endpoints into `bypass_hosts`, or
+1. move problematic endpoints into `bypass_hosts` — the durable control, and
+   the only one `firma config` preserves across a re-run;
+2. narrow `intercept_hosts` scope, or
 3. disable MITM (`enabled = false`) temporarily.
+
+Options 2 and 3 are stripped by the next `firma config` run, which writes no
+interception keys and removes the ones it finds. Use `bypass_hosts` for
+anything that has to outlive a re-run.
 
 ## 12. References
 

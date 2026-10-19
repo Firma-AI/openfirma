@@ -3,7 +3,62 @@
 Single binary: `firma <subcommand>`. All examples below assume `firma` is on
 PATH or invoked via `cargo run -p firma --`.
 
+## `firma login`
+
+Logs in to a Firma Team Control Plane through the browser (OAuth 2.0
+Authorization Code with PKCE). The Control Plane origin is explicit; the
+command does not infer it from `firma.toml` or the Sidecar's Authority URL.
+
+```bash
+firma login --control-plane-origin https://team.example.com
+```
+
+The command prints the authorization URL to stderr and opens the browser. Sign in,
+choose a Workspace, and approve; the browser returns a one-time code to a
+loopback listener, then you can close the window. The CLI exchanges the code
+once and reports success only after one authenticated Workspace request
+succeeds. It prints the Workspace and Membership, never the access token.
+
+- `--terminal-code`: when a loopback callback cannot reach this machine, the
+  browser shows the code instead; paste it into the hidden prompt.
+- `--development-loopback`: allows a plain-HTTP loopback origin, such as
+  `http://127.0.0.1:8080`, for a local Control Plane. Plain HTTP to any other
+  host is rejected.
+- `--allow-plaintext-refresh-token`: on Unix, permits a private `0600` file
+  when the operating system credential store is unavailable. Without this
+  explicit option, renewable login fails closed.
+
+A code works once and expires ten minutes after you approve, so
+sign-in time does not count. The CLI waits up to 15 minutes.
+
+The login is saved as one connection per machine (origin, Workspace and
+Membership) in `connection.json` under the user configuration directory's
+`firma` folder, or under `FIRMA_CONNECTION_DIR` when set to an absolute path.
+The directory and file must be private to the user; on Unix the CLI refuses
+symlinks and group- or world-accessible paths. Login refuses an existing saved
+connection; run `firma logout` before logging in again. Linux and macOS request
+a renewable credential and save it in the operating system credential store;
+Windows remains access-only. If the initial save fails, the CLI reports an
+error without attempting compensating revocation: the unused newly issued
+credential is allowed to expire on the server.
+
+## `firma logout`
+
+Removes the saved connection on this machine and prints `Logged out.`, or
+`No saved login.` when there was none. The command attempts Control Plane
+revocation of the renewable credential, then attempts local removal even if
+reading or revoking that credential failed. Unconfirmed remote revocation
+produces a warning after successful local removal; a local removal failure
+is an error. If an interrupted credential flow is uncertain, run `firma logout`
+before a fresh `firma login`.
+
 ## `firma config`
+
+`agent-remote` uses complete Authority mapping snapshots and generates no local
+mapping files. It rejects `--mapping` and `--extra-hosts`. Conversion removes the
+local `[authority]` section, including its mapping paths, unless an interactive
+run chooses to keep it; existing files are not deleted. `agent-local` continues
+generating files for the local mini-authority's `[authority].mapping_rules_paths`.
 
 `firma run` works out of the box with no prior setup — it auto-scaffolds a
 default config on first use. `firma config` lets you override those defaults:
@@ -16,8 +71,11 @@ to `--mode agent-remote`, the regenerated `firma.toml` normally removes that
 section; otherwise `firma run` starts the Authority locally instead of using
 only the remote Authority. Non-force runs warn about the local startup
 behavior. Interactive runs ask whether to keep the section and use that answer
-to rewrite `firma.toml`; non-interactive non-force runs preserve the existing
-file. `--force` overwrites the config directly and removes the section.
+to rewrite `firma.toml`; non-interactive runs remove the section even without
+`--force`. The command merges `firma.toml` on every run. Switching back to
+`agent-local` removes the remote physical connection override, trust paths,
+mTLS client identity, and PSK credentials so the Sidecar uses the local
+mini-authority. Remote re-runs preserve those connection settings.
 
 ### Usage
 
@@ -27,25 +85,29 @@ firma config [OPTIONS]
 
 ### Options
 
-| Flag                         | Short | Default                  | Description                                                                |
-| ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------------- |
-| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                              |
-| `--profile`                  |       | wizard / `generic`       | Execution profile written to `[run].profile`                               |
-| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`         |
-| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                             |
-| `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
-| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                            |
-| `--workspace`                |       | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
-| `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land                   |
-| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                |
-| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)               |
-| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)        |
-| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                |
-| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                                  |
-| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults                     |
-| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair                  |
-| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                            |
-| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                                 |
+| Flag                         | Short | Default                  | Description                                                                                                                                                               |
+| ---------------------------- | ----- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                                                                                                                             |
+| `--profile`                  |       | wizard / `generic`       | Execution profile written to `[run].profile`                                                                                                                              |
+| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`                                                                                                        |
+| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                                                                                                                            |
+| `--mapping`                  |       | wizard / profile default | Mapping file(s) listed in `[authority].mapping_rules_paths` — repeat for multiple (`agent-local` / `authority`; rejected in `agent-remote`)                               |
+| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach, written to `mapping-rules.toml` (`agent-local` / `authority`; rejected in `agent-remote`)                                |
+| `--workspace`                |       | CWD                      | Agent RW path for the sandbox. Written to `firma.toml` only when it differs from the project root (the directory holding `.firma/`), which `firma run` derives on its own |
+| `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land                                                                                                                  |
+| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                                                                                                               |
+| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)                                                                                                              |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)                                                                                                       |
+| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                                                                                                               |
+| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                                                                                                                                 |
+| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults                                                                                                                    |
+| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair                                                                                                                 |
+| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                                                                                                                           |
+| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                                                                                                                                |
+
+Mappings belong to the Authority that publishes them. In `agent-remote` mode,
+configure mappings on the remote Authority; `--mapping` and `--extra-hosts`
+are rejected there.
 
 An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
 file even without `--force`; other existing generated files are still
@@ -91,8 +153,9 @@ Agent connecting to a remote authority:
 firma config --yes --mode agent-remote \
   --authority-url https://authority.example.com:9443 \
   --authority-ca-cert /path/to/ca.crt \
+  --authority-pub-key /path/to/workspace.pub \
   --agent-id agt_01j0000000e008000000000001 \
-  --profile codex --posture strict --mapping anthropic
+  --profile codex --posture strict
 ```
 
 Multiple mappings:
@@ -241,33 +304,29 @@ The sidecar handles `SIGTERM` and `SIGINT` for graceful shutdown:
 
 ### Standalone startup log contract
 
-On every successful start the sidecar emits exactly seven INFO lines
+On every successful start the sidecar emits exactly six INFO lines
 in order. Operators automating the binary should wait for the final
-`ready` line before sending traffic; the `examples/demo/` runbook
+`sidecar ready` line before sending traffic; the `examples/demo/` runbook
 reproduces the contract.
 
 ```text
 config loaded             path="…"
-mapping table loaded      rules=N
-policy bundle loaded      version="…" policies=N
-authority stream connected endpoint="…"
 connector registry built  hosts=N default_timeout_ms=T
 interceptor listening     addr="…"
-ready
+authority stream connected endpoint="…"
+policy bundle loaded      version=… ttl_seconds=N
+sidecar ready
 ```
 
-`policy bundle loaded version` is the eight-character hex prefix of
-the SHA-256 of the concatenated `.cedar` files in `sidecar.policy.dir`. Line 4
-fires unconditionally; when `sidecar.authority.url` is unset the
-endpoint is reported as `(disabled)`.
-
-Line 7 (`ready`) is held until the Authority streams have hydrated —
-both the policy bundle stream and the revocation stream must report
-themselves ready before the line is emitted. When
-`sidecar.authority.url` is unset, both flags are pre-seeded as ready, so
-the gate is a no-op and `ready` fires immediately after line 6. This
-prevents the first wrapped-agent call from racing the readiness gate
-and hitting a DENY before policy is in place.
+Lines 4–6 are held until the Authority streams have hydrated — both the policy
+bundle stream, which carries the complete policy and mapping snapshot, and the
+revocation stream must report themselves ready. Line 4 names the required
+`sidecar.authority.url` endpoint, and line 5 carries the Authority bundle
+version the Sidecar enforces. This prevents the first wrapped-agent call from
+racing the readiness gate and hitting a DENY before policy is in place. If the
+Authority never hydrates, only lines 1–3 appear. Each stream also logs its own
+`authority stream connected stream=…` line on every connection; those are
+diagnostics, not contract lines.
 
 ### Exit codes
 
@@ -303,16 +362,21 @@ marker's `metadata.toml` to discover a run's full ID.
 
 ### Output columns (table mode)
 
-| Column       | Description                                          |
-| ------------ | ---------------------------------------------------- |
-| `SANDBOX_ID` | The run's sandbox identifier.                        |
-| `AGENT`      | Agent name from the marker metadata.                 |
-| `PID`        | Sidecar process ID, or `-` if absent.                |
-| `STATE`      | `running`, `unhealthy`, `stopped`, or `unknown`.     |
-| `LISTEN`     | UDS path or address the sidecar is bound to, or `-`. |
-| `UPTIME`     | `HH:MM:SS` since the marker was written, or `-`.     |
+| Column       | Description                                                                                                                                    |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SANDBOX_ID` | The run's sandbox identifier.                                                                                                                  |
+| `AGENT`      | Agent name from the marker metadata.                                                                                                           |
+| `PID`        | Sidecar process ID, or `-` if absent.                                                                                                          |
+| `STATE`      | `running`, `unhealthy`, `stopped`, or `unknown`.                                                                                               |
+| `BUNDLE`     | Authority bundle version the sidecar enforces (versions over 12 characters end in `…`), `<version> (stale)` past its TTL, or `-` when unknown. |
+| `LISTEN`     | UDS path or address the sidecar is bound to, or `-`.                                                                                           |
+| `UPTIME`     | `HH:MM:SS` since the marker was written, or `-`.                                                                                               |
 
-In JSON mode, an absent PID is emitted as `null`.
+In JSON mode, an absent PID is emitted as `null`. `policy_bundle_version` and
+`policy_bundle_expires_at` (RFC 3339) report the enforced bundle and are empty
+until the sidecar accepts its first Authority bundle. The sidecar publishes
+them in `enforcement.toml` beside the marker (daemon:
+`<state_dir>/sidecar.enforcement.toml`) and removes that file when it starts.
 
 ### STATE semantics
 
@@ -382,19 +446,23 @@ revocations. Pre-flight only, never on the hot path.
 
 ### `firma authority issue`
 
-Issues a signed capability token directly from the loaded Cedar
-bundle and writes it as signed TOML. Pass that file to
-`firma run --capability-file` when an invocation must use an explicitly
-provided capability instead of automatic issuance.
+Issues a signed capability token directly from the loaded Cedar bundle and
+writes it as signed TOML. For a standalone or locally autostarted Sidecar,
+write the file beneath the selected `<state-dir>/capabilities/` directory.
+Pass that canonical file to `firma run --capability-file` when an invocation
+must use an explicitly provided capability instead of automatic issuance.
 
 ```bash
+export FIRMA_STATE_DIR="$PWD/.firma-runtime"
+mkdir -p "$FIRMA_STATE_DIR/capabilities"
+
 firma authority --config firma.toml issue \
   --agent-id agt_01j0000000e008000000000001 \
   --session-id demo-session \
   --action communication.external.send \
   --resource-scope '*' \
   --ttl-seconds 3600 \
-  --output capability-demo-agent.toml
+  --output "$FIRMA_STATE_DIR/capabilities/capability-demo-agent.toml"
 ```
 
 | Flag               | Required | Default | Description                                    |
@@ -411,8 +479,12 @@ the gRPC `IssueCapability` handler — a Cedar deny exits non-zero
 with `issuance failed: cedar denied issuance (...): ...`.
 
 The output TOML carries the raw `v4.public....` token plus the matching claims.
-`firma run` and the Sidecar verify it with the configured Authority public key
-before use.
+`firma run` requires that complete canonical seed shape and exports only its
+`raw_token` as `FIRMA_CAPABILITY_TOKEN`, alongside the original path as
+`FIRMA_CAPABILITY_FILE`. A locally autostarted Sidecar also loads the file,
+verifies the token with the configured Authority public key, and checks the
+signed claims against the TOML claims. A pre-managed external Sidecar owns its
+seed configuration independently.
 
 ## `firma run`
 
@@ -448,7 +520,7 @@ When autostart fires, `firma run`:
    `[sidecar]` section. Invalid templates fail before local components start or
    run-marker artifacts are created. Relative
    resource paths in the inherited template (e.g. `sidecar.audit.signing_key_path`,
-   `sidecar.policy.dir`, `sidecar.mapping.rules_path`, `sidecar.authority.public_key_path`) are
+   `sidecar.policy.dir`, `authority.mapping_rules_paths`, `sidecar.authority.public_key_path`) are
    rebased to absolute paths anchored on the **template's** config
    directory so they keep pointing at the operator's files after the
    synthesized config is written into `<marker_dir>/`.

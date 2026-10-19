@@ -1,15 +1,18 @@
 # GitHub REST + smart HTTP mapping — 54 rules → 12 action classes.
-# Source of truth: docs/markdown/github_connector.md.
+# Shipped GitHub mapping source for CLI configuration and standard-set curation.
 #
 # MITM required for REST rules (configured via intercept_hosts in firma.toml).
-# Without MITM: only the CONNECT rule below fires — all GitHub traffic → code.review.read.
+# Without MITM: only the CONNECT rules below fire — both hosts map to
+# code.write because an opaque tunnel can contain writes as well as reads.
 # With MITM: individual REST rules classify by method + path.
 
 # Plain CONNECT (no MITM): bare host, default port stripped by normalizer.
+# The API also accepts mutating requests; a read-only class would let a
+# read-only policy authorize those writes without seeing the inner method.
 [[rules]]
 method = "CONNECT"
 host = "api.github.com"
-action_class = "code.review.read"
+action_class = "code.write"
 
 # Git HTTPS transport (clone/push/pull) — cannot be classified further at
 # CONNECT level; code.write covers both read and write git directions.

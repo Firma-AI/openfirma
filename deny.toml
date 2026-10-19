@@ -3,6 +3,36 @@
 
 [graph]
 targets = []
+all-features = true
+
+# ---------------------------------------------------------------------------
+# Advisories
+# ---------------------------------------------------------------------------
+# Vulnerable, unmaintained, unsound and yanked crates fail `just audit`.
+# Documented exceptions for advisories that cannot be fixed without upstream
+# changes; every entry explains why.
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # rustls-pemfile 2.2.0 — unmaintained (superseded by rustls-pki-types)
+  # Path: firma-sidecar → rustls-pemfile (direct, test-only usage in interceptor/http.rs)
+  # Fix: migrate to rustls-pki-types pem feature — tracked separately
+  "RUSTSEC-2025-0134",
+
+  # unsafe-libyaml 0.2.11 — unmaintained
+  # Path: firma → serde_yaml 0.9 → unsafe-libyaml
+  # No advisory reports a vulnerability; replacing serde_yaml is separate work
+  "RUSTSEC-2024-0449",
+
+  # zbus_names, zvariant, zvariant_derive — unmaintained (merged into zbus 6)
+  # Path: firma-connection-store → zbus-secret-service-keyring-store → secret-service → zbus 5
+  # No advisory reports a vulnerability.
+  # TODO: drop these once secret-service releases zbus 6 support
+  "RUSTSEC-2026-0370",
+  "RUSTSEC-2026-0371",
+  "RUSTSEC-2026-0372",
+]
 
 # ---------------------------------------------------------------------------
 # Licenses
@@ -30,7 +60,14 @@ allow = [
 # r-efi: UEFI support library pulled in via getrandom → cc (build dep only).
 # Not linked into the Firma binary; no LGPL linking obligation.
 # Scoped exception so any future runtime LGPL dep still trips the allowlist.
-exceptions = [{ allow = ["LGPL-2.1-or-later"], crate = "r-efi" }]
+#
+# option-ext: MPL-2.0, pulled in via dirs → dirs-sys. MPL-2.0 is file-level
+# copyleft and the crate is used unmodified; scoped so it does not widen the
+# allowlist for any other crate.
+exceptions = [
+  { allow = ["LGPL-2.1-or-later"], crate = "r-efi" },
+  { allow = ["MPL-2.0"], crate = "option-ext" },
+]
 
 # ---------------------------------------------------------------------------
 # Banned crates
@@ -46,8 +83,6 @@ deny = [
   { crate = "openssl", reason = "use rustls; openssl not permitted" },
   { crate = "openssl-sys", reason = "use rustls; openssl not permitted" },
 ]
-
-# Advisories are handled exclusively by cargo-audit (see .cargo/audit.toml).
 
 # ---------------------------------------------------------------------------
 # Sources

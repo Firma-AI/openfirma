@@ -4,6 +4,7 @@ pub mod authority;
 pub mod config;
 pub mod control;
 pub mod doctor;
+pub mod login;
 pub mod monitor;
 pub mod policy;
 pub mod run;
@@ -90,6 +91,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Log in to a Firma Team Control Plane in the browser and save the connection.
+    Login(login::Args),
+    /// Forget the saved Firma Team connection on this machine.
+    Logout,
     /// Run the Authority: issues tokens, streams policy bundles, serves revocations.
     Authority(authority::Args),
     /// Scaffold a new agent config directory interactively.

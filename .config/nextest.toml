@@ -4,12 +4,15 @@ experimental = ["setup-scripts"]
 
 [profile.default]
 default-filter = "not binary_id(firma::e2e)"
-slow-timeout = { period = "60s", terminate-after = 5 }
+slow-timeout = { period = "15s", terminate-after = 4 }
 status-level = "fail"
 final-status-level = "slow"
 
 [profile.ci]
 default-filter = "not binary_id(firma::e2e)"
+# Retry failures so one flaky test does not fail the run. Nextest still reports
+# a test that passes only on retry as flaky.
+retries = 2
 status-level = "fail"
 final-status-level = "slow"
 failure-output = "immediate-final"

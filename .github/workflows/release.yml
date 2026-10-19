@@ -51,7 +51,7 @@ jobs:
   plan:
     permissions:
       contents: read
-    runs-on: "ubuntu-22.04"
+    runs-on: "ubuntu-24.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
       tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
@@ -129,11 +129,11 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
-      - name: "Install protoc"
-        uses: "./.github/actions/setup-protoc"
+      - name: "Install protoc with mise"
+        uses: "./.github/actions/setup-mise"
         with:
-          "repo-token": "${{ secrets.GITHUB_TOKEN }}"
-          "version": "35.1"
+          "tools": |
+            protoc
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
@@ -164,6 +164,22 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
+      - name: Assert packaged secret shim archive members
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(jq -r '.upload_files[]' dist-manifest.json | grep -E '\.(tar\.gz|zip)$')
+          test "${#archives[@]}" -gt 0
+          for archive in "${archives[@]}"; do
+            case "${archive}" in
+              *.tar.gz)
+                tar -tzf "${archive}" | grep -E '/firma-secret-shim$'
+                ;;
+              *.zip)
+                unzip -Z1 "${archive}" | grep -E '/firma-secret-shim\.exe$'
+                ;;
+            esac
+          done
       - name: "Upload artifacts"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -179,7 +195,7 @@ jobs:
     needs:
       - plan
       - build-local-artifacts
-    runs-on: "ubuntu-22.04"
+    runs-on: "ubuntu-24.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
@@ -188,6 +204,11 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Reject a newly published legacy-allowlisted tag
+        if: ${{ needs.plan.outputs.publishing == 'true' }}
+        env:
+          FIRMA_INSTALLER_RELEASE_TAG_GUARD: ${{ needs.plan.outputs.tag }}
+        run: sh ./install.sh
       - name: Install cached dist
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -232,7 +253,7 @@ jobs:
     if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    runs-on: "ubuntu-22.04"
+    runs-on: "ubuntu-24.04"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
@@ -293,7 +314,7 @@ jobs:
     needs:
       - plan
       - host
-    runs-on: "ubuntu-22.04"
+    runs-on: "ubuntu-24.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ needs.plan.outputs.val }}
@@ -346,7 +367,7 @@ jobs:
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
     if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') }}
-    runs-on: "ubuntu-22.04"
+    runs-on: "ubuntu-24.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

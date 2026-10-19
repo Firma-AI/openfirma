@@ -131,7 +131,7 @@ firma run --profile generic -- python agent.py
 | `--config <path>`          | Optional runtime config (.toml/.yaml).                 |
 | `--backend <kind>`         | Override: `bwrap`, `vz`, `wsl2`, `firecracker`.        |
 | `--sidecar <local\|url>`   | `local` autostarts; a URL targets an external sidecar. |
-| `--capability-file <path>` | Capability lease refresh source.                       |
+| `--capability-file <path>` | Canonical signed capability seed TOML.                 |
 | `--identity-mode <mode>`   | `sandbox-user` or `host-user`.                         |
 | `--preserve-host-user`     | Force host UID/GID inside sandbox.                     |
 | `--print-effective-config` | Dump resolved config as JSON before exec.              |
@@ -179,17 +179,17 @@ interactively.
 
 `firma config` flags:
 
-| Flag                    | Default                 | Description                                           |
-| ----------------------- | ----------------------- | ----------------------------------------------------- |
-| `--output-dir <dir>`    | `.firma` in current dir | Where firma.toml, policies, and mappings are written. |
-| `--workspace <dir>`     | current directory       | Agent RW access path (bwrap mount).                   |
-| `--profile <profile>`   | wizard / `generic`      | Local execution profile written to `[run].profile`.   |
-| `--agent-id <agent-id>` | generated / prompt      | Authority-registered `agt_` TypeID.                   |
-| `--posture <val>`       | wizard / `dev`          | Cedar enforcement posture.                            |
-| `--mapping <val>`       | wizard / `anthropic`    | Mapping file(s) — repeat for multiple.                |
-| `--yes`                 | _off_                   | Skip the wizard; use defaults for any unset flag.     |
-| `--state-dir <dir>`     | `FIRMA_STATE_DIR` / XDG | State dir (keys, revocations, generated CA).          |
-| `--force`               | _off_                   | Overwrite existing files.                             |
+| Flag                    | Default                 | Description                                                                                        |
+| ----------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `--output-dir <dir>`    | `.firma` in current dir | Where firma.toml, policies, and mappings are written.                                              |
+| `--workspace <dir>`     | current directory       | Agent RW access path (bwrap mount).                                                                |
+| `--profile <profile>`   | wizard / `generic`      | Local execution profile written to `[run].profile`.                                                |
+| `--agent-id <agent-id>` | generated / prompt      | Authority-registered `agt_` TypeID.                                                                |
+| `--posture <val>`       | wizard / `dev`          | Cedar enforcement posture.                                                                         |
+| `--mapping <val>`       | wizard / `anthropic`    | Mapping file(s) the local Authority publishes — repeat for multiple. Rejected with `agent-remote`. |
+| `--yes`                 | _off_                   | Skip the wizard; use defaults for any unset flag.                                                  |
+| `--state-dir <dir>`     | `FIRMA_STATE_DIR` / XDG | State dir (keys, revocations, generated CA).                                                       |
+| `--force`               | _off_                   | Overwrite existing files.                                                                          |
 
 ### `firma sidecar` (daemon lifecycle)
 

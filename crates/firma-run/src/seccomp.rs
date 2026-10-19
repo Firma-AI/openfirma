@@ -833,7 +833,7 @@ mod tests {
             "credential.write".to_string(),
         ];
         let (syscalls, unsupported) = map_actions_to_syscalls(&actions);
-        assert!(unsupported.is_empty());
+        assert_eq!(unsupported, [] as [String; 0]);
         assert!(syscalls.contains(&SyscallId::Execve));
         assert!(syscalls.contains(&SyscallId::Unlinkat));
         assert!(syscalls.contains(&SyscallId::Setresuid));

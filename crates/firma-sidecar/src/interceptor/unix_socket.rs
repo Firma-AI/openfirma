@@ -298,6 +298,8 @@ fn deny_json_response(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use std::net::SocketAddr;
     use std::time::Duration;
 
@@ -309,7 +311,6 @@ mod tests {
     use tokio::net::UnixStream;
 
     use super::*;
-    use firma_config_schema::sidecar::TenancyMode;
 
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
@@ -390,8 +391,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -401,8 +401,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -412,7 +410,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -430,16 +428,13 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -449,7 +444,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -484,8 +479,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -495,8 +489,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -506,14 +498,13 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(FailingCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
 
-    /// Builds a pipeline where only `api.openai.com` is mapped and
-    /// `default_protected` is false, so unmapped hosts pass through.
-    fn test_pipeline_passthrough() -> Arc<EnforcementPipeline> {
+    /// Builds a pipeline where only `api.openai.com` is mapped.
+    fn test_pipeline_single_host() -> Arc<EnforcementPipeline> {
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -524,8 +515,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -535,8 +525,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -546,7 +534,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -789,10 +777,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_uds_passthrough_for_unmapped_host() {
+    async fn test_uds_denies_unmapped_host() {
         let sock = temp_socket_path("passthrough");
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
-        let handler = test_handler(test_pipeline_passthrough());
+        let handler = test_handler(test_pipeline_single_host());
         let cancel = CancellationToken::new();
         let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
@@ -804,11 +792,8 @@ mod tests {
         );
 
         let (status, body) = uds_request(&sock, &request).await;
-        assert_eq!(
-            status, 200,
-            "non-protected host should passthrough (200), got {status}"
-        );
-        assert_eq!(body, "OK");
+        assert_eq!(status, 403, "unmapped host should be denied, got {status}");
+        assert!(body.contains("UnclassifiedIntent"));
 
         cancel.cancel();
         upstream_cancel.cancel();

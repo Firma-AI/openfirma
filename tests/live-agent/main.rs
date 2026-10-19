@@ -31,16 +31,22 @@ pub fn firma_bin() -> PathBuf {
 
 // ── Test driver ──────────────────────────────────────────────────────────────
 
+/// Scenarios exercise Firma enforcement, not agent capability, so each agent
+/// runs its provider's cheapest model.
 fn default_agent(kind: AgentKind) -> agent::Agent {
     match kind {
         AgentKind::Claude => agent::Agent::claude().args([
+            "--model",
+            "claude-haiku-5-5",
             "--permission-mode",
             "bypassPermissions",
             // Suppresses analytics only — normal agent behavior is unaffected.
             "--settings",
             r#"{"env":{"DISABLE_TELEMETRY":"1"}}"#,
         ]),
-        AgentKind::Codex => agent::Agent::codex().args(["--sandbox", "danger-full-access"]),
+        AgentKind::Codex => {
+            agent::Agent::codex().args(["--model", "gpt-6-luna", "--sandbox", "danger-full-access"])
+        }
     }
 }
 

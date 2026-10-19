@@ -31,7 +31,7 @@ flowchart TB
     credentials -->|"ALLOW"| connector
     connector -->|"Forwarded request"| upstream
 
-    normalizer -. "DENY or PASSTHROUGH" .-> audit
+    normalizer -. "DENY" .-> audit
     capability -. "DENY" .-> audit
     policy -. "DENY" .-> audit
     credentials -. "DENY" .-> audit
@@ -102,15 +102,14 @@ That shift gives policies a portable language. A rule about `communication.exter
 
 Normalization also strips sensitive headers such as `Authorization`, `Cookie`, and `x-api-key` before the request becomes an auditable envelope. Policy needs to know what the agent is trying to do; it should not accidentally receive or log bearer secrets.
 
-### Protected, Denied, Or Passthrough
+### Classified Or Denied
 
-The mapping table also decides whether a request is protected.
+The Authority publishes the mapping rules in a snapshot that protects every
+request. There is no passthrough for hosts the rules do not cover.
 
-If the request is not protected, the normalizer can return `PASSTHROUGH`. That means the call is outside the enforcement surface you configured, so it can be forwarded without Stage 1 or Stage 2.
+If no rule classifies the request, the pipeline returns `DENY` before capability validation. This is fail-closed behavior: an unclassified action is an action policy cannot reason about.
 
-If the request is protected but cannot be classified, the pipeline returns `DENY` before capability validation. This is fail-closed behavior: an unclassified protected action is an action policy cannot reason about.
-
-If the request is protected and classified, the pipeline carries a `NormalizedEnvelope` into Stage 1.
+If a rule classifies the request, the pipeline carries a `NormalizedEnvelope` into Stage 1.
 
 For example, suppose your mapping rules contain only this GitHub route:
 
@@ -122,11 +121,10 @@ path = "/repos/*"
 action_class = "code.read"
 ```
 
-With `default_protected = false`, a request like `GET https://example.com/health` matches no rule and is treated as `PASSTHROUGH`: it is outside the configured enforcement surface.
-
-With `default_protected = true`, a request like `POST https://api.github.com/repos/acme/app/issues` also matches no rule, but it is treated as protected and unclassified, so the pipeline returns `DENY`.
-
-In either stance, `GET https://api.github.com/repos/acme/app` matches the rule, becomes `code.read`, and continues as a `NormalizedEnvelope`.
+Authority snapshots are always protected by default. `GET https://example.com/health`
+and `POST https://api.github.com/repos/acme/app/issues` match no rule here and are
+denied as unclassified. `GET https://api.github.com/repos/acme/app` matches the
+rule, becomes `code.read`, and continues as a `NormalizedEnvelope`.
 
 ## Step 3: Validate The Capability
 
@@ -332,23 +330,18 @@ value, an unknown `@modify` kind, or an empty annotation value) also
 reject the bundle so the operator gets an immediate, actionable error
 rather than a silent semantic divergence.
 
-`PASSTHROUGH` (non-protected traffic) is serialized on the wire as `ALLOW`
-(`1`) with an empty `token_id`. In monitor mode, `DENY`, `MODIFY`, `STEP_UP`,
-and `DEFER` are all overridden to `PASSTHROUGH` so the call goes through,
-with the original reason preserved in the audit record prefixed with
-`monitor_mode:`. Composio protocol-level denials (malformed payloads,
-unknown tools, protocol upgrades on the protected hosts) receive the same
-override, so monitor mode never blocks on policy or protocol grounds.
-Operational aborts (connector failures, credential-injection errors, and a
-batch whose admitted children disagree on the credentials to inject) still
-block in both modes.
+`PASSTHROUGH` (a recognized Composio discovery request forwarded without
+enforcement credentials) is serialized on the wire as `ALLOW` (`1`) with an
+empty `token_id`.
 
-Monitor mode is gated behind the `FIRMA_ALLOW_MONITOR_MODE=1` environment
-variable. A config that sets `mode = "monitor"` without that opt-in downgrades
-to `enforce` at startup with an error log, so a dev config left on `monitor`
-cannot accidentally bypass enforcement in production. `firma run --monitor`
-sets the env var on the autostarted sidecar automatically, so the CLI flag
-keeps honoring observe-only mode without a separate opt-in.
+The Sidecar always enforces; there is no observe-only mode. To let a call
+through while still recording it, permit it in the Cedar policy — the audit
+log records every decision either way. This only covers Stage 2: a call the
+normalizer cannot classify (an unmapped host in the protected Authority snapshot)
+or one that fails capability validation is denied before policy evaluation
+runs, and no policy can permit it. To find those gaps, extend the
+[mapping rules](../../guides/extend-mapping/) rather than reaching for a
+policy.
 
 ## The Mental Model
 

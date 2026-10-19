@@ -6,8 +6,9 @@
 //! so [`ActionClass`] exists to give callers that construct those strings a
 //! single, typo-proof source of truth via [`ActionClass::as_str`].
 //!
-//! The set mirrors the sidecar's runtime `ActionClassRegistry`; a drift test
-//! there asserts the two stay in lockstep.
+//! The Sidecar registry view and catalog consumers derive from
+//! [`ActionClass::ALL`]; Cedar schema parity tests keep policy validation in
+//! lockstep with this catalog.
 
 use std::str::FromStr;
 

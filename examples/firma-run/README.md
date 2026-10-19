@@ -1,5 +1,13 @@
 # Firma Run examples
 
+For Firma Team-managed mappings, start from
+[`firma.managed.example.toml`](firma.managed.example.toml) or generate configuration
+with `firma config --mode agent-remote`. Replace the endpoint, trust anchors, and
+registered IDs, and supply the configured PSK. Mapping snapshots come from the
+Authority; do not configure local mapping paths. The local examples supply
+files to the mini-authority, which streams complete snapshots to its connected
+Sidecar.
+
 These examples show how to run an agent command through `firma run` instead of launching it directly.
 
 `firma run` gives each agent run a profile, session identity, environment, and routing path to the Sidecar. The examples here are meant for local development: they help you prepare a local config, run smoke tests, and inspect what happens when traffic is forced through the governed path.

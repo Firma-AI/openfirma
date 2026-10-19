@@ -112,6 +112,7 @@ export default defineConfig({
             { label: 'Action classes', slug: 'concepts/action-classes' },
             { label: 'Capabilities', slug: 'concepts/capabilities' },
             { label: 'Policies', slug: 'concepts/policies' },
+            { label: 'Secrets without exposure', slug: 'concepts/secrets' },
             { label: 'Interception', slug: 'concepts/interception' },
             { label: 'Connectors', slug: 'concepts/connectors' },
             { label: 'The sandbox boundary', slug: 'concepts/sandbox' },
@@ -122,6 +123,7 @@ export default defineConfig({
           label: 'User Guides',
           items: [
             { label: 'Initialize a project (firma config)', slug: 'guides/initialize-a-project' },
+            { label: 'Log in to Firma Team (firma login)', slug: 'guides/native-login' },
             { label: 'Run the sidecar standalone', slug: 'guides/run-the-sidecar' },
             { label: 'Inspect live sidecars (firma sidecar status)', slug: 'guides/firma-sidecar-status' },
             { label: 'Start & monitor the daemon (firma sidecar & monitor)', slug: 'guides/manage-the-stack' },
@@ -135,6 +137,7 @@ export default defineConfig({
             { label: 'Extend the action-class mapping', slug: 'guides/extend-mapping' },
             { label: 'Inject credentials', slug: 'guides/inject-credentials' },
             { label: 'Rehydrate & mask secrets (secret gateway)', slug: 'guides/secret-gateway' },
+            { label: 'Secret provider reference', slug: 'guides/secret-provider-reference' },
             { label: 'Read & verify the audit log', slug: 'guides/audit-log' },
             { label: 'Secure a local coding agent', slug: 'guides/secure-a-coding-agent' },
             { label: 'Secure GitHub Copilot CLI', slug: 'guides/secure-github-copilot' },

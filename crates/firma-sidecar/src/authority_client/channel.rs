@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use firma_config_utils::NonZeroDuration;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
@@ -40,7 +41,7 @@ pub enum BuildChannelError {
 /// config is bad.
 pub fn build_channel(
     authority: &AuthorityEndpoint,
-    connect_timeout: Duration,
+    connect_timeout: NonZeroDuration,
     ca_cert_pem: Option<&[u8]>,
     client_cert_pem: Option<&[u8]>,
     client_key_pem: Option<&[u8]>,
@@ -51,7 +52,7 @@ pub fn build_channel(
 
     let mut endpoint = Endpoint::from_shared(authority.origin().to_string())
         .map_err(|e| BuildChannelError::InvalidUrl(e.to_string()))?
-        .connect_timeout(connect_timeout)
+        .connect_timeout(connect_timeout.duration())
         .keep_alive_timeout(Duration::from_secs(30))
         .http2_keep_alive_interval(Duration::from_secs(30));
 
@@ -95,7 +96,13 @@ mod tests {
     async fn http_url_builds() {
         let endpoint =
             AuthorityEndpoint::new("http://127.0.0.1:50051", None).expect("valid test endpoint");
-        let ch = build_channel(&endpoint, Duration::from_secs(5), None, None, None);
+        let ch = build_channel(
+            &endpoint,
+            NonZeroDuration::from_static(Duration::from_secs(5)),
+            None,
+            None,
+            None,
+        );
         assert!(ch.is_ok());
     }
 
@@ -103,15 +110,28 @@ mod tests {
     fn https_without_ca_fails() {
         let endpoint = AuthorityEndpoint::new("https://authority.example:9443", None)
             .expect("valid test endpoint");
-        let err = build_channel(&endpoint, Duration::from_secs(5), None, None, None).unwrap_err();
+        let err = build_channel(
+            &endpoint,
+            NonZeroDuration::from_static(Duration::from_secs(5)),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(matches!(err, BuildChannelError::MissingCaCert));
     }
 
     #[test]
     fn partial_client_identity_fails() {
         let endpoint = AuthorityEndpoint::new("http://x:1", None).expect("valid test endpoint");
-        let err = build_channel(&endpoint, Duration::from_secs(5), None, Some(b"cert"), None)
-            .unwrap_err();
+        let err = build_channel(
+            &endpoint,
+            NonZeroDuration::from_static(Duration::from_secs(5)),
+            None,
+            Some(b"cert"),
+            None,
+        )
+        .unwrap_err();
         assert!(matches!(err, BuildChannelError::PartialClientIdentity));
     }
 }

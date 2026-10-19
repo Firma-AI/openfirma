@@ -172,7 +172,7 @@ pub(crate) fn next_provenance(
 /// Default capacity — 8192 active sessions per sidecar process. Tuned
 /// for V1 single-process deployments; overridable via
 /// `sidecar.constraint_enforcement.session_state_capacity` in `firma.toml`.
-const DEFAULT_CAPACITY: usize = 8192;
+const DEFAULT_CAPACITY: NonZeroUsize = NonZeroUsize::new(8192).unwrap();
 
 /// In-memory LRU-capped `SessionStateStore` for V1. Single-process only.
 pub struct LruSessionStateStore {
@@ -216,12 +216,11 @@ impl SessionRecord {
 }
 
 impl LruSessionStateStore {
-    /// Construct with an explicit capacity (minimum 1).
+    /// Construct with an explicit capacity.
     #[must_use]
-    pub fn new(capacity: usize) -> Self {
-        let cap = NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
+    pub fn new(capacity: NonZeroUsize) -> Self {
         Self {
-            inner: Mutex::new(LruCache::new(cap)),
+            inner: Mutex::new(LruCache::new(capacity)),
         }
     }
 
@@ -316,7 +315,7 @@ mod tests {
 
     #[test]
     fn record_action_returns_monotonic_count() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         assert_eq!(store.record_action(&sid("sess_a")), 1);
         assert_eq!(store.record_action(&sid("sess_a")), 2);
         assert_eq!(store.record_action(&sid("sess_a")), 3);
@@ -324,7 +323,7 @@ mod tests {
 
     #[test]
     fn record_action_isolates_sessions() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         assert_eq!(store.record_action(&sid("sess_a")), 1);
         assert_eq!(store.record_action(&sid("sess_b")), 1);
         assert_eq!(store.record_action(&sid("sess_a")), 2);
@@ -332,7 +331,7 @@ mod tests {
 
     #[test]
     fn runtime_signals_defaults_for_unknown_session() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         let signals = store.signals(&sid("never_seen"));
         assert_eq!(signals.action_count, 0);
         assert_eq!(signals.risk_score, 0.0);
@@ -340,7 +339,7 @@ mod tests {
 
     #[test]
     fn runtime_signals_reflects_recorded_actions() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         store.record_action(&sid("sess_a"));
         store.record_action(&sid("sess_a"));
         let signals = store.signals(&sid("sess_a"));
@@ -349,7 +348,7 @@ mod tests {
 
     #[test]
     fn lru_evicts_least_recently_used() {
-        let store = LruSessionStateStore::new(2);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(2).unwrap());
         store.record_action(&sid("sess_a"));
         store.record_action(&sid("sess_b"));
         store.record_action(&sid("sess_c")); // evicts sess_a
@@ -377,7 +376,7 @@ mod tests {
 
     #[test]
     fn record_outcome_appends_to_history() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         store.record_action(&sid("sess_a"));
         store.record_outcome(
             &sid("sess_a"),
@@ -399,7 +398,7 @@ mod tests {
 
     #[test]
     fn deny_count_accumulates_only_denials() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         store.record_action(&sid("sess_a"));
         store.record_outcome(&sid("sess_a"), "a", "r", Outcome::Allow);
         store.record_outcome(&sid("sess_a"), "b", "r", Outcome::Deny);
@@ -411,7 +410,7 @@ mod tests {
 
     #[test]
     fn history_is_bounded_to_cap() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         store.record_action(&sid("sess_a"));
         // Push more than HISTORY_CAP entries; the oldest must be evicted.
         for i in 0..(HISTORY_CAP + 3) {
@@ -430,7 +429,7 @@ mod tests {
 
     #[test]
     fn record_outcome_isolates_sessions() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         store.record_action(&sid("sess_a"));
         store.record_action(&sid("sess_b"));
         store.record_outcome(&sid("sess_a"), "a", "r", Outcome::Deny);
@@ -439,14 +438,14 @@ mod tests {
         assert_eq!(a.deny_count, 1);
         assert_eq!(a.history.len(), 1);
         assert_eq!(b.deny_count, 0);
-        assert!(b.history.is_empty());
+        assert_eq!(b.history, [] as [ActionOutcome; 0]);
     }
 
     #[test]
     fn unknown_session_signals_have_empty_history() {
-        let store = LruSessionStateStore::new(16);
+        let store = LruSessionStateStore::new(NonZeroUsize::new(16).unwrap());
         let signals = store.signals(&sid("never_seen"));
         assert_eq!(signals.deny_count, 0);
-        assert!(signals.history.is_empty());
+        assert_eq!(signals.history, [] as [ActionOutcome; 0]);
     }
 }

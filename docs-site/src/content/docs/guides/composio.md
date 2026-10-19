@@ -26,9 +26,10 @@ The generated configuration enables strict HTTPS interception for
 `app.composio.dev` and `backend.composio.dev`. Do not add those hosts to
 `bypass_hosts`; opaque CONNECT traffic cannot be decoded at Layer 7.
 
-The Sidecar cross-checks this at startup: when the mapping rules reference
-the Composio hosts but the HTTPS MITM configuration leaves them bypassed,
-unintercepted, or non-strict, it logs a warning per affected host so a
+The Sidecar cross-checks this whenever it activates an accepted Authority
+snapshot: when the snapshot's mapping rules start referencing the Composio
+hosts but the HTTPS MITM configuration leaves them bypassed, unintercepted, or
+non-strict, it logs a warning per affected host so a
 misconfiguration cannot silently downgrade governance to opaque tunnels. When
 HTTPS MITM is off altogether, that becomes a single combined warning naming
 both hosts. Wildcard and catch-all rule hosts count as referencing the
@@ -175,13 +176,6 @@ before dispatch and evaluates them in input order.
 - If every child is allowed, the original request is dispatched once.
 - If any child blocks, the request is not dispatched.
 - Allowed siblings are audited as aborted for batch atomicity.
-- Monitor mode dispatches once and retains each would-block reason. This
-  extends to protocol-level denials: malformed payloads, unknown tools, and
-  protocol upgrades are forwarded in monitor mode with a `monitor_mode:`
-  audit annotation instead of being blocked. When every child would have
-  blocked, the forwarded request carries no injected credentials, so the
-  observed upstream response may differ from what an admitted batch would
-  see.
 
 OpenFirma never splits, reorders, or partially forwards the batch.
 

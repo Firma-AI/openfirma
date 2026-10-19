@@ -36,8 +36,8 @@ fn static_normalizer() -> &'static IntentNormalizer {
             },
         ];
         let file = MappingRulesFile { rules };
-        let table = MappingTable::from_config(&file, &registry, false)
-            .expect("static normalizer rules are valid");
+        let table =
+            MappingTable::from_config(&file, &registry).expect("static normalizer rules are valid");
         IntentNormalizer::new(table)
     })
 }

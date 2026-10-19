@@ -1,7 +1,13 @@
-use std::path::Path;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{
+    collections::HashSet,
+    env,
+    ffi::{OsStr, OsString},
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+use firma_connection_store::StoreError;
 use firma_runtime_state::RuntimeLayout;
 use firma_secret_provider::IntegrationSpec;
 use serde::Serialize;
@@ -23,6 +29,10 @@ const DEFAULT_SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 10;
 #[doc(hidden)]
 pub mod vscode;
 
+/// Secret-mediation shim injection (Unix/bwrap). Wires the broker + shim mounts
+/// into a launch when the profile lists `secret_providers`.
+pub mod secret_shims;
+
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
 #[derive(Debug, Clone)]
@@ -39,8 +49,8 @@ pub struct RunInput {
     pub backend: Option<crate::backend::BackendKind>,
     /// CLI value of `--sidecar` (`local` | `<tcp://...|unix:///...>` | unset).
     pub sidecar_cli: crate::sidecar::SidecarCli,
-    /// Optional operator-supplied capability token file, injected into the
-    /// agent environment at launch (bring-your-own token).
+    /// Optional canonical signed capability seed TOML. Run exports only its raw
+    /// token and the original file path to the agent environment at launch.
     pub capability_file: Option<PathBuf>,
     /// Override sandbox identity mode.
     pub identity_mode: Option<crate::config::SandboxIdentityMode>,
@@ -66,10 +76,6 @@ pub struct RunInput {
     /// failing closed. Required for macOS vz and WSL2 backends when
     /// structural enforcement is not available.
     pub allow_non_structural: bool,
-    /// When true, inject `mode = "monitor"` into the synthesized sidecar
-    /// config, overriding any value in the operator template. Equivalent
-    /// to `mode = "monitor"` in firma.toml but scoped to this run only.
-    pub monitor_mode: bool,
 }
 
 /// Callbacks fired around the tty-handoff to the wrapped agent. Both hooks are
@@ -141,6 +147,17 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
 
     let capability_token = read_capability_token(&profile.capability.source)?;
     let working_dir = resolve_working_dir()?;
+    let host_connection_dir = match firma_connection_store::default_dir() {
+        Ok(dir) => Some(dir),
+        Err(StoreError::NoConfigDirectory | StoreError::RelativeDirectory { .. }) => None,
+        Err(error) => {
+            return Err(RunError::Internal(format!(
+                "resolve host login directory: {error}"
+            )));
+        }
+    };
+    let firma_exe = env::current_exe()
+        .map_err(|error| RunError::Internal(format!("resolve current_exe: {error}")))?;
 
     let backend = build_backend(profile.backend);
     let mut handle = Some(backend.prepare(&PrepareRequest {
@@ -148,6 +165,31 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         profile: profile.clone(),
         working_dir: working_dir.clone(),
     })?);
+    let shim_support_result = backend.resolve_secret_shim_support(
+        &runtime_layout,
+        handle
+            .as_ref()
+            .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?,
+        &firma_exe,
+        profile
+            .secret_providers
+            .values()
+            .any(|provider| provider.as_cli().is_some()),
+    );
+    let shim_support = match shim_support_result {
+        Ok(support) => support,
+        Err(error) => {
+            let teardown_result = handle
+                .take()
+                .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
+            return combine_run_and_teardown_results(Err(error), teardown_result);
+        }
+    };
+    // Secret services (gateway + broker) for this run. Assigned once the
+    // profile's providers are known inside the run closure below; dropped
+    // only after sandbox teardown so the agent can resolve placeholders for
+    // its whole lifetime while the plaintext store still cannot outlive the run.
+    let mut secret_services = None;
 
     let run_result = (|| {
         let handle_ref = handle
@@ -206,7 +248,6 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 args.sidecar_startup_timeout_secs
             }),
             use_http_proxy_sidecar: profile.use_http_proxy_sidecar,
-            monitor_mode: args.monitor_mode,
             secret_gateway_addr: profile.secret_gateway_addr.clone(),
             http_secret_providers: profile
                 .secret_providers
@@ -223,8 +264,23 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         if let CapabilitySource::File { ref path } = profile.capability.source {
             flags.capability_seed_path = Some(path.clone());
         }
-        let firma_exe = std::env::current_exe()
-            .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
+        // Start the secret services before the Sidecar so its gateway address
+        // is available while the Sidecar config is synthesized. The guard is
+        // held for the whole run: dropping it stops the gateway and broker
+        // and removes their sockets.
+        secret_services = if profile.secret_providers.is_empty() {
+            None
+        } else {
+            let services = secret_shims::SecretServices::start(
+                &runtime_layout,
+                handle_ref,
+                &identity,
+                &profile,
+                &shim_support,
+            )?;
+            flags.secret_gateway_addr = Some(services.gateway_addr().to_string());
+            Some(services)
+        };
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
             ResolveAuthorityRequest {
@@ -237,6 +293,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 firma_exe: &firma_exe,
                 capability_public_key_path: profile.capability.public_key_path.as_deref(),
                 working_dir: &working_dir,
+                state_layout: &runtime_layout,
             },
             &mut prompt,
         )?;
@@ -327,15 +384,26 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                     .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
                 vscode::ensure_vscode_state_mount(handle_mut, &state_dir);
             }
+            let isolated_secret_shims = secret_shims::prepare(
+                &mut handle,
+                &profile,
+                &mut env,
+                &firma_exe,
+                env::var_os("PATH").as_deref(),
+                secret_services.as_ref(),
+                &shim_support,
+            )?;
             let launch = LaunchSpec {
                 executable,
                 args: launch_args,
                 cwd: working_dir,
                 env,
+                isolated_secret_shims,
                 sidecar_endpoint: effective_endpoint,
                 seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
                 identity_mode: profile.identity_mode,
                 config_file: user_config_path.clone(),
+                host_connection_dir,
                 trust_anchor,
             };
 
@@ -343,7 +411,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 let handle_ref = handle
                     .as_ref()
                     .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
-                backend.start_agent(&runtime_layout, handle_ref, &launch)?
+                backend.start_agent(&runtime_layout, handle_ref, &launch, &shim_support)?
             };
             // Per-run marker dir under the persistent runtime root, alongside
             // `sidecar.log` / `authority.log`. The caller redirects its foreground
@@ -367,6 +435,11 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     let teardown_result = handle
         .take()
         .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
+
+    // Stop the secret services after sandbox teardown so the agent can still
+    // resolve placeholders while it exits, but before the run returns: the
+    // gateway socket is removed and the plaintext per-run store is dropped.
+    drop(secret_services);
 
     combine_run_and_teardown_results(run_result, teardown_result)
 }
@@ -393,7 +466,7 @@ fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
 }
 
 fn resolve_working_dir() -> Result<PathBuf, RunError> {
-    std::env::current_dir()
+    env::current_dir()
         .map_err(|error| RunError::Internal(format!("failed to read current directory: {error}")))
 }
 
@@ -411,18 +484,14 @@ fn combine_run_and_teardown_results(
 }
 
 fn ensure_required_session_identity() -> Result<(), RunError> {
-    let require = std::env::var("FIRMA_RUN_REQUIRE_SESSION_ID")
-        .ok()
-        .is_some_and(|v| {
-            let v = v.trim().to_ascii_lowercase();
-            matches!(v.as_str(), "1" | "true" | "yes" | "on")
-        });
+    let require = env::var("FIRMA_RUN_REQUIRE_SESSION_ID").is_ok_and(|v| {
+        let v = v.trim().to_ascii_lowercase();
+        matches!(v.as_str(), "1" | "true" | "yes" | "on")
+    });
     if !require {
         return Ok(());
     }
-    let has_session = std::env::var("FIRMA_RUN_SESSION_ID")
-        .ok()
-        .is_some_and(|v| !v.trim().is_empty());
+    let has_session = env::var("FIRMA_RUN_SESSION_ID").is_ok_and(|v| !v.trim().is_empty());
     if has_session {
         return Ok(());
     }
@@ -436,9 +505,9 @@ fn maybe_apply_executable_policy(
     executable: &str,
     args: Vec<String>,
 ) -> Vec<String> {
-    let executable = std::path::Path::new(executable)
+    let executable = Path::new(executable)
         .file_name()
-        .and_then(std::ffi::OsStr::to_str)
+        .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_string();
     let Some(policy) = profile.executable_policies.get(&executable) else {
@@ -514,6 +583,109 @@ fn config_item_matches_key(item: &str, key: &str) -> bool {
     item.split_once('=').is_some_and(|(k, _)| k.trim() == key)
 }
 
+fn resolve_host_executable(
+    executable: &str,
+    host_path: Option<&OsStr>,
+) -> Result<PathBuf, RunError> {
+    resolve_host_executables(executable, host_path)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            RunError::ConfigValidation(format!(
+                "cannot resolve executable '{executable}' on host PATH"
+            ))
+        })
+}
+
+/// Resolve every executable regular-file match without canonicalizing aliases.
+fn resolve_host_executables(
+    executable: &str,
+    host_path: Option<&OsStr>,
+) -> Result<Vec<PathBuf>, RunError> {
+    let candidate = PathBuf::from(executable);
+    if candidate
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+    {
+        return require_executable_file(candidate, executable).map(|path| vec![path]);
+    }
+
+    let path_value = host_path
+        .map(OsString::from)
+        .or_else(|| env::var_os("PATH"))
+        .ok_or_else(|| {
+            RunError::ConfigValidation(format!(
+                "cannot resolve executable '{executable}' because host PATH is not set"
+            ))
+        })?;
+    let mut matches = Vec::new();
+    let mut seen = HashSet::new();
+    for dir in env::split_paths(&path_value) {
+        for candidate in executable_search_candidates(&dir, executable) {
+            if is_executable_file(&candidate) && seen.insert(candidate.clone()) {
+                matches.push(candidate);
+            }
+        }
+    }
+    if matches.is_empty() {
+        Err(RunError::ConfigValidation(format!(
+            "cannot resolve executable '{executable}' on host PATH"
+        )))
+    } else {
+        Ok(matches)
+    }
+}
+
+fn require_executable_file(candidate: PathBuf, executable: &str) -> Result<PathBuf, RunError> {
+    if is_executable_file(&candidate) {
+        Ok(candidate)
+    } else {
+        Err(RunError::ConfigValidation(format!(
+            "cannot resolve executable '{executable}' at {}",
+            candidate.display()
+        )))
+    }
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+#[cfg(windows)]
+fn executable_search_candidates(dir: &Path, executable: &str) -> Vec<PathBuf> {
+    let direct = dir.join(executable);
+    if Path::new(executable).extension().is_some() {
+        return vec![direct];
+    }
+
+    let mut candidates = vec![direct];
+    let path_ext = env::var_os("PATHEXT").map_or_else(
+        || ".COM;.EXE;.BAT;.CMD".to_string(),
+        |value| value.to_string_lossy().into_owned(),
+    );
+    candidates.extend(
+        path_ext
+            .split(';')
+            .filter(|extension| !extension.is_empty())
+            .map(|extension| dir.join(format!("{executable}{extension}"))),
+    );
+    candidates
+}
+
+#[cfg(not(windows))]
+fn executable_search_candidates(dir: &Path, executable: &str) -> Vec<PathBuf> {
+    vec![dir.join(executable)]
+}
+
 /// Resolve `executable` to its canonical UTF-8 path, enforce the configured
 /// allowlist policy, and return the canonical string.
 ///
@@ -524,7 +696,7 @@ fn resolve_governed_executable(
     mediator: &crate::config::CommandMediatorConfig,
     executable: &str,
 ) -> Result<String, RunError> {
-    let canonical_path = std::fs::canonicalize(executable).map_err(|error| {
+    let canonical_path = fs::canonicalize(executable).map_err(|error| {
         RunError::Governance(format!(
             "executable '{executable}' could not be resolved (fail-closed): {error}"
         ))
@@ -573,9 +745,9 @@ fn maybe_apply_claude_settings(
         return Ok(args);
     }
 
-    let executable = std::path::Path::new(executable)
+    let executable = Path::new(executable)
         .file_name()
-        .and_then(std::ffi::OsStr::to_str)
+        .and_then(OsStr::to_str)
         .unwrap_or_default();
     if executable != "claude" {
         return Ok(args);
@@ -597,7 +769,7 @@ fn maybe_apply_claude_settings(
             "failed to serialize Claude settings payload: {error}"
         ))
     })?;
-    std::fs::write(&settings_path, serialized).map_err(|error| {
+    fs::write(&settings_path, serialized).map_err(|error| {
         RunError::Internal(format!(
             "failed to write Claude settings file {}: {error}",
             settings_path.display()
@@ -627,7 +799,7 @@ fn print_effective_config(
         agent_id: &identity.agent_id,
         execution_profile: &identity.execution_profile,
         profile,
-        working_dir: std::env::current_dir().map_err(|error| {
+        working_dir: env::current_dir().map_err(|error| {
             RunError::Internal(format!(
                 "failed to resolve working dir for snapshot: {error}"
             ))
@@ -644,7 +816,7 @@ fn print_effective_config(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use firma_config_loader::CONFIG_FILE_NAME;
@@ -656,6 +828,28 @@ mod tests {
 
     use super::{ExecutionEnv, RunIdentity, SidecarTrustAnchor};
     use crate::backend::SandboxHandle;
+
+    /// Serializes the same canonical seed the Authority writes, so the fixture
+    /// cannot drift from [`firma_core::CapabilitySeed`]. `context_hash` is the
+    /// canary the environment assertions look for.
+    fn canonical_seed_toml(raw_token: &str) -> String {
+        let issued_at = chrono::Utc::now();
+        let claims = firma_core::CapabilityClaims {
+            token_id: firma_identifiers::TokenId::generate(),
+            agent_id: crate::identity::test_agent_id(),
+            session_id: "sess_runtime".parse().unwrap_or_else(|e| panic!("{e}")),
+            action_set: vec!["communication.external.send".to_string()],
+            resource_scope: "*".to_string(),
+            issued_at,
+            expiry: issued_at + chrono::Duration::minutes(15),
+            context_hash: "runtime-seed-canary".to_string(),
+        };
+        toml::to_string(&firma_core::CapabilitySeed::from_claims(
+            &claims,
+            raw_token.to_string(),
+        ))
+        .unwrap_or_else(|e| panic!("{e}"))
+    }
 
     /// Quotes a path the way the platform's VS Code shim does.
     fn quote_shim_path(path: &std::path::Path) -> String {
@@ -815,60 +1009,77 @@ mod tests {
     }
 
     #[test]
-    fn capability_file_is_exported_when_file_source_is_used() {
+    fn capability_file_exports_exact_token_and_path_for_local_and_external_sidecars() {
         let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let token_path = tempdir.path().join("cap.token");
-        fs::write(&token_path, "token").unwrap_or_else(|e| panic!("{e}"));
-
-        let profile = ResolvedProfile {
-            id: "generic".to_string(),
-            backend: crate::backend::BackendKind::Bwrap,
-            sidecar_endpoint: SidecarEndpoint::Tcp {
-                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
-            },
-            sidecar_selection: crate::sidecar::SidecarSelection::Local,
-            env_passthrough: BTreeSet::default(),
-            env_set: BTreeMap::default(),
-            mounts: Vec::new(),
-            seccomp_policy: None,
-            network: NetworkPolicy {
-                enforce_network_namespace: false,
-                fail_closed: true,
-            },
-            identity_mode: SandboxIdentityMode::SandboxUser,
-            capability: CapabilityLeaseConfig {
-                source: CapabilitySource::File {
-                    path: token_path.clone(),
-                },
-                public_key_path: None,
-                refresh_ratio: 0.60,
-                grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
-            },
-            sidecar_local_exec: None,
-            secret_gateway_addr: None,
-            secret_providers: BTreeMap::new(),
-            executable_policies: BTreeMap::new(),
-            use_http_proxy_sidecar: false,
-            allow_non_structural: false,
-            ca_trust_mode: crate::config::CaTrustMode::Sole,
+        let seed_path = tempdir.path().join("capability.toml");
+        let raw_token = "v4.public.exact-runtime-token";
+        let seed_document = canonical_seed_toml(raw_token);
+        fs::write(&seed_path, &seed_document).unwrap_or_else(|e| panic!("{e}"));
+        let endpoint = SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
         };
 
-        let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
-        let capability_token = crate::capability::read_capability_token(&profile.capability.source)
-            .unwrap_or_else(|e| panic!("{e}"));
+        for sidecar_selection in [
+            crate::sidecar::SidecarSelection::Local,
+            crate::sidecar::SidecarSelection::Remote(endpoint.clone()),
+        ] {
+            let profile = ResolvedProfile {
+                id: "generic".to_string(),
+                backend: crate::backend::BackendKind::Bwrap,
+                sidecar_endpoint: endpoint.clone(),
+                sidecar_selection,
+                env_passthrough: BTreeSet::default(),
+                env_set: BTreeMap::default(),
+                mounts: Vec::new(),
+                seccomp_policy: None,
+                network: NetworkPolicy {
+                    enforce_network_namespace: false,
+                    fail_closed: true,
+                },
+                identity_mode: SandboxIdentityMode::SandboxUser,
+                capability: CapabilityLeaseConfig {
+                    source: CapabilitySource::File {
+                        path: seed_path.clone(),
+                    },
+                    public_key_path: None,
+                    refresh_ratio: 0.60,
+                    grace: Duration::from_secs(30),
+                    requested_actions: CapabilityLeaseConfig::default_requested_actions(),
+                },
+                sidecar_local_exec: None,
+                secret_gateway_addr: None,
+                secret_providers: BTreeMap::new(),
+                executable_policies: BTreeMap::new(),
+                use_http_proxy_sidecar: false,
+                allow_non_structural: false,
+                ca_trust_mode: crate::config::CaTrustMode::Sole,
+            };
 
-        let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint)
-            .with_capability_token(capability_token.as_deref())
-            .with_capability_source(&profile.capability.source);
-        assert_eq!(
-            env.get("FIRMA_CAPABILITY_FILE"),
-            Some(&token_path.display().to_string())
-        );
-        assert_eq!(
-            env.get("FIRMA_CAPABILITY_TOKEN"),
-            Some(&"token".to_string())
-        );
+            let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
+            let capability_token =
+                crate::capability::read_capability_token(&profile.capability.source)
+                    .unwrap_or_else(|e| panic!("{e}"));
+
+            let env = ExecutionEnv::new(&profile, &identity, &profile.sidecar_endpoint)
+                .with_capability_token(capability_token.as_deref())
+                .with_capability_source(&profile.capability.source);
+            assert_eq!(
+                env.get("FIRMA_CAPABILITY_FILE"),
+                Some(&seed_path.display().to_string())
+            );
+            assert_eq!(
+                env.get("FIRMA_CAPABILITY_TOKEN").map(String::as_str),
+                Some(raw_token)
+            );
+            assert_ne!(
+                env.get("FIRMA_CAPABILITY_TOKEN").map(String::as_str),
+                Some(seed_document.as_str())
+            );
+            assert!(
+                !env.get("FIRMA_CAPABILITY_TOKEN")
+                    .is_some_and(|value| value.contains("runtime-seed-canary"))
+            );
+        }
     }
 
     #[test]
@@ -923,7 +1134,7 @@ mod tests {
     fn ca_trust_mode_selects_appended_bundle_at_injection_site() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let ca_cert = dir.path().join("firma-ca.crt");
-        std::fs::write(&ca_cert, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&ca_cert, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
 
         let make_profile = |mode: crate::config::CaTrustMode| ResolvedProfile {
             id: "copilot".to_string(),
@@ -990,7 +1201,7 @@ mod tests {
         let bundle_path = ca_cert.with_file_name("firma-ca-bundle.crt");
         let system_roots_present = crate::trust::SYSTEM_CA_BUNDLE_CANDIDATES
             .iter()
-            .any(|p| std::path::Path::new(p).is_file());
+            .any(|p| Path::new(p).is_file());
         if system_roots_present {
             // A system bundle exists: AppendSystemRoots must point at the
             // generated sibling bundle, and it must contain the firma CA.
@@ -998,7 +1209,7 @@ mod tests {
                 append_env.get("SSL_CERT_FILE"),
                 Some(&bundle_path.display().to_string())
             );
-            let body = std::fs::read_to_string(&bundle_path).unwrap_or_else(|e| panic!("{e}"));
+            let body = fs::read_to_string(&bundle_path).unwrap_or_else(|e| panic!("{e}"));
             assert!(body.contains("FIRMA CA"));
             assert_ne!(
                 append_env.get("SSL_CERT_FILE"),
@@ -1158,7 +1369,6 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
             allow_non_structural: true,
-            monitor_mode: false,
         };
         let profile =
             crate::config::resolve_profile(&run_args).unwrap_or_else(|error| panic!("{error}"));
@@ -1327,6 +1537,13 @@ mod tests {
         fs::create_dir(&host_bin).unwrap_or_else(|e| panic!("{e}"));
         let real_code = host_bin.join("code");
         fs::write(&real_code, "#!/bin/sh\nexit 0\n").unwrap_or_else(|e| panic!("{e}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&real_code, fs::Permissions::from_mode(0o700))
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
 
         let mut env = ExecutionEnv::from(BTreeMap::from([(
             "PATH".to_string(),
@@ -1552,8 +1769,15 @@ mod tests {
         fs::create_dir(&host_bin).unwrap_or_else(|e| panic!("{e}"));
         let real_code = host_bin.join("code");
         fs::write(&real_code, "#!/bin/sh\nexit 0\n").unwrap_or_else(|e| panic!("{e}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
 
-        let resolved = super::vscode::resolve_host_executable("code", Some(host_bin.as_os_str()))
+            fs::set_permissions(&real_code, std::fs::Permissions::from_mode(0o700))
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
+
+        let resolved = super::resolve_host_executable("code", Some(host_bin.as_os_str()))
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved, real_code);
     }
@@ -1678,7 +1902,6 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
             allow_non_structural: true,
-            monitor_mode: false,
         };
         let resolved = crate::config::resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert!(

@@ -1224,10 +1224,8 @@ mod tests {
     fn audit_sink_forwards_blocked_destination() {
         use std::io::Read as _;
 
-        let dir = std::env::temp_dir().join(format!("firma-egress-audit-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let socket_path = dir.join("run-audit.sock");
-        let _ = std::fs::remove_file(&socket_path);
+        let dir = tempfile::tempdir().expect("temporary audit socket directory");
+        let socket_path = dir.path().join("run-audit.sock");
         let listener = UnixListener::bind(&socket_path).expect("bind audit socket");
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1240,7 +1238,7 @@ mod tests {
         });
 
         let channel = AuditChannel {
-            socket_path: socket_path.clone(),
+            socket_path,
             session_id: "sess-1".to_string(),
             agent_id: "agt_01j0000000e008000000000001"
                 .parse()
@@ -1262,9 +1260,6 @@ mod tests {
         assert_eq!(value["event"]["kind"], "loopback_blocked");
         assert_eq!(value["event"]["dst_ip"], "127.0.0.1");
         assert_eq!(value["event"]["dst_port"], 9000);
-
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     // ── is_loopback / classify edges ────────────────────────────────────────
@@ -1411,9 +1406,8 @@ mod tests {
     fn listener_fd_roundtrip_transfers_open_file() {
         use std::io::{Read as _, Write as _};
 
-        let dir = std::env::temp_dir().join(format!("firma-fd-xfer-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let path = dir.join("marker");
+        let dir = tempfile::tempdir().expect("temporary file transfer directory");
+        let path = dir.path().join("marker");
         {
             let mut f = std::fs::File::create(&path).expect("create");
             f.write_all(b"firma-fd-marker").expect("write");
@@ -1430,10 +1424,6 @@ mod tests {
         let mut got = String::new();
         f.read_to_string(&mut got).expect("read via received fd");
         assert_eq!(got, "firma-fd-marker");
-
-        drop(orig);
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
@@ -1455,9 +1445,8 @@ mod tests {
 
     #[test]
     fn start_binds_socket_and_drop_removes_it() {
-        let dir = std::env::temp_dir().join(format!("firma-egress-start-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let socket_path = dir.join("guard.sock");
+        let dir = tempfile::tempdir().expect("temporary guard socket directory");
+        let socket_path = dir.path().join("guard.sock");
 
         let handle = start(SupervisorConfig {
             socket_path: socket_path.clone(),
@@ -1471,8 +1460,6 @@ mod tests {
 
         drop(handle); // signals stop, joins the supervisor thread, removes socket
         assert!(!socket_path.exists(), "socket removed on drop");
-
-        let _ = std::fs::remove_dir(&dir);
     }
 
     // ── installer error paths (no filter installed) ─────────────────────────
@@ -1487,9 +1474,8 @@ mod tests {
     #[test]
     fn install_and_exec_errors_on_unreachable_supervisor() {
         // Fails at the AF_UNIX connect, before any seccomp filter is installed.
-        let missing =
-            std::env::temp_dir().join(format!("firma-missing-{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&missing);
+        let dir = tempfile::tempdir().expect("temporary socket directory");
+        let missing = dir.path().join("missing.sock");
         let argv = vec!["/bin/true".to_string()];
         let err = install_and_exec(&missing, &argv).expect_err("unreachable socket must error");
         assert!(matches!(err, RunError::Internal(_)), "got {err:?}");
@@ -1538,9 +1524,8 @@ mod tests {
         let blocked_port = blocked_reservation.local_addr().expect("addr").port();
         drop(blocked_reservation);
 
-        let dir = std::env::temp_dir().join(format!("firma-egress-e2e-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let socket_path = dir.join("guard.sock");
+        let dir = tempfile::tempdir().expect("temporary egress guard directory");
+        let socket_path = dir.path().join("guard.sock");
 
         let handle = start(SupervisorConfig {
             socket_path: socket_path.clone(),
@@ -1583,7 +1568,5 @@ mod tests {
         }
 
         drop(handle);
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_dir(&dir);
     }
 }
